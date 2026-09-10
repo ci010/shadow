@@ -58,6 +58,9 @@ export interface DesktopWindowControls {
 
 export interface ShadowDesktopApi {
 	readonly windowControls?: DesktopWindowControls
+	readonly projects?: {
+		selectDirectory(): Promise<string | null>
+	}
 	readonly bootstrap: {
 		load(): Promise<WizardState>
 		dispatch(event: RendererWizardEvent): Promise<WizardState>

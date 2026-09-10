@@ -19,6 +19,7 @@ test('nested subagent inherits explicit workdir and legacy workspace root', asyn
     segmentIndex: 3,
     workspaceRoot: 'discord:root',
     workdir: parentWorkdir,
+    projectId: 'folder-project-a',
   }
   let childFields: Parameters<SessionManager['buildSession']>[2]
 
@@ -69,4 +70,5 @@ test('nested subagent inherits explicit workdir and legacy workspace root', asyn
 
   assertEquals(childFields?.workspaceRoot, 'discord:root')
   assertStrictEquals(childFields?.workdir, parentWorkdir)
+  assertEquals(childFields?.projectId, 'folder-project-a')
 })

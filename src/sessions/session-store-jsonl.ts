@@ -51,6 +51,7 @@ export class JsonlSessionStore implements SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
+        projectId?: string
       }
     >
   > {
@@ -59,6 +60,7 @@ export class JsonlSessionStore implements SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
+        projectId?: string
       }
     > = []
     try {
@@ -73,6 +75,7 @@ export class JsonlSessionStore implements SessionStore {
             sessionId: parsed.sessionId,
             segmentIndex: parsed.segmentIndex ?? 0,
             lastActivityAt: parsed.lastActivityAt,
+            projectId: typeof parsed.projectId === 'string' ? parsed.projectId : undefined,
           })
         } catch { /* skip malformed */ }
       }

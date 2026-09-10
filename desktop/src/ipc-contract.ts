@@ -12,6 +12,7 @@ export const IPC_CHANNELS = {
   launchMain: 'shadow:bootstrap:launch-main',
   ensureRuntime: 'shadow:bootstrap:ensure-runtime',
   selectDirectory: 'shadow:native:select-directory',
+  selectProjectDirectory: 'shadow:projects:select-directory',
   getMainDirectorySelection: 'shadow:bootstrap:get-main-directory-selection',
   selectMainDirectoryPath: 'shadow:bootstrap:select-main-directory-path',
   openExternal: 'shadow:native:open-external',
@@ -48,6 +49,9 @@ export interface DesktopWindowControls {
 
 export interface ShadowDesktopApi {
   readonly windowControls: DesktopWindowControls
+  readonly projects: {
+    selectDirectory(): Promise<string | null>
+  }
   readonly bootstrap: {
     load(): Promise<WizardState>
     dispatch(event: WizardEvent): Promise<WizardState>

@@ -6,6 +6,50 @@ import { rm } from 'node:fs/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionState } from './session-store.ts'
+import { localProjectWorkdirRef } from './locality.ts'
+
+test('SqliteSessionStore preserves project identity alongside unknown prototype metadata', async () => {
+  const sessionsDir = await createTempWorkspace()
+  const dbPath = join(sessionsDir, 'sessions.db')
+  try {
+    const writer = new SqliteSessionStore(sessionsDir)
+    await writer.saveState('web:project', { sessionId: 'web:project', segmentIndex: 2 })
+    writer.close()
+    const metadata = {
+      projectId: 'folder-project',
+      projectName: 'planning-notes',
+      workdir: localProjectWorkdirRef('folder-project'),
+      futureMetadata: { preserved: true },
+    }
+    const db = new Database(dbPath)
+    db.prepare('UPDATE session_states SET prototype = ? WHERE key = ?')
+      .run(JSON.stringify({ version: 1, metadata }), 'web:project')
+    db.close()
+    const reader = new SqliteSessionStore(sessionsDir)
+    try {
+      const state = (await reader.getState('web:project'))!
+      assertEquals(state.projectId, 'folder-project')
+      assertEquals(state.workdir, metadata.workdir)
+      state.description = 'Updated session'
+      await reader.saveState(state.sessionId, state)
+    } finally {
+      reader.close()
+    }
+    const verify = new Database(dbPath)
+    try {
+      const row = verify.prepare('SELECT prototype FROM session_states WHERE key = ?')
+        .get('web:project') as { prototype: string }
+      assertEquals(JSON.parse(row.prototype).metadata, {
+        ...metadata,
+        description: 'Updated session',
+      })
+    } finally {
+      verify.close()
+    }
+  } finally {
+    await rm(sessionsDir, { recursive: true })
+  }
+})
 
 test('SqliteSessionStore round-trips complete SessionState metadata', async () => {
   const sessionsDir = await createTempWorkspace()
@@ -32,6 +76,7 @@ test('SqliteSessionStore round-trips complete SessionState metadata', async () =
     },
     agentType: 'researcher',
     projectName: 'shadow',
+    projectId: 'folder-project-a',
     reportTo: 'discord:parent',
     originUser: 'Ada',
     description: 'Check SQLite parity',

@@ -57,6 +57,8 @@ export interface SessionState {
   agentType?: string
   /** Project name for shared context. Set once at creation. */
   projectName?: string
+  /** Folder-project identity, independent of projectName planning notes. */
+  projectId?: string
   /** Subagent callback target session key (e.g. "discord:123"). Set once at creation. */
   reportTo?: string
   /** Display name of the user who triggered this session. Set once at creation. */
@@ -117,6 +119,7 @@ export interface SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
+        projectId?: string
       }
     >
   >

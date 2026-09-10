@@ -18,6 +18,7 @@ import {
   AtomicRuntimeConfigWriter,
   FileRuntimeConfigReader,
   runtimeConfigPath,
+  normalizeMainDirectoryPath,
 } from './bootstrap/runtime-config.js'
 import {
   AtomicLaunchProfileStore,
@@ -52,6 +53,7 @@ import { installRuntimeRequestAuthorization } from './runtime-authorization.js'
 import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
+import { installProjectDirectoryPicker } from './project-directories.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
@@ -139,6 +141,15 @@ export function createMainWindow(target: RendererTarget): BrowserWindow {
   const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
   removeNativeMenus(Menu, window)
   installWindowControls(ipcMain, window)
+  installProjectDirectoryPicker(ipcMain, window, async () => {
+    const result = await dialog.showOpenDialog(window, {
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    const selectedPath = result.filePaths[0]
+    return result.canceled || selectedPath === undefined
+      ? null
+      : normalizeMainDirectoryPath(selectedPath)
+  })
   enforceNavigationPolicy(window.webContents, target)
   window.once('ready-to-show', () => window.show())
   return window

@@ -183,6 +183,22 @@ forks can inherit a parent segment up to a record index. History assembly
 sanitizes/truncates tool-call/result pairs rather than treating every stored
 message as independent.
 
+Local folder projects have a separate persistent registry under Main's workspace.
+Their stable `projectId` is not the existing `projectName` used for agent planning
+and shared context. Creating a project conversation stores both the project ID
+and a local workdir capability reference. The locality resolver obtains its
+absolute directory from the backend registry, never from a display-path snapshot.
+Managed scratch directories and old unassociated sessions keep their previous
+behavior. Session data and uploads remain under their owning session directory
+even when filesystem tools execute in an external project folder.
+
+`src/projects/` owns registration, canonical-path deduplication, and cancellable
+Git clone operations; `src/index.ts` composes these with session creation and the
+existing capability lookup. Electron only exposes a Main-window-validated native
+directory picker. Project HTTP routes use the existing gateway authorization
+boundary. This local workflow does not implement remote workdir parity or Git
+worktree/branch management.
+
 `subagent` **creates the session but does not send its task**. The parent uses
 `message` afterward. When supported, a channel thread is created; otherwise a
 synthetic session ID is used. Child sessions inherit the root spawner's workdir

@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { resolve } from 'node:path'
 import {
   managedSessionWorkdirRef,
+  localProjectWorkdirRef,
   normalizeSessionLocality,
   parseWorkdirRefV1,
   resolveSessionLocations,
@@ -17,6 +18,43 @@ test('managed compatibility capabilities are deterministic and collision-safe', 
     managedSessionWorkdirRef('discord:room'),
     managedSessionWorkdirRef('discord_room'),
   )
+})
+
+test('local projects resolve only trusted absolute capability paths, retaining private session data', () => {
+  const workdir = { ...localProjectWorkdirRef('project-a'), displayPathSnapshot: resolve('untrusted') }
+  const state = { sessionId: 'web:child', workspaceRoot: 'web:owner', workdir }
+  const workspace = resolve('main')
+  const path = resolve('project-a')
+  const result = resolveSessionLocations(workspace, state, undefined, () => ({
+    node: 'online',
+    capability: { kind: 'workdir', online: true, path },
+  }))
+  assertEquals(workdir.capabilityId, 'local-project-v1:project-a')
+  assertEquals(result.sessionDataDir, resolve(workspace, 'web_owner'))
+  assertEquals(result.workdir, { available: true, locality: 'local', workdir, path })
+  for (const capability of [
+    undefined,
+    { kind: 'workdir', online: true },
+    { kind: 'workdir', online: true, path: 'relative-folder' },
+    { kind: 'workdir', online: false, path },
+    { kind: 'shell', online: true, path },
+  ]) {
+    assertEquals(resolveSessionLocations(workspace, state, undefined, () => ({
+      node: 'online',
+      capability,
+    })).workdir.available, false)
+  }
+  assertEquals(resolveSessionLocations(workspace, state).workdir.available, false)
+})
+
+test('remote project capabilities never expose a trusted lookup path locally', () => {
+  const workdir = { ...localProjectWorkdirRef('project-a'), nodeId: 'remote', displayPathSnapshot: resolve('untrusted') }
+  const result = resolveSessionLocations(resolve('main'), { sessionId: 'web:chat', workdir }, undefined, () => ({
+    node: 'online',
+    capability: { kind: 'workdir', online: true, path: resolve('project-a') },
+  }))
+  assertEquals(result.workdir, { available: true, locality: 'remote', workdir })
+  assertEquals('path' in result.workdir, false)
 })
 
 test('WorkdirRefV1 parser validates persisted data and ignores unknown fields', () => {

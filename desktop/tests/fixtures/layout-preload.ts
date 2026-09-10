@@ -20,9 +20,19 @@ const state: WizardState = { version: 1, revision: 1, mode: 'main', step: 'compl
 let maximized = false
 const calls: string[] = []
 const listeners = new Set<(value: DesktopWindowState) => void>()
+const projectDirectories: Array<string | null> = []
+let projectPickerCalls = 0
 const unused = async (): Promise<never> => { throw new Error('Unsupported layout fixture action') }
 
 const api: ShadowDesktopApi = {
+  projects: {
+    selectDirectory: async (...args: unknown[]) => {
+      if (args.length) throw new Error('Project directory picker accepts no arguments')
+      projectPickerCalls += 1
+      if (projectDirectories.length === 0) throw new Error('Synthetic project picker was not queued')
+      return projectDirectories.shift()!
+    },
+  },
   bootstrap: {
     load: async () => state,
     ensureRuntime: async () => ({ ok: true, context }),
@@ -57,6 +67,8 @@ const api: ShadowDesktopApi = {
 contextBridge.exposeInMainWorld('shadowDesktop', api)
 contextBridge.exposeInMainWorld('layoutFixture', {
   windowCalls: () => [...calls],
+  queueProjectDirectories: (values: Array<string | null>) => { projectDirectories.push(...values) },
+  projectPickerCalls: () => projectPickerCalls,
   publishWindowState: (value: boolean) => {
     maximized = value
     for (const listener of listeners) listener({ maximized })

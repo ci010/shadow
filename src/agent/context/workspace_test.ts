@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { resolve } from 'node:path'
 import type { AgentTypeDefinition } from '../agent-types/types.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
-import { resolveSessionLocations } from '../../sessions/locality.ts'
+import { localProjectWorkdirRef, resolveSessionLocations } from '../../sessions/locality.ts'
 import type { SessionPromptContext } from './builder.ts'
 import { workspaceProvider } from './workspace.ts'
 
@@ -42,6 +42,19 @@ test('workspace prompt uses the same managed path as runtime locality', async ()
     `**Workspace root (this session)**: \`${runtime.workdir.path}\``,
   ))
   assertEquals(runtime.workdir.path, resolve(workspace, 'discord_owner'))
+})
+
+test('project workspace prompt distinguishes actual cwd from private uploads', async () => {
+  const workspace = resolve('main')
+  const path = resolve('project-folder')
+  const prompt = await workspaceProvider(workspace, new VirtualFs(), () => ({
+    node: 'online',
+    capability: { kind: 'workdir', online: true, path },
+  })).getPromptSection(context({ workdir: localProjectWorkdirRef('project') }))
+  assert(prompt?.includes(`**Workspace root (this session)**: \`${path}\``))
+  assert(prompt?.includes(resolve(workspace, 'discord_top')))
+  assert(prompt?.includes('**Session uploads**'))
+  assert(prompt?.includes('not the project folder'))
 })
 
 test('workspace prompt reports unavailable capability without a local path', async () => {

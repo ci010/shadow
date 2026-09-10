@@ -1,4 +1,5 @@
 import type { SystemPromptProvider } from './builder.ts'
+import { join } from 'node:path'
 import type { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import {
@@ -40,8 +41,9 @@ export function workspaceProvider(
           'This folder is home. Treat it that way.',
           '',
           'Files you create with relative paths land in your **workspace root** —',
-          'that keeps home tidy. Files people upload to you also land here, under',
-          '`uploads/`. A few shared resources still resolve from home by their',
+          'that keeps home tidy. Files people upload to you stay in private session data:',
+          `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the project folder).`,
+          'Use the absolute attachment paths supplied in messages. A few shared resources still resolve from home by their',
           'plain names, never your workspace root:',
           '',
           '- `.tmp/` — scratch space for tools and ephemeral data',

@@ -32,6 +32,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'workdir',
   'agentType',
   'projectName',
+  'projectId',
   'reportTo',
   'originUser',
   'description',
@@ -72,6 +73,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
       'workspaceRoot',
       'agentType',
       'projectName',
+      'projectId',
       'reportTo',
       'originUser',
       'description',
@@ -179,7 +181,7 @@ export class SqliteSessionStore implements SessionStore {
         prototype = excluded.prototype
     `)
     this.stmtListSessions = this.db.prepare(
-      'SELECT key, segment_count, last_activity_at FROM session_states',
+      'SELECT key, segment_count, last_activity_at, last_known_tokens, prototype FROM session_states',
     )
     this.stmtDeleteState = this.db.prepare(
       'DELETE FROM session_states WHERE key = ?',
@@ -309,6 +311,7 @@ export class SqliteSessionStore implements SessionStore {
         workdir: state.workdir,
         agentType: state.agentType,
         projectName: state.projectName,
+        projectId: state.projectId,
         reportTo: state.reportTo,
         originUser: state.originUser,
         description: state.description,
@@ -332,6 +335,7 @@ export class SqliteSessionStore implements SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
+        projectId?: string
       }
     >
   > {
@@ -339,11 +343,14 @@ export class SqliteSessionStore implements SessionStore {
       key: string
       segment_count: number
       last_activity_at: string | null
+      last_known_tokens: number | null
+      prototype: string | null
     }>
     return rows.map((r) => ({
       sessionId: r.key,
       segmentIndex: r.segment_count ?? 0,
       lastActivityAt: r.last_activity_at ?? undefined,
+      projectId: this.parseRow(r).projectId,
     }))
   }
 

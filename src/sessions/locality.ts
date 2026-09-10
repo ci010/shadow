@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 
 export const LOCAL_NODE_ID = 'local'
@@ -24,6 +24,8 @@ export interface WorkdirCapabilityState {
   readonly capability?: {
     readonly kind: string
     readonly online: boolean
+    /** Trusted local directory supplied by the capability registry, not a display path. */
+    readonly path?: string
   }
 }
 
@@ -102,6 +104,14 @@ export function managedSessionWorkdirRef(
   }
 }
 
+export function localProjectWorkdirRef(projectId: string): WorkdirRefV1 {
+  return {
+    version: 1,
+    nodeId: LOCAL_NODE_ID,
+    capabilityId: `local-project-v1:${projectId}`,
+  }
+}
+
 export function normalizeSessionLocality<T extends SessionLocalityState>(
   state: T,
   localNodeId = LOCAL_NODE_ID,
@@ -159,13 +169,25 @@ export function resolveSessionLocations(
   }
 
   if (normalized.workdir.capabilityId !== compatibilityRef.capabilityId) {
+    const capabilityState = lookup?.(normalized.workdir)
+    if (capabilityState?.node === 'offline') return unavailable('node-offline')
+    if (capabilityState?.node === 'revoked') return unavailable('capability-revoked')
+    if (capabilityState?.node !== 'online') return unavailable('capability-missing')
+    const capability = capabilityState.capability
+    if (!capability) return unavailable('capability-missing')
+    if (capability.kind !== 'workdir') return unavailable('incompatible')
+    if (!capability.online) return unavailable('capability-offline')
+    if (typeof capability.path !== 'string' || !isAbsolute(capability.path)) {
+      return unavailable('incompatible')
+    }
     return {
       home,
       sessionDataDir,
       workdir: {
-        available: false,
+        available: true,
+        locality: 'local',
         workdir: normalized.workdir,
-        reason: 'capability-missing',
+        path: resolve(capability.path),
       },
     }
   }

@@ -5,11 +5,13 @@ import { createTempWorkspace } from '../testing/workspace.ts'
 import { ConfigSchema } from '../config/schema.ts'
 import { startMainRuntime } from '../index.ts'
 
-test('Main runtime exposes readiness, idempotent shutdown, and completion', async () => {
+test('Main runtime supports a relative workspace, readiness, idempotent shutdown, and completion', async () => {
   const workspace = await createTempWorkspace()
+  const originalCwd = process.cwd()
   try {
+    process.chdir(workspace)
     const config = ConfigSchema.parse({
-      agent: { workspace },
+      agent: { workspace: '.' },
       channels: {},
       mcp: {},
     })
@@ -30,6 +32,7 @@ test('Main runtime exposes readiness, idempotent shutdown, and completion', asyn
       1,
     )
   } finally {
+    process.chdir(originalCwd)
     await rm(workspace, { recursive: true })
   }
 })

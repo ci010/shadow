@@ -19,10 +19,9 @@ export interface ExecutionContext extends MessageContext {
   /** Physical session ID — the actual persisted session log identifier */
   physicalSessionId: string
   /**
-   * Per-session working directory (`<workspace>/<safeSessionId>/`).
-   * Filesystem/shell tools resolve the agent's relative paths against this so
-   * session output stays isolated from the shared workspace root. Shared
-   * resources (memory/, uploads/, SOUL.md, …) still resolve from the root.
+   * Resolved working directory: a managed session folder or registered project.
+   * Filesystem/shell tools resolve relative paths here. Shared resources such as
+   * memory/ and SOUL.md stay under Main; private uploads use explicit file references.
    * Falls back to the workspace root when unset.
    */
   cwd?: string

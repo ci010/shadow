@@ -195,6 +195,7 @@ export function sessionsApiPlugin(
       const nodes: Array<{
         physicalId: string
         logicalId: string
+        projectId?: string
         parentPhysicalId: string | null
         parentIndex: number | null
         isCurrent: boolean
@@ -220,6 +221,7 @@ export function sessionsApiPlugin(
           nodes.push({
             physicalId,
             logicalId: session.sessionId,
+            projectId: state?.projectId,
             parentPhysicalId,
             parentIndex: state?.parent?.index ?? null,
             isCurrent: i === session.segmentIndex,

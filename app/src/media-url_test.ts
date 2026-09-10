@@ -30,3 +30,16 @@ test('media URL rejects non-web sessions and preserves remote URLs', () => {
     'https://example.com/image one.png',
   )
 })
+
+test('absolute Windows upload paths round-trip unchanged through the media URL', () => {
+  for (const path of [
+    String.raw`C:\fixtures\private session\uploads\image one&two.png`,
+    String.raw`\\fixture-server\share\private session\uploads\image #1.png`,
+  ]) {
+    const url = new URL(buildMediaUrl('http://localhost:5173', 'web:chat-upload-fixture', path)!)
+    assertEquals(url.origin, 'http://localhost:5173')
+    assertEquals(url.pathname, '/api/media')
+    assertEquals(url.searchParams.get('chatId'), 'chat-upload-fixture')
+    assertEquals(url.searchParams.get('path'), path)
+  }
+})

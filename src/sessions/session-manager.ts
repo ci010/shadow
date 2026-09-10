@@ -26,7 +26,7 @@ import { newPhysicalSessionId } from '../utils/paths.ts'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
-import type { WorkdirCapabilityLookup, WorkdirRefV1 } from './locality.ts'
+import { LOCAL_NODE_ID, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
 import type { Executor } from '../execution/executor.ts'
 import type {
   SessionConfig,
@@ -408,6 +408,7 @@ export class SessionManager {
       model?: string
       agentType?: string
       projectName?: string
+      projectId?: string
       reportTo?: string
       originUser?: string
       description?: string
@@ -450,15 +451,23 @@ export class SessionManager {
       reasoningEffort: agent?.reasoningEffort,
     }
 
+    const parentState = parent ? this.sessionStates[parent.id] : undefined
+    const parentWorkdir = parentState?.workdir
+    const inheritedWorkdir = parentWorkdir &&
+        !(parentWorkdir.nodeId === LOCAL_NODE_ID &&
+          parentWorkdir.capabilityId.startsWith('managed-session-v1:'))
+      ? parentWorkdir
+      : undefined
     const state: SessionState = {
       sessionId,
       segmentIndex: 0,
       config,
       parent,
       workspaceRoot: stateFields?.workspaceRoot,
-      workdir: stateFields?.workdir,
+      workdir: stateFields?.workdir ?? inheritedWorkdir,
       agentType: stateFields?.agentType,
       projectName: stateFields?.projectName,
+      projectId: stateFields?.projectId ?? parentState?.projectId,
       reportTo: stateFields?.reportTo,
       originUser: stateFields?.originUser,
       description: stateFields?.description,
@@ -675,12 +684,13 @@ export class SessionManager {
   }
 
   listSessions(): Array<
-    { sessionId: string; segmentIndex: number; lastActivityAt?: string }
+    { sessionId: string; segmentIndex: number; lastActivityAt?: string; projectId?: string }
   > {
     return Object.values(this.sessionStates).map((s) => ({
       sessionId: s.sessionId,
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,
+      projectId: s.projectId,
     }))
   }
 

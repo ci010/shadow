@@ -133,13 +133,46 @@ The same backend applies the saved settings without a separate UI-only config.
 The desktop window uses a custom, draggable title bar with minimize,
 maximize/restore, and close controls; it has no native application menu.
 Navigation (including Providers) and window controls share one Shadow header.
-Sessions dock to the left edge; the session list and chat history scroll
+Projects dock to the left edge; the session list and chat history scroll
 independently while the composer stays visible. Narrow browser windows expose
-Sessions through a toggle. The model selector lives in the chat composer's
+Projects through a toggle. The model selector lives in the chat composer's
 toolbar and retains the existing global model-selection behavior; it is also
 available on the Providers tab from other views. Returning from Providers
 restores the existing chat and unsent draft; leaving settings cancels any pending
 device login. First-run credential checks still gate unavailable chat access.
+
+The Projects header's **+** menu contains exactly **Open folder**, **Clone repo**,
+and **Start from scratch**. Open folder registers an existing directory using
+Electron's native folder picker (the browser accepts an explicit Main-local path).
+Registered folders remain visible when empty. Each folder's own **+** creates a
+conversation whose filesystem tools and shell use that folder as their working
+directory. Collapse a folder to hide its conversations.
+
+Folder registrations persist in `<workspace>/projects.v1.json`; session
+associations persist in the selected JSONL or SQLite store.
+Reopening the same canonical folder reuses its project; existing unassociated
+conversations remain under **Chats**. Start from scratch retains the managed
+session-directory behavior and does not use the OS home directory. Session
+history and uploaded attachments remain in Main's private session data, separate
+from the selected project's working directory. This folder registry is distinct
+from the agent `project` tool's named planning documents.
+Upload API callers should preserve the returned `path` unchanged: new uploads
+return absolute private-file references, while relative media paths refer to the
+session's actual working directory.
+An existing `restrictToWorkspace=true` policy still prevents the write tool from
+writing outside Main; opening a project does not silently disable that policy.
+
+Clone repo accepts a repository URL and a new child directory inside a selected
+existing parent. Git runs on Main without a shell command string or new OAuth
+flow, using the machine's existing noninteractive authentication. The UI supports
+progress, errors, cancellation, and retry. A destination that already exists is
+never overwritten; failed or cancelled clones keep partial files for inspection.
+Only successful clones become projects. If registration fails after cloning,
+recover the checkout with Open folder rather than cloning over it.
+Accepted transports are credential-free HTTPS, SSH Git URLs, and local `file:`
+URLs. Passwords, queries, fragments, and Git remote-helper command syntax are
+rejected. Remote cloning requires Git and suitable existing credentials or SSH
+configuration on Main.
 
 The optional layout regression uses the built renderer in hidden Electron
 windows with synthetic APIs and disposable project-local profiles. It does not

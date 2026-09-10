@@ -1,4 +1,5 @@
 import { resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { readFile, stat as nodeStat, writeFile as nodeWriteFile } from 'node:fs/promises'
 import process from 'node:process'
 import { env } from 'node:process'
@@ -34,6 +35,9 @@ import { McpManager } from './mcp/manager.ts'
 import { SessionManager } from './sessions/session-manager.ts'
 import { JsonlSessionStore } from './sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from './sessions/session-store-sqlite.ts'
+import { localProjectWorkdirRef, type WorkdirCapabilityLookup } from './sessions/locality.ts'
+import { ProjectRegistry } from './projects/registry.ts'
+import { ProjectService } from './projects/routes.ts'
 import { SkillsManager } from './skills/loader.ts'
 import { BackgroundTaskTool, ContinuationTool } from './tools/background.ts'
 import { CommandHandlerManager } from './tools/commands/command-handler.ts'
@@ -265,6 +269,10 @@ export async function startMainRuntime(
         : false,
     clientKey: (request) => clientAddresses.resolve(request),
   })
+  const projectRegistry = new ProjectRegistry(resolve(workspace))
+  await projectRegistry.init()
+  const workdirCapabilityLookup: WorkdirCapabilityLookup = (ref) =>
+    projectRegistry.lookupWorkdir(ref) ?? mainCluster.workdirCapabilityLookup(ref)
 
   const execConfig = config.tools.exec
 
@@ -483,14 +491,14 @@ export async function startMainRuntime(
     backgroundTasks,
     agentTypes,
     events,
-    workdirCapabilityLookup: mainCluster.workdirCapabilityLookup,
+    workdirCapabilityLookup,
     remoteExecutor: mainCluster.remoteExecutor,
     onSessionStopped: (id) => backgroundTasks.handleSessionStopped(id),
   })
 
   context.register(guidelineProvider())
   context.register(
-    workspaceProvider(workspace, vfs, mainCluster.workdirCapabilityLookup),
+    workspaceProvider(workspace, vfs, workdirCapabilityLookup),
   )
   context.register(runtimeIdentityProvider({
     identity,
@@ -691,6 +699,22 @@ export async function startMainRuntime(
     getConfig: () => activeConfig,
     auth: copilotAuth,
   })
+  const projects = new ProjectService({
+    registry: projectRegistry,
+    createSession: async (project) => {
+      const chatId = `chat-${randomUUID()}`
+      const sessionId = `web:${chatId}`
+      await sessions.buildSession(sessionId, undefined, {
+        projectId: project.id,
+        workdir: {
+          ...localProjectWorkdirRef(project.id),
+          displayName: project.name,
+          displayPathSnapshot: project.path,
+        },
+      })
+      return { sessionId, chatId }
+    },
+  })
 
   registerGatewayRoutes(app, [
     ...mainCluster.plugins,
@@ -698,6 +722,7 @@ export async function startMainRuntime(
     otelPlugin(otelStore),
     sessionPlugin(sessions, agent, agentTypes),
     sessionsApiPlugin(sessions),
+    projects.plugin,
     providerSetup.plugin(),
     providerPlugin(() => provider, () => providerSetup.status()),
     configPlugin({ store: configStore }),
@@ -775,6 +800,7 @@ export async function startMainRuntime(
   }
   const shutdownRuntime = async () => {
     localControl.markStopping()
+    await projects.dispose()
     await providerSetup.dispose()
     console.info('[main] Shutting down...')
     const closeCluster = mainCluster.closeNodeConnections()

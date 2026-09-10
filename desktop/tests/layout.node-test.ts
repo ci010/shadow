@@ -13,7 +13,7 @@ const repository = resolve(sourceDirectory, '..', '..')
 const require = createRequire(import.meta.url)
 
 test('built Vue layout stays bounded in isolated hidden Electron viewports', {
-  timeout: 120_000,
+  timeout: 150_000,
 }, async (t) => {
   const assets = join(repository, 'app', 'dist')
   await assert.doesNotReject(access(join(assets, 'index.html')), 'Build the renderer with pnpm build:app before the layout test')
@@ -58,7 +58,7 @@ test('built Vue layout stays bounded in isolated hidden Electron viewports', {
   child.stdout.setEncoding('utf8').on('data', (data: string) => { stdout += data })
   child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr += data })
   const closed = once(child, 'close')
-  const timeout = setTimeout(() => child.kill(), 95_000)
+  const timeout = setTimeout(() => child.kill(), 125_000)
   t.after(() => clearTimeout(timeout))
   const [code] = await closed
   const lines = stdout.split(/\r?\n/).filter((line) => line.startsWith('LAYOUT_'))

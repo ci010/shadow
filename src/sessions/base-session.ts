@@ -339,7 +339,7 @@ export abstract class BaseSession {
       ? locations.workdir.path
       : undefined
     const messageWorkdir = cwd ?? locations.sessionDataDir
-    await mkdir(messageWorkdir, { recursive: true })
+    await mkdir(locations.sessionDataDir, { recursive: true })
 
     if (msg.retry === true) {
       // Retry: re-run the agent loop on the existing history without appending

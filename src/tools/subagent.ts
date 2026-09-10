@@ -130,6 +130,7 @@ export class SubagentTool implements Tool {
         preloadTools,
         workspaceRoot,
         workdir: parentState?.workdir,
+        projectId: parentState?.projectId,
       },
     )
 

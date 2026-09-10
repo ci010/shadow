@@ -3,60 +3,23 @@
     class="chat-workspace"
     :class="{ 'tools-open': rightPaneOpen, 'mobile-sessions-open': mobileSidebarOpen }"
   >
-    <button class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Sessions</button>
-    <!-- Sidebar: session list -->
-    <aside id="sessions-sidebar" class="sessions-sidebar" aria-label="Sessions">
-      <div class="flex items-center justify-between">
-        <h2 class="text-lg font-600">Sessions</h2>
-        <button class="btn" @click="startNewChat">+ New</button>
-      </div>
-      <p class="mt-2 text-sm text-ink/60">All sessions. Direct-chat sessions are interactive.</p>
-
-      <!-- New chat input -->
-      <div v-if="creatingNew" class="mt-3 flex gap-2">
-        <input
-          ref="newChatInput"
-          v-model="newChatId"
-          class="flex-1 rounded border border-default bg-surface px-2 py-1 text-sm font-mono"
-          placeholder="chat-id"
-          @keydown.enter="confirmNewChat"
-          @keydown.escape="creatingNew = false"
-        />
-        <button class="btn btn-sm" @click="confirmNewChat">Go</button>
-      </div>
-
-      <div class="mt-4 session-list">
-        <div v-if="allSessions.length === 0 && !creatingNew" class="text-sm text-ink/40">
-          No sessions found.
-        </div>
-        <template v-for="s in allSessions" :key="s.sessionId">
-          <button
-            v-if="isSessionVisible(s)"
-            class="chat-session-row"
-            :class="{ active: activeSessionId === s.sessionId, readonly: !s.isDirectChat }"
-            :style="{ paddingLeft: `${s.depth * 16 + 12}px` }"
-            :title="s.description ? `${s.sessionId}\n${s.description}` : s.sessionId"
-            @click="selectSession(s.sessionId); mobileSidebarOpen = false"
-          >
-            <span
-              v-if="hasChildren(s.sessionId)"
-              class="collapse-toggle"
-              @click.stop="toggleCollapse(s.sessionId)"
-            >{{ collapsedSessions.has(s.sessionId) ? '&#x25B6;' : '&#x25BC;' }}</span>
-            <span v-else-if="s.depth > 0" class="child-marker">&#x2514;</span>
-            <span v-if="s.description" class="chat-session-desc">{{ s.description }}</span>
-            <span class="chat-session-id" :class="{ 'has-desc': !!s.description }">{{ s.label }}</span>
-            <span v-if="sessionStages[s.sessionId] && sessionStages[s.sessionId] !== 'inactive'" class="chat-session-badge" :class="'stage-' + sessionStages[s.sessionId]">{{ sessionStages[s.sessionId] }}</span>
-            <span v-else-if="s.isCurrent" class="chat-session-badge current">live</span>
-            <span
-              class="chat-session-delete"
-              title="Delete session"
-              @click.stop="deleteSession(s.sessionId)"
-            >&times;</span>
-          </button>
-        </template>
-      </div>
-    </aside>
+    <button class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Projects</button>
+    <button v-if="mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close projects" @click="mobileSidebarOpen = false" />
+    <ProjectsSidebar
+      :api-base="apiBase"
+      :sessions="allSessions"
+      :active-session-id="activeSessionId"
+      :collapsed="collapsedSessions"
+      :stages="sessionStages"
+      :sessions-loading="sessionsLoading"
+      :sessions-error="sessionsError"
+      @select="selectSession($event); mobileSidebarOpen = false"
+      @delete="deleteSession"
+      @toggle="toggleCollapse"
+      @reload="loadSessionList"
+      @scratch="createNewWebChat"
+      @created="selectProjectSession"
+    />
 
     <!-- Chat area -->
     <div class="chat-panel">
@@ -379,6 +342,8 @@ import SystemPromptCard from './SystemPromptCard.vue'
 import ToolsCard from './ToolsCard.vue'
 import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
+import ProjectsSidebar from './ProjectsSidebar.vue'
+import { parseSessionGraph, type SidebarSession } from '../projects-sidebar.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -405,13 +370,11 @@ const KATEX_ATTRS = ['mathvariant', 'encoding', 'xmlns', 'display', 'stretchy', 
 const props = defineProps<{ apiBase: string }>()
 
 const activeSessionId = ref('')
+let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
   const id = activeSessionId.value
   return id.startsWith('web:chat-')
 })
-const creatingNew = ref(false)
-const newChatId = ref('')
-const newChatInput = ref<HTMLInputElement>()
 const chatInput = ref<HTMLTextAreaElement>()
 const messagesContainer = ref<HTMLElement>()
 const loadingHistory = ref(false)
@@ -570,7 +533,10 @@ interface ChatMsg {
 }
 
 const messages = ref<ChatMsg[]>([])
-const allSessions = ref<Array<{ sessionId: string; label: string; description?: string; isDirectChat: boolean; isCurrent: boolean; parentSessionId: string | null; depth: number; config?: SessionConfigInfo }>>([])
+const allSessions = ref<SidebarSession[]>([])
+const sessionsLoading = ref(false)
+const sessionsError = ref('')
+let sessionListRequest: AbortController | undefined
 const collapsedSessions = reactive(new Set<string>())
 const expandedToolResults = reactive(new Set<number>())
 const expandedToolCalls = reactive(new Set<number>())
@@ -873,93 +839,27 @@ async function loadGlobalConfig(): Promise<void> {
 }
 
 async function loadSessionList(): Promise<void> {
+  sessionListRequest?.abort()
+  const controller = new AbortController()
+  sessionListRequest = controller
+  sessionsLoading.value = true
+  sessionsError.value = ''
   try {
-    const res = await fetch(buildUrl('/api/sessions/graph'))
+    const res = await fetch(buildUrl('/api/sessions/graph'), {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+    })
+    if (!res.ok) throw new Error('Cannot load conversations. Check Main and retry.')
     const data = await res.json()
-    const sessions: Array<{ sessionId: string; title?: string; history?: string[]; current?: string; description?: string; config?: SessionConfigInfo }> = data.sessions ?? []
-    const nodes: Array<{
-      physicalId: string
-      logicalId: string
-      parentPhysicalId: string | null
-      isCurrent: boolean
-    }> = data.nodes ?? []
-
-    // Build logical-level parent mapping: child logicalId -> parent logicalId
-    // A physical node's parentPhysicalId points to a physical session in another logical session.
-    const physicalToLogical = new Map<string, string>()
-    for (const n of nodes) {
-      physicalToLogical.set(n.physicalId, n.logicalId)
+    if (!controller.signal.aborted) allSessions.value = parseSessionGraph(data)
+  } catch (cause) {
+    if (!controller.signal.aborted) sessionsError.value = cause instanceof Error && cause.message.startsWith('Cannot ')
+      ? cause.message : 'Cannot load conversations. Check Main and retry.'
+  } finally {
+    if (sessionListRequest === controller) {
+      sessionListRequest = undefined
+      sessionsLoading.value = false
     }
-
-    const logicalParent = new Map<string, string>()
-    for (const n of nodes) {
-      if (n.parentPhysicalId) {
-        const parentLogical = physicalToLogical.get(n.parentPhysicalId)
-        if (parentLogical && parentLogical !== n.logicalId) {
-          logicalParent.set(n.logicalId, parentLogical)
-        }
-      }
-    }
-
-    // Build session entries
-    const sessionMap = new Map<string, { sessionId: string; label: string; description?: string; isDirectChat: boolean; isCurrent: boolean; parentSessionId: string | null; config?: SessionConfigInfo }>()
-    for (const s of sessions) {
-      const isDC = s.sessionId.startsWith('web:chat-')
-      const fallbackLabel = isDC ? s.sessionId.replace('web:', '') : s.sessionId
-      sessionMap.set(s.sessionId, {
-        sessionId: s.sessionId,
-        label: s.title || fallbackLabel,
-        description: s.description,
-        isDirectChat: isDC,
-        isCurrent: !!s.current,
-        parentSessionId: logicalParent.get(s.sessionId) ?? null,
-        config: s.config,
-      })
-    }
-
-    // Build children map and collect roots
-    const childrenMap = new Map<string, string[]>()
-    const roots: string[] = []
-    for (const s of sessions) {
-      const parent = logicalParent.get(s.sessionId)
-      if (parent && sessionMap.has(parent)) {
-        if (!childrenMap.has(parent)) childrenMap.set(parent, [])
-        childrenMap.get(parent)!.push(s.sessionId)
-      } else {
-        roots.push(s.sessionId)
-      }
-    }
-
-    // Flatten tree with depth via DFS
-    const result: Array<{ sessionId: string; label: string; description?: string; isDirectChat: boolean; isCurrent: boolean; parentSessionId: string | null; depth: number; config?: SessionConfigInfo }> = []
-    function walk(id: string, depth: number) {
-      const entry = sessionMap.get(id)
-      if (!entry) return
-      result.push({ ...entry, depth })
-      const kids = childrenMap.get(id) ?? []
-      for (const kid of kids) walk(kid, depth + 1)
-    }
-    for (const root of roots) walk(root, 0)
-
-    allSessions.value = result
-  } catch {
-    allSessions.value = []
   }
-}
-
-function isSessionVisible(s: { sessionId: string; parentSessionId: string | null }): boolean {
-  // Walk up the parent chain — if any ancestor is collapsed, this session is hidden
-  let parentId = s.parentSessionId
-  while (parentId) {
-    if (collapsedSessions.has(parentId)) return false
-    const parent = allSessions.value.find(p => p.sessionId === parentId)
-    parentId = parent?.parentSessionId ?? null
-  }
-  return true
-}
-
-function hasChildren(sessionId: string): boolean {
-  return allSessions.value.some(s => s.parentSessionId === sessionId)
 }
 
 function toggleCollapse(sessionId: string): void {
@@ -968,19 +868,6 @@ function toggleCollapse(sessionId: string): void {
   } else {
     collapsedSessions.add(sessionId)
   }
-}
-
-function startNewChat(): void {
-  creatingNew.value = true
-  newChatId.value = `chat-${Date.now().toString(36)}`
-  nextTick(() => newChatInput.value?.select())
-}
-
-function confirmNewChat(): void {
-  const id = newChatId.value.trim()
-  if (!id) return
-  creatingNew.value = false
-  openWebChat(id)
 }
 
 function openWebChat(id: string): void {
@@ -996,6 +883,21 @@ function createNewWebChat(): void {
   openWebChat(`chat-${Date.now().toString(36)}`)
 }
 
+async function selectProjectSession(sessionId: string, projectId: string): Promise<void> {
+  const selectionGeneration = sessionSelectionGeneration
+  await loadSessionList()
+  // The create response is authoritative even if the subsequent list refresh failed.
+  if (!allSessions.value.some(session => session.sessionId === sessionId)) {
+    allSessions.value.unshift({
+      sessionId, projectId, label: sessionId.replace('web:', ''),
+      isDirectChat: true, isCurrent: true, parentSessionId: null, depth: 0,
+    })
+  }
+  if (route.name !== 'chat' || selectionGeneration !== sessionSelectionGeneration) return
+  mobileSidebarOpen.value = false
+  selectSession(sessionId)
+}
+
 async function deleteSession(sessionId: string): Promise<void> {
   const children = allSessions.value.filter(s => s.parentSessionId === sessionId)
   const msg = children.length > 0
@@ -1006,8 +908,7 @@ async function deleteSession(sessionId: string): Promise<void> {
   try {
     const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`), { method: 'DELETE' })
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      console.error('Failed to delete session:', data)
+      sessionsError.value = 'Could not delete this conversation. Check Main and retry.'
       return
     }
     // Clear active view if deleted session was selected
@@ -1016,12 +917,13 @@ async function deleteSession(sessionId: string): Promise<void> {
       messages.value = []
     }
     await loadSessionList()
-  } catch (err) {
-    console.error('Failed to delete session:', err)
+  } catch {
+    sessionsError.value = 'Could not delete this conversation. Check Main and retry.'
   }
 }
 
 function selectSession(sessionId: string): void {
+  sessionSelectionGeneration++
   clearSelection()
   disconnectEventStream()
   activeSessionId.value = sessionId
@@ -1671,6 +1573,7 @@ async function askInFork(): Promise<void> {
       isDirectChat: true,
       isCurrent: false,
       parentSessionId,
+      projectId: parentEntry?.projectId,
       depth: parentDepth + 1,
     })
   }
@@ -1705,7 +1608,7 @@ function handleBackgroundClick(e: MouseEvent): void {
 
   // Ignore clicks on interactive elements (buttons, links, form fields, etc.).
   const target = e.target as HTMLElement | null
-  if (!target || target.closest('button, a, input, textarea, select, option, label, [contenteditable="true"]')) return
+  if (!target || target.closest('button, a, input, textarea, select, option, label, [contenteditable="true"], [role="dialog"], .project-dialog-backdrop, .project-menu-backdrop, .projects-sidebar')) return
 
   input.focus({ preventScroll: true })
 }
@@ -1716,6 +1619,7 @@ window.addEventListener('resize', handleResize)
 const onGlobalConfigChanged = () => { void loadGlobalConfig() }
 window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
+  sessionListRequest?.abort()
   document.removeEventListener('mouseup', handleTextSelection)
   document.removeEventListener('click', handleBackgroundClick)
   window.removeEventListener('resize', handleResize)
@@ -1750,18 +1654,14 @@ function resendLastMessage() {
 .chat-workspace {
   position: relative;
   display: grid;
-  grid-template-columns: clamp(200px, 22vw, 280px) minmax(0, 1fr) 32px;
+  grid-template-columns: 260px minmax(0, 1fr) 32px;
   grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-width: 0;
   min-height: 0;
   height: 100%;
 }
-.chat-workspace.tools-open { grid-template-columns: clamp(200px, 22vw, 280px) minmax(0, 1fr) minmax(240px, 28%); }
-.sessions-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px 12px; border-right: 1px solid var(--c-border); background: var(--c-bg-card); }
-.sessions-sidebar > :not(.session-list) { flex-shrink: 0; }
-.sessions-sidebar h2 { margin: 0; }
-.sessions-sidebar input { min-width: 0; }
+.chat-workspace.tools-open { grid-template-columns: 260px minmax(0, 1fr) minmax(240px, 28%); }
 .chat-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .chat-header { flex-shrink: 0; gap: 10px; }
 .chat-heading-copy { min-width: 0; overflow-wrap: anywhere; }
@@ -1775,15 +1675,17 @@ function resendLastMessage() {
 .composer-send, .composer-send-actions { margin-left: auto; flex-shrink: 0; }
 .composer-send-actions { display: flex; gap: 8px; }
 .mobile-sessions-toggle { display: none; }
+.mobile-sidebar-backdrop { display: none; }
 @media (max-width: 1000px) {
-  .chat-workspace { grid-template-columns: 200px minmax(0, 1fr) 28px; }
-  .chat-workspace.tools-open { grid-template-columns: 200px minmax(0, 1fr) 250px; }
+  .chat-workspace { grid-template-columns: 240px minmax(0, 1fr) 28px; }
+  .chat-workspace.tools-open { grid-template-columns: 240px minmax(0, 1fr) 250px; }
 }
 @media (max-width: 700px) {
   .chat-workspace, .chat-workspace.tools-open { grid-template-columns: minmax(0, 1fr) 28px; }
   .tools-open .right-pane { position: absolute; inset: 0 0 0 auto; width: min(360px, 85%); z-index: 10; background: var(--c-bg-card); box-shadow: -8px 0 24px var(--c-shadow-soft); }
   .sessions-sidebar { display: none; position: absolute; inset: 36px auto 0 0; width: min(280px, 82%); z-index: 12; box-shadow: 8px 0 24px var(--c-shadow-soft); }
   .mobile-sessions-open .sessions-sidebar { display: flex; }
+  .mobile-sidebar-backdrop { display: block; position: absolute; inset: 36px 0 0; z-index: 11; border: 0; background: rgb(0 0 0 / 25%); }
   .mobile-sessions-toggle { display: block; position: absolute; top: 6px; left: 8px; z-index: 13; }
   .chat-header { padding-top: 42px; }
   .chat-empty-cta { padding-top: 42px; }
@@ -1891,102 +1793,6 @@ function resendLastMessage() {
   font-size: 0.7rem;
 }
 
-.session-list {
-  margin-top: 0.5rem;
-  min-height: 0;
-  flex: 1;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.chat-session-row {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  width: 100%;
-  padding: 0.4rem 0.5rem;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.1s ease, transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.chat-session-row:hover {
-  background: var(--c-bg-muted);
-  transform: translateX(2px);
-}
-
-.chat-session-delete {
-  display: none;
-  flex-shrink: 0;
-  margin-left: auto;
-  padding: 0 0.25rem;
-  font-size: 0.85rem;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--c-text-muted);
-  cursor: pointer;
-  border-radius: 3px;
-  transition: color 0.1s ease, background 0.1s ease;
-}
-
-.chat-session-delete:hover {
-  color: var(--c-error);
-  background: var(--c-error-bg);
-}
-
-.chat-session-row:hover .chat-session-delete {
-  display: inline-block;
-}
-
-.chat-session-row.active .chat-session-delete {
-  color: var(--c-text-on-primary);
-}
-
-.chat-session-row.active .chat-session-delete:hover {
-  color: var(--c-error);
-  background: var(--c-error-bg);
-}
-
-.chat-session-row.active {
-  background: var(--c-primary-bg);
-  color: var(--c-text-on-primary);
-}
-
-.chat-session-id {
-  font-size: 0.7rem;
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
-
-.chat-session-id.has-desc {
-  flex: 0 0 auto;
-  max-width: 5ch;
-  opacity: 0.45;
-  font-size: 0.6rem;
-}
-
-.chat-session-desc {
-  font-size: 0.7rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 2ch;
-  flex: 1 1 0;
-}
-
 .chat-session-badge {
   font-size: 0.5rem;
   font-weight: 600;
@@ -1998,11 +1804,6 @@ function resendLastMessage() {
   flex-shrink: 0;
   background: var(--c-bg-muted);
   color: var(--c-text-muted);
-}
-
-.chat-session-row.active .chat-session-badge {
-  background: var(--c-badge-active-overlay);
-  color: var(--c-text-on-primary);
 }
 
 .chat-session-badge.current {
@@ -2035,46 +1836,6 @@ function resendLastMessage() {
 @keyframes pulse-badge {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
-}
-
-.chat-session-row.active .chat-session-badge.current {
-  background: var(--c-success-bg);
-  color: var(--c-success-light);
-}
-
-.chat-session-row.readonly .chat-session-id {
-  opacity: 0.6;
-}
-
-.collapse-toggle {
-  font-size: 0.55rem;
-  width: 0.8rem;
-  flex-shrink: 0;
-  text-align: center;
-  opacity: 0.4;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.collapse-toggle:hover {
-  opacity: 1;
-}
-
-.chat-session-row.active .collapse-toggle {
-  opacity: 0.6;
-}
-
-.child-marker {
-  font-size: 0.6rem;
-  width: 0.8rem;
-  flex-shrink: 0;
-  text-align: center;
-  opacity: 0.25;
-  line-height: 1;
-}
-
-.chat-session-row.active .child-marker {
-  opacity: 0.4;
 }
 
 /* ── System event ─────────────────────────────────────────── */

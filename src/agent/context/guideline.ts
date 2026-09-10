@@ -45,11 +45,10 @@ export function guidelineProvider(): SystemPromptProvider {
       if (!agentType.ephemeral) {
         sections.push(SAFETY)
 
-        if (ctx.isGroup) {
-          sections.push(CHAT_GROUP)
-        } else {
-          sections.push(CHAT_DIRECT)
-        }
+        const chat = ctx.isGroup ? CHAT_GROUP : CHAT_DIRECT
+        sections.push(ctx.workdir && !ctx.workdir.capabilityId.startsWith('managed-session-v1:')
+          ? chat.replace('`uploads/` in this workspace', 'the private session uploads directory shown in Workspace, not the project folder')
+          : chat)
       }
 
       sections.push(TOOLS)

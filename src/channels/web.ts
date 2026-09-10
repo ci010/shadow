@@ -43,7 +43,7 @@ export async function resolveSessionMediaPath(
  * Endpoints:
  *  POST /api/chat/send     — send message (with optional media refs), returns SSE stream
  *  POST /api/chat/message  — send message, wait for full response (sync REST)
- *  POST /api/chat/upload   — upload file/image, returns relative path
+ *  POST /api/chat/upload   — upload file/image, returns absolute private-session path
  *  GET  /api/chat/uploads/* — serve uploaded / outbound media files
  */
 export class WebChannel extends AbstractChannel {
@@ -105,7 +105,7 @@ export class WebChannel extends AbstractChannel {
   }
 
   async start(app: Hono): Promise<void> {
-    // ── POST /api/chat/upload — save file into the session working folder ──
+    // ── POST /api/chat/upload — save file into private session data ──
     app.post('/api/chat/upload', async (c) => {
       try {
         const formData = await c.req.formData()
@@ -127,6 +127,8 @@ export class WebChannel extends AbstractChannel {
         const workdir = resolveSessionLocations(
           this.workspace,
           state ?? { sessionId },
+          undefined,
+          this.sessionManager?.workdirCapabilityLookup,
         ).workdir
         if (!workdir.available || workdir.locality === 'remote') {
           return c.json({ error: 'Upload unavailable' }, 409)
@@ -153,7 +155,10 @@ export class WebChannel extends AbstractChannel {
           `[web] Uploaded file: ${relativePath} (${buf.byteLength} bytes)`,
         )
         return c.json({
-          path: relativePath,
+          path: resolve(
+            sessionWorkspacePath(this.workspace, state?.workspaceRoot ?? sessionId),
+            relativePath,
+          ),
           filename: file.name,
           size: buf.byteLength,
         })
@@ -172,13 +177,12 @@ export class WebChannel extends AbstractChannel {
 
       const chatId = c.req.query('chatId')
       const sessionId = chatId ? `${this.name}:${chatId}` : undefined
-      const filePath = sessionId
-        ? join(
-          sessionWorkspacePath(this.workspace, sessionId),
-          'uploads',
-          filename,
-        )
-        : join(this.workspace, 'uploads', filename)
+      const state = sessionId ? this.sessionManager?.getSessionState(sessionId) : null
+      const uploadsRoot = sessionId
+        ? join(sessionWorkspacePath(this.workspace, state?.workspaceRoot ?? sessionId), 'uploads')
+        : join(this.workspace, 'uploads')
+      const filePath = await resolveSessionMediaPath(uploadsRoot, filename)
+      if (!filePath) return c.json({ error: 'File not found' }, 404)
       try {
         const data = new Uint8Array(await readFile(filePath))
         const ext = extname(filename).toLowerCase()
@@ -453,12 +457,23 @@ export class WebChannel extends AbstractChannel {
       const state = this.sessionManager?.getSessionState(sessionId) ?? {
         sessionId,
       }
-      const workdir = resolveSessionLocations(this.workspace, state).workdir
+      const locations = resolveSessionLocations(
+        this.workspace,
+        state,
+        undefined,
+        this.sessionManager?.workdirCapabilityLookup,
+      )
+      const workdir = locations.workdir
       if (!workdir.available || workdir.locality === 'remote') {
         return c.json({ error: 'Media unavailable' }, 404)
       }
 
-      const resolved = await resolveSessionMediaPath(workdir.path, rawPath)
+      const privateUpload = isAbsolute(rawPath)
+      const mediaRoot = privateUpload
+        ? join(locations.sessionDataDir, 'uploads')
+        : workdir.path
+      const mediaPath = privateUpload ? relative(mediaRoot, rawPath) : rawPath
+      const resolved = await resolveSessionMediaPath(mediaRoot, mediaPath)
       if (!resolved) return c.json({ error: 'Media unavailable' }, 404)
 
       try {
