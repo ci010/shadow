@@ -1,0 +1,44 @@
+{
+  "agent": {
+    "model": "deepseek-v4-flash@deepseek",
+    "workspace": "./workspace",
+    "maxToolIterations": 100
+  },
+  "providers": {
+    "copilot": {}
+  },
+  "channels": {
+    "discord": {
+      "enabled": false,
+      "adminChats": [
+        "1486230505677525094"
+      ]
+    },
+    "feishu": {
+      "enabled": false
+    },
+    "qq": {
+      "enabled": true,
+      "appId": "1904274490",
+      "secret": "MekcHj7RZTBgz4vY",
+      "token": "1904274490:MekcHj7RZTBgz4vY",
+      "sandbox": false
+    },
+    "web": {
+      "enabled": true
+    },
+    "wechat": {
+      "enabled": true
+    },
+    "wechatDesktop": {
+      "enabled": false
+    }
+  },
+  "mcp": {},
+  "tools": {},
+  "cron": {},
+  "voice": {
+    "enabled": false,
+    "sttUrl": "http://192.168.31.186:8000/transcribe"
+  }
+}

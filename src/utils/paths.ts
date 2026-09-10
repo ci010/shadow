@@ -1,0 +1,215 @@
+import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+
+/**
+ * Remove stale tool-result temp files older than `maxAgeMs` from `<workspace>/.tmp/`.
+ */
+export async function cleanupTempFiles(
+  workspace: string,
+  maxAgeMs = 60 * 60 * 1_000,
+): Promise<void> {
+  const tmpDir = join(workspace, '.tmp')
+  try {
+    const cutoff = Date.now() - maxAgeMs
+    for (const entry of await readdir(tmpDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith('tool-result-')) continue
+      const filePath = join(tmpDir, entry.name)
+      try {
+        const info = await stat(filePath)
+        if (info.mtime && info.mtime.getTime() < cutoff) {
+          await rm(filePath)
+        }
+      } catch { /* ignore individual file errors */ }
+    }
+  } catch { /* .tmp dir may not exist yet */ }
+}
+
+/**
+ * Make a session ID safe for use as a filename component.
+ */
+export function safeSessionId(sessionId: string): string {
+  return sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+/**
+ * Generate a physical session ID from a logical session ID and a sequence index.
+ */
+export function newPhysicalSessionId(sessionId: string, index: number): string {
+  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_')
+    .slice(0, 48)
+  return `${safe}-${index}`
+}
+
+/**
+ * Resolve a path relative to the agent workspace root.
+ */
+export function workspacePath(
+  workspace: string,
+  ...segments: string[]
+): string {
+  return resolve(workspace, ...segments)
+}
+
+/**
+ * Absolute path of the per-session working directory
+ * (`<workspace>/<safeSessionId>/`).
+ *
+ * Each logical session gets its own folder so that files the agent produces
+ * stay isolated instead of cluttering the shared workspace root.
+ */
+export function sessionWorkspacePath(
+  workspace: string,
+  sessionId: string,
+): string {
+  return resolve(workspace, safeSessionId(sessionId))
+}
+
+/**
+ * Top-level workspace-root folders that are SHARED across every session.
+ *
+ * Agent-provided relative paths whose first segment matches one of these
+ * resolve against the workspace root rather than the per-session working
+ * directory, so shared resources (memory, skills, etc.) remain reachable by
+ * their plain names from any session.
+ *
+ * Note: `uploads` is deliberately NOT shared — user-uploaded files land in the
+ * per-session working directory (`<cwd>/uploads/`) so they live alongside the
+ * rest of the session's working files.
+ */
+export const SHARED_WORKSPACE_PREFIXES: readonly string[] = [
+  'memory',
+  '.tmp',
+  '.sessions',
+  '.plans',
+  'projects',
+  'skills',
+  'agents',
+  'prompts',
+  'tuning',
+]
+
+/**
+ * Workspace-root files that are SHARED across every session and always resolve
+ * from the workspace root.
+ */
+const SHARED_WORKSPACE_FILES: ReadonlySet<string> = new Set([
+  'SOUL.md',
+  'IDENTITY.md',
+  'USER.md',
+  'AGENTS.md',
+  'MODEL_SETTINGS.json',
+  'HEARTBEAT.pulse',
+])
+
+/**
+ * Rewrite a leading `v:memory` virtual-filesystem alias to the real `memory/`
+ * path segment, so tools that write/edit through `v:memory/...` land in the
+ * shared memory store. Paths without the alias are returned unchanged.
+ */
+export function dealiasMemoryPath(p: string): string {
+  return p.replace(/^v:memory(?=[\\/]|$)/, 'memory')
+}
+
+/**
+ * Resolve an agent-provided path for filesystem/shell tools.
+ *
+ * - Absolute paths are returned unchanged.
+ * - A leading `v:memory` alias is rewritten to the real `memory/` store.
+ * - Relative paths under a {@link SHARED_WORKSPACE_PREFIXES} prefix (or matching
+ *   a shared root file) resolve against the workspace root.
+ * - Everything else resolves against the per-session working directory (`cwd`),
+ *   keeping session output out of the shared workspace root.
+ */
+export function resolveAgentPath(
+  workspace: string,
+  cwd: string,
+  p: string,
+): string {
+  if (isAbsolute(p)) return p
+  const normalized = dealiasMemoryPath(p)
+  const firstSegment = normalized.split(/[\\/]/)[0]
+  if (
+    SHARED_WORKSPACE_FILES.has(firstSegment) ||
+    SHARED_WORKSPACE_PREFIXES.includes(firstSegment)
+  ) {
+    return resolve(workspace, normalized)
+  }
+  return resolve(cwd, normalized)
+}
+
+/**
+ * Check whether a file exists.
+ */
+export async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Read a text file if it exists, otherwise return undefined.
+ */
+export async function readFileIfExists(
+  filePath: string,
+): Promise<string | undefined> {
+  try {
+    return await readFile(filePath, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Save binary data into the per-session uploads folder
+ * (`<workspace>/<safeSessionId>/uploads/<filename>`) and return the
+ * session-relative path (e.g. `"uploads/discord_123.png"`).
+ *
+ * The returned path resolves back to the same file from within the session via
+ * {@link resolveAgentPath}, since `uploads` is not a shared prefix.
+ *
+ * The uploads directory is created automatically if it does not exist.
+ */
+export async function saveToUploads(
+  workspace: string,
+  sessionId: string,
+  filename: string,
+  data: Uint8Array,
+): Promise<string> {
+  const uploadsDir = join(sessionWorkspacePath(workspace, sessionId), 'uploads')
+  await mkdir(uploadsDir, { recursive: true })
+  await writeFile(join(uploadsDir, filename), data)
+  return `uploads/${filename}`
+}
+
+/**
+ * Resolve a media path and read the file. Relative paths resolve against the
+ * session working directory (so `uploads/...` lands in the per-session folder),
+ * falling back to the shared workspace root for backward compatibility.
+ * Returns the raw bytes, filename, and lowercase extension.
+ */
+export async function readMediaFile(
+  workspace: string,
+  sessionId: string,
+  mediaPath: string,
+): Promise<{ filename: string; data: Uint8Array; ext: string }> {
+  let absPath: string
+  if (isAbsolute(mediaPath)) {
+    absPath = mediaPath
+  } else {
+    const cwd = sessionWorkspacePath(workspace, sessionId)
+    absPath = resolveAgentPath(workspace, cwd, mediaPath)
+    // Fall back to the shared workspace root for files saved before uploads
+    // were per-session, or media referenced by a plain root-relative path.
+    if (!(await fileExists(absPath))) {
+      const rootPath = resolve(workspace, mediaPath)
+      if (await fileExists(rootPath)) absPath = rootPath
+    }
+  }
+  const data = await readFile(absPath)
+  const filename = basename(absPath)
+  const ext = extname(filename).toLowerCase()
+  return { filename, data, ext }
+}

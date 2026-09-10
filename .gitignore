@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# Build outputs
+build/
+dist/
+desktop/release/
+desktop/backend/
+
+# Historical Deno lock (not used by the Node workspace)
+deno.lock
+
+# IDE
+.vscode/settings.json
+
+.vite
+
+# Logs
+*.log
+.logs/
+
+.sessions/
+.cron/
+
+*.db
+*.db-shm
+*.db-wal
+
+.DS_Store
+
+**/uploads/*
+/workspace/wechat/
+
+$HOME
+
+.tmp
+
+# Windows reserved device names
+NUL
+
+workspace/**
+bot.config.json
+
+# Instructions
+instruction/
+
+.browser

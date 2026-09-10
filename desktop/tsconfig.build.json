@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "forceConsistentCasingInFileNames": true
+  },
+  "exclude": ["src/**/*.node-test.ts", "src/preload.ts"]
+}

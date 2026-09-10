@@ -1,0 +1,101 @@
+import type { Hono } from 'hono'
+import { extname, join, normalize, resolve } from 'node:path'
+import { readFile as nodeReadFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
+import type { GatewayPlugin } from './types.ts'
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.map': 'application/json',
+  '.txt': 'text/plain; charset=utf-8',
+}
+
+async function readFile(path: string): Promise<Uint8Array | null> {
+  try {
+    // Node's Buffer is a Uint8Array — safe to return as-is for Response bodies.
+    return await nodeReadFile(path)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Hono plugin that serves the built frontend (`app/dist/`) as static files
+ * with SPA history-mode fallback to `index.html`.
+ *
+ * - In production, register this so a single port serves both API and UI.
+ * - In development, the frontend is served by `vite` and proxies API calls
+ *   back to the gateway; this plugin will detect the missing `dist/` and
+ *   silently no-op.
+ *
+ * MUST be registered LAST so its catch-all `*` route doesn't shadow API
+ * routes. Backend-only path prefixes (`/v1/*`, `/api/*`, `/debug/*`) are
+ * explicitly skipped so missing API endpoints still 404 normally.
+ */
+export function uiPlugin(distDir: string): GatewayPlugin {
+  const root = resolve(distDir)
+  let exists = false
+  try {
+    exists = statSync(root).isDirectory()
+  } catch {
+    exists = false
+  }
+
+  return (app: Hono) => {
+    if (!exists) {
+      console.info(
+        `[gateway] UI dist not found at ${root} \u2014 frontend not served (run \`pnpm build:app\` to build, or use the Vite dev server)`,
+      )
+      return
+    }
+    console.info(`[gateway] Serving frontend from ${root}`)
+
+    app.get('*', async (c) => {
+      const path = new URL(c.req.url).pathname
+
+      // Don't shadow backend routes \u2014 let them 404 normally.
+      if (
+        path.startsWith('/v1/') ||
+        path.startsWith('/api/') ||
+        path.startsWith('/debug/')
+      ) {
+        return c.notFound()
+      }
+
+      // Resolve requested file inside dist; reject path traversal.
+      const rel = path === '/' ? 'index.html' : path.replace(/^\/+/, '')
+      const filePath = normalize(join(root, rel))
+      if (!filePath.startsWith(root)) {
+        return c.text('Forbidden', 403)
+      }
+
+      let body = await readFile(filePath)
+      let ext = extname(filePath).toLowerCase()
+
+      // SPA fallback: unknown route \u2192 index.html
+      if (!body) {
+        body = await readFile(join(root, 'index.html'))
+        ext = '.html'
+      }
+      if (!body) return c.notFound()
+
+      return new Response(body as BodyInit, {
+        status: 200,
+        headers: { 'Content-Type': MIME[ext] ?? 'application/octet-stream' },
+      })
+    })
+  }
+}

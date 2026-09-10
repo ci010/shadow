@@ -1,0 +1,577 @@
+exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] = `
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "read",
+      "description": "Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. Use \`offset\` and \`limit\` to page through content.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path, directory path, or URL (http/https)"
+          },
+          "offset": {
+            "type": "number",
+            "description": "1-based starting position. For files: line number. With flag \\"l\\": item index."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Number of lines (or items with flag \\"l\\") to read."
+          },
+          "flag": {
+            "type": "string",
+            "description": "n = line numbers, r = raw URL text, l = list mode (paginate by items). Combine: \\"nl\\"."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "write",
+      "description": "Write or edit a file. With \`match\`: find and replace. Creates directories as needed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path"
+          },
+          "content": {
+            "type": "string",
+            "description": "Full file content, or replacement text when match is set"
+          },
+          "match": {
+            "type": "string",
+            "description": "Exact text to find for edit mode"
+          },
+          "flag": {
+            "type": "string",
+            "description": "g = replace all occurrences, a = append to file"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "plan_write",
+      "description": "Write or edit a plan file. Files are scoped to .plans/ directory.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File path relative to .plans/ (e.g. \\"my-plan.md\\"). Subdirectories allowed."
+          },
+          "content": {
+            "type": "string",
+            "description": "Full file content, or replacement text when match is set."
+          },
+          "match": {
+            "type": "string",
+            "description": "Exact text to find for edit mode (find and replace)."
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      }
+    },
+    "optIn": true
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "exec",
+      "description": "Run a command or script. Use \`shell: \\"node\\"\` for inline TypeScript with tool access.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "script": {
+            "type": "string",
+            "description": "Script to run. For OS shells this is the command string; for \`shell=node\` this is inline TypeScript source."
+          },
+          "shell": {
+            "type": "string",
+            "description": "Runtime: OS shell name or \`node\` for inline TypeScript."
+          },
+          "args": {
+            "type": "array",
+            "description": "Additional arguments passed to the script.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Working directory (defaults to workspace root)"
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Max wait time in milliseconds. 0 = run in background (fire-and-forget). Omit for default (120s). The process is NOT killed on timeout."
+          }
+        },
+        "required": [
+          "script"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search",
+      "description": "Search files or the web via the \`space\` scheme.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Glob pattern, regex, or keywords depending on space."
+          },
+          "space": {
+            "type": "string",
+            "description": "grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search."
+          }
+        },
+        "required": [
+          "query",
+          "space"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "import_tool",
+      "description": "Import a tool or MCP server into the current session. Source: v:tools/<name> for pre-registered, .ts for script tools, .json for MCP config files. Active until sleep.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Virtual source (v:tools/<name>) or filesystem path (.ts module, .json MCP config)."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extra string arguments. For MCP tools: CLI flags (e.g. [\\"--remote-debugging-port=9223\\"]). For .ts modules: passed to the module's optional init(args) function."
+          }
+        },
+        "required": [
+          "source"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "invoke_tool",
+      "description": "Execute a session tool by name. Known catalog tools are imported automatically on first use. Read its skill for the tool name and parameter schema before calling.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the active session tool to execute."
+          },
+          "args": {
+            "type": "object",
+            "description": "Arguments for the named tool, matching the schema documented by its skill."
+          }
+        },
+        "required": [
+          "name",
+          "args"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "kill",
+      "description": "Kill a background task by ID.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task ID to kill."
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "continuation",
+      "description": "Set a continuation string on a background task. When the task completes and its event fires back to the session, the continuation text will be carried as a prefix in the callback message.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Background task ID."
+          },
+          "continuation": {
+            "type": "string",
+            "description": "Continuation text to carry with the task completion event."
+          }
+        },
+        "required": [
+          "task_id",
+          "continuation"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "log",
+      "description": "Append a structured entry to today's log (memory/events/YYYY-MM-DD.jsonl). Use this to record what happened: who did what, when, and why.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "who": {
+            "type": "string",
+            "description": "Entity name — the actor (person, agent, system). Should match a wiki item name."
+          },
+          "what": {
+            "type": "string",
+            "description": "Action or event description. Be concise."
+          },
+          "why": {
+            "type": "string",
+            "description": "Motivation or context for the action. Optional."
+          },
+          "challenge": {
+            "type": "string",
+            "description": "Difficulty or blocker encountered during this event. Optional."
+          },
+          "refs": {
+            "type": "array",
+            "description": "Related wiki item paths (e.g. \\"memory/topics/heartbeat.md\\"). Optional.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "session": {
+            "type": "string",
+            "description": "The session this event belongs to (origin/provenance). Defaults to the current session."
+          }
+        },
+        "required": [
+          "who",
+          "what"
+        ]
+      }
+    },
+    "optIn": true
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "message",
+      "description": "Send a message to another session (subagent or common session).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Message text to send."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Target session ID (e.g. \\"discord:123456\\"). Must not be the current session."
+          },
+          "silent": {
+            "type": "boolean",
+            "description": "If true, the message is recorded in history but does not trigger a response from the target agent."
+          }
+        },
+        "required": [
+          "content",
+          "sessionId"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "event_subscribe",
+      "description": "Manage event subscriptions, event sources, and emit custom events. Events are signals that wake a session; declare urgency to control how they arrive (steering=interrupt now, queue=after current turn, debounce=coalesce a burst, silent=record only). Read v:events for subscriptions and v:events/sources for registered sources. Use the cron tool to schedule periodic events.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "subscribe | unsubscribe | emit | register_source | unregister_source | list_sources",
+            "enum": [
+              "subscribe",
+              "unsubscribe",
+              "emit",
+              "register_source",
+              "unregister_source",
+              "list_sources"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Subscription ID (required for unsubscribe)."
+          },
+          "event": {
+            "type": "string",
+            "description": "Event type to match or emit. Use * to subscribe to all."
+          },
+          "source": {
+            "type": "string",
+            "description": "Event source tag. For subscribe/emit: filter/label (e.g. channel:web, cron). For register_source/unregister_source: the source tag to define/remove."
+          },
+          "channel": {
+            "type": "string",
+            "description": "Optional channel filter for channel.message events."
+          },
+          "chat_id": {
+            "type": "string",
+            "description": "Optional chat filter for channel.message events."
+          },
+          "content": {
+            "type": "string",
+            "description": "Event payload text when action=emit."
+          },
+          "meta_json": {
+            "type": "string",
+            "description": "Optional JSON object string for event metadata."
+          },
+          "target_session": {
+            "type": "string",
+            "description": "Optional target session ID; defaults to current session."
+          },
+          "urgency": {
+            "type": "string",
+            "description": "Delivery urgency for subscribe/emit/register_source: steering (interrupt), queue (default, after current turn), debounce (coalesce burst), silent (record only).",
+            "enum": [
+              "steering",
+              "queue",
+              "debounce",
+              "silent"
+            ]
+          },
+          "coalesce_key": {
+            "type": "string",
+            "description": "Grouping key for debounce coalescing (defaults to \\"<type>:<source>\\")."
+          },
+          "debounce_ms": {
+            "type": "number",
+            "description": "Trailing debounce window in ms (default 30000). Only for urgency=debounce."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Source category for register_source (default \\"custom\\").",
+            "enum": [
+              "channel",
+              "cron",
+              "agent",
+              "system",
+              "custom"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": "Human description for register_source."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "subagent",
+      "description": "Spawn a sub-agent session. Use the message tool to send tasks to it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Short description of the sub-agent session's purpose."
+          },
+          "agent_type": {
+            "type": "string",
+            "description": "Agent type to use. Defaults to \\"sub\\". Available types are listed in the Runtime section of the system prompt."
+          },
+          "report_to": {
+            "type": "string",
+            "description": "Session ID to route every completed turn to instead of this session. Format: \\"channel:chatId\\". Enables agent chains (e.g., coder → verifier)."
+          },
+          "preload_tools": {
+            "type": "object",
+            "description": "Tools to preload before the subagent starts. Map of tool name → extra args array. Example: { \\"chrome-devtools\\": [\\"--remote-debugging-port=9223\\"] }. Use empty array for no extra args: { \\"cron\\": [] }."
+          }
+        },
+        "required": [
+          "description"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_convention",
+      "description": "Add or remove a durable convention (always-on constraint / rule). Conventions are injected full-text every turn — keep them short and remove them when no longer in effect. scope: session (this conversation), project (shared across a project), or agent (about the agent itself).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "remove"
+            ],
+            "description": "Whether to add or remove a convention."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "session",
+              "project",
+              "agent"
+            ],
+            "description": "The scope the convention applies to."
+          },
+          "text": {
+            "type": "string",
+            "description": "The convention text. For remove, a case-insensitive substring match."
+          },
+          "project": {
+            "type": "string",
+            "description": "Project name — required when scope is \\"project\\"."
+          }
+        },
+        "required": [
+          "action",
+          "scope",
+          "text"
+        ]
+      }
+    }
+  }
+]
+`;
+
+exports[`tools — tool surface per agent type > encapsulator 1`] = `
+read
+write
+exec
+search
+continuation
+event_subscribe
+update_convention
+`;
+
+exports[`tools — tool surface per agent type > explore 1`] = `
+read
+exec
+search
+`;
+
+exports[`tools — tool surface per agent type > general 1`] = `
+read
+write
+exec
+search
+import_tool
+invoke_tool
+kill
+continuation
+message
+event_subscribe
+subagent
+update_convention
+`;
+
+exports[`tools — tool surface per agent type > general-legacy 1`] = `
+read
+write
+exec
+search
+import_tool
+invoke_tool
+kill
+continuation
+message
+event_subscribe
+subagent
+update_convention
+`;
+
+exports[`tools — tool surface per agent type > plan 1`] = `
+read
+plan_write
+search
+`;
+
+exports[`tools — tool surface per agent type > reflector 1`] = `
+read
+write
+exec
+search
+log
+`;
+
+exports[`tools — tool surface per agent type > soul-reflector 1`] = `
+read
+write
+exec
+search
+continuation
+event_subscribe
+update_convention
+`;
+
+exports[`tools — tool surface per agent type > sub 1`] = `
+read
+write
+exec
+search
+import_tool
+invoke_tool
+kill
+continuation
+message
+event_subscribe
+`;
+
+exports[`tools — tool surface per agent type > verify 1`] = `
+read
+exec
+search
+`;

@@ -1,0 +1,15 @@
+{
+  "agent": {
+    "model": "gpt-4.1",
+    "workspace": "./workspace",
+    "sessionStorage": "sqlite"
+  },
+  "channels": {
+    "web": {
+      "enabled": true
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": true
+  }
+}

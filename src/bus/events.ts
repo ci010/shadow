@@ -1,0 +1,91 @@
+/**
+ * Shared context fields present on both inbound message metadata and
+ * the agent execution context.  Keeping them in one place ensures
+ * property names stay aligned across the pipeline.
+ */
+export interface MessageContext {
+  /** Channel identifier (e.g. "discord", "telegram", "system") */
+  channel: string
+  /** Internal correlation/tracking ID. May be a UUID for synthetic messages (subagent, system, etc.). */
+  messageId: string
+  /**
+   * Platform-native message ID for reply threading.
+   * Only set for real platform messages (Discord snowflake, Feishu message_id, etc.).
+   * Undefined for synthetic messages — channels must not use this for reply references in that case.
+   */
+  platformMessageId?: string
+  /** Sender's user id within the channel */
+  senderId: string
+  /** Sender display name */
+  senderName?: string
+  /** Chat / conversation id within the channel */
+  chatId: string
+  /** Human-readable chat or channel name, if known */
+  chatName?: string
+  /** True when the message originates from a group / multi-participant chat */
+  isGroup?: boolean
+  /** True when the session has elevated (admin) privileges */
+  admin?: boolean
+}
+
+/**
+ * Message flowing from a channel into the agent.
+ * Extends MessageContext so all context fields live at the top level.
+ */
+export interface InboundMessage extends MessageContext {
+  /** Text content of the message */
+  content: string
+  /** ISO-8601 timestamp */
+  timestamp: string
+  /** Optional attached media URLs or base64 data URIs */
+  media?: string[]
+  /** Record message in history but suppress the bot's response */
+  silent?: boolean
+  /**
+   * Re-run the agent loop on the existing session history without appending a
+   * new user message. Used by the web "retry" action so a failed request can be
+   * retried without duplicating the prompt in history.
+   */
+  retry?: boolean
+  /**
+   * Structured metadata for system events (senderId starting with `event:`).
+   * Rendered as XML attributes on the `<event>` tag by the message-builder.
+   */
+  eventMeta?: Record<string, unknown>
+}
+
+/**
+ * Message flowing from the agent out to a channel.
+ */
+export interface OutboundMessage {
+  /** Target channel identifier */
+  channel: string
+  /** Target chat / conversation id */
+  chatId: string
+
+  event: 'response' | 'tool_call' | 'tool_result'
+  /** Text content */
+  content: string
+  /** Optional id of the message being replied to */
+  replyTo?: string
+  /** Optional attached media */
+  media?: string[]
+  /** Full tool call data (for tool_call events). Channels that support rich display can use this instead of content. */
+  toolCall?: { name: string; arguments: Record<string, unknown> }
+  /**
+   * When true, signals that this is the final message for this queryId.
+   * The channel manager will release any stored message-ID tracking for this query.
+   */
+  done: boolean
+  /** Token usage stats for the LLM call (attached on final response). */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+  /** Arbitrary channel-specific metadata */
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Derive a logical session ID from a message.
+ */
+export function deriveSessionId(msg: InboundMessage): string {
+  return `${msg.channel}:${msg.chatId}`
+}

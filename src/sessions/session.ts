@@ -1,0 +1,598 @@
+import type { Executor } from '../execution/executor.ts'
+import { cleanupTempFiles, newPhysicalSessionId } from '../utils/paths.ts'
+import type { InboundMessage } from '../bus/events.ts'
+import type { EventUrgency } from '../events/types.ts'
+import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
+import { estimateTokens } from '../utils/estimate-tokens.ts'
+import { Span } from '../utils/otel.ts'
+import { errDetail, errMsg } from '../utils/truncate.ts'
+import type { Bus } from '../bus/bus.ts'
+import type { CompactResult, HandoffManager } from '../handoff/manager.ts'
+import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { buildUserChatMessage } from '../agent/message-builder.ts'
+import type { SessionStore } from './session-store.ts'
+import type { SessionStartEvent, SessionState } from './session-store.ts'
+import type { SessionTools } from '../tools/registry.ts'
+import { ReadTool } from '../tools/read.ts'
+import { BaseSession } from './base-session.ts'
+import {
+  resolveSessionLocations,
+  type WorkdirCapabilityLookup,
+} from './locality.ts'
+
+/** Tracks whether the LLM loop is calling the provider or executing tools. */
+export type TurnPhase = 'llm' | 'tool'
+
+export interface PhaseRef {
+  current: TurnPhase
+  /** Timestamp (Date.now()) when the current tool execution started. */
+  toolStartedAt?: number
+}
+
+/** Tool execution shorter than this (ms) always steers; longer triggers quickModel classification. */
+const TOOL_STEER_THRESHOLD_MS = 20_000 // 20 seconds
+
+type LoopEvent =
+  | { type: 'message'; msg: InboundMessage; llm: LlmRuntimeConfig }
+  | { type: 'sleep'; llm: LlmRuntimeConfig }
+  | { type: 'compact'; llm: LlmRuntimeConfig }
+
+export class Session extends BaseSession {
+  private running = false
+  private inbox: LoopEvent[] = []
+  private inboxWaiter: ((event: LoopEvent) => void) | null = null
+  private stopController = new AbortController()
+
+  // ── Active turn state ─────────────────────────────────────────────────
+  private turn: SessionTurn | null = null
+
+  /** Debounced sleep timer — fires at lastActivity + inactivityMs. */
+  private sleepTimer: ReturnType<typeof setTimeout> | null = null
+
+  constructor(
+    workspace: string,
+    id: string,
+    state: SessionState,
+    messages: ChatMessage[],
+    provider: LLMProvider,
+    tools: SessionTools,
+    bus: Bus,
+    store: SessionStore,
+    private readonly handoffManager: HandoffManager,
+    private readonly onStopped: (sessionId: string) => void,
+    private readonly rebuildSystemPrompt?: () => Promise<string>,
+    private readonly quickModel?: string,
+    private readonly sleepInactivityMs?: number,
+    workdirCapabilityLookup?: WorkdirCapabilityLookup,
+    remoteExecutor?: Executor,
+  ) {
+    super(
+      workspace,
+      id,
+      state,
+      messages,
+      provider,
+      tools,
+      bus,
+      store,
+      workdirCapabilityLookup,
+      remoteExecutor,
+    )
+    this.run().catch((err) =>
+      console.error(`[session-manager] Session ${id} crashed:`, errMsg(err))
+    )
+  }
+
+  // ── Public API ──────────────────────────────────────────────────────────
+
+  /** Current turn phase: idle (no turn), llm (waiting on LLM), or tool (executing tools). */
+  get phase(): 'idle' | 'llm' | 'tool' {
+    if (!this.turn) return 'idle'
+    return this.turn.toolStartedAt ? 'tool' : 'llm'
+  }
+
+  /** Push a message into this session's inbox or handle it mid-turn. */
+  dispatch(msg: InboundMessage, llm: LlmRuntimeConfig): void {
+    // Cancel sleep timer — we have work.
+    if (this.sleepTimer) {
+      clearTimeout(this.sleepTimer)
+      this.sleepTimer = null
+    }
+
+    // Declared delivery urgency (set by EventService for system events).
+    // Human channel messages carry no urgency and keep the heuristic path below.
+    const urgency = msg.eventMeta?.urgency as EventUrgency | undefined
+
+    // Silent / non-urgent events never interrupt an active turn: enqueue them
+    // so they are handled (or, for silent, merely recorded) after this turn.
+    if (
+      msg.silent === true || urgency === 'silent' ||
+      urgency === 'queue' || urgency === 'debounce'
+    ) {
+      this.pushEvent({ type: 'message', msg, llm })
+      return
+    }
+
+    // If no turn is active, push straight to inbox.
+    if (!this.turn) {
+      this.pushEvent({ type: 'message', msg, llm })
+      return
+    }
+
+    if (!this.turn.toolStartedAt) {
+      this.turn.abort()
+      console.log(
+        `[session-loop] Aborting ${this.id} turn for new message during llm request phase`,
+      )
+      this.pushEvent({ type: 'message', msg, llm })
+      return
+    }
+
+    // Tool phase. A declared `steering` event skips the quickModel classifier
+    // and steers into the active turn deterministically.
+    if (urgency === 'steering') {
+      console.log(
+        `[session-loop] Steering ${this.id} declared-urgent event into active turn`,
+      )
+      this.turn.steerQueue.push(msg)
+      return
+    }
+
+    const elapsed = Date.now() - this.turn.toolStartedAt
+    if (elapsed < TOOL_STEER_THRESHOLD_MS || !this.quickModel) {
+      console.log(
+        `[session-loop] Steering ${this.id} message into active turn during tool phase (elapsed ${elapsed}ms)`,
+      )
+      this.turn.steerQueue.push(msg)
+      return
+    }
+
+    // Long-running tool with quickModel — classify intent.
+    // Abort any in-flight classification so the newest message wins.
+    if (this.turn.classifyAbortController) {
+      this.turn.classifyAbortController.abort()
+    }
+    const controller = new AbortController()
+    this.turn.classifyAbortController = controller
+    const capturedTurn = this.turn
+
+    console.log(
+      `[session-loop] Classifying message intent with quickModel during tool phase (elapsed ${elapsed}ms):`,
+      {
+        session: this.id,
+        elapsed,
+      },
+    )
+    this.classifyToolIntent(
+      msg,
+      capturedTurn.message,
+      controller.signal,
+    )
+      .then((intent) => {
+        if (this.turn?.classifyAbortController !== controller) {
+          console.log(
+            `[session-loop] Turn changed during intent classification — defaulting to inbox for message:`,
+            {
+              session: this.id,
+            },
+          )
+          this.pushEvent({ type: 'message', msg, llm })
+          return
+        }
+        if (intent === 'abort') {
+          this.turn.abort()
+          console.log(
+            `[session-loop] Classified intent as ABORT — aborting turn for message:`,
+            {
+              session: this.id,
+            },
+          )
+          this.pushEvent({ type: 'message', msg, llm })
+        } else {
+          console.log(
+            `[session-loop] Classified intent as STEER — steering into active turn for message:`,
+            {
+              session: this.id,
+            },
+          )
+          capturedTurn.steerQueue.push(msg)
+        }
+      })
+      .catch((err) => {
+        console.warn(
+          '[session-loop] classifyToolIntent error, falling back to steer:',
+          errMsg(err),
+        )
+        if (this.turn === capturedTurn) {
+          capturedTurn.steerQueue.push(msg)
+        } else {
+          this.pushEvent({ type: 'message', msg, llm })
+        }
+      })
+  }
+
+  /** Trigger compaction manually (routed through the event loop to avoid races). */
+  requestCompact(llm: LlmRuntimeConfig): void {
+    this.pushEvent({ type: 'compact', llm })
+  }
+
+  /**
+   * Start the per-session event loop.
+   * Returns a promise that resolves when the loop stops (sleep timeout or
+   * explicit {@link stop}).
+   */
+  private async run(): Promise<void> {
+    this.running = true
+    console.debug(`[session-loop] Started: ${this.id}`)
+
+    while (this.running) {
+      let event: LoopEvent
+      try {
+        event = await this.consumeEvent()
+      } catch {
+        // consumeEvent rejects when stopController aborts — exit the loop.
+        break
+      }
+
+      try {
+        if (event.type === 'sleep') {
+          await this.sleep(event.llm)
+          // If messages arrived during compaction, keep running to process them.
+          if (this.inbox.length > 0) continue
+          this.stop()
+          break
+        } else if (event.type === 'compact') {
+          await this.compact(event.llm)
+          await this.saveState()
+        } else {
+          this.turn = new SessionTurn(event.msg)
+          await this.processInboundMessage(
+            this.turn.message,
+            event.llm,
+            this.turn.abortController.signal,
+          ).finally(() => {
+            this.turn?.finish()
+            this.turn = null
+          })
+        }
+      } catch (err) {
+        console.error(errDetail(err), `[session-loop] Error in ${this.id}`)
+      }
+
+      // After processing, if no queued messages remain start the sleep timer.
+      if (this.inbox.length === 0) {
+        this.scheduleSleepCheck(event.llm)
+      }
+    }
+
+    console.debug(`[session-loop] Stopped: ${this.id}`)
+    ReadTool.clearSession(this.physicalSessionId)
+    this.onStopped(this.id)
+  }
+
+  /** Signal the loop to stop. */
+  stop(): void {
+    this.running = false
+    if (this.sleepTimer) {
+      clearTimeout(this.sleepTimer)
+      this.sleepTimer = null
+    }
+    this.stopController.abort()
+  }
+
+  // ── BaseSession overrides ─────────────────────────────────────────────
+
+  protected override async appendMessages(
+    llm: LlmRuntimeConfig,
+    ...messages: ChatMessage[]
+  ): Promise<void> {
+    if (messages.length === 0) return
+
+    // Check if we need compaction
+    const usage = this.usage
+    if (usage) {
+      const totalTokens = usage.totalTokens
+      this.state.lastKnownTokens = totalTokens
+      await this.saveState()
+
+      const extra = estimateTokens(messages)
+
+      // Never compact in the middle of a tool call / result cycle.
+      const hasToolResults = messages.some((m) => m.role === 'tool')
+      const hasPendingToolCalls = messages.some((m) =>
+        m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0
+      )
+
+      if (
+        !hasToolResults && !hasPendingToolCalls &&
+        this.handoffManager.shouldHandoff(usage, true, extra)
+      ) {
+        await this.compact(llm)
+      }
+    }
+
+    await super.appendMessages(llm, ...messages)
+    this.scheduleSleepCheck(llm)
+  }
+
+  protected async saveState(): Promise<void> {
+    await this.store.saveState(this.id, this.state)
+  }
+
+  protected override async drainPendingMessages(
+    llm: LlmRuntimeConfig,
+  ): Promise<void> {
+    if (!this.turn) return
+    const locations = resolveSessionLocations(
+      this.workspace,
+      this.state,
+      undefined,
+      this.workdirCapabilityLookup,
+    )
+    if (!locations.workdir.available) {
+      throw new Error(
+        `Session workdir unavailable: ${locations.workdir.reason}`,
+      )
+    }
+    const cwd = locations.workdir.locality === 'local'
+      ? locations.workdir.path
+      : locations.sessionDataDir
+    while (this.turn.steerQueue.length > 0) {
+      const steerQueue = this.turn.steerQueue
+      this.turn.steerQueue = []
+      await this.appendMessages(
+        llm,
+        ...await Promise.all(
+          steerQueue.map((m) => buildUserChatMessage(m, this.workspace, cwd)),
+        ),
+      )
+    }
+  }
+
+  protected override onToolPhaseStart(): void {
+    if (this.turn) this.turn.toolStartedAt = Date.now()
+  }
+
+  protected override onToolPhaseEnd(): void {
+    if (this.turn) this.turn.toolStartedAt = undefined
+  }
+
+  protected override async handleTokenLimitExceeded(
+    llm: LlmRuntimeConfig,
+  ): Promise<boolean> {
+    console.warn(`[${this.id}] Token limit exceeded, compacting session`)
+    await this.compact(llm)
+    return true
+  }
+
+  // ── Inbox helpers ──────────────────────────────────────────────────────
+
+  private pushEvent(event: LoopEvent): void {
+    if (this.inboxWaiter) {
+      const waiter = this.inboxWaiter
+      this.inboxWaiter = null
+      waiter(event)
+    } else {
+      this.inbox.push(event)
+    }
+  }
+
+  private consumeEvent(): Promise<LoopEvent> {
+    const buffered = this.inbox.shift()
+    if (buffered) return Promise.resolve(buffered)
+
+    return new Promise<LoopEvent>((resolve, reject) => {
+      this.inboxWaiter = resolve
+      this.stopController.signal.addEventListener('abort', () => {
+        this.inboxWaiter = null
+        reject(new Error('Session stopped'))
+      }, { once: true })
+    })
+  }
+
+  // ── Sleep ───────────────────────────────────────────────────────────────
+
+  @Span('session.sleep')
+  private async sleep(llm: LlmRuntimeConfig): Promise<void> {
+    try {
+      const messages = this.messages
+      console.info(
+        `[sleep] Putting session to sleep: ${this.id} (${messages.length} messages)`,
+      )
+
+      // Compact if token usage exceeds handoff threshold
+      const tokens = this.state.lastKnownTokens ?? 0
+      const usage = {
+        promptTokens: tokens,
+        completionTokens: 0,
+        totalTokens: tokens,
+      }
+      if (this.handoffManager.shouldHandoff(usage, false)) {
+        await this.compact(llm)
+        this.state.lastKnownTokens = 0
+        await this.store.saveState(this.id, this.state)
+        console.info(`[sleep] Session compacted (cold): ${this.id}`)
+      }
+
+      // Session memory (summary) is intentionally retained across sleep so the
+      // session can resume with its context (MEM.md: under-threshold sleep only
+      // flushes, keeps state). Modified Files / conventions live in separate
+      // files and always persist.
+
+      this.tools.resetDynamic()
+      ReadTool.clearSession(this.physicalSessionId)
+      await cleanupTempFiles(this.workspace, 15 * 60_000)
+    } catch (err) {
+      console.error(
+        `[session-loop] sleepSession failed for ${this.id}:`,
+        errMsg(err),
+      )
+    }
+  }
+
+  // ── Long-running tool intent classification ─────────────────────────────
+
+  private async classifyToolIntent(
+    msg: InboundMessage,
+    previousMsg: InboundMessage | undefined,
+    signal: AbortSignal,
+  ): Promise<'steer' | 'abort'> {
+    const model = this.quickModel
+    if (!model) return 'steer'
+
+    const systemPrompt = [
+      'You are a concurrency router for a chat bot.',
+      'A tool call is currently running. A new user message has arrived.',
+      'Decide: should the new message be injected into the current turn (steer),',
+      'or should the current work be aborted to handle the new message (abort)?',
+      '',
+      'Respond with exactly one word: steer or abort.',
+    ].join('\n')
+
+    const content = [
+      ...(previousMsg
+        ? [
+          `Previous message (currently being processed): ${previousMsg.content}`,
+          '',
+        ]
+        : []),
+      `New message: ${msg.content}`,
+    ].join('\n')
+
+    const combined = AbortSignal.any([signal, AbortSignal.timeout(5000)])
+
+    try {
+      const response = await this.provider.chat(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content }],
+        [],
+        {
+          model,
+          maxTokens: 10,
+          temperature: 0,
+          signal: combined,
+        },
+      )
+      const word = (response.content ?? '').trim().toLowerCase().replace(
+        /[^a-z]/g,
+        '',
+      )
+      if (word === 'abort' || word === 'steer') return word
+      console.warn(
+        `[session-loop] classifyToolIntent unexpected: "${response.content}", falling back to steer`,
+      )
+      return 'steer'
+    } catch (err) {
+      console.warn(
+        '[session-loop] classifyToolIntent failed, falling back to steer:',
+        errMsg(err),
+      )
+      return 'steer'
+    }
+  }
+
+  /**
+   * Synthesize a compact continuity context and persist it as a handoff snapshot.
+   */
+  private async compact(llm: LlmRuntimeConfig): Promise<CompactResult> {
+    const sessionId = this.id
+    const state = this.state
+    const messages = this.messages
+
+    const sourcePhysicalId = newPhysicalSessionId(sessionId, state.segmentIndex)
+    const targetPhysicalId = newPhysicalSessionId(
+      sessionId,
+      state.segmentIndex + 1,
+    )
+    const handoff = await this.handoffManager.create(
+      sessionId,
+      sourcePhysicalId,
+      targetPhysicalId,
+      messages,
+      llm.model,
+    )
+
+    const startEvent: SessionStartEvent = {
+      previous_physical_id: sourcePhysicalId,
+      timestamp: handoff.timestamp,
+      summary_context: handoff.prompt,
+    }
+    await this.store.createSessionLog(targetPhysicalId, [startEvent])
+
+    this.state.segmentIndex++
+    // Regenerate system prompt so it reflects current time/context
+    const newMessages: ChatMessage[] = []
+    if (this.rebuildSystemPrompt) {
+      try {
+        const systemPrompt = await this.rebuildSystemPrompt()
+        newMessages.push({ role: 'system', content: systemPrompt })
+      } catch (err) {
+        // Fall back to preserving the existing system prompt
+        const existing = messages.find((m) => m.role === 'system')
+        if (existing) newMessages.push(existing)
+        console.warn(
+          `[session] Failed to rebuild system prompt: ${errMsg(err)}`,
+        )
+      }
+    } else {
+      const existing = messages.find((m) => m.role === 'system')
+      if (existing) newMessages.push(existing)
+    }
+    newMessages.push({ role: 'user', content: handoff.prompt })
+    this.messages = newMessages
+
+    this.bus.emit('session.handoff', {
+      sessionId: this.id,
+      sourceSessionId: sourcePhysicalId,
+      targetSessionId: targetPhysicalId,
+    })
+
+    return handoff
+  }
+
+  // ── Debounced sleep check ──────────────────────────────────────────────
+
+  /**
+   * (Re)schedule the sleep timer. Fires at
+   * `lastActivityAt + sleepInactivityMs`; puts the session to sleep
+   * (compacts if over threshold; session memory is retained).
+   */
+  private scheduleSleepCheck(llm: LlmRuntimeConfig): void {
+    if (!this.sleepInactivityMs) return
+    if (this.sleepTimer) clearTimeout(this.sleepTimer)
+
+    const lastActive = this.state.lastActivityAt
+      ? new Date(this.state.lastActivityAt).getTime()
+      : Date.now()
+    const delay = Math.max(
+      0,
+      (lastActive + this.sleepInactivityMs) - Date.now(),
+    )
+
+    this.sleepTimer = setTimeout(() => {
+      this.sleepTimer = null
+      this.pushEvent({ type: 'sleep', llm })
+    }, delay)
+  }
+}
+
+class SessionTurn {
+  abortController: AbortController = new AbortController()
+  steerQueue: InboundMessage[] = []
+  toolStartedAt?: number
+  message: InboundMessage
+  classifyAbortController: AbortController | null = null
+
+  constructor(currentMsg: InboundMessage) {
+    this.message = currentMsg
+  }
+
+  finish(): void {
+    if (this.classifyAbortController) {
+      this.classifyAbortController.abort()
+    }
+  }
+
+  abort(): void {
+    this.abortController.abort()
+  }
+}

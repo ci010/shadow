@@ -1,0 +1,56 @@
+{
+  "name": "@shadow/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test:state": "node --import tsx --test src/wizard/state-machine.node-test.ts",
+    "test": "node --import tsx --test src/**/*.node-test.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "pnpm clean && tsc -p tsconfig.build.json && esbuild src/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload.cjs",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "build": {
+    "appId": "com.shadow.app",
+    "productName": "Shadow",
+    "asar": true,
+    "publish": [],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": ["dist/**/*", "package.json", "!**/*.map"]
+      },
+      {
+        "from": "backend/node_modules",
+        "to": "backend/node_modules",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../app/dist",
+        "to": "app-dist"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.9",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.12",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

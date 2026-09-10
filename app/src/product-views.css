@@ -1,0 +1,492 @@
+.product-page {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  color: var(--c-text);
+}
+
+.page-header,
+.node-header,
+.node-admin-primary,
+.node-title-line,
+.node-marks,
+.context-strip,
+.capability-top,
+.admin-actions,
+.approval-header,
+.approval-title-line,
+.approval-actions,
+.approval-actions > div {
+  display: flex;
+  align-items: center;
+}
+
+.page-header {
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.eyebrow,
+.capability-meta dt,
+.node-facts dt,
+.approval-details dt {
+  margin: 0;
+  color: var(--c-text-muted);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd {
+  margin: 0;
+}
+
+h1 {
+  margin-top: 0.15rem;
+  font-size: 1.6rem;
+  line-height: 1.15;
+}
+
+h2 {
+  font-size: 0.95rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+h3 {
+  font-size: 0.9rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.page-summary {
+  margin-top: 0.3rem;
+  color: var(--c-text-body);
+  font-size: 0.82rem;
+}
+
+.context-strip {
+  flex: 0 0 auto;
+  gap: 0.45rem;
+  min-height: 32px;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--c-border);
+  border-radius: 5px;
+  background: var(--c-bg-card);
+  color: var(--c-text-secondary);
+  font-size: 0.72rem;
+}
+
+.role-mark,
+.local-mark,
+.availability,
+.summary-chip,
+.permission-list span,
+.operation-mark,
+.expiry-mark {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--c-border);
+  border-radius: 3px;
+  background: var(--c-bg-soft);
+  color: var(--c-text-secondary);
+  font-size: 0.65rem;
+  line-height: 1.2;
+}
+
+.role-mark,
+.local-mark,
+.availability,
+.permission-list span,
+.operation-mark,
+.expiry-mark {
+  padding: 0.18rem 0.4rem;
+  white-space: nowrap;
+}
+
+.node-list,
+.node-admin-list,
+.approval-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.node-section,
+.node-admin-row {
+  min-width: 0;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-card);
+}
+
+.node-header {
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.node-identity {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.node-marks {
+  flex: 0 0 auto;
+  gap: 0.4rem;
+}
+
+.connection-label,
+.break-value {
+  color: var(--c-text-muted);
+  font-size: 0.68rem;
+}
+
+.break-value,
+.path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--c-success);
+}
+
+.status-dot.connecting {
+  background: var(--c-warn);
+}
+
+.status-dot.offline,
+.status-dot.unpaired {
+  background: var(--c-error);
+}
+
+.status-dot.large {
+  width: 10px;
+  height: 10px;
+}
+
+.capability-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr));
+  gap: 0.6rem;
+  padding: 0.75rem;
+}
+
+.capability-card {
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--c-border);
+  border-radius: 5px;
+  background: var(--c-bg-soft);
+}
+
+.capability-top {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.path {
+  margin-top: 0.3rem;
+  color: var(--c-text-body);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.availability.online,
+.summary-chip.online {
+  border-color: var(--c-success-light);
+  background: var(--c-success-bg);
+  color: var(--c-success);
+}
+
+.availability.unavailable,
+.summary-chip.unavailable {
+  background: var(--c-warn-bg);
+  color: var(--c-warn);
+}
+
+.availability.revoked,
+.summary-chip.revoked {
+  background: var(--c-error-bg);
+  color: var(--c-error);
+}
+
+.unavailable-reason {
+  margin-top: 0.55rem;
+  color: var(--c-warn);
+  font-size: 0.72rem;
+}
+
+.capability-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(100px, 0.7fr) minmax(0, 1fr);
+  gap: 0.65rem;
+  margin-top: 0.7rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--c-border);
+}
+
+.capability-meta dd,
+.node-facts dd {
+  margin-top: 0.2rem;
+  color: var(--c-text-secondary);
+  font-size: 0.72rem;
+}
+
+.permission-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.node-admin-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(300px, 1fr) minmax(0, 1.2fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.8rem;
+}
+
+.node-admin-primary {
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.node-title-line {
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.local-mark {
+  background: var(--c-info-bg);
+  color: var(--c-info);
+}
+
+.node-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.capability-summary {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.summary-chip {
+  max-width: 100%;
+  padding: 0.25rem 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-actions {
+  gap: 0.35rem;
+}
+
+.admin-actions button {
+  min-height: 30px;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-bg-muted);
+  color: var(--c-text-muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.admin-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.approval-row,
+.empty-panel {
+  min-width: 0;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-card);
+}
+
+.approval-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.approval-title-line {
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.operation-mark {
+  flex: 0 0 auto;
+  border-color: var(--c-info);
+  background: var(--c-info-bg);
+  color: var(--c-info);
+}
+
+.expiry-mark {
+  flex: 0 0 auto;
+  background: var(--c-warn-bg);
+  color: var(--c-warn);
+}
+
+.requester-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.55rem;
+  margin-top: 0.45rem;
+  color: var(--c-text-muted);
+  font-size: 0.7rem;
+}
+
+.requester-line strong {
+  color: var(--c-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.approval-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  padding: 0.8rem;
+}
+
+.approval-details > div {
+  min-width: 0;
+}
+
+.approval-details dd {
+  margin-top: 0.2rem;
+  color: var(--c-text-secondary);
+  font-size: 0.72rem;
+}
+
+.approval-actions {
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border-top: 1px solid var(--c-border);
+}
+
+.approval-actions p {
+  color: var(--c-text-muted);
+  font-size: 0.68rem;
+}
+
+.approval-actions > div {
+  flex: 0 0 auto;
+  gap: 0.35rem;
+}
+
+.approval-actions button {
+  min-height: 30px;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-bg-muted);
+  color: var(--c-text-muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.approval-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.approval-actions .deny-button {
+  border-color: var(--c-error);
+  color: var(--c-error);
+}
+
+.empty-panel {
+  padding: 1rem;
+}
+
+.empty-panel p {
+  margin-top: 0.35rem;
+  color: var(--c-text-muted);
+  font-size: 0.75rem;
+}
+
+.min-w-0 {
+  min-width: 0;
+}
+
+@media (max-width: 980px) {
+  .node-admin-row {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr);
+  }
+
+  .capability-summary,
+  .admin-actions {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 680px) {
+  .page-header,
+  .node-header,
+  .capability-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .context-strip {
+    align-self: stretch;
+  }
+
+  .node-marks {
+    padding-left: 1.05rem;
+  }
+
+  .capability-meta,
+  .node-admin-row,
+  .node-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-actions {
+    flex-wrap: wrap;
+  }
+
+  .approval-header,
+  .approval-title-line,
+  .approval-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .approval-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .approval-actions > div {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}

@@ -1,0 +1,116 @@
+import assert, { deepEqual as assertEquals } from 'node:assert/strict'
+import { test } from 'node:test'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { MemoryStore } from '../memory.ts'
+import { memoryProvider } from './memory-provider.ts'
+import type { SessionPromptContext } from './builder.ts'
+import type { AgentTypeDefinition } from '../agent-types/types.ts'
+import type { SessionConfig } from '../../sessions/session-store.ts'
+import { withTempWorkspace } from '../../testing/workspace.ts'
+
+function agent(name: string, ephemeral = false): AgentTypeDefinition {
+  return {
+    name,
+    description: '',
+    prompt: '',
+    ephemeral,
+    source: 'builtin',
+  } as AgentTypeDefinition
+}
+
+function ctx(
+  sessionId: string,
+  a: AgentTypeDefinition,
+  projectName?: string,
+): SessionPromptContext {
+  return {
+    behavior: {} as SessionConfig,
+    channel: 'test',
+    sessionId,
+    chatId: sessionId,
+    agent: a,
+    projectName,
+  }
+}
+
+async function seedEvent(workspace: string, origin: string): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10)
+  await mkdir(`${workspace}/memory/events`, { recursive: true })
+  await writeFile(
+    `${workspace}/memory/events/${today}.jsonl`,
+    JSON.stringify({
+      when: '2026-07-07T09:00:00Z',
+      who: 'a',
+      what: 'own event',
+      origin,
+    }) + '\n',
+  )
+}
+
+test('memory provider — composes block in MEM.md order', async () => {
+  await withTempWorkspace(async (workspace) => {
+    const memory = new MemoryStore(workspace)
+    await memory.addConvention('session', 'discord:1', 'be terse')
+    await memory.recordModifiedFile('discord:1', 'src/a.ts', 'write')
+    await mkdir(`${workspace}/memory/topics`, { recursive: true })
+    await writeFile(`${workspace}/memory/topics/plasma.md`, '# x')
+    await seedEvent(workspace, 'discord:1')
+
+    const provider = memoryProvider(memory, () => undefined)
+    const out = await provider.getPromptSection(ctx('discord:1', agent('general')))
+    assert(out !== null)
+
+    // Order: Conventions → Keywords → Events → Working Set.
+    const iConv = out.indexOf('### Conventions')
+    const iKw = out.indexOf('**Long-term keywords**')
+    const iEvents = out.indexOf('### Recent Events')
+    const iWs = out.indexOf('### Working Set')
+    assert(iConv >= 0 && iKw >= 0 && iEvents >= 0 && iWs >= 0, 'all sections present')
+    assert(iConv < iKw, 'conventions before keywords')
+    assert(iKw < iEvents, 'keywords before events')
+    assert(iEvents < iWs, 'events before working set')
+  })
+})
+
+test('memory provider — keyword index is main-agent-only', async () => {
+  await withTempWorkspace(async (workspace) => {
+    const memory = new MemoryStore(workspace)
+    await mkdir(`${workspace}/memory/topics`, { recursive: true })
+    await writeFile(`${workspace}/memory/topics/plasma.md`, '# x')
+    const provider = memoryProvider(memory, () => undefined)
+
+    const main = await provider.getPromptSection(ctx('discord:1', agent('general')))
+    assert((main ?? '').includes('**Long-term keywords**'))
+
+    // Sub-agents (the 'sub' type and any ephemeral agent) skip the index.
+    const sub = await provider.getPromptSection(ctx('discord:1', agent('sub')))
+    assert(!(sub ?? '').includes('**Long-term keywords**'))
+
+    const eph = await provider.getPromptSection(
+      ctx('discord:1', agent('reflector', true)),
+    )
+    assert(!(eph ?? '').includes('**Long-term keywords**'))
+  })
+})
+
+test('memory provider — conventions inject for sub-agents (read-only)', async () => {
+  await withTempWorkspace(async (workspace) => {
+    const memory = new MemoryStore(workspace)
+    await memory.addConvention('agent', undefined, 'always be safe')
+    const provider = memoryProvider(memory, () => undefined)
+
+    const sub = await provider.getPromptSection(ctx('discord:1', agent('sub')))
+    assert((sub ?? '').includes('### Conventions'))
+    assert((sub ?? '').includes('always be safe'))
+  })
+})
+
+test('memory provider — returns null when nothing to inject', async () => {
+  await withTempWorkspace(async (workspace) => {
+    const provider = memoryProvider(new MemoryStore(workspace), () => undefined)
+    assertEquals(
+      await provider.getPromptSection(ctx('fresh:1', agent('general'))),
+      null,
+    )
+  })
+})

@@ -1,0 +1,40 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "request": "attach",
+      "name": "Attach to Node",
+      "type": "node",
+      "port": 9229,
+      "attachExistingChildren": true,
+      "autoAttachChildProcesses": true
+    },
+    {
+      "request": "attach",
+      "name": "Attach to Node (Docker)",
+      "type": "node",
+      "port": 9229,
+      "localRoot": "${workspaceFolder}",
+      "remoteRoot": "/app",
+      "attachExistingChildren": true,
+      "autoAttachChildProcesses": true
+    },
+    {
+      "request": "launch",
+      "name": "Launch Program",
+      "type": "node",
+      "program": "${workspaceFolder}/src/index.ts",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--import",
+        "tsx"
+      ],
+      "attachSimplePort": 9229
+    }
+  ]
+}

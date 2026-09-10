@@ -1,0 +1,274 @@
+import { z } from 'zod'
+
+// ── Provider configs ────────────────────────────────────────────────────────
+
+export const ProviderConfigSchema = z.object({
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  /** Lightweight model used for fast classifications (e.g. intent routing). */
+  quickModel: z.string().optional(),
+  /**
+   * Per-model context window overrides, keyed by model id. Highest priority,
+   * overrides the built-in registry.
+   */
+  modelContextWindows: z.record(z.string(), z.number()).optional(),
+})
+
+export type ProviderConfig = z.infer<typeof ProviderConfigSchema>
+
+/**
+ * Open-ended record: any provider name maps to the same generic config.
+ * e.g. { openai: { apiKey: "..." }, anthropic: { ... } }
+ */
+export const ProvidersSchema = z.record(z.string(), ProviderConfigSchema)
+  .default({})
+
+// ── Channel configs ─────────────────────────────────────────────────────────
+
+const ChannelBaseSchema = z.object({
+  enabled: z.boolean().default(false),
+  allowFrom: z.array(z.string()).optional(),
+  /** Chat IDs that have admin privileges. DMs are admin by default; this is for group chats. */
+  adminChats: z.array(z.string()).optional(),
+})
+
+export const DiscordChannelSchema = ChannelBaseSchema.extend({
+  token: z.string().optional(),
+  /** 'mention' = respond only to @mentions, DMs, and replies to bot. 'all' = respond to everything. */
+  triggerMode: z.enum(['all', 'mention']).default('mention'),
+  /** Emoji to react with when a message is received. Set to empty string to disable. Default: '👀' */
+  reactionEmoji: z.string().default('👀'),
+})
+
+export const FeishuChannelSchema = ChannelBaseSchema.extend({
+  /** App ID from Feishu Open Platform */
+  appId: z.string().optional(),
+  /** App Secret from Feishu Open Platform */
+  appSecret: z.string().optional(),
+  /** Encryption key for event payloads */
+  encryptKey: z.string().optional(),
+  /** Verification token for event subscription */
+  verificationToken: z.string().optional(),
+})
+
+export const QQChannelSchema = ChannelBaseSchema.extend({
+  /** Bot AppID from the QQ Bot platform (q.qq.com). */
+  appId: z.string().optional(),
+  /** Bot AppSecret (client secret) used to mint the app access token. */
+  secret: z.string().optional(),
+  /** Bot token (legacy guild API). Optional for the v2 group/C2C API. */
+  token: z.string().optional(),
+  /** Use the sandbox API endpoint (sandbox.api.sgroup.qq.com) for testing. */
+  sandbox: z.boolean().default(false),
+  /**
+   * Gateway intents bitmask. Defaults to GROUP_AND_C2C_EVENT | PUBLIC_GUILD_MESSAGES.
+   * Override only if you know which events your bot is approved to receive.
+   */
+  intents: z.number().optional(),
+  /** Render outbound messages as QQ Markdown (msg_type 2). Defaults to true. */
+  markdown: z.boolean().default(true),
+})
+
+export const WebChannelSchema = ChannelBaseSchema.extend({})
+
+export const WeChatChannelSchema = ChannelBaseSchema.extend({
+  /** iLink Bot API base URL. Defaults to https://ilinkai.weixin.qq.com */
+  baseUrl: z.string().optional(),
+})
+
+export const WeChatDesktopChannelSchema = ChannelBaseSchema.extend({
+  /** WeChat main window handle (hex string, e.g. "0x20454"). Auto-detected if omitted. */
+  mainWindowHandle: z.string().optional(),
+  /** Poll interval in ms. Default: 1000. */
+  pollIntervalMs: z.number().optional(),
+  /** Full window scan every N ticks. Default: 5. */
+  windowScanEveryTicks: z.number().optional(),
+})
+
+export const ChannelsSchema = z.object({
+  discord: DiscordChannelSchema.optional(),
+  feishu: FeishuChannelSchema.optional(),
+  qq: QQChannelSchema.optional(),
+  web: WebChannelSchema.optional(),
+  wechat: WeChatChannelSchema.optional(),
+  wechatDesktop: WeChatDesktopChannelSchema.optional(),
+})
+
+// ── MCP configs ─────────────────────────────────────────────────────────────
+
+/**
+ * Schema for a single MCP server entry in the config file.
+ * `name` is derived from the record key; `type` defaults to "stdio".
+ */
+const McpServerEntrySchema = z.object({
+  /** Transport type. Defaults to "stdio". */
+  type: z.enum(['stdio', 'sse', 'streamable-http']).default('stdio'),
+  /** Command for stdio transport */
+  command: z.string().optional(),
+  /** Args for stdio transport */
+  args: z.array(z.string()).optional(),
+  /** URL for sse / streamable-http transport */
+  url: z.string().optional(),
+  /** Environment variables passed to the child process */
+  env: z.record(z.string()).optional(),
+})
+
+/**
+ * Config file format: record of server name → server config.
+ *
+ * ```json
+ * "mcp": {
+ *   "my-server": { "command": "npx", "args": ["-y", "my-mcp-server"] }
+ * }
+ * ```
+ *
+ * Transformed into `{ servers: McpServerConfig[] }` after parsing.
+ */
+export const McpSchema = z
+  .record(z.string(), McpServerEntrySchema)
+  .default({})
+  .transform((record) => ({
+    servers: Object.entries(record).map(([name, cfg]) => ({
+      name,
+      transport: cfg.type,
+      command: cfg.command,
+      args: cfg.args,
+      url: cfg.url,
+      env: cfg.env,
+    })),
+  }))
+
+/**
+ * Resolved MCP server config with name and transport (post-transform).
+ * Used throughout the MCP subsystem.
+ */
+export interface McpServerConfig {
+  name: string
+  transport: 'stdio' | 'sse' | 'streamable-http'
+  command?: string
+  args?: string[]
+  url?: string
+  env?: Record<string, string>
+}
+
+// ── Agent configs ───────────────────────────────────────────────────────────
+
+export const AgentSchema = z.object({
+  /** Model name — the provider is auto-detected from this (e.g. "claude-sonnet-4.6" → copilot). */
+  model: z.string().default('claude-sonnet-4.6'),
+  /** Lightweight model for mid-turn intent classification (steer vs abort). */
+  quickModel: z.string().optional(),
+  /** Workspace root for bootstrap files, skills, memory */
+  workspace: z.string().default('./workspace'),
+  temperature: z.number().default(0.7),
+  maxToolIterations: z.number().default(20),
+  autoHandoff: z.boolean().default(true),
+  handoffMinThreshold: z.number().min(0.5).max(0.95).default(0.75),
+  handoffMaxThreshold: z.number().min(0.5).max(0.95).default(0.95),
+  /** Session storage backend: 'jsonl' (default, file-based) or 'sqlite'. */
+  sessionStorage: z.enum(['jsonl', 'sqlite']).default('jsonl'),
+  /** DeepSeek thinking mode toggle */
+  thinking: z.object({ type: z.enum(['enabled', 'disabled']) }).optional(),
+  /** DeepSeek reasoning effort level */
+  reasoningEffort: z.enum(['high', 'max']).optional(),
+})
+
+// ── Tool configs ────────────────────────────────────────────────────────────
+
+export const ExecToolSchema = z.object({
+  defaultShell: z.enum([
+    'cmd',
+    'sh',
+    'bash',
+    'git-bash',
+    'powershell',
+    'pwsh',
+    'node',
+  ]).optional(),
+  timeoutMs: z.number().default(60_000),
+  maxOutputBytes: z.number().default(10_000),
+})
+
+export const WindowsToolSchema = z.object({
+  enabled: z.boolean().default(false),
+  backend: z.enum(['cli', 'napi']).default('cli'),
+  cliPath: z.string().optional(),
+  napiPath: z.string().optional(),
+  timeoutMs: z.number().default(60_000),
+  maxOutputBytes: z.number().default(10_000),
+})
+
+export const ChromeToolSchema = z.object({
+  /** Path to Chrome/Edge/Brave executable. Auto-detected if omitted. */
+  executablePath: z.string().optional(),
+  /** Base port for remote debugging (default: 9222). Sessions auto-allocate from this. */
+  basePort: z.number().default(9222),
+})
+
+export const ToolsSchema = z.object({
+  exec: ExecToolSchema.optional(),
+  restrictToWorkspace: z.boolean().default(false),
+  braveApiKey: z.string().optional(),
+  firecrawlApiKey: z.string().optional(),
+  windows: WindowsToolSchema.optional(),
+  chrome: ChromeToolSchema.optional(),
+})
+
+// ── Learning config ────────────────────────────────────────────────────────
+
+export const LearningSchema = z.object({
+  /** Interval for reflector poll (default 30 minutes). */
+  reflectIntervalMs: z.number().default(30 * 60 * 1000),
+  /** Interval for encapsulator poll (default 2 hours). */
+  encapsulateIntervalMs: z.number().default(120 * 60 * 1000),
+  /** Interval for soul-reflector poll (default 12 hours). */
+  soulIntervalMs: z.number().default(12 * 60 * 60 * 1000),
+})
+
+// ── Cron config ─────────────────────────────────────────────────────────────
+
+export const CronConfigSchema = z.object({
+  /**
+   * IANA timezone name used to interpret cron schedules as local time.
+   * e.g. "Asia/Shanghai", "America/New_York", "Europe/London".
+   * Defaults to the system timezone detected from the OS.
+   */
+  timezone: z.string().default(() =>
+    Intl.DateTimeFormat().resolvedOptions().timeZone
+  ),
+})
+
+// ── Tunnel config ──────────────────────────────────────────────────────
+
+export const TunnelSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Extra CLI args passed to `devtunnel host` (e.g. ["--allow-anonymous"]). */
+  args: z.array(z.string()).optional(),
+})
+
+// ── Voice / STT config ──────────────────────────────────────────────────
+
+export const VoiceSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** STT service endpoint URL */
+  sttUrl: z.string().optional(),
+  /** Request timeout in milliseconds. Default: 30000 */
+  timeoutMs: z.number().default(30_000),
+})
+
+// ── Root config ─────────────────────────────────────────────────────────
+
+export const ConfigSchema = z.object({
+  agent: AgentSchema.default({}),
+  providers: ProvidersSchema.default({}),
+  channels: ChannelsSchema.default({}),
+  mcp: McpSchema.default({}),
+  tools: ToolsSchema.default({}),
+  learning: LearningSchema.default({}),
+  cron: CronConfigSchema.default({}),
+  tunnel: TunnelSchema.default({}),
+  voice: VoiceSchema.default({}),
+})
+
+export type Config = z.infer<typeof ConfigSchema>
+export type ChannelName = keyof z.infer<typeof ChannelsSchema>

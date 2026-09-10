@@ -1,0 +1,113 @@
+import type { InstallationContextV1 } from './installation-context.ts'
+
+export type InstallationMode = 'main' | 'child'
+
+export type MainWizardStep =
+	| 'choose-role'
+	| 'choose-data-directory'
+	| 'initialize-main'
+	| 'configure-provider'
+	| 'choose-local-capabilities'
+	| 'launch-main'
+	| 'complete'
+
+export type ChildWizardStep =
+	| 'choose-role'
+	| 'enter-pairing-offer'
+	| 'verify-fingerprint'
+	| 'name-device'
+	| 'choose-capabilities'
+	| 'launch-child'
+	| 'complete'
+
+export type WizardState =
+	| { readonly version: 1; readonly revision: number; readonly mode: null; readonly step: 'choose-role' }
+	| { readonly version: 1; readonly revision: number; readonly mode: 'main'; readonly step: MainWizardStep }
+	| { readonly version: 1; readonly revision: number; readonly mode: 'child'; readonly step: ChildWizardStep }
+
+export type RendererWizardEvent =
+	| { readonly type: 'select-role'; readonly mode: InstallationMode }
+	| { readonly type: 'provider-configured' }
+	| { readonly type: 'local-capabilities-selected' }
+
+export type BootstrapCommandResult =
+	| { readonly ok: true; readonly state: WizardState }
+	| {
+		readonly ok: false
+		readonly code: 'invalid-state' | 'invalid-selection' | 'write-failed' | 'initialize-failed' | 'launch-failed'
+		readonly state: WizardState
+	}
+
+export interface NativeDirectorySelection {
+	readonly selectionId: string
+	readonly displayName: string
+}
+
+export interface ShadowDesktopApi {
+	readonly bootstrap: {
+		load(): Promise<WizardState>
+		dispatch(event: RendererWizardEvent): Promise<WizardState>
+		clear?(): Promise<void>
+		commitMainDirectory(selectionId: string): Promise<BootstrapCommandResult>
+		initializeMain(): Promise<BootstrapCommandResult>
+		launchMain(options: { readonly localExecutor: boolean; readonly port: number }): Promise<BootstrapCommandResult>
+		ensureRuntime(): Promise<EnsureRuntimeResult>
+	}
+	selectDirectory(): Promise<NativeDirectorySelection | null>
+}
+
+export type EnsureRuntimeResult =
+	| { readonly ok: true; readonly context: InstallationContextV1 }
+	| {
+		readonly ok: false
+		readonly code: 'invalid-state' | 'profile-missing' | 'runtime-unavailable'
+	}
+
+export type RendererBootstrapOutcome =
+	| { readonly view: 'app'; readonly context: InstallationContextV1 }
+	| { readonly view: 'wizard'; readonly initialState: WizardState | null; readonly loadError: boolean }
+	| { readonly view: 'runtime-recovery' }
+
+declare global {
+	interface Window {
+		readonly shadowDesktop?: ShadowDesktopApi
+	}
+}
+
+export const MAIN_LAUNCH_PORT = 43_123
+
+export function isBootstrapComplete(state: WizardState): boolean {
+	return state.step === 'complete'
+}
+
+export function shouldShowFirstRun(state: WizardState): boolean {
+	return !isBootstrapComplete(state)
+}
+
+export async function loadDesktopBootstrap(api: ShadowDesktopApi): Promise<WizardState> {
+	return await api.bootstrap.load()
+}
+
+export function browserBootstrap(context: InstallationContextV1): RendererBootstrapOutcome {
+	return { view: 'app', context }
+}
+
+export async function resolveDesktopBootstrap(api: ShadowDesktopApi): Promise<RendererBootstrapOutcome> {
+	let initialState: WizardState
+	try {
+		initialState = await loadDesktopBootstrap(api)
+	} catch {
+		return { view: 'wizard', initialState: null, loadError: true }
+	}
+
+	if (shouldShowFirstRun(initialState)) {
+		return { view: 'wizard', initialState, loadError: false }
+	}
+
+	try {
+		const runtime = await api.bootstrap.ensureRuntime()
+		return runtime.ok ? { view: 'app', context: runtime.context } : { view: 'runtime-recovery' }
+	} catch {
+		return { view: 'runtime-recovery' }
+	}
+}

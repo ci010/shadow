@@ -1,0 +1,49 @@
+# Git history (available at runtime via bind mount, not needed in image)
+.git
+
+# Dependencies (rebuilt inside container)
+node_modules
+**/node_modules
+
+# Build artifacts
+build/
+**/build/
+dist/
+**/dist/
+
+# Environment files (passed via env_file in docker-compose)
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# Historical Deno dependency cache
+deno.lock
+
+# Runtime data
+workspace/
+bot.config.json
+desktop/release/
+desktop/backend/
+temp_adapter_qq/
+temp_botpy/
+**/.tmp/
+**/.sessions/
+**/.cron/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+*.log
+**/.logs/
+**/uploads/*
+
+# Docker files
+**/Dockerfile
+**/docker-compose.yml
+.dockerignore
+
+# Reference files
+ref
+ref.*
