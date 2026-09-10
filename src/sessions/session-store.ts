@@ -84,6 +84,8 @@ export interface StoredMessage {
   reasoning_content?: string | null
   /** Display-only reasoning narration (Copilot, OpenAI). Never sent back. */
   reasoning_text?: string | null
+  /** Provider-scoped continuity for assistant messages. */
+  provider_state?: ChatMessage['provider_state']
   tool_calls?: ChatMessage['tool_calls']
   tool_call_id?: string
   name?: string

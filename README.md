@@ -19,18 +19,23 @@ not imply a production-ready distributed system.
 
 ## Requirements
 
-Use **Node.js 24.15 or newer** and **pnpm 12.3.4** (the latest pnpm release when
-this migration was made, pinned in `packageManager`). Deno is not needed to
+Use **Node.js 24.15 or newer** and **pnpm 12.3.1** (pinned in `packageManager`
+for availability on the configured Microsoft npm proxy). Deno is not needed to
 develop, build, or run Shadow.
 
 ```sh
-npm install --global pnpm@12.3.4
+npm install --global pnpm@12.3.1
 pnpm install
 ```
 
 All three packages use the root `pnpm-lock.yaml`. Do not run `npm install` inside
 `app` or `desktop`. Dependencies are installed with pnpm's explicit build-script
 allowlist in `pnpm-workspace.yaml`.
+
+The project `.npmrc` uses `https://packagefeedproxy.microsoft.io/npm/`.
+The pnpm hook keeps package tarball downloads on that proxy even when registry
+metadata advertises an upstream feed URL. Missing mirror versions are pinned to
+the nearest available stable releases in the manifests and workspace overrides.
 
 ## Local development
 
@@ -88,6 +93,62 @@ pnpm desktop
 The development command builds the backend and Electron main/preload, starts
 Vite, and launches Electron. The packaging command additionally builds the
 production UI and creates a Windows NSIS installer in `desktop/release`.
+
+Desktop development uses a separate profile at `.tmp/desktop-dev/user-data` in
+the worktree, rather than the installed application's profile. An absolute
+`SHADOW_DESKTOP_USER_DATA` path can override it. In packaged applications, the
+Main directory defaults to the OS home directory's `.shadow` folder (shown as
+an expanded path); it can be edited or selected with Browse. Existing saved
+Main directories are preserved. Development instead defaults Main to
+`.tmp/desktop-dev/data` to avoid using personal data during smoke tests. The
+absolute `SHADOW_DESKTOP_DEV_MAIN_DIRECTORY` override applies only to development.
+
+After Main starts, an unconfigured provider opens **Connect a model provider**
+instead of an unusable chat. Choose **GitHub Copilot** for device-code login, or
+**API key / local provider** for a provider key or keyless OpenAI-compatible
+endpoint. The device code must be approved by the user on
+`https://github.com/login/device`; the UI supports cancellation and retry.
+The **Providers** navigation tab remains available to change providers or recover from
+rejected credentials. Readiness follows the selected provider, not just the
+presence of an OpenAI key.
+
+Copilot requests follow each model's advertised `supported_endpoints`. Models
+that support chat completions retain that protocol; Responses-only models use
+`/responses` with converted history and tool calls. Endpoint capabilities are
+cached alongside model names. Legacy metadata without capabilities retains
+chat-completions compatibility with a warning; explicit unsupported protocols
+fail without switching models or retrying a rejected request against another API.
+Responses history preserves ordered output and encrypted reasoning separately
+from displayed text, including tool-call IDs and assistant phases. JSONL and
+SQLite retain this provider/model-scoped continuation across restarts; older
+messages remain compatible. Streaming failures and incomplete responses are
+reported as errors instead of committing partial tool calls.
+Clients of Shadow's compatible chat API can preserve this continuation by
+round-tripping the assistant message's optional `provider_state` field unchanged.
+
+The backend saves provider settings in the selected Main directory's
+`config/bot.config.json`. Copilot credentials remain in the desktop profile's
+`auth/copilot` directory, not renderer storage or the repository configuration.
+The same backend applies the saved settings without a separate UI-only config.
+The desktop window uses a custom, draggable title bar with minimize,
+maximize/restore, and close controls; it has no native application menu.
+Navigation (including Providers) and window controls share one Shadow header.
+Sessions dock to the left edge; the session list and chat history scroll
+independently while the composer stays visible. Narrow browser windows expose
+Sessions through a toggle. The model selector lives in the chat composer's
+toolbar and retains the existing global model-selection behavior; it is also
+available on the Providers tab from other views. Returning from Providers
+restores the existing chat and unsent draft; leaving settings cancels any pending
+device login. First-run credential checks still gate unavailable chat access.
+
+The optional layout regression uses the built renderer in hidden Electron
+windows with synthetic APIs and disposable project-local profiles. It does not
+connect to a running Main or use saved credentials:
+
+```sh
+pnpm build:app
+pnpm exec node --import tsx --test desktop/tests/layout.node-test.ts
+```
 
 Packaging uses `pnpm deploy --prod --node-linker hoisted` to include a portable
 backend without development-tree symlinks; only built modules, runtime dependencies,

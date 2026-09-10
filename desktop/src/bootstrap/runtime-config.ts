@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
-import { isAbsolute, dirname, join, resolve } from 'node:path'
+import { isAbsolute, dirname, join, parse, resolve } from 'node:path'
 
 export interface MainRuntimeConfig {
   readonly version: 1
@@ -34,14 +34,20 @@ export class AtomicRuntimeConfigWriter implements RuntimeConfigWriter {
   ) {}
 
   async writeMain(dataDir: string): Promise<void> {
-    const absoluteDataDir = resolve(dataDir)
-    if (!isAbsolute(absoluteDataDir)) throw new TypeError('Data directory must be absolute')
+    const absoluteDataDir = normalizeMainDirectoryPath(dataDir)
+    let existing: MainRuntimeConfig | undefined
+    try {
+      existing = await new FileRuntimeConfigReader(this.filePath).readMain()
+    } catch (error) {
+      if (!isMissingRuntimeConfig(error)) throw error
+    }
     const config: MainRuntimeConfig = {
       version: 1,
       mode: 'main',
       dataDir: absoluteDataDir,
-      localNodeId: this.localNodeIdFactory(),
+      localNodeId: existing?.localNodeId ?? this.localNodeIdFactory(),
     }
+    await mkdir(absoluteDataDir, { recursive: true })
     const directory = dirname(this.filePath)
     await mkdir(directory, { recursive: true })
     const temporaryPath = join(directory, `.${randomUUID()}.tmp`)
@@ -65,6 +71,24 @@ export function runtimeConfigPath(userDataPath: string): string {
   return join(userDataPath, 'bootstrap', 'runtime-config.v1.json')
 }
 
+export function normalizeMainDirectoryPath(value: unknown): string {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > 32_767
+    || /[\u0000-\u001f]/u.test(value)
+    || !isAbsolute(value)
+    || (process.platform === 'win32' && parse(value).root.length < 3)
+  ) {
+    throw new TypeError('Main directory must be a full absolute path')
+  }
+  return resolve(value)
+}
+
+export function isMissingRuntimeConfig(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
 export function parseMainRuntimeConfig(value: unknown): MainRuntimeConfig {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('Runtime config is invalid')
@@ -84,7 +108,7 @@ export function parseMainRuntimeConfig(value: unknown): MainRuntimeConfig {
   return {
     version: 1,
     mode: 'main',
-    dataDir: candidate.dataDir,
+    dataDir: normalizeMainDirectoryPath(candidate.dataDir),
     localNodeId: candidate.localNodeId,
   }
 }

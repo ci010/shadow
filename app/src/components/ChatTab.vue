@@ -1,13 +1,11 @@
 <template>
   <div
-    class="grid gap-3 min-w-0"
-    :class="rightPaneOpen
-      ? 'lg:grid-cols-[minmax(0,280px)_1.6fr_1fr]'
-      : 'lg:grid-cols-[minmax(0,280px)_1fr_max-content]'"
+    class="chat-workspace"
+    :class="{ 'tools-open': rightPaneOpen, 'mobile-sessions-open': mobileSidebarOpen }"
   >
+    <button class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Sessions</button>
     <!-- Sidebar: session list -->
-    <div
-      class="rounded-md border border-default bg-surface p-4 lg:sticky lg:top-10 lg:h-[calc(100vh-5.5rem)]">
+    <aside id="sessions-sidebar" class="sessions-sidebar" aria-label="Sessions">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-600">Sessions</h2>
         <button class="btn" @click="startNewChat">+ New</button>
@@ -38,7 +36,7 @@
             :class="{ active: activeSessionId === s.sessionId, readonly: !s.isDirectChat }"
             :style="{ paddingLeft: `${s.depth * 16 + 12}px` }"
             :title="s.description ? `${s.sessionId}\n${s.description}` : s.sessionId"
-            @click="selectSession(s.sessionId)"
+            @click="selectSession(s.sessionId); mobileSidebarOpen = false"
           >
             <span
               v-if="hasChildren(s.sessionId)"
@@ -58,11 +56,10 @@
           </button>
         </template>
       </div>
-    </div>
+    </aside>
 
     <!-- Chat area -->
-    <div class="rounded-md border border-default flex flex-col min-w-0"
-      style="min-height: 70vh; max-height: calc(100vh - 5.5rem); background: transparent">
+    <div class="chat-panel">
       <div
         v-if="!activeSessionId"
         class="flex-1 flex items-center justify-center text-ink/40 text-sm chat-empty-cta cursor-pointer select-none"
@@ -72,8 +69,8 @@
       </div>
       <template v-else>
         <!-- Header -->
-        <div class="px-4 py-3 border-b border-default flex items-center justify-between" style="background: var(--c-frosted); backdrop-filter: blur(4px)">
-          <div>
+        <div class="chat-header px-4 py-3 border-b border-default flex items-center justify-between" style="background: var(--c-frosted); backdrop-filter: blur(4px)">
+          <div class="chat-heading-copy">
             <div class="text-xs text-ink/50 font-600 uppercase tracking-widest">{{ isDirectChat ? 'Direct Chat' : 'Session (readonly)' }}</div>
             <div class="text-sm font-mono text-ink/70">
               {{ activeSessionId }}
@@ -273,7 +270,7 @@
         </div>
 
         <!-- Input (direct-chat only) -->
-        <div v-if="isDirectChat && !viewingPhysicalId" class="px-4 py-3 border-t border-default" style="background: var(--c-frosted); backdrop-filter: blur(4px)">
+        <div v-if="isDirectChat && !viewingPhysicalId" class="chat-composer" style="background: var(--c-frosted); backdrop-filter: blur(4px)">
           <!-- Selection indicator -->
           <div v-if="selectedText" class="selection-indicator">
             <div class="selection-preview" @click="scrollToSelection">
@@ -281,19 +278,22 @@
             </div>
             <button class="selection-dismiss" @click="clearSelection">&times;</button>
           </div>
-          <div class="flex gap-3">
+          <div class="composer-input">
             <textarea
               ref="chatInput"
               v-model="inputText"
-              class="flex-1 rounded border border-default bg-surface px-3 py-2 text-sm resize-none"
+              class="rounded border border-default bg-surface px-3 py-2 text-sm resize-none"
               placeholder="Type a message..."
+              aria-label="Message"
               rows="2"
-              style="max-height: 200px; overflow-y: auto;"
               :disabled="streaming"
               @keydown="handleKeyDown"
               @input="autoResize"
             />
-            <div v-if="selectedText" class="flex flex-col gap-2 self-end">
+          </div>
+          <div class="composer-toolbar">
+            <ModelSelector />
+            <div v-if="selectedText" class="composer-send-actions">
               <button
                 class="btn"
                 :disabled="!inputText.trim() || streaming"
@@ -311,7 +311,7 @@
             </div>
             <button
               v-else
-              class="btn self-end"
+              class="btn composer-send"
               :disabled="!inputText.trim() || streaming"
               @click="sendMessage()"
             >
@@ -325,13 +325,15 @@
 
     <!-- Right pane: slide-out drawer (system prompt + tools) -->
     <div
-      class="right-pane flex gap-2 min-w-0 lg:sticky lg:top-10 lg:h-[calc(100vh-5.5rem)]"
+      class="right-pane"
       :class="rightPaneOpen ? 'right-pane-open' : 'right-pane-closed'"
     >
       <!-- Drawer toggle handle -->
       <button
         class="right-pane-toggle"
         :title="rightPaneOpen ? 'Collapse panel' : 'Expand panel'"
+        :aria-expanded="rightPaneOpen"
+        aria-label="System and tools panel"
         @click="rightPaneOpen = !rightPaneOpen"
       >
         <span class="right-pane-toggle-icon" v-html="rightPaneOpen ? '&#9654;' : '&#9664;'" />
@@ -376,6 +378,7 @@ import { buildMediaUrl } from '../media-url.ts'
 import SystemPromptCard from './SystemPromptCard.vue'
 import ToolsCard from './ToolsCard.vue'
 import type { ToolDef } from './ToolsCard.vue'
+import ModelSelector from './ModelSelector.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -419,6 +422,7 @@ const streamingToolCallData = ref<{ name: string; arguments: Record<string, unkn
 const streamingToolResult = ref('')
 const streamToolResultExpanded = ref(false)
 const inputText = ref('')
+const mobileSidebarOpen = ref(false)
 
 // ── Session stage polling (batch) ────────────────────────────────────────────
 type SessionStage = 'idle' | 'llm' | 'tool' | 'inactive'
@@ -980,6 +984,7 @@ function confirmNewChat(): void {
 }
 
 function openWebChat(id: string): void {
+  mobileSidebarOpen.value = false
   const sessionId = `web:${id}`
   if (!allSessions.value.some(s => s.sessionId === sessionId)) {
     allSessions.value.unshift({ sessionId, label: id, isDirectChat: true, isCurrent: false, parentSessionId: null, depth: 0 })
@@ -1536,6 +1541,7 @@ function captureHighlightRects(sel: Selection): void {
 }
 
 function handleTextSelection(): void {
+  if (route.name !== 'chat') return
   if (!isDirectChat.value) return // readonly sessions – no selection actions
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || !sel.toString().trim()) return
@@ -1688,6 +1694,7 @@ function handleResize(): void {
  * (links, buttons, the "Ask BTW" text-selection flow) is preserved.
  */
 function handleBackgroundClick(e: MouseEvent): void {
+  if (route.name !== 'chat') return
   if (!isDirectChat.value || viewingPhysicalId.value) return
   const input = chatInput.value
   if (!input || input.disabled) return
@@ -1706,10 +1713,13 @@ function handleBackgroundClick(e: MouseEvent): void {
 document.addEventListener('mouseup', handleTextSelection)
 document.addEventListener('click', handleBackgroundClick)
 window.addEventListener('resize', handleResize)
+const onGlobalConfigChanged = () => { void loadGlobalConfig() }
+window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
   document.removeEventListener('mouseup', handleTextSelection)
   document.removeEventListener('click', handleBackgroundClick)
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('shadow:config-changed', onGlobalConfigChanged)
   stopStagePolling()
   disconnectEventStream()
 })
@@ -1737,8 +1747,56 @@ function resendLastMessage() {
 </script>
 
 <style scoped>
+.chat-workspace {
+  position: relative;
+  display: grid;
+  grid-template-columns: clamp(200px, 22vw, 280px) minmax(0, 1fr) 32px;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.chat-workspace.tools-open { grid-template-columns: clamp(200px, 22vw, 280px) minmax(0, 1fr) minmax(240px, 28%); }
+.sessions-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px 12px; border-right: 1px solid var(--c-border); background: var(--c-bg-card); }
+.sessions-sidebar > :not(.session-list) { flex-shrink: 0; }
+.sessions-sidebar h2 { margin: 0; }
+.sessions-sidebar input { min-width: 0; }
+.chat-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.chat-header { flex-shrink: 0; gap: 10px; }
+.chat-heading-copy { min-width: 0; overflow-wrap: anywhere; }
+.chat-header > button { flex-shrink: 0; }
+.chat-messages { min-height: 0; min-width: 0; overflow-wrap: anywhere; overscroll-behavior: contain; }
+.chat-composer { flex: 0 0 auto; min-width: 0; padding: 12px 16px; border-top: 1px solid var(--c-border); }
+.composer-input { display: flex; min-width: 0; }
+.composer-input textarea { display: block; width: 100%; min-width: 0; max-height: min(160px, 22dvh); overflow-y: auto; }
+.composer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; min-width: 0; }
+.composer-toolbar > :first-child { flex: 0 1 auto; max-width: 100%; }
+.composer-send, .composer-send-actions { margin-left: auto; flex-shrink: 0; }
+.composer-send-actions { display: flex; gap: 8px; }
+.mobile-sessions-toggle { display: none; }
+@media (max-width: 1000px) {
+  .chat-workspace { grid-template-columns: 200px minmax(0, 1fr) 28px; }
+  .chat-workspace.tools-open { grid-template-columns: 200px minmax(0, 1fr) 250px; }
+}
+@media (max-width: 700px) {
+  .chat-workspace, .chat-workspace.tools-open { grid-template-columns: minmax(0, 1fr) 28px; }
+  .tools-open .right-pane { position: absolute; inset: 0 0 0 auto; width: min(360px, 85%); z-index: 10; background: var(--c-bg-card); box-shadow: -8px 0 24px var(--c-shadow-soft); }
+  .sessions-sidebar { display: none; position: absolute; inset: 36px auto 0 0; width: min(280px, 82%); z-index: 12; box-shadow: 8px 0 24px var(--c-shadow-soft); }
+  .mobile-sessions-open .sessions-sidebar { display: flex; }
+  .mobile-sessions-toggle { display: block; position: absolute; top: 6px; left: 8px; z-index: 13; }
+  .chat-header { padding-top: 42px; }
+  .chat-empty-cta { padding-top: 42px; }
+  .chat-composer { padding: 10px; }
+}
 /* ── Right-pane slide-out drawer ──────────────────────────────────────────── */
 .right-pane {
+  display: flex;
+  gap: 6px;
+  min-height: 0;
+  min-width: 0;
+  padding: 8px 4px;
+  border-left: 1px solid var(--c-border);
   transition: none;
 }
 
@@ -1768,10 +1826,10 @@ function resendLastMessage() {
   align-items: center;
   justify-content: flex-start;
   gap: 0.5rem;
-  width: 1.6rem;
+  width: 20px;
   padding: 0.6rem 0;
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--c-frosted);
   color: var(--c-text);
   cursor: pointer;
@@ -1835,14 +1893,17 @@ function resendLastMessage() {
 
 .session-list {
   margin-top: 0.5rem;
+  min-height: 0;
+  flex: 1;
   overflow-y: auto;
-  max-height: calc(100% - 8rem);
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
 .chat-session-row {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;

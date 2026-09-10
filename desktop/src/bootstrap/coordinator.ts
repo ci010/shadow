@@ -1,5 +1,9 @@
+import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import type { BootstrapStateStorage } from './storage.js'
-import type { RuntimeConfigReader, RuntimeConfigWriter } from './runtime-config.js'
+import { isMissingRuntimeConfig, normalizeMainDirectoryPath, type RuntimeConfigReader, type RuntimeConfigWriter } from './runtime-config.js'
+import { defaultMainDirectory } from './main-directory.js'
+import type { NativeDirectorySelection } from '../ipc-contract.js'
 import type { LaunchProfileStore, MainLaunchProfile } from './launch-profile.js'
 import type { MainAgentConfigInitializer } from './main-agent-config.js'
 import {
@@ -59,6 +63,7 @@ const PRIVILEGED_EVENTS = new Set<WizardEvent['type']>([
 
 export class BootstrapCoordinator {
   private readonly selections = new Map<string, string>()
+  private selectedDirectory: string | undefined
   private operation: Promise<unknown> = Promise.resolve()
 
   constructor(
@@ -68,10 +73,49 @@ export class BootstrapCoordinator {
     private readonly runtimeHost: MainRuntimeHost,
     private readonly launchProfiles: LaunchProfileStore,
     private readonly configReader: RuntimeConfigReader,
+    private readonly getDefaultDirectory: () => string = defaultMainDirectory,
   ) {}
 
   registerDirectorySelection(selectionId: string, absolutePath: string): void {
     this.selections.set(selectionId, absolutePath)
+    this.selectedDirectory = absolutePath
+  }
+
+  getMainDirectorySelection(): Promise<NativeDirectorySelection> {
+    return this.serialize(async () => {
+      await this.requireDirectoryStep()
+      let path = this.selectedDirectory
+      if (path === undefined) {
+        try {
+          path = (await this.configReader.readMain()).dataDir
+        } catch (error) {
+          if (!isMissingRuntimeConfig(error)) throw new Error('Saved Main directory could not be loaded')
+          path = this.getDefaultDirectory()
+        }
+      }
+      return this.createDirectorySelection(path)
+    })
+  }
+
+  selectMainDirectoryPath(path: string): Promise<NativeDirectorySelection> {
+    return this.serialize(async () => {
+      await this.requireDirectoryStep()
+      return this.createDirectorySelection(path)
+    })
+  }
+
+  private async requireDirectoryStep(): Promise<void> {
+    const current = await this.load()
+    if (current.mode !== 'main' || current.step !== 'choose-data-directory') {
+      throw new TypeError('Main directory selection is only available during directory setup')
+    }
+  }
+
+  private createDirectorySelection(path: string): NativeDirectorySelection {
+    const displayPath = normalizeMainDirectoryPath(path)
+    const selectionId = randomUUID()
+    this.registerDirectorySelection(selectionId, displayPath)
+    return { selectionId, displayName: basename(displayPath), displayPath }
   }
 
   async load(): Promise<WizardState> {

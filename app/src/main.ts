@@ -1,4 +1,4 @@
-import { createApp } from 'vue'
+import { createApp, defineComponent, h, type Component } from 'vue'
 import 'uno.css'
 import 'katex/dist/katex.min.css'
 import './styles.css'
@@ -9,6 +9,7 @@ import { createProductFixturesProvider } from './composables/useProductFixtures.
 import { createLocalMainAdminContext } from './installation-context.ts'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
+import DesktopFrame from './DesktopFrame.vue'
 import {
 	browserBootstrap,
 	resolveDesktopBootstrap,
@@ -18,6 +19,12 @@ import {
 import type { InstallationContextV1 } from './installation-context.ts'
 
 const apiBase = import.meta.env.VITE_API_BASE?.trim() || globalThis.location.origin
+
+function desktopRoot(component: Component, props?: Record<string, unknown>) {
+	return defineComponent({
+		setup: () => () => h(DesktopFrame, null, { default: () => h(component, props) }),
+	})
+}
 
 function mountMainApp(installationContext: InstallationContextV1): void {
 	createApp(App)
@@ -34,7 +41,7 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 	}
 
 	if (outcome.view === 'wizard') {
-		const wizard = createApp(FirstRunWizard, {
+		const wizard = createApp(desktopRoot(FirstRunWizard, {
 			api,
 			initialState: outcome.initialState,
 			loadError: outcome.loadError,
@@ -46,13 +53,13 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 				wizard.unmount()
 				await startDesktopApp(api)
 			},
-		})
+		}))
 		wizard.mount('#app')
 		return
 	}
 
 	const clearSetup = api.bootstrap.clear
-	const recovery = createApp(RuntimeRecovery, {
+	const recovery = createApp(desktopRoot(RuntimeRecovery, {
 		canReset: typeof clearSetup === 'function',
 		retry: async () => {
 			recovery.unmount()
@@ -65,7 +72,7 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 				await startDesktopApp(api)
 			}
 			: undefined,
-	})
+	}))
 	recovery.mount('#app')
 }
 

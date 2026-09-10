@@ -1,8 +1,10 @@
-import { strictEqual as assertEquals } from 'node:assert/strict'
+import { deepStrictEqual, rejects, strictEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import {
 	browserBootstrap,
+	commitMainDirectoryChoice,
 	loadDesktopBootstrap,
+	loadMainDirectorySelection,
 	resolveDesktopBootstrap,
 	shouldShowFirstRun,
 	type ShadowDesktopApi,
@@ -116,4 +118,90 @@ test('browser fallback preserves its synthetic installation context', () => {
 	assertEquals(outcome.view, 'app')
 	if (outcome.view !== 'app') throw new Error('Expected app outcome')
 	assertEquals(outcome.context, realContext)
+})
+
+test('Main default is supplied by desktop as an expanded path without opening the chooser', async () => {
+	let defaults = 0
+	let browse = 0
+	const selection = { selectionId: 'default', displayName: '.shadow', displayPath: 'C:\\fake-home\\.shadow' }
+	const api = {
+		getMainDirectorySelection: async () => { defaults += 1; return selection },
+		selectDirectory: async () => { browse += 1; return null },
+	} as unknown as ShadowDesktopApi
+	assertEquals(await loadMainDirectorySelection(api, null), selection)
+	assertEquals(defaults, 1)
+	assertEquals(browse, 0)
+
+	const custom = { selectionId: 'custom', displayName: 'custom', displayPath: 'D:\\custom' }
+	assertEquals(await loadMainDirectorySelection(api, custom), custom)
+	assertEquals(defaults, 1)
+})
+
+test('default and edited Main paths use validated selections before committing', async () => {
+	const commands: unknown[] = []
+	const result = { ok: true, state: mainState('initialize-main') } as const
+	const api = {
+		selectMainDirectoryPath: async (path: string) => {
+			commands.push(['select', path])
+			return { selectionId: 'validated', displayName: 'main', displayPath: path }
+		},
+		bootstrap: {
+			commitMainDirectory: async (selectionId: string) => { commands.push(['commit', selectionId]); return result },
+		},
+	} as unknown as ShadowDesktopApi
+	const initial = { selectionId: 'default', displayName: '.shadow', displayPath: 'C:\\fake-home\\.shadow' }
+	assertEquals(await commitMainDirectoryChoice(api, initial.displayPath, initial), result)
+	assertEquals(await commitMainDirectoryChoice(api, 'D:\\custom', initial), result)
+	deepStrictEqual(commands, [
+		['select', 'C:\\fake-home\\.shadow'], ['commit', 'validated'],
+		['select', 'D:\\custom'], ['commit', 'validated'],
+	])
+})
+
+test('failed saves refresh the single-use directory selection on retry', async () => {
+	let selections = 0
+	const committed: string[] = []
+	const api = {
+		selectMainDirectoryPath: async () => ({ selectionId: `selection-${++selections}`, displayName: 'main' }),
+		bootstrap: {
+			commitMainDirectory: async (selectionId: string) => {
+				committed.push(selectionId)
+				return committed.length === 1
+					? { ok: false, code: 'write-failed', state: mainState('choose-data-directory') }
+					: { ok: true, state: mainState('initialize-main') }
+			},
+		},
+	} as unknown as ShadowDesktopApi
+	assertEquals((await commitMainDirectoryChoice(api, 'C:\\fake-home\\.shadow', null)).ok, false)
+	assertEquals((await commitMainDirectoryChoice(api, 'C:\\fake-home\\.shadow', null)).ok, true)
+	deepStrictEqual(committed, ['selection-1', 'selection-2'])
+})
+
+test('legacy desktop directory mocks remain compatible without manufacturing a path', async () => {
+	let committed = ''
+	const selection = { selectionId: 'native-id', displayName: 'main' }
+	const api = {
+		bootstrap: {
+			commitMainDirectory: async (id: string) => {
+				committed = id
+				return { ok: true, state: mainState('initialize-main') }
+			},
+		},
+	} as unknown as ShadowDesktopApi
+	assertEquals(await loadMainDirectorySelection(api, null), null)
+	assertEquals((await commitMainDirectoryChoice(api, 'main', selection)).ok, true)
+	assertEquals(committed, 'native-id')
+	await rejects(commitMainDirectoryChoice(api, '', null), /Choose a Main directory first/)
+})
+
+test('invalid edited paths do not fall back to the previously selected directory', async () => {
+	let writes = 0
+	const api = {
+		selectMainDirectoryPath: async () => { throw new Error('Path must be absolute') },
+		bootstrap: {
+			commitMainDirectory: async () => { writes += 1 },
+		},
+	} as unknown as ShadowDesktopApi
+	await rejects(commitMainDirectoryChoice(api, '~/.shadow', { selectionId: 'old', displayName: 'old' }), /absolute/)
+	assertEquals(writes, 0)
 })

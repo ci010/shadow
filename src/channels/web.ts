@@ -6,7 +6,6 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import type { Hono } from 'hono'
 import { saveToUploads, sessionWorkspacePath } from '../utils/paths.ts'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
-import { CopilotAuthenticator } from '../providers/copilot.ts'
 import { resolveSessionLocations } from '../sessions/locality.ts'
 
 function escapesRoot(root: string, target: string): boolean {
@@ -46,14 +45,10 @@ export async function resolveSessionMediaPath(
  *  POST /api/chat/message  — send message, wait for full response (sync REST)
  *  POST /api/chat/upload   — upload file/image, returns relative path
  *  GET  /api/chat/uploads/* — serve uploaded / outbound media files
- *  GET  /api/auth           — check copilot auth status
- *  POST /api/auth/login     — trigger device-code login, returns URL + code
- *  POST /api/auth/poll      — poll until device-code login completes
  */
 export class WebChannel extends AbstractChannel {
   readonly name = 'web'
   private workspace: string
-  private copilotAuth: CopilotAuthenticator
 
   /**
    * Pending SSE connections keyed by `requestId` (the messageId we set on
@@ -94,7 +89,6 @@ export class WebChannel extends AbstractChannel {
     super(bus, opts.allowFrom, true)
     this.workspace = opts.workspace ?? '.'
     this.sessionManager = opts.sessionManager
-    this.copilotAuth = new CopilotAuthenticator()
 
     this.acceptToolResults = true
 
@@ -226,52 +220,6 @@ export class WebChannel extends AbstractChannel {
       } catch {
         return c.json({ error: 'File not found' }, 404)
       }
-    })
-
-    // ── GET /api/auth — check copilot auth status ──
-    app.get('/api/auth', (c) => {
-      return c.json({
-        authenticated: this.copilotAuth.hasAccessToken(),
-        apiKeyValid: this.copilotAuth.hasValidApiKey(),
-      })
-    })
-
-    // ── POST /api/auth/login — start device-code flow ──
-    app.post('/api/auth/login', async (c) => {
-      if (
-        this.copilotAuth.hasAccessToken() && this.copilotAuth.hasValidApiKey()
-      ) {
-        return c.json({ authenticated: true })
-      }
-      try {
-        const deviceCode = await this.copilotAuth.startDeviceLogin()
-        return c.json({
-          authenticated: false,
-          verification_uri: deviceCode.verification_uri,
-          user_code: deviceCode.user_code,
-          device_code: deviceCode.device_code,
-          message:
-            `Visit ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
-        })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Login failed'
-        return c.json({ error: message }, 500)
-      }
-    })
-
-    // ── POST /api/auth/poll — poll until device-code is authorised ──
-    app.post('/api/auth/poll', async (c) => {
-      const body = await c.req.json<{ device_code: string }>()
-      if (!body.device_code) {
-        return c.json({ error: 'device_code is required' }, 400)
-      }
-      const success = await this.copilotAuth.completeDeviceLogin(
-        body.device_code,
-      )
-      return success ? c.json({ authenticated: true }) : c.json(
-        { authenticated: false, error: 'Login timed out or failed' },
-        408,
-      )
     })
 
     // ── POST /api/chat/message — sync: send message, wait for full response ──

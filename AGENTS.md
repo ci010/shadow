@@ -26,7 +26,7 @@ passing unit test, or old workstream status.
 
 ## Toolchain and commands
 
-Use **Node.js 24.15+** and **pnpm 12.3.4**, as pinned in root `package.json`.
+Use **Node.js 24.15+** and **pnpm 12.3.1**, as pinned in root `package.json`.
 Install from the repository root with `pnpm install`; the root, `app`, and
 `desktop` share `pnpm-lock.yaml` and `pnpm-workspace.yaml`.
 

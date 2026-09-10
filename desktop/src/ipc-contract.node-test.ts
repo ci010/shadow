@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { resolve } from 'node:path'
 import {
+  handleGetMainDirectorySelection,
+  handleSelectMainDirectoryPath,
   handleInitializeMain,
   parseLaunchMainOptions,
   parseNoArguments,
@@ -54,4 +57,30 @@ test('ensureRuntime accepts no renderer arguments and returns the frozen result'
     () => handleEnsureRuntime({ ensureRuntime: async () => expected }, ['unexpected']),
     /accepts no arguments/,
   )
+})
+
+test('directory IPC obtains a trusted default without arguments and validates edits before selection', async () => {
+  let reads = 0
+  const paths: string[] = []
+  const path = resolve('.tmp', 'synthetic-home', '.shadow')
+  const selection = { selectionId: 'opaque-id', displayName: '.shadow', displayPath: path }
+  const coordinator = {
+    getMainDirectorySelection: async () => { reads += 1; return selection },
+    selectMainDirectoryPath: async (value: string) => { paths.push(value); return selection },
+  }
+  assert.deepEqual(await handleGetMainDirectorySelection(coordinator, []), selection)
+  for (const args of [[undefined], [path], [{ home: path }]]) {
+    assert.throws(() => handleGetMainDirectorySelection(coordinator, args), /accepts no arguments/)
+  }
+  assert.equal(reads, 1)
+  assert.deepEqual(await handleSelectMainDirectoryPath(coordinator, [path]), selection)
+  const invalidPaths: unknown[] = [null, undefined, {}, '', 'relative', '~/.shadow', 'C:relative', `${path}\0bad`]
+  if (process.platform === 'win32') invalidPaths.push('\\drive-relative', '/drive-relative')
+  for (const value of invalidPaths) {
+    assert.throws(() => handleSelectMainDirectoryPath(coordinator, [value]), /absolute path/)
+  }
+  for (const args of [[], [path, { overwrite: true }]]) {
+    assert.throws(() => handleSelectMainDirectoryPath(coordinator, args), /requires one absolute path/)
+  }
+  assert.deepEqual(paths, [path])
 })

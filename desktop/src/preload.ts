@@ -6,8 +6,10 @@ import {
   type ShadowDesktopApi,
 } from './ipc-contract.js'
 import type { WizardEvent, WizardState } from './wizard/state-machine.js'
+import { createWindowControlsApi } from './window-controls-preload.js'
 
 const api: ShadowDesktopApi = Object.freeze({
+  windowControls: createWindowControlsApi(ipcRenderer),
   bootstrap: Object.freeze({
     load: () =>
       ipcRenderer.invoke(IPC_CHANNELS.loadWizard) as Promise<WizardState>,
@@ -27,8 +29,14 @@ const api: ShadowDesktopApi = Object.freeze({
     ipcRenderer.invoke(IPC_CHANNELS.selectDirectory) as Promise<
       NativeDirectorySelection | null
     >,
+  getMainDirectorySelection: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.getMainDirectorySelection) as Promise<NativeDirectorySelection>,
+  selectMainDirectoryPath: (path: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.selectMainDirectoryPath, path) as Promise<NativeDirectorySelection>,
   openExternal: (url: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.openExternal, url) as Promise<void>,
+  openCopilotLogin: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.openCopilotLogin) as Promise<void>,
 })
 
 contextBridge.exposeInMainWorld('shadowDesktop', api)

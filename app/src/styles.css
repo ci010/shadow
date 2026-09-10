@@ -167,19 +167,20 @@
 
 body {
   margin: 0;
-  overflow-x: hidden;
   background-color: var(--c-bg);
   background-image: radial-gradient(circle, var(--c-grid-dot) 1px, transparent 1px);
   background-size: 20px 20px;
 }
 
 html {
-  overflow-y: auto;
   height: 100%;
 }
 
+body,
 #app {
-  /* no min-height — let content dictate height, avoid spurious scrollbar */
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* Interactive elements get pointer cursor */

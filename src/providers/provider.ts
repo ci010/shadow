@@ -10,6 +10,55 @@ export interface ToolCall {
   arguments: Record<string, unknown>
 }
 
+export type ResponsesOutputAnnotation =
+  | { type: 'file_citation'; file_id: string; filename: string; index: number }
+  | { type: 'url_citation'; start_index: number; end_index: number; url: string; title: string }
+  | { type: 'container_file_citation'; container_id: string; file_id: string; filename: string; start_index: number; end_index: number }
+  | { type: 'file_path'; file_id: string; index: number }
+
+/** Supported completed Responses items, retained in their original output order. */
+export type ResponsesOutputItem =
+  | {
+    type: 'reasoning'
+    id?: string
+    status?: 'completed'
+    encrypted_content?: string | null
+    summary: Array<{ type: 'summary_text'; text: string }>
+  }
+  | {
+    type: 'message'
+    id: string
+    role: 'assistant'
+    status: 'completed'
+    phase?: 'commentary' | 'final_answer' | null
+    content: Array<
+      | { type: 'output_text'; text: string; annotations: ResponsesOutputAnnotation[] }
+      | { type: 'refusal'; refusal: string }
+    >
+  }
+  | {
+    type: 'function_call'
+    id?: string
+    status?: 'completed'
+    call_id: string
+    name: string
+    arguments: string
+  }
+
+/** Provider-only stateless Responses continuity, scoped to its issuing provider/model. */
+export interface ResponsesProviderState {
+  provider: 'copilot'
+  model: string
+  reasoning: Array<{
+    type: 'reasoning'
+    id?: string
+    encrypted_content: string
+    summary: Array<{ type: 'summary_text'; text: string }>
+  }>
+  /** Authoritative ordered replay; older records may contain only reasoning. */
+  outputItems?: ResponsesOutputItem[]
+}
+
 /**
  * Structured response from an LLM provider.
  */
@@ -27,6 +76,7 @@ export interface LLMResponse {
    * providers reject or ignore it, and it bloats the prompt.
    */
   reasoningText?: string | null
+  providerState?: ResponsesProviderState
   /** Tool calls requested by the model. */
   toolCalls: ToolCall[]
   /** Actual model name returned by the provider, if available. */
@@ -94,6 +144,8 @@ export interface ChatMessage {
   reasoning_text?: string | null
   /** Chain-of-thought reasoning from thinking models (e.g. DeepSeek). */
   reasoning_content?: string | null
+  /** Provider-only continuation data, never a chat-completions message field. */
+  provider_state?: ResponsesProviderState
   /** Timestamp from session log. Only present on messages loaded from history. */
   timestamp?: string
 }
@@ -118,10 +170,15 @@ export interface ModelInfo {
   id: string
   /** Human-friendly display name, if the provider supplies one. */
   name?: string
+  /** False hides a model from pickers without discarding its routing capabilities. */
+  selectable?: boolean
   /** Whether the model accepts image input. */
   vision?: boolean
   /** Maximum context window in tokens, if known. */
   contextWindow?: number
+  /** Explicit API paths advertised by the provider; absent for legacy metadata. */
+  supportedEndpoints?: string[]
+  reasoningEfforts?: string[]
 }
 
 /**
@@ -163,6 +220,13 @@ export class TokenLimitExceededError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'TokenLimitExceededError'
+  }
+}
+
+export class ProviderHttpError extends Error {
+  constructor(readonly status: number, message: string, readonly code?: string) {
+    super(message)
+    this.name = 'ProviderHttpError'
   }
 }
 

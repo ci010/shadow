@@ -8,7 +8,6 @@ import type {
 import type { ToolDefinition } from '../tools/tool.ts'
 import { env } from 'node:process'
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
 
 // ---------------------------------------------------------------------------
@@ -79,9 +78,11 @@ function convertTools(tools: ToolDefinition[]): any[] {
 export class AnthropicProvider implements LLMProvider {
   readonly name = 'anthropic'
   private apiKey: string
+  private baseUrl: string
 
-  constructor(opts: { apiKey?: string }) {
+  constructor(opts: { apiKey?: string; baseUrl?: string }) {
     this.apiKey = opts.apiKey ?? env.ANTHROPIC_API_KEY ?? ''
+    this.baseUrl = opts.baseUrl ?? 'https://api.anthropic.com/v1'
   }
 
   async chat(
@@ -107,7 +108,7 @@ export class AnthropicProvider implements LLMProvider {
     if (system) body.system = system
     if (tools.length > 0) body.tools = convertTools(tools)
 
-    const res = await fetch(ANTHROPIC_API_URL, {
+    const res = await fetch(`${this.baseUrl.replace(/\/+$/, '')}/messages`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

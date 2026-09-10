@@ -17,9 +17,10 @@ import type {
  */
 export class DeepSeekProvider extends OpenAICompatibleProvider {
   constructor(
-    defaultModel: string = 'deepseek-v4-flash'
+    defaultModel: string = 'deepseek-v4-flash',
+    options: { apiKey?: string; baseUrl?: string } = {},
   ) {
-    super('deepseek', env.DEEPSEEK_API_KEY!, 'https://api.deepseek.com', defaultModel)
+    super('deepseek', options.apiKey ?? env.DEEPSEEK_API_KEY ?? '', options.baseUrl ?? 'https://api.deepseek.com', defaultModel)
   }
 
   override async chat(

@@ -8,7 +8,7 @@ import type {
   LLMResponse,
   ToolCall,
 } from './provider.ts'
-import { TokenLimitExceededError } from './provider.ts'
+import { ProviderHttpError, TokenLimitExceededError } from './provider.ts'
 
 // ---------------------------------------------------------------------------
 //  Outbound message sanitization
@@ -27,7 +27,7 @@ import { TokenLimitExceededError } from './provider.ts'
 function sanitizeOutboundMessages(messages: ChatMessage[]): unknown[] {
   return messages.map((msg) => {
     // deno-lint-ignore no-explicit-any
-    const { reasoning_text: _rt, usage: _u, timestamp: _ts, ...rest } = msg as any
+    const { reasoning_text: _rt, provider_state: _ps, usage: _u, timestamp: _ts, ...rest } = msg as any
     return rest
   })
 }
@@ -113,9 +113,11 @@ export async function openaiChat(params: {
 
       if (!res.ok) {
         const text = await res.text()
+        let code: string | undefined
         // Detect token-limit errors so the agent loop can trigger a forced handoff
         try {
           const errJson = JSON.parse(text)
+          if (typeof errJson?.error?.code === 'string') code = errJson.error.code
           if (errJson?.error?.code === 'model_max_prompt_tokens_exceeded') {
             throw new TokenLimitExceededError(
               `${
@@ -126,8 +128,9 @@ export async function openaiChat(params: {
         } catch (e) {
           if (e instanceof TokenLimitExceededError) throw e
         }
-        throw new Error(
+        throw new ProviderHttpError(res.status,
           `${params.providerName ?? 'LLM'} chat failed: ${res.status} ${text}`,
+          code,
         )
       }
 

@@ -1,9 +1,9 @@
 import type { LLMProvider } from './provider.ts'
-import type { Config, ProviderConfig } from '../config/schema.ts'
+import type { Config } from '../config/schema.ts'
 import { env } from 'node:process'
 import { OpenAICompatibleProvider } from './openai-compatible.ts'
 import { AnthropicProvider } from './anthropic.ts'
-import { CopilotProvider } from './copilot.ts'
+import { CopilotProvider, type CopilotAuthenticator } from './copilot.ts'
 import { DeepSeekProvider } from './deepseek.ts'
 import { AggregatedProvider, parseModelSpec } from './aggregated.ts'
 
@@ -22,6 +22,7 @@ const PROVIDER_DEFAULTS: Record<string, {
     apiKeyEnv: 'OPENAI_API_KEY',
   },
   anthropic: {
+    baseUrl: 'https://api.anthropic.com/v1',
     apiKeyEnv: 'ANTHROPIC_API_KEY',
   },
   copilot: {},
@@ -80,6 +81,26 @@ export function detectProvider(model: string): string {
   return 'openai'
 }
 
+/** Shared by construction and onboarding; custom endpoints may intentionally be keyless. */
+export function resolveProviderSettings(config: Config, name: string): {
+  apiKey: string
+  baseUrl?: string
+  authMode: 'api-key' | 'copilot' | 'none'
+} {
+  const configured = config.providers[name] ?? {}
+  const defaults = PROVIDER_DEFAULTS[name]
+  const apiKey = configured.apiKey ??
+    (defaults?.apiKeyEnv ? env[defaults.apiKeyEnv] : undefined) ?? ''
+  const baseUrl = configured.baseUrl ?? defaults?.baseUrl
+  const customEndpoint = !!configured.baseUrl &&
+    configured.baseUrl.replace(/\/+$/, '') !== defaults?.baseUrl?.replace(/\/+$/, '')
+  return {
+    apiKey, baseUrl,
+    authMode: name === 'copilot' ? 'copilot'
+      : !apiKey && customEndpoint ? 'none' : 'api-key',
+  }
+}
+
 /**
  * Instantiate a provider for the given model, using per-provider config
  * from `config.providers[providerName]` when available.
@@ -93,35 +114,32 @@ export function createProvider(
   model: string,
   config: Config,
   providerName?: string,
+  copilotAuth?: CopilotAuthenticator,
 ): LLMProvider {
   const name = providerName ?? detectProvider(model)
-  const providerConfig: ProviderConfig = config.providers[name] ?? {}
-  const defaults = PROVIDER_DEFAULTS[name]
+  const { apiKey, baseUrl } = resolveProviderSettings(config, name)
 
   // --- Anthropic (non-OpenAI API) ---
   if (name === 'anthropic') {
     return new AnthropicProvider({
-      apiKey: providerConfig.apiKey,
+      apiKey,
+      baseUrl,
     })
   }
 
   // --- Copilot (OpenAI-compatible but with custom OAuth auth) ---
   if (name === 'copilot') {
-    return new CopilotProvider()
+    return new CopilotProvider(copilotAuth)
   }
 
   if (name === 'deepseek') {
-    return new DeepSeekProvider(model)
+    return new DeepSeekProvider(model, { apiKey, baseUrl })
   }
 
   // --- All other OpenAI-compatible providers ---
-  const baseUrl = providerConfig.baseUrl ?? defaults?.baseUrl
   if (!baseUrl) {
     throw new Error(`Provider "${name}" requires a baseUrl`)
   }
-
-  const apiKey = providerConfig.apiKey ??
-    (defaults?.apiKeyEnv ? env[defaults.apiKeyEnv] : undefined) ?? ''
 
   return new OpenAICompatibleProvider(name, apiKey, baseUrl, model)
 }
@@ -139,7 +157,7 @@ export function createProvider(
  *   2. `@provider` suffixes in `config.agent.model` / `config.agent.quickModel`
  *   3. Any providers with explicit config in `config.providers`
  */
-export function createAggregatedProvider(config: Config): AggregatedProvider {
+export function createAggregatedProvider(config: Config, copilotAuth?: CopilotAuthenticator): AggregatedProvider {
   const mainModel = config.agent.model
   const { model: bareModel, provider: explicitProvider } = parseModelSpec(
     mainModel,
@@ -169,7 +187,7 @@ export function createAggregatedProvider(config: Config): AggregatedProvider {
       // Pass the provider name explicitly so non-primary providers are created
       // as the right class (the model string alone would detect the primary).
       const model = name === primaryName ? bareModel : mainModel
-      providers.set(name, createProvider(model, config, name))
+      providers.set(name, createProvider(model, config, name, copilotAuth))
     } catch (err) {
       console.warn(
         `[aggregated] Failed to create provider "${name}": ${

@@ -17,6 +17,7 @@ test('local Main admin sees product and diagnostic routes', () => {
     'chat',
     'workspaces',
     'nodes',
+    'providers',
     'agents',
     'spans',
     'logs',
@@ -62,6 +63,14 @@ test('Main node administration requires nodes:admin', () => {
   }
 
   assertEquals(routeNames(context), ['nodes'])
+})
+
+test('Providers is a Main administration tab in the primary navigation group', () => {
+  const context = createLocalMainAdminContext('http://localhost')
+  assertEquals(navigationFor(context).find((item) => item.name === 'providers'), {
+    name: 'providers', label: 'Providers', group: 'primary',
+  })
+  assertEquals(routeNames({ ...context, uiScopes: ['chat:read'] }), ['chat', 'workspaces'])
 })
 
 test('Child local surfaces do not require Main administration scopes', () => {

@@ -69,6 +69,7 @@ import { Bus } from './bus/bus.ts'
 import { ChannelManager } from './channels/manager.ts'
 import { loadConfig } from './config/loader.ts'
 import { configPlugin } from './config/routes.ts'
+import { ConfigStore } from './config/store.ts'
 import { EventService } from './events/service.ts'
 import { CronService } from './cron/service.ts'
 
@@ -91,6 +92,8 @@ import {
 import { parseModelSpec } from './providers/aggregated.ts'
 import { resolveContextWindow } from './providers/model-registry.ts'
 import { providerPlugin } from './providers/routes.ts'
+import { CopilotAuthenticator } from './providers/copilot.ts'
+import { ProviderSetup } from './providers/setup.ts'
 import { sessionsApiPlugin } from './sessions/routes.ts'
 import { registerEvalBridgeRoute } from './eval/bridge.ts'
 import { SearchTool } from './tools/search.ts'
@@ -191,7 +194,9 @@ export async function startMainRuntime(
   const bus = new Bus()
   const events = new EventService(workspace, bus)
   await events.start()
-  const provider = createAggregatedProvider(config)
+  const copilotAuth = new CopilotAuthenticator()
+  let provider = createAggregatedProvider(config, copilotAuth)
+  let activeConfig = config
   const backgroundTasks = new BackgroundTaskManager(bus, events)
 
   // OTel ingest/query store (formerly the standalone observer in app/)
@@ -665,6 +670,27 @@ export async function startMainRuntime(
 
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
+  const configStore = new ConfigStore({
+    configPath,
+    getConfig: () => activeConfig,
+    onChanged: (newConfig) => {
+      const newProvider = createAggregatedProvider(newConfig, copilotAuth)
+      const newPrimaryProvider = resolvePrimaryProviderName(newConfig.agent.model)
+      const newQuickModel = newConfig.providers[newPrimaryProvider]?.quickModel ??
+        newConfig.agent.quickModel
+      const newLlm = createLlmRuntimeConfig(newConfig)
+      sessions.updateProvider(newProvider, newQuickModel)
+      provider = newProvider
+      llm = newLlm
+      activeConfig = newConfig
+      providerSetup.invalidate()
+    },
+  })
+  const providerSetup = new ProviderSetup({
+    store: configStore,
+    getConfig: () => activeConfig,
+    auth: copilotAuth,
+  })
 
   registerGatewayRoutes(app, [
     ...mainCluster.plugins,
@@ -672,28 +698,9 @@ export async function startMainRuntime(
     otelPlugin(otelStore),
     sessionPlugin(sessions, agent, agentTypes),
     sessionsApiPlugin(sessions),
-    providerPlugin(provider),
-    configPlugin({
-      configPath,
-      onChanged: (newConfig) => {
-        try {
-          const newProvider = createAggregatedProvider(newConfig)
-          const newPrimaryProvider = resolvePrimaryProviderName(
-            newConfig.agent.model,
-          )
-          const newQuickModel =
-            newConfig.providers[newPrimaryProvider]?.quickModel ??
-              newConfig.agent.quickModel
-          llm = createLlmRuntimeConfig(newConfig)
-          sessions.updateProvider(newProvider, newQuickModel)
-          console.info(
-            `[main] Config hot-reloaded: model=${newConfig.agent.model}`,
-          )
-        } catch (err) {
-          console.error('[main] Failed to hot-reload config:', err)
-        }
-      },
-    }),
+    providerSetup.plugin(),
+    providerPlugin(() => provider, () => providerSetup.status()),
+    configPlugin({ store: configStore }),
   ], {
     launchCredential,
     launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
@@ -768,6 +775,7 @@ export async function startMainRuntime(
   }
   const shutdownRuntime = async () => {
     localControl.markStopping()
+    await providerSetup.dispose()
     console.info('[main] Shutting down...')
     const closeCluster = mainCluster.closeNodeConnections()
     bus.emit('app.lifecycle', { action: 'stop' })

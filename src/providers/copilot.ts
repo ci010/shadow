@@ -1,8 +1,12 @@
 import { join } from 'node:path'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { env } from 'node:process'
+import { setTimeout as delay } from 'node:timers/promises'
+import { writePrivateFile } from '../config/store.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { openaiChat } from './openai-compatible.ts'
+import { openaiResponses } from './openai-responses.ts'
+import { ProviderHttpError } from './provider.ts'
 import type {
   ChatMessage,
   ContentPart,
@@ -37,6 +41,7 @@ const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.6'
 interface CopilotModelInfo {
   id: string
   name?: string
+  supported_endpoints?: string[]
   model_picker_enabled?: boolean
   capabilities?: {
     type?: string
@@ -47,6 +52,7 @@ interface CopilotModelInfo {
     supports?: {
       vision?: boolean
       tool_calls?: boolean
+      reasoning_effort?: string[]
     }
   }
 }
@@ -57,8 +63,31 @@ interface ModelsCache {
   fetchedAt: number
 }
 
-const POLL_INTERVAL_MS = 5_000
-const MAX_POLL_ATTEMPTS = 60 // 5 min
+function stringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function validModelInfo(value: unknown): value is ModelInfo {
+  if (!value || typeof value !== 'object') return false
+  const model = value as ModelInfo
+  return typeof model.id === 'string' && model.id.length > 0 &&
+    (model.name === undefined || typeof model.name === 'string') &&
+    (model.vision === undefined || typeof model.vision === 'boolean') &&
+    (model.selectable === undefined || typeof model.selectable === 'boolean') &&
+    (model.contextWindow === undefined || Number.isFinite(model.contextWindow)) &&
+    (model.supportedEndpoints === undefined || stringList(model.supportedEndpoints)) &&
+    (model.reasoningEfforts === undefined || stringList(model.reasoningEfforts))
+}
+
+export function copilotModelEndpoint(model: ModelInfo | undefined): '/chat/completions' | '/responses' {
+  // Older caches and servers omitted capabilities; retain their chat protocol.
+  if (model?.supportedEndpoints === undefined) return '/chat/completions'
+  if (model.supportedEndpoints.includes('/chat/completions')) return '/chat/completions'
+  if (model.supportedEndpoints.includes('/responses')) return '/responses'
+  throw new Error(`[copilot] Model "${model.id}" does not advertise a supported HTTP chat or Responses API.`)
+}
+
+export const COPILOT_VERIFICATION_URI = 'https://github.com/login/device'
 
 // ---------------------------------------------------------------------------
 //  Copilot Authenticator – OAuth Device Code Flow
@@ -68,6 +97,69 @@ interface ApiKeyInfo {
   token: string
   expires_at: number
   endpoints?: { api?: string }
+}
+
+export type CopilotAuthFailure = 'missing' | 'denied' | 'expired' | 'cancelled' | 'network' | 'invalid' | 'storage'
+const AUTH_MESSAGES: Record<CopilotAuthFailure, string> = {
+  missing: 'Sign in to GitHub Copilot to continue.',
+  denied: 'GitHub authorization was denied or Copilot access is unavailable. Sign in again.',
+  expired: 'The GitHub code expired. Start a new sign-in.',
+  cancelled: 'Sign-in was cancelled.',
+  network: 'GitHub could not be reached. Check your connection and try again.',
+  invalid: 'GitHub returned an invalid authentication response. Try again.',
+  storage: 'Credentials could not be saved. Check access to the application data directory.',
+}
+
+export class CopilotAuthError extends Error {
+  constructor(readonly code: CopilotAuthFailure) {
+    super(AUTH_MESSAGES[code])
+    this.name = 'CopilotAuthError'
+  }
+}
+
+export interface DeviceAuthorization {
+  deviceCode: string
+  userCode: string
+  verificationUri: typeof COPILOT_VERIFICATION_URI
+  expiresAt: number
+  intervalMs: number
+}
+
+export interface CopilotGrant {
+  accessToken: string
+  apiKey: ApiKeyInfo
+}
+
+export interface CopilotAuthStorage {
+  read(name: string): string | undefined
+  write(name: string, value: string): void
+  remove(name: string): void
+}
+
+interface CopilotAuthOptions {
+  fetch?: typeof fetch
+  now?: () => number
+  wait?: (ms: number, signal?: AbortSignal) => Promise<void>
+  storage?: CopilotAuthStorage
+}
+
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new CopilotAuthError('invalid')
+  return value as Record<string, unknown>
+}
+
+function validApiKey(value: unknown): ApiKeyInfo | null {
+  if (!value || typeof value !== 'object') return null
+  const info = value as ApiKeyInfo
+  if (typeof info.token !== 'string' || !info.token || !Number.isFinite(info.expires_at)) return null
+  if (info.endpoints?.api !== undefined) {
+    try {
+      const url = new URL(info.endpoints.api)
+      if (url.protocol !== 'https:' || url.username || url.password ||
+        !(url.hostname === 'githubcopilot.com' || url.hostname.endsWith('.githubcopilot.com'))) return null
+    } catch { return null }
+  }
+  return info
 }
 
 /**
@@ -82,8 +174,13 @@ export class CopilotAuthenticator {
   private readonly accessTokenFile: string
   private readonly apiKeyFile: string
   private readonly modelsCacheFile: string
+  private readonly request: typeof fetch
+  private readonly now: () => number
+  private readonly wait: (ms: number, signal?: AbortSignal) => Promise<void>
+  private readonly storage: CopilotAuthStorage
+  private refreshing?: Promise<string>
 
-  constructor(tokenDir?: string) {
+  constructor(tokenDir?: string, options: CopilotAuthOptions = {}) {
     const homeDir = env.HOME || env.USERPROFILE || '.'
     this.tokenDir = tokenDir ??
       env.GITHUB_COPILOT_TOKEN_DIR ??
@@ -101,76 +198,151 @@ export class CopilotAuthenticator {
       this.tokenDir,
       env.GITHUB_COPILOT_MODELS_CACHE_FILE ?? 'models.json',
     )
-    mkdirSync(this.tokenDir, { recursive: true })
+    this.request = options.fetch ?? fetch
+    this.now = options.now ?? Date.now
+    this.wait = options.wait ?? ((ms, signal) => delay(ms, undefined, { signal }))
+    this.storage = options.storage ?? {
+      read: (name) => {
+        try { return readFileSync(name, 'utf8') } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+          throw new CopilotAuthError('storage')
+        }
+      },
+      write: (name, value) => {
+        try {
+          mkdirSync(this.tokenDir, { recursive: true, mode: 0o700 })
+          chmodSync(this.tokenDir, 0o700)
+          writePrivateFile(name, value)
+        } catch { throw new CopilotAuthError('storage') }
+      },
+      remove: (name) => {
+        try { rmSync(name, { force: true }) } catch { throw new CopilotAuthError('storage') }
+      },
+    }
   }
 
   // ---- public API ---------------------------------------------------------
 
   /** True when a cached access token exists on disk. */
   hasAccessToken(): boolean {
-    try {
-      const t = readFileSync(this.accessTokenFile, 'utf8').trim()
-      return !!t
-    } catch {
-      return false
-    }
+    return !!this.storage.read(this.accessTokenFile)?.trim()
   }
 
   /** True when a cached API key exists and is not yet expired. */
   hasValidApiKey(): boolean {
     const cached = this.readApiKeyFile()
-    return !!cached && cached.expires_at > Date.now() / 1000
+    return !!cached && cached.expires_at > this.now() / 1000
   }
 
   /**
    * Request a GitHub device code (step 1 of the login flow).
    * Returns the verification URI and user code to display to the caller.
    */
-  async startDeviceLogin(): Promise<{
-    device_code: string
-    user_code: string
-    verification_uri: string
-  }> {
-    return this.requestDeviceCode()
+  async startDeviceLogin(signal?: AbortSignal): Promise<DeviceAuthorization> {
+    const json = await this.fetchJson(GITHUB_DEVICE_CODE_URL, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': USER_AGENT },
+      body: JSON.stringify({ client_id: GITHUB_CLIENT_ID, scope: 'read:user' }),
+    }, signal)
+    if (typeof json.device_code !== 'string' || !json.device_code ||
+      typeof json.user_code !== 'string' || !/^[A-Z0-9-]{4,32}$/i.test(json.user_code) ||
+      json.verification_uri !== COPILOT_VERIFICATION_URI ||
+      typeof json.expires_in !== 'number' || !Number.isInteger(json.expires_in) || json.expires_in <= 0 ||
+      (json.interval !== undefined && (typeof json.interval !== 'number' || !Number.isInteger(json.interval) || json.interval <= 0))) {
+      throw new CopilotAuthError('invalid')
+    }
+    return {
+      deviceCode: json.device_code,
+      userCode: json.user_code,
+      verificationUri: COPILOT_VERIFICATION_URI,
+      expiresAt: this.now() + Math.min(json.expires_in, 3600) * 1000,
+      intervalMs: Math.min((json.interval as number | undefined) ?? 5, 3600) * 1000,
+    }
   }
 
   /**
    * Poll GitHub until the user completes device-code authorisation,
-   * then persist the access token. Resolves with `true` on success.
+   * then verify the Copilot exchange. The caller commits only a current flow.
    */
-  async completeDeviceLogin(deviceCode: string): Promise<boolean> {
-    try {
-      const token = await this.pollForAccessToken(deviceCode)
-      try {
-        writeFileSync(this.accessTokenFile, token)
-      } catch (e) {
-        console.warn('[copilot] Could not persist access token', e)
+  async completeDeviceLogin(
+    device: DeviceAuthorization,
+    signal?: AbortSignal,
+    onInterval?: (ms: number) => void,
+  ): Promise<CopilotGrant> {
+    let interval = device.intervalMs
+    while (this.now() < device.expiresAt) {
+      await this.wait(Math.min(interval, device.expiresAt - this.now()), signal)
+      signal?.throwIfAborted()
+      if (this.now() >= device.expiresAt) break
+      const json = await this.fetchJson(GITHUB_ACCESS_TOKEN_URL, {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': USER_AGENT },
+        body: JSON.stringify({
+          client_id: GITHUB_CLIENT_ID,
+          device_code: device.deviceCode,
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        }),
+      }, signal)
+      if (typeof json.access_token === 'string' && json.access_token) {
+        const apiKey = await this.refreshApiKey(json.access_token, signal)
+        signal?.throwIfAborted()
+        return { accessToken: json.access_token, apiKey }
       }
-      // Also refresh the API key immediately so it's ready for chat()
-      const apiKeyInfo = await this.refreshApiKey(token)
-      this.writeApiKeyFile(apiKeyInfo)
-      return true
+      if (json.error === 'authorization_pending') continue
+      if (json.error === 'slow_down') {
+        interval = Math.max(interval + 5000,
+          typeof json.interval === 'number' && Number.isFinite(json.interval) && json.interval > 0
+            ? json.interval * 1000 : 0)
+        onInterval?.(interval)
+        continue
+      }
+      if (json.error === 'access_denied') throw new CopilotAuthError('denied')
+      if (json.error === 'expired_token') throw new CopilotAuthError('expired')
+      throw new CopilotAuthError('invalid')
+    }
+    throw new CopilotAuthError('expired')
+  }
+
+  persistGrant(grant: CopilotGrant, signal?: AbortSignal): void {
+    signal?.throwIfAborted()
+    const previousAccess = this.storage.read(this.accessTokenFile)
+    const previousKey = this.storage.read(this.apiKeyFile)
+    try {
+      this.storage.write(this.accessTokenFile, grant.accessToken)
+      this.writeApiKeyFile(grant.apiKey)
     } catch {
-      return false
+      try {
+        if (previousAccess !== undefined) this.storage.write(this.accessTokenFile, previousAccess)
+        else this.storage.remove(this.accessTokenFile)
+        if (previousKey !== undefined) this.storage.write(this.apiKeyFile, previousKey)
+        else this.storage.remove(this.apiKeyFile)
+      } catch { /* Still report persistence failure; never claim authentication succeeded. */ }
+      throw new CopilotAuthError('storage')
     }
   }
 
   /**
    * Return a valid Bearer token for the Copilot chat API.
-   * Transparently handles login + refresh.
+   * Refreshes existing credentials. Never starts interactive login implicitly.
    */
-  async getApiKey(): Promise<string> {
+  async getApiKey(signal?: AbortSignal, forceRefresh = false): Promise<string> {
     // 1. Try cached API key (not expired)
     const cached = this.readApiKeyFile()
-    if (cached && cached.expires_at > Date.now() / 1000) {
+    if (cached && cached.expires_at > this.now() / 1000 && (!forceRefresh || !this.hasAccessToken())) {
       return cached.token
     }
 
     // 2. Refresh using our access token
-    const accessToken = await this.getAccessToken()
-    const apiKeyInfo = await this.refreshApiKey(accessToken)
-    this.writeApiKeyFile(apiKeyInfo)
-    return apiKeyInfo.token
+    if (this.refreshing) return this.refreshing
+    this.refreshing = (async () => {
+      const accessToken = this.storage.read(this.accessTokenFile)?.trim()
+      if (!accessToken) throw new CopilotAuthError('missing')
+      const apiKeyInfo = await this.refreshApiKey(accessToken, signal)
+      signal?.throwIfAborted()
+      this.writeApiKeyFile(apiKeyInfo)
+      return apiKeyInfo.token
+    })()
+    try { return await this.refreshing } finally { this.refreshing = undefined }
   }
 
   /**
@@ -181,181 +353,64 @@ export class CopilotAuthenticator {
     return cached?.endpoints?.api ?? GITHUB_COPILOT_API_BASE
   }
 
-  // ---- access-token (device code -> GitHub PAT-ish token) -----------------
-
-  @Span('CopilotAuthenticator.getAccessToken')
-  private async getAccessToken(): Promise<string> {
-    // Persisted?
-    try {
-      const token = readFileSync(this.accessTokenFile, 'utf8').trim()
-      if (token) return token
-    } catch { /* first run */ }
-
-    // Interactive device-code login
-    const token = await this.loginDeviceCode()
-    try {
-      writeFileSync(this.accessTokenFile, token)
-    } catch (e) {
-      console.warn('[copilot] Could not persist access token', e)
-    }
-    return token
-  }
-
-  @Span('CopilotAuthenticator.loginDeviceCode')
-  private async loginDeviceCode(): Promise<string> {
-    const deviceCode = await this.requestDeviceCode()
-
-    // Inform user
-    console.info(
-      `[copilot] GitHub Copilot: visit ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
-    )
-    // Also print to stdout so it's always visible
-    console.log(
-      `\n╔══════════════════════════════════════════════════════╗\n` +
-        `║  GitHub Copilot Authentication                      ║\n` +
-        `║                                                     ║\n` +
-        `║  Visit: ${deviceCode.verification_uri.padEnd(38)}     ║\n` +
-        `║  Code:  ${deviceCode.user_code.padEnd(38)}     ║\n` +
-        `╚══════════════════════════════════════════════════════╝\n`,
-    )
-
-    return this.pollForAccessToken(deviceCode.device_code)
-  }
-
-  @Span('CopilotAuthenticator.requestDeviceCode')
-  private async requestDeviceCode(): Promise<{
-    device_code: string
-    user_code: string
-    verification_uri: string
-  }> {
-    const res = await fetch(GITHUB_DEVICE_CODE_URL, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        'user-agent': USER_AGENT,
-      },
-      body: JSON.stringify({
-        client_id: GITHUB_CLIENT_ID,
-        scope: 'read:user',
-      }),
-    })
-    if (!res.ok) {
-      throw new Error(
-        `Device code request failed: ${res.status} ${await res.text()}`,
-      )
-    }
-    const json = (await res.json()) as Record<string, string>
-    if (!json.device_code || !json.user_code || !json.verification_uri) {
-      throw new Error(
-        `Device code response missing fields: ${JSON.stringify(json)}`,
-      )
-    }
-    return json as {
-      device_code: string
-      user_code: string
-      verification_uri: string
-    }
-  }
-
-  @Span('CopilotAuthenticator.pollForAccessToken')
-  private async pollForAccessToken(deviceCode: string): Promise<string> {
-    for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
-      await sleep(POLL_INTERVAL_MS)
-
-      const res = await fetch(GITHUB_ACCESS_TOKEN_URL, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-          'user-agent': USER_AGENT,
-        },
-        body: JSON.stringify({
-          client_id: GITHUB_CLIENT_ID,
-          device_code: deviceCode,
-          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-        }),
-      })
-
-      if (!res.ok) {
-        // 403/404 means user hasn't authorised yet
-        if (res.status === 403 || res.status === 404) continue
-        throw new Error(`Access token poll failed: ${res.status}`)
-      }
-
-      const json = (await res.json()) as Record<string, string>
-      if (json.access_token) {
-        console.info('[copilot] GitHub Copilot: authentication successful')
-        return json.access_token
-      }
-      if (json.error === 'authorization_pending') continue
-      if (json.error === 'slow_down') {
-        await sleep(POLL_INTERVAL_MS) // extra wait
-        continue
-      }
-      if (json.error) {
-        throw new Error(
-          `OAuth error: ${json.error} – ${json.error_description ?? ''}`,
-        )
-      }
-    }
-    throw new Error('Timed out waiting for device authorisation')
-  }
-
   // ---- API key (copilot internal token) -----------------------------------
 
-  private async refreshApiKey(accessToken: string): Promise<ApiKeyInfo> {
-    const res = await fetch(GITHUB_API_KEY_URL, {
-      headers: {
-        accept: 'application/json',
-        authorization: `token ${accessToken}`,
-        'editor-version': EDITOR_VERSION,
-        'editor-plugin-version': PLUGIN_VERSION,
-        'user-agent': USER_AGENT,
-      },
-    })
-    if (!res.ok) {
-      // If 401, the access token may be revoked – purge it so next call re-logins
-      if (res.status === 401) {
-        try {
-          rmSync(this.accessTokenFile)
-        } catch { /* noop */ }
+  private async refreshApiKey(accessToken: string, signal?: AbortSignal): Promise<ApiKeyInfo> {
+    let json: Record<string, unknown>
+    try {
+      json = await this.fetchJson(GITHUB_API_KEY_URL, {
+        headers: {
+          accept: 'application/json',
+          authorization: `token ${accessToken}`,
+          'editor-version': EDITOR_VERSION,
+          'editor-plugin-version': PLUGIN_VERSION,
+          'user-agent': USER_AGENT,
+        },
+      }, signal)
+    } catch (error) {
+      if (error instanceof CopilotAuthError && error.code === 'denied') this.clearApiKey()
+      throw error
+    }
+    const info = validApiKey(json)
+    if (!info || info.expires_at <= this.now() / 1000) throw new CopilotAuthError('invalid')
+    return info
+  }
+
+  private async fetchJson(url: string, init: RequestInit, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    try {
+      signal?.throwIfAborted()
+      const timeout = AbortSignal.timeout(30_000)
+      const res = await this.request(url, {
+        ...init,
+        redirect: 'error',
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      })
+      if (res.status === 401 || res.status === 403) throw new CopilotAuthError('denied')
+      if (!res.ok) throw new CopilotAuthError('network')
+      try { return record(await res.json()) } catch (error) {
+        if (error instanceof CopilotAuthError) throw error
+        throw new CopilotAuthError('invalid')
       }
-      throw new Error(
-        `Copilot API key refresh failed: ${res.status} ${await res.text()}`,
-      )
+    } catch (error) {
+      if (signal?.aborted) throw new CopilotAuthError('cancelled')
+      if (error instanceof CopilotAuthError) throw error
+      throw new CopilotAuthError('network')
     }
-    const json = (await res.json()) as ApiKeyInfo
-    if (!json.token) {
-      throw new Error(
-        `API key response missing token: ${JSON.stringify(json)}`,
-      )
-    }
-    return json
   }
 
   /** Invalidate cached API key so the next call forces a refresh. */
   clearApiKey(): void {
-    try {
-      rmSync(this.apiKeyFile)
-    } catch { /* already gone */ }
+    this.storage.remove(this.apiKeyFile)
   }
 
   private readApiKeyFile(): ApiKeyInfo | null {
-    try {
-      const raw = readFileSync(this.apiKeyFile, 'utf8')
-      return JSON.parse(raw) as ApiKeyInfo
-    } catch {
-      return null
-    }
+    const raw = this.storage.read(this.apiKeyFile)
+    if (!raw) return null
+    try { return validApiKey(JSON.parse(raw)) } catch { return null }
   }
 
   private writeApiKeyFile(info: ApiKeyInfo): void {
-    try {
-      writeFileSync(this.apiKeyFile, JSON.stringify(info, null, 2))
-    } catch (e) {
-      console.warn('[copilot] Could not persist API key', e)
-    }
+    this.storage.write(this.apiKeyFile, JSON.stringify(info))
   }
 
   // ---- supported-models cache ---------------------------------------------
@@ -363,9 +418,11 @@ export class CopilotAuthenticator {
   /** Read the persisted list of supported Copilot model IDs, if any. */
   readModelsCache(): ModelsCache | null {
     try {
-      const raw = readFileSync(this.modelsCacheFile, 'utf8')
+      const raw = this.storage.read(this.modelsCacheFile)
+      if (!raw) return null
       const parsed = JSON.parse(raw) as ModelsCache
-      if (!Array.isArray(parsed.models)) return null
+      if (!Array.isArray(parsed.models) || !parsed.models.every(validModelInfo) ||
+        !Number.isFinite(parsed.fetchedAt)) return null
       return parsed
     } catch {
       return null
@@ -375,13 +432,11 @@ export class CopilotAuthenticator {
   /** Persist the list of supported Copilot models for offline fallback. */
   writeModelsCache(models: ModelInfo[]): void {
     try {
-      writeFileSync(
+      this.storage.write(
         this.modelsCacheFile,
-        JSON.stringify({ models, fetchedAt: Date.now() }, null, 2),
+        JSON.stringify({ models, fetchedAt: this.now() }, null, 2),
       )
-    } catch (e) {
-      console.warn('[copilot] Could not persist models cache', e)
-    }
+    } catch { /* Model metadata is an optional cache, unlike credentials. */ }
   }
 }
 
@@ -393,8 +448,8 @@ export class CopilotAuthenticator {
  * GitHub Copilot LLM provider.
  *
  * Uses the Copilot internal API (OpenAI-compatible) at
- * `api.githubcopilot.com`. Authentication is handled automatically via
- * OAuth device-code flow on first use; tokens are persisted locally.
+ * `api.githubcopilot.com`. Explicit provider onboarding obtains locally
+ * persisted OAuth credentials; normal API requests only refresh existing ones.
  */
 export class CopilotProvider implements LLMProvider {
   readonly name = 'copilot'
@@ -407,8 +462,8 @@ export class CopilotProvider implements LLMProvider {
   /** Known model IDs (from the /models API or the on-disk cache) for `resolveModel`. */
   private _knownModels = new Set<string>()
 
-  constructor() {
-    this.auth = new CopilotAuthenticator()
+  constructor(auth = new CopilotAuthenticator()) {
+    this.auth = auth
     // Seed known models from the on-disk cache so model validation works
     // before the first successful /models fetch (e.g. an offline start-up).
     const cached = this.auth.readModelsCache()
@@ -420,32 +475,43 @@ export class CopilotProvider implements LLMProvider {
     tools: ToolDefinition[],
     options: LLMProviderOptions,
   ): Promise<LLMResponse> {
+    options.signal?.throwIfAborted()
+    const model = this.resolveModel(options.model)
+    const info = (await this.fetchModels(options.signal)).find((item) => item.id === model)
+    const endpoint = copilotModelEndpoint(info)
+    if (info?.supportedEndpoints === undefined) {
+      console.warn(`[copilot] No endpoint capabilities for "${model}"; using the legacy chat-completions protocol.`)
+    }
+    if (endpoint === '/responses' && options.reasoningEffort && info?.reasoningEfforts &&
+      !info.reasoningEfforts.includes(options.reasoningEffort)) {
+      throw new Error(`[copilot] Model "${model}" does not support reasoning effort "${options.reasoningEffort}".`)
+    }
+    const inlinedMessages = await inlineExternalImages(messages, options.signal)
     // Retry once on 401 — the cached API key may have expired server-side
     // before the local expires_at check fires.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const apiKey = await this.auth.getApiKey()
+      const apiKey = await this.auth.getApiKey(options.signal)
       const baseURL = this.auth.getApiBase().replace(/\/+$/, '')
 
-      // Copilot does not accept external image URLs – inline them as base64.
-      const inlinedMessages = await inlineExternalImages(messages)
-
       try {
-        return await openaiChat({
-          url: `${baseURL}/chat/completions`,
+        const request = {
+          url: `${baseURL}${endpoint}`,
           apiKey,
           headers: copilotHeaders(),
-          model: this.resolveModel(options.model),
+          model,
           messages: inlinedMessages,
           tools,
           maxTokens: options.maxTokens,
-          temperature: options.temperature ?? 0.7,
           thinking: options.thinking,
           reasoningEffort: options.reasoningEffort,
           providerName: 'copilot',
           signal: options.signal,
-        })
+        }
+        return endpoint === '/responses'
+          ? await openaiResponses(request)
+          : await openaiChat({ ...request, temperature: options.temperature ?? 0.7 })
       } catch (err) {
-        const is401 = err instanceof Error && /\b401\b/.test(err.message)
+        const is401 = err instanceof ProviderHttpError && err.status === 401
         if (is401 && attempt === 0) {
           console.warn(
             '[copilot] API key expired (401), clearing cache and retrying...',
@@ -461,11 +527,11 @@ export class CopilotProvider implements LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
-    return (await this.fetchModels()).map((m) => m.id)
+    return (await this.fetchModels()).filter((m) => m.selectable !== false).map((m) => m.id)
   }
 
-  listModelInfos(): Promise<ModelInfo[]> {
-    return this.fetchModels()
+  async listModelInfos(): Promise<ModelInfo[]> {
+    return (await this.fetchModels()).filter((m) => m.selectable !== false)
   }
 
   // --------------------------------------------------------------------------
@@ -477,15 +543,17 @@ export class CopilotProvider implements LLMProvider {
    * cache on any failure (e.g. offline or rate-limited).
    */
   @Span('CopilotProvider.fetchModels')
-  private async fetchModels(): Promise<ModelInfo[]> {
+  private async fetchModels(signal?: AbortSignal): Promise<ModelInfo[]> {
+    signal?.throwIfAborted()
     const CACHE_TTL = 5 * 60_000 // 5 minutes
     if (this._modelsCache && Date.now() - this._modelsCacheTime < CACHE_TTL) {
       return this._modelsCache
     }
     try {
-      const apiKey = await this.auth.getApiKey()
+      const apiKey = await this.auth.getApiKey(signal)
       const baseURL = this.auth.getApiBase().replace(/\/+$/, '')
       const res = await fetch(`${baseURL}/models`, {
+        signal,
         headers: {
           accept: 'application/json',
           authorization: `Bearer ${apiKey}`,
@@ -493,27 +561,38 @@ export class CopilotProvider implements LLMProvider {
         },
       })
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403) this.auth.clearApiKey()
         console.warn(
           `[copilot] /models returned ${res.status}, falling back to cached list`,
         )
         return this.cachedModels()
       }
       const json = (await res.json()) as { data?: CopilotModelInfo[] }
+      if (!Array.isArray(json.data)) throw new Error('Copilot returned an invalid model list')
       const data = json.data ?? []
-      // Keep user-selectable chat models only, then dedupe by id + sort.
+      // Keep routing capabilities even for models no longer shown in the picker.
       const byId = new Map<string, ModelInfo>()
       for (const m of data) {
         if (
-          !m.id ||
-          m.model_picker_enabled === false ||
+          !m || typeof m.id !== 'string' || !m.id ||
           (m.capabilities?.type ?? 'chat') !== 'chat'
         ) continue
+        if ((m.supported_endpoints !== undefined && !stringList(m.supported_endpoints)) ||
+          (m.capabilities?.supports?.reasoning_effort !== undefined &&
+            !stringList(m.capabilities.supports.reasoning_effort))) {
+          throw new Error(`Copilot returned invalid endpoint capabilities for model "${m.id}"`)
+        }
         if (byId.has(m.id)) continue
         byId.set(m.id, {
           id: m.id,
           name: m.name,
+          ...(m.model_picker_enabled === false ? { selectable: false } : {}),
           vision: m.capabilities?.supports?.vision ?? false,
           contextWindow: m.capabilities?.limits?.max_context_window_tokens,
+          ...(m.supported_endpoints === undefined ? {} : { supportedEndpoints: [...m.supported_endpoints] }),
+          ...(m.capabilities?.supports?.reasoning_effort === undefined ? {} : {
+            reasoningEfforts: [...m.capabilities.supports.reasoning_effort],
+          }),
         })
       }
       const infos = Array.from(byId.values()).sort((a, b) =>
@@ -527,6 +606,7 @@ export class CopilotProvider implements LLMProvider {
       this.auth.writeModelsCache(infos)
       return infos
     } catch (err) {
+      if (signal?.aborted) throw signal.reason
       console.warn(
         `[copilot] Failed to fetch /models: ${
           err instanceof Error ? err.message : err
@@ -566,6 +646,7 @@ export class CopilotProvider implements LLMProvider {
  */
 async function inlineExternalImages(
   messages: ChatMessage[],
+  signal?: AbortSignal,
 ): Promise<ChatMessage[]> {
   return Promise.all(
     messages.map(async (msg) => {
@@ -579,7 +660,7 @@ async function inlineExternalImages(
             return part
           }
           try {
-            const res = await fetch(part.image_url.url)
+            const res = await fetch(part.image_url.url, { signal })
             if (!res.ok) {
               console.warn(
                 `[copilot] Failed to fetch image ${part.image_url.url}: ${res.status}`,
@@ -599,6 +680,7 @@ async function inlineExternalImages(
               },
             } satisfies ContentPart
           } catch (e) {
+            if (signal?.aborted) throw signal.reason
             console.warn(
               `[copilot] Could not inline image ${part.image_url.url}:`,
               e,
@@ -621,8 +703,4 @@ function copilotHeaders(): Record<string, string> {
     'openai-intent': 'conversation-panel',
     'x-github-api-version': API_VERSION,
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms))
 }

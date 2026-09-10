@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto'
-import { basename, join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   app,
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
   session,
   shell,
   type WebContents,
@@ -26,10 +27,14 @@ import { AtomicMainAgentConfigInitializer } from './bootstrap/main-agent-config.
 import { BootstrapCoordinator } from './bootstrap/coordinator.js'
 import {
   handleEnsureRuntime,
+  handleGetMainDirectorySelection,
   handleInitializeMain,
+  handleOpenCopilotLogin,
+  handleSelectMainDirectoryPath,
   IPC_CHANNELS,
   parseLaunchMainOptions,
   parseSelectionId,
+  parseNoArguments,
 } from './ipc-contract.js'
 import {
   type RendererTarget,
@@ -45,19 +50,12 @@ import {
 } from './sidecar/runtime-host.js'
 import { installRuntimeRequestAuthorization } from './runtime-authorization.js'
 import { type WizardEvent } from './wizard/state-machine.js'
+import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
+import { framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
+
+export { secureWebPreferences } from './window-controls.js'
 
 let mainWindow: BrowserWindow | null = null
-
-export function secureWebPreferences(
-  preloadPath: string,
-): Electron.WebPreferences {
-  return {
-    preload: preloadPath,
-    contextIsolation: true,
-    sandbox: true,
-    nodeIntegration: false,
-  }
-}
 
 export function enforceNavigationPolicy(
   webContents: WebContents,
@@ -100,18 +98,29 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
     (_event, ...rawArguments: unknown[]) =>
       handleEnsureRuntime(coordinator, rawArguments),
   )
-  ipcMain.handle(IPC_CHANNELS.selectDirectory, async () => {
+  ipcMain.handle(
+    IPC_CHANNELS.getMainDirectorySelection,
+    (_event, ...rawArguments: unknown[]) =>
+      handleGetMainDirectorySelection(coordinator, rawArguments),
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.selectMainDirectoryPath,
+    (_event, ...rawArguments: unknown[]) =>
+      handleSelectMainDirectoryPath(coordinator, rawArguments),
+  )
+  ipcMain.handle(IPC_CHANNELS.selectDirectory, async (_event, ...rawArguments: unknown[]) => {
+    parseNoArguments(rawArguments)
+    const current = await coordinator.getMainDirectorySelection()
     const options: Electron.OpenDialogOptions = {
       properties: ['openDirectory', 'createDirectory'],
+      ...(current.displayPath ? { defaultPath: current.displayPath } : {}),
     }
     const result = mainWindow
       ? await dialog.showOpenDialog(mainWindow, options)
       : await dialog.showOpenDialog(options)
     const selectedPath = result.filePaths[0]
     if (result.canceled || selectedPath === undefined) return null
-    const selectionId = randomUUID()
-    coordinator.registerDirectorySelection(selectionId, selectedPath)
-    return { selectionId, displayName: basename(selectedPath) }
+    return await coordinator.selectMainDirectoryPath(selectedPath)
   })
   ipcMain.handle(IPC_CHANNELS.openExternal, async (_event, url: unknown) => {
     if (typeof url !== 'string' || !isAllowedExternalUrl(url)) {
@@ -119,19 +128,17 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
     }
     await shell.openExternal(url)
   })
+  ipcMain.handle(
+    IPC_CHANNELS.openCopilotLogin,
+    (_event, ...rawArguments: unknown[]) =>
+      handleOpenCopilotLogin((url) => shell.openExternal(url), rawArguments),
+  )
 }
 
 export function createMainWindow(target: RendererTarget): BrowserWindow {
-  const window = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    show: false,
-    webPreferences: secureWebPreferences(
-      join(import.meta.dirname, 'preload.cjs'),
-    ),
-  })
+  const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
+  removeNativeMenus(Menu, window)
+  installWindowControls(ipcMain, window)
   enforceNavigationPolicy(window.webContents, target)
   window.once('ready-to-show', () => window.show())
   return window
@@ -199,6 +206,11 @@ async function start(): Promise<void> {
     runtimeHost,
     new AtomicLaunchProfileStore(launchProfilePath(userDataPath)),
     new FileRuntimeConfigReader(configPath),
+    () => resolveDesktopMainDirectory(
+      app.getAppPath(),
+      app.isPackaged,
+      process.env.SHADOW_DESKTOP_DEV_MAIN_DIRECTORY,
+    ),
   )
   registerRuntimeHostQuitLifecycle(app, runtimeHost)
   registerIpcHandlers(coordinator)
@@ -218,6 +230,15 @@ async function start(): Promise<void> {
 }
 
 if (!process.env.SHADOW_DESKTOP_DISABLE_AUTO_START) {
+  const profilePath = resolveDesktopUserDataPath(
+    app.getAppPath(),
+    app.isPackaged,
+    process.env.SHADOW_DESKTOP_USER_DATA || app.commandLine.getSwitchValue('user-data-dir'),
+  )
+  if (profilePath) {
+    mkdirSync(profilePath, { recursive: true })
+    app.setPath('userData', profilePath)
+  }
   app.whenReady().then(start).catch((error: unknown) => {
     console.error('[desktop] Failed to start', error)
     app.quit()

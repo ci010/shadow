@@ -41,9 +41,23 @@ export type BootstrapCommandResult =
 export interface NativeDirectorySelection {
 	readonly selectionId: string
 	readonly displayName: string
+	readonly displayPath?: string
+}
+
+export interface DesktopWindowState {
+	readonly maximized: boolean
+}
+
+export interface DesktopWindowControls {
+	getState(): Promise<DesktopWindowState>
+	minimize(): Promise<void>
+	toggleMaximize(): Promise<DesktopWindowState>
+	close(): Promise<void>
+	onStateChanged(listener: (state: DesktopWindowState) => void): () => void
 }
 
 export interface ShadowDesktopApi {
+	readonly windowControls?: DesktopWindowControls
 	readonly bootstrap: {
 		load(): Promise<WizardState>
 		dispatch(event: RendererWizardEvent): Promise<WizardState>
@@ -54,6 +68,9 @@ export interface ShadowDesktopApi {
 		ensureRuntime(): Promise<EnsureRuntimeResult>
 	}
 	selectDirectory(): Promise<NativeDirectorySelection | null>
+	getMainDirectorySelection?(): Promise<NativeDirectorySelection>
+	selectMainDirectoryPath?(path: string): Promise<NativeDirectorySelection>
+	openCopilotLogin?(): Promise<void>
 }
 
 export type EnsureRuntimeResult =
@@ -75,6 +92,25 @@ declare global {
 }
 
 export const MAIN_LAUNCH_PORT = 43_123
+
+export async function loadMainDirectorySelection(
+	api: ShadowDesktopApi,
+	current: NativeDirectorySelection | null,
+): Promise<NativeDirectorySelection | null> {
+	return current ?? await api.getMainDirectorySelection?.() ?? null
+}
+
+export async function commitMainDirectoryChoice(
+	api: ShadowDesktopApi,
+	path: string,
+	current: NativeDirectorySelection | null,
+): Promise<BootstrapCommandResult> {
+	const selection = api.selectMainDirectoryPath
+		? await api.selectMainDirectoryPath(path)
+		: current
+	if (!selection) throw new Error('Choose a Main directory first')
+	return await api.bootstrap.commitMainDirectory(selection.selectionId)
+}
 
 export function isBootstrapComplete(state: WizardState): boolean {
 	return state.step === 'complete'

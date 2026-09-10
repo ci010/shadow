@@ -176,6 +176,13 @@ export function createProductionRuntimeHost(
       new NodeSidecarSupervisor({
         readinessProbe: createSidecarReadinessProbe({ expectedRole: role }),
         authenticatedShutdownRequest,
+        environment: {
+          ...process.env,
+          GITHUB_COPILOT_TOKEN_DIR: join(paths.userDataPath, 'auth', 'copilot'),
+          GITHUB_COPILOT_ACCESS_TOKEN_FILE: 'access-token',
+          GITHUB_COPILOT_API_KEY_FILE: 'api-key.json',
+          GITHUB_COPILOT_MODELS_CACHE_FILE: 'models.json',
+        },
       }),
     ...(onAuthorizationChanged ? { onAuthorizationChanged } : {}),
   })

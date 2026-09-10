@@ -1,6 +1,7 @@
 import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import type { BootstrapCommandResult } from './bootstrap/coordinator.js'
 import type { EnsureRuntimeResult } from './bootstrap/coordinator.js'
+import { normalizeMainDirectoryPath } from './bootstrap/runtime-config.js'
 
 export const IPC_CHANNELS = {
   loadWizard: 'shadow:bootstrap:load',
@@ -11,12 +12,21 @@ export const IPC_CHANNELS = {
   launchMain: 'shadow:bootstrap:launch-main',
   ensureRuntime: 'shadow:bootstrap:ensure-runtime',
   selectDirectory: 'shadow:native:select-directory',
+  getMainDirectorySelection: 'shadow:bootstrap:get-main-directory-selection',
+  selectMainDirectoryPath: 'shadow:bootstrap:select-main-directory-path',
   openExternal: 'shadow:native:open-external',
+  openCopilotLogin: 'shadow:native:open-copilot-login',
+  windowGetState: 'shadow:window:get-state',
+  windowMinimize: 'shadow:window:minimize',
+  windowToggleMaximize: 'shadow:window:toggle-maximize',
+  windowClose: 'shadow:window:close',
+  windowStateChanged: 'shadow:window:state-changed',
 } as const
 
 export interface NativeDirectorySelection {
   readonly selectionId: string
   readonly displayName: string
+  readonly displayPath?: string
 }
 
 export interface LaunchMainOptions {
@@ -24,7 +34,20 @@ export interface LaunchMainOptions {
   readonly port: number
 }
 
+export interface DesktopWindowState {
+  readonly maximized: boolean
+}
+
+export interface DesktopWindowControls {
+  getState(): Promise<DesktopWindowState>
+  minimize(): Promise<void>
+  toggleMaximize(): Promise<DesktopWindowState>
+  close(): Promise<void>
+  onStateChanged(listener: (state: DesktopWindowState) => void): () => void
+}
+
 export interface ShadowDesktopApi {
+  readonly windowControls: DesktopWindowControls
   readonly bootstrap: {
     load(): Promise<WizardState>
     dispatch(event: WizardEvent): Promise<WizardState>
@@ -34,8 +57,26 @@ export interface ShadowDesktopApi {
     launchMain(options: LaunchMainOptions): Promise<BootstrapCommandResult>
     ensureRuntime(): Promise<EnsureRuntimeResult>
   }
+
   selectDirectory(): Promise<NativeDirectorySelection | null>
+  getMainDirectorySelection(): Promise<NativeDirectorySelection>
+  selectMainDirectoryPath(path: string): Promise<NativeDirectorySelection>
   openExternal(url: string): Promise<void>
+  openCopilotLogin(): Promise<void>
+}
+
+export function parseDesktopWindowState(value: unknown): DesktopWindowState {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || Array.isArray(value)
+    || Object.keys(value).length !== 1
+    || !Object.hasOwn(value, 'maximized')
+    || typeof (value as Record<string, unknown>).maximized !== 'boolean'
+  ) {
+    throw new TypeError('Desktop window state is invalid')
+  }
+  return { maximized: (value as Record<string, unknown>).maximized as boolean }
 }
 
 export interface MainBootstrapInitializer {
@@ -44,6 +85,27 @@ export interface MainBootstrapInitializer {
 
 export interface MainRuntimeEnsurer {
   ensureRuntime(): Promise<EnsureRuntimeResult>
+}
+
+export interface MainDirectorySelector {
+  getMainDirectorySelection(): Promise<NativeDirectorySelection>
+  selectMainDirectoryPath(path: string): Promise<NativeDirectorySelection>
+}
+
+export function handleGetMainDirectorySelection(
+  coordinator: MainDirectorySelector,
+  rawArguments: readonly unknown[],
+): Promise<NativeDirectorySelection> {
+  parseNoArguments(rawArguments)
+  return coordinator.getMainDirectorySelection()
+}
+
+export function handleSelectMainDirectoryPath(
+  coordinator: MainDirectorySelector,
+  rawArguments: readonly unknown[],
+): Promise<NativeDirectorySelection> {
+  if (rawArguments.length !== 1) throw new TypeError('Main directory selection requires one absolute path')
+  return coordinator.selectMainDirectoryPath(normalizeMainDirectoryPath(rawArguments[0]))
 }
 
 export function handleInitializeMain(
@@ -71,6 +133,14 @@ export function parseSelectionId(value: unknown): string {
 
 export function parseNoArguments(values: readonly unknown[]): void {
   if (values.length !== 0) throw new TypeError('Bootstrap command accepts no arguments')
+}
+
+export async function handleOpenCopilotLogin(
+  open: (url: string) => Promise<void>,
+  rawArguments: readonly unknown[],
+): Promise<void> {
+  parseNoArguments(rawArguments)
+  await open('https://github.com/login/device')
 }
 
 export function parseLaunchMainOptions(value: unknown): LaunchMainOptions {

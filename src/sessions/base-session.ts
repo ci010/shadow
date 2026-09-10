@@ -91,6 +91,7 @@ export abstract class BaseSession {
           ? e.reasoning_content
           : undefined,
         reasoning_text: e.role === 'assistant' ? e.reasoning_text : undefined,
+        provider_state: e.role === 'assistant' ? e.provider_state : undefined,
         tool_calls: e.tool_calls,
         tool_call_id: e.tool_call_id,
         name: e.name,
@@ -190,6 +191,7 @@ export abstract class BaseSession {
         content: response.content,
         reasoning_content: response.reasoningContent,
         reasoning_text: response.reasoningText,
+        provider_state: response.providerState,
         tool_calls: response.toolCalls.map((tc) => ({
           id: tc.id,
           type: 'function' as const,

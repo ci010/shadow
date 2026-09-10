@@ -1,49 +1,27 @@
 <template>
-  <div class="app-shell">
-    <!-- Mouse glow follower -->
-    <div ref="glowEl" class="mouse-glow" />
-
-    <!-- System bar -->
-    <div class="system-bar">
-      <div class="system-bar-inner">
-        <span class="system-bar-title">Context Lens</span>
-        <nav class="tab-nav">
+  <DesktopFrame>
+    <template #navigation>
+        <nav class="tab-nav" aria-label="Main navigation">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
-            <router-link v-for="item in group.items" :key="item.name" :to="{ name: item.name }" custom v-slot="{ isActive, navigate }">
-              <button class="tab" :class="{ active: isActive }" @click="navigate">
+            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name }" custom v-slot="{ isActive, navigate }">
+              <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">
                 {{ item.label }}
               </button>
             </router-link>
           </template>
         </nav>
-        <div class="system-bar-right">
-          <div class="system-bar-model">
-            <label class="system-bar-model-label">Model</label>
-            <select v-model="currentModel" class="system-bar-model-select" @change="onModelChange">
-              <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
-              <option v-if="currentModel && !modelOptions.includes(currentModel)" :value="currentModel">{{ currentModel }}</option>
-            </select>
-          </div>
-          <div v-if="!copilotAuthed" class="copilot-auth">
-            <button class="copilot-login-btn" :disabled="copilotLoginPending" @click="startCopilotLogin">
-              {{ copilotLoginPending ? 'Waiting for authorization…' : 'Login Copilot' }}
-            </button>
-            <div v-if="copilotLoginInfo" class="copilot-login-info">
-              Visit
-              <a :href="copilotLoginInfo.verification_uri" target="_blank" rel="noopener">{{ copilotLoginInfo.verification_uri }}</a>
-              and enter code <code>{{ copilotLoginInfo.user_code }}</code>
-            </div>
-          </div>
-          <button class="theme-toggle" @click="toggleTheme" :title="isDark ? 'Switch to light' : 'Switch to dark'">
+    </template>
+    <template #actions>
+          <button class="theme-toggle" @click="toggleTheme" :title="isDark ? 'Switch to light' : 'Switch to dark'" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'">
             <!-- Sun icon (shown in dark mode) -->
             <svg v-if="isDark" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
             <!-- Moon icon (shown in light mode) -->
             <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           </button>
-        </div>
-      </div>
-    </div>
+    </template>
+    <div class="app-shell">
+    <div class="mouse-glow-layer" aria-hidden="true"><div ref="glowEl" class="mouse-glow" /></div>
 
     <div class="runtime-status-bar" aria-label="Runtime status">
       <div class="runtime-status-inner">
@@ -66,7 +44,7 @@
       </div>
     </div>
 
-    <main class="px-3 md:px-6 pb-6 mx-auto w-full app-main">
+    <main class="app-main">
       <aside v-if="showChildRecovery" class="recovery-panel" role="status">
         <div class="recovery-copy">
           <strong>{{ recoveryTitle }}</strong>
@@ -77,22 +55,52 @@
           <router-link :to="{ name: 'approvals' }">Review approvals</router-link>
         </div>
       </aside>
-      <router-view
-        :api-base="resolvedBase"
-        class="mt-4"
-        @update:log-count="logCount = $event"
-      />
+      <div v-if="showSetup" class="setup-content-scroll">
+        <ProvidersView v-bind="providerViewProps" v-on="providerViewEvents" />
+      </div>
+      <p v-else-if="providerError && route.name !== 'providers'" class="provider-error" role="alert">{{ providerError }} Use the Providers tab to reconnect.</p>
+      <div
+        v-if="hasReadyProvider || !isMain"
+        v-show="!showSetup"
+        class="route-content"
+        :class="{ 'chat-route': route.name === 'chat' }"
+      >
+      <router-view v-slot="{ Component, route: viewRoute }">
+        <KeepAlive :key="resolvedBase" include="ChatTab">
+          <component
+            :is="Component"
+            v-if="!showSetup"
+            :key="viewRoute.name"
+            v-bind="viewRoute.name === 'providers' ? providerViewProps : { apiBase: resolvedBase }"
+            v-on="viewRoute.name === 'providers' ? providerViewEvents : {}"
+            @update:log-count="logCount = $event"
+          />
+        </KeepAlive>
+      </router-view>
+      </div>
     </main>
-  </div>
+    </div>
+  </DesktopFrame>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useProductFixtures } from './composables/useProductFixtures.ts'
 import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
+import ProvidersView from './components/ProvidersView.vue'
+import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
+import DesktopFrame from './DesktopFrame.vue'
+import { modelSelectionInput, provideModelSelection } from './model-selection.ts'
 
+const route = useRoute()
+const router = useRouter()
+const lastChatLocation = ref('/chat')
+watch(() => route.fullPath, (path) => {
+  if (route.name === 'chat') lastChatLocation.value = path
+}, { immediate: true })
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
 const productFixtures = useProductFixtures()
@@ -125,104 +133,111 @@ const logCount = ref(0)
 
 // ── Model selector ──────────────────────────────────────────
 const currentModel = ref('')
-const configCache = ref<Record<string, unknown> | null>(null)
 const modelOptions = ref<string[]>([])
-
-async function fetchModels() {
-  try {
-    const res = await fetch(`${resolvedBase.value}/debug/models`)
-    if (!res.ok) return
-    const data = await res.json()
-    modelOptions.value = Array.isArray(data.models) ? data.models : []
-  } catch { /* ignore */ }
+const isMain = computed(() => installationContext.value.mode === 'main')
+const providerStatus = ref<ProviderSetupStatus | null>(null)
+const providerReady = computed(() => providerStatus.value?.ready === true)
+const checkingProvider = ref(true)
+const hasReadyProvider = ref(false)
+const savingModel = ref(false)
+const showSetup = computed(() => isMain.value && !providerReady.value)
+const providerError = ref('')
+const providerViewProps = computed(() => ({
+  apiBase: resolvedBase.value,
+  status: providerStatus.value,
+  error: providerError.value,
+  checking: checkingProvider.value,
+  available: isMain.value && installationContext.value.uiScopes.includes('main:admin'),
+}))
+const providerViewEvents = {
+  configured: providerConfigured,
+  retry: () => { void refreshProvider(true) },
+  close: () => { void router.push(lastChatLocation.value) },
 }
+let providerGeneration = 0
+let providerRequest: AbortController | undefined
+provideModelSelection({
+  current: currentModel,
+  options: modelOptions,
+  disabled: computed(() => !providerReady.value || checkingProvider.value || savingModel.value),
+  loading: computed(() => checkingProvider.value || savingModel.value),
+  error: providerError,
+  select: onModelChange,
+})
 
-// ── Copilot device-code authentication ──────────────────────
-const copilotConfigured = ref(false)
-const copilotAuthed = ref(true)
-const copilotLoginPending = ref(false)
-const copilotLoginInfo = ref<{ verification_uri: string; user_code: string; device_code: string } | null>(null)
-
-async function checkCopilotAuth() {
+async function fetchModels(signal: AbortSignal, generation: number) {
   try {
-    const res = await fetch(`${resolvedBase.value}/api/auth`)
-    if (!res.ok) return
-    const data = await res.json()
-    copilotAuthed.value = !!data.authenticated && !!data.apiKeyValid
-  } catch { /* ignore */ }
-}
-
-async function startCopilotLogin() {
-  copilotLoginPending.value = true
-  copilotLoginInfo.value = null
-  try {
-    const res = await fetch(`${resolvedBase.value}/api/auth/login`, { method: 'POST' })
-    const data = await res.json()
-    if (data.authenticated) {
-      copilotAuthed.value = true
+    const res = await fetch(`${resolvedBase.value}/debug/models`, { signal })
+    if (generation !== providerGeneration) return
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        if (providerStatus.value) providerStatus.value = { ...providerStatus.value, ready: false, reason: 'invalid_credentials' }
+        providerError.value = 'Provider credentials were rejected. Sign in again or update the API key.'
+      } else {
+        providerError.value = 'Could not load models. Check your provider connection.'
+      }
       return
     }
-    if (!data.device_code) return
-    copilotLoginInfo.value = {
-      verification_uri: data.verification_uri,
-      user_code: data.user_code,
-      device_code: data.device_code,
+    const data = await res.json()
+    if (generation === providerGeneration) {
+      modelOptions.value = Array.isArray(data.models) ? data.models.filter((model: unknown) => typeof model === 'string') : []
     }
-    // Open GitHub's device-authorization page for convenience.
-    window.open(data.verification_uri, '_blank', 'noopener')
-    // Poll until the user finishes authorizing (blocks server-side up to ~5min).
-    const pollRes = await fetch(`${resolvedBase.value}/api/auth/poll`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_code: data.device_code }),
-    })
-    const pollData = await pollRes.json()
-    if (pollData.authenticated) {
-      copilotAuthed.value = true
-      copilotLoginInfo.value = null
-      fetchModels()
-    }
-  } catch { /* ignore */ } finally {
-    copilotLoginPending.value = false
+  } catch {
+    if (!signal.aborted && generation === providerGeneration) providerError.value = 'Could not load models. Check your network and provider settings.'
   }
 }
 
-async function fetchConfig() {
+async function refreshProvider(refresh = false) {
+  const generation = ++providerGeneration
+  providerRequest?.abort()
+  providerRequest = new AbortController()
+  const signal = providerRequest.signal
+  checkingProvider.value = isMain.value
+  providerError.value = ''
+  if (!isMain.value) return
   try {
-    const res = await fetch(`${resolvedBase.value}/api/config`)
-    if (!res.ok) return
-    const data = await res.json()
-    configCache.value = data
-    currentModel.value = data.agent?.model ?? ''
-    // Detect whether Copilot is referenced anywhere in the config so we only
-    // surface the login button for users who actually use it.
-    copilotConfigured.value = JSON.stringify(data).toLowerCase().includes('copilot')
-  } catch { /* ignore */ }
+    const status = await createProviderSetupClient(resolvedBase.value).status(signal, refresh)
+    if (generation !== providerGeneration) return
+    providerStatus.value = status
+    currentModel.value = status.model
+    if (status.ready) hasReadyProvider.value = true
+    if (status.ready) await fetchModels(signal, generation)
+    else modelOptions.value = []
+  } catch (error) {
+    if (signal.aborted || generation !== providerGeneration) return
+    providerStatus.value = null
+    providerError.value = error instanceof Error ? error.message : 'Could not check provider configuration. Retry when Main is available.'
+  } finally {
+    if (generation === providerGeneration) checkingProvider.value = false
+  }
 }
 
-async function onModelChange() {
-  if (!currentModel.value || !configCache.value) return
-  try {
-    const updated = { ...configCache.value, agent: { ...(configCache.value.agent as Record<string, unknown> ?? {}), model: currentModel.value } }
-    const res = await fetch(`${resolvedBase.value}/api/config`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updated),
-    })
-    if (res.ok) {
-      configCache.value = await res.json()
-      // Notify other views (e.g. ChatTab's config badge) that the global
-      // model/config changed so they can refresh.
-      window.dispatchEvent(new CustomEvent('shadow:config-changed'))
-    }
-  } catch { /* ignore */ }
+function providerConfigured() {
+  window.dispatchEvent(new CustomEvent('shadow:config-changed'))
+  void router.push(lastChatLocation.value)
 }
 
-watch(resolvedBase, () => {
-  fetchConfig()
-  fetchModels()
-  checkCopilotAuth()
-}, { immediate: false })
+async function onModelChange(model: string) {
+  if (!model || !providerStatus.value || savingModel.value) return
+  savingModel.value = true
+  providerError.value = ''
+  try {
+    const result = await createProviderSetupClient(resolvedBase.value).save(
+      modelSelectionInput(model, providerStatus.value.provider),
+    )
+    if (!result.ready) throw new Error('The selected provider is not ready. The model was not changed; check the Providers tab.')
+    currentModel.value = result.model
+    providerStatus.value = result
+    window.dispatchEvent(new CustomEvent('shadow:config-changed'))
+  } catch (error) {
+    providerError.value = error instanceof Error ? error.message : 'Could not change the selected model.'
+  } finally {
+    savingModel.value = false
+  }
+}
+
+watch(resolvedBase, () => { void refreshProvider() })
+const onConfigChanged = () => { void refreshProvider(true) }
 
 const navigationGroups = computed(() => {
   const items = navigationFor(installationContext.value)
@@ -272,13 +287,15 @@ function tick() {
 onMounted(() => {
   window.addEventListener('mousemove', onMouseMove)
   rafId = requestAnimationFrame(tick)
-  fetchConfig()
-  fetchModels()
-  checkCopilotAuth()
+  window.addEventListener('shadow:config-changed', onConfigChanged)
+  void refreshProvider()
 })
 
 onUnmounted(() => {
   window.removeEventListener('mousemove', onMouseMove)
+  window.removeEventListener('shadow:config-changed', onConfigChanged)
+  ++providerGeneration
+  providerRequest?.abort()
   cancelAnimationFrame(rafId)
 })
 </script>
@@ -286,8 +303,16 @@ onUnmounted(() => {
 <style scoped>
 /* ── Mouse glow ───────────────────────────────────────────── */
 
-.mouse-glow {
+.mouse-glow-layer {
   position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 9999;
+  mix-blend-mode: difference;
+}
+.mouse-glow {
+  position: absolute;
   top: -16px;
   left: -16px;
   width: 32px;
@@ -295,36 +320,25 @@ onUnmounted(() => {
   border-radius: 50%;
   background: #a0a0a0;
   pointer-events: none;
-  z-index: 9999;
   will-change: transform;
-  mix-blend-mode: difference;
 }
 
 /* ── App shell ─────────────────────────────────────────────── */
 
 .app-shell {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
+.provider-error { flex: 0 0 auto; color: var(--c-error); padding: 8px 12px; margin: 0; }
+
 /* ── System bar ────────────────────────────────────────────── */
 
-.system-bar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 50;
-  background: var(--c-bg-card);
-  border-bottom: 1px solid var(--c-border);
-}
-
 .runtime-status-bar {
-  position: fixed;
-  top: 36px;
-  left: 0;
-  right: 0;
-  z-index: 49;
+  flex: 0 0 auto;
   min-width: 0;
   border-bottom: 1px solid var(--c-border);
   background: var(--c-bg-soft);
@@ -345,6 +359,7 @@ onUnmounted(() => {
 }
 
 .runtime-status-item {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -402,8 +417,15 @@ onUnmounted(() => {
 }
 
 .app-main {
-  padding-top: 78px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
+.route-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
+.route-content.chat-route { display: flex; padding: 0; overflow: hidden; }
+.setup-content-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 
 .recovery-panel {
   display: flex;
@@ -448,24 +470,6 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.system-bar-inner {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0 0.75rem;
-  height: 36px;
-}
-
-.system-bar-title {
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--c-text-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
 .tab-nav {
   display: flex;
   align-items: center;
@@ -495,6 +499,7 @@ onUnmounted(() => {
 }
 
 .tab {
+  flex-shrink: 0;
   border: none;
   background: transparent;
   padding: 0.5rem 0.6rem;
@@ -523,31 +528,11 @@ onUnmounted(() => {
   border-bottom-color: var(--c-text);
 }
 
-.system-bar-right {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
 @media (max-width: 760px) {
-  .system-bar-title,
-  .system-bar-model-label {
-    display: none;
-  }
-
-  .system-bar-inner {
-    gap: 0.35rem;
-  }
-
-  .system-bar-model-select {
-    width: 7rem;
-  }
-
   .runtime-status-node {
     max-width: 11rem;
   }
+  @media (max-width: 1100px) { .tab-group-label { display: none; } .tab { padding-inline: 7px; font-size: 10px; } }
 
   .recovery-panel,
   .recovery-copy {
@@ -612,92 +597,6 @@ onUnmounted(() => {
 .system-bar-api-input:focus {
   outline: none;
   border-color: var(--c-border-hover);
-}
-
-.system-bar-model {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.system-bar-model-label {
-  font-size: 0.55rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--c-text-muted);
-}
-
-.system-bar-model-select {
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-bg-soft);
-  padding: 0.15rem 0.4rem;
-  font-size: 0.65rem;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  max-width: 12rem;
-}
-
-.system-bar-model-select:focus {
-  outline: none;
-  border-color: var(--c-border-hover);
-}
-
-/* ── Copilot auth ────────────────────────────────────────── */
-
-.copilot-auth {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.copilot-login-btn {
-  border: 1px solid var(--c-warning, #f59e0b);
-  border-radius: 4px;
-  background: var(--c-warning-bg, rgba(245, 158, 11, 0.12));
-  color: var(--c-warning, #f59e0b);
-  padding: 0.15rem 0.5rem;
-  font-size: 0.6rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.copilot-login-btn:hover:not(:disabled) {
-  background: var(--c-warning, #f59e0b);
-  color: #fff;
-}
-
-.copilot-login-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.copilot-login-info {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 50;
-  width: max-content;
-  max-width: 20rem;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-soft);
-  color: var(--c-text-secondary);
-  font-size: 0.65rem;
-  line-height: 1.4;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-}
-
-.copilot-login-info code {
-  font-weight: 700;
-  color: var(--c-text-body);
-  background: var(--c-bg-muted);
-  padding: 0.05em 0.3em;
-  border-radius: 3px;
 }
 
 /* ── Shared utility classes ──────────────────────────────── */

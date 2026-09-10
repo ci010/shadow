@@ -9,6 +9,7 @@ export type AppRouteName =
   | 'chat'
   | 'workspaces'
   | 'nodes'
+  | 'providers'
   | 'approvals'
   | 'agents'
   | 'spans'
@@ -48,6 +49,13 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
     scopes: ['nodes:admin'],
     modes: ['main', 'child'],
     childLocal: true,
+  },
+  {
+    name: 'providers',
+    label: 'Providers',
+    group: 'primary',
+    scopes: ['main:admin'],
+    modes: ['main'],
   },
   {
     name: 'approvals',

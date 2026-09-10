@@ -59,7 +59,7 @@ async function resetSetup(): Promise<void> {
 	--muted: #66706b;
 	--line: #d8ddd9;
 	--accent: #147a57;
-	min-height: 100vh;
+	min-height: 100%;
 	display: grid;
 	place-items: center;
 	padding: 24px;

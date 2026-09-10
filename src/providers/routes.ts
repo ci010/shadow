@@ -5,12 +5,18 @@ import type {
 } from './provider.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
+import type { ProviderSetupStatus } from './setup.ts'
 
 export function providerPlugin(
-  provider: LLMProvider | undefined,
+  source: LLMProvider | undefined | (() => LLMProvider | undefined),
+  readiness?: () => Promise<ProviderSetupStatus>,
 ): GatewayPlugin {
+  const current = () => typeof source === 'function' ? source() : source
   return (app) => {
     app.get('/debug/models', async (c) => {
+      const setup = await readiness?.()
+      if (setup && !setup.ready) return c.json({ models: [], infos: [], setup })
+      const provider = current()
       const models = await (provider?.listModels() ?? [])
       const infos = provider?.listModelInfos
         ? await provider.listModelInfos()
@@ -21,6 +27,9 @@ export function providerPlugin(
     // ── OpenAI-compatible LLM API ────────────────────────────────────────────
 
     app.get('/v1/models', async (c) => {
+      const setup = await readiness?.()
+      if (setup && !setup.ready) return c.json({ object: 'list', data: [], setup })
+      const provider = current()
       const models = await (provider?.listModels() ?? [])
       return c.json({
         object: 'list',
@@ -35,6 +44,9 @@ export function providerPlugin(
     })
 
     app.post('/v1/chat/completions', async (c) => {
+      const provider = current()
+      const setup = await readiness?.()
+      if (setup && !setup.ready) return c.json({ error: 'provider_setup_required', setup }, 409)
       if (!provider) return c.json({ error: 'provider_unavailable' }, 501)
       let body: Record<string, unknown>
       try {
@@ -49,6 +61,7 @@ export function providerPlugin(
       }
       const options: LLMProviderOptions = {
         model: body.model,
+        signal: c.req.raw.signal,
         maxTokens: typeof body.max_tokens === 'number'
           ? body.max_tokens
           : undefined,
@@ -68,6 +81,7 @@ export function providerPlugin(
             message: {
               role: 'assistant',
               content: result.content,
+              ...(result.providerState ? { provider_state: result.providerState } : {}),
               ...(result.toolCalls.length > 0
                 ? {
                   tool_calls: result.toolCalls.map((tc) => ({

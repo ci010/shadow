@@ -1049,6 +1049,9 @@ export class SessionManager {
             content: event.content,
             reasoning_content: event.reasoning_content,
             reasoning_text: event.reasoning_text,
+            provider_state: event.role === 'assistant'
+              ? event.provider_state
+              : undefined,
             tool_calls: event.tool_calls as ChatMessage['tool_calls'],
             tool_call_id: event.tool_call_id,
             name: event.name,
