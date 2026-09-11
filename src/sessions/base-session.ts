@@ -93,10 +93,11 @@ export abstract class BaseSession {
     ...messages: ChatMessage[]
   ): Promise<void> {
     if (messages.length === 0) return
-    this.messages.push(...messages)
+    const now = new Date().toISOString()
+    const stampedMessages = messages.map(message => ({ ...message, timestamp: now }))
+    this.messages.push(...stampedMessages)
     try {
-      const now = new Date().toISOString()
-      const stored: StoredMessage[] = messages.map((e) => ({
+      const stored: StoredMessage[] = stampedMessages.map((e) => ({
         role: e.role,
         content: e.content,
         reasoning_content: e.role === 'assistant'
@@ -167,8 +168,13 @@ export abstract class BaseSession {
       // Hook: drain pending messages (e.g. steer queue in Session).
       await this.drainPendingMessages(llm)
 
+      const traceAttributes = {
+        sessionId: this.id,
+        physicalSessionId: this.physicalSessionId,
+        iteration: i,
+      }
       using span = uspan('agent.loop', {
-        attributes: { iteration: i },
+        attributes: traceAttributes,
       })
 
       const response = await activeSpan(
@@ -182,7 +188,7 @@ export abstract class BaseSession {
             thinking,
             reasoningEffort,
           }),
-        {},
+        { attributes: { ...traceAttributes, model } },
         span.context,
       ).catch((err) => err as Error)
 
@@ -259,7 +265,13 @@ export abstract class BaseSession {
                 `agent.tool`,
                 () =>
                   this.tools.execute(tc.name, tc.arguments, executionContext),
-                {},
+                {
+                  attributes: {
+                    ...traceAttributes,
+                    'tool.call_id': tc.id,
+                    'tool.name': tc.name,
+                  },
+                },
                 span.context,
               )
             ),

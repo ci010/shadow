@@ -24,3 +24,18 @@ export function modelSelectionInput(model: string, currentProvider: string): Pro
   const suffix = model.lastIndexOf('@')
   return { model, provider: suffix > 0 ? model.slice(suffix + 1) : currentProvider }
 }
+
+export function modelDisplayName(model: string): string {
+  const suffix = model.lastIndexOf('@')
+  return suffix > 0 ? model.slice(0, suffix) : model
+}
+
+export function modelProvider(model: string): string {
+  const suffix = model.lastIndexOf('@')
+  return suffix > 0 ? model.slice(suffix + 1) : ''
+}
+
+export function filterModelOptions(options: readonly string[], current: string, query: string): string[] {
+  const models = [...new Set([...options, ...(current ? [current] : [])])]
+  return models.filter(model => model.toLowerCase().includes(query.trim().toLowerCase()))
+}

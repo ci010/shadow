@@ -389,6 +389,10 @@ export class InMemoryPairingNodeRegistry {
       .map((value) => structuredClone(value))
   }
 
+  listNodes(): (ApprovedNodeV1 | RevokedNodeV1)[] {
+    return [...this.#nodes.values()].map((value) => structuredClone(value))
+  }
+
   getNodeState(nodeId: NodeId): 'approved' | 'revoked' | 'missing' {
     let revoked = false
     for (const node of this.#nodes.values()) {

@@ -94,7 +94,7 @@ function onRowClick(): void {
   align-items: center;
   gap: 0.3rem;
   padding: 0.15rem 0.4rem 0.15rem 0;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   font-size: 0.72rem;
   color: var(--c-text);

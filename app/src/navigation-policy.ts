@@ -7,7 +7,6 @@ import type {
 export type NavigationGroup = 'primary' | 'diagnostics'
 export type AppRouteName =
   | 'chat'
-  | 'workspaces'
   | 'nodes'
   | 'providers'
   | 'approvals'
@@ -31,13 +30,6 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
   {
     name: 'chat',
     label: 'Chat',
-    group: 'primary',
-    scopes: ['chat:read'],
-    modes: ['main', 'child'],
-  },
-  {
-    name: 'workspaces',
-    label: 'Workspaces',
     group: 'primary',
     scopes: ['chat:read'],
     modes: ['main', 'child'],

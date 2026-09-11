@@ -54,6 +54,7 @@ import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
 import { installProjectDirectoryPicker } from './project-directories.js'
+import { installChatContextPickers } from './chat-context.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
@@ -149,6 +150,20 @@ export function createMainWindow(target: RendererTarget): BrowserWindow {
     return result.canceled || selectedPath === undefined
       ? null
       : normalizeMainDirectoryPath(selectedPath)
+  })
+  installChatContextPickers(ipcMain, window, {
+    selectFiles: async () => {
+      const result = await dialog.showOpenDialog(window, {
+        properties: ['openFile', 'multiSelections'],
+      })
+      return result.canceled ? [] : result.filePaths
+    },
+    selectFolders: async () => {
+      const result = await dialog.showOpenDialog(window, {
+        properties: ['openDirectory', 'multiSelections'],
+      })
+      return result.canceled ? [] : result.filePaths
+    },
   })
   enforceNavigationPolicy(window.webContents, target)
   window.once('ready-to-show', () => window.show())

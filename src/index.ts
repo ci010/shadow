@@ -116,6 +116,7 @@ import {
   parseBackendCliArguments,
 } from './runtime/backend-cli.ts'
 import { LocalRuntimeControl } from './runtime/local-control.ts'
+import { authorizeMainNodeInventory, mainLocalNodeInventory } from './runtime/node-inventory.ts'
 import {
   type ProcessEntryResult,
   runProcessEntry,
@@ -134,6 +135,7 @@ export interface MainRuntimeHandle {
 }
 
 export interface MainRuntimeOptions {
+  readonly localNodeId?: string
   readonly configPath?: string
   readonly clusterSnapshotPath?: string
   readonly gateway?: {
@@ -254,6 +256,14 @@ export async function startMainRuntime(
     env.WINDOWS_USE_LAUNCH_TOKEN,
   )
   const mainCluster = await createMainCluster({
+    authorizeInventory: (request) =>
+      authorizeMainNodeInventory(request, launchCredential, clientAddresses),
+    localNodeInventory: () => mainLocalNodeInventory({
+      localNodeId: options.localNodeId ?? 'local',
+      implementationVersion: '0.1.0',
+      projects: projectRegistry,
+      shellAvailable: tools.has('exec'),
+    }),
     snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(
       options.clusterSnapshotPath ??
         resolve(workspace, '.cluster', 'registry.v1.json'),
@@ -870,7 +880,7 @@ export async function runBackendCli(
 ): Promise<void> {
   const { configPath } = parseBackendCliArguments(hooks.argv)
   const config = await loadConfig(configPath)
-  const runtime = await startMainRuntime(config, { configPath })
+  const runtime = await startMainRuntime(config, { configPath, localNodeId: 'local' })
   const detachSignals = attachBackendSignalHandlers(runtime, hooks, {
     includeSigterm: getOs() !== 'windows',
   })

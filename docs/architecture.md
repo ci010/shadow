@@ -40,7 +40,7 @@ current references from historical proposals.
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus optional Discord, Feishu, QQ, and WeChat/iLink implementations; credentials and platform setup remain external requirements |
 | Browser automation | Lazy Chrome DevTools MCP with per-session browser allocation; requires a usable browser/MCP process |
-| Web application | Vue chat/session/files UI, agent views, logs and traces; Workspaces/Nodes/Approvals product screens are still fixture-backed |
+| Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory from the backend; Approvals remains fixture-backed |
 | Electron | Main bootstrap, persisted launch profile, backend supervision, narrow preload API, renderer setup/recovery; Child/product integration remains incomplete |
 | Device execution | Pairing/challenge/WebSocket code and bounded remote UTF-8 workdir operations exist; full remote tools, artifacts, UI administration, and release hardening remain WIP |
 
@@ -567,10 +567,34 @@ history; browser deployment uses web history.
 
 Installation context and route policy distinguish Main/Child and UI scope.
 These client-side policies are presentation rules, not server authorization.
-`app/src/main.ts` still installs `createProductFixturesProvider()`;
-Workspaces/Nodes/Approvals consume fixtures. Approval decision buttons explicitly
-remain disabled until a local service is connected. Do not describe these
-screens as live device management merely because the routes render.
+The former Workspaces page is consolidated into each node's capability details;
+`/workspaces` redirects to `/nodes`. Nodes consumes a versioned, allowlisted
+read-only inventory, not product fixtures. The renderer validates responses,
+polls every five seconds while visible, aborts requests on navigation, and
+displays errors without stale online statuses or synthetic fallback devices.
+Unsupported fields (including remote filesystem paths) are omitted.
+Node/capability IDs are identifiers, not capability kinds.
+
+Main's `GET /nodes/v1` combines its configured identity, registered local shell
+and project workdirs, and approved/revoked Child records. Remote availability
+requires an authenticated connection and a capability advertisement from that
+connection, not a persisted `online` flag. Remote versions and last-seen times
+are not currently reported. The route requires the launch credential when
+configured; credentialless development permits only a verified loopback TCP
+peer with a loopback request hostname, under the gateway's origin policy.
+Pairing and administration authorization are unchanged.
+
+Child's authenticated `GET /local/v1/nodes` reports only its local executor
+capabilities and configured workdir paths. Its connected status describes the
+reachable local runtime, not connectivity to Main. Local workdir availability
+reflects the current directory state. These endpoints are read-only and do not
+expose device credentials, public keys, permission lists, or approval policies.
+
+`app/src/main.ts` still installs `createProductFixturesProvider()` for the
+separate Child Approvals screen. Its decision buttons remain disabled until a
+local service is connected. The shell no longer presents fixture-derived node
+names, latency, or pending-approval counts. A live inventory does not imply
+working pairing/revocation UI or complete multi-device support.
 
 ## Electron lifecycle
 

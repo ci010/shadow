@@ -1,0 +1,556 @@
+<template>
+  <section class="session-diagnosis" aria-label="Session diagnosis">
+    <div class="diagnosis-navigation">
+      <div class="diagnosis-views" role="tablist" aria-label="Diagnosis view">
+        <button v-for="view in views" :id="`diagnosis-${view.id}-tab`" :key="view.id" role="tab"
+          :aria-selected="section === view.id" :aria-controls="`diagnosis-${view.id}`"
+          :tabindex="section === view.id ? 0 : -1" :class="{ selected: section === view.id }"
+          @click="section = view.id" @keydown="navigateViews($event, view.id)">
+          {{ view.label }}<span v-if="view.id === 'tools'" class="view-count">{{ tools.length }}</span>
+        </button>
+      </div>
+      <span class="diagnosis-status" :class="{ working: working && !physicalId && !error }">
+        <i v-if="working && !physicalId && !error" aria-hidden="true" />
+        {{ error ? 'Update unavailable' : physicalId ? 'Historical segment' : working ? 'Recording' : 'Auto-refresh' }}
+      </span>
+    </div>
+
+    <div v-show="section === 'trace'" id="diagnosis-trace" class="diagnosis-scroll" role="tabpanel" aria-labelledby="diagnosis-trace-tab" tabindex="0">
+      <div v-if="!canReadTrace" class="diagnosis-empty">Session traces require audit:read access. System prompt and tools are available in the tabs above.</div>
+      <template v-else>
+        <div class="trace-heading">
+          <div><h2>Session trace</h2><p>{{ physicalId ? 'History and execution for this physical segment.' : 'History and execution for the current segment.' }}</p></div>
+          <button class="diagnosis-button" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing...' : 'Refresh' }}</button>
+        </div>
+        <div v-if="error" class="diagnosis-error" role="alert">{{ error }}<span v-if="events.length || spans.length"> Showing the last successful snapshot.</span></div>
+        <div class="trace-metrics">
+          <div title="Union of loaded execution spans, excluding gaps between turns. Not the age of the conversation."><strong>{{ formatTraceDuration(duration) }}</strong><span>Duration <small v-if="hasMore">(loaded spans)</small></span></div>
+          <div><strong>{{ turns }}</strong><span>User turns</span></div>
+          <div><strong>{{ modelSpans.length }}</strong><span>Model calls <small v-if="hasMore">(loaded)</small></span></div>
+          <div :title="hasUnlinkedToolSpans ? 'Legacy spans have no call ID, so this is a lower bound rather than a guessed pairing.' : 'Recorded tool calls'"><strong><template v-if="hasUnlinkedToolSpans">&ge; </template>{{ toolCallCount }}</strong><span>Tool calls<small v-if="hasUnlinkedToolSpans"> (legacy IDs missing)</small></span></div>
+        </div>
+        <div class="trace-search">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m12 12 5 5"/></svg>
+          <input v-model="query" type="search" aria-label="Search session trace" placeholder="Search messages, tools, arguments and spans..." />
+          <span v-if="query">{{ filteredEvents.length }} events</span>
+        </div>
+
+        <div class="trace-timeline" aria-label="Execution timeline">
+          <div class="timeline-controls">
+            <span>Execution overview</span>
+            <button class="diagnosis-button" aria-label="Zoom into trace" :disabled="timelineRange.end - timelineRange.start <= 1" @click="zoomTimeline(.5)">+</button>
+            <button class="diagnosis-button" aria-label="Zoom out of trace" :disabled="!zoomWindow" @click="zoomTimeline(2)">&minus;</button>
+            <button class="diagnosis-button" :disabled="!zoomWindow" @click="zoomWindow = undefined">Reset</button>
+          </div>
+          <div class="timeline-scale"><span>Elapsed</span><div><span>{{ formatTraceDuration(timelineRange.start - fullTimelineRange.start) }}</span><span>{{ formatTraceDuration(timelineRange.end - fullTimelineRange.start) }}</span></div></div>
+          <div v-for="lane in lanes" :key="lane.name" class="timeline-lane">
+            <span>{{ lane.name }}</span>
+            <div class="lane-track" :style="{ height: `${laneHeight(lane.items)}px` }">
+              <button v-for="item in visibleTimelineItems(lane.items)" :key="item.id" class="lane-bar"
+                :class="[lane.name.toLowerCase(), { running: item.live, failed: item.failed, dimmed: !item.matches, picked: selectedId === item.id }]"
+                :style="timelineStyle(item)" :title="item.label" :aria-label="item.label" @click="selectTimelineItem(item)" />
+            </div>
+          </div>
+          <label v-if="zoomWindow" class="timeline-pan">Pan timeline<input type="range" min="0" max="100" step="0.1" aria-label="Pan trace timeline" :value="panPosition" @input="panTimeline" /></label>
+          <p class="timeline-note">{{ spans.length ? 'Actual recorded timings; hover for duration, select for details. Gaps include time between requests.' : 'No execution timing is recorded for this segment. Message timestamps are not model or tool durations.' }}</p>
+        </div>
+
+        <div v-if="selectedSpan" class="span-inspector">
+          <div class="inspector-heading">
+            <span class="event-kind" :class="selectedSpan.name === 'agent.tool' ? 'TOOL' : 'ASSISTANT'">{{ selectedSpan.name === 'agent.tool' ? 'TOOL' : 'SPAN' }}</span>
+            <strong>{{ selectedSpan.attributes['tool.name'] || selectedSpan.name }}</strong>
+            <span>{{ formatTraceDuration(spanDuration(selectedSpan, now)) }}{{ selectedSpan.live ? ' elapsed' : '' }}</span>
+            <button class="diagnosis-button" aria-label="Close span details" @click="selectedId = ''">&times;</button>
+          </div>
+          <dl class="span-identity"><dt>Trace</dt><dd>{{ selectedSpan.traceId }}</dd><dt>Span</dt><dd>{{ selectedSpan.spanId }}</dd><dt>Started</dt><dd>{{ formatTime(selectedSpan.startTime) }}</dd><dt>Status</dt><dd>{{ selectedSpan.live ? 'Running' : selectedSpan.statusCode === 2 ? 'Error' : 'Completed' }} {{ selectedSpan.statusMessage }}</dd></dl>
+          <template v-if="selectedCall">
+            <h4>Arguments</h4><pre>{{ prettyArguments(selectedCall.arguments ?? '') }}</pre>
+            <h4>Result</h4><pre v-if="selectedCall.result !== undefined">{{ selectedCall.result }}</pre><p v-else class="missing-detail">No result recorded yet.</p>
+          </template>
+          <details open><summary>Attributes</summary><pre>{{ detailText(selectedSpan.attributes) }}</pre></details>
+          <details v-if="selectedSpan.events.length" open><summary>Events &amp; exceptions ({{ selectedSpan.events.length }})</summary><pre>{{ detailText(selectedSpan.events) }}</pre></details>
+        </div>
+
+        <div class="events-heading"><h3>Recorded events</h3><div class="event-fold-controls"><button class="diagnosis-button" @click="toggleAllTurns">{{ allTurnsCollapsed ? 'Expand turns' : 'Collapse turns' }}</button><button class="diagnosis-button" @click="toggleAllCalls">{{ allCallsExpanded ? 'Collapse calls' : 'Expand calls' }}</button></div><span>{{ events.length }} events</span></div>
+        <div class="event-filters" aria-label="Filter recorded events">
+          <button v-for="kind in kinds" :key="kind" :class="{ selected: filter === kind }" :aria-pressed="filter === kind" @click="filter = kind">{{ kind === 'ALL' ? 'All events' : kind.toLowerCase() }}</button>
+        </div>
+        <div v-if="loading && !events.length && !spans.length" class="diagnosis-empty" role="status">Loading this session's trace...</div>
+        <div v-else-if="!filteredEvents.length" class="diagnosis-empty">{{ query || filter !== 'ALL' ? 'No events match this filter.' : 'No messages recorded in this segment yet.' }}</div>
+        <div v-for="group in eventGroups" :key="group.turn" class="trace-turn">
+          <button class="turn-heading" :aria-expanded="!collapsedTurns.has(group.turn) || !!query || filter !== 'ALL'" @click="toggleTurn(group.turn)"><span>{{ collapsedTurns.has(group.turn) && !query && filter === 'ALL' ? '&#9656;' : '&#9662;' }} {{ group.turn ? `Turn ${group.turn}` : 'Session context' }}</span><span>{{ group.events.length }} events</span></button>
+          <div v-show="!collapsedTurns.has(group.turn) || query || filter !== 'ALL'">
+          <div v-for="event in group.events" :key="event.id" :ref="element => registerEvent(event.id, element)" class="trace-event" :class="{ expanded: expanded.has(event.id), highlighted: selectedId === event.id }">
+            <button class="trace-event-header" :aria-expanded="expanded.has(event.id)" @click="toggleEvent(event.id)">
+              <span class="event-chevron" aria-hidden="true">{{ expanded.has(event.id) ? '&#9662;' : '&#9656;' }}</span>
+              <span class="event-kind" :class="event.kind">{{ event.kind }}</span>
+              <strong v-if="event.kind === 'TOOL' || event.kind === 'CONTEXT'" class="event-name">{{ event.title }}</strong>
+              <span class="event-preview">{{ preview(event) }}</span>
+              <span v-if="event.kind === 'TOOL' && toolSpan(event.id)" class="event-duration">{{ formatTraceDuration(spanDuration(toolSpan(event.id)!, now)) }}</span>
+              <time class="event-time" :title="formatTime(event.timestamp)">{{ shortTime(event.timestamp) }}</time>
+            </button>
+            <div v-if="expanded.has(event.id)" class="trace-event-detail">
+              <div v-if="event.callId" class="event-call-id">Call ID: {{ event.callId }}<button v-if="toolSpan(event.id)" class="diagnosis-button" @click="selectSpan(toolSpan(event.id)!)">Inspect timing</button></div>
+              <template v-if="event.arguments !== undefined"><h4>Arguments</h4><pre>{{ prettyArguments(event.arguments) }}</pre><h4>Result</h4><pre v-if="event.result !== undefined">{{ event.result }}</pre><p v-else class="missing-detail">No result recorded yet.</p></template>
+              <pre v-else>{{ event.content }}</pre>
+              <details v-if="event.reasoning"><summary>Reasoning</summary><pre>{{ event.reasoning }}</pre></details>
+              <details v-if="event.usage"><summary>Token usage</summary><pre>{{ event.usage }}</pre></details>
+            </div>
+            </div>
+          </div>
+        </div>
+        <details class="all-spans">
+          <summary>All execution spans <span>{{ filteredSpans.length }}{{ query ? ' matching' : '' }}</span></summary>
+          <p class="timeline-note">Includes model, tool, context and nested execution spans where recorded. Selecting a span shows its attributes and errors.</p>
+          <button v-for="span in filteredSpans" :key="traceKey(span)" class="span-row" :class="{ failed: span.statusCode === 2 }" @click="selectSpan(span)">
+            <span class="span-dot" :class="{ running: span.live }" /><strong>{{ span.name }}</strong><span>{{ span.attributes['tool.name'] || span.attributes.model || '' }}</span><span>{{ formatTraceDuration(spanDuration(span, now)) }}</span>
+          </button>
+          <div v-if="!filteredSpans.length" class="diagnosis-empty">No recorded spans match.</div>
+        </details>
+        <button v-if="hasMore" class="diagnosis-button load-earlier" :disabled="loading" @click="loadEarlier">Load earlier execution spans</button>
+        <p class="trace-footnote">History comes from this segment's persisted messages. Tool results are paired by call ID. Missing timing or historical context is never estimated.</p>
+      </template>
+    </div>
+
+    <div v-show="section === 'prompt'" id="diagnosis-prompt" class="diagnosis-scroll context-view" role="tabpanel" aria-labelledby="diagnosis-prompt-tab" tabindex="0">
+      <p class="context-note">Current session system prompt, not a captured prompt for each historical model call.</p>
+      <SystemPromptCard :prompt="systemPrompt" empty-message="No system prompt loaded for this session." />
+      <SystemPromptCard v-if="compactionSummary" title="Compaction Summary" :prompt="compactionSummary" :show-token-estimate="true" />
+    </div>
+    <div v-show="section === 'tools'" id="diagnosis-tools" class="diagnosis-scroll context-view" role="tabpanel" aria-labelledby="diagnosis-tools-tab" tabindex="0">
+      <p class="context-note">Currently available tool definitions. Actual calls, arguments and results are in Trace.</p>
+      <ToolsCard :tools="tools" />
+    </div>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed, nextTick, onUnmounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
+import SystemPromptCard from './SystemPromptCard.vue'
+import ToolsCard, { type ToolDef } from './ToolsCard.vue'
+import {
+  correlateToolSpans, detailText, eventMatches, fetchDiagnosisJson, fitTraceWindow, formatTraceDuration, mergeTraceSpans, parseDiagnosisHistory,
+  parseTracePage, spanDuration, spanMatches, stackTimelineItems, traceDuration, traceKey,
+  type DiagnosisEvent, type SessionTraceSpan, type TracePage, type TraceWindow,
+} from '../session-diagnosis.ts'
+
+const props = defineProps<{
+  apiBase: string
+  sessionId: string
+  physicalId: string | null
+  active: boolean
+  canReadTrace: boolean
+  working: boolean
+  systemPrompt: string
+  compactionSummary: string
+  tools: ToolDef[]
+}>()
+const views = [{ id: 'trace', label: 'Trace' }, { id: 'prompt', label: 'System prompt' }, { id: 'tools', label: 'Tools' }] as const
+const section = ref<typeof views[number]['id']>('trace')
+const query = ref('')
+const kinds = ['ALL', 'USER', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
+const filter = ref('ALL')
+const events = ref<DiagnosisEvent[]>([])
+const spans = ref<SessionTraceSpan[]>([])
+const loading = ref(false)
+const error = ref('')
+const now = ref(Date.now())
+const selectedId = ref('')
+const expanded = reactive(new Set<string>())
+const collapsedTurns = reactive(new Set<number>())
+const zoomWindow = ref<TraceWindow>()
+const eventElements = new Map<string, Element>()
+let currentPhysicalId: string | undefined
+let beforeId: number | undefined
+const hasMore = ref(false)
+let request: AbortController | undefined
+let timer: ReturnType<typeof setInterval> | undefined
+let clock: ReturnType<typeof setInterval> | undefined
+let loaded = false
+
+const duration = computed(() => traceDuration(spans.value.filter(span => ['session.processMessage', 'agent.loop', 'agent.chat', 'agent.tool'].includes(span.name)), now.value))
+const turns = computed(() => events.value.reduce((max, event) => Math.max(max, event.turn), 0))
+const modelSpans = computed(() => spans.value.filter(span => span.name === 'agent.chat'))
+const toolSpans = computed(() => spans.value.filter(span => span.name === 'agent.tool'))
+const hasUnlinkedToolSpans = computed(() => toolSpans.value.some(span => !span.attributes['tool.call_id']))
+const toolCallCount = computed(() => {
+  const historyCounts = new Map<string, number>()
+  const spanCounts = new Map<string, number>()
+  let orphanCount = 0
+  for (const event of events.value.filter(event => event.kind === 'TOOL')) {
+    if (event.callId) historyCounts.set(event.callId, (historyCounts.get(event.callId) ?? 0) + 1)
+    else orphanCount++
+  }
+  for (const span of toolSpans.value) {
+    const callId = span.attributes['tool.call_id']
+    // Legacy spans without call IDs cannot safely be deduplicated against history.
+    if (callId) spanCounts.set(callId, (spanCounts.get(callId) ?? 0) + 1)
+  }
+  const knownCount = orphanCount + [...new Set([...historyCounts.keys(), ...spanCounts.keys()])]
+    .reduce((sum, id) => sum + Math.max(historyCounts.get(id) ?? 0, spanCounts.get(id) ?? 0), 0)
+  return Math.max(knownCount, toolSpans.value.length)
+})
+const filteredEvents = computed(() => events.value.filter(event => eventMatches(event, query.value, filter.value)))
+const filteredSpans = computed(() => spans.value.filter(span => spanMatches(span, query.value)))
+const eventGroups = computed(() => {
+  const groups = new Map<number, DiagnosisEvent[]>()
+  for (const event of filteredEvents.value) {
+    const group = groups.get(event.turn) ?? []
+    group.push(event)
+    groups.set(event.turn, group)
+  }
+  return [...groups].map(([turn, events]) => ({ turn, events }))
+})
+const allTurnsCollapsed = computed(() => eventGroups.value.length > 0 && eventGroups.value.every(group => collapsedTurns.has(group.turn)))
+const allCallsExpanded = computed(() => {
+  const calls = events.value.filter(event => event.kind === 'TOOL')
+  return calls.length > 0 && calls.every(event => expanded.has(event.id))
+})
+function toggleTurn(turn: number): void {
+  if (collapsedTurns.has(turn)) collapsedTurns.delete(turn)
+  else collapsedTurns.add(turn)
+}
+function toggleAllTurns(): void {
+  if (allTurnsCollapsed.value) collapsedTurns.clear()
+  else for (const group of eventGroups.value) collapsedTurns.add(group.turn)
+}
+function toggleAllCalls(): void {
+  const collapse = allCallsExpanded.value
+  for (const event of events.value.filter(event => event.kind === 'TOOL')) {
+    if (collapse) expanded.delete(event.id)
+    else expanded.add(event.id)
+  }
+}
+const selectedSpan = computed(() => spans.value.find(span => traceKey(span) === selectedId.value))
+const selectedCall = computed(() => {
+  return selectedSpan.value ? events.value.find(event => {
+    const span = toolSpan(event.id)
+    return span && traceKey(span) === selectedId.value
+  }) : undefined
+})
+const toolSpanById = computed(() => correlateToolSpans(events.value, toolSpans.value))
+function toolSpan(eventId: string): SessionTraceSpan | undefined {
+  return toolSpanById.value.get(eventId)
+}
+
+interface TimelineItem { id: string; start: number; end: number; label: string; live: boolean; failed: boolean; matches: boolean }
+const lanes = computed(() => {
+  const spanItems = (items: SessionTraceSpan[]): TimelineItem[] => items.map(span => ({
+    id: traceKey(span), start: span.startTime,
+    end: span.live ? Math.max(now.value, span.startTime) : span.endTime ?? span.startTime,
+    label: `${span.attributes['tool.name'] || span.name} | ${formatTime(span.startTime)} | ${formatTraceDuration(spanDuration(span, now.value))}${span.live ? ' elapsed (running)' : ''}`,
+    live: span.live, failed: span.statusCode === 2, matches: spanMatches(span, query.value),
+  }))
+  return [
+    { name: 'Input', items: events.value.flatMap(event => event.timestamp !== undefined && ['USER', 'CONTEXT', 'SYSTEM'].includes(event.kind)
+      ? [{ id: event.id, start: event.timestamp, end: event.timestamp, label: `${event.kind} | ${formatTime(event.timestamp)} | ${preview(event)}`, live: false, failed: false, matches: eventMatches(event, query.value) }] : []) },
+    { name: 'Model', items: spanItems(modelSpans.value) },
+    { name: 'Tools', items: spanItems(toolSpans.value) },
+  ]
+})
+const fullTimelineRange = computed(() => {
+  const items = lanes.value.flatMap(lane => lane.items)
+  if (!items.length) return { start: 0, end: 0 }
+  return { start: Math.min(...items.map(item => item.start)), end: Math.max(...items.map(item => item.end)) }
+})
+const timelineRange = computed(() => zoomWindow.value ? fitTraceWindow(zoomWindow.value, fullTimelineRange.value) : fullTimelineRange.value)
+function visibleTimelineItems(items: TimelineItem[]) {
+  return stackTimelineItems(items.filter(item => item.end >= timelineRange.value.start && item.start <= timelineRange.value.end))
+}
+function laneHeight(items: TimelineItem[]): number {
+  return Math.max(1, ...visibleTimelineItems(items).map(item => item.track + 1)) * 22
+}
+function timelineStyle(item: TimelineItem & { track: number }): Record<string, string> {
+  const range = Math.max(1, timelineRange.value.end - timelineRange.value.start)
+  const left = Math.min(99.5, Math.max(0, (item.start - timelineRange.value.start) / range * 100))
+  const width = (Math.min(item.end, timelineRange.value.end) - Math.max(item.start, timelineRange.value.start)) / range * 100
+  return { left: `${left}%`, width: `${Math.min(100 - left, Math.max(.5, width))}%`, top: `${item.track * 22 + 3}px` }
+}
+function zoomTimeline(factor: number): void {
+  const { start, end } = timelineRange.value
+  const center = (start + end) / 2
+  const half = Math.max(1, (end - start) * factor) / 2
+  const next = fitTraceWindow({ start: center - half, end: center + half }, fullTimelineRange.value)
+  zoomWindow.value = next.end - next.start >= fullTimelineRange.value.end - fullTimelineRange.value.start ? undefined : next
+}
+const panPosition = computed(() => {
+  const room = fullTimelineRange.value.end - fullTimelineRange.value.start - (timelineRange.value.end - timelineRange.value.start)
+  return room > 0 ? (timelineRange.value.start - fullTimelineRange.value.start) / room * 100 : 0
+})
+function panTimeline(event: Event): void {
+  if (!(event.target instanceof HTMLInputElement)) return
+  const duration = timelineRange.value.end - timelineRange.value.start
+  const room = fullTimelineRange.value.end - fullTimelineRange.value.start - duration
+  const start = fullTimelineRange.value.start + room * event.target.valueAsNumber / 100
+  zoomWindow.value = fitTraceWindow({ start, end: start + duration }, fullTimelineRange.value)
+}
+function formatTime(value?: number): string {
+  return value === undefined ? 'Time unavailable' : new Date(value).toLocaleString([], { hour12: false })
+}
+function shortTime(value?: number): string {
+  return value === undefined ? 'No timestamp' : new Date(value).toLocaleTimeString([], { hour12: false })
+}
+function preview(event: DiagnosisEvent): string {
+  return (event.content || event.reasoning || 'Empty message').replace(/\s+/g, ' ').slice(0, 180)
+}
+function prettyArguments(value: string): string {
+  try { return detailText(JSON.parse(value)) } catch { return value }
+}
+function registerEvent(id: string, element: Element | ComponentPublicInstance | null): void {
+  if (element instanceof Element) eventElements.set(id, element)
+  else eventElements.delete(id)
+}
+function toggleEvent(id: string): void {
+  if (expanded.has(id)) expanded.delete(id)
+  else expanded.add(id)
+}
+async function selectTimelineItem(item: TimelineItem): Promise<void> {
+  selectedId.value = item.id
+  if (!events.value.some(event => event.id === item.id)) return
+  query.value = ''
+  filter.value = 'ALL'
+  expanded.add(item.id)
+  const event = events.value.find(event => event.id === item.id)
+  if (event) collapsedTurns.delete(event.turn)
+  await nextTick()
+  eventElements.get(item.id)?.scrollIntoView({ block: 'center', behavior: 'instant' })
+}
+async function selectSpan(span: SessionTraceSpan): Promise<void> {
+  selectedId.value = traceKey(span)
+  await nextTick()
+  document.getElementById('diagnosis-trace')?.querySelector('.span-inspector')?.scrollIntoView({ block: 'nearest' })
+}
+function navigateViews(event: KeyboardEvent, view: typeof views[number]['id']): void {
+  const index = views.findIndex(item => item.id === view)
+  const next = event.key === 'ArrowRight' ? (index + 1) % views.length : event.key === 'ArrowLeft' ? (index + views.length - 1) % views.length
+    : event.key === 'Home' ? 0 : event.key === 'End' ? views.length - 1 : undefined
+  if (next === undefined) return
+  event.preventDefault()
+  section.value = views[next].id
+  document.getElementById(`diagnosis-${section.value}-tab`)?.focus()
+}
+function url(path: string, params: Record<string, string> = {}): URL {
+  const target = new URL(path, props.apiBase)
+  for (const [key, value] of Object.entries(params)) target.searchParams.set(key, value)
+  return target
+}
+async function tracePage(signal: AbortSignal, cursor?: number): Promise<TracePage> {
+  const params: Record<string, string> = { sessionId: props.sessionId, limit: '200' }
+  if (currentPhysicalId) params.physicalSessionId = currentPhysicalId
+  if (cursor !== undefined) params.beforeId = String(cursor)
+  return parseTracePage(await fetchDiagnosisJson(url('/v1/query/session-spans', params), signal), props.sessionId, currentPhysicalId)
+}
+async function refresh(): Promise<void> {
+  if (request || !props.active || !props.canReadTrace || !props.sessionId) return
+  const controller = new AbortController()
+  request = controller
+  loading.value = true
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)])
+  try {
+    const history = parseDiagnosisHistory(await fetchDiagnosisJson(url(`/api/sessions/${encodeURIComponent(props.physicalId || props.sessionId)}`, { shallow: 'true' }), signal))
+    signal.throwIfAborted()
+    const physical = props.physicalId || history.physicalId
+    if (!physical) throw new Error('The current physical segment is unavailable; trace data was not fetched.')
+    if (currentPhysicalId !== physical) {
+      spans.value = []
+      loaded = false
+      currentPhysicalId = physical
+      selectedId.value = ''
+      zoomWindow.value = undefined
+      collapsedTurns.clear()
+      expanded.clear()
+    }
+    events.value = history.events
+    let page = await tracePage(signal)
+    const incoming = [...page.entries]
+    const known = new Set(spans.value.filter(span => !span.live).map(traceKey))
+    // Catch up after a hidden tab or a slow request, without leaving a gap in loaded spans.
+    while (loaded && page.hasMore && !page.entries.some(span => known.has(traceKey(span)))) {
+      const previous = page.nextBeforeId
+      page = await tracePage(signal, previous)
+      if (page.hasMore && (page.nextBeforeId === undefined || page.nextBeforeId >= previous!)) throw new Error('Trace pagination did not advance.')
+      incoming.push(...page.entries)
+    }
+    signal.throwIfAborted()
+    spans.value = mergeTraceSpans(spans.value, incoming, true)
+    if (!loaded || !page.hasMore) {
+      hasMore.value = page.hasMore
+      beforeId = page.nextBeforeId
+    }
+    loaded = true
+    now.value = Date.now()
+    error.value = ''
+  } catch (cause) {
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (request === controller) { request = undefined; loading.value = false }
+  }
+}
+async function loadEarlier(): Promise<void> {
+  if (request || !hasMore.value || beforeId === undefined) return
+  const controller = new AbortController()
+  request = controller
+  loading.value = true
+  try {
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)])
+    const page = await tracePage(signal, beforeId)
+    signal.throwIfAborted()
+    if (page.hasMore && page.nextBeforeId! >= beforeId) throw new Error('Trace pagination did not advance.')
+    spans.value = mergeTraceSpans(spans.value, page.entries)
+    hasMore.value = page.hasMore
+    beforeId = page.nextBeforeId
+    error.value = ''
+  } catch (cause) {
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (request === controller) { request = undefined; loading.value = false }
+  }
+}
+function stop(): void {
+  request?.abort()
+  request = undefined
+  loading.value = false
+  clearInterval(timer)
+  clearInterval(clock)
+}
+watch(() => [props.sessionId, props.physicalId, props.apiBase], () => {
+  stop()
+  events.value = []
+  spans.value = []
+  currentPhysicalId = undefined
+  beforeId = undefined
+  hasMore.value = false
+  loaded = false
+  error.value = ''
+  query.value = ''
+  filter.value = 'ALL'
+  selectedId.value = ''
+  expanded.clear()
+  collapsedTurns.clear()
+  zoomWindow.value = undefined
+}, { flush: 'sync' })
+watch(() => [props.active, props.sessionId, props.physicalId, props.apiBase, props.canReadTrace], () => {
+  stop()
+  if (!props.active || !props.canReadTrace || !props.sessionId) return
+  void refresh()
+  timer = setInterval(() => { void refresh() }, 2000)
+  clock = setInterval(() => { if (!error.value) now.value = Date.now() }, 250)
+}, { immediate: true })
+onUnmounted(stop)
+</script>
+
+<style scoped>
+.session-diagnosis { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; color: var(--c-text); }
+.diagnosis-navigation { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--c-border); }
+.diagnosis-views { display: flex; gap: 4px; min-width: 0; }
+.diagnosis-views button, .event-filters button { display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); padding: 6px 10px; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.diagnosis-views button.selected, .event-filters button.selected { background: var(--c-bg-muted); color: var(--c-text); }
+.view-count { font-size: 10px; color: var(--c-text-muted); }
+.diagnosis-status { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--c-text-secondary); font-size: 11px; }
+.diagnosis-status.working { color: var(--c-blue); }
+.diagnosis-status i, .span-dot { width: 6px; height: 6px; border-radius: var(--radius-circle); background: var(--c-blue); }
+.diagnosis-status i, .span-dot.running { animation: trace-pulse 1.6s ease-in-out infinite; }
+.diagnosis-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 24px; overscroll-behavior: contain; }
+.trace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h2, h3, h4, p { margin: 0; }
+h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; }
+.trace-heading p { color: var(--c-text-secondary); font-size: 12px; margin-top: 6px; }
+.diagnosis-button { border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 5px 10px; background: var(--c-bg-card); color: var(--c-text-secondary); font: inherit; font-size: 11px; cursor: pointer; }
+.diagnosis-button:hover { color: var(--c-text); background: var(--c-bg-soft); }
+.diagnosis-button:disabled { opacity: .5; cursor: wait; }
+.trace-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin: 24px 0; }
+.trace-metrics > div { display: flex; flex-direction: column; gap: 6px; border-left: 2px solid var(--c-border); padding-left: 14px; min-width: 0; }
+.trace-metrics strong { font-size: clamp(17px, 2vw, 26px); font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.trace-metrics span { color: var(--c-text-secondary); font-size: 11px; }
+.trace-metrics small { font-size: 10px; }
+.trace-search { display: flex; align-items: center; gap: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); padding: 9px 12px; }
+.trace-search:focus-within { border-color: var(--c-blue); }
+.trace-search svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--c-text-secondary); }
+.trace-search input { min-width: 0; flex: 1; background: transparent; border: 0; outline: 0; color: var(--c-text); font: inherit; font-size: 12px; }
+.trace-search > span { font-size: 10px; color: var(--c-text-secondary); white-space: nowrap; }
+.trace-timeline { margin: 20px 0 26px; padding: 14px 16px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--radius-surface); }
+.timeline-controls { display: flex; align-items: center; gap: 5px; margin-bottom: 14px; }
+.timeline-controls > span { margin-right: auto; color: var(--c-text-secondary); font-size: 11px; }
+.timeline-controls button { padding: 3px 8px; }
+.timeline-pan { display: flex; align-items: center; gap: 12px; margin-top: 12px; color: var(--c-text-secondary); font-size: 10px; }
+.timeline-pan input { flex: 1; min-width: 0; accent-color: var(--c-blue); }
+.timeline-scale, .timeline-lane { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 14px; align-items: center; font-size: 11px; color: var(--c-text-secondary); }
+.timeline-scale { margin-bottom: 10px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.timeline-scale > div { display: flex; justify-content: space-between; }
+.timeline-lane { min-height: 33px; }
+.lane-track { position: relative; height: 22px; background: repeating-linear-gradient(90deg, var(--c-border) 0 1px, transparent 1px 25%); border-radius: var(--radius-sm); }
+.lane-bar { position: absolute; top: 3px; height: 16px; min-width: 3px; padding: 0; border: 0; border-radius: var(--radius-sm); background: #6e8de0; cursor: pointer; }
+.lane-bar.input { background: #848b96; }
+.lane-bar.tools { background: #bb944f; }
+.lane-bar.failed { background: var(--c-error, #db6565); }
+.lane-bar:hover, .lane-bar.picked { outline: 2px solid var(--c-text); outline-offset: 1px; z-index: 1; }
+.lane-bar.dimmed { opacity: .2; }
+.lane-bar.running { animation: trace-pulse 1.6s ease-in-out infinite; }
+.timeline-note, .trace-footnote { color: var(--c-text-secondary); font-size: 11px; line-height: 1.6; margin-top: 12px; }
+.events-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+h3 { font-size: 14px; font-weight: 550; }
+.events-heading > span { font-size: 11px; color: var(--c-text-secondary); }
+.event-fold-controls { display: flex; gap: 6px; margin-left: auto; }
+.event-filters { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 14px; }
+.event-filters button { padding: 4px 8px; font-size: 11px; text-transform: capitalize; }
+.trace-turn { margin-bottom: 16px; }
+.turn-heading { display: flex; justify-content: space-between; width: 100%; background: transparent; border: 0; border-bottom: 1px solid var(--c-border); padding: 9px 2px; color: var(--c-text-secondary); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; cursor: pointer; }
+.turn-heading > span:last-child { font-size: 9px; opacity: .7; }
+.trace-event { border-bottom: 1px solid var(--c-border); }
+.trace-event.highlighted { outline: 1px solid var(--c-blue); outline-offset: -1px; }
+.trace-event-header { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 6px; text-align: left; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; cursor: pointer; }
+.trace-event-header:hover, .trace-event.expanded { background: var(--c-bg-soft); }
+.event-chevron { font-size: 12px; width: 8px; flex-shrink: 0; }
+.event-kind { flex: 0 0 auto; display: inline-block; color: #7d91b5; background: color-mix(in srgb, #7d91b5 12%, transparent); font: 600 9px ui-monospace, monospace; letter-spacing: .045em; padding: 4px 6px; border-radius: var(--radius-sm); }
+.event-kind.USER { color: #8a84c9; background: color-mix(in srgb, #8a84c9 12%, transparent); }
+.event-kind.ASSISTANT { color: #5e96c5; background: color-mix(in srgb, #5e96c5 12%, transparent); }
+.event-kind.TOOL { color: #b99552; background: color-mix(in srgb, #b99552 12%, transparent); }
+.event-kind.CONTEXT { color: #5eaa93; background: color-mix(in srgb, #5eaa93 12%, transparent); }
+.event-name { max-width: 25%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 11px; font-weight: 500; }
+.event-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.event-time, .event-duration { font-size: 10px; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--c-text-secondary); }
+.trace-event-detail { padding: 8px 18px 16px 30px; }
+pre { margin: 8px 0 12px; padding: 12px; max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text-secondary); font: 11px/1.65 ui-monospace, monospace; }
+h4, summary { font-size: 11px; font-weight: 500; color: var(--c-text-secondary); }
+summary { cursor: pointer; padding: 8px 0; }
+.event-call-id { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font: 10px ui-monospace, monospace; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.missing-detail { margin: 8px 0; color: var(--c-text-secondary); font-size: 12px; }
+.span-inspector { border: 1px solid color-mix(in srgb, var(--c-blue) 30%, var(--c-border)); border-radius: var(--radius-surface); padding: 14px; margin-bottom: 24px; }
+.inspector-heading { display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 12px; }
+.inspector-heading strong { flex: 1; overflow-wrap: anywhere; font-weight: 500; }
+.inspector-heading > span:not(.event-kind) { font-size: 11px; white-space: nowrap; color: var(--c-text-secondary); }
+.span-identity { display: grid; grid-template-columns: 55px minmax(0, 1fr); gap: 6px; color: var(--c-text-secondary); font: 10px/1.6 ui-monospace, monospace; margin: 14px 0; }
+.span-identity dd { margin: 0; overflow-wrap: anywhere; }
+.span-identity dt { opacity: .7; }
+.all-spans { margin-top: 22px; border-top: 1px solid var(--c-border); }
+.all-spans > summary { font-size: 12px; padding: 14px 0; }
+.all-spans > summary span { margin-left: 6px; color: var(--c-text-muted); font-size: 10px; }
+.span-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 6px; text-align: left; border: 0; border-bottom: 1px solid var(--c-border); background: transparent; color: var(--c-text-secondary); font: 11px ui-monospace, monospace; cursor: pointer; }
+.span-row:hover { background: var(--c-bg-soft); }
+.span-row strong { font-weight: 500; }
+.span-row > span:nth-last-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.span-row > span:last-child { margin-left: auto; flex-shrink: 0; }
+.span-row.failed .span-dot { background: var(--c-error, #db6565); }
+.span-dot { flex-shrink: 0; }
+.load-earlier { margin: 16px 0; }
+.diagnosis-empty { padding: 28px 12px; text-align: center; color: var(--c-text-secondary); font-size: 12px; line-height: 1.7; }
+.diagnosis-error { border: 1px solid var(--c-error, #db6565); border-radius: var(--radius-surface); color: var(--c-error, #db6565); padding: 10px 12px; margin-top: 16px; font-size: 12px; line-height: 1.6; }
+.context-note { color: var(--c-text-secondary); font-size: 12px; line-height: 1.6; margin-bottom: 20px; }
+.context-view > :deep(div) { margin-bottom: 16px; }
+.context-view :deep(.system-prompt-content) { font-size: 13px; }
+button:focus-visible, [tabindex="0"]:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+@keyframes trace-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .diagnosis-status i, .span-dot.running, .lane-bar.running { animation: none; } }
+@media (max-width: 700px) {
+  .diagnosis-navigation { padding: 10px 12px; gap: 5px; flex-wrap: wrap; }
+  .diagnosis-scroll { padding: 18px 12px; }
+  .trace-metrics { gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .event-time { display: none; }
+  .trace-event-header { gap: 6px; }
+  .event-kind { font-size: 8px; }
+  .trace-event-detail { padding-left: 12px; padding-right: 12px; }
+  .trace-timeline { padding: 12px; }
+  .timeline-scale, .timeline-lane { grid-template-columns: 40px minmax(0, 1fr); gap: 10px; }
+  .events-heading { flex-wrap: wrap; }
+}
+</style>

@@ -4,17 +4,20 @@ import {
   type GatewayServer,
   registerGatewayRoutes,
   serveGateway,
+  validateLaunchCredential,
 } from '../gateway/server.ts'
 import { localApprovalApiPlugin } from '../execution/local-approval-api.ts'
 import type { LocalApprovalService } from '../execution/local-approval.ts'
 import { LocalRuntimeControl } from './local-control.ts'
 import type { ChildRuntimeService } from './child-runtime.ts'
+import { nodeInventoryApiPlugin, type NodeInventoryEntry } from '../cluster/node-inventory.ts'
 
 export interface ChildLocalControlOptions {
   readonly port: number
   readonly launchCredential: string
   readonly approvalService: LocalApprovalService
   readonly requestShutdown: () => void | Promise<void>
+  readonly nodeInventory?: () => NodeInventoryEntry | Promise<NodeInventoryEntry>
 }
 
 export class ChildLocalControlService implements ChildRuntimeService {
@@ -47,6 +50,17 @@ export class ChildLocalControlService implements ChildRuntimeService {
     registerGatewayRoutes(app, [
       this.#control.plugin(),
       localApprovalApiPlugin({ service: this.options.approvalService }),
+      ...(this.options.nodeInventory ? [nodeInventoryApiPlugin({
+        path: '/local/v1/nodes',
+        authorize: (request) => validateLaunchCredential(
+          request.headers.get('Authorization') ?? undefined,
+          this.options.launchCredential,
+        ),
+        inventory: async () => ({
+          version: 1,
+          nodes: [await this.options.nodeInventory!()],
+        }),
+      })] : []),
     ], { launchCredential: this.options.launchCredential })
     this.#server = serveGateway(app, {
       host: '127.0.0.1',

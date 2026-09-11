@@ -4,7 +4,7 @@
       v-for="session in visibleSessions(sessions, collapsed)"
       :key="session.sessionId"
       class="project-session-row"
-      :class="{ active: activeSessionId === session.sessionId }"
+      :class="{ active: activeSessionId === session.sessionId, working: isWorkingStage(stages[session.sessionId]) }"
       :style="{ paddingLeft: `${Math.min(session.depth, 6) * 12 + 8}px` }"
     >
       <button
@@ -25,8 +25,7 @@
         <span class="session-label">{{ session.label }}</span>
         <span v-if="session.description" class="session-description">{{ session.description }}</span>
       </button>
-      <span v-if="stages[session.sessionId] && stages[session.sessionId] !== 'inactive'" class="session-state" :title="stages[session.sessionId]">{{ stages[session.sessionId] }}</span>
-      <span v-else-if="session.isCurrent" class="session-state">live</span>
+      <SessionActivity :stage="stages[session.sessionId]" compact />
       <button class="session-delete" :aria-label="`Delete conversation ${session.label}`" title="Delete conversation" @click="$emit('delete', session.sessionId)">×</button>
     </li>
   </ul>
@@ -35,6 +34,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { visibleSessions, type SidebarSession } from '../projects-sidebar.ts'
+import SessionActivity from './SessionActivity.vue'
+import { isWorkingStage } from '../session-activity.ts'
 const props = defineProps<{
   sessions: SidebarSession[]
   activeSessionId: string
@@ -47,21 +48,21 @@ const parents = computed(() => new Set(props.sessions.map(session => session.par
 
 <style scoped>
 .project-session-list { list-style: none; padding: 0; margin: 3px 0 8px; }
-.project-session-row { display: flex; align-items: center; gap: 3px; min-height: 36px; min-width: 0; padding-right: 4px; border-radius: 5px; }
+.project-session-row { display: flex; align-items: center; gap: 3px; min-height: 36px; min-width: 0; padding-right: 4px; border-radius: var(--radius-control); }
 .project-session-row:hover { background: var(--c-bg-muted); }
 .project-session-row.active { background: var(--c-selection-bg); }
 .session-select { display: flex; flex: 1; flex-direction: column; justify-content: center; min-width: 0; min-height: 36px; padding: 5px 1px; text-align: left; border: 0; color: var(--c-text-secondary); background: transparent; }
 .active .session-select { color: var(--c-text); font-weight: 500; }
+.working .session-select { color: var(--c-text); }
 .session-label, .session-description { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-label { font-size: 13px; }
 .session-description { margin-top: 2px; font-size: 11px; color: var(--c-text-secondary); font-weight: 400; }
 .lineage-toggle, .lineage-spacer { display: grid; place-items: center; flex: 0 0 18px; width: 18px; height: 28px; color: var(--c-text-secondary); font-size: 15px; }
-.lineage-toggle, .session-delete { border: 0; border-radius: 3px; background: transparent; }
+.lineage-toggle, .session-delete { border: 0; border-radius: var(--radius-sm); background: transparent; }
 .session-delete { flex: 0 0 24px; width: 24px; height: 28px; font-size: 18px; color: var(--c-text-secondary); opacity: 0; }
 .project-session-row:hover .session-delete, .project-session-row:focus-within .session-delete { opacity: 1; }
 .session-delete:hover { background: var(--c-error-bg); color: var(--c-error); }
 .lineage-toggle:hover { background: var(--c-bg-soft); color: var(--c-text); }
-.session-state { flex-shrink: 0; color: var(--c-text-secondary); font-size: 10px; }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 @media (hover: none), (max-width: 700px) { .session-delete { opacity: 1; } }
 </style>

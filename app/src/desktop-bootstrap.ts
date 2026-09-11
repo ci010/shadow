@@ -61,6 +61,10 @@ export interface ShadowDesktopApi {
 	readonly projects?: {
 		selectDirectory(): Promise<string | null>
 	}
+	readonly chatContext?: {
+		readonly selectFiles: () => Promise<string[]>
+		readonly selectFolders: () => Promise<string[]>
+	}
 	readonly bootstrap: {
 		load(): Promise<WizardState>
 		dispatch(event: RendererWizardEvent): Promise<WizardState>

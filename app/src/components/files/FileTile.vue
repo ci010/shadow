@@ -96,7 +96,7 @@ watch(fullPath, loadTextPreview)
   width: 100%;
   height: 100%;
   border: 1px solid var(--c-border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   background: var(--c-bg-card);
   overflow: hidden;
   cursor: pointer;
@@ -156,7 +156,7 @@ watch(fullPath, loadTextPreview)
   font-size: 0.7rem;
   color: #fff;
   background: rgba(0, 0, 0, 0.55);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   width: 1.3rem;
   height: 1.3rem;
   display: flex;

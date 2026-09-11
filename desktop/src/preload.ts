@@ -8,10 +8,12 @@ import {
 import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import { createWindowControlsApi } from './window-controls-preload.js'
 import { createProjectDirectoriesApi } from './project-directories.js'
+import { createChatContextApi } from './chat-context.js'
 
 const api: ShadowDesktopApi = Object.freeze({
   windowControls: createWindowControlsApi(ipcRenderer),
   projects: createProjectDirectoriesApi(ipcRenderer),
+  chatContext: createChatContextApi(ipcRenderer),
   bootstrap: Object.freeze({
     load: () =>
       ipcRenderer.invoke(IPC_CHANNELS.loadWizard) as Promise<WizardState>,

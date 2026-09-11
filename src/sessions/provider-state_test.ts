@@ -200,11 +200,14 @@ for (const [name, createStore] of stores) {
       deepEqual(requests[1].at(-2)?.provider_state, toolState)
       deepEqual(requests[1].at(-2)?.tool_calls, [toolCall])
       equal(requests[1].at(-2)?.reasoning_text, 'Display-only narration')
+      const toolTimestamp = requests[1].at(-1)?.timestamp
+      assert(toolTimestamp && Number.isFinite(Date.parse(toolTimestamp)))
       deepEqual(requests[1].at(-1), {
         role: 'tool',
         content: 'tool result',
         tool_call_id: toolCall.id,
         name: toolCall.function.name,
+        timestamp: toolTimestamp,
       })
       deepEqual(session.history.at(-1)?.provider_state, finalState)
       equal(session.physicalSessionId, physicalId)
@@ -215,6 +218,10 @@ for (const [name, createStore] of stores) {
       deepEqual(await store.getState(state.sessionId), state)
       const records = await Array.fromAsync(store.readSessionLog(physicalId))
       equal(records.length, 6)
+      for (let index = 2; index < records.length; index++) {
+        equal(session.history[index].timestamp, records[index].timestamp)
+        assert(Number.isFinite(Date.parse(session.history[index].timestamp!)))
+      }
       deepEqual(records[3].provider_state, toolState)
       deepEqual(records[3].tool_calls, [toolCall])
       deepEqual(records[3].usage, usage)
@@ -231,6 +238,9 @@ for (const [name, createStore] of stores) {
       for (const query of [undefined, { shallow: true }, { physicalId }]) {
         const { messages } = await manager.getHistory(state.sessionId, query)
         equal(messages.length, 5)
+        for (let index = 0; index < messages.length; index++) {
+          equal(messages[index].timestamp, records[index + 1].timestamp)
+        }
         equal(messages[0].provider_state, undefined)
         deepEqual(messages[2].provider_state, toolState)
         deepEqual(messages[2].tool_calls, [toolCall])

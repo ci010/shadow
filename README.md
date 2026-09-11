@@ -135,18 +135,102 @@ maximize/restore, and close controls; it has no native application menu.
 Navigation (including Providers) and window controls share one Shadow header.
 Projects dock to the left edge; the session list and chat history scroll
 independently while the composer stays visible. Narrow browser windows expose
-Projects through a toggle. The model selector lives in the chat composer's
-toolbar and retains the existing global model-selection behavior; it is also
+Projects through a toggle. New conversations start as a centered, unsent draft.
+Project drafts prominently show the folder name and path above the input;
+scratch drafts explicitly say that no project folder is selected.
+No session ID, history request, or sidebar conversation is created until the
+first message is sent. Background clicks do not focus the composer. An
+unmodified letter (a-z) or digit (1-9) focuses it and inserts that first
+character, except while editing another field, using an open menu/dialog,
+composing with an IME, viewing Diagnosis, or viewing a read-only/historical conversation.
+The model selector is a compact composer button with a searchable popover,
+provider labels, and the current selection marked. It retains the existing
+global model-selection behavior; it is also
 available on the Providers tab from other views. Returning from Providers
 restores the existing chat and unsent draft; leaving settings cancels any pending
 device login. First-run credential checks still gate unavailable chat access.
 
+Working sessions have animated sidebar indicators: blue for model work and
+amber for tool calls. The selected conversation also shows its activity in the
+header and in a persistent strip above the composer. These follow polled runtime
+phases and the active response stream, including when reopening a running session.
+Idle/inactive indicators are static; unavailable status is not shown as working.
+Animations respect the operating system's reduced-motion preference.
+
+The right edge of conversation history shows one small horizontal marker per
+user message. Hover or focus a marker to preview the message and its local
+send time; click it to jump to that turn. System events, tool results, and
+compaction summaries are excluded. Older records without timestamps display
+**Time unavailable** rather than an inferred date.
+User and assistant bubbles also show a compact local time in their footer;
+hover to see the complete date and time zone. New streamed replies retain their
+first-received time as text arrives. Reloaded history uses the recorded message
+timestamp, shared by the in-memory history and JSONL/SQLite persistence.
+Conversation bubbles omit role labels. Only group messages display human sender
+names; assistant names stay hidden, including while streaming. New sender
+envelopes record the group/direct distinction. Older histories without that
+metadata show names only when distinct recorded sender IDs establish multiple
+participants; ambiguous old records are not guessed to be group chats.
+
+Frontend corner shapes are centralized in `app/src/styles.css`: `--radius-sm`
+for compact details, `--radius-control` for buttons and inputs,
+`--radius-surface` for cards/messages/events/tool calls, and `--radius-overlay`
+for composers, menus and dialogs. Pills and circular indicators use
+`--radius-pill` and `--radius-circle`. UnoCSS rounded utilities use the same
+variables; native window controls and maximized edge-to-edge previews remain square.
+
+Existing sessions have **Conversation** and **Diagnosis** tabs. Switching tabs
+preserves the composer draft, attachments, history position and active response
+stream. The former System & Tools drawer is replaced by Diagnosis's **Trace**,
+**System prompt** and **Tools** views; resend remains beside the composer.
+Trace shows the displayed physical segment's recorded messages grouped by user
+turn, searchable tool arguments/results, and Input / Model / Tools timing lanes.
+Select a timing bar to inspect attributes, errors and matched tool results.
+Zoom and pan the overview to inspect dense activity; parallel calls occupy
+separate tracks. Turns and tool-call details can be folded in bulk, and search
+matches all entered terms across text and metadata. The expandable all-spans
+list includes nested execution spans.
+
+Execution timing is fetched from `GET /v1/query/session-spans` with an exact
+logical session ID and physical segment filter. The trace UI follows the
+`audit:read` visibility scope; the API inherits the gateway's existing configured
+launch-credential authentication (UI scopes are not server authorization).
+Visible Diagnosis refreshes every two seconds and includes
+in-progress spans; switching away aborts its requests. Earlier execution spans
+can be loaded explicitly. Duration is the union of loaded execution intervals,
+not the age of the conversation or a sum of overlapping spans. Missing legacy
+timing is marked unavailable; the current prompt and tool definitions are
+not presented as historical per-call snapshots. Unsent drafts never fetch trace
+data or materialize sessions. Inspect older segments through Conversation's
+segment navigation before opening Diagnosis.
+
 The Projects header's **+** menu contains exactly **Open folder**, **Clone repo**,
 and **Start from scratch**. Open folder registers an existing directory using
 Electron's native folder picker (the browser accepts an explicit Main-local path).
-Registered folders remain visible when empty. Each folder's own **+** creates a
-conversation whose filesystem tools and shell use that folder as their working
-directory. Collapse a folder to hide its conversations.
+Registered folders remain visible when empty. Each folder's own **+** opens a
+draft associated with that project. Its session is created on the first send;
+filesystem tools and shell then use that folder as their working directory.
+Collapse a folder to hide its conversations.
+
+**Nodes** is the single device/capability view. Expand a device's **Capabilities**
+to see actual resource types, names and availability. The former
+`/workspaces` page redirects to `/nodes`; there is no separate Workspaces tab.
+Nodes loads a read-only inventory from the backend, refreshes while visible, and
+shows explicit connection/API errors rather than example devices. Unknown
+versions, last-seen times, and remote paths are omitted. A capability is shown as
+available only while its device is connected and the capability is online.
+This does not add pairing/revocation controls or complete remote execution parity.
+The Child Approvals screen remains separate, fixture-backed, and noninteractive.
+After updating the backend, restart `pnpm desktop:dev` to enable the inventory API.
+Internal capability IDs and unconnected approval policies are not shown.
+
+The composer's **+** menu offers **Add file** and **Add folder** in the local Main
+desktop app. Native pickers support multiple selections; removable chips show
+the selected context before sending. These are local path references included
+in the message, not file uploads, recursive folder imports, or a change of
+working directory. Reading them still uses the agent's filesystem tools and
+their existing access controls. Native context selection is unavailable in the
+browser and on Child installations; it does not imply remote file-transfer support.
 
 Folder registrations persist in `<workspace>/projects.v1.json`; session
 associations persist in the selected JSONL or SQLite store.
@@ -182,6 +266,24 @@ connect to a running Main or use saved credentials:
 pnpm build:app
 pnpm exec node --import tsx --test desktop/tests/layout.node-test.ts
 ```
+
+The `app` renderer uses Vite 8 and Vue Router 5 with explicit routes. UnoCSS's
+`presetWind3` retains the existing utility styles; `presetIcons` loads local
+Lucide (general UI) and Simple Icons (brands) collections on demand. Icons are
+compiled into CSS masks using `currentColor`, without a runtime icon CDN or
+shipping the entire collections.
+
+```html
+<span class="i-lucide-folder-open w-4 h-4" aria-hidden="true"></span>
+<span class="i-simple-icons-github w-4 h-4" aria-hidden="true"></span>
+```
+
+Keep full icon class names in source (including both branches of conditional
+classes); do not construct names like `i-lucide-${name}` that the extractor
+cannot see. Icon-only buttons still need an accessible label on the button.
+Prefer Lucide for new UI controls; native window glyphs and custom illustrations
+can retain their purpose-built SVGs. Add further collections as local development
+dependencies and register them in `app/unocss.config.ts`.
 
 Packaging uses `pnpm deploy --prod --node-linker hoisted` to include a portable
 backend without development-tree symlinks; only built modules, runtime dependencies,

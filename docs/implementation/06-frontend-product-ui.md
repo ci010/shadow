@@ -1,6 +1,8 @@
 > **WIP design/workstream reference.**
-> Workspaces, Nodes, and Approvals screens are fixture-backed; visible routes
-> and role policies are not evidence of live device administration. Approval
+> The Workspaces screen described below has since been consolidated into Nodes;
+> `/workspaces` redirects to `/nodes`. Nodes now reads a live, read-only inventory;
+> Approvals remains fixture-backed. Visible routes and role policies are not
+> evidence of working device administration actions. Approval
 > decisions are not yet connected in this UI. See the
 > [status/index](README.md) and [current architecture](../architecture.md).
 

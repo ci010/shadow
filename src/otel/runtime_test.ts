@@ -234,3 +234,180 @@ test('Node telemetry shares handles without duplicates and restores globals afte
     secondStore.close()
   }
 })
+
+test('running snapshots track late attributes, events, child boundaries and completed identities', async () => {
+  const store = new OtelStore(':memory:')
+  const telemetry = initializeNodeTelemetry(store)
+  try {
+    await activeSpan('session.processMessage', async (parent) => {
+      assert.equal(store.querySessionSpans({ sessionId: 'parent' }).entries.length, 0)
+      parent.setAttributes({ sessionId: 'parent', physicalSessionId: 'parent-1' })
+      parent.addEvent('checkpoint', { phase: 'running' }, [1789040000, 123456789])
+      parent.setStatus({ code: SpanStatusCode.ERROR, message: 'fixture failure' })
+      await setImmediate()
+      const snapshot = store.querySessionSpans({ sessionId: 'parent' })
+      assert.equal(snapshot.entries.length, 1)
+      const running = snapshot.entries[0]
+      assert.equal(running.id, null)
+      assert.equal(running.live, true)
+      assert.equal(running.startTime, 1789040000000)
+      assert.equal(running.statusCode, SpanStatusCode.ERROR)
+      assert.equal(running.statusMessage, 'fixture failure')
+      assert(!('endTime' in running))
+      assert(!('nextBeforeId' in snapshot))
+      assert.deepEqual(running.events, [{
+        name: 'checkpoint', time: 1789040000123.456789, attributes: { phase: 'running' },
+      }])
+      assert.equal(store.querySpans().length, 0)
+
+      activeSpan('legacy-child', () => {})
+      const during = store.querySessionSpans({ sessionId: 'parent', physicalSessionId: 'parent-1', limit: 1 })
+      assert.deepEqual(during.entries.map((entry) => entry.name), ['legacy-child', 'session.processMessage'])
+      assert.equal(during.entries[0].parentSpanId, running.spanId)
+      assert.equal(during.entries[0].live, false)
+      assert.equal(during.entries[1].spanId, running.spanId)
+      assert.equal(during.nextBeforeId, 1)
+      assert.equal(store.querySessionSpans({ sessionId: 'parent', beforeId: 2 }).entries.length, 1)
+      assert.equal(store.querySessionSpans({ sessionId: 'parent', physicalSessionId: 'parent-2' }).entries.length, 0)
+
+      await activeSpan('session.processMessage', async (child) => {
+        child.setAttributes({ sessionId: 'child', physicalSessionId: 'child-1' })
+        activeSpan('child-tool', () => {})
+        assert.deepEqual(store.querySessionSpans({ sessionId: 'parent' }).entries
+          .map((entry) => entry.name), ['legacy-child', 'session.processMessage'])
+        assert.deepEqual(store.querySessionSpans({ sessionId: 'child' }).entries
+          .map((entry) => entry.name), ['child-tool', 'session.processMessage'])
+      })
+      assert.deepEqual(store.querySessionSpans({ sessionId: 'parent' }).entries
+        .map((entry) => entry.name), ['legacy-child', 'session.processMessage'])
+    }, { startTime: [1789040000, 0] })
+    const completed = store.querySessionSpans({ sessionId: 'parent' }).entries
+    assert.deepEqual(completed.map((entry) => entry.name), ['session.processMessage', 'legacy-child'])
+    assert(completed.every((entry) => entry.id !== null && entry.id > 0 && !entry.live))
+    assert.equal(completed[0].startTime, 1789040000000)
+    assert.equal(completed[0].spanId, completed[1].parentSpanId)
+    assert.equal(new Set(completed.map((entry) => `${entry.traceId}:${entry.spanId}`)).size, 2)
+    assert.equal(typeof completed[0].endTime, 'number')
+  } finally {
+    await telemetry.shutdown()
+    store.close()
+  }
+})
+
+test('live spans clean up per-store only after its last telemetry handle shuts down', async () => {
+  const firstStore = new OtelStore(':memory:')
+  const secondStore = new OtelStore(':memory:')
+  const first = initializeNodeTelemetry(firstStore)
+  const duplicate = initializeNodeTelemetry(firstStore)
+  const second = initializeNodeTelemetry(secondStore)
+  try {
+    const running = trace.getTracer('test').startSpan('agent.chat', { attributes: { sessionId: 'parent' } })
+    assert.equal(firstStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 1)
+    assert.equal(secondStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 1)
+    await first.shutdown()
+    assert.equal(firstStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 1)
+    await duplicate.shutdown()
+    assert.equal(firstStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 0)
+    assert.equal(secondStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 1)
+    await second.shutdown()
+    assert.equal(secondStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 0)
+    running.end()
+    assert.equal(firstStore.countSpans(), 0)
+    assert.equal(secondStore.countSpans(), 0)
+  } finally {
+    await first.shutdown()
+    await duplicate.shutdown()
+    await second.shutdown()
+    firstStore.close()
+    secondStore.close()
+  }
+})
+
+test('failed completed-span persistence still removes the live entry', async (t) => {
+  const store = new OtelStore(':memory:')
+  const telemetry = initializeNodeTelemetry(store)
+  try {
+    t.mock.method(store, 'ingestTraces', () => { throw new Error('fixture write failure') })
+    const errorOutput = t.mock.method(process.stderr, 'write', () => true)
+    const running = trace.getTracer('test').startSpan('agent.tool', { attributes: { sessionId: 'parent' } })
+    assert.equal(store.querySessionSpans({ sessionId: 'parent' }).entries.length, 1)
+    running.end()
+    assert.equal(store.querySessionSpans({ sessionId: 'parent' }).entries.length, 0)
+    assert.equal(errorOutput.mock.callCount(), 1)
+  } finally {
+    await telemetry.shutdown()
+    store.close()
+  }
+})
+
+test('ownership crosses mixed active/completed parent links without returning duplicate live identities', async () => {
+  const store = new OtelStore(':memory:')
+  const telemetry = initializeNodeTelemetry(store)
+  try {
+    await activeSpan('session.processMessage', async (parent) => {
+      parent.setAttributes({ sessionId: 'parent', physicalSessionId: 'parent-1' })
+      await activeSpan('unannotated-loop', async () => {
+        activeSpan('unannotated-tool', () => {})
+        const page = store.querySessionSpans({ sessionId: 'parent', physicalSessionId: 'parent-1' })
+        assert.equal(page.entries.length, 3)
+        assert.equal(page.entries.filter((entry) => entry.live).length, 2)
+        const tool = page.entries.find((entry) => entry.name === 'unannotated-tool')
+        assert(tool && !tool.live)
+        store.registerLiveSpan(tool.traceId, tool.spanId, () => ({
+          traceId: tool.traceId, spanId: tool.spanId,
+          name: tool.name, startTimeUnixNano: '1789040000000000000',
+          attributes: [{ key: 'sessionId', value: { stringValue: 'parent' } }],
+        }))
+        const refreshed = store.querySessionSpans({ sessionId: 'parent' })
+        assert.equal(refreshed.entries.length, 3)
+        assert.equal(refreshed.entries.filter((entry) => entry.spanId === tool.spanId).length, 1)
+        const older = store.querySessionSpans({ sessionId: 'parent', beforeId: 2 })
+        assert.deepEqual(older.entries.map((entry) => entry.name), ['unannotated-tool'])
+      })
+    })
+    assert.equal(store.querySessionSpans({ sessionId: 'parent' }).entries.length, 3)
+  } finally {
+    await telemetry.shutdown()
+    store.close()
+  }
+})
+
+test('administrative live spans stay out of diagnosis unless nested in same-session execution', async () => {
+  const store = new OtelStore(':memory:')
+  const telemetry = initializeNodeTelemetry(store)
+  const opts = { sessionId: 'parent', physicalSessionId: 'parent-1' }
+  try {
+    await activeSpan('session.getHistory', async (read) => {
+      read.setAttributes(opts)
+      await activeSpan('sqlite.read', async () => {
+        assert.equal(store.querySessionSpans(opts).entries.length, 0)
+        assert.equal(store.querySessionSpans({ sessionId: 'parent' }).entries.length, 0)
+      })
+    })
+    assert.equal(store.querySessionSpans(opts).entries.length, 0)
+    for (const name of ['agent.loop', 'agent.chat', 'agent.tool']) {
+      const work = trace.getTracer('test').startSpan(name, { attributes: opts })
+      const page = store.querySessionSpans(opts)
+      assert.equal(page.entries.filter((entry) => entry.live && entry.name === name).length, 1)
+      work.end()
+      assert.equal(store.querySessionSpans(opts).entries.filter((entry) => entry.name === name).length, 1)
+    }
+    await activeSpan('session.processMessage', async (execution) => {
+      execution.setAttributes(opts)
+      await activeSpan('session.getHistory', async (read) => {
+        read.setAttribute('sessionId', 'parent')
+        const page = store.querySessionSpans(opts)
+        assert.equal(page.entries.filter((entry) => entry.live).length, 2)
+        assert(page.entries.some((entry) => entry.name === 'session.getHistory'))
+      })
+      const nested = store.querySessionSpans(opts).entries.filter((entry) => entry.name === 'session.getHistory')
+      assert.equal(nested.length, 1)
+      assert.equal(nested[0].live, false)
+      assert.equal(nested[0].parentSpanId, execution.spanContext().spanId)
+    })
+    assert.equal(store.querySessionSpans(opts).entries.length, 5)
+  } finally {
+    await telemetry.shutdown()
+    store.close()
+  }
+})

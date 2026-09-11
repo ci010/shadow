@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
+import { fileURLToPath } from 'node:url'
 
 // Default backend gateway (the Shadow bot). Override with VITE_API_TARGET if
 // you run the bot on a non-default host/port.
@@ -8,7 +9,9 @@ const API_TARGET = process.env.VITE_API_TARGET ?? 'http://localhost:3123'
 
 export default defineConfig({
   base: './',
-  plugins: [vue(), UnoCSS()],
+  plugins: [vue(), UnoCSS({
+    configFile: fileURLToPath(new URL('./unocss.config.ts', import.meta.url)),
+  })],
   server: {
     host: true,
     port: 5273,
@@ -25,6 +28,10 @@ export default defineConfig({
         target: API_TARGET,
         changeOrigin: true,
         ws: true,
+      },
+      '/nodes/v1': {
+        target: API_TARGET,
+        changeOrigin: true,
       },
       // Internal debug endpoints
       '/debug': {

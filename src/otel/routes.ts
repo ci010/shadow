@@ -73,7 +73,7 @@ function sseStream(store: OtelStore, kind: 'spans' | 'logs'): Response {
  * Gateway plugin that exposes OTLP/HTTP ingest, query, and SSE streams.
  *
  *   POST /v1/traces  /v1/logs  /v1/metrics      — OTLP/HTTP JSON ingest
- *   GET  /v1/query/{spans,logs,metrics,stats}   — paged queries
+ *   GET  /v1/query/{spans,session-spans,logs,metrics,stats} — paged queries
  *   GET  /v1/stream/{spans,logs}                — SSE tail
  */
 export function otelPlugin(store: OtelStore): GatewayPlugin {
@@ -122,6 +122,43 @@ export function otelPlugin(store: OtelStore): GatewayPlugin {
     })
 
     // ── Query ──────────────────────────────────────────────────────────
+    app.get('/v1/query/session-spans', (c) => {
+      const values = c.req.queries()
+      for (const key of ['sessionId', 'physicalSessionId', 'beforeId', 'limit']) {
+        if ((values[key]?.length ?? 0) > 1) {
+          return c.json({ error: `${key} must be specified once` }, 400)
+        }
+      }
+      const sessionId = c.req.query('sessionId')
+      const physicalSessionId = c.req.query('physicalSessionId')
+      if (sessionId === undefined || !sessionId.trim()) {
+        return c.json({ error: 'sessionId must be nonempty' }, 400)
+      }
+      if (physicalSessionId !== undefined && !physicalSessionId.trim()) {
+        return c.json({ error: 'physicalSessionId must be nonempty when supplied' }, 400)
+      }
+      const before = c.req.query('beforeId')
+      const size = c.req.query('limit')
+      if (before !== undefined &&
+        (!/^[1-9]\d*$/.test(before) || !Number.isSafeInteger(Number(before)))) {
+        return c.json({ error: 'beforeId must be a positive safe integer' }, 400)
+      }
+      if (size !== undefined &&
+        (!/^[1-9]\d*$/.test(size) || !Number.isSafeInteger(Number(size)) || Number(size) > 500)) {
+        return c.json({ error: 'limit must be an integer between 1 and 500' }, 400)
+      }
+      try {
+        return c.json(store.querySessionSpans({
+          sessionId, physicalSessionId,
+          beforeId: before === undefined ? undefined : Number(before),
+          limit: size === undefined ? 200 : Number(size),
+        }))
+      } catch (error) {
+        console.error('[otel] Failed to query session spans:', error)
+        return c.json({ error: 'Failed to query session spans' }, 500)
+      }
+    })
+
     app.get('/v1/query/spans', (c) => {
       const ascending = c.req.query('ascending') === 'true'
       const limit = Math.min(intParam(c, 'limit') ?? 100, 1000)

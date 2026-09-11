@@ -5,7 +5,7 @@ import {
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace-node'
 import { format } from 'node:util'
-import type { OtelStore } from './store.ts'
+import type { OtelStore, OtlpSpan } from './store.ts'
 
 export interface NodeTelemetryHandle {
   shutdown(): Promise<void>
@@ -45,6 +45,27 @@ function nanoseconds(time: [number, number]): string {
   return String(BigInt(time[0]) * 1_000_000_000n + BigInt(time[1]))
 }
 
+function spanSnapshot(span: ReadableSpan, ended: boolean): OtlpSpan {
+  const spanContext = span.spanContext()
+  return {
+    traceId: spanContext.traceId,
+    spanId: spanContext.spanId,
+    parentSpanId: span.parentSpanContext?.spanId,
+    name: span.name,
+    // The SDK SpanKind enum starts at zero; OTLP reserves zero.
+    kind: span.kind + 1,
+    startTimeUnixNano: nanoseconds(span.startTime),
+    ...(ended ? { endTimeUnixNano: nanoseconds(span.endTime) } : {}),
+    status: span.status,
+    attributes: attributes(span.attributes),
+    events: span.events.map((event) => ({
+      name: event.name,
+      timeUnixNano: nanoseconds(event.time),
+      attributes: attributes(event.attributes ?? {}),
+    })),
+  }
+}
+
 interface TelemetryState {
   provider: NodeTracerProvider
   stores: Map<OtelStore, number>
@@ -67,7 +88,12 @@ export function initializeNodeTelemetry(
     const resource = { attributes: attributes({ 'service.name': serviceName }) }
     const scope = { name: 'shadow-console', version: '0.1.0' }
     const processor: SpanProcessor = {
-      onStart() {},
+      onStart(span) {
+        const { traceId, spanId } = span.spanContext()
+        for (const target of stores.keys()) {
+          target.registerLiveSpan(traceId, spanId, () => spanSnapshot(span, false))
+        }
+      },
       onEnd(span: ReadableSpan) {
         const spanContext = span.spanContext()
         for (const target of stores.keys()) {
@@ -85,33 +111,22 @@ export function initializeNodeTelemetry(
                     name: span.instrumentationScope.name,
                     version: span.instrumentationScope.version,
                   },
-                  spans: [{
-                    traceId: spanContext.traceId,
-                    spanId: spanContext.spanId,
-                    parentSpanId: span.parentSpanContext?.spanId,
-                    name: span.name,
-                    // The SDK SpanKind enum starts at zero; OTLP reserves zero.
-                    kind: span.kind + 1,
-                    startTimeUnixNano: nanoseconds(span.startTime),
-                    endTimeUnixNano: nanoseconds(span.endTime),
-                    status: span.status,
-                    attributes: attributes(span.attributes),
-                    events: span.events.map((event) => ({
-                      name: event.name,
-                      timeUnixNano: nanoseconds(event.time),
-                      attributes: attributes(event.attributes ?? {}),
-                    })),
-                  }],
+                  spans: [spanSnapshot(span, true)],
                 }],
               }],
             })
           } catch (error) {
             process.stderr.write(`[otel] Failed to persist span: ${String(error)}\n`)
+          } finally {
+            target.endLiveSpan(spanContext.traceId, spanContext.spanId)
           }
         }
       },
       forceFlush: () => Promise.resolve(),
-      shutdown: () => Promise.resolve(),
+      shutdown: () => {
+        for (const target of stores.keys()) target.clearLiveSpans()
+        return Promise.resolve()
+      },
     }
     const provider = new NodeTracerProvider({ spanProcessors: [processor] })
     provider.register()
@@ -177,7 +192,10 @@ export function initializeNodeTelemetry(
       shutdownPromise ??= (async () => {
         const remaining = (state.stores.get(store) ?? 1) - 1
         if (remaining > 0) state.stores.set(store, remaining)
-        else state.stores.delete(store)
+        else {
+          state.stores.delete(store)
+          store.clearLiveSpans()
+        }
         if (state.stores.size > 0) return
         state.restoreConsole()
         if (current === state) {

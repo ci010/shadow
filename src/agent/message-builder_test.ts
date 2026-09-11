@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { test } from 'node:test'
+import type { InboundMessage } from '../bus/events.ts'
 import { channelMessageInput, inputContext, type SessionMessageInput } from '../sessions/input.ts'
+import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
+import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
+import type { SessionStore } from '../sessions/session-store.ts'
 import { buildUserChatMessage } from './message-builder.ts'
 
 test('channel adapter normalizes retry/silent and never trusts event-shaped sender metadata', async () => {
@@ -74,3 +80,51 @@ test('session messages retain session attribution without impersonating a user o
   })
   assert.equal(inputContext('web:target', input).admin, false)
 })
+
+const inbound: InboundMessage = {
+  channel: 'test', chatId: 'authors', senderId: 'one', senderName: 'A & B <team>',
+  messageId: 'synthetic', timestamp: '2026-09-10T18:00:00.000Z', content: 'Hello',
+}
+
+function userInput(message: InboundMessage): SessionMessageInput {
+  const input = channelMessageInput(message)
+  assert.equal(input.kind, 'message')
+  return input
+}
+
+test('sender envelope records chat type without changing human text', async () => {
+  for (const isGroup of [true, false, undefined]) {
+    const message = await buildUserChatMessage(userInput({ ...inbound, isGroup }), '.', '.')
+    assert.deepEqual(message, {
+      role: 'user', name: inbound.senderName,
+      content: [
+        { type: 'text', text: `<sender id="one" name="A &amp; B &lt;team&gt;" chat="${isGroup ? 'group' : 'direct'}" />` },
+        { type: 'text', text: 'Hello' },
+      ],
+    })
+  }
+})
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: sender chat type and legacy envelopes survive storage reopen`, async (t) => {
+    await mkdir('.test-data', { recursive: true })
+    const directory = await mkdtemp(join(process.cwd(), '.test-data', 'message-author-'))
+    let store: SessionStore = new Store(directory)
+    t.after(async () => { store.close?.(); await rm(directory, { recursive: true, force: true }) })
+    await store.init()
+    const group = await buildUserChatMessage(userInput({ ...inbound, isGroup: true }), directory, directory)
+    const direct = await buildUserChatMessage(userInput({ ...inbound, isGroup: false }), directory, directory)
+    const messages = [
+      { ...group, timestamp: inbound.timestamp },
+      { ...direct, timestamp: inbound.timestamp },
+      { role: 'user', name: 'Legacy', content: '<sender id="old" name="Legacy" />Hello', timestamp: inbound.timestamp },
+    ]
+    await store.appendMessages('test_authors-0', messages)
+    store.close?.()
+    store = new Store(directory)
+    await store.init()
+    const restored = []
+    for await (const record of store.readSessionLog('test_authors-0')) restored.push(record)
+    assert.deepEqual(restored.map(record => ({ content: record.content, name: record.name })), messages.map(message => ({ content: message.content, name: message.name })))
+  })
+}

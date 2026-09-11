@@ -672,7 +672,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .input {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.4rem 0.6rem;
   font-size: 0.8rem;
   background: var(--c-bg-card);
@@ -680,7 +680,7 @@ onBeforeUnmount(() => {
 
 .tag {
   border: 1px solid var(--c-border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.1rem 0.4rem;
   font-size: 0.65rem;
   text-transform: uppercase;
@@ -710,7 +710,7 @@ onBeforeUnmount(() => {
 
 .trace-item {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.45rem 0.6rem;
   background: var(--c-bg-card);
   display: flex;
@@ -897,7 +897,7 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   box-shadow: 0 0 4px color-mix(in srgb, currentColor 40%, transparent);
 }
 
@@ -914,7 +914,7 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   padding: 0.05rem 0.25rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--c-error);
   color: white;
 }
@@ -924,7 +924,7 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   padding: 0.05rem 0.25rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--c-success);
   color: white;
   animation: pulse-live 1.5s ease-in-out infinite;
@@ -939,7 +939,7 @@ onBeforeUnmount(() => {
   position: relative;
   height: 20px;
   background: var(--c-bg-muted);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   overflow: hidden;
 }
 
@@ -947,7 +947,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 2px;
   bottom: 2px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: linear-gradient(90deg, var(--bar-color, var(--c-gradient-start)), color-mix(in srgb, var(--bar-color, var(--c-gradient-end)) 70%, white));
   display: flex;
   align-items: center;
@@ -989,7 +989,7 @@ onBeforeUnmount(() => {
   color: var(--c-text);
   border: 1px solid var(--c-border);
   padding: 0.35rem 0.7rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   font-size: 0.75rem;
   cursor: pointer;
   transition: background 0.1s ease;
@@ -1001,7 +1001,7 @@ onBeforeUnmount(() => {
 
 .detail-card {
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   padding: 0.75rem;
   background: var(--c-bg-card);
   display: grid;
@@ -1038,7 +1038,7 @@ onBeforeUnmount(() => {
 
 .event-card {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-surface);
   padding: 0.45rem 0.55rem;
   display: grid;
   gap: 0.3rem;
@@ -1068,7 +1068,7 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   padding: 0.05rem 0.25rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--c-error-bg);
   color: var(--c-error);
 }
@@ -1090,7 +1090,7 @@ onBeforeUnmount(() => {
   word-break: break-word;
   background: var(--c-bg-muted);
   padding: 0.4rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
 }
 
 .event-attrs {

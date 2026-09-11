@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { access, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { access, copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
@@ -15,6 +15,14 @@ const require = createRequire(import.meta.url)
 test('built Vue layout stays bounded in isolated hidden Electron viewports', {
   timeout: 150_000,
 }, async (t) => {
+  await runFixture(t, 'layout-smoke')
+})
+
+test('session diagnosis preserves conversations and isolates trace navigation', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'diagnosis-smoke')
+})
+
+async function runFixture(t: TestContext, fixture: string): Promise<void> {
   const assets = join(repository, 'app', 'dist')
   await assert.doesNotReject(access(join(assets, 'index.html')), 'Build the renderer with pnpm build:app before the layout test')
   const scratch = join(repository, '.tmp')
@@ -23,7 +31,7 @@ test('built Vue layout stays bounded in isolated hidden Electron viewports', {
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
 
   await Promise.all(['layout-smoke', 'layout-preload'].map((name) => build({
-    entryPoints: [join(sourceDirectory, 'fixtures', `${name}.ts`)],
+    entryPoints: [join(sourceDirectory, 'fixtures', `${name === 'layout-smoke' ? fixture : name}.ts`)],
     outfile: join(directory, `${name}.cjs`),
     bundle: true,
     platform: 'node',
@@ -65,4 +73,9 @@ test('built Vue layout stays bounded in isolated hidden Electron viewports', {
   for (const line of lines) t.diagnostic(line)
   assert.equal(code, 0, `Hidden Electron fixture failed:\n${lines.join('\n')}\n${stderr.slice(-6_000)}`)
   assert.ok(lines.some((line) => line.startsWith('LAYOUT_RESULT ') && JSON.parse(line.slice(14)).ok === true), 'Fixture must report completed geometry assertions')
-})
+  if (fixture === 'diagnosis-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    for (const name of ['diagnosis-desktop.png', 'diagnosis-mobile.png', 'bubble-timestamps.png', 'rounded-chat-desktop.png', 'rounded-chat-light.png', 'rounded-chat-mobile.png', 'nodes-capabilities-desktop.png', 'nodes-capabilities-mobile.png']) await copyFile(join(directory, name), join(output, name))
+  }
+}

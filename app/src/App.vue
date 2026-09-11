@@ -15,9 +15,9 @@
     <template #actions>
           <button class="theme-toggle" @click="toggleTheme" :title="isDark ? 'Switch to light' : 'Switch to dark'" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'">
             <!-- Sun icon (shown in dark mode) -->
-            <svg v-if="isDark" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            <span v-if="isDark" class="i-lucide-sun w-3.5 h-3.5" aria-hidden="true" />
             <!-- Moon icon (shown in light mode) -->
-            <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            <span v-else class="i-lucide-moon w-3.5 h-3.5" aria-hidden="true" />
           </button>
     </template>
     <div class="app-shell">
@@ -30,17 +30,16 @@
           <span class="runtime-dot" :class="installationContext.mainConnection" />
           <strong>Main</strong> {{ mainConnectionLabel }}<template v-if="installationContext.mainLatencyMs !== null"> · {{ installationContext.mainLatencyMs }} ms</template>
         </span>
-        <span class="runtime-status-item runtime-status-node" :title="activeLocalNode?.nodeId">
-          <strong>Local node</strong> {{ activeLocalNode?.displayName ?? installationContext.localNodeId }}
+        <span class="runtime-status-item runtime-status-node" :title="installationContext.localNodeId">
+          <strong>Local node</strong> {{ installationContext.localNodeId }}
         </span>
         <router-link
           v-if="installationContext.mode === 'child'"
           class="runtime-status-item runtime-status-link"
           :to="{ name: 'approvals' }"
         >
-          <strong>Approvals</strong> {{ pendingLocalApprovalCount }} pending
+          <strong>Approvals</strong>
         </router-link>
-        <span v-else class="runtime-status-item"><strong>Approvals</strong> {{ pendingLocalApprovalCount }} pending</span>
       </div>
     </div>
 
@@ -87,7 +86,6 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
-import { useProductFixtures } from './composables/useProductFixtures.ts'
 import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
 import ProvidersView from './components/ProvidersView.vue'
@@ -103,15 +101,8 @@ watch(() => route.fullPath, (path) => {
 }, { immediate: true })
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
-const productFixtures = useProductFixtures()
 
 const resolvedBase = computed(() => installationContext.value.apiBase)
-const activeLocalNode = computed(() => productFixtures.value.nodes.find((node) =>
-  node.nodeId === installationContext.value.localNodeId
-))
-const pendingLocalApprovalCount = computed(() => productFixtures.value.approvals.filter((approval) =>
-  approval.ownerNodeId === installationContext.value.localNodeId && approval.status === 'pending'
-).length)
 const roleLabel = computed(() => installationContext.value.mode === 'main' ? 'Main' : 'Child')
 const mainConnectionLabel = computed(() => {
   if (installationContext.value.mainConnection === 'connected') return 'Connected'
@@ -317,7 +308,7 @@ onUnmounted(() => {
   left: -16px;
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   background: #a0a0a0;
   pointer-events: none;
   will-change: transform;
@@ -403,7 +394,7 @@ onUnmounted(() => {
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   background: var(--c-success);
 }
 
@@ -436,7 +427,7 @@ onUnmounted(() => {
   margin: 0 auto 0.75rem;
   padding: 0.65rem 0.75rem;
   border: 1px solid var(--c-warn);
-  border-radius: 5px;
+  border-radius: var(--radius-overlay);
   background: var(--c-warn-bg);
   color: var(--c-text-secondary);
   font-size: 0.72rem;
@@ -553,7 +544,7 @@ onUnmounted(() => {
   width: 28px;
   height: 28px;
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--c-text-muted);
   cursor: pointer;
@@ -586,7 +577,7 @@ onUnmounted(() => {
 
 .system-bar-api-input {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--c-bg-soft);
   padding: 0.15rem 0.4rem;
   font-size: 0.65rem;
@@ -606,7 +597,7 @@ onUnmounted(() => {
   background: var(--c-primary-bg);
   color: var(--c-text-on-primary);
   padding: 0.4rem 0.75rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   font-size: 0.75rem;
   font-weight: 500;
   cursor: pointer;
@@ -632,7 +623,7 @@ onUnmounted(() => {
 
 .input {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.4rem 0.6rem;
   font-size: 0.8rem;
   background: var(--c-bg-input);
@@ -640,7 +631,7 @@ onUnmounted(() => {
 
 .tag {
   border: 1px solid var(--c-border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.1rem 0.4rem;
   font-size: 0.65rem;
   text-transform: uppercase;
@@ -662,7 +653,7 @@ onUnmounted(() => {
 
 .log-panel {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-surface);
   padding: 0.75rem;
   max-height: 320px;
   overflow: auto;
@@ -674,7 +665,7 @@ onUnmounted(() => {
 
 .detail-card {
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   padding: 0.75rem;
   background: var(--c-bg-card);
   display: grid;
@@ -696,7 +687,7 @@ onUnmounted(() => {
 .detail-json {
   background: var(--c-bg-code);
   color: var(--c-text-on-dark);
-  border-radius: 4px;
+  border-radius: var(--radius-surface);
   padding: 0.6rem;
   font-size: 0.7rem;
   line-height: 1.5;
@@ -712,7 +703,7 @@ onUnmounted(() => {
 
 .trace-section {
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   padding: 0.6rem;
   background: var(--c-bg-card);
   display: grid;
@@ -738,7 +729,7 @@ onUnmounted(() => {
 
 .prompt-card {
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   padding: 0.6rem 0.75rem;
   background: var(--c-bg-card);
 }
@@ -772,7 +763,7 @@ onUnmounted(() => {
 .tool-calls {
   margin-top: 0.4rem;
   padding: 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-surface);
   background: var(--c-bg-muted);
 }
 
@@ -782,7 +773,7 @@ onUnmounted(() => {
 
 .stat {
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   padding: 0.75rem;
   background: var(--c-bg-card);
 }

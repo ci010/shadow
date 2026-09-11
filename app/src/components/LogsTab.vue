@@ -558,7 +558,7 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
 <style scoped>
 .tag {
   border: 1px solid var(--c-border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.1rem 0.4rem;
   font-size: 0.65rem;
   text-transform: uppercase;
@@ -578,7 +578,7 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
   color: var(--c-text);
   border: 1px solid var(--c-border);
   padding: 0.35rem 0.7rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   font-size: 0.75rem;
   cursor: pointer;
   transition: background 0.1s ease;
@@ -590,7 +590,7 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
 
 .detail-card {
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   padding: 0.75rem;
   background: var(--c-bg-card);
   display: grid;
@@ -617,7 +617,7 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
 
 .trace-section {
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   padding: 0.5rem;
   background: var(--c-bg-card);
   display: grid;
@@ -639,7 +639,7 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 0.1rem 0.4rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .sev-trace { background: var(--c-indigo-bg); color: var(--c-indigo); }
@@ -651,7 +651,7 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
 .log-body-block {
   background: var(--c-bg-soft);
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.5rem 0.6rem;
   overflow-x: auto;
 }
@@ -689,7 +689,7 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
 
 .trace-msg {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.4rem 0.5rem;
   background: var(--c-bg-card);
 }

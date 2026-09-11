@@ -229,7 +229,7 @@ onMounted(async () => {
   gap: 0.2rem;
   padding: 0.5rem 0.6rem;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   text-align: left;
   cursor: pointer;
   background: var(--c-bg-soft);
@@ -303,7 +303,7 @@ onMounted(async () => {
 .badge {
   display: inline-block;
   padding: 0.05rem 0.35rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 0.6rem;
   font-weight: 600;
 }

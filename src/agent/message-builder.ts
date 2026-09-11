@@ -54,7 +54,11 @@ function escapeAttr(s: string): string {
  */
 function buildSenderTag(msg: SessionMessageInput): string {
   const sender = inputSender(msg)
-  const origin = msg.source.kind === 'session' ? ' source="session"' : ''
+  const origin = msg.source.kind === 'session'
+    ? ' source="session"'
+    : msg.source.kind === 'user'
+    ? ` chat="${msg.source.sender.isGroup ? 'group' : 'direct'}"`
+    : ''
   return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin} />`
 }
 

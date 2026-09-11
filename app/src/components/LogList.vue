@@ -95,7 +95,7 @@ function handleScroll(): void {
 
 .log-item {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--c-bg-card);
   padding: 0.5rem 0.7rem;
   display: flex;
@@ -153,7 +153,7 @@ function handleScroll(): void {
   font-size: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.15rem 0.4rem;
   border: 1px solid var(--c-border);
   flex-shrink: 0;

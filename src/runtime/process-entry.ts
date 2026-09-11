@@ -12,6 +12,7 @@ export interface ProcessEntryDependencies {
   readonly startMainRuntime: (
     config: Config,
     options: {
+      readonly localNodeId: string
       readonly configPath: string
       readonly clusterSnapshotPath: string
       readonly gateway: { readonly port?: number }
@@ -45,11 +46,12 @@ export async function runProcessEntry(
   const dispatch = dependencies.dispatch ?? dispatchRuntimeCli
   const result = await dispatch(args, {
     ...dependencies.runtime,
-    mainFactory: async (_plan, paths, context) => {
+    mainFactory: async (plan, paths, context) => {
       const config = await dependencies.loadConfig(
         paths.mutableAgentConfigPath,
       )
       return await dependencies.startMainRuntime(config, {
+        localNodeId: plan.config.localNodeId,
         configPath: paths.mutableAgentConfigPath,
         clusterSnapshotPath: paths.clusterSnapshotPath,
         gateway: { port: context.loopbackPort },

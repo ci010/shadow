@@ -3,6 +3,14 @@
   font-family: 'Inter', system-ui, sans-serif;
   cursor: crosshair;
 
+  /* Shared shape scale: compact details, controls, cards, and floating surfaces. */
+  --radius-sm: 6px;
+  --radius-control: 8px;
+  --radius-surface: 14px;
+  --radius-overlay: 18px;
+  --radius-pill: 999px;
+  --radius-circle: 50%;
+
   /* ── Core surfaces ─────────────────────────────── */
   --c-bg: #f0f0f3;
   --c-bg-card: #ffffff;
@@ -158,7 +166,7 @@
 
 *::-webkit-scrollbar-thumb {
   background: var(--c-border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 *::-webkit-scrollbar-thumb:hover {

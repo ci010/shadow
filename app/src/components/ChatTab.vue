@@ -1,7 +1,7 @@
 <template>
   <div
     class="chat-workspace"
-    :class="{ 'tools-open': rightPaneOpen, 'mobile-sessions-open': mobileSidebarOpen }"
+    :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId }"
   >
     <button class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Projects</button>
     <button v-if="mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close projects" @click="mobileSidebarOpen = false" />
@@ -9,8 +9,9 @@
       :api-base="apiBase"
       :sessions="allSessions"
       :active-session-id="activeSessionId"
+      :draft-project-id="draft.project?.id"
       :collapsed="collapsedSessions"
-      :stages="sessionStages"
+      :stages="displayedSessionStages"
       :sessions-loading="sessionsLoading"
       :sessions-error="sessionsError"
       @select="selectSession($event); mobileSidebarOpen = false"
@@ -18,26 +19,34 @@
       @toggle="toggleCollapse"
       @reload="loadSessionList"
       @scratch="createNewWebChat"
-      @created="selectProjectSession"
+      @draft="createNewWebChat"
     />
 
     <!-- Chat area -->
-    <div class="chat-panel">
-      <div
-        v-if="!activeSessionId"
-        class="flex-1 flex items-center justify-center text-ink/40 text-sm chat-empty-cta cursor-pointer select-none"
-        @click="createNewWebChat"
-      >
-        Click anywhere to start a new chat.
+    <div class="chat-panel" :class="{ 'is-draft': !activeSessionId }">
+      <div v-if="!activeSessionId" class="draft-heading">
+        <div v-if="!draft.project" class="draft-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M24 5 40 14v20L24 43 8 34V14L24 5Z" /><path d="m24 14 9 5v10l-9 5-9-5V19l9-5Z" /></svg>
+        </div>
+        <h1>What would you like to work on?</h1>
+        <div v-if="draft.project" class="draft-project" :aria-label="`Working folder: ${draft.project.name}`">
+          <svg class="draft-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 6h6l3 3h9v11H3V6Z" /><path d="M3 6V4h6l3 3h9v2" /></svg>
+          <div class="draft-project-copy">
+            <span class="draft-project-label">New conversation in project folder</span>
+            <strong>{{ draft.project.name }}</strong>
+            <span class="draft-project-path" :title="draft.project.path">{{ draft.project.path }}</span>
+          </div>
+        </div>
+        <p v-else class="draft-scratch">From scratch &middot; No project folder</p>
       </div>
       <template v-else>
         <!-- Header -->
         <div class="chat-header px-4 py-3 border-b border-default flex items-center justify-between" style="background: var(--c-frosted); backdrop-filter: blur(4px)">
           <div class="chat-heading-copy">
             <div class="text-xs text-ink/50 font-600 uppercase tracking-widest">{{ isDirectChat ? 'Direct Chat' : 'Session (readonly)' }}</div>
-            <div class="text-sm font-mono text-ink/70">
-              {{ activeSessionId }}
-              <span v-if="sessionStage" class="chat-session-badge" :class="'stage-' + sessionStage" style="margin-left: 0.4rem; vertical-align: middle;">{{ sessionStage }}</span>
+            <div class="chat-session-meta text-sm font-mono text-ink/70">
+              <span>{{ activeSessionId }}</span>
+              <SessionActivity :stage="sessionStage" :title="stageError || undefined" />
             </div>
             <div class="session-config-badges">
               <span v-if="activeSessionConfig.model" class="config-badge model">{{ activeSessionConfig.model }}</span>
@@ -48,7 +57,19 @@
           <button class="btn btn-sm" @click="loadCurrentSession">Refresh</button>
         </div>
 
+        <div class="conversation-tabs" role="tablist" aria-label="Session view">
+          <button id="conversation-tab" role="tab" aria-controls="conversation-panel" :aria-selected="activePanel === 'conversation'" :tabindex="activePanel === 'conversation' ? 0 : -1" :class="{ active: activePanel === 'conversation' }" @click="switchPanel('conversation')" @keydown="handlePanelKey($event, 'conversation')">Conversation</button>
+          <button id="diagnosis-tab" role="tab" aria-controls="diagnosis-panel" :aria-selected="activePanel === 'diagnosis'" :tabindex="activePanel === 'diagnosis' ? 0 : -1" :class="{ active: activePanel === 'diagnosis' }" @click="switchPanel('diagnosis')" @keydown="handlePanelKey($event, 'diagnosis')">
+            <span class="i-lucide-activity w-4 h-4" aria-hidden="true" />Diagnosis
+          </button>
+        </div>
+        <SessionDiagnosis v-if="diagnosisOpened" v-show="activePanel === 'diagnosis'" id="diagnosis-panel" role="tabpanel" aria-labelledby="diagnosis-tab"
+          :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
+          :active="activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
+          :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
+
         <!-- Messages -->
+        <div v-show="activePanel === 'conversation'" id="conversation-panel" class="chat-history" role="tabpanel" aria-labelledby="conversation-tab">
         <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-3 chat-messages" style="position: relative;" @click="handleChatAreaClick">
           <!-- SVG filter for hand-drawn highlight edges -->
           <svg width="0" height="0" style="position: absolute;">
@@ -66,6 +87,7 @@
           />
           <div v-if="loadingHistory" class="text-sm text-ink/50">Loading history...</div>
           <div v-else-if="messages.length === 0" class="text-sm text-ink/40 select-none">No messages yet. Send one below.</div>
+          <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
           <!-- Segment navigation: view previous (top) -->
           <div v-if="previousPhysicalId && !viewingPhysicalId" class="segment-nav">
             <button class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment">&#8592; View previous session</button>
@@ -158,8 +180,10 @@
                 { 'has-selection': msg.role === 'assistant' && selectedMsgIndex === idx },
               ]"
               :data-msg-idx="idx"
+              role="article"
+              :aria-label="msg.role === 'user' ? (msg.senderName ? `Message from ${msg.senderName}` : 'User message') : 'Assistant message'"
             >
-              <div class="chat-role">{{ msg.role }}</div>
+              <div v-if="msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
               <!-- Reasoning / thinking content (collapsible) -->
               <div v-if="msg.reasoningContent || msg.reasoningText" class="thinking-block">
                 <div class="thinking-header" @click="toggleThinking(idx)">
@@ -187,10 +211,13 @@
                   />
                 </template>
               </div>
+              <div class="chat-footer">
               <div v-if="msg.usage" class="usage-info">
                 <span class="usage-badge">{{ msg.usage.promptTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.prompt.toLocaleString() }})</span> prompt</span>
                 <span class="usage-badge">{{ msg.usage.completionTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.completion.toLocaleString() }})</span> completion</span>
                 <span class="usage-badge total">{{ msg.usage.totalTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.total.toLocaleString() }})</span> total</span>
+              </div>
+              <MessageTimestamp :timestamp="msg.timestamp" />
               </div>
             </div>
           </template>
@@ -215,14 +242,11 @@
             </div>
           </div>
           <!-- Streaming response -->
-          <div v-if="streaming" class="chat-bubble chat-assistant">
-            <div class="chat-role">assistant</div>
+          <div v-if="streaming && streamContent" class="chat-bubble chat-assistant" role="article" aria-label="Assistant message">
             <div class="chat-content">
-              <span v-if="streamContent">{{ streamContent }}</span>
-              <span v-else-if="!streamingToolCall && !streamingToolResult" class="typing-indicator">
-                <span /><span /><span />
-              </span>
+              <span>{{ streamContent }}</span>
             </div>
+            <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
           <!-- Segment navigation: back to current + view older (bottom) -->
           <div v-if="viewingPhysicalId" class="segment-nav">
@@ -231,9 +255,21 @@
             <button v-if="previousPhysicalId" class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment">&#8592; View older session</button>
           </div>
         </div>
+        <MessageHistoryRail :entries="historyMarkers" :container="messagesContainer" />
+        </div>
+        <div v-if="sessionWorking && !viewingPhysicalId && activePanel === 'conversation'" class="chat-working" :class="sessionStage" role="status" aria-live="polite">
+          <SessionActivity :stage="sessionStage" />
+          <span class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
+          <span class="working-wave" aria-hidden="true"><i /><i /><i /></span>
+        </div>
+      </template>
 
         <!-- Input (direct-chat only) -->
-        <div v-if="isDirectChat && !viewingPhysicalId" class="chat-composer" style="background: var(--c-frosted); backdrop-filter: blur(4px)">
+        <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" v-show="activePanel === 'conversation'" class="chat-composer">
+          <div v-if="canResend" class="resend-bar">
+            <button class="resend-btn" @click="resendLastMessage()">&#8635; Resend last message</button>
+          </div>
+          <div class="composer-box">
           <!-- Selection indicator -->
           <div v-if="selectedText" class="selection-indicator">
             <div class="selection-preview" @click="scrollToSelection">
@@ -241,32 +277,53 @@
             </div>
             <button class="selection-dismiss" @click="clearSelection">&times;</button>
           </div>
+          <div v-if="contextItems.length" class="composer-context" aria-label="Attached context">
+            <span v-for="(item, index) in contextItems" :key="`${item.kind}:${item.path}`" class="context-chip" :title="item.path">
+              <span class="context-icon" :class="item.kind === 'folder' ? 'i-lucide-folder' : 'i-lucide-file'" aria-hidden="true" />
+              <span>{{ chatContextName(item.path) }}</span>
+              <button :disabled="streaming || preparingSend" :aria-label="`Remove ${chatContextName(item.path)}`" @click="contextItems.splice(index, 1)">&times;</button>
+            </span>
+          </div>
           <div class="composer-input">
             <textarea
               ref="chatInput"
               v-model="inputText"
-              class="rounded border border-default bg-surface px-3 py-2 text-sm resize-none"
-              placeholder="Type a message..."
+              placeholder="Ask anything, or add files and folders for context..."
               aria-label="Message"
-              rows="2"
-              :disabled="streaming"
+              rows="3"
+              :disabled="streaming || preparingSend"
               @keydown="handleKeyDown"
               @input="autoResize"
             />
           </div>
           <div class="composer-toolbar">
-            <ModelSelector />
+            <div class="composer-controls">
+              <ComposerPopover label="Add context" :title="canPickContext ? 'Add files or folders as context' : 'File and folder context requires the local Main desktop app'" :disabled="!canPickContext || pickingContext || streaming || preparingSend" :width="220">
+                <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
+                <template #default="{ close }">
+                  <button class="context-action" @click="close(); pickContext('file')">
+                    <span class="context-icon i-lucide-file-plus" aria-hidden="true" />
+                    Add file
+                  </button>
+                  <button class="context-action" @click="close(); pickContext('folder')">
+                    <span class="context-icon i-lucide-folder-plus" aria-hidden="true" />
+                    Add folder
+                  </button>
+                </template>
+              </ComposerPopover>
+              <ModelSelector />
+            </div>
             <div v-if="selectedText" class="composer-send-actions">
               <button
                 class="btn"
-                :disabled="!inputText.trim() || streaming"
+                :disabled="!canSend"
                 @click="askInline"
               >
                 Send
               </button>
               <button
                 class="btn btn-fork"
-                :disabled="!inputText.trim() || streaming"
+                :disabled="!canSend"
                 @click="askInFork"
               >
                 Ask BTW
@@ -274,76 +331,47 @@
             </div>
             <button
               v-else
-              class="btn composer-send"
-              :disabled="!inputText.trim() || streaming"
+              class="composer-send"
+              :disabled="!canSend"
+              aria-label="Send message"
+              :title="preparingSend ? 'Starting conversation...' : 'Send message'"
               @click="sendMessage()"
             >
-              Send
+              <span class="i-lucide-arrow-up w-5 h-5" aria-hidden="true" />
             </button>
           </div>
-          <div class="mt-1 text-xs text-ink/40">Press Enter to send, Shift+Enter for new line</div>
+          </div>
+          <p v-if="composerError" class="composer-error" role="alert">{{ composerError }}</p>
+          <div class="composer-hint">{{ pickingContext ? 'Choosing context...' : preparingSend ? 'Starting conversation...' : 'Enter to send · Shift+Enter for a new line' }}</div>
         </div>
-      </template>
     </div>
 
-    <!-- Right pane: slide-out drawer (system prompt + tools) -->
-    <div
-      class="right-pane"
-      :class="rightPaneOpen ? 'right-pane-open' : 'right-pane-closed'"
-    >
-      <!-- Drawer toggle handle -->
-      <button
-        class="right-pane-toggle"
-        :title="rightPaneOpen ? 'Collapse panel' : 'Expand panel'"
-        :aria-expanded="rightPaneOpen"
-        aria-label="System and tools panel"
-        @click="rightPaneOpen = !rightPaneOpen"
-      >
-        <span class="right-pane-toggle-icon" v-html="rightPaneOpen ? '&#9654;' : '&#9664;'" />
-        <span v-if="!rightPaneOpen" class="right-pane-toggle-label">System &amp; Tools</span>
-      </button>
-
-      <!-- Drawer content -->
-      <div v-show="rightPaneOpen" class="flex flex-col gap-3 min-w-0 flex-1 overflow-hidden">
-        <!-- System prompt card -->
-        <SystemPromptCard
-          class="flex-1 min-h-0"
-          :prompt="systemPrompt"
-          :empty-message="!activeSessionId ? 'Select a session to view its system prompt.' : 'No system prompt loaded.'"
-        />
-
-        <!-- Compaction summary card (only when session has been compacted) -->
-        <SystemPromptCard
-          v-if="compactionSummary"
-          class="flex-1 min-h-0"
-          title="Compaction Summary"
-          :prompt="compactionSummary"
-          :show-token-estimate="true"
-        />
-
-        <!-- Tools card -->
-        <ToolsCard :tools="tools" max-height="40%" />
-      <div v-if="canResend" class="resend-bar">
-        <button class="resend-btn" @click="resendLastMessage()">↻ Resend</button>
-      </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, shallowRef, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import katex from 'katex'
 import { buildMediaUrl } from '../media-url.ts'
-import SystemPromptCard from './SystemPromptCard.vue'
-import ToolsCard from './ToolsCard.vue'
+import SessionDiagnosis from './SessionDiagnosis.vue'
 import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
+import ComposerPopover from './ComposerPopover.vue'
+import MessageHistoryRail from './MessageHistoryRail.vue'
+import MessageTimestamp from './MessageTimestamp.vue'
+import SessionActivity from './SessionActivity.vue'
 import ProjectsSidebar from './ProjectsSidebar.vue'
 import { parseSessionGraph, type SidebarSession } from '../projects-sidebar.ts'
+import { createProjectsClient, type ProjectRecord } from '../projects-client.ts'
+import { addChatContext, chatContextName, composeChatMessage, createChatDraft, type ChatContextItem } from '../chat-draft.ts'
+import { useInstallationContext } from '../composables/useInstallationContext.ts'
+import { userMessageMarkers } from '../message-history.ts'
+import { isWorkingStage, parseSessionStages, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import { canRedirectComposerKey, isComposerTypingKey } from '../composer-autofocus.ts'
+import { groupSenderNames } from '../message-author.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -369,6 +397,17 @@ const KATEX_ATTRS = ['mathvariant', 'encoding', 'xmlns', 'display', 'stretchy', 
 
 const props = defineProps<{ apiBase: string }>()
 
+const installation = useInstallationContext()
+const projectsClient = createProjectsClient(props.apiBase)
+const draft = shallowRef(createChatDraft(projectsClient))
+const contextItems = ref<ChatContextItem[]>([])
+const composerError = ref('')
+const preparingSend = ref(false)
+const pickingContext = ref(false)
+const canPickContext = computed(() => installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
+const canSend = computed(() => (!!inputText.value.trim() || contextItems.value.length > 0) && !streaming.value && !preparingSend.value && !pickingContext.value)
+let sendRequest: AbortController | undefined
+let historyRequest: AbortController | undefined
 const activeSessionId = ref('')
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
@@ -379,7 +418,9 @@ const chatInput = ref<HTMLTextAreaElement>()
 const messagesContainer = ref<HTMLElement>()
 const loadingHistory = ref(false)
 const streaming = ref(false)
+const streamPhase = ref<WorkingStage>()
 const streamContent = ref('')
+const streamTimestamp = ref<string>()
 const streamingToolCall = ref('')
 const streamingToolCallData = ref<{ name: string; arguments: Record<string, unknown> } | null>(null)
 const streamingToolResult = ref('')
@@ -388,11 +429,16 @@ const inputText = ref('')
 const mobileSidebarOpen = ref(false)
 
 // ── Session stage polling (batch) ────────────────────────────────────────────
-type SessionStage = 'idle' | 'llm' | 'tool' | 'inactive'
 const sessionStages = ref<Record<string, SessionStage>>({})
+const stageError = ref('')
+const displayedSessionStages = computed(() => {
+  if (!activeSessionId.value || !streaming.value) return sessionStages.value
+  return { ...sessionStages.value, [activeSessionId.value]: streamPhase.value ?? 'llm' }
+})
 const sessionStage = computed<SessionStage | null>(() =>
-  activeSessionId.value ? (sessionStages.value[activeSessionId.value] ?? null) : null,
+  activeSessionId.value ? (displayedSessionStages.value[activeSessionId.value] ?? null) : null,
 )
+const sessionWorking = computed(() => isWorkingStage(sessionStage.value))
 const activeSessionConfig = computed<SessionConfigInfo>(() => {
   const session = activeSessionId.value
     ? allSessions.value.find(s => s.sessionId === activeSessionId.value)?.config
@@ -405,24 +451,27 @@ const activeSessionConfig = computed<SessionConfigInfo>(() => {
   }
 })
 let stageInterval: ReturnType<typeof setInterval> | null = null
-let stagePolling = false
+let stageRequest: AbortController | undefined
 
 async function pollSessionStages(): Promise<void> {
-  if (stagePolling) return
-  stagePolling = true
+  if (stageRequest) return
+  const controller = new AbortController()
+  stageRequest = controller
   try {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 3000)
-    const res = await fetch(buildUrl('/api/sessions/stages'), { signal: controller.signal })
-    clearTimeout(timeoutId)
-    if (res.ok) {
-      const data = await res.json()
-      sessionStages.value = data.stages ?? {}
+    const res = await fetch(buildUrl('/api/sessions/stages'), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]) })
+    if (!res.ok) throw new Error('Session activity is unavailable.')
+    const stages = parseSessionStages(await res.json())
+    if (!controller.signal.aborted) {
+      sessionStages.value = stages
+      stageError.value = ''
     }
   } catch {
-    // Ignore abort/network errors silently
+    if (!controller.signal.aborted) {
+      sessionStages.value = {}
+      stageError.value = 'Session activity is unavailable. Retrying...'
+    }
   } finally {
-    stagePolling = false
+    if (stageRequest === controller) stageRequest = undefined
   }
 }
 
@@ -434,6 +483,8 @@ function startStagePolling(): void {
 
 function stopStagePolling(): void {
   if (stageInterval) { clearInterval(stageInterval); stageInterval = null }
+  stageRequest?.abort()
+  stageRequest = undefined
   sessionStages.value = {}
 }
 
@@ -450,6 +501,7 @@ function connectEventStream(chatId: string): void {
   const es = new EventSource(buildUrl('/api/chat/events', { chatId }))
   eventStream = es
   es.onmessage = (ev) => {
+    if (eventStream !== es || activeSessionId.value !== `web:${chatId}`) return
     if (!ev.data) return
     // Never render live pushes into a historical-segment view.
     if (viewingPhysicalId.value) return
@@ -473,6 +525,8 @@ function disconnectEventStream(): void {
     eventStream = null
   }
   bgStreamState.accumulated = ''
+  bgStreamState.timestamp = undefined
+  streamTimestamp.value = undefined
 }
 
 function autoResize() {
@@ -489,7 +543,7 @@ const tools = ref<ToolDef[]>([])
  * After a sleep/compact, the new physical session log starts with a
  * synthesized summary_context which is rendered as a `__compaction_summary__`
  * user message (see session-manager.parseSessionLog). We surface it as a
- * dedicated right-pane card so users can see the full session context the
+ * dedicated diagnosis card so users can see the full session context the
  * LLM sees on each turn without scrolling through chat history.
  */
 const compactionSummary = computed(() => {
@@ -499,10 +553,21 @@ const compactionSummary = computed(() => {
   return ''
 })
 
-// ── Right-pane drawer state ───────────────────────────────────────────────────
-// The right pane slides out horizontally. When closed it collapses to a thin
-// toggle handle so the chat area gets the freed horizontal space.
-const rightPaneOpen = ref(false)
+const activePanel = ref<'conversation' | 'diagnosis'>('conversation')
+const diagnosisOpened = ref(false)
+function switchPanel(panel: 'conversation' | 'diagnosis'): void {
+  activePanel.value = panel
+  if (panel === 'diagnosis') diagnosisOpened.value = true
+}
+function handlePanelKey(event: KeyboardEvent, panel: 'conversation' | 'diagnosis'): void {
+  const next = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+    ? (panel === 'conversation' ? 'diagnosis' : 'conversation')
+    : event.key === 'Home' ? 'conversation' : event.key === 'End' ? 'diagnosis' : undefined
+  if (!next) return
+  event.preventDefault()
+  switchPanel(next)
+  document.getElementById(`${next}-tab`)?.focus()
+}
 const globalConfig = ref<{ model?: string; provider?: string; thinking?: { type: 'enabled' | 'disabled' }; reasoningEffort?: 'high' | 'max' }>({})
 interface SessionConfigInfo {
   model?: string
@@ -513,6 +578,8 @@ interface SessionConfigInfo {
 interface ChatMsg {
   role: string
   content: string
+  senderName?: string
+  timestamp?: string
   event?: string
   toolName?: string
   toolCall?: { name: string; arguments: Record<string, unknown> }
@@ -638,6 +705,7 @@ const MEDIA_LINE_RE = /^MEDIA:(\S+)$/gm
 
 interface RawMessage {
   role: string
+  timestamp?: string
   content: string | Array<{ type: string; text?: string }> | null
   reasoning_content?: string | null
   reasoning_text?: string | null
@@ -707,6 +775,7 @@ function extractMedia(text: string): { text: string; media: string[] } {
 
 function collapseHistory(raw: RawMessage[]): ChatMsg[] {
   const out: ChatMsg[] = []
+  const senderNames = groupSenderNames(raw, isDirectChat.value)
   let i = 0
 
   while (i < raw.length) {
@@ -727,7 +796,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           eventMeta: { type: ev.attrs.type ?? 'event', source: ev.source, attrs: ev.attrs },
         })
       } else {
-        out.push({ role: 'user', content })
+        out.push({ role: 'user', content, senderName: senderNames[i], timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : undefined })
       }
       i++
       continue
@@ -741,7 +810,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           const rawText = rawTextContent(cur)
           if (rawText) {
             const { text, media } = extractMedia(rawText)
-            const entry: ChatMsg = { role: 'assistant', content: text }
+            const entry: ChatMsg = { role: 'assistant', content: text, timestamp: cur.timestamp }
             if (cur.usage) entry.usage = cur.usage
             if (media.length > 0) entry.media = media
             if (cur.reasoning_content) entry.reasoningContent = cur.reasoning_content
@@ -870,32 +939,40 @@ function toggleCollapse(sessionId: string): void {
   }
 }
 
-function openWebChat(id: string): void {
+function createNewWebChat(project?: ProjectRecord): void {
+  resetConversation()
+  draft.value = createChatDraft(projectsClient, project)
+  activeSessionId.value = ''
   mobileSidebarOpen.value = false
-  const sessionId = `web:${id}`
-  if (!allSessions.value.some(s => s.sessionId === sessionId)) {
-    allSessions.value.unshift({ sessionId, label: id, isDirectChat: true, isCurrent: false, parentSessionId: null, depth: 0 })
-  }
-  selectSession(sessionId)
+  void router.replace({ name: 'chat' })
+  void nextTick(() => {
+    autoResize()
+    chatInput.value?.focus({ preventScroll: true })
+  })
 }
 
-function createNewWebChat(): void {
-  openWebChat(`chat-${Date.now().toString(36)}`)
-}
-
-async function selectProjectSession(sessionId: string, projectId: string): Promise<void> {
-  const selectionGeneration = sessionSelectionGeneration
-  await loadSessionList()
-  // The create response is authoritative even if the subsequent list refresh failed.
-  if (!allSessions.value.some(session => session.sessionId === sessionId)) {
-    allSessions.value.unshift({
-      sessionId, projectId, label: sessionId.replace('web:', ''),
-      isDirectChat: true, isCurrent: true, parentSessionId: null, depth: 0,
-    })
+async function pickContext(kind: ChatContextItem['kind']): Promise<void> {
+  const picker = window.shadowDesktop?.chatContext
+  if (!canPickContext.value || !picker) {
+    composerError.value = 'File and folder context requires the local Main desktop app.'
+    return
   }
-  if (route.name !== 'chat' || selectionGeneration !== sessionSelectionGeneration) return
-  mobileSidebarOpen.value = false
-  selectSession(sessionId)
+  if (pickingContext.value) return
+  const generation = sessionSelectionGeneration
+  pickingContext.value = true
+  composerError.value = ''
+  try {
+    const paths = kind === 'file' ? await picker.selectFiles() : await picker.selectFolders()
+    if (generation !== sessionSelectionGeneration) return
+    contextItems.value = addChatContext(contextItems.value, kind, paths)
+  } catch (error) {
+    if (generation === sessionSelectionGeneration) composerError.value = error instanceof Error ? error.message : 'Could not select context. Try again.'
+  } finally {
+    if (generation === sessionSelectionGeneration) {
+      pickingContext.value = false
+      chatInput.value?.focus({ preventScroll: true })
+    }
+  }
 }
 
 async function deleteSession(sessionId: string): Promise<void> {
@@ -913,8 +990,7 @@ async function deleteSession(sessionId: string): Promise<void> {
     }
     // Clear active view if deleted session was selected
     if (activeSessionId.value === sessionId) {
-      activeSessionId.value = ''
-      messages.value = []
+      createNewWebChat()
     }
     await loadSessionList()
   } catch {
@@ -922,13 +998,30 @@ async function deleteSession(sessionId: string): Promise<void> {
   }
 }
 
-function selectSession(sessionId: string): void {
+function resetConversation(): void {
   sessionSelectionGeneration++
+  activePanel.value = 'conversation'
+  diagnosisOpened.value = false
+  sendRequest?.abort()
+  sendRequest = undefined
+  historyRequest?.abort()
+  historyRequest = undefined
+  loadingHistory.value = false
+  preparingSend.value = false
+  pickingContext.value = false
+  streaming.value = false
+  streamPhase.value = undefined
+  inputText.value = ''
+  contextItems.value = []
+  composerError.value = ''
   clearSelection()
   disconnectEventStream()
-  activeSessionId.value = sessionId
   messages.value = []
   streamContent.value = ''
+  streamTimestamp.value = undefined
+  streamingToolCall.value = ''
+  streamingToolCallData.value = null
+  streamingToolResult.value = ''
   systemPrompt.value = ''
   tools.value = []
   previousPhysicalId.value = null
@@ -938,7 +1031,12 @@ function selectSession(sessionId: string): void {
   expandedToolCalls.clear()
   expandedEvents.clear()
   expandedThinking.clear()
-  router.replace({ name: 'chat', params: { sessionId } })
+}
+
+function selectSession(sessionId: string): void {
+  resetConversation()
+  activeSessionId.value = sessionId
+  void router.replace({ name: 'chat', params: { sessionId } })
   void loadCurrentSession()
 }
 
@@ -954,34 +1052,48 @@ async function loadCurrentSession(): Promise<void> {
 }
 
 async function loadDirectChat(): Promise<void> {
+  historyRequest?.abort()
+  const controller = new AbortController()
+  historyRequest = controller
   const chatId = activeSessionId.value.replace('web:', '')
+  const sessionId = activeSessionId.value
   loadingHistory.value = true
   try {
-    const res = await fetch(buildUrl('/api/chat/session', { chatId }))
+    const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal })
+    if (!res.ok) throw new Error('Could not load conversation. Refresh to retry.')
     const data = await res.json()
+    if (controller.signal.aborted) return
     messages.value = collapseHistory(data.history ?? [])
     systemPrompt.value = data.systemPrompt ?? ''
     tools.value = data.tools ?? []
     // Also fetch segment info for navigation
     try {
-      const segRes = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(activeSessionId.value)}`, { pageSize: '1', shallow: 'true' }))
+      const segRes = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { pageSize: '1', shallow: 'true' }), { signal: controller.signal })
       const segData = await segRes.json()
+      if (controller.signal.aborted) return
       previousPhysicalId.value = segData.previousPhysicalId ?? null
-    } catch { previousPhysicalId.value = null }
+    } catch { if (!controller.signal.aborted) previousPhysicalId.value = null }
+    if (controller.signal.aborted) return
     viewingPhysicalId.value = null
     physicalIdStack.value = []
-  } catch {
-    messages.value = []
+  } catch (error) {
+    if (!controller.signal.aborted) composerError.value = error instanceof Error ? error.message : 'Could not load conversation. Refresh to retry.'
   } finally {
-    loadingHistory.value = false
-    scrollToBottom()
+    if (historyRequest === controller) {
+      historyRequest = undefined
+      loadingHistory.value = false
+      scrollToBottom()
+    }
   }
   // Keep a live event stream open so background pushes (cron/self-awake/subagent)
   // render without a manual refresh.
-  connectEventStream(chatId)
+  if (!controller.signal.aborted) connectEventStream(chatId)
 }
 
 async function loadReadonlySession(): Promise<void> {
+  historyRequest?.abort()
+  const controller = new AbortController()
+  historyRequest = controller
   const sessionId = activeSessionId.value
 
   // Read-only sessions have no live web input; ensure any event stream is closed.
@@ -990,11 +1102,12 @@ async function loadReadonlySession(): Promise<void> {
   try {
     // Fetch all history + context in parallel
     const [histRes, ctxRes] = await Promise.all([
-      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' })),
-      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`)),
+      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), { signal: controller.signal }),
+      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal }),
     ])
 
     const histData = await histRes.json()
+    if (controller.signal.aborted) return
     const rawMessages: RawMessage[] = histData.messages ?? []
     messages.value = collapseHistory(rawMessages)
     previousPhysicalId.value = histData.previousPhysicalId ?? null
@@ -1003,14 +1116,18 @@ async function loadReadonlySession(): Promise<void> {
 
     if (ctxRes.ok) {
       const ctxData = await ctxRes.json()
+      if (controller.signal.aborted) return
       systemPrompt.value = ctxData.systemPrompt ?? ''
       tools.value = ctxData.tools ?? []
     }
   } catch {
-    messages.value = []
+    if (!controller.signal.aborted) messages.value = []
   } finally {
-    loadingHistory.value = false
-    scrollToBottom()
+    if (historyRequest === controller) {
+      historyRequest = undefined
+      loadingHistory.value = false
+      scrollToBottom()
+    }
   }
 }
 
@@ -1018,21 +1135,30 @@ async function loadReadonlySession(): Promise<void> {
 
 async function viewPreviousSegment(): Promise<void> {
   if (!previousPhysicalId.value) return
-  physicalIdStack.value.push(viewingPhysicalId.value ?? '')
   const physId = previousPhysicalId.value
+  historyRequest?.abort()
+  const controller = new AbortController()
+  historyRequest = controller
   loadingHistory.value = true
   try {
-    const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(physId)}`))
+    const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(physId)}`), { signal: controller.signal })
+    if (!res.ok) throw new Error('Could not load this historical segment. Refresh to retry.')
     const data = await res.json()
+    if (controller.signal.aborted) return
     const rawMessages: RawMessage[] = data.messages ?? []
+    physicalIdStack.value.push(viewingPhysicalId.value ?? '')
     messages.value = collapseHistory(rawMessages)
     viewingPhysicalId.value = physId
     previousPhysicalId.value = data.previousPhysicalId ?? null
-  } catch {
-    messages.value = []
+    composerError.value = ''
+  } catch (cause) {
+    if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
-    loadingHistory.value = false
-    scrollToBottom()
+    if (historyRequest === controller) {
+      historyRequest = undefined
+      loadingHistory.value = false
+      scrollToBottom()
+    }
   }
 }
 
@@ -1046,7 +1172,7 @@ async function goBackToCurrentSegment(): Promise<void> {
 // ── Send message ──────────────────────────────────────────────────────────────
 
 function handleKeyDown(e: KeyboardEvent): void {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault()
     if (selectedText.value) {
       askInline()
@@ -1058,7 +1184,7 @@ function handleKeyDown(e: KeyboardEvent): void {
 
 /** Streaming accumulator state shared between the active request reader and the
  * persistent background event stream. */
-interface StreamState { accumulated: string }
+interface StreamState { accumulated: string; timestamp?: string }
 
 /** A decoded SSE payload emitted by the web channel. */
 interface StreamPayload {
@@ -1078,13 +1204,16 @@ interface StreamPayload {
  */
 function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean {
   const event = payload.event ?? 'response'
+  streamPhase.value = event === 'tool_call' ? 'tool' : 'llm'
 
   if (event === 'tool_call') {
     // Flush any pending response text
     if (state.accumulated) {
-      messages.value.push({ role: 'assistant', content: state.accumulated })
+      messages.value.push({ role: 'assistant', content: state.accumulated, timestamp: state.timestamp })
       state.accumulated = ''
+      state.timestamp = undefined
       streamContent.value = ''
+      streamTimestamp.value = undefined
     }
     // Flush previous tool result
     flushStreamingTool()
@@ -1111,24 +1240,29 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
     // response event
     flushStreamingTool()
     if (payload.content) {
+      state.timestamp ??= new Date().toISOString()
       state.accumulated += payload.content
       streamContent.value = state.accumulated
+      streamTimestamp.value = state.timestamp
       scrollToBottom()
     }
   }
 
   if (payload.done) {
+    streamPhase.value = undefined
     flushStreamingTool()
     if (state.accumulated) {
       const { text, media } = extractMedia(state.accumulated)
-      const msg: ChatMsg = { role: 'assistant', content: text }
+      const msg: ChatMsg = { role: 'assistant', content: text, timestamp: state.timestamp }
       if (payload.usage) msg.usage = payload.usage
       if (payload.media?.length) msg.media = [...(media.length ? media : []), ...payload.media]
       else if (media.length) msg.media = media
       messages.value.push(msg)
     }
     state.accumulated = ''
+    state.timestamp = undefined
     streamContent.value = ''
+    streamTimestamp.value = undefined
     scrollToBottom()
     return true
   }
@@ -1137,26 +1271,45 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
 
 async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: string; retry?: boolean; retryContent?: string }): Promise<void> {
   const retry = opts?.retry === true
-  const content = retry ? '' : (overrideContent ?? inputText.value.trim())
-  if ((!content && !retry) || streaming.value) return
-
-  // Add user message to chat (skip on retry — we re-run the existing request)
-  if (!retry) {
-    messages.value.push({ role: 'user', content })
-    inputText.value = ''
-    if (chatInput.value) chatInput.value.style.height = 'auto'
-  }
-  clearSelection()
-  streaming.value = true
-  streamContent.value = ''
-  streamingToolCall.value = ''
-  streamingToolResult.value = ''
-  streamToolResultExpanded.value = false
-  scrollToBottom()
+  const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
+  if ((!content && !retry) || streaming.value || preparingSend.value || pickingContext.value) return
+  const generation = sessionSelectionGeneration
+  const controller = new AbortController()
+  sendRequest = controller
+  const startingDraft = !activeSessionId.value
+  preparingSend.value = startingDraft
+  composerError.value = ''
+  let accepted = false
 
   try {
+    const sessionId = activeSessionId.value || await draft.value.prepare(controller.signal)
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    // Never load context/history for a draft: that endpoint materializes a session.
+    historyRequest?.abort()
+    historyRequest = undefined
+    loadingHistory.value = false
+    activeSessionId.value = sessionId
+    void router.replace({ name: 'chat', params: { sessionId } })
+    preparingSend.value = false
+    if (!retry) {
+      messages.value.push({ role: 'user', content, timestamp: new Date().toISOString() })
+      inputText.value = ''
+      contextItems.value = []
+      if (chatInput.value) chatInput.value.style.height = 'auto'
+    }
+    clearSelection()
+    streaming.value = true
+    streamPhase.value = 'llm'
+    streamContent.value = ''
+    streamTimestamp.value = undefined
+    streamingToolCall.value = ''
+    streamingToolResult.value = ''
+    streamToolResultExpanded.value = false
+    scrollToBottom()
+
+    const chatId = sessionId.replace('web:', '')
     const payload: Record<string, unknown> = {
-      chatId: activeSessionId.value.replace('web:', ''),
+      chatId,
       senderId: 'admin',
     }
     if (retry) {
@@ -1172,13 +1325,16 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     })
 
     if (!res.ok || !res.body) {
-      streaming.value = false
-      messages.value.push({ role: 'assistant', content: `Error: ${res.status} ${res.statusText}`, isError: true })
-      return
+      throw new Error(`Could not send message (${res.status} ${res.statusText}). Retry when Main is available.`)
     }
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    accepted = true
+    if (!eventStream) connectEventStream(chatId)
+    void loadSessionList()
 
     // Read SSE stream
     const reader = res.body.getReader()
@@ -1188,6 +1344,7 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
 
     while (true) {
       const { value, done } = await reader.read()
+      if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
       if (done) break
       buffer += decoder.decode(value, { stream: true })
 
@@ -1211,17 +1368,29 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
     // Stream ended without explicit done
     flushStreamingTool()
     if (streamState.accumulated) {
-      messages.value.push({ role: 'assistant', content: streamState.accumulated })
+      messages.value.push({ role: 'assistant', content: streamState.accumulated, timestamp: streamState.timestamp })
     }
   } catch (err) {
-    messages.value.push({ role: 'assistant', content: `Error: ${err}`, isError: true })
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    if (!activeSessionId.value) {
+      composerError.value = err instanceof Error ? err.message : 'Could not start the conversation. Retry.'
+    } else {
+      messages.value.push({ role: 'assistant', content: `Error: ${err}`, isError: true, timestamp: new Date().toISOString() })
+    }
   } finally {
-    streaming.value = false
-    streamContent.value = ''
-    streamingToolCall.value = ''
-    streamingToolCallData.value = null
-    streamingToolResult.value = ''
-    scrollToBottom()
+    if (generation === sessionSelectionGeneration) {
+      if (sendRequest === controller) sendRequest = undefined
+      preparingSend.value = false
+      streaming.value = false
+      streamPhase.value = undefined
+      streamContent.value = ''
+      streamTimestamp.value = undefined
+      streamingToolCall.value = ''
+      streamingToolCallData.value = null
+      streamingToolResult.value = ''
+      scrollToBottom()
+      if (accepted && !systemPrompt.value) void loadCurrentSession()
+    }
   }
 }
 
@@ -1278,6 +1447,7 @@ function flushStreamingTool(): void {
 
 function scrollToBottom(): void {
   nextTick(() => {
+    if (activePanel.value !== 'conversation') return
     const el = messagesContainer.value
     if (el) el.scrollTop = el.scrollHeight
   })
@@ -1443,7 +1613,7 @@ function captureHighlightRects(sel: Selection): void {
 }
 
 function handleTextSelection(): void {
-  if (route.name !== 'chat') return
+  if (route.name !== 'chat' || activePanel.value !== 'conversation') return
   if (!isDirectChat.value) return // readonly sessions – no selection actions
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || !sel.toString().trim()) return
@@ -1553,36 +1723,12 @@ async function askInFork(): Promise<void> {
   ].filter(Boolean).join('\n')
 
   const parentSessionId = activeSessionId.value
-  const parentEntry = allSessions.value.find(s => s.sessionId === parentSessionId)
-  const parentDepth = parentEntry?.depth ?? 0
-
-  // Create child session under current session's collapse group
-  const id = `chat-${Date.now().toString(36)}`
-  const sessionId = `web:${id}`
-  if (!allSessions.value.some(s => s.sessionId === sessionId)) {
-    // Insert right after parent (and any existing children) in the list
-    const parentIdx = allSessions.value.findIndex(s => s.sessionId === parentSessionId)
-    let insertIdx = parentIdx + 1
-    // Skip past existing children of the parent
-    while (insertIdx < allSessions.value.length && allSessions.value[insertIdx].depth > parentDepth) {
-      insertIdx++
-    }
-    allSessions.value.splice(insertIdx, 0, {
-      sessionId,
-      label: id,
-      isDirectChat: true,
-      isCurrent: false,
-      parentSessionId,
-      projectId: parentEntry?.projectId,
-      depth: parentDepth + 1,
-    })
-  }
-
-  // Expand parent so the new child is visible
+  const context = [...contextItems.value]
   collapsedSessions.delete(parentSessionId)
-
-  selectSession(sessionId)
-  await nextTick()
+  resetConversation()
+  contextItems.value = context
+  // Sending establishes parent lineage; fetching the empty child first would not.
+  activeSessionId.value = `web:chat-${crypto.randomUUID()}`
   await sendMessage(content, { parentSessionId })
 }
 
@@ -1590,38 +1736,41 @@ function handleResize(): void {
   if (highlightRects.value.length > 0) clearSelection()
 }
 
-/**
- * Terminal-CLI-like UX: clicking anywhere on the empty page background focuses
- * the chat input so the user can immediately start typing. Skips clicks on
- * interactive elements and active text selections so existing behaviour
- * (links, buttons, the "Ask BTW" text-selection flow) is preserved.
- */
-function handleBackgroundClick(e: MouseEvent): void {
-  if (route.name !== 'chat') return
-  if (!isDirectChat.value || viewingPhysicalId.value) return
+function handleTypingFocus(e: KeyboardEvent): void {
+  if (activePanel.value !== 'conversation' || !isComposerTypingKey(e)) return
   const input = chatInput.value
-  if (!input || input.disabled) return
+  if (!input) return
+  const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"], [role="slider"], [role="listbox"]'
+  const editing = [e.target, document.activeElement].some(target => target instanceof Element && !!target.closest(editable))
+  const overlayOpen = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="menu"], .project-dialog-backdrop, .project-menu-backdrop, .composer-popover-backdrop'))
+    .some(element => element.getClientRects().length > 0)
+  if (!canRedirectComposerKey(e, {
+    available: route.name === 'chat' && (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value
+      && !input.disabled && !input.readOnly && !preparingSend.value && !pickingContext.value,
+    editing,
+    overlayOpen,
+  })) return
 
-  // Don't steal focus while the user is selecting text.
-  const sel = window.getSelection()
-  if (sel && !sel.isCollapsed && sel.toString().trim()) return
-
-  // Ignore clicks on interactive elements (buttons, links, form fields, etc.).
-  const target = e.target as HTMLElement | null
-  if (!target || target.closest('button, a, input, textarea, select, option, label, [contenteditable="true"], [role="dialog"], .project-dialog-backdrop, .project-menu-backdrop, .projects-sidebar')) return
-
+  e.preventDefault()
   input.focus({ preventScroll: true })
+  // Insert the triggering character once; subsequent keys use normal textarea input.
+  input.setRangeText(e.key, input.selectionStart, input.selectionEnd, 'end')
+  inputText.value = input.value
+  autoResize()
 }
 
 document.addEventListener('mouseup', handleTextSelection)
-document.addEventListener('click', handleBackgroundClick)
+document.addEventListener('keydown', handleTypingFocus)
 window.addEventListener('resize', handleResize)
 const onGlobalConfigChanged = () => { void loadGlobalConfig() }
 window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
+  sessionSelectionGeneration++
+  sendRequest?.abort()
+  historyRequest?.abort()
   sessionListRequest?.abort()
   document.removeEventListener('mouseup', handleTextSelection)
-  document.removeEventListener('click', handleBackgroundClick)
+  document.removeEventListener('keydown', handleTypingFocus)
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('shadow:config-changed', onGlobalConfigChanged)
   stopStagePolling()
@@ -1643,6 +1792,7 @@ const canResend = computed(() => {
   const lastMsg = messages.value[messages.value.length - 1]
   return lastMsg.role === 'user'
 })
+const historyMarkers = computed(() => userMessageMarkers(messages.value))
 
 function resendLastMessage() {
   const lastUserMsg = [...messages.value].reverse().find(m => m.role === 'user')
@@ -1654,63 +1804,92 @@ function resendLastMessage() {
 .chat-workspace {
   position: relative;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 32px;
+  grid-template-columns: 260px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-width: 0;
   min-height: 0;
   height: 100%;
 }
-.chat-workspace.tools-open { grid-template-columns: 260px minmax(0, 1fr) minmax(240px, 28%); }
+.conversation-tabs { display: flex; flex-shrink: 0; gap: 24px; padding: 0 24px; border-bottom: 1px solid var(--c-border); }
+.conversation-tabs button { display: inline-flex; align-items: center; gap: 6px; position: relative; padding: 13px 0; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
+.conversation-tabs button.active { color: var(--c-text); font-weight: 550; }
+.conversation-tabs button.active::after { position: absolute; content: ''; height: 2px; inset: auto 0 -1px; background: var(--c-blue); border-radius: var(--radius-sm); }
+.conversation-tabs button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
 .chat-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.chat-panel.is-draft { justify-content: center; overflow-y: auto; padding: 40px 0 80px; box-sizing: border-box; }
+.draft-heading { flex-shrink: 0; box-sizing: border-box; width: min(100%, 720px); padding: 0 24px; margin: 0 auto 30px; text-align: center; color: var(--c-text); }
+.draft-mark { width: 64px; height: 64px; margin: 0 auto 22px; color: var(--c-text-secondary); }
+.draft-mark svg { width: 100%; height: 100%; }
+.draft-heading h1 { margin: 0 0 10px; font-size: clamp(19px, 2vw, 26px); font-weight: 500; letter-spacing: -.025em; }
+.draft-heading p { margin: 0; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
+.draft-project { display: inline-flex; align-items: center; gap: 16px; box-sizing: border-box; max-width: 100%; margin-top: 20px; padding: 16px 22px; border: 1px solid color-mix(in srgb, var(--c-blue) 40%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 8%, var(--c-bg-card)); text-align: left; }
+.draft-folder-icon { flex: 0 0 34px; width: 34px; height: 34px; color: var(--c-blue); }
+.draft-project-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.draft-project-label { color: var(--c-blue); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.draft-project strong { color: var(--c-text); font-size: 24px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+.draft-project-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
+.draft-heading .draft-scratch { margin-top: 14px; }
 .chat-header { flex-shrink: 0; gap: 10px; }
+.chat-session-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; }
 .chat-heading-copy { min-width: 0; overflow-wrap: anywhere; }
 .chat-header > button { flex-shrink: 0; }
-.chat-messages { min-height: 0; min-width: 0; overflow-wrap: anywhere; overscroll-behavior: contain; }
-.chat-composer { flex: 0 0 auto; min-width: 0; padding: 12px 16px; border-top: 1px solid var(--c-border); }
+.chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
+.chat-messages { min-height: 0; min-width: 0; padding-right: 56px; overflow-wrap: anywhere; overscroll-behavior: contain; }
+.chat-working { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--c-blue) 22%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 5%, var(--c-bg-card)); color: var(--c-blue); }
+.chat-working.tool { border-color: color-mix(in srgb, var(--c-warning, #d49a35) 28%, var(--c-border)); background: color-mix(in srgb, var(--c-warning, #d49a35) 6%, var(--c-bg-card)); color: var(--c-warning, #d49a35); }
+.chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
+.working-wave { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; height: 16px; margin-left: auto; }
+.working-wave i { width: 3px; height: 13px; border-radius: var(--radius-sm); background: currentColor; animation: working-wave 1.2s ease-in-out infinite; }
+.working-wave i:nth-child(2) { animation-delay: .15s; }
+.working-wave i:nth-child(3) { animation-delay: .3s; }
+@keyframes working-wave { 0%, 100% { transform: scaleY(.35); opacity: .45; } 50% { transform: scaleY(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .working-wave i { animation: none; } }
+.chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: 860px; margin: 12px auto 16px; }
+.composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); transition: border-color .15s ease; }
+.composer-box:focus-within { border-color: var(--c-text-secondary); }
 .composer-input { display: flex; min-width: 0; }
-.composer-input textarea { display: block; width: 100%; min-width: 0; max-height: min(160px, 22dvh); overflow-y: auto; }
-.composer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; min-width: 0; }
-.composer-toolbar > :first-child { flex: 0 1 auto; max-width: 100%; }
+.composer-input textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 78px; max-height: min(240px, 28dvh); overflow-y: auto; resize: none; padding: 3px 4px 10px; border: 0; outline: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; line-height: 1.6; }
+.composer-input textarea::placeholder { color: var(--c-text-secondary); }
+.composer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 4px; min-width: 0; }
+.composer-controls { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: calc(100% - 42px); }
 .composer-send, .composer-send-actions { margin-left: auto; flex-shrink: 0; }
+.composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-circle); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
+.composer-send:disabled { opacity: .35; cursor: not-allowed; }
+.composer-send:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
+.composer-send:focus-visible, .context-action:focus-visible, .context-chip button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .composer-send-actions { display: flex; gap: 8px; }
+.composer-context { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 10px; }
+.context-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 5px 4px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text-secondary); font-size: 12px; }
+.context-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-icon { flex-shrink: 0; width: 17px; height: 17px; }
+.context-chip button { flex-shrink: 0; padding: 0 3px; border: 0; background: transparent; color: var(--c-text-secondary); font-size: 17px; cursor: pointer; }
+.context-action { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.context-action:hover { background: var(--c-bg-muted); }
+.composer-error { margin: 8px 4px; color: var(--c-error); font-size: 12px; overflow-wrap: anywhere; }
+.composer-hint { margin-top: 9px; text-align: center; color: var(--c-text-secondary); font-size: 11px; opacity: .65; }
 .mobile-sessions-toggle { display: none; }
 .mobile-sidebar-backdrop { display: none; }
 @media (max-width: 1000px) {
-  .chat-workspace { grid-template-columns: 240px minmax(0, 1fr) 28px; }
-  .chat-workspace.tools-open { grid-template-columns: 240px minmax(0, 1fr) 250px; }
+  .chat-workspace { grid-template-columns: 240px minmax(0, 1fr); }
 }
 @media (max-width: 700px) {
-  .chat-workspace, .chat-workspace.tools-open { grid-template-columns: minmax(0, 1fr) 28px; }
-  .tools-open .right-pane { position: absolute; inset: 0 0 0 auto; width: min(360px, 85%); z-index: 10; background: var(--c-bg-card); box-shadow: -8px 0 24px var(--c-shadow-soft); }
+  .chat-workspace { grid-template-columns: minmax(0, 1fr); }
   .sessions-sidebar { display: none; position: absolute; inset: 36px auto 0 0; width: min(280px, 82%); z-index: 12; box-shadow: 8px 0 24px var(--c-shadow-soft); }
   .mobile-sessions-open .sessions-sidebar { display: flex; }
   .mobile-sidebar-backdrop { display: block; position: absolute; inset: 36px 0 0; z-index: 11; border: 0; background: rgb(0 0 0 / 25%); }
   .mobile-sessions-toggle { display: block; position: absolute; top: 6px; left: 8px; z-index: 13; }
   .chat-header { padding-top: 42px; }
-  .chat-empty-cta { padding-top: 42px; }
-  .chat-composer { padding: 10px; }
+  .chat-panel.is-draft { padding: 58px 0 28px; }
+  .draft-heading { margin-bottom: 18px; }
+  .draft-mark { width: 48px; height: 48px; margin-bottom: 16px; }
+  .draft-project { padding: 14px; gap: 12px; }
+  .draft-project strong { font-size: 21px; }
+  .chat-working { width: calc(100% - 24px); gap: 8px; }
+  .chat-working-detail { display: none; }
+  .chat-composer { width: calc(100% - 24px); margin-bottom: 12px; }
+  .composer-controls { gap: 0; }
 }
-/* ── Right-pane slide-out drawer ──────────────────────────────────────────── */
-.right-pane {
-  display: flex;
-  gap: 6px;
-  min-height: 0;
-  min-width: 0;
-  padding: 8px 4px;
-  border-left: 1px solid var(--c-border);
-  transition: none;
-}
-
-.chat-empty-cta {
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.chat-empty-cta:hover {
-  color: var(--c-text);
-  background: var(--c-frosted);
-}
-
 .retry-row {
   margin-top: 0.5rem;
 }
@@ -1721,50 +1900,12 @@ function resendLastMessage() {
   gap: 0.3rem;
 }
 
-.right-pane-toggle {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0.5rem;
-  width: 20px;
-  padding: 0.6rem 0;
-  border: 1px solid var(--c-border);
-  border-radius: 0;
-  background: var(--c-frosted);
-  color: var(--c-text);
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.right-pane-toggle:hover {
-  background: var(--c-primary-bg);
-  color: var(--c-text-on-primary);
-}
-
-.right-pane-toggle-icon {
-  font-size: 0.7rem;
-  line-height: 1;
-}
-
-.right-pane-toggle-label {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.6;
-}
-
 .btn {
   border: 1px solid var(--c-border);
   background: var(--c-primary-bg);
   color: var(--c-text-on-primary);
   padding: 0.35rem 0.7rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   font-size: 0.75rem;
   font-weight: 500;
   cursor: pointer;
@@ -1793,58 +1934,13 @@ function resendLastMessage() {
   font-size: 0.7rem;
 }
 
-.chat-session-badge {
-  font-size: 0.5rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  border-radius: 3px;
-  padding: 0.1em 0.4em;
-  white-space: nowrap;
-  flex-shrink: 0;
-  background: var(--c-bg-muted);
-  color: var(--c-text-muted);
-}
-
-.chat-session-badge.current {
-  background: var(--c-success-bg);
-  color: var(--c-success);
-}
-
-.chat-session-badge.stage-idle {
-  background: var(--c-success-bg);
-  color: var(--c-success);
-}
-
-.chat-session-badge.stage-llm {
-  background: var(--c-blue-bg, rgba(59, 130, 246, 0.15));
-  color: var(--c-blue, #3b82f6);
-  animation: pulse-badge 1.5s ease-in-out infinite;
-}
-
-.chat-session-badge.stage-tool {
-  background: var(--c-warning-bg, rgba(245, 158, 11, 0.15));
-  color: var(--c-warning, #f59e0b);
-  animation: pulse-badge 1.5s ease-in-out infinite;
-}
-
-.chat-session-badge.stage-inactive {
-  background: var(--c-bg-muted);
-  color: var(--c-text-faint);
-}
-
-@keyframes pulse-badge {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
 /* ── System event ─────────────────────────────────────────── */
 
 .system-event {
   align-self: stretch;
-  border-left: 2px solid var(--c-purple-border);
+  border: 1px solid var(--c-purple-border);
   padding: 0.3rem 0.5rem;
-  border-radius: 0 3px 3px 0;
+  border-radius: var(--radius-surface);
   background: var(--c-purple-soft);
   font-size: 0.7rem;
   color: var(--c-text-body);
@@ -1876,7 +1972,7 @@ function resendLastMessage() {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.05em 0.35em;
   background: var(--c-purple-soft-bg);
   color: var(--c-purple);
@@ -1888,7 +1984,7 @@ function resendLastMessage() {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.05em 0.35em;
   background: var(--c-bg-muted);
   color: var(--c-text-muted);
@@ -1962,7 +2058,7 @@ function resendLastMessage() {
 .system-event-content :deep(pre) {
   background: var(--c-bg-muted);
   color: var(--c-text);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.35rem;
   font-size: 0.65rem;
   overflow-x: auto;
@@ -1975,8 +2071,8 @@ function resendLastMessage() {
 
 .thinking-block {
   margin-bottom: 0.4rem;
-  border-left: 2px solid var(--c-warning, #f59e0b);
-  border-radius: 0 3px 3px 0;
+  border: 1px solid color-mix(in srgb, var(--c-warn) 30%, var(--c-border));
+  border-radius: var(--radius-control);
   padding: 0.25rem 0.5rem;
   background: var(--c-warning-bg, rgba(245, 158, 11, 0.08));
 }
@@ -2017,7 +2113,7 @@ function resendLastMessage() {
 .thinking-content :deep(pre) {
   background: var(--c-bg-muted);
   color: var(--c-text);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.35rem;
   font-size: 0.65rem;
   overflow-x: auto;
@@ -2036,7 +2132,7 @@ function resendLastMessage() {
 .chat-media-img {
   max-width: 100%;
   max-height: 320px;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--c-border);
   cursor: pointer;
   transition: opacity 0.12s ease;
@@ -2049,7 +2145,7 @@ function resendLastMessage() {
 .chat-content :deep(.chat-inline-img) {
   max-width: 100%;
   max-height: 320px;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--c-border);
   cursor: pointer;
   margin: 0.4rem 0;
@@ -2071,7 +2167,7 @@ function resendLastMessage() {
 .chat-bubble {
   max-width: 80%;
   padding: 0.5rem 0.75rem;
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   font-size: 0.8rem;
   line-height: 1.5;
   border: 1px solid var(--c-border);
@@ -2082,7 +2178,6 @@ function resendLastMessage() {
   align-self: flex-end;
   background: var(--c-bg-muted);
   color: var(--c-text);
-  border-bottom-right-radius: 2px;
   border-color: var(--c-border-soft);
 }
 
@@ -2090,7 +2185,6 @@ function resendLastMessage() {
   align-self: flex-start;
   background: var(--c-bg-card);
   color: var(--c-text);
-  border-bottom-left-radius: 2px;
 }
 
 /* ── Compaction summary ───────────────────────────────────── */
@@ -2098,8 +2192,8 @@ function resendLastMessage() {
 .compaction-summary {
   align-self: stretch;
   border: 1px dashed var(--c-info, #6366f1);
-  border-left: 3px solid var(--c-info, #6366f1);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
+  overflow: hidden;
   font-size: 0.8rem;
 }
 
@@ -2136,7 +2230,7 @@ function resendLastMessage() {
   margin-bottom: 0.5rem;
   background: var(--c-bg-muted);
   border: 1px solid var(--c-border-soft);
-  border-radius: 6px;
+  border-radius: var(--radius-surface);
   font-size: 0.75rem;
 }
 
@@ -2192,7 +2286,7 @@ function resendLastMessage() {
   pointer-events: none;
   z-index: 1;
   background: rgba(250, 204, 21, 0.4);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   filter: url(#highlight-rough);
   animation: hl-fade-in 0.25s ease-out;
 }
@@ -2203,24 +2297,42 @@ function resendLastMessage() {
   }
 }
 
-.chat-role {
-  font-size: 0.55rem;
+.chat-sender {
+  font-size: 0.7rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  opacity: 0.45;
-  margin-bottom: 0.15rem;
-  user-select: none;
+  color: var(--c-text-secondary);
+  margin-bottom: 0.25rem;
+  overflow-wrap: anywhere;
 }
 
 .chat-content {
   word-break: break-word;
 }
 
+.chat-content :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.chat-content :deep(> :last-child) {
+  margin-bottom: 0;
+}
+
+.chat-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.65rem;
+  margin-top: 0.4rem;
+}
+
+.chat-footer .usage-info {
+  margin-top: 0;
+}
+
 .chat-content :deep(pre) {
   background: var(--c-bg-code);
   color: var(--c-text-on-dark);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.6rem 0.75rem;
   overflow-x: auto;
   font-size: 0.75rem;
@@ -2241,7 +2353,7 @@ function resendLastMessage() {
 .chat-content :deep(:not(pre) > code) {
   background: var(--c-bg-muted);
   padding: 0.1em 0.3em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .chat-content :deep(pre code) {
@@ -2255,12 +2367,10 @@ function resendLastMessage() {
 .tool-group {
   align-self: flex-start;
   max-width: 85%;
-  border-left: 2px solid var(--c-border);
-  padding-left: 0.6rem;
-  margin-left: 0.2rem;
+  border: 1px solid var(--c-border);
   font-size: 0.75rem;
   background: var(--c-frosted);
-  border-radius: 0 4px 4px 0;
+  border-radius: var(--radius-surface);
   padding: 0.3rem 0.6rem;
 }
 
@@ -2324,7 +2434,7 @@ function resendLastMessage() {
   word-break: break-word;
   color: var(--c-text-secondary);
   background: var(--c-bg-muted);
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   padding: 0.4rem 0.5rem;
   max-height: 300px;
   overflow: auto;
@@ -2344,7 +2454,7 @@ function resendLastMessage() {
   font-size: 0.55rem;
   font-weight: 500;
   letter-spacing: 0.03em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.1em 0.4em;
   background: var(--c-bg-muted);
   color: var(--c-text-secondary, var(--c-text-body));
@@ -2365,7 +2475,7 @@ function resendLastMessage() {
 
 .tool-result {
   margin-top: 0.25rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--c-bg-soft);
   padding: 0.3rem 0.5rem;
   transition: background 0.1s ease;
@@ -2409,36 +2519,6 @@ function resendLastMessage() {
   overflow: hidden;
 }
 
-/* ── Typing indicator ──────────────────────────────────────── */
-
-.typing-indicator {
-  display: inline-flex;
-  gap: 3px;
-  align-items: center;
-  padding: 2px 0;
-}
-
-.typing-indicator span {
-  width: 5px;
-  height: 5px;
-  background: var(--c-text-faint);
-  border-radius: 50%;
-  animation: typing-dot 1.4s ease-in-out infinite;
-}
-
-.typing-indicator span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.typing-indicator span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-
-@keyframes typing-dot {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1); }
-}
-
 /* ── Selection indicator ──────────────────────────────────── */
 
 .selection-indicator {
@@ -2448,8 +2528,8 @@ function resendLastMessage() {
   gap: 0.5rem;
   margin-bottom: 0.35rem;
   padding: 0.35rem 0.5rem;
-  border-left: 2px solid var(--c-selection-border);
-  border-radius: 0 3px 3px 0;
+  border: 1px solid var(--c-selection-border);
+  border-radius: var(--radius-control);
   background: var(--c-selection-bg);
   font-size: 0.75rem;
 }
@@ -2488,7 +2568,7 @@ function resendLastMessage() {
   font-size: 0.9rem;
   line-height: 1;
   padding: 0.1rem 0.2rem;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   flex-shrink: 0;
   transition: color 0.1s ease, background 0.1s ease;
@@ -2518,7 +2598,7 @@ function resendLastMessage() {
   font-size: 0.55rem;
   font-weight: 600;
   letter-spacing: 0.03em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 0.1em 0.4em;
   white-space: nowrap;
   background: var(--c-bg-muted);
@@ -2555,7 +2635,7 @@ function resendLastMessage() {
   border: 1px solid #666;
   color: inherit;
   padding: 6px 16px;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   font-size: 0.85rem;
 }

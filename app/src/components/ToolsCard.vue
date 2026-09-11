@@ -1,5 +1,5 @@
 <template>
-  <div class="rounded-md border border-default bg-surface flex flex-col min-w-0 min-h-0 flex-shrink-0" :style="!collapsed && maxHeight ? `max-height: ${maxHeight}` : ''">
+  <div class="rounded-md border border-default bg-surface flex flex-col min-w-0 min-h-0 flex-shrink-0 overflow-hidden" :style="!collapsed && maxHeight ? `max-height: ${maxHeight}` : ''">
     <div
       class="px-4 py-3 border-b border-default flex-shrink-0 flex items-center justify-between"
       :class="{ 'card-header-toggle': collapsible }"
@@ -15,8 +15,7 @@
         :class="{ copied }"
         @click.stop="copy"
       >
-        <svg v-if="!copied" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <span class="w-3 h-3" :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />
         {{ copied ? 'Copied!' : 'Copy JSON' }}
       </button>
     </div>
@@ -112,7 +111,7 @@ function copy() {
   gap: 0.3rem;
   padding: 0.2rem 0.55rem;
   border: 1px solid var(--c-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--c-bg-soft);
   color: var(--c-text-muted);
   font-size: 0.6rem;
@@ -153,7 +152,7 @@ function copy() {
   flex-direction: column;
   gap: 0.1rem;
   padding: 0.4rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   background: var(--c-bg-soft);
   cursor: pointer;
   user-select: none;

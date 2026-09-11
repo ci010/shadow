@@ -137,7 +137,7 @@ void reload()
 .crumb {
   font-size: 0.75rem;
   padding: 0.15rem 0.4rem;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   border: none;
   background: transparent;
   color: var(--c-text-muted);
@@ -174,7 +174,7 @@ void reload()
   cursor: pointer;
   font-size: 0.9rem;
   padding: 0.15rem 0.4rem;
-  border-radius: 5px;
+  border-radius: var(--radius-control);
 }
 
 .file-desktop-refresh:hover {

@@ -81,6 +81,7 @@ export class NodeConnectionSession {
   readonly #localHello: VersionHelloV1
   readonly #options: NodeConnectionSessionOptions
   readonly #jobs = new Map<string, TrackedJob>()
+  readonly #advertisedCapabilities = new Set<string>()
   readonly #outbound: NodeSessionOutboundFrameV1[] = []
   readonly #closedResolver = Promise.withResolvers<DuplexCloseInfo>()
   #writerWake: (() => void) | undefined
@@ -124,6 +125,11 @@ export class NodeConnectionSession {
 
   get state(): NodeConnectionState {
     return this.#state
+  }
+
+  hasAdvertisedCapability(capabilityId: string): boolean {
+    return this.#state === 'authenticated' &&
+      this.#advertisedCapabilities.has(capabilityId)
   }
 
   get authentication(): DeviceAuthenticationV1 | undefined {
@@ -351,6 +357,7 @@ export class NodeConnectionSession {
     try {
       if (frame.type === 'capability-advertise') {
         this.#registry.advertiseCapability(auth, frame.capability)
+        this.#advertisedCapabilities.add(frame.capability.capabilityId)
         await this.#options.onRegistryMutation?.(this.#now())
       } else if (frame.type === 'capability-withdraw') {
         this.#registry.withdrawCapability(
@@ -358,6 +365,7 @@ export class NodeConnectionSession {
           frame.nodeId,
           frame.capabilityId,
         )
+        this.#advertisedCapabilities.delete(frame.capabilityId)
         await this.#options.onRegistryMutation?.(this.#now())
       } else if (frame.type === 'job-event') {
         this.#registry.requireNodePrivilege(auth, 'jobs:execute')

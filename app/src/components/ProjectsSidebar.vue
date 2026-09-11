@@ -18,9 +18,7 @@
             <svg class="folder-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 5.5h5l2 2h8v8.5a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-10.5a1 1 0 0 1 1-1Z" /></svg>
             <span class="project-name">{{ group.project.name }}</span>
           </button>
-          <button class="project-add folder-add" :disabled="creatingProjectId !== ''" :aria-label="`New conversation in ${group.project.name}`" :title="`New conversation in ${group.project.name}`" @click="createProjectSession(group.project)">
-            {{ creatingProjectId === group.project.id ? '…' : '+' }}
-          </button>
+          <button class="project-add folder-add" :aria-label="`New conversation in ${group.project.name}`" :title="`New conversation in ${group.project.name}`" @click="startProjectDraft(group.project)">+</button>
         </div>
         <div v-if="expandedProjects.has(group.project.id)" class="project-conversations">
           <p v-if="!group.sessions.length" class="empty-project">No conversations yet</p>
@@ -34,7 +32,6 @@
         <p v-if="!sessionsLoading && !groups.chats.length" class="sidebar-note">No unassociated conversations.</p>
         <ProjectSessionList :sessions="groups.chats" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
       </section>
-      <div v-if="actionError" class="sidebar-error" role="alert"><p>{{ actionError }}</p><button v-if="failedProject" class="text-action" @click="createProjectSession(failedProject)">Retry new conversation</button></div>
       <div v-if="cloneStatus.state === 'unknown' || cloneStatus.state === 'failed'" class="sidebar-error" role="alert">
         <p>{{ cloneStatus.error }}</p><button class="text-action" @click="dialogMode = 'clone'">Review clone</button>
       </div>
@@ -61,6 +58,7 @@ const props = defineProps<{
   apiBase: string
   sessions: SidebarSession[]
   activeSessionId: string
+  draftProjectId?: string
   collapsed: ReadonlySet<string>
   stages: Record<string, string>
   sessionsLoading: boolean
@@ -72,7 +70,7 @@ const emit = defineEmits<{
   toggle: [id: string]
   reload: []
   scratch: []
-  created: [sessionId: string, projectId: string]
+  draft: [project: ProjectRecord]
 }>()
 const client = createProjectsClient(props.apiBase)
 const projects = ref<ProjectRecord[]>([])
@@ -81,9 +79,6 @@ const expandedProjects = reactive(new Set<string>())
 const selectedProjectId = ref('')
 const loading = ref(false)
 const error = ref('')
-const actionError = ref('')
-const failedProject = ref<ProjectRecord>()
-const creatingProjectId = ref('')
 const cloneStatus = ref<CloneView>({ state: 'idle' })
 const dialogMode = ref<'open' | 'clone' | null>(null)
 const menuOpen = ref(false)
@@ -91,10 +86,11 @@ const menuButton = ref<HTMLElement>()
 const menu = ref<HTMLElement>()
 const menuPosition = ref({ top: '0px', left: '0px' })
 let listRequest: AbortController | undefined
-let createRequest: AbortController | undefined
 let active = true
 
-watch(() => props.sessions.find(session => session.sessionId === props.activeSessionId)?.projectId, id => {
+watch(() => props.activeSessionId
+  ? props.sessions.find(session => session.sessionId === props.activeSessionId)?.projectId
+  : props.draftProjectId, id => {
   selectedProjectId.value = id ?? ''
   if (id) expandedProjects.add(id)
 }, { immediate: true })
@@ -135,27 +131,10 @@ function selectConversation(id: string) {
   selectedProjectId.value = props.sessions.find(session => session.sessionId === id)?.projectId ?? ''
   emit('select', id)
 }
-async function createProjectSession(project: ProjectRecord) {
-  if (creatingProjectId.value) return
-  actionError.value = ''
-  failedProject.value = undefined
-  creatingProjectId.value = project.id
-  const controller = new AbortController()
-  createRequest = controller
-  try {
-    const session = await client.createSession(project.id, controller.signal)
-    if (controller.signal.aborted || !active) return
-    selectedProjectId.value = project.id
-    expandedProjects.add(project.id)
-    emit('created', session.sessionId, project.id)
-  } catch (cause) {
-    if (!controller.signal.aborted) {
-      failedProject.value = project
-      actionError.value = cause instanceof Error ? cause.message : 'Could not create a conversation. Check Main and retry.'
-    }
-  } finally {
-    if (createRequest === controller) { createRequest = undefined; creatingProjectId.value = '' }
-  }
+function startProjectDraft(project: ProjectRecord) {
+  selectedProjectId.value = project.id
+  expandedProjects.add(project.id)
+  emit('draft', project)
 }
 async function openMenu() {
   if (!menuButton.value) return
@@ -198,9 +177,6 @@ function deactivate() {
   listRequest?.abort()
   listRequest = undefined
   loading.value = false
-  createRequest?.abort()
-  createRequest = undefined
-  creatingProjectId.value = ''
 }
 const closeOnResize = () => closeMenu()
 onMounted(() => { void loadProjects(); window.addEventListener('resize', closeOnResize) })
@@ -213,12 +189,12 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .projects-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
 .projects-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 60px; padding: 12px 16px 8px 20px; }
 .projects-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.project-add { display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; color: var(--c-text-secondary); background: transparent; font-size: 21px; line-height: 1; }
+.project-add { display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-control); color: var(--c-text-secondary); background: transparent; font-size: 21px; line-height: 1; }
 .project-add:hover { color: var(--c-text); background: var(--c-bg-muted); }
 .project-add:disabled { opacity: .5; cursor: wait; }
 .projects-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 10px 16px; }
 .project-group { margin-bottom: 4px; }
-.project-folder-row { display: flex; align-items: center; min-width: 0; padding-right: 4px; border-radius: 5px; }
+.project-folder-row { display: flex; align-items: center; min-width: 0; padding-right: 4px; border-radius: var(--radius-control); }
 .project-folder-row:hover { background: var(--c-bg-soft); }
 .project-folder-row.selected { background: var(--c-bg-muted); }
 .project-folder { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; min-height: 38px; padding: 5px 2px 5px 6px; border: 0; background: transparent; color: var(--c-text); text-align: left; }
@@ -237,8 +213,8 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .text-action { border: 0; padding: 3px 0; background: transparent; color: var(--c-text); text-decoration: underline; text-underline-offset: 3px; font: inherit; }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .project-menu-backdrop { position: fixed; inset: 0; z-index: 900; }
-.project-menu { position: fixed; display: flex; flex-direction: column; width: 196px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--c-border); border-radius: 7px; background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
-.project-menu button { border: 0; padding: 10px 12px; border-radius: 3px; background: transparent; color: var(--c-text); font-size: 13px; text-align: left; }
+.project-menu { position: fixed; display: flex; flex-direction: column; width: 196px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
+.project-menu button { border: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: transparent; color: var(--c-text); font-size: 13px; text-align: left; }
 .project-menu button:hover, .project-menu button:focus-visible { background: var(--c-bg-muted); }
 @media (hover: none), (max-width: 700px) { .folder-add { opacity: 1; } }
 </style>

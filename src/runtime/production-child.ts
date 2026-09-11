@@ -31,6 +31,7 @@ import {
   type LocalApprovalService,
 } from '../execution/local-approval.ts'
 import { ChildLocalControlService } from './child-local-control.ts'
+import { childLocalNodeInventory } from './node-inventory.ts'
 
 export interface ProductionChildOptions {
   readonly keyStore?: ProtectedDeviceKeyStore
@@ -157,6 +158,7 @@ export async function startProductionChildRuntime(
       ...options.localControl,
       approvalService,
       requestShutdown: () => runtime?.shutdown(),
+      nodeInventory: () => childLocalNodeInventory(config, capabilities, '0.1.0'),
     })
     : undefined
   runtime = startChildRuntime(config, {

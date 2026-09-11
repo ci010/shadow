@@ -15,7 +15,6 @@ test('local Main admin sees product and diagnostic routes', () => {
 
   assertEquals(routeNames(context), [
     'chat',
-    'workspaces',
     'nodes',
     'providers',
     'agents',
@@ -32,7 +31,6 @@ test('Main-facing navigation is scope-aware rather than role-gated', () => {
 
   assertEquals(routeNames(context), [
     'chat',
-    'workspaces',
     'nodes',
     'approvals',
     'agents',
@@ -50,7 +48,6 @@ test('restricted Child sees only routes allowed by its scopes', () => {
 
   assertEquals(routeNames(context), [
     'chat',
-    'workspaces',
     'nodes',
     'approvals',
   ])
@@ -70,7 +67,7 @@ test('Providers is a Main administration tab in the primary navigation group', (
   assertEquals(navigationFor(context).find((item) => item.name === 'providers'), {
     name: 'providers', label: 'Providers', group: 'primary',
   })
-  assertEquals(routeNames({ ...context, uiScopes: ['chat:read'] }), ['chat', 'workspaces'])
+  assertEquals(routeNames({ ...context, uiScopes: ['chat:read'] }), ['chat'])
 })
 
 test('Child local surfaces do not require Main administration scopes', () => {

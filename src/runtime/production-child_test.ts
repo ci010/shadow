@@ -170,6 +170,31 @@ test('production Child starts with a correlated protected key and shuts down', a
     role: 'child',
     status: 'ready',
   })
+  const inventoryUrl = `http://127.0.0.1:${localControlPort}/local/v1/nodes`
+  assertEquals((await fetch(inventoryUrl)).status, 401)
+  assertEquals((await fetch(inventoryUrl, {
+    headers: { Authorization: 'Bearer incorrect' },
+  })).status, 401)
+  const inventory = await fetch(inventoryUrl, {
+    headers: { Authorization: 'Bearer production-child-secret' },
+  })
+  assertEquals(inventory.status, 200)
+  assertEquals(inventory.headers.get('Cache-Control'), 'no-store')
+  const body = await inventory.json()
+  assertEquals(body.version, 1)
+  assertEquals(body.nodes.length, 1)
+  assertEquals(body.nodes[0].nodeId, 'node-1')
+  assertEquals(body.nodes[0].role, 'child')
+  assertEquals(body.nodes[0].connection, 'connected')
+  assertEquals(body.nodes[0].capabilities, [{
+    capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
+  }])
+  assertEquals(JSON.stringify(body).includes('credential'), false)
+  assertEquals(JSON.stringify(body).includes('fingerprint'), false)
+  assertEquals((await fetch(
+    `http://127.0.0.1:${localControlPort}/nodes/v1`,
+    { headers: { Authorization: 'Bearer production-child-secret' } },
+  )).status, 404)
   assertEquals(await Promise.all([runtime.shutdown(), runtime.shutdown()]), [
     undefined,
     undefined,

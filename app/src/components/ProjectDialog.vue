@@ -210,12 +210,12 @@ onUnmounted(deactivate)
 
 <style scoped>
 .project-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgb(0 0 0 / 36%); }
-.project-dialog { width: min(100%, 480px); min-width: 0; max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 16px 48px var(--c-shadow); }
+.project-dialog { width: min(100%, 480px); min-width: 0; max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; padding: 24px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 16px 48px var(--c-shadow); }
 .project-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .project-dialog h2 { margin: 0; font-size: 18px; font-weight: 600; }
 .dialog-intro { margin: 12px 0 24px; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
 .dialog-field { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; font-size: 13px; font-weight: 500; }
-.dialog-field input { min-width: 0; width: 100%; border: 1px solid var(--c-border-soft); border-radius: 5px; padding: 9px 10px; background: var(--c-bg-input); color: var(--c-text); font: inherit; font-weight: 400; }
+.dialog-field input { min-width: 0; width: 100%; border: 1px solid var(--c-border-soft); border-radius: var(--radius-control); padding: 9px 10px; background: var(--c-bg-input); color: var(--c-text); font: inherit; font-weight: 400; }
 .dialog-field input::placeholder { color: var(--c-text-secondary); }
 .dialog-field small { color: var(--c-text-secondary); font-weight: 400; line-height: 1.5; }
 .path-input-row { display: flex; gap: 8px; }
@@ -223,7 +223,7 @@ onUnmounted(deactivate)
 .project-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
 .project-dialog .primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .project-dialog .primary:hover { background: var(--c-primary-bg-hover); }
-.project-icon-button { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border: 0; border-radius: 4px; background: transparent; color: var(--c-text-secondary); font-size: 22px; }
+.project-icon-button { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font-size: 22px; }
 .project-icon-button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .project-dialog :is(button, input):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .project-dialog button:disabled, .project-dialog input:disabled { opacity: .6; cursor: not-allowed; }

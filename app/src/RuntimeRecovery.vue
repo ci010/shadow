@@ -74,7 +74,7 @@ async function resetSetup(): Promise<void> {
 	gap: 14px;
 	padding: 28px;
 	border: 1px solid #cdd5d0;
-	border-radius: 8px;
+	border-radius: var(--radius-overlay);
 	background: #fff;
 	box-shadow: 0 18px 48px rgba(25, 49, 39, .1);
 }
@@ -83,7 +83,7 @@ async function resetSetup(): Promise<void> {
 	height: 44px;
 	display: grid;
 	place-items: center;
-	border-radius: 7px;
+	border-radius: var(--radius-control);
 	color: white;
 	background: var(--ink);
 	font: 700 22px/1 Georgia, serif;
@@ -91,9 +91,9 @@ async function resetSetup(): Promise<void> {
 .eyebrow { margin: 0 0 3px; color: var(--accent); font-size: 12px; font-weight: 700; text-transform: uppercase; }
 h1 { margin: 0; font: 600 24px/1.2 Georgia, "Times New Roman", serif; letter-spacing: 0; }
 .message { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
-.notice { grid-column: 1 / -1; margin: 4px 0 0; padding: 11px 13px; color: #7b3027; border: 1px solid #e5bbb4; border-radius: 6px; background: #fff5f3; font-size: 13px; }
+.notice { grid-column: 1 / -1; margin: 4px 0 0; padding: 11px 13px; color: #7b3027; border: 1px solid #e5bbb4; border-radius: var(--radius-surface); background: #fff5f3; font-size: 13px; }
 .actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
-button { min-height: 38px; padding: 0 16px; border-radius: 5px; font: 650 13px/1 "Segoe UI Variable", "Segoe UI", sans-serif; cursor: pointer; }
+button { min-height: 38px; padding: 0 16px; border-radius: var(--radius-control); font: 650 13px/1 "Segoe UI Variable", "Segoe UI", sans-serif; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .52; }
 .primary-button { color: white; border: 1px solid var(--accent); background: var(--accent); }
 .secondary-button { color: var(--ink); border: 1px solid #bac4be; background: white; }

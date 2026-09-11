@@ -32,6 +32,7 @@ export interface MainNodeSession {
   run(): Promise<void>
   close(info: DuplexCloseInfo): Promise<void>
   readonly state?: string
+  hasAdvertisedCapability?(capabilityId: string): boolean
   dispatchJob?(request: JobRequestV1): JobRequestV1
   dispatchCancellation?(jobId: string): void
 }
@@ -55,6 +56,7 @@ export interface NodeWebSocketApi extends RemoteNodeJobDispatcher {
   readonly plugin: GatewayPlugin
   readonly activeSessionCount: number
   isNodeConnected(nodeId: string): boolean
+  hasAdvertisedCapability(nodeId: string, capabilityId: string): boolean
   closeAll(reason?: string): Promise<void>
 }
 
@@ -171,6 +173,9 @@ export function createNodeWebSocketApi(
     },
     isNodeConnected(nodeId): boolean {
       return sessionsByNode.get(nodeId)?.state === 'authenticated'
+    },
+    hasAdvertisedCapability(nodeId, capabilityId): boolean {
+      return sessionsByNode.get(nodeId)?.hasAdvertisedCapability?.(capabilityId) === true
     },
     closeAll(reason = 'Main node listener is shutting down'): Promise<void> {
       if (closePromise) return closePromise

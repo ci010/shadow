@@ -167,19 +167,19 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.provider-setup { max-width: 680px; margin: 24px auto; padding: 30px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-bg-card); color: var(--c-text); }
+.provider-setup { max-width: 680px; margin: 24px auto; padding: 30px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); background: var(--c-bg-card); color: var(--c-text); }
 .eyebrow { color: var(--c-success); font-size: 11px; font-weight: 700; letter-spacing: .1em; }
 h1 { font-size: 24px; margin: 8px 0 14px; } h2 { font-size: 17px; }
 .lead, .method-panel p { color: var(--c-text-secondary); line-height: 1.6; }
 .method-tabs, .actions, .footer-actions, .device-code { display: flex; flex-wrap: wrap; gap: 10px; }
 .method-tabs { margin: 22px 0; }.method-tabs [aria-pressed="true"] { border-color: var(--c-success); color: var(--c-success); }
-button { padding: 9px 14px; border: 1px solid var(--c-border); border-radius: 5px; color: var(--c-text); background: var(--c-bg-soft); font: inherit; cursor: pointer; }
+button { padding: 9px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-soft); font: inherit; cursor: pointer; }
 button:disabled { opacity: .55; cursor: not-allowed; } button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--c-success); outline-offset: 2px; }
 .primary { background: #147a57; border-color: #147a57; color: white; }.actions { justify-content: flex-end; margin-top: 20px; }
 .method-panel { display: grid; gap: 12px; } label { display: grid; gap: 6px; font-size: 13px; }
-input, select { min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: 5px; background: var(--c-bg); color: var(--c-text); font: inherit; }
-.help { font-size: 12px; }.notice { padding: 12px; border: 1px solid var(--c-border); border-radius: 5px; line-height: 1.5; }.error { border-color: var(--c-error); color: var(--c-error); }
-.device-panel { display: grid; gap: 14px; padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border); border-radius: 6px; }.device-panel span { font-size: 13px; color: var(--c-text-secondary); }
+input, select { min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
+.help { font-size: 12px; }.notice { padding: 12px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); line-height: 1.5; }.error { border-color: var(--c-error); color: var(--c-error); }
+.device-panel { display: grid; gap: 14px; padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border); border-radius: var(--radius-surface); }.device-panel span { font-size: 13px; color: var(--c-text-secondary); }
 .device-code { align-items: center; justify-content: space-between; }.device-code code { user-select: text; font: 700 26px monospace; letter-spacing: .08em; }
 .footer-actions { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--c-border); justify-content: space-between; }
 @media (max-width: 680px) { .provider-setup { padding: 20px; margin: 12px auto; } }

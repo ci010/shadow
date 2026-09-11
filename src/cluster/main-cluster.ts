@@ -14,6 +14,11 @@ import {
 import { pairingApiPlugin } from './pairing-api.ts'
 import { nodeAdministrationApiPlugin } from './node-administration-api.ts'
 import {
+  mainNodeInventory,
+  nodeInventoryApiPlugin,
+  type NodeInventoryEntry,
+} from './node-inventory.ts'
+import {
   type RegistrySnapshotAdapter,
   RegistrySnapshotCoordinator,
 } from './persistence.ts'
@@ -39,6 +44,10 @@ export interface MainClusterOptions {
     request: Request,
   ) => boolean | Promise<boolean>
   readonly clientKey: (request: Request) => string
+  readonly localNodeInventory?: () => NodeInventoryEntry
+  readonly authorizeInventory?: (
+    request: Request,
+  ) => boolean | Promise<boolean>
   readonly now?: () => Date
 }
 
@@ -167,6 +176,11 @@ export async function createMainCluster(
         approve,
         now,
       }),
+      ...(options.localNodeInventory ? [nodeInventoryApiPlugin({
+        path: '/nodes/v1',
+        authorize: options.authorizeInventory ?? options.authorizeOfferCreation,
+        inventory: () => mainNodeInventory(options.localNodeInventory!(), registry, nodeApi),
+      })] : []),
       nodeApi.plugin,
     ],
     get activeSessionCount(): number {

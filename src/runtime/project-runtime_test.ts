@@ -42,7 +42,7 @@ test('Main serves authorized project creation and restores its session associati
     })
     const configPath = join(root, 'bot.config.json')
     await writeFile(configPath, JSON.stringify(config))
-    const options = { configPath, gateway: { host: '127.0.0.1', port, launchCredential: credential } }
+    const options = { configPath, localNodeId: 'project-main-node', gateway: { host: '127.0.0.1', port, launchCredential: credential } }
     runtime = await startMainRuntime(config, options)
     await runtime.ready
     const url = `http://127.0.0.1:${port}`
@@ -57,12 +57,28 @@ test('Main serves authorized project creation and restores its session associati
       body: JSON.stringify({ path: folder }),
     })
     assert.equal(unauthorized.status, 401)
+    assert.equal((await fetch(`${url}/nodes/v1`)).status, 401)
+    const initialInventory = await (await request('/nodes/v1')).json()
+    assert.equal(initialInventory.version, 1)
+    assert.equal(initialInventory.nodes.length, 1)
+    assert.equal(initialInventory.nodes[0].nodeId, 'project-main-node')
+    assert.deepEqual(initialInventory.nodes[0].capabilities, [{
+      capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
+    }])
     const empty = await request('/api/projects')
     assert.deepEqual(await empty.json(), { projects: [] })
     const opened = await request('/api/projects/register', { path: folder })
     assert.equal(opened.status, 200)
     const { project } = await opened.json() as { project: ProjectRecord }
     assert.equal(project.path.toLowerCase(), folder.toLowerCase())
+    const projectInventory = await (await request('/nodes/v1')).json()
+    assert.deepEqual(projectInventory.nodes[0].capabilities[1], {
+      capabilityId: `local-project-v1:${project.id}`,
+      kind: 'workdir',
+      displayName: project.name,
+      displayPath: project.path,
+      online: true,
+    })
     const created = await request(`/api/projects/${project.id}/sessions`, {})
     assert.equal(created.status, 200)
     const { sessionId, chatId } = await created.json() as { sessionId: string; chatId: string }

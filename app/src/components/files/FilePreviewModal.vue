@@ -121,7 +121,7 @@ watch(path, loadText)
   width: 100%;
   background: var(--c-bg-card);
   border: 1px solid var(--c-border);
-  border-radius: 10px;
+  border-radius: var(--radius-overlay);
   overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
@@ -178,7 +178,7 @@ watch(path, loadText)
   font-size: 0.75rem;
   padding: 0.2rem 0.55rem;
   border: 1px solid var(--c-border);
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   background: var(--c-bg-card);
   color: var(--c-text);
   cursor: pointer;
@@ -205,7 +205,7 @@ watch(path, loadText)
   max-width: 100%;
   max-height: calc(88vh - 4rem);
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
 }
 
 .file-modal-audio {
@@ -234,7 +234,7 @@ watch(path, loadText)
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--c-bg-card);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
 }
 
 .file-modal-note {

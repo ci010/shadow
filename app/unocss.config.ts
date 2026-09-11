@@ -1,9 +1,19 @@
-import { defineConfig, presetUno, presetIcons, presetTypography } from 'unocss'
+import { defineConfig, presetWind3, presetIcons, presetTypography } from 'unocss'
 
 export default defineConfig({
   presets: [
-    presetUno({ dark: 'class' }),
-    presetIcons(),
+    presetWind3({ dark: 'class' }),
+    presetIcons({
+      collections: {
+        lucide: () => import('@iconify-json/lucide').then(module => module.icons),
+        'simple-icons': () => import('@iconify-json/simple-icons').then(module => module.icons),
+      },
+      extraProperties: {
+        display: 'inline-block',
+        'vertical-align': 'middle',
+        'flex-shrink': '0',
+      },
+    }),
     presetTypography({
       cssExtend: {
         'code::before': { content: 'none' },
@@ -22,6 +32,13 @@ export default defineConfig({
     }),
   ],
   theme: {
+    borderRadius: {
+      DEFAULT: 'var(--radius-control)',
+      sm: 'var(--radius-sm)',
+      md: 'var(--radius-surface)',
+      lg: 'var(--radius-overlay)',
+      full: 'var(--radius-pill)',
+    },
     colors: {
       ink: 'rgb(var(--c-ink) / %alpha)',
       haze: '#f8f9fa',

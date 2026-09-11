@@ -39,9 +39,9 @@ export function createLocalMainAdminContext(
   return {
     version: 1,
     mode: 'main',
-    localNodeId: 'main-studio',
+    localNodeId: 'local',
     mainConnection: 'connected',
-    mainLatencyMs: 18,
+    mainLatencyMs: null,
     uiScopes: [...LOCAL_MAIN_ADMIN_SCOPES],
     apiBase,
   }
