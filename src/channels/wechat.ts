@@ -597,7 +597,7 @@ export class WeChatChannel extends AbstractChannel {
 
     console.info(`[wechat] Incoming from ${chatId}: "${text.slice(0, 80)}"`)
     const media = mediaResult ? [mediaResult.filePath] : undefined
-    this.handleIncoming(chatId, chatId, text, String(msg.message_id ?? ''), undefined, media)
+    await this.handleIncoming(chatId, chatId, text, String(msg.message_id ?? ''), undefined, media)
   }
 
   // ── Outbound helpers ──────────────────────────────────────────────────────

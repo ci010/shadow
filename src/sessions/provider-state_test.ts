@@ -14,6 +14,7 @@ import type {
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { BaseSession } from './base-session.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
+import { channelMessageInput } from './input.ts'
 import {
   SessionManager,
   type SessionManagerDeps,
@@ -192,7 +193,8 @@ for (const [name, createStore] of stores) {
         new Bus(),
         store,
       )
-      await session.dispatch(inbound('Use the fixture tool'), llm)
+      session.dispatch(channelMessageInput(inbound('Use the fixture tool')), llm)
+      await session.completion
 
       equal(requests.length, 2)
       deepEqual(requests[1].at(-2)?.provider_state, toolState)
@@ -237,6 +239,7 @@ for (const [name, createStore] of stores) {
         deepEqual(messages[4].provider_state, finalState)
       }
       await manager.dispatch(inbound('Continue after restart'), llm)
+      await manager.getActiveSession(state.sessionId)?.completion
       equal(resumed.requests.length, 1)
       const restoredContext = resumed.requests[0]
       equal(restoredContext[0].role, 'system')
@@ -249,7 +252,7 @@ for (const [name, createStore] of stores) {
       equal(Object.hasOwn(updated.at(-1)!, 'provider_state'), false)
       equal((await store.getState(state.sessionId))?.segmentIndex, 3)
     } finally {
-      manager?.stop()
+      await manager?.stop()
       store.close?.()
       await rm(workspace, { recursive: true, force: true })
     }
@@ -356,7 +359,7 @@ for (const [name, createStore] of stores) {
       equal(shallow.messages[0].provider_state, undefined)
       deepEqual(await store.getState(childState.sessionId), childState)
     } finally {
-      manager?.stop()
+      await manager?.stop()
       store.close?.()
       await rm(workspace, { recursive: true, force: true })
     }

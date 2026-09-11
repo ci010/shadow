@@ -48,8 +48,8 @@ export interface InboundMessage extends MessageContext {
    */
   retry?: boolean
   /**
-   * Structured metadata for system events (senderId starting with `event:`).
-   * Rendered as XML attributes on the `<event>` tag by the message-builder.
+   * Legacy adapter metadata, retained for wire compatibility only.
+   * It does not choose source identity, scheduling, or prompt roles.
    */
   eventMeta?: Record<string, unknown>
 }

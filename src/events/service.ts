@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
-import type { InboundMessage } from '../bus/events.ts'
+import { deriveSessionId, type InboundMessage } from '../bus/events.ts'
+import type { DeliverInput, InputOrigin, SessionMessageInput } from '../sessions/input.ts'
 import type {
   CreateEventSubscription,
   EventDelivery,
@@ -13,41 +14,30 @@ import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 
 const SUBSCRIPTIONS_FILE = '.events/subscriptions.json'
 const SOURCES_FILE = '.events/sources.json'
-const EVENT_PREFIX = 'event:'
 const DEFAULT_DEBOUNCE_MS = 30_000
 
-function eventToInbound(
+export function eventToInput(
   evt: SystemEvent,
-  sub: EventSubscription,
-  delivery: EventDelivery,
-): InboundMessage {
-  const [channel, ...rest] = sub.sessionId.split(':')
-  const chatId = rest.join(':')
-  const eventType = evt.type.trim() || 'custom'
-  const sender = evt.senderId ?? `${EVENT_PREFIX}${eventType}`
-  const silent = delivery.urgency === 'silent' || evt.silent === true
-
+  delivery: { urgency: Exclude<EventUrgency, 'debounce'> },
+): SessionMessageInput {
   return {
-    channel,
-    chatId,
-    senderId: sender,
-    senderName: evt.senderName ?? 'System Event',
-    messageId: crypto.randomUUID(),
+    kind: 'message',
+    id: crypto.randomUUID(),
+    source: {
+      kind: 'event',
+      eventId: evt.id,
+      type: evt.type.trim() || 'custom',
+      source: evt.source,
+      senderId: evt.senderId,
+      senderName: evt.senderName,
+      isGroup: evt.isGroup,
+      origin: evt.origin,
+      attributes: { ...evt.meta },
+    },
     content: evt.content ?? '',
     media: evt.media,
     timestamp: evt.timestamp,
-    isGroup: evt.isGroup,
-    silent,
-    eventMeta: {
-      __eventDispatch: true,
-      source: evt.source,
-      'event-id': evt.id,
-      // Surfaced to the session's dispatch router (steering / queue / silent).
-      // Omitted when the effective urgency is the default 'queue' to keep the
-      // rendered <event> tag clean.
-      ...(delivery.urgency !== 'queue' ? { urgency: delivery.urgency } : {}),
-      ...(evt.meta ?? {}),
-    },
+    policy: delivery.urgency,
   }
 }
 
@@ -60,73 +50,57 @@ export class EventService {
   /** Registered event sources, keyed by their `source` tag. */
   private sources = new Map<string, EventSourceDescriptor>()
   private sourcesPath: string
-  /** Trailing-debounce buffers, keyed by `${sessionId}::${coalesceKey}`. */
+  private stopped = false
+  private persistenceTail: Promise<void> = Promise.resolve()
+  private persistenceErrors = new Map<string, unknown>()
+  /** Trailing-debounce buffers, keyed by session and coalescing key. */
   private debouncers = new Map<
     string,
-    { timer: ReturnType<typeof setTimeout>; evt: SystemEvent; sub: EventSubscription; delivery: EventDelivery; count: number }
+    {
+      timer: ReturnType<typeof setTimeout>
+      evt: SystemEvent
+      sessionId: string
+      count: number
+      eventIds: string[]
+      origins: InputOrigin[]
+    }
   >()
 
-  constructor(private workspace: string, private bus: Bus) {
+  constructor(private workspace: string, private bus: Bus, private deliver: DeliverInput) {
     this.subscriptionsPath = workspacePath(workspace, SUBSCRIPTIONS_FILE)
     this.sourcesPath = workspacePath(workspace, SOURCES_FILE)
   }
 
   async start(): Promise<void> {
+    this.stopped = false
+    await this.flush()
     await this.loadSubscriptions()
     await this.loadSources()
     this.registerBuiltinSources()
-
-    // Route channel/user messages and legacy event-prefixed messages.
-    this.bus.on('message.inbound', (msg) => {
-      if (msg.senderId.startsWith(EVENT_PREFIX)) {
-        if (msg.eventMeta?.__eventDispatch === true) return
-        const type = msg.senderId.slice(EVENT_PREFIX.length) || 'custom'
-        this.emit({
-          id: msg.messageId,
-          type,
-          source: typeof msg.eventMeta?.source === 'string'
-            ? msg.eventMeta.source
-            : `legacy:${msg.channel}`,
-          timestamp: msg.timestamp,
-          content: msg.content,
-          media: msg.media,
-          channel: msg.channel,
-          chatId: msg.chatId,
-          senderId: msg.senderId,
-          senderName: msg.senderName,
-          isGroup: msg.isGroup,
-          targetSessionId: `${msg.channel}:${msg.chatId}`,
-          silent: msg.silent,
-          meta: msg.eventMeta,
-        })
-        return
-      }
-
-      this.emit({
-        id: msg.messageId,
-        type: 'channel.message',
-        source: `channel:${msg.channel}`,
-        timestamp: msg.timestamp,
-        content: msg.content,
-        media: msg.media,
-        channel: msg.channel,
-        chatId: msg.chatId,
-        senderId: msg.senderId,
-        senderName: msg.senderName,
-        isGroup: msg.isGroup,
-        meta: {
-          platformMessageId: msg.platformMessageId,
-          chatName: msg.chatName,
-          admin: msg.admin,
-        },
-      })
-    })
   }
 
-  /** Clear pending debounce timers. Call on shutdown. */
-  stop(): void {
+  /** Stop routing immediately, then drain definition writes before workspace cleanup. */
+  async stop(): Promise<void> {
+    this.stopped = true
     for (const d of this.debouncers.values()) clearTimeout(d.timer)
     this.debouncers.clear()
+    await this.flush()
+  }
+
+  /** Await pending definition writes; synchronous mutations remain compatible. */
+  async flush(): Promise<void> {
+    let pending: Promise<void>
+    do {
+      pending = this.persistenceTail
+      await pending
+    } while (pending !== this.persistenceTail)
+    if (this.persistenceErrors.size > 0) {
+      throw new AggregateError([...this.persistenceErrors.values()], 'Event definition persistence failed')
+    }
+  }
+
+  private assertRunning(): void {
+    if (this.stopped) throw new Error('EventService is stopped')
   }
 
   // ── Event sources ──────────────────────────────────────────────────────
@@ -145,6 +119,7 @@ export class EventService {
 
   /** Register (or replace) a named event source. Custom sources are persisted. */
   registerSource(desc: Omit<EventSourceDescriptor, 'createdAt'> & { createdAt?: string }): EventSourceDescriptor {
+    this.assertRunning()
     const source = desc.source.trim()
     if (!source) throw new TypeError('source is required')
     const full: EventSourceDescriptor = {
@@ -153,18 +128,19 @@ export class EventService {
       createdAt: desc.createdAt ?? new Date().toISOString(),
     }
     this.sources.set(source, full)
-    if (full.kind !== 'system') this.saveSources().catch(() => {})
+    if (full.kind !== 'system') this.saveSources()
     return full
   }
 
   unregisterSource(source: string): boolean {
+    this.assertRunning()
     const existing = this.sources.get(source)
     // Built-in sources cannot be removed.
     if (!existing || ['channel', 'cron', 'agent', 'system'].includes(existing.kind) && !existing.ownerSessionId) {
       return false
     }
     const ok = this.sources.delete(source)
-    if (ok) this.saveSources().catch(() => {})
+    if (ok) this.saveSources()
     return ok
   }
 
@@ -173,6 +149,7 @@ export class EventService {
   }
 
   subscribe(input: CreateEventSubscription): EventSubscription {
+    this.assertRunning()
     const event = input.event.trim()
     if (!event) {
       throw new TypeError('event is required')
@@ -190,13 +167,14 @@ export class EventService {
       createdAt: new Date().toISOString(),
     }
     this.subscriptions.set(id, sub)
-    this.saveSubscriptions().catch(() => {})
+    this.saveSubscriptions()
     return sub
   }
 
   unsubscribe(id: string): boolean {
+    this.assertRunning()
     const ok = this.subscriptions.delete(id)
-    if (ok) this.saveSubscriptions().catch(() => {})
+    if (ok) this.saveSubscriptions()
     return ok
   }
 
@@ -206,6 +184,7 @@ export class EventService {
    * removed after firing.
    */
   unsubscribeByCronJob(cronJobId: string): number {
+    this.assertRunning()
     let removed = 0
     for (const [id, sub] of this.subscriptions) {
       if (sub.cronJobId === cronJobId) {
@@ -213,7 +192,7 @@ export class EventService {
         removed++
       }
     }
-    if (removed > 0) this.saveSubscriptions().catch(() => {})
+    if (removed > 0) this.saveSubscriptions()
     return removed
   }
 
@@ -223,7 +202,8 @@ export class EventService {
     return all.filter((s) => s.sessionId === sessionId)
   }
 
-  emit(evt: Omit<SystemEvent, 'id' | 'timestamp'> & { id?: string; timestamp?: string }): void {
+  /** Resolves after directed acceptances (or router-side debounce buffering), not model completion. */
+  async emit(evt: Omit<SystemEvent, 'id' | 'timestamp'> & { id?: string; timestamp?: string }): Promise<void> {
     const full: SystemEvent = {
       ...evt,
       id: evt.id ?? crypto.randomUUID(),
@@ -231,48 +211,105 @@ export class EventService {
       source: evt.source ?? 'system',
     }
 
+    await this.dispatch(full)
+  }
+
+  /** Publish once at channel ingress, after accepting the original direct input. */
+  async publishChannelMessage(msg: InboundMessage): Promise<void> {
+    const origin: InputOrigin = {
+      sessionId: deriveSessionId(msg),
+      inputId: msg.messageId,
+      source: {
+        kind: 'user',
+        sender: {
+          channel: msg.channel,
+          chatId: msg.chatId,
+          messageId: msg.messageId,
+          platformMessageId: msg.platformMessageId,
+          senderId: msg.senderId,
+          senderName: msg.senderName,
+          chatName: msg.chatName,
+          isGroup: msg.isGroup,
+          admin: msg.admin,
+        },
+      },
+    }
+    await this.dispatch({
+      id: msg.messageId,
+      type: 'channel.message',
+      source: `channel:${msg.channel}`,
+      timestamp: msg.timestamp,
+      content: msg.content,
+      media: msg.media,
+      channel: msg.channel,
+      chatId: msg.chatId,
+      senderId: msg.senderId,
+      senderName: msg.senderName,
+      isGroup: msg.isGroup,
+      silent: msg.silent,
+      origin,
+      meta: {
+        ...msg.eventMeta,
+        platformMessageId: msg.platformMessageId,
+        chatName: msg.chatName,
+        admin: msg.admin,
+      },
+    }, origin.sessionId)
+  }
+
+  private async dispatch(full: SystemEvent, excludedSessionId?: string): Promise<void> {
+    this.assertRunning()
     this.bus.emit('system.event', full)
 
     const delivered = new Set<string>()
+    if (excludedSessionId) delivered.add(excludedSessionId)
+    const acceptances: Promise<void>[] = []
 
-    if (full.targetSessionId) {
+    if (full.targetSessionId && !delivered.has(full.targetSessionId)) {
       const pseudo: EventSubscription = {
         id: 'target',
         sessionId: full.targetSessionId,
         event: full.type,
         createdAt: full.timestamp,
       }
-      this.route(full, pseudo)
+      acceptances.push(this.route(full, pseudo))
       delivered.add(full.targetSessionId)
     }
 
     for (const sub of this.subscriptions.values()) {
       if (!this.matches(sub, full)) continue
       if (delivered.has(sub.sessionId)) continue
-      this.route(full, sub)
+      acceptances.push(this.route(full, sub))
       delivered.add(sub.sessionId)
+    }
+
+    // Independent targets may accept even if another fails; no rollback or exactly-once guarantee.
+    const outcomes = await Promise.allSettled(acceptances)
+    const failures = outcomes.filter((outcome) => outcome.status === 'rejected')
+    if (failures.length === 1) throw failures[0].reason
+    if (failures.length > 1) {
+      throw new AggregateError(failures.map((failure) => failure.reason), `Event ${full.id} delivery failed`)
     }
   }
 
   /**
    * Resolve the effective delivery policy for an event on a given subscription.
-   * Precedence: event.delivery → subscription.delivery → source default →
-   * `silent` flag → `queue`.
+   * The legacy record-only flag wins; otherwise event → subscription → source → queue.
    */
   private resolveDelivery(evt: SystemEvent, sub: EventSubscription): EventDelivery {
-    const chosen = evt.delivery ?? sub.delivery ?? this.sources.get(evt.source)?.delivery ??
-      (evt.silent ? { urgency: 'silent' as EventUrgency } : { urgency: 'queue' as EventUrgency })
-    return chosen
+    if (evt.silent) return { urgency: 'silent' }
+    return evt.delivery ?? sub.delivery ?? this.sources.get(evt.source)?.delivery ?? { urgency: 'queue' }
   }
 
   /** Deliver an event to one session, honoring its effective urgency. */
-  private route(evt: SystemEvent, sub: EventSubscription): void {
+  private async route(evt: SystemEvent, sub: EventSubscription): Promise<void> {
+    this.assertRunning()
     const delivery = this.resolveDelivery(evt, sub)
     if (delivery.urgency === 'debounce') {
       this.scheduleDebounced(evt, sub, delivery)
       return
     }
-    this.bus.emit('message.inbound', eventToInbound(evt, sub, delivery))
+    await this.deliver(sub.sessionId, eventToInput(evt, { urgency: delivery.urgency }))
   }
 
   /**
@@ -281,31 +318,51 @@ export class EventService {
    */
   private scheduleDebounced(evt: SystemEvent, sub: EventSubscription, delivery: EventDelivery): void {
     const key = delivery.coalesceKey ?? `${evt.type}:${evt.source}`
-    const bufKey = `${sub.sessionId}::${key}`
+    const bufKey = JSON.stringify([sub.sessionId, key])
     const windowMs = delivery.debounceMs ?? DEFAULT_DEBOUNCE_MS
 
     const existing = this.debouncers.get(bufKey)
     if (existing) {
       clearTimeout(existing.timer)
       existing.evt = evt
-      existing.sub = sub
-      existing.delivery = delivery
       existing.count += 1
-      existing.timer = setTimeout(() => this.flushDebounced(bufKey), windowMs)
+      existing.eventIds.push(evt.id)
+      if (evt.origin) existing.origins.push(evt.origin)
+      existing.timer = setTimeout(() => { void this.flushDebounced(bufKey) }, windowMs)
       return
     }
-    const timer = setTimeout(() => this.flushDebounced(bufKey), windowMs)
-    this.debouncers.set(bufKey, { timer, evt, sub, delivery, count: 1 })
+    const timer = setTimeout(() => { void this.flushDebounced(bufKey) }, windowMs)
+    this.debouncers.set(bufKey, {
+      timer,
+      evt,
+      sessionId: sub.sessionId,
+      count: 1,
+      eventIds: [evt.id],
+      origins: evt.origin ? [evt.origin] : [],
+    })
   }
 
-  private flushDebounced(bufKey: string): void {
+  private async flushDebounced(bufKey: string): Promise<void> {
     const buf = this.debouncers.get(bufKey)
-    if (!buf) return
+    if (!buf || this.stopped) return
     this.debouncers.delete(bufKey)
-    // Deliver as a normal (queue) wake; annotate how many were coalesced.
-    const inbound = eventToInbound(buf.evt, buf.sub, { urgency: 'queue' })
-    if (buf.count > 1 && inbound.eventMeta) inbound.eventMeta.coalesced = buf.count
-    this.bus.emit('message.inbound', inbound)
+    let inputId: string | undefined
+    try {
+      const input = eventToInput(buf.evt, { urgency: 'queue' })
+      inputId = input.id
+      if (input.source.kind === 'event') {
+        input.source.coalesced = { count: buf.count, eventIds: buf.eventIds, origins: buf.origins }
+        input.source.attributes = { ...input.source.attributes, coalesced: buf.count }
+      }
+      await this.deliver(buf.sessionId, input)
+    } catch {
+      // Error messages can contain provider tokens or payloads; report correlation IDs only.
+      console.error('[events] Debounced delivery failed', {
+        targetSessionId: buf.sessionId,
+        eventId: buf.evt.id,
+        inputId,
+      })
+    }
   }
 
   private matches(sub: EventSubscription, evt: SystemEvent): boolean {
@@ -331,10 +388,9 @@ export class EventService {
     }
   }
 
-  private async saveSubscriptions(): Promise<void> {
-    await mkdir(workspacePath(this.workspace, '.events'), { recursive: true })
+  private saveSubscriptions(): void {
     const arr = Array.from(this.subscriptions.values())
-    await writeFile(this.subscriptionsPath, JSON.stringify(arr, null, 2))
+    this.persist(SUBSCRIPTIONS_FILE, this.subscriptionsPath, arr)
   }
 
   private async loadSources(): Promise<void> {
@@ -351,10 +407,23 @@ export class EventService {
     }
   }
 
-  private async saveSources(): Promise<void> {
-    await mkdir(workspacePath(this.workspace, '.events'), { recursive: true })
+  private saveSources(): void {
     // Persist only non-system (custom/agent) sources; builtins are re-registered on start.
     const arr = Array.from(this.sources.values()).filter((s) => s.kind !== 'system')
-    await writeFile(this.sourcesPath, JSON.stringify(arr, null, 2))
+    this.persist(SOURCES_FILE, this.sourcesPath, arr)
+  }
+
+  private persist(file: string, path: string, definitions: unknown[]): void {
+    const contents = JSON.stringify(definitions, null, 2)
+    this.persistenceTail = this.persistenceTail.then(async () => {
+      try {
+        await mkdir(workspacePath(this.workspace, '.events'), { recursive: true })
+        await writeFile(path, contents)
+        this.persistenceErrors.delete(file)
+      } catch (error) {
+        this.persistenceErrors.set(file, error)
+        console.error('[events] Failed to persist definitions', { file })
+      }
+    })
   }
 }

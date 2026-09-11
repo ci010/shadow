@@ -4,18 +4,18 @@ import type { ExecutionContext } from './agent.ts'
 import type { Tools } from '../tools/registry.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import type { EventService } from '../events/service.ts'
+import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
 
 export type BackgroundTaskStatus = 'running' | 'completed' | 'failed'
 export type BackgroundTaskKind = 'tool' | 'subagent' | 'process'
 
 export interface BackgroundTaskCallback {
-  channel: string
-  chatId: string
+  sessionId: string
+  replyTo?: ReplyAddress
   contentPrefix?: string
   senderName?: string
   isGroup?: boolean
-  /** Override the default event type ('background-task-complete') for the callback message.
-   * Used as senderId prefix: `event:<eventType>`. */
+  /** Override the default event type ('background-task-complete'). */
   eventType?: string
 }
 
@@ -28,10 +28,12 @@ export interface BackgroundTaskSummary {
   createdAt: string
   completedAt?: string
   error?: string
+  callbackError?: string
 }
 
 interface BackgroundTaskRecord extends BackgroundTaskSummary {
   result?: string
+  origin?: InputOrigin
   callback?: BackgroundTaskCallback
   /** Returns live output for a running task (e.g. partial stdout, session history). */
   observe?: () => Promise<string> | string
@@ -48,21 +50,23 @@ interface BackgroundTaskRecord extends BackgroundTaskSummary {
 export class BackgroundTaskManager {
   private tasks = new Map<string, BackgroundTaskRecord>()
 
-  constructor(private bus: Bus, private events?: EventService) {
+  constructor(private bus: Bus, private events: EventService) {
     // Auto-complete session-bound tasks when the session finishes.
-    this.bus.on('message.outbound', (msg) => {
-      if (!msg.done) return
-      const sessionId = `${msg.channel}:${msg.chatId}`
-      const task = this.findByTag('sessionId', sessionId)
+    this.bus.on('session.turn.finished', (fact) => {
+      const task = this.findByTag('sessionId', fact.sessionId)
       if (!task) return
-
-      const summary = msg.content?.trim()
-      if (!summary) {
-        this.complete(task.id, '(session completed with no output)')
+      const record = this.tasks.get(task.id)!
+      record.origin = {
+        sessionId: fact.sessionId,
+        inputId: fact.inputId,
+        source: { kind: 'session', sessionId: fact.sessionId },
+      }
+      if (fact.status !== 'completed') {
+        this.fail(task.id, fact.error ?? `Session ${fact.status}`)
         return
       }
-      const parsed = parseMediaFromContent(msg.content)
-      this.complete(task.id, parsed.text)
+      const parsed = parseMediaFromContent(fact.content)
+      this.complete(task.id, parsed.text.trim() || '(session completed with no output)')
     })
   }
 
@@ -96,6 +100,7 @@ export class BackgroundTaskManager {
         kind: 'tool',
         title: options?.title ?? `Tool: ${name}`,
         sessionId: context.sessionId,
+        inputId: context.messageId,
         callback: options?.callback,
       },
       tools.execute(name, args, executionContext),
@@ -107,6 +112,7 @@ export class BackgroundTaskManager {
       kind: BackgroundTaskKind
       title: string
       sessionId?: string
+      inputId?: string
       callback?: BackgroundTaskCallback
       observe?: () => Promise<string> | string
       onCancel?: () => void
@@ -122,6 +128,7 @@ export class BackgroundTaskManager {
     kind: BackgroundTaskKind
     title: string
     sessionId?: string
+    inputId?: string
     callback?: BackgroundTaskCallback
     observe?: () => Promise<string> | string
     onCancel?: () => void
@@ -138,6 +145,13 @@ export class BackgroundTaskManager {
       kind: options.kind,
       title: options.title,
       sessionId: options.sessionId,
+      origin: options.sessionId
+        ? {
+          sessionId: options.sessionId,
+          inputId: options.inputId ?? taskId,
+          source: { kind: 'session', sessionId: options.sessionId },
+        }
+        : undefined,
       status: 'running',
       createdAt: new Date().toISOString(),
       callback: options.callback,
@@ -171,6 +185,7 @@ export class BackgroundTaskManager {
         createdAt: task.createdAt,
         completedAt: task.completedAt,
         error: task.error,
+        callbackError: task.callbackError,
       }))
   }
 
@@ -225,14 +240,15 @@ export class BackgroundTaskManager {
     if (!task) return `Error: no background task with id=${taskId}`
 
     if (!task.callback) {
-      task.callback = { channel: '', chatId: '' }
+      if (!task.sessionId) return `Error: task ${taskId} has no callback session`
+      task.callback = { sessionId: task.sessionId }
     }
     task.callback.contentPrefix = continuation
 
     if (task.status !== 'running') {
       // Task already finished — re-fire the callback with the continuation
-      this.publishCallback(task)
-      return `Continuation set and callback re-fired for task ${taskId} (${task.status}).`
+      this.notifyCallback(task)
+      return `Continuation set and callback scheduled for task ${taskId} (${task.status}).`
     }
 
     return `Continuation set for task ${taskId}. It will be included when the task completes.`
@@ -299,7 +315,7 @@ export class BackgroundTaskManager {
     task.completedAt = new Date().toISOString()
     task.result = result
     task.resolve(result)
-    this.publishCallback(task)
+    this.notifyCallback(task)
   }
 
   private failTask(taskId: string, reason?: unknown, skipCallback = false, cancel = false): void {
@@ -317,10 +333,17 @@ export class BackgroundTaskManager {
     task.completedAt = new Date().toISOString()
     task.error = message
     task.reject(reason)
-    if (!skipCallback) this.publishCallback(task)
+    if (!skipCallback) this.notifyCallback(task)
   }
 
-  private publishCallback(task: BackgroundTaskRecord): void {
+  private notifyCallback(task: BackgroundTaskRecord): void {
+    void this.publishCallback(task).catch((error) => {
+      task.callbackError = errMsg(error)
+      console.error(`[background-task] Callback delivery failed (${task.id}, ${task.callback?.sessionId}):`, error)
+    })
+  }
+
+  private async publishCallback(task: BackgroundTaskRecord): Promise<void> {
     if (!task.callback) return
 
     const statusLine = task.status === 'completed'
@@ -334,52 +357,36 @@ export class BackgroundTaskManager {
 
     const eventType = task.callback.eventType ?? 'background-task-complete'
 
-    // Emit outbound message so it shows up in the chat UI
-    const icon = task.status === 'completed' ? '✅' : '❌'
-    const shortTitle = task.title.length > 60 ? task.title.slice(0, 60) + '…' : task.title
-    const displayContent = `${icon} [${task.kind}] ${shortTitle} — ${statusLine}`
-    this.bus.emit('message.outbound', {
-      event: 'response',
-      channel: task.callback.channel,
-      chatId: task.callback.chatId,
-      done: false,
-      content: displayContent,
-    })
-
-    if (this.events) {
-      this.events.emit({
-        type: eventType,
-        source: 'background-task',
-        content,
-        targetSessionId: `${task.callback.channel}:${task.callback.chatId}`,
-        senderName: task.callback.senderName ?? 'Background Task',
-        isGroup: task.callback.isGroup,
-        meta: {
-          'task-id': task.id,
-          kind: task.kind,
-          title: task.title,
-          status: statusLine,
-        },
-      })
-      return
-    }
-
-    this.bus.emit('message.inbound', {
-      channel: task.callback.channel,
-      chatId: task.callback.chatId,
-      senderId: `event:${eventType}`,
-      senderName: task.callback.senderName ?? 'Background Task',
-      messageId: crypto.randomUUID(),
+    await this.events.emit({
+      type: eventType,
+      source: 'background-task',
       content,
-      timestamp: new Date().toISOString(),
+      targetSessionId: task.callback.sessionId,
+      senderName: task.callback.senderName ?? 'Background Task',
       isGroup: task.callback.isGroup,
-      eventMeta: {
+      origin: task.origin,
+      meta: {
         'task-id': task.id,
         kind: task.kind,
         title: task.title,
         status: statusLine,
       },
     })
+    task.callbackError = undefined
+
+    const reply = task.callback.replyTo ?? sessionReplyAddress(task.callback.sessionId)
+    if (!reply) return
+    const icon = task.status === 'completed' ? '✅' : '❌'
+    const shortTitle = task.title.length > 60 ? task.title.slice(0, 60) + '…' : task.title
+    const displayContent = `${icon} [${task.kind}] ${shortTitle} — ${statusLine}`
+    this.bus.emit('message.outbound', {
+      event: 'response',
+      channel: reply.channel,
+      chatId: reply.chatId,
+      done: false,
+      content: displayContent,
+    })
+
   }
 
   private formatTaskResult(task: BackgroundTaskRecord): string {
@@ -392,6 +399,7 @@ export class BackgroundTaskManager {
     ]
     if (task.completedAt) lines.push(`Completed: ${task.completedAt}`)
     if (task.sessionId) lines.push(`Session: ${task.sessionId}`)
+    if (task.callbackError) lines.push(`Callback delivery failed: ${task.callbackError}`)
     if (task.error) {
       lines.push('', task.error)
       return lines.join('\n')

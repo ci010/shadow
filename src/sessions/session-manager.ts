@@ -36,6 +36,12 @@ import type {
   SessionStore,
 } from './session-store.ts'
 import { Session } from './session.ts'
+import {
+  channelMessageInput,
+  inputContext,
+  type DeliveryReceipt,
+  type SessionInput,
+} from './input.ts'
 
 export type { SessionState, SessionStore } from './session-store.ts'
 
@@ -94,6 +100,7 @@ export interface SessionManagerDeps {
   events: EventService
   workdirCapabilityLookup?: WorkdirCapabilityLookup
   remoteExecutor?: Executor
+  getLlmRuntimeConfig?: () => LlmRuntimeConfig
   /** Called when a session stops (idle timeout, crash, or explicit stop). */
   onSessionStopped?: (sessionId: string) => void
   sleep?: SleepConfig
@@ -138,7 +145,12 @@ export function sessionPromptLocality(
 
 export class SessionManager {
   /** Registry of active per-session event loops. */
-  private sessions: Record<string, Session> = {}
+  private sessions: Record<string, Session | EphemeralSession> = {}
+  private preparations = new Map<string, Promise<unknown>>()
+  private acceptedInputs = new Set<string>()
+  private stopped = false
+  private stopPromise?: Promise<void>
+  private reportSubscription?: string
   private sessionStates: Record<string, SessionState> = {}
   private readonly sleepInactivityMs: number
 
@@ -188,68 +200,151 @@ export class SessionManager {
     return agentType?.ephemeral ?? false
   }
 
+  /**
+   * Message-tool follow-ups are disallowed for ephemeral sessions, but their
+   * fresh prototypes still need an initial task. Call synchronously immediately
+   * before deliver; its preparation barrier reserves a pending first admission.
+   * This restriction does not apply to direct event delivery.
+   */
+  canReceiveSessionMessage(sessionId: string): boolean {
+    if (!this.isEphemeralSession(sessionId)) return true
+    const state = this.sessionStates[sessionId]
+    return !this.acceptedInputs.has(sessionId) &&
+      !this.preparations.has(sessionId) &&
+      !state?.lastActivityAt &&
+      !(state?.segmentIndex > 0)
+  }
+
   // ── Lifecycle (start / stop / dispatch / recovery) ──────────────────
 
   async start(): Promise<void> {
+    if (this.stopPromise) await this.stopPromise
+    this.stopPromise = undefined
+    this.stopped = false
     // Load all session states into memory cache
     this.sessionStates = await this.store.listAllStates()
+    // Older states may omit activity timestamps. Their own stored messages
+    // distinguish an already-used ephemeral session from a fresh prototype.
+    for (const state of Object.values(this.sessionStates)) {
+      if (!this.isEphemeralSession(state.sessionId) || state.lastActivityAt || state.segmentIndex > 0) continue
+      for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
+        if ((typeof record.role === 'string' && record.role !== 'system') || record.session_recovered) {
+          this.acceptedInputs.add(state.sessionId)
+          break
+        }
+      }
+    }
 
-    // Persistent report_to routing: forward completed turn messages to the report_to target
-    this.deps.bus.on('message.outbound', (msg) => {
-      if (!msg.done) return
-      const sessionId = `${msg.channel}:${msg.chatId}`
-      const state = this.sessionStates[sessionId]
-      if (!state?.reportTo) return
+    if (this.reportSubscription) this.deps.bus.off(this.reportSubscription)
+    this.reportSubscription = this.deps.bus.on('session.turn.finished', async (fact) => {
+      if (fact.status === 'cancelled') return
+      const state = this.sessionStates[fact.sessionId]
+      if (!state?.reportTo || state.reportTo === fact.sessionId) return
+      const content = (fact.status === 'failed' ? fact.error : fact.content)?.trim()
+      if (!content && fact.status === 'completed') return
 
-      const colonIdx = state.reportTo.indexOf(':')
-      if (colonIdx <= 0) return
-      const targetChannel = state.reportTo.slice(0, colonIdx)
-      const targetChatId = state.reportTo.slice(colonIdx + 1)
-
-      const content = msg.content?.trim()
-      if (!content) return
-
-      this.deps.events.emit({
-        type: 'subagent-complete',
+      await this.deps.events.emit({
+        type: fact.status === 'failed' ? 'subagent-failed' : 'subagent-complete',
         source: 'subagent',
-        targetSessionId: `${targetChannel}:${targetChatId}`,
+        targetSessionId: state.reportTo,
         senderName: 'Subagent',
-        content,
+        content: content ?? 'Subagent request failed',
+        origin: {
+          sessionId: fact.sessionId,
+          inputId: fact.inputId,
+          source: { kind: 'session', sessionId: fact.sessionId },
+        },
         meta: {
           kind: 'subagent',
-          sourceSessionId: sessionId,
+          sourceSessionId: fact.sessionId,
           agentType: state.agentType,
         },
       })
     })
   }
 
-  stop(): void {
-    for (const sess of Object.values(this.sessions)) {
-      sess.stop()
+  /** Stops admissions immediately; resolves after active work and preparation quiesce. */
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise
+    this.stopped = true
+    if (this.reportSubscription) this.deps.bus.off(this.reportSubscription)
+    this.reportSubscription = undefined
+    const sessions = new Set(Object.values(this.sessions))
+    const errors: unknown[] = []
+    const stopSession = (session: Session | EphemeralSession) => {
+      try { session.stop() } catch (error) { errors.push(error) }
     }
-    this.sessions = {}
+    this.stopPromise = Promise.resolve().then(async () => {
+      // Admission errors belong to their deliver callers. Wait for them rather
+      // than allowing an in-flight preparation to outlive shutdown.
+      await Promise.allSettled(this.preparations.values())
+      for (const session of Object.values(this.sessions)) {
+        if (sessions.has(session)) continue
+        sessions.add(session)
+        stopSession(session)
+      }
+      const completed = await Promise.allSettled([...sessions].map((session) => session.completion))
+      for (const result of completed) {
+        if (result.status === 'rejected') errors.push(result.reason)
+      }
+      if (errors.length) throw new AggregateError(errors, 'Session shutdown failed')
+    })
+    for (const session of sessions) stopSession(session)
+    return this.stopPromise
   }
 
   /**
-   * Route an inbound message to the appropriate session type.
-   *
-   * - If an active persistent session exists, enqueues the message there.
-   * - If the resolved agent type is ephemeral, creates an {@link EphemeralSession}
-   *   and processes the message fire-and-forget (no event loop, no activeSessions).
-   * - Otherwise creates a persistent {@link Session} with full event loop.
+   * Legacy channel adapter. Directed internal producers use deliver instead.
    */
   async dispatch(msg: InboundMessage, llm: LlmRuntimeConfig): Promise<void> {
-    const sessionId = deriveSessionId(msg)
+    await this.deliver(deriveSessionId(msg), channelMessageInput(msg), llm)
+  }
 
-    // Fast path: already-active persistent session.
-    const existing = this.sessions[sessionId]
-    if (existing) {
-      existing.dispatch(msg, llm)
-      return
+  /** Resolves after preparation and admission, never after model completion. */
+  deliver(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig): Promise<DeliveryReceipt> {
+    if (this.stopped) return Promise.reject(new Error('Session manager stopped'))
+    const previous = this.preparations.get(sessionId) ?? Promise.resolve()
+    const admission = previous.catch(() => {}).then(async (): Promise<DeliveryReceipt> => {
+      if (this.stopped) throw new Error('Session manager stopped')
+      const config = llm ?? this.deps.getLlmRuntimeConfig?.()
+      if (!config) throw new Error('Session delivery requires LLM runtime configuration')
+      let session: Session | EphemeralSession | undefined = this.sessions[sessionId]
+      if (session && !session.accepting) {
+        await session.completion
+        session = undefined
+      }
+      const created = !session
+      if (!session) session = await this.createActiveSession(sessionId, input)
+      if (this.stopped) {
+        session.stop()
+        throw new Error('Session manager stopped')
+      }
+      try {
+        session.dispatch(input, config)
+      } catch (error) {
+        if (created) session.stop()
+        throw error
+      }
+      this.acceptedInputs.add(sessionId)
+      this.deps.bus.emit('session.input.accepted', { sessionId, input })
+      return { status: 'accepted', sessionId, inputId: input.id }
+    })
+    this.preparations.set(sessionId, admission)
+    const clean = () => {
+      if (this.preparations.get(sessionId) === admission) this.preparations.delete(sessionId)
     }
+    void admission.then(clean, clean)
+    return admission
+  }
 
-    const ctx = await this.prepareSessionContext(msg, sessionId)
+  private async createActiveSession(sessionId: string, input: SessionInput): Promise<Session | EphemeralSession> {
+    const ctx = await this.prepareSessionContext(input, sessionId)
+    if (this.stopped) throw new Error('Session manager stopped')
+    const onStopped = (id: string) => {
+      delete this.sessions[id]
+      this.deps.bus.emit('session.ended', { sessionId: id, agentType: ctx.state.agentType })
+      this.deps.onSessionStopped?.(id)
+    }
 
     if (ctx.resolvedAgentType.ephemeral) {
       const sess = new EphemeralSession(
@@ -264,11 +359,9 @@ export class SessionManager {
         this.deps.workdirCapabilityLookup,
         this.deps.remoteExecutor,
       )
-      await sess.dispatch(msg, llm)
-      this.deps.bus.emit('session.ended', {
-        sessionId,
-        agentType: ctx.state.agentType,
-      })
+      sess.onStopped = onStopped
+      this.sessions[sessionId] = sess
+      return sess
     } else {
       const sess = new Session(
         this.deps.workspace,
@@ -280,14 +373,7 @@ export class SessionManager {
         this.deps.bus,
         this.deps.store,
         this.deps.handoffManager,
-        (id) => {
-          delete this.sessions[id]
-          this.deps.bus.emit('session.ended', {
-            sessionId: id,
-            agentType: ctx.state.agentType,
-          })
-          this.deps.onSessionStopped?.(id)
-        },
+        onStopped,
         () => this.deps.context.buildSystemPrompt(ctx.promptCtx),
         this.deps.quickModel,
         this.sleepInactivityMs,
@@ -295,7 +381,7 @@ export class SessionManager {
         this.deps.remoteExecutor,
       )
       this.sessions[sessionId] = sess
-      sess.dispatch(msg, llm)
+      return sess
     }
   }
 
@@ -304,12 +390,10 @@ export class SessionManager {
    *
    * Scans all persisted sessions. For each whose last stored record
    * indicates an incomplete turn (user message without response, or
-   * mid-tool-cycle), publishes a synthetic recovery message to the bus
-   * so the session resumes processing.
+   * mid-tool-cycle), delivers a recovery event so the session resumes processing.
    *
    * Subagent sessions (those with `report_to` in their start event) are
-   * re-registered via the `onSessionRecovery` callback so their completion
-   * flows to the parent through the normal outbound path.
+   * reported through the domain turn-finished listener registered by start().
    *
    * @param maxAgeMs  Only recover sessions active within this window
    *                  (default: 30 minutes). Older sessions are considered
@@ -354,21 +438,18 @@ export class SessionManager {
         if (isComplete) continue
 
         // Session was interrupted — resume it.
-        const colonIdx = state.sessionId.indexOf(':')
-        if (colonIdx <= 0) continue
-        const channel = state.sessionId.slice(0, colonIdx)
-        const chatId = state.sessionId.slice(colonIdx + 1)
-
         // report_to routing is handled persistently by the bus listener
         // in start(), so no re-registration needed on recovery.
 
         console.info(
           `[recovery] Resuming interrupted session ${state.sessionId}`,
         )
-        this.deps.events.emit({
+        // Legacy records do not retain input IDs; do not invent an origin for
+        // the interrupted turn. The new recovery event receives its own ID.
+        await this.deps.events.emit({
           type: 'session-recovery',
           source: 'system',
-          targetSessionId: `${channel}:${chatId}`,
+          targetSessionId: state.sessionId,
           senderName: 'System',
           content:
             'The previous request was interrupted by a system restart. Continue from where you left off.',
@@ -483,6 +564,7 @@ export class SessionManager {
    * @returns sessionId, or null if the agent type is unknown.
    */
   async startSession(opts: StartSessionOptions): Promise<string | null> {
+    if (this.stopped) throw new Error('Session manager stopped')
     const agentType = this.deps.agentTypes.resolve(opts.agentType)
     if (!agentType) {
       console.error(`[session-manager] Unknown agent type "${opts.agentType}"`)
@@ -506,13 +588,23 @@ export class SessionManager {
       ? `${opts.task}\n\nAdditional context:\n${opts.context}`
       : opts.task
 
-    // Publish synthetic inbound — the agent loop will create the session
-    this.deps.bus.emit('message.inbound', {
-      channel,
-      chatId,
-      senderId: 'system',
-      senderName: 'system',
-      messageId: crypto.randomUUID(),
+    const eventId = crypto.randomUUID()
+    await this.deliver(sessionId, {
+      id: eventId,
+      kind: 'message',
+      source: {
+        kind: 'event',
+        eventId,
+        type: 'agent-start',
+        source: 'system',
+        origin: {
+          sessionId,
+          inputId: eventId,
+          source: { kind: 'session', sessionId },
+        },
+      },
+      policy: 'queue',
+      replyTo: { channel, chatId },
       content,
       timestamp: new Date().toISOString(),
     })
@@ -657,6 +749,7 @@ export class SessionManager {
 
     // Remove from in-memory cache
     delete this.sessionStates[sessionId]
+    this.acceptedInputs.delete(sessionId)
 
     deleted.push(sessionId)
   }
@@ -667,14 +760,20 @@ export class SessionManager {
     return this.sessionStates[sessionId] ?? null
   }
 
-  getActiveSession(sessionId: string): Session | undefined {
+  getActiveSession(sessionId: string): Session | EphemeralSession | undefined {
     return this.sessions[sessionId]
   }
 
   requestCompact(sessionId: string, llm: LlmRuntimeConfig): boolean {
     const sess = this.sessions[sessionId]
-    if (!sess) return false
-    sess.requestCompact(llm)
+    if (!(sess instanceof Session) || !sess.accepting) return false
+    sess.dispatch({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      source: { kind: 'session', sessionId },
+      kind: 'control',
+      command: { type: 'compact' },
+    }, llm)
     return true
   }
 
@@ -938,7 +1037,8 @@ export class SessionManager {
     return state
   }
 
-  private async prepareSessionContext(msg: InboundMessage, sessionId: string) {
+  private async prepareSessionContext(input: SessionInput, sessionId: string) {
+    const msg = inputContext(sessionId, input)
     const state = this.sessionStates[sessionId] ??
       await this.getOrCreateState(sessionId)
     const behavior = state.config ?? {}
@@ -954,6 +1054,7 @@ export class SessionManager {
       chatName: msg.chatName,
       senderId: msg.senderId,
       senderName: msg.senderName ?? msg.senderId,
+      inputSource: input.source.kind,
       isGroup: msg.isGroup,
       admin: msg.admin,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,

@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import type { InboundMessage } from '../bus/events.ts'
+import { inputSender, type EventInputSource, type SessionMessageInput } from '../sessions/input.ts'
 import type { ChatMessage, ContentPart } from '../providers/provider.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 
@@ -48,36 +48,42 @@ function escapeAttr(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/** Prefix convention: senderIds starting with 'event:' are system events. */
-const EVENT_PREFIX = 'event:'
-
 /**
  * Build a self-closing `<sender>` XML tag identifying the message author.
  * Injected as a separate content part so the user's actual text is untouched.
  */
-function buildSenderTag(msg: InboundMessage): string {
-  const id = escapeAttr(msg.senderId)
-  const name = escapeAttr(msg.senderName ?? msg.senderId)
-  return `<sender id="${id}" name="${name}" />`
+function buildSenderTag(msg: SessionMessageInput): string {
+  const sender = inputSender(msg)
+  const origin = msg.source.kind === 'session' ? ' source="session"' : ''
+  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin} />`
 }
 
 /**
  * Build an `<event>` XML tag with type and metadata attributes.
- * The event type is extracted from the `event:` prefix in senderId.
  * Injected as a separate content part; the event payload (msg.content) follows
  * as its own part.
  */
-function buildEventTag(msg: InboundMessage): string {
-  const type = escapeAttr(msg.senderId.slice(EVENT_PREFIX.length))
-  const attrs = [`type="${type}"`]
-
-  if (msg.eventMeta) {
-    for (const [key, value] of Object.entries(msg.eventMeta)) {
-      if (value == null) continue
-      // Internal routing keys (e.g. __eventDispatch) are not for the model.
-      if (key.startsWith('__')) continue
-      attrs.push(`${key}="${escapeAttr(String(value))}"`)
-    }
+function buildEventTag(source: EventInputSource): string {
+  const attrs = [
+    `type="${escapeAttr(source.type)}"`,
+    `source="${escapeAttr(source.source)}"`,
+    `event-id="${escapeAttr(source.eventId)}"`,
+  ]
+  if (source.senderId) attrs.push(`sender-id="${escapeAttr(source.senderId)}"`)
+  if (source.senderName) attrs.push(`sender-name="${escapeAttr(source.senderName)}"`)
+  if (source.origin) {
+    attrs.push(`source-session-id="${escapeAttr(source.origin.sessionId)}"`)
+    attrs.push(`input-id="${escapeAttr(source.origin.inputId)}"`)
+  }
+  const reserved = new Set([
+    'type', 'source', 'event-id', 'sender-id', 'sender-name', 'source-session-id',
+    'input-id', 'urgency', 'silent', 'retry', 'delivery', 'policy', 'admin',
+    'coalesceKey', 'debounceMs',
+  ])
+  for (const [key, value] of Object.entries(source.attributes ?? {})) {
+    if (value == null || key.startsWith('__') || reserved.has(key)) continue
+    if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key)) continue
+    attrs.push(`${key}="${escapeAttr(String(value))}"`)
   }
 
   return `<event ${attrs.join(' ')} />`
@@ -88,21 +94,22 @@ function buildEventTag(msg: InboundMessage): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a `ChatMessage` from an `InboundMessage`, using a `ContentPart[]`
+ * Build a user-role `ChatMessage` from typed content, using a `ContentPart[]`
  * with a metadata XML tag as the first block so the LLM can distinguish
  * user messages from system events without modifying the actual content.
  *
- * - Messages with `senderId` starting with `event:` → `<event type="..." ... />` + content
- * - All other messages → `<sender id="..." name="..." />` + content
+ * Provenance chooses the label; neither sender names nor payload metadata grant
+ * a different provider role or carry internal scheduling instructions.
  */
 export async function buildUserChatMessage(
-  msg: InboundMessage,
+  msg: SessionMessageInput,
   workspace: string,
   cwd: string,
 ): Promise<ChatMessage> {
-  const senderName = msg.senderName ?? msg.senderId
-  const isEvent = msg.senderId.startsWith(EVENT_PREFIX)
-  const metaTag = isEvent ? buildEventTag(msg) : buildSenderTag(msg)
+  const senderName = inputSender(msg).name
+  const metaTag = msg.source.kind === 'event'
+    ? buildEventTag(msg.source)
+    : buildSenderTag(msg)
 
   // Always use ContentPart[] so the metadata tag and user text are separate.
   const parts: ContentPart[] = [

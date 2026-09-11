@@ -4,6 +4,7 @@ import type { Bus } from '../bus/bus.ts'
 import type { Config } from '../config/schema.ts'
 import type { Hono } from 'hono'
 import type { SessionManager } from '../sessions/session-manager.ts'
+import type { ReceiveChannelMessage } from '../sessions/input.ts'
 import { DiscordChannel } from './discord.ts'
 import { FeishuChannel } from './feishu.ts'
 import { QQChannel } from './qq.ts'
@@ -18,12 +19,17 @@ export class ChannelManager {
   private channels = new Map<string, BaseChannel>()
   private running = false
   private voicePipeline?: VoicePipeline
+  private dispatchController?: AbortController
+  private dispatchTask?: Promise<void>
 
   constructor(
     private config: Config,
     private bus: Bus,
     private sessionManager: SessionManager,
-  ) { }
+    private receive: ReceiveChannelMessage,
+  ) {
+    this.bus.declareQueue('message.outbound')
+  }
 
   async init(): Promise<void> {
     const ch = this.config.channels
@@ -102,6 +108,8 @@ export class ChannelManager {
       this.channels.set('wechat', wechat)
     }
 
+    for (const channel of this.channels.values()) channel.setReceiver(this.receive)
+
     console.info(
       `[channel-manager] Channels initialized: ${Array.from(this.channels.keys()).join(', ')
       }`,
@@ -113,10 +121,12 @@ export class ChannelManager {
    * Each channel receives the gateway Hono app to register its own routes.
    */
   async startAll(app: Hono): Promise<void> {
+    if (this.running) return
     this.running = true
 
     // Start outbound dispatcher
-    this.dispatchOutbound()
+    this.dispatchController = new AbortController()
+    this.dispatchTask = this.dispatchOutbound(this.dispatchController.signal)
 
     // Start each channel
     const starts = Array.from(this.channels.values()).map(async (ch) => {
@@ -135,10 +145,15 @@ export class ChannelManager {
   }
 
   /**
-   * Stop all channels.
+   * After producers quiesce, drain outbound work before stopping channels.
+   * Cancels an idle consume wait without cancelling in-flight sends.
    */
   async stopAll(): Promise<void> {
     this.running = false
+    this.dispatchController?.abort()
+    await this.dispatchTask
+    this.dispatchTask = undefined
+    this.dispatchController = undefined
     for (const ch of this.channels.values()) {
       await ch.stop().catch(() => { })
     }
@@ -161,10 +176,17 @@ export class ChannelManager {
   /**
    * Continuously consume outbound messages and route them to the correct channel.
    */
-  private async dispatchOutbound(): Promise<void> {
-    while (this.running) {
+  private async dispatchOutbound(signal: AbortSignal): Promise<void> {
+    while (this.running || this.bus.hasQueued('message.outbound')) {
+      let waiting = true
       try {
-        const msg: OutboundMessage = await this.bus.consume('message.outbound')
+        const msg: OutboundMessage = await this.bus.consume(
+          'message.outbound',
+          this.running ? { signal } : undefined,
+        )
+        waiting = false
+        // Once dequeued, finish delivery before stopping the channels. Do not
+        // discard an in-flight message if stopAll() races with consume().
         const ch = this.channels.get(msg.channel)
         if (!ch) {
           // virtual channels are handled via bus.on('message.outbound')
@@ -176,13 +198,15 @@ export class ChannelManager {
           continue
         }
 
-        // Cleanup-only signal: done with no content, nothing to send
-        if (msg.done && !msg.content) {
-          continue
-        }
-
         await ch.onMessage(msg)
       } catch (err) {
+        if (waiting && (
+          (signal.aborted && err === signal.reason) ||
+          (err instanceof DOMException && err.name === 'AbortError')
+        )) {
+          if (this.running) break
+          continue
+        }
         console.error(
           '[channel-manager] Error dispatching outbound message',
           err,

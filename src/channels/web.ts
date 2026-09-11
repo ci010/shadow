@@ -1,4 +1,4 @@
-import { AbstractChannel } from './base.ts'
+import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import { readFile, realpath } from 'node:fs/promises'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
@@ -60,9 +60,10 @@ export class WebChannel extends AbstractChannel {
   /** Pending sync REST requests keyed by requestId. */
   private syncPending = new Map<string, {
     resolve: (resp: { content: string; media?: string[] }) => void
+    reject: (error: unknown) => void
     chunks: string[]
     media: string[]
-    timer: number
+    timer: ReturnType<typeof setTimeout>
   }>()
 
   /**
@@ -245,32 +246,35 @@ export class WebChannel extends AbstractChannel {
       const timeoutMs = body.timeoutMs ?? 120_000
 
       try {
-        const response = await new Promise<
+        const completed = new Promise<
           { content: string; media?: string[] }
         >(
           (resolve, reject) => {
             const timer = setTimeout(() => {
               this.syncPending.delete(requestId)
-              reject(new Error('Response timeout'))
+              reject(new DOMException('Response timeout', 'TimeoutError'))
             }, timeoutMs)
 
             this.syncPending.set(requestId, {
               resolve,
+              reject,
               chunks: [],
               media: [],
-              timer: timer as unknown as number,
+              timer,
             })
-
-            this.handleIncoming(
-              body.senderId ?? 'web-user',
-              chatId,
-              body.content,
-              requestId,
-              { senderName: body.senderId ?? 'web-user' },
-              body.media,
-            )
           },
         )
+        const [, response] = await Promise.all([
+          this.handleIncoming(
+            body.senderId ?? 'web-user',
+            chatId,
+            body.content,
+            requestId,
+            { senderName: body.senderId ?? 'web-user' },
+            body.media,
+          ),
+          completed,
+        ])
 
         return c.json({
           requestId,
@@ -279,8 +283,16 @@ export class WebChannel extends AbstractChannel {
           media: response.media?.length ? response.media : undefined,
         })
       } catch (err) {
+        this.syncPending.get(requestId)?.reject(err)
         const message = err instanceof Error ? err.message : 'Internal error'
-        return c.json({ error: message }, 504)
+        const status = err instanceof DOMException && err.name === 'TimeoutError'
+          ? 504
+          : err instanceof ChannelAdmissionError ? err.status : 503
+        return c.json({ error: message }, status)
+      } finally {
+        const pending = this.syncPending.get(requestId)
+        if (pending) clearTimeout(pending.timer)
+        this.syncPending.delete(requestId)
       }
     })
 
@@ -331,36 +343,15 @@ export class WebChannel extends AbstractChannel {
         }
       }
 
-      // Fire-and-forget submit (steering / queuing). Used when a turn is
+      // Admission-only submit (steering / queuing). Used when a turn is
       // already active in the browser: we don't open a dedicated SSE stream —
       // the message is steered into the running turn (its reply flows through
       // the active request's stream) or, if the turn is aborted/restarted,
       // through the persistent GET /api/chat/events stream. This avoids
       // registering a per-request controller that would never receive `done`.
       if (stream === false) {
-        this.handleIncoming(
-          senderId ?? 'web-user',
-          chatId,
-          content ?? '',
-          requestId,
-          {
-            senderName: senderId ?? 'web-user',
-            ...(retry ? { retry: true } : {}),
-          },
-          media,
-        )
-        return c.json({ requestId, chatId })
-      }
-
-      // Create SSE stream
-      const sseStream = new ReadableStream({
-        start: (controller) => {
-          // Register this connection keyed by requestId
-          this.pending.set(requestId, controller)
-
-          // Publish inbound message to the bus.
-          // messageId = requestId so the session loop sets replyTo = requestId
-          this.handleIncoming(
+        try {
+          await this.handleIncoming(
             senderId ?? 'web-user',
             chatId,
             content ?? '',
@@ -371,11 +362,46 @@ export class WebChannel extends AbstractChannel {
             },
             media,
           )
+          return c.json({ requestId, chatId })
+        } catch (err) {
+          return c.json(
+            { error: err instanceof Error ? err.message : 'Message admission failed' },
+            err instanceof ChannelAdmissionError ? err.status : 503,
+          )
+        }
+      }
+
+      // Create SSE stream
+      const sseStream = new ReadableStream({
+        start: (controller) => {
+          // Register before admission so even an immediate response is captured.
+          this.pending.set(requestId, controller)
         },
         cancel: () => {
           this.pending.delete(requestId)
         },
       })
+
+      try {
+        await this.handleIncoming(
+          senderId ?? 'web-user',
+          chatId,
+          content ?? '',
+          requestId,
+          {
+            senderName: senderId ?? 'web-user',
+            ...(retry ? { retry: true } : {}),
+          },
+          media,
+        )
+      } catch (err) {
+        this.pending.delete(requestId)
+        await sseStream.cancel()
+        return c.json(
+          { error: err instanceof Error ? err.message : 'Message admission failed' },
+          err instanceof ChannelAdmissionError ? err.status : 503,
+        )
+      }
 
       return new Response(sseStream, {
         headers: {
@@ -547,7 +573,7 @@ export class WebChannel extends AbstractChannel {
 
     for (const [id, p] of this.syncPending) {
       clearTimeout(p.timer)
-      p.resolve({ content: '' })
+      p.reject(new Error('Web channel stopped'))
       this.syncPending.delete(id)
     }
   }

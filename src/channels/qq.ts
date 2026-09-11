@@ -745,7 +745,7 @@ export class QQChannel extends AbstractChannel {
     const media = await this.downloadAttachments(data, chatId)
     if (!content && !media) return
 
-    this.handleIncoming(senderId, chatId, content, msgId, {
+    await this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: true,
     }, media)
@@ -765,7 +765,7 @@ export class QQChannel extends AbstractChannel {
     const media = await this.downloadAttachments(data, chatId)
     if (!content && !media) return
 
-    this.handleIncoming(senderId, chatId, content, msgId, {
+    await this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: false,
     }, media)
@@ -793,7 +793,7 @@ export class QQChannel extends AbstractChannel {
     const media = await this.downloadAttachments(data, chatId)
     if (!content && !media) return
 
-    this.handleIncoming(senderId, chatId, content, msgId, {
+    await this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: !isDirect,
       senderName,

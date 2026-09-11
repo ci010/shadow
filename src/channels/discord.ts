@@ -620,7 +620,7 @@ export class DiscordChannel extends AbstractChannel {
         })
       }
 
-      this.handleIncoming(
+      await this.handleIncoming(
         author.id,
         channelId,
         finalContent,

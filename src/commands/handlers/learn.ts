@@ -165,11 +165,12 @@ export async function triggerReflectorFlush(
   const { entries, newWatermark } = await computeSessionDiff(sessions, watermark)
   if (entries.length === 0) return false
 
-  sessions.startSession({
+  const sessionId = await sessions.startSession({
     channel: 'heartbeat',
     agentType: 'reflector',
     task: buildReflectorTask(entries),
   })
+  if (!sessionId) throw new Error('Reflector session was not accepted')
   await writeWatermark(sessions.workspace, newWatermark)
   return true
 }
@@ -177,8 +178,7 @@ export async function triggerReflectorFlush(
 export function createLearnCommand(
   sessions: SessionManager,
 ): SlashCommandHandler {
-  const PIPELINES = createPipelines()
-  const VALID_NAMES = Object.keys(PIPELINES)
+  const VALID_NAMES = Object.keys(createPipelines())
 
   return {
     name: 'learn',
@@ -193,17 +193,18 @@ export function createLearnCommand(
         }`
       }
 
-      const pipeline = PIPELINES[name]
+      const pipeline = createPipelines()[name]
       if (!pipeline) {
         return `Unknown pipeline "${name}". Available: ${VALID_NAMES.join(', ')}`
       }
 
       const task = await pipeline.taskFn(sessions)
 
-      sessions.startSession({
+      const sessionId = await sessions.startSession({
         agentType: pipeline.agentType,
         task,
       })
+      if (!sessionId) throw new Error(`${name} session was not accepted`)
 
       await pipeline.afterStart?.(sessions)
 

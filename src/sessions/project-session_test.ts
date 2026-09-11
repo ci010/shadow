@@ -25,6 +25,7 @@ import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionStore } from './session-store.ts'
 import { Session } from './session.ts'
+import { channelMessageInput, type SessionTurnFact } from './input.ts'
 
 const llm: LlmRuntimeConfig = { model: 'fixture', contextWindow: 100_000, temperature: 0 }
 
@@ -38,12 +39,14 @@ test('project attachment context distinguishes absolute private uploads from rel
     await mkdir(join(privateData, 'uploads'), { recursive: true })
     await writeFile(join(privateData, 'uploads', 'image.png'), 'private image')
     await writeFile(join(project, 'uploads', 'image.png'), 'project image')
-    const built = await buildUserChatMessage(
-      message('a', [
+    const input = channelMessageInput(message('a', [
         join(privateData, 'uploads', 'image.png'),
         join(privateData, 'uploads', 'notes.txt'),
         'uploads/image.png', './uploads/image.png', 'uploads/notes.txt',
-      ]),
+      ]))
+    assert(input.kind === 'message')
+    const built = await buildUserChatMessage(
+      input,
       root, project,
     )
     assert(Array.isArray(built.content))
@@ -73,13 +76,30 @@ function manager(
   provider: LLMProvider,
   workdirCapabilityLookup: WorkdirCapabilityLookup,
 ) {
-  return new SessionManager({
-    workspace, store, tools, provider, workdirCapabilityLookup, bus: new Bus(),
+  const fixtureBus = new Bus()
+  return Object.assign(new SessionManager({
+    workspace, store, tools, provider, workdirCapabilityLookup, bus: fixtureBus,
     context: { buildSystemPrompt: async () => 'Synthetic project context' },
     agentTypes: {
       resolve: () => ({ name: 'fixture', description: '', prompt: '', ephemeral: true, source: 'builtin' }),
     },
-  } as unknown as SessionManagerDeps)
+  } as unknown as SessionManagerDeps), { fixtureBus })
+}
+
+async function dispatchAndFinish(sessions: ReturnType<typeof manager>, msg: InboundMessage) {
+  const completed = Promise.withResolvers<SessionTurnFact>()
+  const subscription = sessions.fixtureBus.on('session.turn.finished', (fact) => {
+    if (fact.inputId === msg.messageId) completed.resolve(fact)
+  })
+  try {
+    await sessions.dispatch(msg, llm)
+    const fact = await completed.promise
+    await sessions.getActiveSession(`web:${msg.chatId}`)?.completion
+    if (fact.status === 'failed') throw new Error(fact.error)
+    equal(fact.status, 'completed')
+  } finally {
+    sessions.fixtureBus.off(subscription)
+  }
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
@@ -100,6 +120,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     let store: SessionStore = new Store(join(home, 'sessions'))
     let sessions = manager(home, store, tools, provider, lookup)
     let channel = new WebChannel(new Bus(), { workspace: home, sessionManager: sessions })
+    channel.setReceiver(async (msg) => ({
+      status: 'accepted', sessionId: `web:${msg.chatId}`, inputId: msg.messageId,
+    }))
     let app = new Hono()
     const uploads: Array<{ chatId: string; parentChatId: string; path: string; projectId?: string; ownerSessionId?: string }> = []
     const verifyUpload = async (upload: typeof uploads[number]) => {
@@ -178,7 +201,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       equal(sessions.getSessionState('web:remote-fork')?.workspaceRoot, undefined)
 
       await channel.stop()
-      sessions.stop()
+      await sessions.stop()
       store.close?.()
       store = new Store(join(home, 'sessions'))
       await store.init()
@@ -186,13 +209,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await sessions.start()
       app = new Hono()
       channel = new WebChannel(new Bus(), { workspace: home, sessionManager: sessions })
+      channel.setReceiver(async (msg) => ({
+        status: 'accepted', sessionId: `web:${msg.chatId}`, inputId: msg.messageId,
+      }))
       await channel.start(app)
       for (const upload of uploads) await verifyUpload(upload)
       deepEqual(sessions.getSessionState('web:remote-fork')?.workdir, remoteWorkdir)
       equal(sessions.getSessionState('web:subagent')?.workspaceRoot, 'web:managed-parent')
     } finally {
       await channel.stop()
-      sessions.stop()
+      await sessions.stop()
       store.close?.()
       await rm(root, { recursive: true, force: true })
     }
@@ -253,7 +279,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           projectId: id, projectName: 'unrelated-planning-notes',
           workdir: localProjectWorkdirRef(id), description: `Project ${id}`,
         })
-        await sessions.dispatch(message(id), llm)
+        await dispatchAndFinish(sessions, message(id))
         equal(await readFile(join(folders[id], 'relative.txt'), 'utf8'), 'project file')
         equal((await readFile(join(folders[id], 'shell.txt'), 'utf8')).trim(), folders[id])
         equal(existsSync(join(sessionWorkspacePath(home, `web:${id}`), 'relative.txt')), false)
@@ -279,7 +305,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await sessions.addChild('web:a', 'web:fork')
       await sessions.setSessionConfig('web:a', { temperature: 0.2 })
       const saved = JSON.parse(JSON.stringify(sessions.getSessionState('web:a')))
-      sessions.stop()
+      await sessions.stop()
       store.close?.()
       store = new Store(join(home, 'sessions'))
       await store.init()
@@ -334,23 +360,23 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         store.saveState = originalSave
       }
       await writeFile(join(folders.b, 'relative.txt'), 'other project unchanged')
-      await sessions.dispatch(message('a'), llm)
+      await dispatchAndFinish(sessions, message('a'))
       equal(await readFile(join(folders.b, 'relative.txt'), 'utf8'), 'other project unchanged')
 
       await rm(folders.a, { recursive: true })
-      await rejects(sessions.dispatch(message('a'), llm), /workdir unavailable/)
+      await rejects(dispatchAndFinish(sessions, message('a')), /workdir unavailable/)
       equal(existsSync(folders.a), false)
       await sessions.buildSession('web:unknown', undefined, {
         workdir: { ...localProjectWorkdirRef('unknown'), displayPathSnapshot: folders.b },
       })
-      await rejects(sessions.dispatch(message('unknown'), llm), /workdir unavailable/)
+      await rejects(dispatchAndFinish(sessions, message('unknown')), /workdir unavailable/)
       await sessions.buildSession('web:remote', undefined, {
         workdir: { ...localProjectWorkdirRef('b'), nodeId: 'remote', displayPathSnapshot: folders.b },
       })
-      await rejects(sessions.dispatch(message('remote'), llm), /remote executor/)
+      await rejects(dispatchAndFinish(sessions, message('remote')), /remote executor/)
       equal(await readFile(join(folders.b, 'relative.txt'), 'utf8'), 'other project unchanged')
     } finally {
-      sessions.stop()
+      await sessions.stop()
       store.close?.()
       await rm(root, { recursive: true, force: true })
     }

@@ -196,7 +196,11 @@ export async function startMainRuntime(
 
   // ── Create core components ────────────────────────────────
   const bus = new Bus()
-  const events = new EventService(workspace, bus)
+  bus.declareQueue('message.outbound')
+  let deliverInput: import('./sessions/input.ts').DeliverInput = async () => {
+    throw new Error('Session delivery is not ready')
+  }
+  const events = new EventService(workspace, bus, (sessionId, input) => deliverInput(sessionId, input))
   await events.start()
   const copilotAuth = new CopilotAuthenticator()
   let provider = createAggregatedProvider(config, copilotAuth)
@@ -491,10 +495,12 @@ export async function startMainRuntime(
     backgroundTasks,
     agentTypes,
     events,
+    getLlmRuntimeConfig: () => llm,
     workdirCapabilityLookup,
     remoteExecutor: mainCluster.remoteExecutor,
     onSessionStopped: (id) => backgroundTasks.handleSessionStopped(id),
   })
+  deliverInput = (sessionId, input) => sessions.deliver(sessionId, input)
 
   context.register(guidelineProvider())
   context.register(
@@ -560,6 +566,7 @@ export async function startMainRuntime(
     mcpManager,
     commandDispatcher,
     agentTypes,
+    events,
     getLlmRuntimeConfig: () => llm,
   })
 
@@ -574,9 +581,10 @@ export async function startMainRuntime(
   tools.register(
     new MessageTool(
       bus,
-      (id) => sessions.isEphemeralSession(id),
+      (id) => sessions.canReceiveSessionMessage(id),
       (id) => sessions.getSessionState(id)?.parent,
       (parentId) => sessions.getSessionState(parentId)?.children,
+      deliverInput,
     ),
   )
 
@@ -595,7 +603,7 @@ export async function startMainRuntime(
       content: job.task ?? '',
     }
 
-    events.emit({
+    await events.emit({
       type: event.type,
       source: event.source ?? 'cron',
       content: event.content,
@@ -619,15 +627,15 @@ export async function startMainRuntime(
   // ── Learning pipelines ──────────────────────────────────────────────
   // All pipelines use bus.poll: buffer events over an interval, aggregate in handler.
 
-  // Reflector: poll message.inbound, aggregate unique session keys (O(1) memory)
-  bus.poll<'message.inbound', Set<string>>(
-    'message.inbound',
+  // Observe accepted activity, never the input delivery transport.
+  bus.poll<'session.input.accepted', Set<string>>(
+    'session.input.accepted',
     {
       intervalMs: config.learning.reflectIntervalMs,
       init: () => new Set<string>(),
       reduce: (acc, e) => {
-        if (e.channel !== 'sleep' && e.channel !== 'heartbeat') {
-          acc.add(`${e.channel}:${e.chatId}`)
+        if (!e.sessionId.startsWith('sleep:') && !e.sessionId.startsWith('heartbeat:')) {
+          acc.add(e.sessionId)
         }
         return acc
       },
@@ -636,7 +644,7 @@ export async function startMainRuntime(
       if (sessionKeys.size === 0) return
       // The aggregated keys just signal "activity happened"; the watermark diff
       // determines exactly which sessions' increments to flush (dedup).
-      void triggerReflectorFlush(sessions)
+      return triggerReflectorFlush(sessions)
     },
   )
 
@@ -647,7 +655,7 @@ export async function startMainRuntime(
     (events) => {
       if (!events.some((e) => e.agentType === 'reflector')) return
       const today = new Date().toISOString().slice(0, 10)
-      sessions.startSession({
+      return sessions.startSession({
         channel: 'heartbeat',
         agentType: 'encapsulator',
         task:
@@ -663,7 +671,7 @@ export async function startMainRuntime(
     (events) => {
       if (!events.some((e) => e.agentType === 'reflector')) return
       const today = new Date().toISOString().slice(0, 10)
-      sessions.startSession({
+      return sessions.startSession({
         channel: 'heartbeat',
         agentType: 'soul-reflector',
         task:
@@ -732,7 +740,7 @@ export async function startMainRuntime(
   })
 
   // ── Channel manager ───────────────────────────────────────────────
-  const channels = new ChannelManager(config, bus, sessions)
+  const channels = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg))
   await channels.init()
   // Each channel registers its own routes (e.g. feishu proxy) onto the app
   await channels.startAll(app)
@@ -806,16 +814,24 @@ export async function startMainRuntime(
     const closeCluster = mainCluster.closeNodeConnections()
     bus.emit('app.lifecycle', { action: 'stop' })
     clearInterval(pulseTimer)
-    bus.stopAll()
-    await agent.shutdown()
-    await channels.stopAll()
     cronService.stop()
-    events.stop()
-    await chromeManager.releaseAll()
-    await closeCluster
-    await gateway.shutdown()
-    await mainCluster.save()
-    await closeTelemetry()
+    const errors: unknown[] = []
+    // Quiesce producers before draining output; one failed cleanup must not
+    // leave the remaining channels, persistence writes, or gateway running.
+    for (const close of [
+      () => agent.shutdown(),
+      () => channels.stopAll(),
+      () => events.stop(),
+      () => bus.stopAll(),
+      () => chromeManager.releaseAll(),
+      () => closeCluster,
+      () => gateway.shutdown(),
+      () => mainCluster.save(),
+      () => closeTelemetry(),
+    ]) {
+      try { await close() } catch (error) { errors.push(error) }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Main shutdown failed')
   }
 
   // ── Start everything ──────────────────────────────────────────────

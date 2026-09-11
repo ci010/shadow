@@ -1,4 +1,5 @@
 import type { SessionConfig } from '../../sessions/session-store.ts'
+import type { SessionInput } from '../../sessions/input.ts'
 import type { WorkdirRefV1 } from '../../sessions/locality.ts'
 import type { AgentTypeDefinition } from '../agent-types/types.ts'
 import type { ExecShell } from '../../tools/shell.ts'
@@ -18,6 +19,7 @@ export interface SessionPromptContext {
   chatName?: string
   senderId?: string
   senderName?: string
+  inputSource?: SessionInput['source']['kind']
   isGroup?: boolean
   admin?: boolean
   defaultExecShell?: ExecShell

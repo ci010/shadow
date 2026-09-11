@@ -57,7 +57,10 @@ const stub = <T>(): T => ({} as unknown as T)
  */
 function buildBaseTools(): Tools {
   const bus = new Bus()
-  const events = new EventService(WORKSPACE, bus)
+  const deliver = async (sessionId: string, input: { id: string }) => ({
+    status: 'accepted' as const, sessionId, inputId: input.id,
+  })
+  const events = new EventService(WORKSPACE, bus, deliver)
   const backgroundTasks = new BackgroundTaskManager(bus, events)
   const commandHandler = new CommandHandlerManager()
   const processManager = new ProcessManager()
@@ -83,7 +86,7 @@ function buildBaseTools(): Tools {
   tools.register(new ContinuationTool(backgroundTasks))
   tools.register(new LogTool(WORKSPACE))
   tools.register(
-    new MessageTool(bus, () => false, () => undefined, () => undefined),
+    new MessageTool(bus, () => true, () => undefined, () => undefined, deliver),
   )
   tools.register(new EventSubscribeTool(events))
   tools.register(

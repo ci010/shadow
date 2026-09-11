@@ -1,0 +1,136 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { Bus } from '../bus/bus.ts'
+import type { OutboundMessage } from '../bus/events.ts'
+import type { ExecutionContext } from '../agent/agent.ts'
+import type { DeliveryReceipt, SessionInput } from '../sessions/input.ts'
+import { EventService } from '../events/service.ts'
+import { EventSubscribeTool } from './event-subscribe.ts'
+import { MessageTool } from './message.ts'
+import { SessionTools, Tools } from './registry.ts'
+
+function context(): ExecutionContext {
+  return {
+    sessionId: 'web:source', physicalSessionId: 'source.0',
+    channel: 'discord', chatId: 'reply-address', senderId: 'fixture',
+    messageId: 'causal-input', senderName: 'Agent',
+    signal: new AbortController().signal,
+    tools: new SessionTools(new Tools('.'), '.'),
+  }
+}
+
+test('message tool awaits acceptance before displaying one session-origin message', async () => {
+  const bus = new Bus()
+  const displayed: OutboundMessage[] = []
+  bus.on('message.outbound', (message) => { displayed.push(message) })
+  const accepted = Promise.withResolvers<DeliveryReceipt>()
+  let delivered: SessionInput | undefined
+  const tool = new MessageTool(bus, () => true, () => undefined, () => [], (sessionId, input) => {
+    assert.equal(sessionId, 'web:target')
+    delivered = input
+    return accepted.promise
+  })
+  const result = tool.execute({ sessionId: 'web:target', content: 'task' }, context())
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(displayed.length, 0)
+  assert(delivered?.kind === 'message')
+  assert.equal(delivered.policy, 'queue')
+  assert.deepEqual(delivered.source, {
+    kind: 'session', sessionId: 'web:source', inputId: 'causal-input', senderName: 'Agent',
+  })
+  accepted.resolve({ status: 'accepted', sessionId: 'web:target', inputId: delivered.id })
+  assert.match(await result, /Message sent to web:target/)
+  assert.equal(displayed.length, 1)
+  assert.equal(displayed[0].chatId, 'target')
+  assert.equal(displayed[0].content, 'task')
+  assert.equal(displayed[0].done, false)
+})
+
+test('rejected cross-session delivery never produces a sent projection', async () => {
+  const bus = new Bus()
+  let displays = 0
+  bus.on('message.outbound', () => { displays++ })
+  const tool = new MessageTool(bus, () => true, () => undefined, () => [], async () => {
+    throw new Error('target unavailable')
+  })
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'task' }, context()), /target unavailable/)
+  assert.equal(displays, 0)
+})
+
+test('initial ephemeral task reserves admission before a concurrent message-tool follow-up', async () => {
+  const bus = new Bus()
+  const accepted = Promise.withResolvers<DeliveryReceipt>()
+  let available = true
+  let deliveries = 0
+  let firstInputId = ''
+  const tool = new MessageTool(bus, () => available, () => undefined, () => [], (_sessionId, input) => {
+    available = false
+    deliveries++
+    firstInputId = input.id
+    return accepted.promise
+  })
+  const first = tool.execute({ sessionId: 'web:ephemeral', content: 'initial task' }, context())
+  assert.match(
+    await tool.execute({ sessionId: 'web:ephemeral', content: 'follow-up' }, context()),
+    /ephemeral/i,
+  )
+  assert.equal(deliveries, 1)
+  accepted.resolve({ status: 'accepted', sessionId: 'web:ephemeral', inputId: firstInputId })
+  assert.match(await first, /Message sent/)
+  assert.match(
+    await tool.execute({ sessionId: 'web:ephemeral', content: 'later follow-up' }, context()),
+    /ephemeral/i,
+  )
+  assert.equal(deliveries, 1)
+})
+
+test('message tool preserves silent policy and refuses self or another parent child', async () => {
+  const bus = new Bus()
+  const inputs: SessionInput[] = []
+  const tool = new MessageTool(
+    bus, () => true, (id) => id === 'web:owned' ? { id: 'web:other' } : undefined,
+    () => [], async (sessionId, input) => {
+      inputs.push(input)
+      return { status: 'accepted', sessionId, inputId: input.id }
+    },
+  )
+  assert.match(await tool.execute({ sessionId: 'web:source', content: 'task' }, context()), /current session/)
+  assert.match(await tool.execute({ sessionId: 'web:owned', content: 'task' }, context()), /another session/)
+  assert.equal(inputs.length, 0)
+  await tool.execute({ sessionId: 'web:target', content: 'record', silent: true }, context())
+  assert(inputs[0].kind === 'message')
+  assert.equal(inputs[0].policy, 'silent')
+})
+
+test('event tool awaits directed acceptance and preserves session causality', async () => {
+  let observed: SessionInput | undefined
+  const gate = Promise.withResolvers<void>()
+  const events = new EventService('.', new Bus(), async (sessionId, input) => {
+    assert.equal(sessionId, 'web:source')
+    observed = input
+    await gate.promise
+    return { status: 'accepted', sessionId, inputId: input.id }
+  })
+  const tool = new EventSubscribeTool(events)
+  let returned = false
+  const result = tool.execute({
+    action: 'emit', event: 'custom-result', content: 'result',
+    meta_json: JSON.stringify({ urgency: 'steering' }),
+  }, context()).then((value) => { returned = true; return value })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(returned, false)
+  assert(observed?.kind === 'message' && observed.source.kind === 'event')
+  assert.equal(observed.policy, 'queue')
+  assert.equal(observed.source.origin?.sessionId, 'web:source')
+  assert.equal(observed.source.origin?.inputId, 'causal-input')
+  gate.resolve()
+  assert.match(await result, /Emitted event custom-result/)
+
+  const failing = new EventSubscribeTool(new EventService('.', new Bus(), async () => {
+    throw new Error('Event target unavailable')
+  }))
+  await assert.rejects(
+    failing.execute({ action: 'emit', event: 'custom-result', content: 'result' }, context()),
+    /Event target unavailable/,
+  )
+})

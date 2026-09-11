@@ -3,7 +3,12 @@ import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
-import type { InboundMessage } from '../bus/events.ts'
+import {
+  inputContext,
+  retryMessage,
+  type SessionInput,
+  type SessionTurnFact,
+} from './input.ts'
 import {
   type ChatMessage,
   type LLMProvider,
@@ -77,6 +82,13 @@ export abstract class BaseSession {
    * Subclasses may override to add compaction checks (see {@link Session}).
    */
   protected async appendMessages(
+    llm: LlmRuntimeConfig,
+    ...messages: ChatMessage[]
+  ): Promise<void> {
+    await this.persistMessages(llm, ...messages)
+  }
+
+  private async persistMessages(
     _llm: LlmRuntimeConfig,
     ...messages: ChatMessage[]
   ): Promise<void> {
@@ -140,7 +152,7 @@ export abstract class BaseSession {
     executionContext: ExecutionContext,
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<string> {
     const model = executionContext.model ?? llm.model
     const temperature = executionContext.temperature ?? llm.temperature
     const maxTokens = executionContext.maxTokens ?? llm.maxTokens
@@ -174,6 +186,7 @@ export abstract class BaseSession {
         span.context,
       ).catch((err) => err as Error)
 
+      signal.throwIfAborted()
       if (response instanceof TokenLimitExceededError) {
         console.warn(`[${this.id}] Token limit exceeded`)
         if (await this.handleTokenLimitExceeded(llm)) continue
@@ -201,8 +214,8 @@ export abstract class BaseSession {
       })
 
       const done = response.toolCalls.length === 0
-      if (response.content) {
-        const { text, media } = parseMediaFromContent(response.content)
+      if (response.content || done) {
+        const { text, media } = parseMediaFromContent(response.content ?? '')
         this.bus.emit('message.outbound', {
           event: 'response',
           channel: executionContext.channel,
@@ -217,12 +230,11 @@ export abstract class BaseSession {
 
       if (done) {
         console.log(`[${this.id}] LLM response complete, exiting loop`)
-        return
+        return response.content ?? ''
       }
 
-      signal.throwIfAborted()
-
       const groups = groupTools(response.toolCalls, this.tools)
+      const pendingResults = new Map(response.toolCalls.map((call) => [call.id, call]))
 
       this.onToolPhaseStart()
       try {
@@ -261,6 +273,7 @@ export abstract class BaseSession {
               name: call.name,
             } satisfies ChatMessage)),
           )
+          for (const call of group.calls) pendingResults.delete(call.id)
 
           for (let idx = 0; idx < group.calls.length; idx++) {
             this.bus.emit('message.outbound', {
@@ -273,25 +286,39 @@ export abstract class BaseSession {
             })
           }
         }
+      } catch (error) {
+        // A cancelled later tool group still needs results for its persisted
+        // assistant calls before another input can safely use this history.
+        await this.appendMessages(llm, ...Array.from(pendingResults.values(), (call) => ({
+          role: 'tool' as const,
+          content: signal.aborted ? 'Tool execution cancelled.' : `Tool execution failed: ${errMsg(error)}`,
+          tool_call_id: call.id,
+          name: call.name,
+        })))
+        throw error
       } finally {
         this.onToolPhaseEnd()
       }
     }
+    throw new Error('Session turn exceeded the maximum number of iterations')
   }
 
   // ── Shared message processing ──────────────────────────────────────────
 
   /**
-   * Process a single inbound message through the full LLM pipeline.
+   * Process an admitted input through the full LLM pipeline.
    * Builds the user ChatMessage, appends it, constructs an ExecutionContext,
    * runs the LLM loop, and handles errors.
    */
   @Span('session.processMessage')
-  protected async processInboundMessage(
-    msg: InboundMessage,
+  protected async processInput(
+    input: SessionInput,
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<SessionTurnFact | undefined> {
+    if (input.kind === 'control' && input.command.type !== 'retry') return
+    const silent = input.kind === 'message' && input.policy === 'silent'
+    const msg = inputContext(this.id, input)
     const senderName = msg.senderName ?? msg.senderId
     const isGroup = !!msg.isGroup
     const queryId = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
@@ -310,93 +337,102 @@ export abstract class BaseSession {
       platformMessageId: msg.platformMessageId,
       queryId,
     }
-    spanAttributes(attributes)
-
-    console.log(`[${this.id}] Processing message`)
-
-    // Per-session working directory — created lazily so the agent's relative
-    // file paths (and the media it reads) land here instead of cluttering the
-    // shared workspace root.
-    const locations = resolveSessionLocations(
-      this.workspace,
-      this.state,
-      undefined,
-      this.workdirCapabilityLookup,
-    )
-    if (!locations.workdir.available) {
-      throw new Error(
-        `Session workdir unavailable: ${locations.workdir.reason}`,
-      )
+    const fact: SessionTurnFact = {
+      sessionId: this.id,
+      turnId: queryId,
+      inputId: input.id,
+      source: input.source,
+      status: 'completed',
+      content: '',
     }
-    const remoteWorkdir = locations.workdir.locality === 'remote'
-      ? {
-        nodeId: locations.workdir.workdir.nodeId,
-        capabilityId: locations.workdir.workdir.capabilityId,
-        executor: this.remoteExecutor ?? failMissingRemoteExecutor(),
-      }
-      : undefined
-    const cwd = locations.workdir.locality === 'local'
-      ? locations.workdir.path
-      : undefined
-    const messageWorkdir = cwd ?? locations.sessionDataDir
-    await mkdir(locations.sessionDataDir, { recursive: true })
-
-    if (msg.retry === true) {
-      // Retry: re-run the agent loop on the existing history without appending
-      // a new user message (avoids duplicating the prompt after a failed call).
-      // If there is nothing to replay (e.g. the original request never reached
-      // the backend), fall back to appending the provided content once.
-      const hasReplayable = this.messages.some((m) => m.role !== 'system')
-      if (hasReplayable) {
-        console.info(`[${this.id}] Retrying last request on existing history`)
-      } else if (msg.content && msg.content.trim()) {
-        const userMsg = await buildUserChatMessage(
-          msg,
-          this.workspace,
-          messageWorkdir,
-        )
-        await this.appendMessages(llm, userMsg)
-      } else {
-        console.warn(
-          `[${this.id}] Retry requested but nothing to replay — ignoring`,
-        )
-        return
-      }
-    } else {
-      const userMsg = await buildUserChatMessage(
-        msg,
-        this.workspace,
-        messageWorkdir,
-      )
-      await this.appendMessages(llm, userMsg)
-
-      if (msg.silent === true) {
-        console.info(`[${this.id}] Recorded silent message`)
-        return
-      }
-    }
-
-    console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
-
-    const executionContext: ExecutionContext = {
-      ...attributes,
-      cwd,
-      remoteWorkdir,
-      tools: this.tools,
-      signal,
-      defaultExecShell: this.state.config?.defaultShell,
-      model: this.state.config?.model,
-      temperature: this.state.config?.temperature,
-      maxTokens: this.state.config?.maxTokens,
-      thinking: this.state.config?.thinking,
-      reasoningEffort: this.state.config?.reasoningEffort,
-    }
-
+    const attempted = !silent
     try {
+      spanAttributes(attributes)
       signal.throwIfAborted()
-      await this.runLlmLoop(executionContext, llm, signal)
+
+      console.log(`[${this.id}] Processing message`)
+
+      // Resolve only locally available workdirs; remote display paths are not
+      // filesystem paths on this node. Uploads stay in private session data.
+      const locations = resolveSessionLocations(
+        this.workspace,
+        this.state,
+        undefined,
+        this.workdirCapabilityLookup,
+      )
+      if (!locations.workdir.available) {
+        throw new Error(`Session workdir unavailable: ${locations.workdir.reason}`)
+      }
+      const remoteWorkdir = locations.workdir.locality === 'remote'
+        ? {
+          nodeId: locations.workdir.workdir.nodeId,
+          capabilityId: locations.workdir.workdir.capabilityId,
+          executor: this.remoteExecutor ?? failMissingRemoteExecutor(),
+        }
+        : undefined
+      const cwd = locations.workdir.locality === 'local' ? locations.workdir.path : undefined
+      const messageWorkdir = cwd ?? locations.sessionDataDir
+      await mkdir(locations.sessionDataDir, { recursive: true })
+
+      if (input.kind === 'control') {
+        // Retry the existing history without storing the original prompt twice.
+        const hasReplayable = this.messages.some((m) => m.role !== 'system')
+        if (hasReplayable) {
+          console.info(`[${this.id}] Retrying last request on existing history`)
+        } else if (input.command.type === 'retry' && input.command.fallbackContent?.trim()) {
+          await this.appendMessages(llm, await buildUserChatMessage(
+            retryMessage(input), this.workspace, messageWorkdir,
+          ))
+        } else {
+          throw new Error('Nothing to retry: no previous request or fallback content')
+        }
+      } else {
+        const message = await buildUserChatMessage(
+          input, this.workspace, messageWorkdir,
+        )
+        if (silent) {
+          // A silent admission must not trigger compaction/model inference.
+          await this.persistMessages(llm, message)
+          console.info(`[${this.id}] Recorded silent message`)
+          return
+        }
+        await this.appendMessages(llm, message)
+      }
+
+      console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
+      const executionContext: ExecutionContext = {
+        ...attributes,
+        cwd,
+        remoteWorkdir,
+        tools: this.tools,
+        signal,
+        defaultExecShell: this.state.config?.defaultShell,
+        model: this.state.config?.model,
+        temperature: this.state.config?.temperature,
+        maxTokens: this.state.config?.maxTokens,
+        thinking: this.state.config?.thinking,
+        reasoningEffort: this.state.config?.reasoningEffort,
+      }
+
+      signal.throwIfAborted()
+      fact.content = await this.runLlmLoop(executionContext, llm, signal)
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') return
+      if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+        fact.status = 'cancelled'
+        if (!silent) {
+          this.bus.emit('message.outbound', {
+            channel: msg.channel,
+            chatId: msg.chatId,
+            content: '',
+            replyTo: msg.platformMessageId,
+            done: true,
+            event: 'response',
+          })
+        }
+        return fact
+      }
+      fact.status = 'failed'
+      fact.error = errMsg(err)
       console.error(errDetail(err), 'LLM provider error')
       this.bus.emit('message.outbound', {
         channel: msg.channel,
@@ -406,7 +442,10 @@ export abstract class BaseSession {
         done: true,
         event: 'response',
       })
+    } finally {
+      if (attempted) this.bus.emit('session.turn.finished', fact)
     }
+    return attempted ? fact : undefined
   }
 }
 

@@ -151,7 +151,7 @@ export class EventSubscribeTool implements Tool {
     const action = String(args.action ?? '')
     const sessionId = String(args.target_session ?? context.sessionId)
 
-    const result = (() => {
+    const result = (async () => {
       switch (action) {
       case 'subscribe': {
         const event = String(args.event ?? '').trim()
@@ -178,13 +178,18 @@ export class EventSubscribeTool implements Tool {
         const event = String(args.event ?? '').trim()
         if (!event) return 'Error: event is required for emit'
         const meta = parseJsonObject(args.meta_json)
-        this.events.emit({
+        await this.events.emit({
           type: event,
           source: typeof args.source === 'string' ? args.source : 'agent',
           content: typeof args.content === 'string' ? args.content : '',
           meta,
           targetSessionId: sessionId,
           delivery: parseDelivery(args),
+          origin: {
+            sessionId: context.sessionId,
+            inputId: context.messageId,
+            source: { kind: 'session', sessionId: context.sessionId },
+          },
         })
         return `Emitted event ${event} to ${sessionId}`
       }
@@ -226,6 +231,6 @@ export class EventSubscribeTool implements Tool {
       }
     })()
 
-    return Promise.resolve(result)
+    return result
   }
 }

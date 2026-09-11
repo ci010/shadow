@@ -57,9 +57,8 @@ Browser / Electron renderer              External messaging platforms
           | HTTP + SSE                              |
           v                                         v
                  One Node backend (Main)
-  Hono gateway + channels <-> in-process Bus <-> AgentApp
-                                               |
-                                         SessionManager
+  Hono gateway + channels --> AgentApp --> SessionManager.deliver
+  Event routing / other sessions ------->      |
                                                |
                                Session / EphemeralSession
                                   |                   |
@@ -67,6 +66,8 @@ Browser / Electron renderer              External messaging platforms
                                                       |
                                  host files/processes, VFS, MCP,
                                  browser, subagents, event services
+
+  Session facts/output --> Bus notifications + outbound queue --> UI/channels
 
         File/SQLite state beneath the configured agent Home
 
@@ -124,19 +125,28 @@ remains the primary way to run the agent without Electron.
 
 ## A message from input to response
 
-1. **Normalize input.** A channel validates its configured sender policy,
-   processes text/media, adds channel/chat/sender metadata, and emits
-   `message.inbound`. Logical identity normally derives from `channel:chatId`.
-2. **Handle commands.** `AgentApp` tries the slash-command dispatcher first.
+1. **Normalize input at the boundary.** A channel validates its configured sender
+   policy and calls its explicit receiver. `AgentApp.receiveChannelMessage`
+   translates the existing channel wire shape into `SessionInput`. Only this
+   adapter derives the legacy logical ID from `channel:chatId`; directed callers
+   supply a session ID without disguising their input as a channel message.
+2. **Handle channel commands.** `AgentApp` tries the slash-command dispatcher for
+   ordinary channel text, retaining its existing admin checks.
    Commands such as `/help`, `/config`, `/status`, `/sessions`, `/compact`,
    `/dump-prompt`, and `/learn` can respond without an ordinary agent turn.
-3. **Select a session.** `SessionManager` restores/builds state and history,
+   Event and other-session inputs do not pass through this command boundary.
+   Retry is a typed control, not another copy of the user's content.
+3. **Accept into a session.** `SessionManager.deliver(sessionId, input)`
+   restores/builds state and history,
    resolves the agent type and workdir, builds context, and supplies the
-   session-specific tool overlay. Persistent sessions receive an inbox event;
-   ephemeral types run a single turn.
+   session-specific tool overlay, and admits the input to that session's mailbox.
+   Its receipt means accepted in this process, not model completion or durable
+   persistence. Preparation/admission errors reject the directed caller; web
+   requests do not return a successful acceptance for those errors.
 4. **Build the message.** `agent/message-builder.ts` converts inbound text,
-   sender/event metadata, and supported media into provider-neutral chat
-   messages. The execution context carries logical and physical IDs, effective
+   explicit user/session/event provenance and supported media into provider-neutral
+   **user-role** messages. Sender prefixes and arbitrary metadata do not select
+   roles, urgency, or command privileges. The execution context carries logical and physical IDs, effective
    cwd or remote capability, tool overlay, model settings, and an abort signal.
 5. **Run the LLM/tool loop.** `BaseSession` calls `LLMProvider.chat`, persists
    assistant messages and usage/reasoning, and emits response/tool activity.
@@ -145,8 +155,34 @@ remains the primary way to run the agent without Electron.
    paired tool messages before the next model call.
 6. **Finish or continue.** No tool calls ends the turn. A context-limit response
    can trigger persistent-session compaction and retry; ordinary errors and
-   cancellation follow the session error path. Outbound events reach channel
-   adapters and web subscribers.
+   cancellation follow the session error path. A real `session.turn.finished`
+   fact records completed/failed/cancelled status. Independent outbound projections
+   retain the channel/web response format; `done` is a display boundary, not the
+   source of domain completion.
+
+```mermaid
+flowchart LR
+  Channel["Channel adapter / web HTTP"] --> Ingress["AgentApp channel boundary"]
+  Ingress --> Delivery["SessionManager.deliver(target, typed input)"]
+  Ingress -. "explicit channel-source publication" .-> Events["EventService: match / dedupe / debounce"]
+  Producers["Cron / background completion / domain reports"] --> Events
+  Events --> Delivery
+  Messages["Other session: message tool"] --> Delivery
+  Delivery --> Mailbox["Target Session mailbox"]
+  Mailbox --> Turn["Agent / provider / tool loop"]
+  Delivery -. "accepted fact" .-> Bus["Bus notifications"]
+  Turn -. "turn finished fact" .-> Bus
+  Turn --> Output["Outbound projection / explicit channel queue"]
+  Output --> UI["Channels / HTTP SSE"]
+```
+
+The channel source is published once after direct acceptance and skips its original
+session during subscription fanout. Delivery is never re-published as
+`message.inbound`: there is no Message-to-Event-to-Message feedback loop.
+`SessionInput` separates target identity from source and optional reply address;
+event IDs and original input/session provenance survive fanout, while each delivery
+has its own input ID. These envelopes are in-memory contracts, not a new storage
+format or network protocol.
 
 This is an iterative conversation loop, not a durable workflow DAG. A frontend
 SSE activity stream does not mean every provider is token-streaming to the UI:
@@ -162,11 +198,15 @@ the common loop works with completed `chat` responses and tool events.
 - New human input during an LLM request aborts that request and queues the
   message. During tool work it can steer into the next model iteration; longer
   tool work can use `quickModel` to classify steer versus abort.
-- Event metadata can request steering, queued/silent handling, or debounce.
-  Silent messages are recorded without starting a normal response.
-- `EphemeralSession` has no persistent event loop, steering, idle sleep, or
-  compaction. Its transcript **is still persisted**. “Ephemeral” describes the
-  execution lifecycle, not absence of stored data.
+- Content has an explicit `interactive`, `queue`, `steering`, or `silent` policy.
+  Event defaults and trailing-debounce flushes are explicitly queued, including
+  during LLM/tool work; they cannot accidentally take the human-interruption path.
+  Silent inputs only record content. Retry/cancel/compact are distinct controls;
+  debounce exists only in the event router, not as a fourth execution mode.
+- `EphemeralSession` serializes admitted work without persistent-session steering,
+  idle sleep, or compaction. Admission does not wait for the model; lifetime end
+  follows actual processing. Its transcript **is still persisted**. “Ephemeral”
+  describes the execution lifecycle, not absence of stored data.
 
 The default persistent-session inactivity period is 15 minutes. Sleep releases
 active session resources and dynamically imported tools; state/history remain.
@@ -202,8 +242,14 @@ worktree/branch management.
 `subagent` **creates the session but does not send its task**. The parent uses
 `message` afterward. When supported, a channel thread is created; otherwise a
 synthetic session ID is used. Child sessions inherit the root spawner's workdir
-ownership, not an isolated git worktree. Persistent `reportTo` routing sends
-completed turn content as a `subagent-complete` event to the callback session.
+ownership, not an isolated git worktree. Persisted `reportTo` routing consumes real
+turn facts and sends `subagent-complete` or `subagent-failed` to the callback session.
+UI command responses, tool projections, and `outbound.done` cannot produce a
+spurious completion report. The `message` tool waits for target acceptance before
+displaying its sent projection.
+Fresh ephemeral subagents can receive their initial task; concurrent or later
+message-tool follow-ups are rejected, including after recovery of an already-used
+session. This does not turn ephemeral execution into a persistent conversational agent.
 This supports coder/verifier patterns without making verification automatic.
 
 ### Compaction is continuity, not full memory reconstruction
@@ -412,13 +458,23 @@ rate limits, and provider behavior remain external dependencies.
 
 Three mechanisms must not be conflated:
 
-1. **Bus:** in-memory typed topics with immediate subscribers, bounded polling
-   buffers/aggregators, and single-consumer queues. It is not Redis, a message
-   broker, or a durable event log.
+1. **Bus:** in-memory typed notifications with immediate subscribers and bounded
+   polling buffers/aggregators. A work queue exists only after `declareQueue`;
+   composition explicitly declares `message.outbound` before publishing, preserving
+   FIFO messages sent before the channel consumer starts. Ordinary notification
+   topics never accumulate hidden consume buffers. Async/sync observer failures
+   reach the error reporter; notification emission is not an input-acceptance API.
+   Shutdown stops session producers, then drains the outbound dispatcher before
+   stopping the Bus. Pending event deliveries are still not crash-durable.
+   It is not Redis, a message broker, or a durable event log.
 2. **EventService:** normalized events with source descriptors, subscriptions,
    targets, urgency, and trailing debounce. Definitions persist under `.events`;
-   delivery/debounce state remains in memory. Cron/background/subagent events
-   can become inbound session messages.
+   writes are serialized, failures are reported, and `flush`/`stop` await pending
+   writes. Delivery/debounce state remains in memory. It calls typed session delivery
+   directly. `emit` awaits directed admission (or schedules the debounce window);
+   independent fanout targets can partially succeed, with failures returned to the
+   producer. Timer-triggered failures report correlation IDs. There is no automatic
+   retry or crash replay of this pending work.
 3. **Memory event log:** model-curated daily knowledge in `memory/events`, not
    the transport log of every Bus event.
 
@@ -426,7 +482,8 @@ Three mechanisms must not be conflated:
 other operations can outlive the originating turn and report completion through
 events. Continuation text tells the resumed agent what to do; it is not a
 serialized execution stack. Restarting the backend does not restore OS
-processes from these records.
+processes from these records. Session-bound tasks use turn facts rather than UI
+`done`. Callback delivery errors are reported separately from the real task result.
 
 `CronService` persists definitions in `.cron/jobs.json` and schedules them only
 while the backend is running. Jobs can target an existing session or an isolated

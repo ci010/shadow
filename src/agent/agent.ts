@@ -12,6 +12,8 @@ import type { SkillsManager } from '../skills/loader.ts'
 import type { SessionTools } from '../tools/registry.ts'
 import type { ExecShell } from '../tools/shell.ts'
 import type { Executor } from '../execution/executor.ts'
+import type { EventService } from '../events/service.ts'
+import { channelMessageInput, type DeliveryReceipt } from '../sessions/input.ts'
 
 export interface ExecutionContext extends MessageContext {
   /** Logical session ID (e.g. "discord:1234567890") */
@@ -58,6 +60,7 @@ export interface AgentOptions {
   commandDispatcher: CommandDispatcher
   agentTypes: AgentTypesManager
   getLlmRuntimeConfig: () => LlmRuntimeConfig
+  events: EventService
 }
 
 /**
@@ -76,6 +79,7 @@ export class AgentApp {
   private running = false
   private commandDispatcher: CommandDispatcher
   private getLlmRuntimeConfig: () => LlmRuntimeConfig
+  private events: EventService
 
   constructor(opts: AgentOptions) {
     this.bus = opts.bus
@@ -85,6 +89,7 @@ export class AgentApp {
     this.agentTypes = opts.agentTypes
     this.commandDispatcher = opts.commandDispatcher
     this.getLlmRuntimeConfig = opts.getLlmRuntimeConfig
+    this.events = opts.events
   }
 
   async start(): Promise<void> {
@@ -97,45 +102,52 @@ export class AgentApp {
     await this.sessions.start()
     this.running = true
 
-    this.bus.on('message.inbound', (msg) => {
-      if (!this.running) return
-      this.onInboundMessage(msg)
-    })
-
     console.log('Agent loop started')
   }
 
   async shutdown(): Promise<void> {
     this.running = false
-    this.sessions.stop()
+    await this.sessions.stop()
     console.log('Agent loop stopped')
     await this.skills.stopWatching()
     await this.agentTypes.stopWatching()
     await this.mcpManager.stopWatching()
   }
 
-  private async onInboundMessage(msg: InboundMessage): Promise<void> {
-    try {
-      const llm = this.getLlmRuntimeConfig()
-      const output = await this.commandDispatcher.dispatch(msg.content, {
-        sessionId: deriveSessionId(msg),
+  /** Only channel adapters enter the slash-command boundary. */
+  async receiveChannelMessage(msg: InboundMessage): Promise<DeliveryReceipt> {
+    if (!this.running) throw new Error('Agent is not accepting input')
+    const sessionId = deriveSessionId(msg)
+    const input = channelMessageInput(msg)
+    const llm = this.getLlmRuntimeConfig()
+    const output = input.kind === 'message' && input.policy === 'interactive'
+      ? await this.commandDispatcher.dispatch(input.content, {
+        sessionId,
         msg,
         admin: !!msg.admin,
         llm,
       })
-      if (output !== null) {
-        this.publishCommandResponse(msg, output)
-        return
-      }
-
-      await this.sessions.dispatch(msg, llm)
-    } catch (err) {
-      console.error(errDetail(err), 'Error in routing handler')
+      : null
+    let receipt: DeliveryReceipt
+    if (output !== null) {
+      receipt = { status: 'accepted', sessionId, inputId: input.id }
+      this.bus.emit('session.input.accepted', { sessionId, input })
+      this.publishCommandResponse(msg, output)
+    } else {
+      receipt = await this.sessions.deliver(sessionId, input, llm)
     }
+
+    // Fanout is a separate source publication; its failure cannot undo acceptance
+    // of the original input or cause a client to retry an already accepted turn.
+    if (input.kind === 'message') {
+      void this.events.publishChannelMessage(msg).catch((error) => {
+        console.error(`[agent] Channel subscription delivery failed (${sessionId}, ${input.id}):`, errDetail(error))
+      })
+    }
+    return receipt
   }
 
   private publishCommandResponse(msg: InboundMessage, content: string): void {
-    const queryId = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
     this.bus.emit('message.outbound', {
       event: 'response',
       channel: msg.channel,

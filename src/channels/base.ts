@@ -1,18 +1,29 @@
 import type { InboundMessage, OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { Hono } from 'hono'
+import type { DeliveryReceipt, ReceiveChannelMessage } from '../sessions/input.ts'
+
+export class ChannelAdmissionError extends Error {
+  constructor(message: string, readonly status: 403 | 503) {
+    super(message)
+    this.name = 'ChannelAdmissionError'
+  }
+}
 
 /**
  * Abstract base for all communication channels (Discord, Telegram, Feishu, etc.).
  *
  * Each channel:
  * - Connects to its platform and listens for incoming messages
- * - Publishes InboundMessages to the Bus
+ * - Submits InboundMessages to an explicit session receiver
  * - Receives OutboundMessages and delivers them to the platform
  */
 export interface BaseChannel {
   /** Channel identifier (e.g., "discord", "telegram"). */
   readonly name: string
+
+  /** Configure explicit message admission before starting the channel. */
+  setReceiver(receiver: ReceiveChannelMessage): void
 
   /** Start listening for messages (long-running). Receives the gateway Hono app so the channel can register its own routes. */
   start(app: Hono): Promise<void>
@@ -37,6 +48,7 @@ export interface BaseChannel {
  */
 export abstract class AbstractChannel implements BaseChannel {
   abstract readonly name: string
+  private receiver?: ReceiveChannelMessage
   protected chatActiveMessage: Map<string, {
     messageId: string
     bufferedChunks: string[]
@@ -53,6 +65,10 @@ export abstract class AbstractChannel implements BaseChannel {
 
   acceptToolResults: boolean = false
 
+  setReceiver(receiver: ReceiveChannelMessage): void {
+    this.receiver = receiver
+  }
+
   abstract start(app: Hono): Promise<void>
   abstract stop(): Promise<void>
   abstract send(msg: OutboundMessage): Promise<string | null>
@@ -64,6 +80,11 @@ export abstract class AbstractChannel implements BaseChannel {
   ): Promise<void>
 
   async onMessage(msg: OutboundMessage) {
+    if (msg.done && !msg.content && !msg.media?.length) {
+      this.chatActiveMessage.delete(msg.chatId)
+      return
+    }
+
     if (msg.event === 'tool_result') {
       if (!this.acceptToolResults) return
     }
@@ -113,9 +134,9 @@ export abstract class AbstractChannel implements BaseChannel {
   }
 
   /**
-   * Helper: validate sender and publish to bus.
+   * Validate the sender and await admission, not the completed model response.
    */
-  protected handleIncoming(
+  protected async handleIncoming(
     senderId: string,
     chatId: string,
     content: string,
@@ -133,8 +154,13 @@ export abstract class AbstractChannel implements BaseChannel {
       >
     >,
     media?: string[],
-  ): void {
-    if (!this.isAllowed(senderId)) return
+  ): Promise<DeliveryReceipt> {
+    if (!this.isAllowed(senderId)) {
+      throw new ChannelAdmissionError(`[${this.name}] Sender is not authorized`, 403)
+    }
+    if (!this.receiver) {
+      throw new ChannelAdmissionError(`[${this.name}] Message receiver is not configured`, 503)
+    }
 
     const admin = this.alwaysAdmin || !fields?.isGroup ||
       !!this.adminChats?.includes(chatId)
@@ -153,6 +179,6 @@ export abstract class AbstractChannel implements BaseChannel {
       media,
       admin,
     }
-    this.bus.emit('message.inbound', msg)
+    return await this.receiver(msg)
   }
 }

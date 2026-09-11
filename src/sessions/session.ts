@@ -1,7 +1,6 @@
 import type { Executor } from '../execution/executor.ts'
 import { cleanupTempFiles, newPhysicalSessionId } from '../utils/paths.ts'
-import type { InboundMessage } from '../bus/events.ts'
-import type { EventUrgency } from '../events/types.ts'
+import { inputContent, type SessionInput, type SessionMessageInput } from './input.ts'
 import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
 import { Span } from '../utils/otel.ts'
@@ -33,7 +32,7 @@ export interface PhaseRef {
 const TOOL_STEER_THRESHOLD_MS = 20_000 // 20 seconds
 
 type LoopEvent =
-  | { type: 'message'; msg: InboundMessage; llm: LlmRuntimeConfig }
+  | { type: 'message'; msg: SessionInput; llm: LlmRuntimeConfig }
   | { type: 'sleep'; llm: LlmRuntimeConfig }
   | { type: 'compact'; llm: LlmRuntimeConfig }
 
@@ -42,6 +41,10 @@ export class Session extends BaseSession {
   private inbox: LoopEvent[] = []
   private inboxWaiter: ((event: LoopEvent) => void) | null = null
   private stopController = new AbortController()
+  private readonly stopped: Promise<void>
+
+  get completion(): Promise<void> { return this.stopped }
+  get accepting(): boolean { return !this.stopController.signal.aborted }
 
   // ── Active turn state ─────────────────────────────────────────────────
   private turn: SessionTurn | null = null
@@ -78,7 +81,8 @@ export class Session extends BaseSession {
       workdirCapabilityLookup,
       remoteExecutor,
     )
-    this.run().catch((err) =>
+    this.stopped = this.run()
+    this.stopped.catch((err) =>
       console.error(`[session-manager] Session ${id} crashed:`, errMsg(err))
     )
   }
@@ -92,22 +96,33 @@ export class Session extends BaseSession {
   }
 
   /** Push a message into this session's inbox or handle it mid-turn. */
-  dispatch(msg: InboundMessage, llm: LlmRuntimeConfig): void {
+  dispatch(msg: SessionInput, llm: LlmRuntimeConfig): void {
+    if (!this.accepting) throw new Error(`Session ${this.id} is stopped`)
     // Cancel sleep timer — we have work.
     if (this.sleepTimer) {
       clearTimeout(this.sleepTimer)
       this.sleepTimer = null
     }
 
-    // Declared delivery urgency (set by EventService for system events).
-    // Human channel messages carry no urgency and keep the heuristic path below.
-    const urgency = msg.eventMeta?.urgency as EventUrgency | undefined
+    if (msg.kind === 'control') {
+      if (msg.command.type === 'cancel') {
+        this.cancel()
+        this.scheduleSleepCheck(llm)
+      }
+      else if (msg.command.type === 'compact') this.requestCompact(llm)
+      else {
+        // Retry replays history, never a steerable prompt. Interrupt an active
+        // provider request, but let running tools finish/persist their results.
+        if (this.turn && !this.turn.toolStartedAt) this.turn.abort()
+        this.pushEvent({ type: 'message', msg, llm })
+      }
+      return
+    }
 
     // Silent / non-urgent events never interrupt an active turn: enqueue them
     // so they are handled (or, for silent, merely recorded) after this turn.
     if (
-      msg.silent === true || urgency === 'silent' ||
-      urgency === 'queue' || urgency === 'debounce'
+      msg.policy === 'silent' || msg.policy === 'queue'
     ) {
       this.pushEvent({ type: 'message', msg, llm })
       return
@@ -130,7 +145,7 @@ export class Session extends BaseSession {
 
     // Tool phase. A declared `steering` event skips the quickModel classifier
     // and steers into the active turn deterministically.
-    if (urgency === 'steering') {
+    if (msg.policy === 'steering') {
       console.log(
         `[session-loop] Steering ${this.id} declared-urgent event into active turn`,
       )
@@ -169,6 +184,7 @@ export class Session extends BaseSession {
       controller.signal,
     )
       .then((intent) => {
+        if (!this.accepting) return
         if (this.turn?.classifyAbortController !== controller) {
           console.log(
             `[session-loop] Turn changed during intent classification — defaulting to inbox for message:`,
@@ -199,6 +215,7 @@ export class Session extends BaseSession {
         }
       })
       .catch((err) => {
+        if (!this.accepting) return
         console.warn(
           '[session-loop] classifyToolIntent error, falling back to steer:',
           errMsg(err),
@@ -216,6 +233,11 @@ export class Session extends BaseSession {
     this.pushEvent({ type: 'compact', llm })
   }
 
+  /** Cancel only the active turn; already queued inputs remain admitted. */
+  cancel(): void {
+    this.turn?.abort()
+  }
+
   /**
    * Start the per-session event loop.
    * Returns a promise that resolves when the loop stops (sleep timeout or
@@ -229,6 +251,7 @@ export class Session extends BaseSession {
       let event: LoopEvent
       try {
         event = await this.consumeEvent()
+        if (!this.accepting) break
       } catch {
         // consumeEvent rejects when stopController aborts — exit the loop.
         break
@@ -246,12 +269,20 @@ export class Session extends BaseSession {
           await this.saveState()
         } else {
           this.turn = new SessionTurn(event.msg)
-          await this.processInboundMessage(
+          await this.processInput(
             this.turn.message,
             event.llm,
             this.turn.abortController.signal,
           ).finally(() => {
-            this.turn?.finish()
+            const turn = this.turn
+            turn?.finish()
+            // Steering admitted while a provider/tool was aborting still needs
+            // its own turn if it was never consumed by the active one.
+            if (this.accepting && turn) {
+              this.inbox.unshift(...turn.steerQueue.map((msg): LoopEvent => ({
+                type: 'message', msg, llm: event.llm,
+              })))
+            }
             this.turn = null
           })
         }
@@ -278,6 +309,8 @@ export class Session extends BaseSession {
       this.sleepTimer = null
     }
     this.stopController.abort()
+    this.turn?.abort()
+    this.inbox = []
   }
 
   // ── BaseSession overrides ─────────────────────────────────────────────
@@ -368,6 +401,7 @@ export class Session extends BaseSession {
   // ── Inbox helpers ──────────────────────────────────────────────────────
 
   private pushEvent(event: LoopEvent): void {
+    if (!this.accepting) return
     if (this.inboxWaiter) {
       const waiter = this.inboxWaiter
       this.inboxWaiter = null
@@ -378,15 +412,20 @@ export class Session extends BaseSession {
   }
 
   private consumeEvent(): Promise<LoopEvent> {
+    if (!this.accepting) return Promise.reject(new Error('Session stopped'))
     const buffered = this.inbox.shift()
     if (buffered) return Promise.resolve(buffered)
 
     return new Promise<LoopEvent>((resolve, reject) => {
-      this.inboxWaiter = resolve
-      this.stopController.signal.addEventListener('abort', () => {
+      const abort = () => {
         this.inboxWaiter = null
         reject(new Error('Session stopped'))
-      }, { once: true })
+      }
+      this.inboxWaiter = (event) => {
+        this.stopController.signal.removeEventListener('abort', abort)
+        resolve(event)
+      }
+      this.stopController.signal.addEventListener('abort', abort, { once: true })
     })
   }
 
@@ -433,8 +472,8 @@ export class Session extends BaseSession {
   // ── Long-running tool intent classification ─────────────────────────────
 
   private async classifyToolIntent(
-    msg: InboundMessage,
-    previousMsg: InboundMessage | undefined,
+    msg: SessionMessageInput,
+    previousMsg: SessionInput | undefined,
     signal: AbortSignal,
   ): Promise<'steer' | 'abort'> {
     const model = this.quickModel
@@ -452,7 +491,7 @@ export class Session extends BaseSession {
     const content = [
       ...(previousMsg
         ? [
-          `Previous message (currently being processed): ${previousMsg.content}`,
+          `Previous message (currently being processed): ${inputContent(previousMsg)}`,
           '',
         ]
         : []),
@@ -557,7 +596,7 @@ export class Session extends BaseSession {
    * (compacts if over threshold; session memory is retained).
    */
   private scheduleSleepCheck(llm: LlmRuntimeConfig): void {
-    if (!this.sleepInactivityMs) return
+    if (!this.sleepInactivityMs || !this.accepting || this.turn || this.inbox.length) return
     if (this.sleepTimer) clearTimeout(this.sleepTimer)
 
     const lastActive = this.state.lastActivityAt
@@ -577,12 +616,12 @@ export class Session extends BaseSession {
 
 class SessionTurn {
   abortController: AbortController = new AbortController()
-  steerQueue: InboundMessage[] = []
+  steerQueue: SessionMessageInput[] = []
   toolStartedAt?: number
-  message: InboundMessage
+  message: SessionInput
   classifyAbortController: AbortController | null = null
 
-  constructor(currentMsg: InboundMessage) {
+  constructor(currentMsg: SessionInput) {
     this.message = currentMsg
   }
 
@@ -593,6 +632,7 @@ class SessionTurn {
   }
 
   abort(): void {
+    this.classifyAbortController?.abort()
     this.abortController.abort()
   }
 }

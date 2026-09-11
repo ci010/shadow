@@ -4,13 +4,13 @@ import type { Bus } from '../bus/bus.ts'
 import type { ExecutionContext } from '../agent/agent.ts'
 import type { SessionParent } from '../sessions/session-store.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
+import { sessionReplyAddress, type DeliverInput } from '../sessions/input.ts'
 
 /**
  * Tool that lets the agent send a message to another session.
  *
- * Emits both an outbound message (for channel display) and an
- * inbound message (for the target agent to process). Use `silent`
- * to record the message without triggering a response.
+ * Admits a typed session-origin input before projecting it to the channel.
+ * Use `silent` to record the message without triggering a response.
  */
 export class MessageTool implements Tool {
   readonly name = 'message'
@@ -35,9 +35,10 @@ export class MessageTool implements Tool {
 
   constructor(
     private bus: Bus,
-    private isEphemeralSession: (sessionId: string) => boolean | Promise<boolean>,
+    private canReceiveSessionMessage: (sessionId: string) => boolean,
     private getSessionParent: (sessionId: string) => SessionParent | undefined,
     private getChildSessions: (parentSessionId: string) => string[] | undefined,
+    private deliver: DeliverInput,
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -55,11 +56,12 @@ export class MessageTool implements Tool {
     if (!rawContent) return 'Error: content is required'
 
     const targetSessionId = typeof args.sessionId === 'string' ? args.sessionId : ''
-    if (!targetSessionId || !targetSessionId.includes(':')) {
+    const reply = sessionReplyAddress(targetSessionId)
+    if (!reply) {
       return 'Error: sessionId is required and must be in "channel:chatId" format.'
     }
 
-    const currentSessionId = `${context.channel}:${context.chatId}`
+    const currentSessionId = context.sessionId
     if (targetSessionId === currentSessionId) {
       return 'Error: cannot send a message to the current session.'
     }
@@ -75,39 +77,37 @@ export class MessageTool implements Tool {
       }
     }
 
-    if (await this.isEphemeralSession(targetSessionId)) {
-      return `Error: cannot send messages to ephemeral session "${targetSessionId}".`
+    if (!this.canReceiveSessionMessage(targetSessionId)) {
+      return `Error: cannot send follow-up messages to ephemeral session "${targetSessionId}".`
     }
 
     const { text, media } = parseMediaFromContent(rawContent)
     const silent = args.silent === true
 
-    const [channel, ...rest] = targetSessionId.split(':')
-    const chatId = rest.join(':')
+    await this.deliver(targetSessionId, {
+      kind: 'message',
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      source: {
+        kind: 'session',
+        sessionId: currentSessionId,
+        inputId: context.messageId,
+        senderName: context.senderName ?? 'Agent',
+      },
+      policy: silent ? 'silent' : 'queue',
+      content: text,
+      media,
+    })
 
-    // Emit outbound message (for channel display)
     const outbound: OutboundMessage = {
       event: 'response',
-      channel,
-      chatId,
+      channel: reply.channel,
+      chatId: reply.chatId,
       done: false,
       content: text,
       media,
     }
     this.bus.emit('message.outbound', outbound)
-
-    // Emit inbound message (for the target agent to process)
-    this.bus.emit('message.inbound', {
-      channel,
-      chatId,
-      senderId: currentSessionId,
-      senderName: context.senderName ?? 'Agent',
-      messageId: crypto.randomUUID(),
-      content: text,
-      media,
-      timestamp: new Date().toISOString(),
-      silent: silent || undefined,
-    })
 
     return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}`
   }

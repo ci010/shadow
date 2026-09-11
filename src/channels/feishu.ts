@@ -820,7 +820,7 @@ export class FeishuChannel extends AbstractChannel {
       // Best-effort display name: resolve from contact API with local cache
       const authorName = await this._fetchUserName(senderId)
 
-      this.handleIncoming(
+      await this.handleIncoming(
         senderId,
         replyTo!,
         content,
