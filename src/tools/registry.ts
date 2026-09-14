@@ -110,7 +110,8 @@ export class Tools {
 
       if (
         result.length > this.truncationThreshold &&
-        !EXEMPT_TOOLS.has(name)
+        !EXEMPT_TOOLS.has(name) &&
+        !(context.remoteWorkdir && name === 'exec')
       ) {
         result = await this.truncateAndSave(name, result)
       }

@@ -160,7 +160,8 @@ export function createNodeWebSocketApi(
           (socket) => attach(socket as unknown as WebSocket),
           verified.protocol,
         )
-      } catch {
+      } catch (error) {
+        console.warn('[cluster] WebSocket upgrade failed:', error instanceof Error ? error.message : 'unknown upgrade error')
         return context.json({ error: 'websocket_upgrade_failed' }, 400)
       }
     })

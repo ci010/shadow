@@ -1,10 +1,26 @@
 import { createNodeWebSocket } from '@hono/node-ws'
 import type { Context, Hono } from 'hono'
-import type { IncomingMessage } from 'node:http'
+import { IncomingMessage } from 'node:http'
+import { TLSSocket } from 'node:tls'
 import type { WebSocket } from 'ws'
 
 const adapters = new WeakMap<Hono, ReturnType<typeof createNodeWebSocket>>()
 const protocols = new WeakMap<IncomingMessage, string>()
+
+export function normalizeGatewayUpgradeRequest(context: Context): void {
+  const incoming: unknown = context.env?.incoming
+  if (!(incoming instanceof IncomingMessage)
+    || context.env.outgoing !== undefined
+    || incoming.headers.upgrade?.toLowerCase() !== 'websocket') return
+  const authority = incoming.headers.host
+  if (!authority || /[\s/@?#\\]/.test(authority)) throw new TypeError('Invalid WebSocket Host')
+  const origin = new URL(`${incoming.socket instanceof TLSSocket ? 'https:' : 'http:'}//${authority}`)
+  const url = new URL(context.req.url)
+  url.protocol = origin.protocol
+  url.host = origin.host
+  // node-ws otherwise routes upgrades through http://localhost, losing the signed audience.
+  context.req.raw = new Request(url, context.req.raw)
+}
 
 export function gatewayWebSockets(app: Hono) {
   let adapter = adapters.get(app)

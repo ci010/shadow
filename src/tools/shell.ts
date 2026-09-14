@@ -30,6 +30,7 @@ import type { LocalProcessExecutor } from '../execution/executor.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
 import { isWindows } from '../utils/runtime.ts'
+import { executeRemoteShell } from '../execution/remote-shell-client.ts'
 
 async function waitForExit<T>(
   exit: Promise<T>,
@@ -240,6 +241,7 @@ function formatNodeResult(
  */
 export class ExecTool implements Tool {
   readonly name = 'exec'
+  readonly supportsRemoteWorkdir = true
   readonly description =
     'Run a command or script. Use `shell: "node"` for inline TypeScript with tool access.'
   readonly parameters: ToolParameters = {
@@ -364,7 +366,33 @@ export class ExecTool implements Tool {
     const foreground = context.tools?.executionMode === 'call'
     if (context.remoteWorkdir) {
       const reason = 'exec cannot enforce a foreground process lifecycle on remote workdirs.'
-      return foreground ? context.tools.rejectExecution(reason) : `Error: ${reason}`
+      if (foreground) return context.tools.rejectExecution(reason)
+      context.signal.throwIfAborted()
+      if (typeof args.shell === 'string' && args.shell.trim().toLowerCase() === 'node') {
+        return 'Error: shell=node and its inline tool bridge are not supported on remote workdirs.'
+      }
+      if (DANGEROUS_PATTERNS.some(pattern => pattern.test(String(args.script)))) {
+        return 'Error: command blocked by safety filter'
+      }
+      try {
+        // Do not resolve cwd, shells, dotenv, or command interceptors on Main.
+        const output = await executeRemoteShell({
+          ...context.remoteWorkdir,
+          sessionId: context.sessionId,
+          turnId: context.messageId ?? context.sessionId,
+          signal: context.signal,
+        }, {
+          script: args.script,
+          ...(args.shell === undefined ? {} : { shell: parseExecShell(args.shell) }),
+          ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          ...(args.args === undefined ? {} : { args: args.args }),
+        }, args.timeout_ms === undefined ? this._defaultTimeoutMs : args.timeout_ms as number)
+        context.signal.throwIfAborted()
+        return output
+      } catch (error) {
+        context.signal.throwIfAborted()
+        return `Error: ${errMsg(error)}`
+      }
     }
     if (foreground) {
       context.signal.throwIfAborted()

@@ -95,7 +95,11 @@ export function preserveHighlightSource(source: string, tokens: readonly {
   return result
 }
 
-export async function highlightFile(source: string, path: string): Promise<FileHighlightToken[]> {
+export async function highlightFile(
+  source: string,
+  path: string,
+  options: { tokenizeTimeLimit?: number } = {},
+): Promise<FileHighlightToken[]> {
   const language = fileLanguage(path)
   if (language === 'text' || !source) return [{ text: source }]
   const engine = await sharedHighlighter()
@@ -112,7 +116,7 @@ export async function highlightFile(source: string, path: string): Promise<FileH
   }
   const { tokens } = engine.codeToTokens(source, {
     lang: language, themes: { light: 'github-light', dark: 'github-dark' },
-    tokenizeMaxLineLength: 2000, tokenizeTimeLimit: 50,
+    tokenizeMaxLineLength: 2000, tokenizeTimeLimit: options.tokenizeTimeLimit ?? 50,
   })
   return preserveHighlightSource(source, tokens.flat())
 }

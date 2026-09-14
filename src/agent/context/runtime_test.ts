@@ -6,6 +6,26 @@ import { runtimeIdentityProvider } from './runtime.ts'
 import type { ExecutionMode } from '../../sessions/execution-mode.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from '../../channels/capabilities.ts'
 
+test('remote execution prompt does not advertise Main shell detection or inline Node as Child capabilities', async () => {
+  const provider = runtimeIdentityProvider({
+    identity: new IdentityManager('.'), getSkillsSummary: () => '', getAgentTypesSummary: () => '',
+  })
+  const ctx: SessionPromptContext = {
+    behavior: {}, channel: 'web', chatId: 'remote', sessionId: 'web:remote', defaultExecShell: 'powershell',
+    agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
+    workdir: { version: 1, nodeId: 'wsl', capabilityId: 'workspace' },
+  }
+  const remote = (await provider.getPromptSection(ctx))!
+  assert.match(remote, /Main Host Platform.*not the execution target/)
+  assert.match(remote, /remote node `wsl`/)
+  assert.match(remote, /Child chooses its default OS shell/)
+  assert.match(remote, /not an OS sandbox/)
+  assert.doesNotMatch(remote, /Available Exec Shells|Default Exec Shell|node \| inline TypeScript/)
+  const local = (await provider.getPromptSection({ ...ctx, workdir: undefined }))!
+  assert.match(local, /Default Exec Shell.*powershell/)
+  assert.match(local, /node \| inline TypeScript/)
+})
+
 test('runtime identity uses explicit input source and target session, not sender prefixes or reply address', async (t) => {
   const identity = new IdentityManager('.')
   const lookup = t.mock.method(identity, 'lookupByAccount', async () => ({ personContext: 'Fixture user profile' }))

@@ -2,7 +2,7 @@ import type { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { env } from 'node:process'
 import type { AddressInfo } from 'node:net'
-import { gatewayWebSockets } from './websocket.ts'
+import { gatewayWebSockets, normalizeGatewayUpgradeRequest } from './websocket.ts'
 import type { GatewayPlugin } from './types.ts'
 
 export type { GatewayPlugin } from './types.ts'
@@ -127,6 +127,11 @@ function registerGatewayRoutes(
   )
 
   app.use('*', async (c, next) => {
+    try {
+      normalizeGatewayUpgradeRequest(c)
+    } catch {
+      return c.json({ error: 'invalid_websocket_host' }, 400)
+    }
     const requestOrigin = c.req.header('Origin')
     let normalizedRequestOrigin: string | undefined
     if (requestOrigin) {

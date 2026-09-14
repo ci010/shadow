@@ -1,4 +1,5 @@
 import type { JobRequestV1 } from './contracts.ts'
+import { parseWorkdirProcessArgs, type WorkdirProcessArgs } from './capability-shell.ts'
 
 export type LocalApprovalPolicy = 'always' | 'session' | 'grant'
 export type LocalApprovalGrantScope = 'once' | 'session' | 'capability'
@@ -16,6 +17,7 @@ export interface LocalApprovalSummaryV1 {
   readonly action: string
   readonly target?: string
   readonly detail?: string
+  readonly process?: WorkdirProcessArgs
 }
 
 export interface PendingLocalApprovalV1 {
@@ -294,6 +296,19 @@ function summarizeRequest(
   capabilityDisplayName: string,
 ): LocalApprovalSummaryV1 {
   const args = isRecord(request.args) ? request.args : {}
+  if (request.operation === 'workdir.process.execute') {
+    let process: WorkdirProcessArgs | undefined
+    try { process = parseWorkdirProcessArgs(args) } catch { /* Invalid arguments cannot be approved by exact process matching. */ }
+    return {
+      version: 1,
+      operation: request.operation,
+      capabilityDisplayName,
+      action: 'Run a shell as the Child user (not sandboxed)',
+      ...(typeof args.script === 'string' ? { target: boundedSingleLine(args.script) } : {}),
+      detail: `Initial directory: capability root${typeof args.cwd === 'string' ? ` / ${boundedSingleLine(args.cwd)}` : ''}. Shell can access resources outside this directory.`,
+      ...(process ? { process: structuredClone(process) } : {}),
+    }
+  }
   if (request.operation === 'process.execute') {
     return {
       version: 1,

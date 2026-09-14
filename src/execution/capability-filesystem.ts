@@ -177,7 +177,7 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
   }
 }
 
-async function resolveExistingTarget(
+export async function resolveExistingTarget(
   root: string,
   input: string,
 ): Promise<string> {

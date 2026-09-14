@@ -143,6 +143,7 @@ test('production Child starts with a correlated protected key and shuts down', a
       dataDir: './data',
       localNodeId: 'node-1',
       mainEndpoint: 'https://main.example.test',
+      workdirs: [{ capabilityId: 'project-root', displayName: 'Child project', rootPath: process.cwd() }],
     },
     paths,
     {
@@ -188,6 +189,8 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes[0].connection, 'connected')
   assertEquals(body.nodes[0].capabilities, [{
     capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
+  }, {
+    capabilityId: 'project-root', kind: 'workdir', displayName: 'Child project', online: true, displayPath: process.cwd(),
   }])
   assertEquals(JSON.stringify(body).includes('credential'), false)
   assertEquals(JSON.stringify(body).includes('fingerprint'), false)

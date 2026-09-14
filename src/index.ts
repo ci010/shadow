@@ -62,6 +62,7 @@ import { Tools } from './tools/registry.ts'
 import { ExecTool } from './tools/shell.ts'
 import { SubagentTool } from './tools/subagent.ts'
 import { YieldTool } from './tools/yield.ts'
+import { remoteSessionPlugin } from './sessions/remote-session-routes.ts'
 import {
   createBgTasksHandler,
   createEventsHandler,
@@ -761,6 +762,10 @@ export async function startMainRuntime(
     otelPlugin(otelStore),
     sessionPlugin(sessions, agent, agentTypes),
     sessionsApiPlugin(sessions),
+    remoteSessionPlugin({
+      sessions,
+      authorize: request => authorizeMainNodeInventory(request, launchCredential, clientAddresses),
+    }),
     projects.plugin,
     providerSetup.plugin(),
     channelSetupPlugin({

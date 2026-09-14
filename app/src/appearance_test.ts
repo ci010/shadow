@@ -85,15 +85,15 @@ test('cursor highlight remains circular independently of square interface tokens
   assert.match(compiled.code, /\.mouse-glow\[data-v-app\]\s*\{[^}]*border-radius: 50%;/)
 })
 
-test('assistant, system, compaction and tool rows share one pane-relative width cap without changing user alignment', () => {
+test('assistant, system, compaction, tool and execution rows share one pane-relative width cap without changing user alignment', () => {
   assert.match(styles, /--conversation-item-max-width:\s*80%;/)
   const { descriptor } = parse(chat)
   const sheet = descriptor.styles.map(style => style.content).join('\n')
-  assert.match(sheet, /\.chat-messages > :deep\(:is\(\.chat-assistant, \.system-event, \.compaction-summary, \.tool-activity\)\)\s*\{\s*min-width: 0;\s*max-width: var\(--conversation-item-max-width\);\s*align-self: flex-start;/)
+  assert.match(sheet, /\.chat-messages > :deep\(:is\(\.chat-assistant, \.system-event, \.compaction-summary, \.tool-activity, \.execution-card\)\)\s*\{\s*min-width: 0;\s*max-width: var\(--conversation-item-max-width\);\s*align-self: flex-start;/)
   assert.equal([...sheet.matchAll(/max-width: var\(--conversation-item-max-width\)/g)].length, 1)
   assert.match(sheet, /\.chat-user\s*\{\s*align-self: flex-end;/)
   assert.match(sheet, /\.chat-bubble\s*\{\s*max-width: 80%;/)
   const compiled = compileStyle({ source: sheet, filename: 'ChatTab.vue', id: 'data-v-chat', scoped: true })
   assert.deepEqual(compiled.errors, [])
-  assert.ok(/\.chat-messages\[data-v-chat\] >\s+:is\(\.chat-assistant, \.system-event, \.compaction-summary, \.tool-activity\)/.test(compiled.code))
+  assert.ok(/\.chat-messages\[data-v-chat\] >\s+:is\(\.chat-assistant, \.system-event, \.compaction-summary, \.tool-activity, \.execution-card\)/.test(compiled.code))
 })

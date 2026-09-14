@@ -124,3 +124,25 @@ test('local approval always prompts and cancellation removes pending work', asyn
   assertEquals(await decision, false)
   assertEquals(service.listPending(), [])
 })
+
+test('workdir shell approval exposes exact validated arguments, not just normalized display text', async () => {
+  const service = new InMemoryLocalApprovalService([{
+    capabilityId: 'workdir-1', displayName: 'Child project', policy: 'grant',
+  }])
+  const args = { script: "printf 'two  spaces\\n'\nprintf done", cwd: 'nested', shell: 'sh', args: ['one  two'] }
+  const job = request({ operation: 'workdir.process.execute', args })
+  const decision = service.authorize(job, new AbortController().signal, () => {})
+  const pending = service.listPending()[0]!
+  assertEquals(pending.summary.process, args)
+  assertEquals(pending.summary.target, "printf 'two spaces\\n' printf done")
+  assertEquals(pending.summary.action, 'Run a shell as the Child user (not sandboxed)')
+  assertEquals(pending.summary.detail, 'Initial directory: capability root / nested. Shell can access resources outside this directory.')
+  service.approve(job.jobId, 'once')
+  assertEquals(await decision, true)
+
+  const invalid = request({ operation: 'workdir.process.execute', args: { script: 'echo no', env: {} } })
+  const rejected = service.authorize(invalid, new AbortController().signal, () => {})
+  assertEquals(service.listPending()[0]!.summary.process, undefined)
+  service.deny(invalid.jobId)
+  assertEquals(await rejected, false)
+})

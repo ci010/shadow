@@ -843,11 +843,22 @@ session. The current local resolver does not turn an arbitrary display path into
 an external local-folder capability.
 
 Tools reject remote contexts unless they explicitly opt in.
-`read`/`write` have remote filesystem implementations, but `exec`, search,
-dynamic/MCP imports, browser operations, and other local tools must not be
-assumed remotely usable. A Child advertising shell capability and implementing
-`process.execute` does **not** mean the ordinary agent's `exec` can execute in a
-selected remote workdir.
+`read`/`write` have remote filesystem implementations. Session/task `exec` supports
+bounded foreground OS-shell commands through the separate
+`workdir.process.execute` operation on a configured workdir capability. The Child
+resolves cwd, enforces the operation permission and local approval, and owns
+deadline/cancellation cleanup. Main's platform and detected shells are not
+advertised as the remote target's capabilities. A generic `process.execute`
+advertisement alone does not authorize capability-bound workdir execution.
+Remote inline Node/TypeScript, background processes, call-mode exec, search,
+dynamic/MCP imports and browser operations remain unsupported; a shell workdir is
+not an OS sandbox.
+
+The Main-admin-only `POST /api/sessions/remote` route creates a fresh web root from
+an online node/workdir capability reference. It uses ordinary session construction
+and JSONL/SQLite persistence, without accepting paths or rebinding an active
+conversation. Subsequent messages still go through the web channel and
+`SessionManager`. No raw job-submission endpoint or second agent loop is added.
 
 ### Not complete
 

@@ -30,7 +30,8 @@ test('Shiki produces real dual-theme tokens for common file languages and hidden
     ['README.md', '# Hello\n\n**source**\n'],
     ['index.html', '<h1 class="title">Hello</h1>\n'],
   ]) {
-    const tokens = await highlightFile(source!, path!)
+    // Assert grammar/color correctness independently of concurrent-suite CPU contention.
+    const tokens = await highlightFile(source!, path!, { tokenizeTimeLimit: 0 })
     assert.equal(tokens.map(token => token.text).join(''), source, path)
     assert(tokens.some(token => /^#[0-9a-f]{6}$/i.test(token.light ?? '') && /^#[0-9a-f]{6}$/i.test(token.dark ?? '')), path)
     assert(new Set(tokens.map(token => token.light).filter(Boolean)).size > 1, path)

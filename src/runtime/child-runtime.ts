@@ -157,8 +157,9 @@ export function startChildRuntime(
         delayMs = reconnect.initialDelayMs
         await waitForDisconnect(connection, abortController.signal)
         activeConnection = undefined
-      } catch {
+      } catch (error) {
         if (abortController.signal.aborted) return
+        console.warn('[child] Main connection failed; retrying:', error instanceof Error ? error.message : 'unknown connection error')
       }
 
       try {

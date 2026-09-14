@@ -32,6 +32,7 @@ import {
 } from '../execution/local-approval.ts'
 import { ChildLocalControlService } from './child-local-control.ts'
 import { childLocalNodeInventory } from './node-inventory.ts'
+import { CapabilityShell, WORKDIR_PROCESS_EXECUTE_OPERATION } from '../execution/capability-shell.ts'
 
 export interface ProductionChildOptions {
   readonly keyStore?: ProtectedDeviceKeyStore
@@ -91,7 +92,7 @@ export async function startProductionChildRuntime(
       nodeId: config.localNodeId,
       kind: 'workdir',
       displayName: workdir.displayName,
-      permissions: [FILESYSTEM_READ_OPERATION, FILESYSTEM_WRITE_OPERATION],
+      permissions: [FILESYSTEM_READ_OPERATION, FILESYSTEM_WRITE_OPERATION, WORKDIR_PROCESS_EXECUTE_OPERATION],
       approvalPolicy: 'grant',
       online: true,
     })),
@@ -105,7 +106,7 @@ export async function startProductionChildRuntime(
   const executor = new LocalExecutor(
     processManager,
     config.localNodeId,
-    [filesystem],
+    [filesystem, new CapabilityShell(workdirs)],
     ['process-execute'],
     approvalService,
   )
@@ -199,8 +200,7 @@ class LocalExecutorService implements ChildRuntimeService {
     const running = this.processManager.list().filter((process) =>
       process.exitedAt === undefined
     )
-    for (const process of running) process.process.kill()
-    await Promise.allSettled(running.map((process) => process.exitPromise))
+    await Promise.all(running.map((process) => this.processManager.terminate(process)))
   }
 }
 

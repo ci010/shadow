@@ -512,7 +512,22 @@ take up to another 10 seconds. Permitted local `exec` remains available inside t
 call, but only in the foreground: `timeout_ms` is an integer from 1 to 120000,
 defaulting to 120000. Zero is rejected, and timeout/abort terminates managed work
 instead of returning a background task ID. Foreground call exec is currently
-local-only; remote exec fails explicitly. Session/task exec behavior is unchanged.
+local-only; remote exec fails explicitly. Local session/task exec behavior is unchanged.
+
+Session/task conversations bound to a connected Child workdir can run bounded
+foreground OS-shell commands through `workdir.process.execute`. The Child resolves
+the working directory from its configured capability root and applies its local
+approval policy. Omit `shell` to use the Child's default, not Main's detected shell.
+Remote inline Node/TypeScript, background execution, and call-mode exec remain
+unsupported. Shell commands run as the Child user: a workdir is not an OS sandbox.
+
+Main's authenticated administrator API can create a dedicated remote conversation:
+`POST /api/sessions/remote` with `{"nodeId":"child-id","capabilityId":"workdir-id"}`.
+It accepts only an online workdir capability, not an absolute/display path, and
+returns `sessionId` and `chatId` for the normal chat endpoints. Its durable workdir
+reference uses the existing JSONL/SQLite session state. Existing conversations are
+not silently moved. A user-facing remote-workdir picker and live Child approval
+controls are still WIP; this endpoint does not replace pairing or Child approvals.
 
 For a blocked call outcome, the model returns raw JSON without Markdown fences:
 `{"status":"blocked","reason":"Missing decision or permission","partialWork":"Actions already taken and side effects"}`.

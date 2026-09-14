@@ -8,6 +8,7 @@ import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { getArch, getOs } from '../../utils/runtime.ts'
 import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from '../../channels/capabilities.ts'
+import { LOCAL_NODE_ID } from '../../sessions/locality.ts'
 
 export function channelCapabilityPrompt(
   channel: string,
@@ -75,8 +76,9 @@ export function runtimeIdentityProvider(
     name: 'runtime',
     async getPromptSection(ctx) {
       const platform = `${getOs()} ${getArch()}`
+      const remote = ctx.workdir && ctx.workdir.nodeId !== LOCAL_NODE_ID ? ctx.workdir : undefined
       const defaultShell = ctx.defaultExecShell ?? defaultManagedShell()
-      const detectedShells = await availableExecShells()
+      const detectedShells = remote ? [] : await availableExecShells()
       const delegationModes = isToolAllowed(ctx.agent, 'subagent')
         ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId)
         : []
@@ -84,16 +86,24 @@ export function runtimeIdentityProvider(
       const lines = [
         '# Runtime',
         '',
-        `- **Platform**: ${platform}`,
-        `- **Default Exec Shell**: ${defaultShell}`,
-        '- **Available Exec Shells**:',
-        ...detectedShells.map((shell) => {
-          const details = [shell.name]
-          if (shell.default) details.push('default')
-          if (shell.version) details.push(shell.version)
-          return `  - ${details.join(' | ')}`
-        }),
-        '  - node | inline TypeScript runtime',
+        ...(remote ? [
+          `- **Main Host Platform**: ${platform} (not the execution target)`,
+          `- **Execution Target**: remote node \`${remote.nodeId}\`, workdir capability \`${remote.capabilityId}\`.`,
+          '- The Child chooses its default OS shell. Omit shell unless its availability on the Child is known; Main shell detection does not apply.',
+          '- Remote exec is bounded foreground OS-shell execution only: use a positive timeout_ms. Inline Node/TypeScript, background jobs and call-mode remote exec are unsupported.',
+          '- The Child resolves cwd from the workdir capability. Use relative paths; never use Main paths or display-path snapshots as remote cwd. Local approval may be required; shell execution is not an OS sandbox.',
+        ] : [
+          `- **Platform**: ${platform}`,
+          `- **Default Exec Shell**: ${defaultShell}`,
+          '- **Available Exec Shells**:',
+          ...detectedShells.map((shell) => {
+            const details = [shell.name]
+            if (shell.default) details.push('default')
+            if (shell.version) details.push(shell.version)
+            return `  - ${details.join(' | ')}`
+          }),
+          '  - node | inline TypeScript runtime',
+        ]),
       ]
 
       lines.push(

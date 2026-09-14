@@ -3,6 +3,8 @@ import type {
   ManagedProcessStatus,
   ProcessManager,
 } from '../agent/process-manager.ts'
+import { terminateProcessTree } from '../agent/process-manager.ts'
+import nodeProcess from 'node:process'
 import { decodeChunks } from '../utils/decode-chunks.ts'
 import {
   type CancelReceiptV1,
@@ -25,6 +27,11 @@ export const PROCESS_EXECUTE_OPERATION = 'process.execute'
 export interface LocalJobOperationHandler {
   handles(operation: string): boolean
   execute(request: JobRequestV1, signal: AbortSignal): Promise<string>
+}
+
+export interface LocalProcessOperationHandler {
+  handles(operation: string): boolean
+  prepareProcess(request: JobRequestV1, signal: AbortSignal): Promise<ProcessExecuteArgsV1>
 }
 
 type ProcessSpawner = Pick<ProcessManager, 'spawn'>
@@ -53,6 +60,20 @@ const TERMINAL_STATES = new Set<JobStateV1>([
   'expired',
   'cancelled',
 ])
+
+const MAX_WORKDIR_PROCESS_OUTPUT_BYTES = 128 * 1024
+
+async function terminateWorkdirProcess(managed: ManagedProcess): Promise<ManagedProcessStatus> {
+  // A foreground shell may exit after spawning children with redirected stdio.
+  // Kill its owned POSIX group even when the shell's own pipes already closed.
+  if (nodeProcess.platform !== 'win32') {
+    try { nodeProcess.kill(-managed.pid, 'SIGKILL') }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+  }
+  return await terminateProcessTree(managed.process, managed.exitPromise, true)
+}
 
 function now(): string {
   return new Date().toISOString()
@@ -115,7 +136,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
   constructor(
     private processManager: ProcessSpawner,
     private localNodeId = 'local',
-    private operationHandlers: readonly LocalJobOperationHandler[] = [],
+    private operationHandlers: readonly (LocalJobOperationHandler | LocalProcessOperationHandler)[] = [],
     private processCapabilityIds?: readonly string[],
     private approvalAuthority?: LocalApprovalAuthority,
   ) {}
@@ -176,7 +197,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     record.cancelRequested = true
     this.setState(record, 'cancelling')
     record.operationController?.abort()
-    record.process?.process.kill()
+    if (!record.process?.isolated) record.process?.process.kill()
     return this.cancelReceipt(jobId, 'requested', record.status)
   }
 
@@ -222,6 +243,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     const operationHandler = this.operationHandlers.find((handler) =>
       handler.handles(request.operation)
     )
+    if (operationHandler && 'prepareProcess' in operationHandler) {
+      await this.runWorkdirProcess(record, operationHandler)
+      return
+    }
     if (operationHandler) {
       if (!await this.authorize(record)) return
       const controller = new AbortController()
@@ -356,6 +381,121 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
         retryable: true,
       })
     }
+  }
+
+  private async runWorkdirProcess(record: JobRecord, handler: LocalProcessOperationHandler): Promise<void> {
+    // Unlike a raw local job, a capability shell must always have a Child authority.
+    if (!this.approvalAuthority) {
+      this.finish(record, 'rejected', 'rejected', {
+        code: 'approval-required', message: 'Workdir shell requires Child-local approval', retryable: false,
+      })
+      return
+    }
+    if (!await this.authorize(record)) return
+    const controller = new AbortController()
+    record.operationController = controller
+    if (record.cancelRequested) controller.abort()
+    const remainingMs = Math.min(120_000, Math.max(0, Date.parse(record.request.deadlineAt) - Date.now()))
+    const timer = setTimeout(() => {
+      record.timedOut = true
+      controller.abort()
+    }, remainingMs)
+    let abort: (() => void) | undefined
+    let cleanup: Promise<ManagedProcessStatus> | undefined
+    let status: ManagedProcessStatus | undefined
+    let cleaned = false
+    let outputLimitTimer: ReturnType<typeof setInterval> | undefined
+    try {
+      if (remainingMs === 0) {
+        record.timedOut = true
+        controller.abort()
+      }
+      controller.signal.throwIfAborted()
+      const args = await handler.prepareProcess(record.request, controller.signal)
+      controller.signal.throwIfAborted()
+      const process = await this.startProcess(args, { isolated: true, signal: controller.signal })
+      record.process = process
+      const terminate = () => cleanup ??= terminateWorkdirProcess(process)
+      const interrupted = Promise.withResolvers<ManagedProcessStatus>()
+      abort = () => { void terminate().then(interrupted.resolve, interrupted.reject) }
+      controller.signal.addEventListener('abort', abort, { once: true })
+      outputLimitTimer = setInterval(() => {
+        const size = [...process.stdoutChunks, ...process.stderrChunks]
+          .reduce((total, chunk) => total + chunk.byteLength, 0)
+        if (size > MAX_WORKDIR_PROCESS_OUTPUT_BYTES) controller.abort()
+      }, 20)
+      this.setState(record, record.cancelRequested ? 'cancelling' : 'running')
+      this.push(record, { type: 'started', pid: process.pid })
+      if (controller.signal.aborted) abort()
+      // Await cleanup as well as exit: an acknowledgement must not precede tree termination.
+      status = await Promise.race([
+        process.exitPromise,
+        interrupted.promise,
+      ])
+      await terminate()
+      cleaned = true
+      const tooLarge = this.emitBoundedProcessOutput(record, process)
+      if (tooLarge && !record.cancelRequested && !record.timedOut) {
+        this.finish(record, 'failed', 'failed', {
+          code: 'process-output-too-large',
+          message: 'Remote shell output exceeded 128 KiB; output is truncated',
+          retryable: false,
+        }, status)
+      } else this.finishFromStatus(record, status)
+    } catch (error) {
+      if (record.process) {
+        try {
+          await (cleanup ??= terminateWorkdirProcess(record.process))
+          cleaned = true
+        } catch (cleanupError) {
+          this.finish(record, 'failed', 'failed', {
+            code: 'process-cleanup-failed',
+            message: cleanupError instanceof Error ? cleanupError.message : 'Process cleanup failed',
+            retryable: false,
+          })
+          return
+        }
+        this.emitBoundedProcessOutput(record, record.process)
+      }
+      if (record.cancelRequested || record.timedOut) {
+        this.finishFromStatus(record, status ?? { success: false, code: -1, signal: null })
+      } else {
+        this.finish(record, record.process ? 'failed' : 'rejected', record.process ? 'failed' : 'rejected', {
+          code: error instanceof Error && 'code' in error && typeof error.code === 'string'
+            ? error.code : 'process-execution-failed',
+          message: error instanceof Error ? error.message : 'Workdir shell execution failed',
+          retryable: false,
+        }, status)
+      }
+    } finally {
+      clearTimeout(timer)
+      clearInterval(outputLimitTimer)
+      if (abort) controller.signal.removeEventListener('abort', abort)
+      record.operationController = undefined
+      if (cleaned && record.process && 'remove' in this.processManager && typeof this.processManager.remove === 'function') {
+        this.processManager.remove(record.process.pid)
+      }
+    }
+  }
+
+  private emitBoundedProcessOutput(record: JobRecord, process: ManagedProcess): boolean {
+    let remaining = MAX_WORKDIR_PROCESS_OUTPUT_BYTES
+    let truncated = false
+    for (const [type, chunks] of [['stdout', process.stdoutChunks], ['stderr', process.stderrChunks]] as const) {
+      const kept: Uint8Array[] = []
+      for (const chunk of chunks) {
+        if (chunk.byteLength > remaining) truncated = true
+        kept.push(chunk.subarray(0, remaining))
+        remaining = Math.max(0, remaining - chunk.byteLength)
+      }
+      const output = decodeChunks(kept, process.shell)
+      // Keep JSON-escaped events comfortably below the transport's 256 KiB frame limit.
+      for (let offset = 0; offset < output.length; offset += 8192) {
+        this.push(record, { type, chunk: output.slice(offset, offset + 8192) })
+      }
+    }
+    if (truncated) this.push(record, { type: 'stderr', chunk: '\n[Remote shell output truncated at 128 KiB]\n' })
+    return truncated
   }
 
   private async authorize(record: JobRecord): Promise<boolean> {
