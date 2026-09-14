@@ -1,5 +1,7 @@
 import type { AgentTypeDefinition } from './types.ts'
 import { parseFrontmatter } from '../../utils/frontmatter.ts'
+import { isReasoningEffort } from '../llm-config.ts'
+import { parseExecutionMode } from '../../sessions/execution-mode.ts'
 
 /**
  * Parse an AGENT.md file into an AgentTypeDefinition.
@@ -17,10 +19,20 @@ export function parseAgentFile(
       name: fallbackName,
       description: content.slice(0, 200),
       prompt: content,
-      ephemeral: false,
+      defaultMode: 'session',
       source: 'workspace',
       dirPath,
     }
+  }
+
+  if (fm.ephemeral !== undefined) {
+    if (typeof fm.ephemeral !== 'boolean') {
+      throw new TypeError(`Agent "${fallbackName}": legacy ephemeral must be a boolean.`)
+    }
+    if (fm.defaultMode !== undefined) {
+      throw new TypeError(`Agent "${fallbackName}": use defaultMode without legacy ephemeral.`)
+    }
+    console.warn(`[agent-types] "${fallbackName}" uses deprecated ephemeral; replace it with defaultMode: ${fm.ephemeral ? 'task' : 'session'}.`)
   }
 
   return {
@@ -29,9 +41,11 @@ export function parseAgentFile(
     prompt: body,
     allowedTools: toStringArray(fm.allowedTools),
     blockedTools: toStringArray(fm.blockedTools),
-    ephemeral: fm.ephemeral === true,
+    defaultMode: fm.defaultMode === undefined
+      ? fm.ephemeral === true ? 'task' : 'session'
+      : parseExecutionMode(fm.defaultMode),
     skills: typeof fm.skills === 'boolean' ? fm.skills : undefined,
-    soul: typeof fm.soul === 'boolean' ? fm.soul : undefined,
+    soul: typeof fm.soul === 'boolean' ? fm.soul : fm.ephemeral === true ? false : undefined,
     root: typeof fm.root === 'boolean' ? fm.root : undefined,
     source: 'workspace',
     dirPath,
@@ -41,7 +55,7 @@ export function parseAgentFile(
     thinking: fm.thinking && typeof fm.thinking === 'object' && 'type' in fm.thinking
       ? fm.thinking as { type: 'enabled' | 'disabled' }
       : undefined,
-    reasoningEffort: fm.reasoningEffort === 'high' || fm.reasoningEffort === 'max'
+    reasoningEffort: isReasoningEffort(fm.reasoningEffort)
       ? fm.reasoningEffort
       : undefined,
   }

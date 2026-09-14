@@ -11,7 +11,8 @@ const agent: AgentTypeDefinition = {
   name: 'test',
   description: '',
   prompt: '',
-  ephemeral: true,
+  defaultMode: 'task',
+  soul: false,
   source: 'builtin',
 }
 

@@ -102,6 +102,34 @@ test('message tool preserves silent policy and refuses self or another parent ch
   assert.equal(inputs[0].policy, 'silent')
 })
 
+test('message routes to actual parent and same-owner siblings, but never across unrelated owners', async () => {
+  const bus = new Bus()
+  const parents: Record<string, { id: string }> = {
+    'web:source': { id: 'web:parent' }, 'web:parent': { id: 'web:grandparent' },
+    'web:sibling': { id: 'web:parent' }, 'web:foreign': { id: 'web:other' },
+  }
+  const delivered: string[] = []
+  const tool = new MessageTool(bus, () => true, id => parents[id], () => [], async (sessionId, input) => {
+    delivered.push(sessionId)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  })
+  assert.match(await tool.execute({ sessionId: 'web:parent', content: 'Parent' }, context()), /Message sent/)
+  assert.match(await tool.execute({ sessionId: 'web:sibling', content: 'Sibling' }, context()), /Message sent/)
+  assert.match(await tool.execute({ sessionId: 'web:foreign', content: 'Foreign' }, context()), /another session/)
+  assert.deepEqual(delivered, ['web:parent', 'web:sibling'])
+})
+
+test('task target admission guard blocks delivery and outbound projection', async () => {
+  const bus = new Bus()
+  let projections = 0
+  bus.on('message.outbound', () => { projections++ })
+  const tool = new MessageTool(bus, () => true, () => undefined, () => [], async () => {
+    throw new Error('Should not deliver')
+  }, () => false)
+  assert.match(await tool.execute({ sessionId: 'web:parent', content: 'Follow-up work' }, context()), /task executions do not admit messages/)
+  assert.equal(projections, 0)
+})
+
 test('event tool awaits directed acceptance and preserves session causality', async () => {
   let observed: SessionInput | undefined
   const gate = Promise.withResolvers<void>()

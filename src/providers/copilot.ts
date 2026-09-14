@@ -482,9 +482,10 @@ export class CopilotProvider implements LLMProvider {
     if (info?.supportedEndpoints === undefined) {
       console.warn(`[copilot] No endpoint capabilities for "${model}"; using the legacy chat-completions protocol.`)
     }
-    if (endpoint === '/responses' && options.reasoningEffort && info?.reasoningEfforts &&
-      !info.reasoningEfforts.includes(options.reasoningEffort)) {
-      throw new Error(`[copilot] Model "${model}" does not support reasoning effort "${options.reasoningEffort}".`)
+    const effort = options.thinking?.type === 'disabled' ? 'none' : options.reasoningEffort
+    if ((endpoint === '/responses' || effort === 'none') && effort && info?.reasoningEfforts &&
+      !info.reasoningEfforts.includes(effort)) {
+      throw new Error(`[copilot] Model "${model}" does not support reasoning effort "${effort}".`)
     }
     const inlinedMessages = await inlineExternalImages(messages, options.signal)
     // Retry once on 401 — the cached API key may have expired server-side

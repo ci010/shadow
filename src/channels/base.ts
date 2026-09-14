@@ -2,6 +2,20 @@ import type { InboundMessage, OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { Hono } from 'hono'
 import type { DeliveryReceipt, ReceiveChannelMessage } from '../sessions/input.ts'
+import type { ChannelState } from './setup-contract.ts'
+import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
+import type { YieldRequest } from '../sessions/yield-contract.ts'
+
+export interface ChannelDecision {
+  chatId: string
+  senderId: string
+  requestId: string
+  option: 1 | 2 | 3 | 'cancel'
+}
+
+export interface ChannelDecisionHandler {
+  (decision: ChannelDecision): Promise<string>
+}
 
 export class ChannelAdmissionError extends Error {
   constructor(message: string, readonly status: 403 | 503) {
@@ -24,6 +38,12 @@ export interface BaseChannel {
 
   /** Configure explicit message admission before starting the channel. */
   setReceiver(receiver: ReceiveChannelMessage): void
+
+  setStatusListener?(listener: (state: ChannelState) => void): void
+  getCapabilities?(chatId: string): ChannelCapabilities | Promise<ChannelCapabilities>
+  setDecisionHandler?(handler: ChannelDecisionHandler): void
+  presentDecision?(chatId: string, request: YieldRequest, content: string): Promise<void>
+  presentDecisionText?(chatId: string, content: string): Promise<void>
 
   /** Start listening for messages (long-running). Receives the gateway Hono app so the channel can register its own routes. */
   start(app: Hono): Promise<void>
@@ -49,6 +69,10 @@ export interface BaseChannel {
 export abstract class AbstractChannel implements BaseChannel {
   abstract readonly name: string
   private receiver?: ReceiveChannelMessage
+  private statusListener?: (state: ChannelState) => void
+  private accepting = true
+  private decisionHandler?: ChannelDecisionHandler
+  private requestController = new AbortController()
   protected chatActiveMessage: Map<string, {
     messageId: string
     bufferedChunks: string[]
@@ -67,6 +91,59 @@ export abstract class AbstractChannel implements BaseChannel {
 
   setReceiver(receiver: ReceiveChannelMessage): void {
     this.receiver = receiver
+  }
+
+  setStatusListener(listener: (state: ChannelState) => void): void {
+    this.statusListener = listener
+  }
+
+  getCapabilities(_chatId: string): ChannelCapabilities | Promise<ChannelCapabilities> {
+    return unavailableCapabilities()
+  }
+
+  setDecisionHandler(handler: ChannelDecisionHandler): void {
+    this.decisionHandler = handler
+  }
+
+  protected async answerDecision(decision: ChannelDecision): Promise<string> {
+    if (!this.accepting) throw new ChannelAdmissionError('Channel is disconnected', 503)
+    if (!this.isAllowed(decision.senderId)) throw new ChannelAdmissionError('Sender is not authorized', 403)
+    if (!this.decisionHandler) throw new ChannelAdmissionError('Decision handler is unavailable', 503)
+    return this.decisionHandler(decision)
+  }
+
+  async presentDecision(chatId: string, _request: YieldRequest, content: string): Promise<void> {
+    await this.presentDecisionText(chatId, content)
+  }
+
+  async presentDecisionText(chatId: string, content: string): Promise<void> {
+    const messageId = await this.send({ channel: this.name, chatId, content, event: 'response', done: true })
+    if (!messageId) throw new Error('Channel decision message was not acknowledged')
+  }
+
+  protected reportState(state: ChannelState): void {
+    this.statusListener?.(state)
+  }
+
+  protected setAccepting(accepting: boolean): void {
+    this.accepting = accepting
+    this.requestController.abort()
+    if (accepting) this.requestController = new AbortController()
+    else this.chatActiveMessage.clear()
+  }
+
+  protected async request(input: string | URL, init: RequestInit = {}): Promise<Response> {
+    try {
+      const signal = AbortSignal.any([
+        this.requestController.signal, AbortSignal.timeout(60_000),
+        ...(init.signal ? [init.signal] : []),
+      ])
+      signal.throwIfAborted()
+      return await fetch(input, { ...init, signal })
+    } catch {
+      // Network/SDK errors can contain request headers or credential-bearing URLs.
+      throw new Error('Channel request failed')
+    }
   }
 
   abstract start(app: Hono): Promise<void>
@@ -89,7 +166,8 @@ export abstract class AbstractChannel implements BaseChannel {
       if (!this.acceptToolResults) return
     }
 
-    if (!this.update) {
+    if (!this.update || (await this.getCapabilities(msg.chatId)).updates === 'none') {
+      this.chatActiveMessage.delete(msg.chatId)
       await this.send(msg)
       return
     }
@@ -155,6 +233,9 @@ export abstract class AbstractChannel implements BaseChannel {
     >,
     media?: string[],
   ): Promise<DeliveryReceipt> {
+    if (!this.accepting) {
+      throw new ChannelAdmissionError(`[${this.name}] Channel is disconnected`, 503)
+    }
     if (!this.isAllowed(senderId)) {
       throw new ChannelAdmissionError(`[${this.name}] Sender is not authorized`, 403)
     }

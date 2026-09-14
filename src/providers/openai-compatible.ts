@@ -1,5 +1,5 @@
 import type { ToolDefinition } from '../tools/tool.ts'
-import type { ThinkingConfig } from '../agent/llm-config.ts'
+import { isGptModel, type ReasoningEffort, type ThinkingConfig } from '../agent/llm-config.ts'
 import { spanAttributes } from '../utils/otel.ts'
 import type {
   ChatMessage,
@@ -50,11 +50,11 @@ export async function openaiChat(params: {
   messages: ChatMessage[]
   tools: ToolDefinition[]
   maxTokens?: number
-  temperature: number
+  temperature?: number
   providerName?: string
   signal?: AbortSignal
   thinking?: ThinkingConfig
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: ReasoningEffort
 }): Promise<LLMResponse> {
   spanAttributes({
     'llm.provider': params.providerName ?? 'unknown',
@@ -66,7 +66,7 @@ export async function openaiChat(params: {
   const body: Record<string, unknown> = {
     model: params.model,
     messages: sanitizeOutboundMessages(params.messages),
-    temperature: params.temperature,
+    ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
   }
 
   if (params.maxTokens !== undefined) {
@@ -77,10 +77,17 @@ export async function openaiChat(params: {
     body.tools = params.tools
   }
 
-  if (params.thinking) {
+  const thinkingDisabled = params.thinking?.type === 'disabled'
+  const gpt = isGptModel(params.model)
+  const openaiThinkingDisabled = thinkingDisabled &&
+    (gpt || params.providerName === 'openai' || params.providerName === 'copilot')
+  if (params.thinking && !gpt && !openaiThinkingDisabled) {
     body.thinking = params.thinking
   }
-  if (params.reasoningEffort) {
+  // Native OpenAI uses effort for opt-out; other compatible APIs retain their thinking switch.
+  if (openaiThinkingDisabled) {
+    body.reasoning_effort = 'none'
+  } else if (params.reasoningEffort && !thinkingDisabled) {
     body.reasoning_effort = params.reasoningEffort
   }
 

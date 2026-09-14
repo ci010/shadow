@@ -24,7 +24,7 @@
         >
           <div class="agent-item-top">
             <span class="agent-name">{{ a.name }}</span>
-            <span v-if="a.ephemeral" class="badge badge-ephemeral">eph</span>
+            <span v-if="a.defaultMode" class="badge badge-mode">{{ a.defaultMode }}</span>
           </div>
           <span class="agent-desc">{{ a.description }}</span>
           <span class="agent-source" :class="a.source">{{ a.source }}</span>
@@ -41,7 +41,7 @@
 
         <div class="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
           <div><span class="text-ink/50">Source:</span> <span class="font-mono">{{ selected.source }}</span></div>
-          <div><span class="text-ink/50">Ephemeral:</span> {{ selected.ephemeral ? 'Yes' : 'No' }}</div>
+          <div><span class="text-ink/50">Default mode:</span> {{ selected.defaultMode ?? 'session' }}</div>
           <div><span class="text-ink/50">Can Spawn:</span> {{ selected.canSpawn ? 'Yes' : 'No' }}</div>
           <div v-if="selected.model"><span class="text-ink/50">Model:</span> <span class="font-mono">{{ selected.model }}</span></div>
           <div v-if="selected.temperature != null"><span class="text-ink/50">Temperature:</span> {{ selected.temperature }}</div>
@@ -108,7 +108,7 @@ interface AgentTypeMeta {
   allowedTools?: string[]
   blockedTools?: string[]
   canSpawn: boolean
-  ephemeral: boolean
+  defaultMode?: 'session' | 'task' | 'call'
   includeWorkspaceIntro: boolean
   includeMemory: boolean
   includeSafety: boolean
@@ -309,8 +309,8 @@ onMounted(async () => {
 }
 .badge-builtin { background: var(--c-info-bg); color: var(--c-info); }
 .badge-workspace { background: var(--c-warn-bg); color: var(--c-warn); }
-.badge-ephemeral { background: var(--c-purple-bg); color: var(--c-purple); font-size: 0.5rem; }
-.agent-item.active .badge-ephemeral { background: var(--c-purple-bg); color: var(--c-purple-border); }
+.badge-mode { background: var(--c-purple-bg); color: var(--c-purple); }
+.agent-item.active .badge-mode { background: var(--c-purple-bg); color: var(--c-purple-border); }
 .badge-on { background: var(--c-success-bg); color: var(--c-success); }
 .badge-off { background: var(--c-bg-muted); color: var(--c-text-muted); }
 .badge-tool { background: var(--c-info-bg); color: var(--c-info); font-family: 'IBM Plex Mono', ui-monospace, monospace; }

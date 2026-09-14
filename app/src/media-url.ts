@@ -10,7 +10,11 @@ export function buildMediaUrl(
   sessionId: string,
   path: string,
 ): string | null {
-  if (path.startsWith('http://') || path.startsWith('https://')) return path
+  if (
+    path.startsWith('http://') || path.startsWith('https://') ||
+    /^data:image\//i.test(path)
+  ) return path
+  if (path.startsWith('data:')) return null
 
   const chatId = chatIdForMediaSession(sessionId)
   if (!chatId) return null

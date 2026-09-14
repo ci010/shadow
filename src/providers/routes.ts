@@ -6,6 +6,8 @@ import type {
 import type { ToolDefinition } from '../tools/tool.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import type { ProviderSetupStatus } from './setup.ts'
+import { isReasoningEffort } from '../agent/llm-config.ts'
+import { ProviderHttpError } from './provider.ts'
 
 export function providerPlugin(
   source: LLMProvider | undefined | (() => LLMProvider | undefined),
@@ -59,6 +61,15 @@ export function providerPlugin(
       if (typeof body.model !== 'string' || !body.model.trim()) {
         return c.json({ error: 'model_required' }, 400)
       }
+      if (body.reasoning_effort !== undefined && !isReasoningEffort(body.reasoning_effort)) {
+        return c.json({ error: 'invalid_reasoning_effort' }, 400)
+      }
+      const thinking = body.thinking
+      if (thinking !== undefined && (
+        typeof thinking !== 'object' || thinking === null || Array.isArray(thinking) ||
+        !('type' in thinking) || (thinking.type !== 'enabled' && thinking.type !== 'disabled') ||
+        Object.keys(thinking).length !== 1
+      )) return c.json({ error: 'invalid_thinking' }, 400)
       const options: LLMProviderOptions = {
         model: body.model,
         signal: c.req.raw.signal,
@@ -68,6 +79,9 @@ export function providerPlugin(
         temperature: typeof body.temperature === 'number'
           ? body.temperature
           : undefined,
+        reasoningEffort: isReasoningEffort(body.reasoning_effort) ? body.reasoning_effort : undefined,
+        thinking: thinking && typeof thinking === 'object' && 'type' in thinking
+          && (thinking.type === 'enabled' || thinking.type === 'disabled') ? { type: thinking.type } : undefined,
       }
       try {
         const result = await provider.chat(messages, tools, options)
@@ -81,6 +95,7 @@ export function providerPlugin(
             message: {
               role: 'assistant',
               content: result.content,
+              ...(result.reasoningContent != null ? { reasoning_content: result.reasoningContent } : {}),
               ...(result.providerState ? { provider_state: result.providerState } : {}),
               ...(result.toolCalls.length > 0
                 ? {
@@ -106,6 +121,9 @@ export function providerPlugin(
             : undefined,
         })
       } catch (err) {
+        if (err instanceof ProviderHttpError && err.code === 'unsupported_reasoning_effort') {
+          return c.json({ error: err.code, detail: err.message }, 400)
+        }
         return c.json({
           error: 'chat_failed',
           detail: err instanceof Error ? err.message : String(err),

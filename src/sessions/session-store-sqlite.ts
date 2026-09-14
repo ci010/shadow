@@ -10,6 +10,7 @@ import type {
   StoredMessage,
 } from './session-store.ts'
 import { parseWorkdirRefV1 } from './locality.ts'
+import { isExecutionMode } from './execution-mode.ts'
 
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 50
@@ -38,6 +39,13 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'description',
   'children',
   'preloadTools',
+  'mode',
+  'executionStatus',
+  'executionId',
+  'parentSessionId',
+  'executionKey',
+  'parentToolCallId',
+  'completionReported',
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -63,6 +71,11 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (!isRecord(value)) return null
 
   const metadata: SessionMetadata = {}
+  if (typeof value.completionReported === 'boolean') metadata.completionReported = value.completionReported
+  if (isExecutionMode(value.mode)) metadata.mode = value.mode
+  if (['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'].includes(String(value.executionStatus))) {
+    metadata.executionStatus = value.executionStatus as SessionState['executionStatus']
+  }
   if (isRecord(value.config)) metadata.config = value.config as SessionConfig
   if (isSessionParent(value.parent)) metadata.parent = value.parent
   const workdir = parseWorkdirRefV1(value.workdir)
@@ -77,10 +90,15 @@ function parseMetadata(value: unknown): SessionMetadata | null {
       'reportTo',
       'originUser',
       'description',
+      'executionId',
+      'parentSessionId',
+      'executionKey',
+      'parentToolCallId',
     ] as const
   ) {
     if (typeof value[key] === 'string') metadata[key] = value[key]
   }
+  if (value.parentSessionId === null) metadata.parentSessionId = null
 
   if (
     Array.isArray(value.children) &&
@@ -317,6 +335,13 @@ export class SqliteSessionStore implements SessionStore {
         description: state.description,
         children: state.children,
         preloadTools: state.preloadTools,
+        mode: state.mode,
+        executionStatus: state.executionStatus,
+        executionId: state.executionId,
+        parentSessionId: state.parentSessionId,
+        executionKey: state.executionKey,
+        parentToolCallId: state.parentToolCallId,
+        completionReported: state.completionReported,
       },
     }
     await withRetry('saveState', () =>

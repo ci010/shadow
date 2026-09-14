@@ -32,8 +32,98 @@ test('registered empty projects are retained, independent of session activity', 
   assert.deepEqual(groupProjectSessions([project], []).projects, [{ project, sessions: [] }])
 })
 
+test('self reflections use stable heartbeat agent IDs, not mutable titles or other heartbeat tasks', () => {
+  const sessions = parseSessionGraph({
+    sessions: [
+      { sessionId: 'heartbeat:reflector-1789000000000', title: 'Renamed to an ordinary title' },
+      { sessionId: 'heartbeat:soul-reflector-1789000000001', title: 'Also renamed' },
+      { sessionId: 'web:chat-reflect', title: 'Reflect: this is a normal conversation' },
+      { sessionId: 'heartbeat:encapsulator-1789000000002', title: 'Reflect: not a reflector' },
+      { sessionId: 'heartbeat:heartbeat', title: 'Soul Reflect: also not a reflector' },
+      { sessionId: 'web:reflector-1789000000003' },
+      { sessionId: 'heartbeat:reflector' },
+    ],
+    nodes: [],
+  })
+  const groups = groupProjectSessions([], sessions)
+  assert.deepEqual(groups.reflections.map(session => session.sessionId), [
+    'heartbeat:reflector-1789000000000', 'heartbeat:soul-reflector-1789000000001',
+  ])
+  assert.equal(groups.reflections[0].label, 'Renamed to an ordinary title')
+  assert.deepEqual(groups.chats.map(session => session.sessionId), sessions.slice(2).map(session => session.sessionId))
+})
+
+test('reflection descendants cross project boundaries without changing associations or full text', () => {
+  const title = '完整标题 https://example.invalid/' + '很长的内容\n'.repeat(300)
+  const description = 'Original description\n'.repeat(100)
+  const sessions = parseSessionGraph({
+    sessions: [
+      { sessionId: 'web:chat-regular', projectId: project.id },
+      { sessionId: 'web:chat-grandchild', projectId: 'missing-project', title, description },
+      { sessionId: 'heartbeat:reflector-1789000000000', projectId: project.id },
+      { sessionId: 'web:chat-child', projectId: 'project-b' },
+    ],
+    nodes: [
+      { physicalId: 'reflection', logicalId: 'heartbeat:reflector-1789000000000' },
+      { physicalId: 'child', logicalId: 'web:chat-child', parentPhysicalId: 'reflection' },
+      { physicalId: 'grandchild', logicalId: 'web:chat-grandchild', parentPhysicalId: 'child' },
+    ],
+  })
+  const before = structuredClone(sessions)
+  const groups = groupProjectSessions([project, { ...project, id: 'project-b' }], sessions)
+  assert.deepEqual(groups.projects.map(group => group.sessions.map(session => session.sessionId)), [['web:chat-regular'], []])
+  assert.deepEqual(groups.chats, [])
+  assert.deepEqual(groups.reflections.map(session => [session.sessionId, session.depth, session.projectId]), [
+    ['heartbeat:reflector-1789000000000', 0, project.id],
+    ['web:chat-child', 1, 'project-b'],
+    ['web:chat-grandchild', 2, 'missing-project'],
+  ])
+  assert.equal(groups.reflections[2].label, title)
+  assert.equal(groups.reflections[2].description, description)
+  assert.deepEqual(sessions, before)
+  assert.deepEqual(visibleSessions(groups.reflections, new Set(['web:chat-child'])).map(session => session.sessionId), [
+    'heartbeat:reflector-1789000000000', 'web:chat-child',
+  ])
+})
+
+test('missing reflection roots and malformed cycles retain every session exactly once', () => {
+  const sessions = parseSessionGraph({
+    sessions: [
+      { sessionId: 'web:chat-cycle-child', projectId: project.id },
+      { sessionId: 'heartbeat:soul-reflector-1789000000001' },
+      { sessionId: 'web:chat-orphan' },
+      { sessionId: 'web:chat-orphan-child' },
+      { sessionId: 'web:chat-unrelated-orphan' },
+      { sessionId: 'heartbeat:encapsulator-1789000000002' },
+    ],
+    nodes: [
+      { physicalId: 'cycle-child', logicalId: 'web:chat-cycle-child', parentPhysicalId: 'cycle-root' },
+      { physicalId: 'cycle-root', logicalId: 'heartbeat:soul-reflector-1789000000001', parentPhysicalId: 'cycle-child' },
+      { physicalId: 'missing', logicalId: 'heartbeat:reflector-1789000000000' },
+      { physicalId: 'orphan', logicalId: 'web:chat-orphan', parentPhysicalId: 'missing' },
+      { physicalId: 'orphan-child', logicalId: 'web:chat-orphan-child', parentPhysicalId: 'orphan' },
+      { physicalId: 'missing-normal', logicalId: 'web:chat-missing' },
+      { physicalId: 'unrelated-orphan', logicalId: 'web:chat-unrelated-orphan', parentPhysicalId: 'missing-normal' },
+    ],
+  })
+  const groups = groupProjectSessions([project], sessions)
+  const all = [...groups.projects.flatMap(group => group.sessions), ...groups.chats, ...groups.reflections]
+  assert.equal(all.length, sessions.length)
+  assert.equal(new Set(all.map(session => session.sessionId)).size, sessions.length)
+  assert.deepEqual(new Set(groups.reflections.map(session => session.sessionId)), new Set([
+    'heartbeat:soul-reflector-1789000000001', 'web:chat-cycle-child', 'web:chat-orphan', 'web:chat-orphan-child',
+  ]))
+  assert.equal(visibleSessions(groups.reflections, new Set()).length, 4)
+  assert.deepEqual(groups.chats.map(session => session.sessionId), ['web:chat-unrelated-orphan', 'heartbeat:encapsulator-1789000000002'])
+  assert.equal(groups.reflections.find(session => session.sessionId === 'web:chat-orphan')?.depth, 0)
+  assert.equal(groups.reflections.find(session => session.sessionId === 'web:chat-orphan-child')?.depth, 1)
+  const root = groups.reflections[0]
+  assert.equal(root.depth, 0)
+  assert.ok(visibleSessions(groups.reflections, new Set(groups.reflections.map(session => session.sessionId))).includes(root))
+})
+
 test('physical parent lineage, logical compaction, label, model and collapse interaction survive grouping', () => {
-  const config = { model: 'provider/model', thinking: { type: 'enabled' }, reasoningEffort: 'high' }
+  const config = { model: 'provider/model', thinking: { type: 'enabled' }, reasoningEffort: 'low' }
   const sessions = parseSessionGraph({
     sessions: [
       { sessionId: 'web:chat-child', projectId: project.id, description: 'A child' },

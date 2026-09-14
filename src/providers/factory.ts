@@ -52,6 +52,10 @@ const PROVIDER_DEFAULTS: Record<string, {
   },
 }
 
+export function knownProviderNames(): string[] {
+  return Object.keys(PROVIDER_DEFAULTS)
+}
+
 /**
  * Auto-detect the provider name from a model identifier.
  *

@@ -2,6 +2,18 @@ export interface ThinkingConfig {
   type: 'enabled' | 'disabled'
 }
 
+export const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export type ReasoningEffort = typeof REASONING_EFFORTS[number]
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return REASONING_EFFORTS.some(effort => effort === value)
+}
+
+export function isGptModel(model: string): boolean {
+  const unqualified = model.split('@')[0]
+  return /(?:^|\/)gpt(?:-|$)/i.test(unqualified)
+}
+
 /**
  * Runtime config for the agent loop.
  */
@@ -15,7 +27,7 @@ export interface LlmRuntimeConfig {
   /** The thinking model configuration. */
   thinking?: ThinkingConfig
   /** The reasoning effort level for the model. */
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: ReasoningEffort
   /** Per-request completion budget — sent to the API as `max_tokens`. Set via agent type frontmatter. */
   maxTokens?: number
 }

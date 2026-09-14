@@ -26,7 +26,7 @@
 import { nextTick, onActivated, onDeactivated, onUnmounted, ref, useId, watch } from 'vue'
 import { formatMessageTime, type UserMessageMarker } from '../message-history.ts'
 
-const props = defineProps<{ entries: readonly UserMessageMarker[]; container?: HTMLElement }>()
+const props = withDefaults(defineProps<{ entries: readonly UserMessageMarker[]; container?: HTMLElement; active?: boolean }>(), { active: true })
 const rail = ref<HTMLElement>()
 const currentIndex = ref(-1)
 const preview = ref<UserMessageMarker>()
@@ -34,6 +34,7 @@ const previewPosition = ref<Record<string, string>>({})
 const tooltipId = useId()
 let frame: number | undefined
 let active = true
+let observer: ResizeObserver | undefined
 
 function hidePreview() { preview.value = undefined }
 function showPreview(entry: UserMessageMarker, event: Event) {
@@ -91,6 +92,7 @@ function navigate(event: KeyboardEvent) {
 function resize() { hidePreview(); scheduleUpdate() }
 function deactivate() {
   active = false
+  observer?.disconnect()
   props.container?.removeEventListener('scroll', scheduleUpdate)
   window.removeEventListener('resize', resize)
   if (frame !== undefined) cancelAnimationFrame(frame)
@@ -98,19 +100,20 @@ function deactivate() {
   hidePreview()
 }
 function activate() {
+  deactivate()
+  if (!props.active) return
   active = true
   props.container?.addEventListener('scroll', scheduleUpdate, { passive: true })
+  observer = new ResizeObserver(resize)
+  if (props.container) observer.observe(props.container)
   window.addEventListener('resize', resize)
   scheduleUpdate()
 }
-watch(() => props.container, (container, previous) => {
+watch(() => props.container, (_container, previous) => {
   previous?.removeEventListener('scroll', scheduleUpdate)
-  if (active) {
-    container?.addEventListener('scroll', scheduleUpdate, { passive: true })
-    window.addEventListener('resize', resize)
-  }
-  scheduleUpdate()
+  activate()
 }, { immediate: true, flush: 'post' })
+watch(() => props.active, activate)
 watch(() => props.entries, async () => {
   hidePreview()
   await nextTick()
@@ -132,12 +135,12 @@ onUnmounted(deactivate)
 </script>
 
 <style scoped>
-.message-history-rail { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); z-index: 2; display: flex; flex-direction: column; align-items: flex-end; width: 42px; max-height: min(65%, 340px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; padding: 5px 0; }
+.message-history-rail { position: absolute; top: calc((100% - var(--composer-height, 0px)) / 2); right: 8px; transform: translateY(-50%); z-index: 2; display: flex; flex-direction: column; align-items: flex-end; width: 42px; max-height: max(0px, min(340px, calc(100% - var(--composer-height, 0px) - 24px))); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; padding: 5px 0; }
 .message-history-rail::-webkit-scrollbar { display: none; }
 .history-marker { display: flex; align-items: center; justify-content: flex-end; flex: 0 0 15px; width: 100%; height: 15px; padding: 0 5px; border: 0; background: transparent; cursor: pointer; }
-.history-marker span { display: block; width: 10px; height: 3px; border-radius: var(--radius-sm); background: var(--c-text-secondary); opacity: .5; transition: width .15s ease, opacity .15s ease; }
-.history-marker.current span { width: 20px; opacity: .85; }
-.history-marker:hover span, .history-marker.previewing span, .history-marker:focus-visible span { width: 30px; opacity: 1; background: var(--c-text); }
+.history-marker span { display: block; width: 30px; height: 3px; border-radius: var(--radius-sm); background: var(--c-text-secondary); opacity: .5; transform: scaleX(.333333); transform-origin: right; transition: transform .15s ease, opacity .15s ease; }
+.history-marker.current span { transform: scaleX(.666667); opacity: .85; }
+.history-marker:hover span, .history-marker.previewing span, .history-marker:focus-visible span { transform: scaleX(1); opacity: 1; background: var(--c-text); }
 .history-marker:focus-visible { outline: 1px solid var(--c-blue); outline-offset: -1px; border-radius: var(--radius-control); }
 .history-preview { position: fixed; z-index: 980; box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 8px 28px var(--c-shadow); pointer-events: none; }
 .history-preview-message { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 13px; font-weight: 600; line-height: 1.5; }

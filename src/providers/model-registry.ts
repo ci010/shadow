@@ -74,7 +74,9 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'deepseek-reasoner': 128_000,
   'deepseek-v3': 128_000,
   'deepseek-r1': 128_000,
+  'deepseek-flash': 1_000_000,
   'deepseek-v4-flash': 1_000_000,
+  'deepseek-v4-flash-vision-exp': 1_000_000,
   'deepseek-v4-pro': 1_000_000,
 
   // ── Groq / Llama ─────────────────────────────────────────────────

@@ -2,8 +2,8 @@
   <section class="session-diagnosis" aria-label="Session diagnosis">
     <div class="diagnosis-navigation">
       <div class="diagnosis-views" role="tablist" aria-label="Diagnosis view">
-        <button v-for="view in views" :id="`diagnosis-${view.id}-tab`" :key="view.id" role="tab"
-          :aria-selected="section === view.id" :aria-controls="`diagnosis-${view.id}`"
+        <button v-for="view in views" :id="domId(`diagnosis-${view.id}-tab`)" :key="view.id" role="tab"
+          :aria-selected="section === view.id" :aria-controls="domId(`diagnosis-${view.id}`)"
           :tabindex="section === view.id ? 0 : -1" :class="{ selected: section === view.id }"
           @click="section = view.id" @keydown="navigateViews($event, view.id)">
           {{ view.label }}<span v-if="view.id === 'tools'" class="view-count">{{ tools.length }}</span>
@@ -15,7 +15,7 @@
       </span>
     </div>
 
-    <div v-show="section === 'trace'" id="diagnosis-trace" class="diagnosis-scroll" role="tabpanel" aria-labelledby="diagnosis-trace-tab" tabindex="0">
+    <div v-show="section === 'trace'" :id="domId('diagnosis-trace')" class="diagnosis-scroll" role="tabpanel" :aria-labelledby="domId('diagnosis-trace-tab')" tabindex="0">
       <div v-if="!canReadTrace" class="diagnosis-empty">Session traces require audit:read access. System prompt and tools are available in the tabs above.</div>
       <template v-else>
         <div class="trace-heading">
@@ -112,12 +112,12 @@
       </template>
     </div>
 
-    <div v-show="section === 'prompt'" id="diagnosis-prompt" class="diagnosis-scroll context-view" role="tabpanel" aria-labelledby="diagnosis-prompt-tab" tabindex="0">
+    <div v-show="section === 'prompt'" :id="domId('diagnosis-prompt')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-prompt-tab')" tabindex="0">
       <p class="context-note">Current session system prompt, not a captured prompt for each historical model call.</p>
       <SystemPromptCard :prompt="systemPrompt" empty-message="No system prompt loaded for this session." />
       <SystemPromptCard v-if="compactionSummary" title="Compaction Summary" :prompt="compactionSummary" :show-token-estimate="true" />
     </div>
-    <div v-show="section === 'tools'" id="diagnosis-tools" class="diagnosis-scroll context-view" role="tabpanel" aria-labelledby="diagnosis-tools-tab" tabindex="0">
+    <div v-show="section === 'tools'" :id="domId('diagnosis-tools')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-tools-tab')" tabindex="0">
       <p class="context-note">Currently available tool definitions. Actual calls, arguments and results are in Trace.</p>
       <ToolsCard :tools="tools" />
     </div>
@@ -144,7 +144,9 @@ const props = defineProps<{
   systemPrompt: string
   compactionSummary: string
   tools: ToolDef[]
+  idPrefix?: string
 }>()
+const domId = (id: string) => props.idPrefix ? `${props.idPrefix}-${id}` : id
 const views = [{ id: 'trace', label: 'Trace' }, { id: 'prompt', label: 'System prompt' }, { id: 'tools', label: 'Tools' }] as const
 const section = ref<typeof views[number]['id']>('trace')
 const query = ref('')
@@ -318,7 +320,7 @@ async function selectTimelineItem(item: TimelineItem): Promise<void> {
 async function selectSpan(span: SessionTraceSpan): Promise<void> {
   selectedId.value = traceKey(span)
   await nextTick()
-  document.getElementById('diagnosis-trace')?.querySelector('.span-inspector')?.scrollIntoView({ block: 'nearest' })
+  document.getElementById(domId('diagnosis-trace'))?.querySelector('.span-inspector')?.scrollIntoView({ block: 'nearest' })
 }
 function navigateViews(event: KeyboardEvent, view: typeof views[number]['id']): void {
   const index = views.findIndex(item => item.id === view)
@@ -327,7 +329,7 @@ function navigateViews(event: KeyboardEvent, view: typeof views[number]['id']): 
   if (next === undefined) return
   event.preventDefault()
   section.value = views[next].id
-  document.getElementById(`diagnosis-${section.value}-tab`)?.focus()
+  document.getElementById(domId(`diagnosis-${section.value}-tab`))?.focus()
 }
 function url(path: string, params: Record<string, string> = {}): URL {
   const target = new URL(path, props.apiBase)

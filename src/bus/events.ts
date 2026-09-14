@@ -72,6 +72,10 @@ export interface OutboundMessage {
   media?: string[]
   /** Full tool call data (for tool_call events). Channels that support rich display can use this instead of content. */
   toolCall?: { name: string; arguments: Record<string, unknown> }
+  toolCallId?: string
+  toolName?: string
+  /** Structured decision, separate from ordinary progressive response output. */
+  yieldRequest?: import('../sessions/yield-contract.ts').YieldRequest
   /**
    * When true, signals that this is the final message for this queryId.
    * The channel manager will release any stored message-ID tracking for this query.

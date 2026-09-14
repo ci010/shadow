@@ -15,6 +15,56 @@ export interface ProviderSetupInput {
   baseUrl?: string
 }
 
+export interface ConfiguredProvider {
+  provider: string
+  authMode: ProviderSetupStatus['authMode']
+  hasApiKey: boolean
+  selected: boolean
+  baseUrl?: string
+  model?: string
+}
+
+export const providerPresets = [
+  { id: 'openai', name: 'OpenAI', model: 'gpt-4.1' },
+  { id: 'anthropic', name: 'Anthropic', model: 'claude-sonnet-4-6' },
+  { id: 'deepseek', name: 'DeepSeek', model: 'deepseek-flash' },
+  { id: 'openrouter', name: 'OpenRouter', model: 'anthropic/claude-sonnet-4.6' },
+  { id: 'gemini', name: 'Google Gemini', model: 'gemini-2.5-pro' },
+  { id: 'groq', name: 'Groq', model: 'llama-3.3-70b-versatile' },
+]
+
+export function providerDisplayName(provider: string): string {
+  return provider === 'copilot' ? 'GitHub Copilot' : providerPresets.find(item => item.id === provider)?.name ?? provider
+}
+
+export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
+  if (!isRecord(value) || !Array.isArray(value.providers)) {
+    throw new Error('The backend returned an invalid provider list. Restart Main and retry.')
+  }
+  const names = new Set<string>()
+  let selected = false
+  return value.providers.map((item: unknown) => {
+    if (!isRecord(item) || typeof item.provider !== 'string' || !item.provider
+      || names.has(item.provider) || typeof item.selected !== 'boolean'
+      || (item.selected && selected) || typeof item.hasApiKey !== 'boolean'
+      || !['api-key', 'copilot', 'none'].includes(String(item.authMode))
+      || (item.model !== undefined && typeof item.model !== 'string')
+      || (item.baseUrl !== undefined && typeof item.baseUrl !== 'string')) {
+      throw new Error('The backend returned an invalid provider list. Restart Main and retry.')
+    }
+    names.add(item.provider)
+    selected ||= item.selected
+    return {
+      provider: item.provider,
+      selected: item.selected,
+      hasApiKey: item.hasApiKey,
+      authMode: item.authMode as ConfiguredProvider['authMode'],
+      ...(typeof item.model === 'string' ? { model: item.model } : {}),
+      ...(typeof item.baseUrl === 'string' ? { baseUrl: item.baseUrl } : {}),
+    }
+  })
+}
+
 export type LoginState = 'pending' | 'succeeded' | 'denied' | 'expired' | 'cancelled' | 'error'
 export interface DeviceLogin {
   loginId: string
@@ -103,6 +153,9 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
     catch { throw new ProviderRequestError(502) }
   }
   return {
+    async configured(signal?: AbortSignal) {
+      return parseConfiguredProviders(await json('/api/provider/configured', { signal }))
+    },
     async status(signal?: AbortSignal, refresh = false) {
       return parseProviderSetup(await json(`/api/provider/setup${refresh ? '?refresh=true' : ''}`, { signal }))
     },

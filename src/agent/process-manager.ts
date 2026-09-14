@@ -1,6 +1,7 @@
 import {
   type ChildProcess,
   spawn as childSpawn,
+  execFile,
   type SpawnOptions,
 } from 'node:child_process'
 import { env as sysEnv } from 'node:process'
@@ -12,6 +13,8 @@ import {
   resolveExecShell,
 } from '../utils/exec-shell.ts'
 import { isWindows } from '../utils/runtime.ts'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 
 /**
  * Final exit status of a managed process.
@@ -29,6 +32,8 @@ export interface ManagedProcessStatus {
  * process itself.
  */
 export interface ManagedProcess {
+  /** Dedicated POSIX process group, owned by an awaited foreground operation. */
+  isolated?: boolean
   pid: number
   command: string
   cwd: string
@@ -69,7 +74,9 @@ export class ProcessManager {
     env?: Record<string, string>,
     shell: ManagedShell = defaultManagedShell(),
     args: string[] = [],
+    options: { isolated?: boolean; signal?: AbortSignal } = {},
   ): Promise<ManagedProcess> {
+    options.signal?.throwIfAborted()
     // Auto-escalate from cmd to sh when MSYS2 tools are detected.
     // MSYS2 binaries (grep, sed, …) require a proper cygwin context which
     // only msys/bash provides – cmd-spawned MSYS2 processes hang silently.
@@ -87,6 +94,7 @@ export class ProcessManager {
         `Shell "${effectiveShell}" is not available on this machine`,
       )
     }
+    options.signal?.throwIfAborted()
 
     const shellArgs = buildShellArgs(resolvedShell.name, script, args)
 
@@ -107,6 +115,7 @@ export class ProcessManager {
       env: spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       ...(useVerbatimArgs ? { windowsVerbatimArguments: true } : {}),
+      ...(options.isolated ? { detached: !isWindows, windowsHide: true } : {}),
     }
 
     const proc = childSpawn(resolvedShell.command, shellArgs, spawnOpts)
@@ -147,6 +156,7 @@ export class ProcessManager {
     })
 
     const managed: ManagedProcess = {
+      ...(options.isolated ? { isolated: true } : {}),
       pid: proc.pid,
       command: script,
       cwd,
@@ -174,11 +184,55 @@ export class ProcessManager {
   remove(pid: number): void {
     this.processes.delete(pid)
   }
+
+  async terminate(managed: ManagedProcess): Promise<ManagedProcessStatus> {
+    const status = await terminateProcessTree(managed.process, managed.exitPromise, managed.isolated)
+    this.remove(managed.pid)
+    return status
+  }
 }
 
 // ---------------------------------------------------------------------------
 //  Helpers
 // ---------------------------------------------------------------------------
+
+/** Terminate only the owned PID/tree and wait for exit and pipe drainage. */
+export async function terminateProcessTree(
+  child: ChildProcess,
+  exit: Promise<ManagedProcessStatus>,
+  isolated = false,
+): Promise<ManagedProcessStatus> {
+  const closed = () => (child.exitCode !== null || child.signalCode !== null)
+    && (!child.stdout || child.stdout.destroyed) && (!child.stderr || child.stderr.destroyed)
+  if (child.pid !== undefined && !closed()) {
+    if (isWindows) {
+      try {
+        await promisify(execFile)(
+          join(sysEnv.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
+          ['/PID', String(child.pid), '/T', '/F'],
+          { windowsHide: true, timeout: 5000 },
+        )
+      } catch (error) {
+        if (!closed()) throw new Error(`Failed to terminate process tree PID=${child.pid}`, { cause: error })
+      }
+    } else {
+      try {
+        process.kill(isolated ? -child.pid : child.pid, 'SIGKILL')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+      }
+    }
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      exit,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Process PID=${child.pid} did not close after termination`)), 5000)
+      }),
+    ])
+  } finally { clearTimeout(timer) }
+}
 
 /** Read all chunks from a Node Readable stream into `out` in the background. */
 async function drainStream(

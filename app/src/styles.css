@@ -3,13 +3,15 @@
   font-family: 'Inter', system-ui, sans-serif;
   cursor: crosshair;
 
-  /* Shared shape scale: compact details, controls, cards, and floating surfaces. */
-  --radius-sm: 6px;
-  --radius-control: 8px;
-  --radius-surface: 14px;
-  --radius-overlay: 18px;
-  --radius-pill: 999px;
-  --radius-circle: 50%;
+  /* App UI uses square corners, including controls and status indicators. */
+  --radius-sm: 0px;
+  --radius-control: 0px;
+  --radius-surface: 0px;
+  --radius-overlay: 0px;
+  --radius-pill: 0px;
+  --radius-circle: 0px;
+
+  --conversation-item-max-width: 80%;
 
   /* ── Core surfaces ─────────────────────────────── */
   --c-bg: #f0f0f3;
@@ -24,6 +26,8 @@
   --c-border: #e2e2e8;
   --c-border-hover: #9ca3af;
   --c-border-soft: #d1d5db;
+  --c-scrollbar-thumb: #7c8797;
+  --c-scrollbar-thumb-hover: #596579;
 
   /* ── Ink (UnoCSS text-ink with opacity support) ── */
   --c-ink: 26 26 46;
@@ -46,6 +50,11 @@
   /* ── Semantic status ───────────────────────────── */
   --c-success-bg: #dcfce7;
   --c-success: #16a34a;
+  --c-git-added: #1a7f37;
+  --c-git-modified: #8a6500;
+  --c-git-deleted: #c72e39;
+  --c-git-renamed: #0969da;
+  --c-diff-added: #15803d;
   --c-success-light: #86efac;
   --c-error-bg: #fee2e2;
   --c-error: #dc2626;
@@ -99,6 +108,8 @@
   --c-border: #2a2a2b;
   --c-border-hover: #525257;
   --c-border-soft: #343436;
+  --c-scrollbar-thumb: #777782;
+  --c-scrollbar-thumb-hover: #9ca3af;
 
   --c-ink: 229 231 235;
 
@@ -117,6 +128,11 @@
 
   --c-success-bg: rgba(22, 163, 74, 0.15);
   --c-success: #4ade80;
+  --c-git-added: #73c991;
+  --c-git-modified: #d9b778;
+  --c-git-deleted: #f48771;
+  --c-git-renamed: #75beff;
+  --c-diff-added: #4ade80;
   --c-success-light: #166534;
   --c-error-bg: rgba(220, 38, 38, 0.15);
   --c-error: #f87171;
@@ -152,7 +168,24 @@
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
-  scrollbar-color: var(--c-border) transparent;
+  scrollbar-color: var(--c-scrollbar-thumb) transparent;
+}
+
+*, *::before, *::after {
+  border-radius: 0;
+}
+
+/* Typography's preset has literal radii instead of using the shape tokens. */
+.prose pre, .prose kbd {
+  border-radius: var(--radius-sm);
+}
+
+input::-webkit-slider-thumb, input::-webkit-slider-runnable-track {
+  border-radius: 0;
+}
+
+input::-moz-range-thumb, input::-moz-range-track {
+  border-radius: 0;
 }
 
 *::-webkit-scrollbar {
@@ -165,12 +198,12 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: var(--c-border);
+  background: var(--c-scrollbar-thumb);
   border-radius: var(--radius-sm);
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--c-border-hover);
+  background: var(--c-scrollbar-thumb-hover);
 }
 
 body {

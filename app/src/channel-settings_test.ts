@@ -1,0 +1,89 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { test } from 'node:test'
+import { channelDefinitions, channelDraft, channelPatch, channelStateLabel, createChannelSettingsClient, parseChannelList, parseChannelStatus } from './channel-settings.ts'
+import type { ChannelSetupStatus } from '../../src/channels/setup-contract.ts'
+
+const statuses = (): ChannelSetupStatus[] => channelDefinitions.map(item => ({
+  id: item.id, label: item.label, enabled: false, configured: false, state: 'unconfigured', config: {}, secrets: {},
+}))
+test('status contract rejects malformed, duplicate, unknown and credential-bearing responses', () => {
+  const channels = statuses()
+  assert.deepEqual(parseChannelList({ channels: channels.toReversed() }), channels)
+  for (const value of [null, {}, { channels: [] }, { channels: [channels[0], channels[0], channels[2]] }]) {
+    assert.throws(() => parseChannelList(value), /channel list/)
+  }
+  for (const patch of [{ id: 'wechat' }, { state: 'ready' }, { enabled: 'true' }, { config: { secret: 'must-not-reach-renderer' } },
+    { config: { sandbox: 'false' } }, { secrets: { secret: 'actual-value' } }, { secrets: { madeUp: false } }]) {
+    assert.throws(() => parseChannelStatus({ ...channels[0], ...patch }), /invalid channel status/)
+  }
+})
+test('channel drafts never contain saved secrets and blank password fields preserve stored values', () => {
+  const channel: ChannelSetupStatus = { ...statuses()[0], configured: true, config: { appId: 'fixture-id', markdown: false, allowFrom: ['a', 'b'] }, secrets: { secret: true } }
+  const draft = channelDraft(channel)
+  assert.equal(draft.secret, '')
+  assert.equal(draft.markdown, false)
+  assert.equal(draft.allowFrom, 'a\nb')
+  const patch = channelPatch(channel, draft, true)
+  assert.equal(patch.enabled, true)
+  assert.equal(Object.hasOwn(patch, 'secret'), false)
+  assert.equal(Object.hasOwn(patch, 'token'), false)
+  assert.deepEqual(patch.allowFrom, ['a', 'b'])
+  draft.secret = 'replacement'
+  assert.equal(channelPatch(channel, draft, true).secret, 'replacement')
+})
+test('connect validates required credentials, lists, selections and bitmasks; incomplete drafts may be saved disabled', () => {
+  for (const channel of statuses()) {
+    const draft = channelDraft(channel)
+    assert.throws(() => channelPatch(channel, draft, true), /required/)
+    assert.equal(channelPatch(channel, draft, false).enabled, false)
+  }
+  const channel = statuses()[0]
+  const draft = { ...channelDraft(channel), appId: 'app', secret: 'fixture', allowFrom: 'a\n a \n b' }
+  assert.deepEqual(channelPatch(channel, draft, true).allowFrom, ['a', 'b'])
+  for (const intents of ['NaN', '-1', '1.5', '4294967296']) assert.throws(() => channelPatch(channel, { ...draft, intents }, true), /32-bit integer/)
+  assert.equal(channelPatch(channel, { ...draft, intents: '4294967295' }, true).intents, 4294967295)
+  const discord = statuses()[2]
+  assert.throws(() => channelPatch(discord, { ...channelDraft(discord), token: 'fixture', triggerMode: 'invalid' }, true), /valid value/)
+})
+test('runtime labels never equate configured or SDK-running with connected', () => {
+  assert.equal(channelStateLabel({ ...statuses()[0], configured: true, state: 'disabled' }), 'Disconnected')
+  assert.equal(channelStateLabel({ ...statuses()[0], configured: true, enabled: true, state: 'running' }), 'Running · connection unverified')
+  assert.equal(channelStateLabel({ ...statuses()[0], configured: true, enabled: true, state: 'connected' }), 'Connected')
+})
+test('client patches only selected channel and refuses unexpected success payloads', async () => {
+  const channel = statuses()[0]
+  const client = createChannelSettingsClient('http://fixture', async (url, init) => {
+    assert.equal(url, 'http://fixture/api/channels/qq')
+    assert.equal(init?.method, 'PATCH')
+    assert.deepEqual(JSON.parse(String(init?.body)), { config: { enabled: false } })
+    return Response.json({ channel })
+  })
+  assert.deepEqual(await client.save('qq', { enabled: false }), channel)
+  const wrong = createChannelSettingsClient('', async () => Response.json({ channel: statuses()[1] }))
+  await assert.rejects(wrong.save('qq', {}), /another channel/)
+  const denied = createChannelSettingsClient('', async () => new Response('credential-bearing SDK error', { status: 403 }))
+  await assert.rejects(denied.list(), /Main administrator/)
+})
+test('Settings shell and channel forms compile and preserve accessible navigation and hidden drafts', async () => {
+  const require = createRequire(new URL('./package.json', import.meta.url))
+  const compiler = require('vue/compiler-sfc') as typeof import('vue/compiler-sfc')
+  for (const filename of ['SettingsView.vue', 'ChannelsView.vue']) {
+    const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
+    const { descriptor, errors } = compiler.parse(source, { filename })
+    assert.deepEqual(errors, [])
+    const script = compiler.compileScript(descriptor, { id: filename })
+    assert.deepEqual(compiler.compileTemplate({ source: descriptor.template!.content, filename, id: filename,
+      compilerOptions: { bindingMetadata: script.bindings } }).errors, [])
+    if (filename === 'SettingsView.vue') {
+      assert.match(source, /aria-label="Settings sections"/)
+      assert.match(source, /ProvidersView v-show=/)
+      assert.match(source, /ChannelsView v-if="channelsOpened" v-show=/)
+    }
+  }
+  const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
+  assert.match(app, /hasReadyProvider \|\| !isMain \|\| route.name === 'settings'/)
+  const router = await readFile(new URL('./router.ts', import.meta.url), 'utf8')
+  assert.match(router, /path: '\/providers'.*redirect: '\/settings\/providers'/)
+})

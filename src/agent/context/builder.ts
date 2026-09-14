@@ -4,6 +4,7 @@ import type { WorkdirRefV1 } from '../../sessions/locality.ts'
 import type { AgentTypeDefinition } from '../agent-types/types.ts'
 import type { ExecShell } from '../../tools/shell.ts'
 import { resolve } from 'node:path'
+import type { ExecutionMode } from '../../sessions/execution-mode.ts'
 
 // ── Session-scoped context for system prompt building ──────────────────
 
@@ -12,6 +13,9 @@ import { resolve } from 'node:path'
  * fields, not per-message execution state.
  */
 export interface SessionPromptContext {
+  mode?: ExecutionMode
+  /** Structural delegation owner, not a context-only fork source. */
+  parentSessionId?: string
   behavior: SessionConfig
   channel: string
   sessionId: string

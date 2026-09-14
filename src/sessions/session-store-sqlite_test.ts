@@ -55,6 +55,12 @@ test('SqliteSessionStore round-trips complete SessionState metadata', async () =
   const sessionsDir = await createTempWorkspace()
   const state: SessionState = {
     sessionId: 'discord:complete',
+    mode: 'task',
+    executionId: 'discord:complete',
+    executionStatus: 'completed',
+    executionKey: 'parent:turn:tool',
+    completionReported: true,
+    parentSessionId: 'discord:parent',
     segmentIndex: 3,
     lastActivityAt: '2026-08-26T12:34:56.000Z',
     lastKnownTokens: 4321,

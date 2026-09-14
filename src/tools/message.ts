@@ -39,6 +39,7 @@ export class MessageTool implements Tool {
     private getSessionParent: (sessionId: string) => SessionParent | undefined,
     private getChildSessions: (parentSessionId: string) => string[] | undefined,
     private deliver: DeliverInput,
+    private canSendSessionMessage?: (sourceId: string, targetId: string) => boolean,
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -52,6 +53,8 @@ export class MessageTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    const denied = context.tools?.executionDenial?.('message', args)
+    if (denied) return denied
     const rawContent = String(args.content ?? '')
     if (!rawContent) return 'Error: content is required'
 
@@ -65,6 +68,9 @@ export class MessageTool implements Tool {
     if (targetSessionId === currentSessionId) {
       return 'Error: cannot send a message to the current session.'
     }
+    if (this.canSendSessionMessage && !this.canSendSessionMessage(currentSessionId, targetSessionId)) {
+      return 'Error: task executions do not admit messages; create a new execution.'
+    }
 
     // Validate target is accessible: must be a child of this session or a common session
     const children = this.getChildSessions(currentSessionId)
@@ -72,13 +78,16 @@ export class MessageTool implements Tool {
     if (!isChild) {
       // Check if target is a common session (no parent, or parent is current session)
       const targetParent = this.getSessionParent(targetSessionId)
-      if (targetParent && targetParent.id !== currentSessionId) {
+      const ownParent = this.getSessionParent(currentSessionId)
+      const isParent = ownParent?.id === targetSessionId
+      const isSibling = !!ownParent && targetParent?.id === ownParent.id
+      if (targetParent && targetParent.id !== currentSessionId && !isParent && !isSibling) {
         return `Error: cannot send messages to "${targetSessionId}" — it is a subagent owned by another session.`
       }
     }
 
     if (!this.canReceiveSessionMessage(targetSessionId)) {
-      return `Error: cannot send follow-up messages to ephemeral session "${targetSessionId}".`
+      return `Error: task execution "${targetSessionId}" does not accept messages; create a new execution.`
     }
 
     const { text, media } = parseMediaFromContent(rawContent)

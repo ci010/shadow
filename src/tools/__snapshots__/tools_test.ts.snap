@@ -322,6 +322,54 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
   {
     "type": "function",
     "function": {
+      "name": "yield",
+      "description": "Yield for a decision with exactly three choices and one default. Root sessions ask the human; child sessions ask their stored parent. Waits until answered, cancelled, or the configured timeout selects the default. Use action=\\"answer\\" to answer a child request. You cannot select the recipient or timeout.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "answer"
+            ],
+            "default": "ask",
+            "description": "Ask a question or answer a child session’s request."
+          },
+          "question": {
+            "type": "string",
+            "description": "For ask: a clear question requiring a decision."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "uniqueItems": true,
+            "description": "For ask: exactly three distinct non-empty choices."
+          },
+          "default_option": {
+            "type": "string",
+            "description": "For ask: exactly one of options, used only if the configured timeout expires."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "For answer: the request ID received from your child session."
+          },
+          "option": {
+            "type": "string",
+            "description": "For answer: the exact text of one of the child’s three options."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "event_subscribe",
       "description": "Manage event subscriptions, event sources, and emit custom events. Events are signals that wake a session; declare urgency to control how they arrive (steering=interrupt now, queue=after current turn, debounce=coalesce a burst, silent=record only). Read v:events for subscriptions and v:events/sources for registered sources. Use the cron tool to schedule periodic events.",
       "parameters": {
@@ -415,17 +463,30 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "subagent",
-      "description": "Spawn a sub-agent session. Use the message tool to send tasks to it.",
+      "description": "Create an asynchronous session/task, or invoke a blocking bounded leaf call. Available modes depend on this session’s execution mode and structural ownership. Blocking calls must use this tool directly, not an exec/invoke bridge.",
       "parameters": {
         "type": "object",
         "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "session",
+              "task",
+              "call"
+            ],
+            "description": "Session/task return an accepted ID immediately. Call waits for its final result and cannot coordinate, yield, or delegate. Mode is required outside root sessions; at root, omission uses the selected role’s defaultMode only when allowed."
+          },
+          "task": {
+            "type": "string",
+            "description": "Initial work. Required for task/call; optional for session."
+          },
           "description": {
             "type": "string",
             "description": "Short description of the sub-agent session's purpose."
           },
           "agent_type": {
             "type": "string",
-            "description": "Agent type to use. Defaults to \\"sub\\". Available types are listed in the Runtime section of the system prompt."
+            "description": "Agent role. Defaults to \\"sub\\"; explicit call mode inherits the caller role when omitted. Available types are listed in the Runtime section of the system prompt."
           },
           "report_to": {
             "type": "string",
@@ -493,6 +554,7 @@ write
 exec
 search
 continuation
+yield
 event_subscribe
 update_convention
 `;
@@ -501,6 +563,7 @@ exports[`tools — tool surface per agent type > explore 1`] = `
 read
 exec
 search
+yield
 `;
 
 exports[`tools — tool surface per agent type > general 1`] = `
@@ -513,6 +576,7 @@ invoke_tool
 kill
 continuation
 message
+yield
 event_subscribe
 subagent
 update_convention
@@ -528,6 +592,7 @@ invoke_tool
 kill
 continuation
 message
+yield
 event_subscribe
 subagent
 update_convention
@@ -537,6 +602,7 @@ exports[`tools — tool surface per agent type > plan 1`] = `
 read
 plan_write
 search
+yield
 `;
 
 exports[`tools — tool surface per agent type > reflector 1`] = `
@@ -545,6 +611,7 @@ write
 exec
 search
 log
+yield
 `;
 
 exports[`tools — tool surface per agent type > soul-reflector 1`] = `
@@ -553,6 +620,7 @@ write
 exec
 search
 continuation
+yield
 event_subscribe
 update_convention
 `;
@@ -567,11 +635,14 @@ invoke_tool
 kill
 continuation
 message
+yield
 event_subscribe
+subagent
 `;
 
 exports[`tools — tool surface per agent type > verify 1`] = `
 read
 exec
 search
+yield
 `;

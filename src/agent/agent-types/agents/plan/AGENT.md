@@ -1,6 +1,6 @@
 ---
 description: Planning agent for design and architecture work
-allowedTools: [read, search, plan_write]
+allowedTools: [read, search, plan_write, yield]
 ---
 # Plan Agent
 
@@ -28,7 +28,8 @@ When your plan is ready, output a final message with:
 4. Dependencies and ordering
 5. Verification strategy
 
-This plan will be forwarded to the parent session.
+Follow the execution contract for completion delivery; do not send a duplicate
+completion message.
 
 ## Your Body
 

@@ -36,7 +36,7 @@ const toolCall: NonNullable<ChatMessage['tool_calls']>[number] = {
 }
 const usage = { promptTokens: 42, completionTokens: 12, totalTokens: 54 }
 
-function providerState(suffix: string): ResponsesProviderState {
+function providerState(suffix: string, provider: ResponsesProviderState['provider'] = 'copilot'): ResponsesProviderState {
   const reasoning: ResponsesProviderState['reasoning'] = [{
     type: 'reasoning',
     id: `rs_synthetic_${suffix}`,
@@ -44,11 +44,14 @@ function providerState(suffix: string): ResponsesProviderState {
     summary: [{ type: 'summary_text', text: `Summary ${suffix}` }],
   }]
   return {
-    provider: 'copilot',
+    provider,
     model: llm.model,
-    reasoning,
+    reasoning: provider === 'copilot' ? reasoning : [],
     outputItems: [
-      ...reasoning,
+      ...(provider === 'copilot' ? reasoning : [{
+        type: 'reasoning' as const, summary: [],
+        content: [{ type: 'reasoning_text' as const, text: `Synthetic DeepSeek reasoning ${suffix}` }],
+      }]),
       {
         type: 'message',
         id: `msg_synthetic_${suffix}`,
@@ -84,10 +87,10 @@ function inbound(content: string): InboundMessage {
   }
 }
 
-function scriptedProvider(responses: LLMResponse[]) {
+function scriptedProvider(responses: LLMResponse[], name = 'copilot') {
   const requests: ChatMessage[][] = []
   const provider: LLMProvider = {
-    name: 'copilot',
+    name,
     listModels: () => [llm.model],
     chat: async (messages) => {
       requests.push(structuredClone(messages))
@@ -110,13 +113,14 @@ function historyManager(
     provider,
     bus: new Bus(),
     tools: new Tools(workspace),
+    handoffManager: { shouldHandoff: () => false },
     context: { buildSystemPrompt: async () => 'Synthetic system prompt' },
     agentTypes: {
       resolve: () => ({
         name: 'fixture',
         description: 'Fixture agent',
         prompt: '',
-        ephemeral: true,
+        defaultMode: 'session',
         source: 'builtin',
       }),
     },
@@ -134,8 +138,9 @@ const stores = [
   ['SQLite', (directory: string): SessionStore => new SqliteSessionStore(directory)],
 ] as const
 
-for (const [name, createStore] of stores) {
-  test(`${name}: Responses continuity survives the tool loop, persistence, and resumed context`, async () => {
+for (const [name, createStore, providerName] of stores.flatMap(([name, createStore]) =>
+  (['copilot', 'deepseek'] as const).map(provider => [name, createStore, provider] as const))) {
+  test(`${name}/${providerName}: Responses continuity survives the tool loop, persistence, and resumed context`, async () => {
     await mkdir('.test-data', { recursive: true })
     const workspace = await mkdtemp(join(process.cwd(), '.test-data', 'provider-state-'))
     const directory = join(workspace, 'sessions')
@@ -145,6 +150,7 @@ for (const [name, createStore] of stores) {
       await store.init()
       const state: SessionState = {
         sessionId: 'test:continuity',
+        mode: 'session',
         segmentIndex: 3,
         lastKnownTokens: 123,
         config: { model: llm.model },
@@ -157,8 +163,8 @@ for (const [name, createStore] of stores) {
         { previous_physical_id: 'test_continuity-2', timestamp },
         { role: 'assistant', content: 'Legacy reply', timestamp },
       ])
-      const toolState = providerState('tool')
-      const finalState = providerState('final')
+      const toolState = providerState('tool', providerName)
+      const finalState = providerState('final', providerName)
       const { provider, requests } = scriptedProvider([
         {
           content: null,
@@ -172,7 +178,7 @@ for (const [name, createStore] of stores) {
           usage,
         },
         { content: 'Finished', providerState: finalState, toolCalls: [] },
-      ])
+      ], providerName)
       const tools = new Tools(workspace)
       tools.register({
         name: toolCall.function.name,
@@ -232,7 +238,7 @@ for (const [name, createStore] of stores) {
       }
       equal(Object.hasOwn(records[1], 'provider_state'), false)
 
-      const resumed = scriptedProvider([{ content: 'Resumed', toolCalls: [] }])
+      const resumed = scriptedProvider([{ content: 'Resumed', toolCalls: [] }], providerName)
       manager = historyManager(workspace, store, resumed.provider)
       await manager.start()
       for (const query of [undefined, { shallow: true }, { physicalId }]) {
@@ -249,7 +255,9 @@ for (const [name, createStore] of stores) {
         deepEqual(messages[4].provider_state, finalState)
       }
       await manager.dispatch(inbound('Continue after restart'), llm)
-      await manager.getActiveSession(state.sessionId)?.completion
+      while (resumed.requests.length === 0 || manager.getActiveSession(state.sessionId)?.phase !== 'idle') {
+        await new Promise(resolve => setTimeout(resolve, 2))
+      }
       equal(resumed.requests.length, 1)
       const restoredContext = resumed.requests[0]
       equal(restoredContext[0].role, 'system')
@@ -268,7 +276,7 @@ for (const [name, createStore] of stores) {
     }
   })
 
-  test(`${name}: provider state is assistant-only when saving and restoring inherited history`, async () => {
+  test(`${name}/${providerName}: provider state is assistant-only when saving and restoring inherited history`, async () => {
     await mkdir('.test-data', { recursive: true })
     const workspace = await mkdtemp(join(process.cwd(), '.test-data', 'provider-state-'))
     let store = createStore(join(workspace, 'sessions'))
@@ -277,11 +285,11 @@ for (const [name, createStore] of stores) {
       await store.init()
       const state: SessionState = { sessionId: 'test:parent', segmentIndex: 2 }
       const physicalId = SessionManager.currentPhysicalId(state)
-      const continuation = providerState('inherited')
+      const continuation = providerState('inherited', providerName)
       await store.createSessionLog(physicalId, [
         { previous_physical_id: null, timestamp },
       ])
-      const { provider } = scriptedProvider([])
+      const { provider } = scriptedProvider([], providerName)
       const session = new AppendSession(
         workspace,
         state.sessionId,
@@ -328,6 +336,7 @@ for (const [name, createStore] of stores) {
       ])
       const childState: SessionState = {
         sessionId: 'test:child',
+        mode: 'session',
         segmentIndex: 0,
         lastActivityAt: timestamp,
         lastKnownTokens: 0,

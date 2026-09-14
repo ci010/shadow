@@ -6,6 +6,7 @@ import { CopilotAuthenticator, CopilotProvider, copilotModelEndpoint } from './c
 import { AggregatedProvider } from './aggregated.ts'
 import { ProviderHttpError, type ModelInfo } from './provider.ts'
 import { providerPlugin } from './routes.ts'
+import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 
 const astra = {
   id: 'gpt-6-astra',
@@ -155,6 +156,66 @@ test('Responses reasoning effort uses declared support and does not silently low
   await f.provider.chat([{ role: 'user', content: 'hi' }], [], { model: astra.id, reasoningEffort: 'high' })
   assert.deepEqual(f.posts[0].body.reasoning, { effort: 'high' })
 })
+
+for (const endpoint of ['/responses', '/chat/completions']) {
+  test(`${endpoint} GPT gateway preserves all effort levels including Medium and XHigh`, async (t) => {
+    const f = fixture(t, { data: [{
+      ...astra, supported_endpoints: [endpoint],
+      capabilities: { supports: { reasoning_effort: ['none', ...REASONING_EFFORTS] } },
+    }] })
+    const app = new Hono()
+    providerPlugin(f.provider)(app)
+    for (const reasoning_effort of REASONING_EFFORTS) {
+      const response = await app.request('/v1/chat/completions', {
+        method: 'POST', body: JSON.stringify({
+          model: astra.id, messages: [{ role: 'user', content: 'Fixture' }],
+          thinking: { type: 'enabled' }, reasoning_effort,
+        }),
+      })
+      assert.equal(response.status, 200)
+      const post = f.posts.at(-1)!
+      assert.equal(post.path, endpoint)
+      assert.deepEqual(endpoint === '/responses' ? post.body.reasoning : post.body.reasoning_effort,
+        endpoint === '/responses' ? { effort: reasoning_effort } : reasoning_effort)
+      assert.equal('thinking' in post.body, false)
+    }
+  })
+
+  test(`${endpoint} rejects explicit None when capabilities exclude it before fetching images or generating`, async (t) => {
+    const f = fixture(t, { data: [{
+      ...astra, supported_endpoints: [endpoint],
+      capabilities: { supports: { reasoning_effort: ['high'] } },
+    }] })
+    for (const reasoningEffort of [undefined, 'high'] as const) {
+      await assert.rejects(f.provider.chat([{
+        role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://synthetic.invalid/image.png' } }],
+      }], [], { model: astra.id, thinking: { type: 'disabled' }, reasoningEffort }),
+      /does not support reasoning effort "none"/)
+    }
+    assert.equal(f.posts.length, 0)
+  })
+
+  for (const efforts of [undefined, ['none']]) {
+    test(`${endpoint} sends None with ${efforts ? 'explicit' : 'unknown'} capabilities, overriding inherited high`, async (t) => {
+      const f = fixture(t, { data: [{
+        ...astra, supported_endpoints: [endpoint],
+        capabilities: { supports: efforts ? { reasoning_effort: efforts } : {} },
+      }] })
+      for (const reasoningEffort of [undefined, 'high'] as const) {
+        await f.provider.chat([{ role: 'user', content: 'hi' }], [], {
+          model: astra.id, thinking: { type: 'disabled' }, reasoningEffort,
+        })
+      }
+      assert.equal(f.posts.length, 2)
+      for (const request of f.posts) {
+        assert.equal(request.path, endpoint)
+        if (endpoint === '/responses') assert.deepEqual(request.body.reasoning, { effort: 'none' })
+        else assert.equal(request.body.reasoning_effort, 'none')
+        assert.equal('thinking' in request.body, false)
+      }
+    })
+  }
+}
 
 test('abort stops metadata lookup instead of sending a legacy or Responses POST', async (t) => {
   const f = fixture(t)

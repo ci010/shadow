@@ -80,8 +80,9 @@ function manager(
   return Object.assign(new SessionManager({
     workspace, store, tools, provider, workdirCapabilityLookup, bus: fixtureBus,
     context: { buildSystemPrompt: async () => 'Synthetic project context' },
+    handoffManager: { shouldHandoff: () => false },
     agentTypes: {
-      resolve: () => ({ name: 'fixture', description: '', prompt: '', ephemeral: true, source: 'builtin' }),
+      resolve: () => ({ name: 'fixture', description: '', prompt: '', defaultMode: 'session', source: 'builtin' }),
     },
   } as unknown as SessionManagerDeps), { fixtureBus })
 }
@@ -94,7 +95,6 @@ async function dispatchAndFinish(sessions: ReturnType<typeof manager>, msg: Inbo
   try {
     await sessions.dispatch(msg, llm)
     const fact = await completed.promise
-    await sessions.getActiveSession(`web:${msg.chatId}`)?.completion
     if (fact.status === 'failed') throw new Error(fact.error)
     equal(fact.status, 'completed')
   } finally {
@@ -175,6 +175,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           body: JSON.stringify({ chatId, parentChatId, content: 'First fork message', media: [path], stream: false }),
         })
         equal(sent.status, 200)
+        equal(sessions.getSessionState(`web:${chatId}`)?.parentSessionId, null)
         await verifyUpload(upload)
         equal((await app.request(`/api/media?chatId=${parentChatId}&path=${encodeURIComponent(path)}`)).status, 404)
       }
@@ -301,6 +302,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const legacy = resolveSessionLocations(home, sessions.getSessionState('web:legacy')!, undefined, lookup)
       assert(legacy.workdir.available && legacy.workdir.locality === 'local')
       equal(legacy.workdir.path, sessionWorkspacePath(home, 'web:legacy'))
+      await dispatchAndFinish(sessions, message('legacy'))
+      equal(await readFile(join(legacy.workdir.path, 'relative.txt'), 'utf8'), 'project file')
+      deepEqual(observedCwds.slice(-2), [legacy.workdir.path, legacy.workdir.path])
+      await sessions.buildSession('web:managed-child', { id: 'web:legacy' }, { workspaceRoot: 'web:legacy' })
+      await sessions.buildSession('heartbeat:reflector-fixture')
+      await sessions.buildSession('web:reflection-fork', { id: 'heartbeat:reflector-fixture' })
 
       await sessions.addChild('web:a', 'web:fork')
       await sessions.setSessionConfig('web:a', { temperature: 0.2 })
@@ -317,6 +324,21 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       equal(sessions.listSessions().find((s) => s.sessionId === 'web:a')?.projectId, 'a')
       const app = new Hono()
       sessionsApiPlugin(sessions)(app)
+      for (const id of ['heartbeat:reflector-fixture', 'web:reflection-fork']) {
+        const response = await app.request(`/api/sessions/${encodeURIComponent(id)}/files`)
+        equal(response.status, 200)
+        deepEqual((await response.json()).workdir, { kind: 'local', displayPath: home, scope: 'home' })
+      }
+      for (const [id, path] of [
+        ['web:a', folders.a], ['web:b', folders.b], ['web:fork', folders.a],
+        ['web:nested', folders.a], ['web:legacy', legacy.workdir.path], ['web:managed-child', legacy.workdir.path],
+      ]) {
+        const response = await app.request(`/api/sessions/${encodeURIComponent(id!)}/files`)
+        equal(response.status, 200)
+        const listing = await response.json()
+        deepEqual(listing.workdir, { kind: 'local', displayPath: path })
+        assert(listing.entries.some((entry: { name: string }) => entry.name === 'relative.txt'))
+      }
       const graph = await (await app.request('/api/sessions/graph')).json()
       equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === 'web:a').projectId, 'a')
       equal(graph.nodes.find((s: { logicalId: string }) => s.logicalId === 'web:a').projectId, 'a')

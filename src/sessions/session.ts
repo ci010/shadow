@@ -298,6 +298,7 @@ export class Session extends BaseSession {
 
     console.debug(`[session-loop] Stopped: ${this.id}`)
     ReadTool.clearSession(this.physicalSessionId)
+    this.tools.resetDynamic()
     this.onStopped(this.id)
   }
 

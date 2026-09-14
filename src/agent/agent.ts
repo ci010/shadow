@@ -6,7 +6,7 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import { errDetail } from '../utils/truncate.ts'
 import type { AgentTypesManager } from './agent-types/manager.ts'
 import type { LlmRuntimeConfig } from './llm-config.ts'
-import type { ThinkingConfig } from './llm-config.ts'
+import type { ReasoningEffort, ThinkingConfig } from './llm-config.ts'
 import type { McpManager } from '../mcp/manager.ts'
 import type { SkillsManager } from '../skills/loader.ts'
 import type { SessionTools } from '../tools/registry.ts'
@@ -16,6 +16,7 @@ import type { EventService } from '../events/service.ts'
 import { channelMessageInput, type DeliveryReceipt } from '../sessions/input.ts'
 
 export interface ExecutionContext extends MessageContext {
+  inputSource?: 'user' | 'session' | 'event'
   /** Logical session ID (e.g. "discord:1234567890") */
   sessionId: string
   /** Physical session ID — the actual persisted session log identifier */
@@ -37,6 +38,10 @@ export interface ExecutionContext extends MessageContext {
   tools: SessionTools
   /** Abort signal for the current turn — tools should check this for early cancellation. */
   signal: AbortSignal
+  /** Provider tool invocation ID, used for idempotent subagent admission. */
+  toolCallId?: string
+  /** Provider-facing tool name; nested script invocations are separate admissions. */
+  toolCallName?: string
   /** Resolved default shell for exec in this context, after global/session overrides. */
   defaultExecShell?: ExecShell
   /** LLM model override for this session. */
@@ -48,7 +53,7 @@ export interface ExecutionContext extends MessageContext {
   /** DeepSeek thinking mode toggle */
   thinking?: ThinkingConfig
   /** DeepSeek reasoning effort level */
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface AgentOptions {

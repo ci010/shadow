@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { MAX_YIELD_TIMEOUT_MS } from '../sessions/yield-contract.ts'
+import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 
 // ── Provider configs ────────────────────────────────────────────────────────
 
@@ -170,7 +172,7 @@ export const AgentSchema = z.object({
   /** DeepSeek thinking mode toggle */
   thinking: z.object({ type: z.enum(['enabled', 'disabled']) }).optional(),
   /** DeepSeek reasoning effort level */
-  reasoningEffort: z.enum(['high', 'max']).optional(),
+  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
 })
 
 // ── Tool configs ────────────────────────────────────────────────────────────
@@ -207,6 +209,9 @@ export const ChromeToolSchema = z.object({
 
 export const ToolsSchema = z.object({
   exec: ExecToolSchema.optional(),
+  yield: z.object({
+    timeoutMs: z.number().int().min(1).max(MAX_YIELD_TIMEOUT_MS).nullable().default(null),
+  }).strict().optional(),
   restrictToWorkspace: z.boolean().default(false),
   braveApiKey: z.string().optional(),
   firecrawlApiKey: z.string().optional(),

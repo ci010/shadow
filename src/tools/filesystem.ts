@@ -1,14 +1,16 @@
 import { dirname, relative, resolve } from 'node:path'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import type { ExecutionContext } from '../agent/agent.ts'
-import { isWindows } from '../utils/runtime.ts'
+import { isNotFoundError, isWindows } from '../utils/runtime.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import {
   FILESYSTEM_READ_OPERATION,
   FILESYSTEM_WRITE_OPERATION,
 } from '../execution/capability-filesystem.ts'
-import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
+import { executeRemoteFilesystemText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
+import { formatWriteResult, MAX_WRITE_REGIONS, type ReplacementResult } from './write-result.ts'
+import { countLineChanges, MAX_LINE_DIFF_CHARS } from './line-changes.ts'
 
 export { ReadTool } from './read.ts'
 
@@ -28,6 +30,47 @@ function isWithinPath(rootPath: string, targetPath: string): boolean {
 function displayPath(absPath: string, workspace: string): string {
   const rel = relative(workspace, absPath)
   return rel.startsWith('..') ? absPath : rel
+}
+
+/** Optional observation must not turn a write-only target into a failed overwrite. */
+async function observeBeforeOverwrite(path: string, signal: AbortSignal): Promise<
+  { content: string; unavailable?: never } | { content?: never; unavailable: string }
+> {
+  try {
+    signal.throwIfAborted()
+    const file = await open(path, 'r')
+    try {
+      const info = await file.stat()
+      if (!info.isFile()) return { unavailable: 'Previous target is not a regular file.' }
+      if (info.size > MAX_LINE_DIFF_CHARS) {
+        return { unavailable: 'Previous file exceeds the pre-write observation size limit.' }
+      }
+      // Bound the read even if another writer grows the file after stat.
+      const bytes = Buffer.alloc(MAX_LINE_DIFF_CHARS + 1)
+      let length = 0
+      while (length < bytes.length) {
+        signal.throwIfAborted()
+        const { bytesRead } = await file.read(bytes, length, bytes.length - length, null)
+        if (!bytesRead) break
+        length += bytesRead
+      }
+      signal.throwIfAborted()
+      if (length > MAX_LINE_DIFF_CHARS) {
+        return { unavailable: 'Previous file exceeds the pre-write observation size limit.' }
+      }
+      return { content: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, length)) }
+    } finally {
+      await file.close()
+    }
+  } catch (error) {
+    signal.throwIfAborted()
+    if (error instanceof Error && error.name === 'AbortError') throw error
+    if (isNotFoundError(error)) return { content: '' }
+    const code = (error as NodeJS.ErrnoException)?.code
+    return { unavailable: code === 'EACCES' || code === 'EPERM' || code === 'ERR_ACCESS_DENIED'
+      ? 'Reading the previous file was not permitted.'
+      : 'Previous file could not be read as UTF-8 text.' }
+  }
 }
 
 // ── Edit replacers ───────────────────────────────────────────────────────────
@@ -54,13 +97,26 @@ function SimpleReplacer(
   oldStr: string,
   newStr: string,
   replaceAll: boolean,
-): string | null {
+): ReplacementResult | null {
   const idx = content.indexOf(oldStr)
   if (idx === -1) return null
   if (replaceAll) {
-    return content.replaceAll(oldStr, newStr)
+    let count = 0
+    let delta = 0
+    const ranges: ReplacementResult['ranges'] = []
+    const updated = content.replaceAll(oldStr, (_match, offset: number) => {
+      const start = offset + delta
+      if (ranges.length < MAX_WRITE_REGIONS) ranges.push({ start, end: start + newStr.length })
+      count++
+      delta += newStr.length - oldStr.length
+      return newStr
+    })
+    return { content: updated, strategy: 'exact', count, ranges }
   }
-  return content.slice(0, idx) + newStr + content.slice(idx + oldStr.length)
+  return {
+    content: content.slice(0, idx) + newStr + content.slice(idx + oldStr.length),
+    strategy: 'exact', count: 1, ranges: [{ start: idx, end: idx + newStr.length }],
+  }
 }
 
 /** Strategy 2 — match after trimming each line. Tolerates trailing/leading space differences. */
@@ -68,7 +124,7 @@ function LineTrimmedReplacer(
   content: string,
   oldStr: string,
   newStr: string,
-): string | null {
+): ReplacementResult | null {
   const contentLines = content.split('\n')
   const oldLines = oldStr.split('\n')
   const n = oldLines.length
@@ -77,11 +133,12 @@ function LineTrimmedReplacer(
   for (let i = 0; i <= contentLines.length - n; i++) {
     const window = contentLines.slice(i, i + n)
     if (window.every((line, j) => line.trim() === trimmedOld[j])) {
-      return [
+      const start = contentLines.slice(0, i).reduce((offset, line) => offset + line.length + 1, 0)
+      return { content: [
         ...contentLines.slice(0, i),
         ...newStr.split('\n'),
         ...contentLines.slice(i + n),
-      ].join('\n')
+      ].join('\n'), strategy: 'line-trimmed', count: 1, ranges: [{ start, end: start + newStr.length }] }
     }
   }
   return null
@@ -92,7 +149,7 @@ function IndentationFlexibleReplacer(
   content: string,
   oldStr: string,
   newStr: string,
-): string | null {
+): ReplacementResult | null {
   const contentLines = content.split('\n')
   const oldLines = oldStr.split('\n')
   const n = oldLines.length
@@ -122,11 +179,12 @@ function IndentationFlexibleReplacer(
           : l
         return commonWindowIndent + stripped
       })
-      return [
+      const start = contentLines.slice(0, i).reduce((offset, line) => offset + line.length + 1, 0)
+      return { content: [
         ...contentLines.slice(0, i),
         ...newLines,
         ...contentLines.slice(i + n),
-      ].join('\n')
+      ].join('\n'), strategy: 'indentation-flexible', count: 1, ranges: [{ start, end: start + newLines.join('\n').length }] }
     }
   }
   return null
@@ -138,6 +196,15 @@ export function applyReplacement(
   newStr: string,
   replaceAll = false,
 ): string | null {
+  return applyReplacementDetailed(content, oldStr, newStr, replaceAll)?.content ?? null
+}
+
+export function applyReplacementDetailed(
+  content: string,
+  oldStr: string,
+  newStr: string,
+  replaceAll = false,
+): ReplacementResult | null {
   // Normalize line endings before all comparisons
   const nc = content.replace(/\r\n/g, '\n')
   const no = oldStr.replace(/\r\n/g, '\n')
@@ -190,6 +257,7 @@ export class WriteTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    context.signal.throwIfAborted()
     if (context.remoteWorkdir) {
       return await this.writeRemote(args, context)
     }
@@ -205,36 +273,60 @@ export class WriteTool implements Tool {
       // ── Edit mode: find and replace ──
       let existing: string
       try {
-        existing = await readFile(filePath, 'utf8')
-      } catch {
+        existing = await readFile(filePath, { encoding: 'utf8', signal: context.signal })
+      } catch (error) {
+        if (!isNotFoundError(error)) throw error
         return `Error: file not found: ${filePath}`
       }
+      context.signal.throwIfAborted()
       const replaceAll = flags.includes('g')
-      const updated = applyReplacement(existing, match, content, replaceAll)
+      const updated = applyReplacementDetailed(existing, match, content, replaceAll)
       if (updated === null) {
         return 'Error: match string not found in file'
       }
-      await writeFile(filePath, updated)
-      return `✏️ ${filePath}`
+      context.signal.throwIfAborted()
+      await writeFile(filePath, updated.content)
+      context.signal.throwIfAborted()
+      return formatWriteResult({
+        path: filePath, mode: 'edit', content: updated.content, writtenBytes: Buffer.byteLength(updated.content),
+        edit: updated, unchanged: existing === updated.content, normalizedNewlines: existing.includes('\r\n'), global: replaceAll,
+        lineChanges: countLineChanges(existing, updated.content),
+      })
     }
 
     if (flags.includes('a')) {
       // ── Append mode ──
       let existing = ''
       try {
-        existing = await readFile(filePath, 'utf8')
-      } catch {
-        // File doesn't exist yet — will create
+        existing = await readFile(filePath, { encoding: 'utf8', signal: context.signal })
+      } catch (error) {
+        if (!isNotFoundError(error)) throw error
       }
+      context.signal.throwIfAborted()
       await mkdir(dirname(filePath), { recursive: true })
-      await writeFile(filePath, existing + content)
-      return `📝 ${filePath} (appended)`
+      context.signal.throwIfAborted()
+      await appendFile(filePath, content)
+      context.signal.throwIfAborted()
+      return formatWriteResult({
+        path: filePath, mode: 'append', content: existing + content, appendStart: existing.length,
+        writtenBytes: Buffer.byteLength(content),
+        lineChanges: countLineChanges(existing, existing + content),
+      })
     }
 
     // ── Full write mode ──
+    const before = await observeBeforeOverwrite(filePath, context.signal)
+    context.signal.throwIfAborted()
     await mkdir(dirname(filePath), { recursive: true })
+    context.signal.throwIfAborted()
     await writeFile(filePath, content)
-    return `📝 ${filePath}`
+    context.signal.throwIfAborted()
+    return formatWriteResult({
+      path: filePath, mode: 'write', content, writtenBytes: Buffer.byteLength(content),
+      lineChanges: before.content !== undefined
+        ? countLineChanges(before.content, content)
+        : { unavailable: before.unavailable },
+    })
   }
 
   private async writeRemote(
@@ -247,34 +339,67 @@ export class WriteTool implements Tool {
     const match = args.match != null ? String(args.match) : undefined
     let nextContent = content
     let mode: 'replace' | 'append' = flags.includes('a') ? 'append' : 'replace'
+    let edit: ReplacementResult | undefined
+    let existing: string | undefined
+    let boundaryUnavailable: string | undefined
+    let observationUnavailable: string | undefined
 
     if (match !== undefined) {
-      const existing = await executeRemoteFilesystemText(
+      existing = await executeRemoteFilesystemText(
         remoteFilesystemTarget(context),
         FILESYSTEM_READ_OPERATION,
         { path },
       )
-      const updated = applyReplacement(
+      context.signal.throwIfAborted()
+      const updated = applyReplacementDetailed(
         existing,
         match,
         content,
         flags.includes('g'),
       )
       if (updated === null) return 'Error: match string not found in file'
-      nextContent = updated
+      edit = updated
+      nextContent = updated.content
       mode = 'replace'
+    } else {
+      try {
+        existing = await executeRemoteFilesystemText(
+          remoteFilesystemTarget(context), FILESYSTEM_READ_OPERATION, { path },
+        )
+      } catch (error) {
+        context.signal.throwIfAborted()
+        if (!(error instanceof RemoteFilesystemError)) throw error
+        if (error.code === 'cancelled' || error.code === 'aborted') throw error
+        if (error.code === 'file-not-found') existing = ''
+        else if (mode === 'replace') {
+          observationUnavailable = `Previous remote content could not be read (${error.code}).`
+        }
+        else if (error.code === 'filesystem-result-too-large' || error.code === 'file-type-denied') {
+          boundaryUnavailable = `Previous remote content could not be previewed (${error.code}).`
+          observationUnavailable = boundaryUnavailable
+        } else throw error
+      }
     }
 
+    context.signal.throwIfAborted()
     await executeRemoteFilesystemText(
       remoteFilesystemTarget(context),
       FILESYSTEM_WRITE_OPERATION,
       { path, content: nextContent, mode },
     )
-    return match !== undefined
-      ? `✏️ ${path}`
-      : flags.includes('a')
-      ? `📝 ${path} (appended)`
-      : `📝 ${path}`
+    context.signal.throwIfAborted()
+    const resultingContent = mode === 'append' && existing !== undefined ? existing + content : nextContent
+    return formatWriteResult({
+      path, mode: edit ? 'edit' : mode === 'append' ? 'append' : 'write',
+      content: resultingContent,
+      lineChanges: existing !== undefined
+        ? countLineChanges(existing, resultingContent)
+        : { unavailable: observationUnavailable ?? 'Previous remote file text was not observed.' },
+      writtenBytes: Buffer.byteLength(nextContent), edit,
+      appendStart: mode === 'append' && existing !== undefined ? existing.length : undefined,
+      boundaryUnavailable, unchanged: edit ? existing === nextContent : undefined,
+      normalizedNewlines: edit ? existing?.includes('\r\n') : undefined, global: flags.includes('g'),
+    })
   }
 
   private resolve(p: string, context?: ExecutionContext): string {

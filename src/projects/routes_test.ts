@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { test, type TestContext } from 'node:test'
+import { describe, test, type TestContext } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -13,6 +13,8 @@ import { CloneTerminationError, type GitCloneRunner } from './git.ts'
 import { ProjectRegistry } from './registry.ts'
 import { ProjectService } from './routes.ts'
 import { projectFixture } from './test-fixtures.ts'
+import { sessionsApiPlugin } from '../sessions/routes.ts'
+import type { SessionManager } from '../sessions/session-manager.ts'
 
 async function setup(t: TestContext, gitRunner?: GitCloneRunner) {
   const fixture = await projectFixture(t)
@@ -58,6 +60,148 @@ function cloneBody(parentPath: string, overrides: Record<string, unknown> = {}) 
     url: 'https://example.invalid/owner/repo.git', ...overrides,
   }
 }
+
+describe('project file browsing', () => {
+  test('text encoding changes preserve exact Unicode paths and original bytes for project and session previews', async t => {
+    const { app, folders, registry } = await setup(t)
+    const project = await registry.register(folders)
+    sessionsApiPlugin({
+      workspace: folders,
+      getSessionState: () => ({ sessionId: 'encoded', workdir: { version: 1, nodeId: 'local', capabilityId: 'project' } }),
+      workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: folders } }),
+    } as unknown as SessionManager)(app)
+    const filename = '\u65e5\u672c\u8a9e % #.txt'
+    const bytes = Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea, 10])
+    await writeFile(join(folders, filename), bytes)
+    await writeFile(join(folders, 'boundary.txt'), 'x'.repeat(255) + '\u65e5')
+    for (const base of [`/api/projects/${project.id}`, '/api/sessions/encoded']) {
+      const path = encodeURIComponent(filename)
+      const utf8 = await (await app.request(`${base}/preview?path=${path}`)).json()
+      assert.match(utf8.encodingWarning, /not valid utf-8/)
+      const decoded = await (await app.request(`${base}/preview?path=${path}&encoding=shift_jis`)).json()
+      assert.equal(decoded.path, filename)
+      assert.equal(decoded.content, '\u65e5\u672c\u8a9e\n')
+      assert.equal(decoded.encoding, 'shift_jis')
+      assert.equal(decoded.encodingWarning, undefined)
+      assert.deepEqual(Buffer.from(await (await app.request(`${base}/raw?path=${path}`)).arrayBuffer()), bytes)
+      assert.equal((await app.request(`${base}/preview?path=${path}&encoding=unknown`)).status, 400)
+      const truncated = await (await app.request(`${base}/preview?path=boundary.txt&maxBytes=256`)).json()
+      assert.equal(truncated.truncated, true)
+      assert.equal(truncated.content, 'x'.repeat(255))
+      assert.equal(truncated.encodingWarning, undefined)
+    }
+    assert.deepEqual(await readFile(join(folders, filename)), bytes)
+  })
+
+  test('registered project files are available before Send without creating a session', async t => {
+    const { app, folders, registry, sessions, workspace } = await setup(t)
+    await mkdir(join(folders, 'docs'))
+    await writeFile(join(folders, '.node-version'), '24.15.0\n')
+    await writeFile(join(folders, 'docs', 'notes.custom'), 'project notes')
+    const project = await registry.register(folders)
+    const savedRegistry = await readFile(registry.filePath, 'utf8')
+    const base = `/api/projects/${project.id}`
+    const listing = await app.request(`${base}/files?cwd=untrusted&sessionId=injected`)
+    assert.equal(listing.status, 200)
+    const data = await listing.json()
+    assert.equal(data.projectId, project.id)
+    assert.equal(data.path, '')
+    assert.deepEqual(data.workdir, { kind: 'local', displayPath: project.path })
+    assert.deepEqual(data.entries.map((entry: { name: string }) => entry.name), ['docs', '.node-version'])
+    assert.equal(data.entries[0].type, 'dir')
+    assert.deepEqual((await (await app.request(`${base}/files?path=docs`)).json()).entries
+      .map((entry: { name: string }) => entry.name), ['notes.custom'])
+    for (const path of ['.node-version', 'docs/notes.custom']) {
+      const preview = await app.request(`${base}/preview?path=${encodeURIComponent(path)}`)
+      assert.equal(preview.status, 200)
+      assert.equal((await preview.json()).content, path === '.node-version' ? '24.15.0\n' : 'project notes')
+    }
+    assert.deepEqual(sessions, [])
+    assert.equal(await readFile(registry.filePath, 'utf8'), savedRegistry)
+    assert.deepEqual(await readdir(workspace), ['projects.v1.json'])
+  })
+
+  test('project and local-session file routes share text, binary, media and static serving', async t => {
+    const { app, folders, registry, sessions } = await setup(t)
+    const project = await registry.register(folders)
+    sessionsApiPlugin({
+      workspace: folders,
+      getSessionState: () => ({ sessionId: 'existing', workdir: { version: 1, nodeId: 'local', capabilityId: 'project' } }),
+      workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: folders } }),
+    } as unknown as SessionManager)(app)
+    await mkdir(join(folders, 'page'))
+    await writeFile(join(folders, 'page', 'index.html'), '<link rel="stylesheet" href="style.css"><h1>Fixture</h1>')
+    await writeFile(join(folders, 'page', 'style.css'), 'h1 { color: red }')
+    await writeFile(join(folders, 'large.custom'), 'x'.repeat(70_000))
+    await writeFile(join(folders, 'binary.custom'), new Uint8Array([1, 0, 2]))
+    const media = [['image.PNG', 'image/png'], ['image % #.png', 'image/png'], ['movie.mp4', 'video/mp4'], ['sound.wav', 'audio/wav'],
+      ['document.pdf', 'application/pdf']] as const
+    for (const [name] of media) await writeFile(join(folders, name), new Uint8Array([10, 20, 30]))
+    for (const base of [`/api/projects/${project.id}`, '/api/sessions/existing']) {
+      const preview = await app.request(`${base}/preview?path=large.custom&maxBytes=999999`)
+      assert.equal(preview.status, 200)
+      const text = await preview.json()
+      assert.equal(text.content.length, 65536)
+      assert.equal(text.size, 70000)
+      assert.equal(text.truncated, true)
+      const binary = await (await app.request(`${base}/preview?path=binary.custom`)).json()
+      assert.equal(binary.binary, true)
+      assert.equal(binary.content, undefined)
+      for (const [name, mime] of media) {
+        const raw = await app.request(`${base}/raw?path=${encodeURIComponent(name)}`)
+        assert.equal(raw.status, 200)
+        assert.equal(raw.headers.get('content-type'), mime)
+        assert.equal(raw.headers.get('content-length'), '3')
+        if (mime.startsWith('image/')) {
+          assert.equal(decodeURIComponent(raw.headers.get('x-shadow-source-path')!), join(folders, name))
+          assert.equal(raw.headers.get('access-control-expose-headers'), 'X-Shadow-Source-Path')
+        } else assert.equal(raw.headers.get('x-shadow-source-path'), null)
+        assert.deepEqual(new Uint8Array(await raw.arrayBuffer()), new Uint8Array([10, 20, 30]))
+      }
+      const html = await app.request(`${base}/static/page/index.html`)
+      assert.equal(html.headers.get('content-type'), 'text/html; charset=utf-8')
+      assert.match(await html.text(), /href="style.css"/)
+      const css = await app.request(`${base}/static/page/style.css`)
+      assert.equal(css.headers.get('access-control-allow-origin'), '*')
+      assert.equal(css.headers.get('content-type'), 'text/css; charset=utf-8')
+      assert.equal(await css.text(), 'h1 { color: red }')
+      assert.equal((await app.request(`${base}/preview?path=page`)).status, 400)
+      assert.equal((await app.request(`${base}/raw?path=page`)).status, 400)
+      assert.equal((await app.request(`${base}/preview?path=missing`)).status, 404)
+      assert.equal((await app.request(`${base}/static/%ZZ`)).status, 400)
+    }
+    assert.deepEqual(sessions, [])
+  })
+
+  test('project file routes reject missing identities, traversal and symlink escapes without fallback', async t => {
+    const { app, folders, root, registry, sessions } = await setup(t)
+    const project = await registry.register(folders)
+    const outside = join(root, 'outside')
+    await mkdir(outside)
+    await writeFile(join(outside, 'private.txt'), 'outside fixture')
+    await symlink(outside, join(folders, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+    const base = `/api/projects/${project.id}`
+    for (const operation of ['files', 'raw', 'preview', 'static']) {
+      const suffix = operation === 'static' ? '/private.txt' : '?path=private.txt'
+      assert.equal((await app.request(`/api/projects/${randomUUID()}/${operation}${suffix}`)).status, 404)
+      assert.equal((await app.request(`/api/projects/missing/${operation}${suffix}`)).status, 404)
+      const paths = ['../outside/private.txt', 'escape/private.txt', '\0']
+      for (const path of paths) {
+        const url = operation === 'static' ? `${base}/static/${encodeURIComponent(path)}`
+          : `${base}/${operation}?path=${encodeURIComponent(path)}`
+        assert.equal((await app.request(url)).status, 400, url)
+      }
+    }
+    await rm(folders, { recursive: true })
+    for (const suffix of ['files', 'raw?path=private.txt', 'preview?path=private.txt', 'static/private.txt']) {
+      const response = await app.request(`${base}/${suffix}`)
+      assert.equal(response.status, 409)
+      assert.equal((await response.json()).error, 'folder_unavailable')
+    }
+    assert.deepEqual(sessions, [])
+  })
+
+})
 
 test('project routes list/register and create a session from only the registered available project', async (t) => {
   const { app, folders, sessions } = await setup(t)

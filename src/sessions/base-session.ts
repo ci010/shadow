@@ -112,6 +112,11 @@ export abstract class BaseSession {
         usage: e.role === 'assistant' ? this.usage : undefined,
       }))
       await this.store.appendMessages(this.physicalSessionId, stored)
+      for (const message of stampedMessages) {
+        if (message.role === 'user') this.bus.emit('session.message.appended', {
+          sessionId: this.id, physicalSessionId: this.physicalSessionId, message,
+        })
+      }
     } catch (err) {
       console.error(
         `[session] Failed to persist messages for ${this.id}:`,
@@ -137,6 +142,14 @@ export abstract class BaseSession {
 
   /** Drain any pending messages (e.g. steer queue) before each LLM call. No-op by default. */
   protected async drainPendingMessages(_llm: LlmRuntimeConfig): Promise<void> {}
+  protected async finishTurn(fact: SessionTurnFact): Promise<void> {
+    this.state.executionStatus = fact.status
+    await this.store.saveState(this.id, this.state)
+    if (this.state.mode && this.state.mode !== 'session') {
+      await this.store.appendRawEvents(this.physicalSessionId, [{ execution_receipt: fact }])
+    }
+    this.bus.emit('session.turn.finished', fact)
+  }
   /** Called when tool execution starts in the LLM loop. No-op by default. */
   protected onToolPhaseStart(): void {}
 
@@ -160,6 +173,7 @@ export abstract class BaseSession {
     const thinking = executionContext.thinking ?? llm.thinking
     const reasoningEffort = executionContext.reasoningEffort ??
       llm.reasoningEffort
+    executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
 
     for (let i = 0; i < 100; i++) {
       const toolDefs = this.tools.getDefinitions()
@@ -177,7 +191,7 @@ export abstract class BaseSession {
         attributes: traceAttributes,
       })
 
-      const response = await activeSpan(
+      const response = await withAbort(activeSpan(
         'agent.chat',
         () =>
           this.provider.chat(this.messages, toolDefs, {
@@ -190,7 +204,7 @@ export abstract class BaseSession {
           }),
         { attributes: { ...traceAttributes, model } },
         span.context,
-      ).catch((err) => err as Error)
+      ).catch((err) => err as Error), signal)
 
       signal.throwIfAborted()
       if (response instanceof TokenLimitExceededError) {
@@ -256,15 +270,19 @@ export abstract class BaseSession {
               replyTo: executionContext.platformMessageId,
               content: display || tc.name,
               toolCall: { name: tc.name, arguments: tc.arguments },
+              toolCallId: tc.id,
+              toolName: tc.name,
               done,
             })
           }
-          const results = await Promise.all(
+          const execution = Promise.all(
             group.calls.map((tc) =>
               activeSpan(
                 `agent.tool`,
                 () =>
-                  this.tools.execute(tc.name, tc.arguments, executionContext),
+                  this.tools.execute(tc.name, tc.arguments, {
+                    ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
+                  }),
                 {
                   attributes: {
                     ...traceAttributes,
@@ -276,6 +294,7 @@ export abstract class BaseSession {
               )
             ),
           )
+          const results = await (this.state.mode === 'call' ? withAbort(execution, signal) : execution)
           await this.appendMessages(
             llm,
             ...group.calls.map((call, idx) => ({
@@ -294,6 +313,8 @@ export abstract class BaseSession {
               chatId: executionContext.chatId,
               replyTo: executionContext.platformMessageId,
               content: results[idx],
+              toolCallId: group.calls[idx].id,
+              toolName: group.calls[idx].name,
               done,
             })
           }
@@ -361,6 +382,10 @@ export abstract class BaseSession {
     try {
       spanAttributes(attributes)
       signal.throwIfAborted()
+      if (attempted) {
+        this.state.executionStatus = 'running'
+        await this.store.saveState(this.id, this.state)
+      }
 
       console.log(`[${this.id}] Processing message`)
 
@@ -414,6 +439,7 @@ export abstract class BaseSession {
       console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
       const executionContext: ExecutionContext = {
         ...attributes,
+        inputSource: input.source.kind,
         cwd,
         remoteWorkdir,
         tools: this.tools,
@@ -455,12 +481,28 @@ export abstract class BaseSession {
         event: 'response',
       })
     } finally {
-      if (attempted) this.bus.emit('session.turn.finished', fact)
+      if (attempted) {
+        await this.finishTurn(fact)
+      }
     }
+
     return attempted ? fact : undefined
   }
 }
 
 function failMissingRemoteExecutor(): never {
   throw new Error('Session workdir requires the remote executor')
+}
+
+function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort)
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(value => { signal.removeEventListener('abort', abort); resolve(value) },
+      error => { signal.removeEventListener('abort', abort); reject(error) })
+    if (signal.aborted) abort()
+  })
 }

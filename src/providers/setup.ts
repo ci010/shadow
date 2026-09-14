@@ -4,7 +4,7 @@ import type { GatewayPlugin } from '../gateway/types.ts'
 import { ConfigStore, REDACTED_SECRET } from '../config/store.ts'
 import { ConfigSchema, type Config } from '../config/schema.ts'
 import { parseModelSpec } from './aggregated.ts'
-import { detectProvider, resolveProviderSettings } from './factory.ts'
+import { detectProvider, knownProviderNames, resolveProviderSettings } from './factory.ts'
 import {
   CopilotAuthenticator,
   CopilotAuthError,
@@ -20,6 +20,15 @@ export interface ProviderSetupStatus {
   reason?: string
   baseUrl?: string
   hasApiKey: boolean
+}
+
+export interface ConfiguredProvider {
+  provider: string
+  authMode: 'api-key' | 'copilot' | 'none'
+  hasApiKey: boolean
+  selected: boolean
+  baseUrl?: string
+  model?: string
 }
 
 type LoginState = 'pending' | 'succeeded' | 'denied' | 'expired' | 'cancelled' | 'error'
@@ -125,6 +134,33 @@ export class ProviderSetup {
 
   invalidate(): void {
     this.readiness = undefined
+  }
+
+  configured(): ConfiguredProvider[] {
+    const config = this.options.getConfig()
+    const spec = parseModelSpec(config.agent.model)
+    const selected = spec.provider ?? detectProvider(spec.model)
+    const names = new Set([...Object.keys(config.providers), ...knownProviderNames(), selected])
+    const cachedCopilot = this.auth.hasAccessToken() || this.auth.hasValidApiKey()
+    const providers: ConfiguredProvider[] = []
+    for (const provider of names) {
+      const entry = config.providers[provider]
+      const settings = resolveProviderSettings(config, provider)
+      const explicit = entry && (provider === 'copilot' || entry.apiKey?.trim() ||
+        entry.baseUrl?.trim() || entry.quickModel?.trim() ||
+        Object.keys(entry.modelContextWindows ?? {}).length > 0)
+      if (!explicit && !settings.apiKey.trim() && !(provider === 'copilot' && cachedCopilot)) continue
+      const baseUrl = safeBaseUrl(settings.baseUrl)
+      providers.push({
+        provider,
+        authMode: settings.authMode,
+        hasApiKey: !!settings.apiKey,
+        selected: provider === selected,
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(provider === selected ? { model: config.agent.model } : {}),
+      })
+    }
+    return providers.sort((a, b) => Number(b.selected) - Number(a.selected) || a.provider.localeCompare(b.provider))
   }
 
   async status(refresh = false): Promise<ProviderSetupStatus> {
@@ -356,6 +392,7 @@ export class ProviderSetup {
     return (app) => {
       app.use('/api/provider/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next() })
       app.use('/api/auth/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next() })
+      app.get('/api/provider/configured', (c) => c.json({ providers: this.configured() }))
       app.get('/api/provider/setup', async (c) => c.json(await this.status(c.req.query('refresh') === 'true')))
       app.post('/api/provider/setup', async (c) => {
         const input = SetupInput.safeParse(await c.req.json().catch(() => null))

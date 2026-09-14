@@ -1,6 +1,7 @@
 import type { SessionConfig } from '../../sessions/session-store.ts'
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import type { SlashCommandHandler } from '../index.ts'
+import { parseYieldPolicy } from '../../sessions/yield-contract.ts'
 
 const CONFIG_KEYS = [
   'triggerMode',
@@ -8,6 +9,7 @@ const CONFIG_KEYS = [
   'temperature',
   'maxTokens',
   'defaultShell',
+  'yield',
 ] as const
 type ConfigKey = typeof CONFIG_KEYS[number]
 
@@ -38,7 +40,8 @@ export function createConfigCommand(
           }
           const patch = parseConfigValue(key, rawValue)
           if (typeof patch === 'string') return patch
-          await sessions.setSessionConfig(ctx.sessionId, patch)
+          if (key === 'yield') await sessions.applySessionConfigPatch(ctx.sessionId, { set: patch, unset: [] }, true)
+          else await sessions.setSessionConfig(ctx.sessionId, patch)
           return [
             `Updated ${key} for ${ctx.sessionId}.`,
             '',
@@ -96,6 +99,14 @@ function parseConfigValue(
   rawValue: string,
 ): Partial<SessionConfig> | string {
   switch (key) {
+    case 'yield': {
+      try {
+        return { yield: parseYieldPolicy({ timeoutMs: rawValue === 'wait' || rawValue === 'null' ? null : Number(rawValue) }) }
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error
+        return `Error: use \`/config set yield wait\` or a positive integer timeout in milliseconds. ${error.message}`
+      }
+    }
     case 'triggerMode':
       if (rawValue !== 'all' && rawValue !== 'mention') {
         return 'Error: triggerMode must be `all` or `mention`.'

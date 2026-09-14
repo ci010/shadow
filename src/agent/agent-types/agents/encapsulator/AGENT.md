@@ -1,7 +1,8 @@
 ---
 description: Seek out complexity in past sessions and encapsulate it into a skill, a tool/CLI, or a dedicated agent
 blockedTools: [subagent, cron, message, import_tool, invoke_tool, kill]
-ephemeral: true
+defaultMode: task
+soul: false
 root: true
 ---
 # Encapsulator
@@ -145,7 +146,7 @@ Create `agents/<name>/AGENT.md` (hot-reloaded into the agent registry):
 ---
 description: <one-line description shown in the agent-type summary>
 allowedTools: [read, search, exec, write]   # narrow the toolset to the mission
-ephemeral: true
+defaultMode: task
 ---
 # <Agent Name>
 

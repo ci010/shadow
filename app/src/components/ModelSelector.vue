@@ -1,12 +1,29 @@
 <template>
-  <ComposerPopover v-if="selection" label="Choose model" :title="selection.current.value || 'Choose model'" :disabled="selection.disabled.value">
+  <ComposerPopover v-if="selection" label="Choose model" :title="triggerTitle" :disabled="unavailable" :busy="pending" @opened="resetMenu">
     <template #trigger>
-      <span class="model-label">{{ selection.loading.value ? 'Loading models...' : modelDisplayName(selection.current.value) || 'Choose model' }}</span>
+      <span class="model-label">{{ modelDisplayName(selection.current.value) || (selection.loading.value ? 'Loading models...' : 'Choose model') }}</span>
+      <span v-if="settings" class="model-effort"><span aria-hidden="true">·</span> {{ effortLabel }}</span>
       <span class="model-chevron i-lucide-chevron-down" aria-hidden="true" />
     </template>
     <template #default="{ close }">
-      <div class="model-menu-heading"><span>Model</span><span class="model-scope">For new turns</span></div>
-      <input v-model="query" class="model-search" type="search" placeholder="Search models..." aria-label="Search models" />
+      <div ref="menu" class="model-menu" @keydown="submenuKey">
+      <template v-if="page === 'menu'">
+        <button ref="modelRow" type="button" class="model-setting-row model-menu-model" @click="openPage('model')" @keydown.right.prevent="openPage('model')">
+          <span>Model</span><span class="model-menu-value">{{ modelDisplayName(selection.current.value) || 'Choose model' }}</span><span class="model-chevron i-lucide-chevron-right" aria-hidden="true" />
+        </button>
+        <button ref="effortRow" type="button" class="model-setting-row model-menu-effort" :disabled="settingsDisabled" @click="openPage('effort')" @keydown.right.prevent="openPage('effort')">
+          <span>Effort</span><span class="model-menu-value">{{ effortLabel }}</span><span class="model-chevron i-lucide-chevron-right" aria-hidden="true" />
+        </button>
+      </template>
+      <template v-else>
+      <div class="model-menu-heading">
+        <button v-if="settings" type="button" class="model-menu-back" aria-label="Back to model settings" @click="back">
+          <span class="model-chevron i-lucide-chevron-left" aria-hidden="true" /><span>{{ page === 'model' ? 'Model' : 'Effort' }}</span>
+        </button>
+        <span v-else>Model</span><span class="model-scope">{{ page === 'model' ? 'For new turns' : 'This conversation' }}</span>
+      </div>
+      <template v-if="page === 'model'">
+      <input ref="search" v-model="query" class="model-search" type="search" placeholder="Search models..." aria-label="Search models" />
       <div class="model-options" role="group" aria-label="Available models">
         <button v-for="model in options" :key="model" class="model-option" :aria-pressed="model === selection.current.value" :title="model" @click="choose(model, close)">
           <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelProvider(model) }}</small></span>
@@ -14,29 +31,90 @@
         </button>
         <p v-if="!options.length" class="model-empty">No matching models.</p>
       </div>
+      </template>
+      <ReasoningControls v-else-if="settings" :settings="settings" :model="selection.current.value" :disabled="unavailable || !!settingsDisabled" :busy="pending" @change="chooseEffort($event, close)" />
+      </template>
       <p v-if="selection.error.value" class="model-error" role="alert">{{ selection.error.value }}</p>
+      </div>
     </template>
   </ComposerPopover>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
+import ReasoningControls from './ReasoningControls.vue'
 import { filterModelOptions, modelDisplayName, modelProvider, useModelSelection } from '../model-selection.ts'
+import { currentEffort, effortOptions, type ReasoningSettings } from '../session-settings.ts'
 
+const props = defineProps<{ settings?: ReasoningSettings; settingsDisabled?: boolean; busy?: boolean }>()
+const emit = defineEmits<{ 'change-settings': [patch: ReasoningSettings] }>()
 const selection = useModelSelection()
 const query = ref('')
+const page = ref<'menu' | 'model' | 'effort'>(props.settings ? 'menu' : 'model')
+const menu = ref<HTMLElement>()
+const search = ref<HTMLInputElement>()
+const modelRow = ref<HTMLButtonElement>()
+const effortRow = ref<HTMLButtonElement>()
+const unavailable = computed(() => !!selection?.disabled.value)
+const pending = computed(() => !!props.busy || !!selection?.loading.value)
+const effortLabel = computed(() => effortOptions.find(option => option.value === currentEffort(props.settings ?? {}))!.label)
+const triggerTitle = computed(() => `${selection?.current.value || 'Choose model'}${props.settings ? ` · ${effortLabel.value}` : ''}`)
 const options = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', query.value))
+function resetMenu() {
+  page.value = props.settings ? 'menu' : 'model'
+  query.value = ''
+}
+async function openPage(next: 'model' | 'effort') {
+  if (next === 'effort' && props.settingsDisabled) return
+  page.value = next
+  await nextTick()
+  if (next === 'model') search.value?.focus({ preventScroll: true })
+  else {
+    const target = menu.value?.querySelector<HTMLElement>('.effort-option[aria-pressed="true"]')
+      ?? menu.value?.querySelector<HTMLElement>('.effort-option:not(:disabled)')
+    target?.focus({ preventScroll: true })
+  }
+}
+async function back() {
+  const previous = page.value
+  page.value = 'menu'
+  query.value = ''
+  await nextTick()
+  const target = previous === 'model' ? modelRow.value : effortRow.value
+  target?.focus({ preventScroll: true })
+}
+function submenuKey(event: KeyboardEvent) {
+  if (!props.settings || page.value === 'menu' || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+  if (event.key !== 'Escape' && (event.key !== 'ArrowLeft' || event.target instanceof HTMLInputElement)) return
+  event.preventDefault()
+  event.stopPropagation()
+  void back()
+}
 function choose(model: string, close: () => void) {
+  if (unavailable.value || pending.value) return
   close()
   query.value = ''
   void selection?.select(model)
+}
+function chooseEffort(patch: ReasoningSettings, close: () => void) {
+  if (unavailable.value || pending.value || props.settingsDisabled) return
+  close()
+  emit('change-settings', patch)
 }
 </script>
 
 <style scoped>
 .model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; color: var(--c-text); }
 .model-chevron { flex: 0 0 14px; width: 14px; height: 14px; }
+.model-effort { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; white-space: nowrap; }
+.model-menu { display: flex; flex-direction: column; min-height: 0; }
+.model-setting-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 9px 10px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.model-setting-row:hover:not(:disabled) { background: var(--c-bg-muted); }
+.model-setting-row:disabled { opacity: .5; cursor: not-allowed; }
+.model-menu-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--c-text-secondary); }
+.model-menu-back { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; border: 0; background: transparent; color: var(--c-text); font: inherit; cursor: pointer; }
+.model-menu-back:hover { color: var(--c-blue); }
 .model-menu-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 9px 12px; font-size: 13px; font-weight: 600; }
 .model-scope { color: var(--c-text-secondary); font-size: 11px; font-weight: 400; }
 .model-search { flex-shrink: 0; box-sizing: border-box; width: calc(100% - 8px); margin: 0 4px 8px; padding: 9px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }

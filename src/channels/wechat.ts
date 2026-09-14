@@ -271,13 +271,17 @@ export class WeChatChannel extends AbstractChannel {
     return null
   }
 
-  async update(
-    _messageId: string,
-    _chatId: string,
-    _content: string,
-    _media?: string[],
-  ): Promise<void> {
-    // WeChat iLink does not support message editing — no-op.
+  override update = undefined
+
+  override async presentDecisionText(chatId: string, content: string): Promise<void> {
+    await this._sendText(chatId, content)
+  }
+
+  override getCapabilities(): import('./capabilities.ts').ChannelCapabilities {
+    return {
+      conversation: 'direct', format: 'plain', codeBlocks: false, tables: false,
+      outboundMedia: ['image'], updates: 'none', threads: 'none', decisions: 'text',
+    }
   }
 
   // ── Routes ────────────────────────────────────────────────────────────────

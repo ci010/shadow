@@ -7,7 +7,9 @@ import process from 'node:process'
 import {
   formatElapsed,
   type ManagedProcessStatus,
+  type ManagedProcess,
   type ProcessManager,
+  terminateProcessTree,
 } from '../agent/process-manager.ts'
 import {
   defaultManagedShell,
@@ -26,6 +28,8 @@ import { resolveAgentPath } from '../utils/paths.ts'
 import { decodeChunks } from '../utils/decode-chunks.ts'
 import type { LocalProcessExecutor } from '../execution/executor.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
+import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
+import { isWindows } from '../utils/runtime.ts'
 
 async function waitForExit<T>(
   exit: Promise<T>,
@@ -142,6 +146,7 @@ async function spawnNodeChild(
   request: EvalRunnerRequest,
   workspace: string,
   bridgeUrl?: string,
+  options: { isolated?: boolean; signal?: AbortSignal } = {},
 ): Promise<NodeChildHandle> {
   const payload = encodePayload(request)
   const commandArgs = buildRunnerArgs(payload)
@@ -153,11 +158,13 @@ async function spawnNodeChild(
     SHADOW_TOOLS_CREDENTIAL: process.env.GATEWAY_LAUNCH_CREDENTIAL ??
       process.env.WINDOWS_USE_LAUNCH_TOKEN ?? '',
   }
+  options.signal?.throwIfAborted()
   const child = childSpawn(process.execPath, commandArgs, {
     cwd: request.cwd,
     env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    ...(options.isolated ? { detached: !isWindows } : {}),
   })
 
   const stdoutChunks: Uint8Array[] = []
@@ -228,6 +235,8 @@ function formatNodeResult(
  *     killed; use background-task tools to follow up).
  * For `shell=node`, the script is treated as inline TypeScript and executed
  * in an isolated child process with the tool bridge enabled.
+ * Leaf calls instead require a positive timeout (default/max 120 seconds),
+ * terminate owned foreground work on timeout/abort, and never register callbacks.
  */
 export class ExecTool implements Tool {
   readonly name = 'exec'
@@ -352,6 +361,28 @@ export class ExecTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    const foreground = context.tools?.executionMode === 'call'
+    if (context.remoteWorkdir) {
+      const reason = 'exec cannot enforce a foreground process lifecycle on remote workdirs.'
+      return foreground ? context.tools.rejectExecution(reason) : `Error: ${reason}`
+    }
+    if (foreground) {
+      context.signal.throwIfAborted()
+      const denied = context.tools.executionDenial('exec', args)
+      if (denied) return denied
+      return context.tools.runForeground(context.signal, (signal, cancel) =>
+        this.executeRequest(args, { ...context, signal }, true, cancel))
+    }
+    return this.executeRequest(args, context, false)
+  }
+
+  private async executeRequest(
+    args: Record<string, unknown>,
+    context: ExecutionContext,
+    foreground: boolean,
+    cancel: () => void = () => {},
+  ): Promise<string> {
+    if (foreground) context.signal.throwIfAborted()
     const script = typeof args.script === 'string' ? args.script : ''
     if (!script.trim()) {
       return 'Error: `script` is required'
@@ -372,9 +403,10 @@ export class ExecTool implements Tool {
       : base
     const timeoutMs = args.timeout_ms !== undefined
       ? Number(args.timeout_ms)
-      : this._defaultTimeoutMs
+      : foreground ? MAX_CALL_TIMEOUT_MS : this._defaultTimeoutMs
 
     if (shell === 'node') {
+      if (foreground) return this.executeForegroundNode(script, scriptArgs, cwd, timeoutMs, context, cancel)
       if (timeoutMs === 0) {
         return await this.backgroundNodeScript(script, scriptArgs, cwd, context)
       }
@@ -409,6 +441,7 @@ export class ExecTool implements Tool {
 
     // Load workspace .env and forward to subprocess
     const dotEnv = await loadDotEnv(this.workspace)
+    if (foreground) context.signal.throwIfAborted()
 
     // Spawn
     let managed
@@ -427,11 +460,12 @@ export class ExecTool implements Tool {
           env: dotEnv,
           shell,
           args: scriptArgs,
-        })
+        }, foreground ? { isolated: true, signal: context.signal } : undefined)
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`
     }
 
+    if (foreground) return this.executeForegroundProcess(managed, timeoutMs, context, cancel)
     const { pid } = managed
 
     // Fire-and-forget: return PID immediately
@@ -484,6 +518,75 @@ export class ExecTool implements Tool {
       result.status.success,
       managed.shell,
     )
+  }
+
+  private async cleanupForeground(
+    context: ExecutionContext,
+    cleanup: () => Promise<ManagedProcessStatus>,
+  ): Promise<ManagedProcessStatus> {
+    try { return await cleanup() }
+    catch (error) {
+      context.tools.rejectExecution(`Foreground process cleanup failed: ${errMsg(error)}`)
+      throw error
+    }
+  }
+
+  private async executeForegroundProcess(
+    managed: ManagedProcess,
+    timeoutMs: number,
+    context: ExecutionContext,
+    cancel: () => void,
+  ): Promise<string> {
+    let cleanup: Promise<ManagedProcessStatus> | undefined
+    const terminate = () => cleanup ??= this.cleanupForeground(context, () => this.processManager.terminate(managed))
+    try {
+      const result = await waitForExit(managed.exitPromise, timeoutMs, context.signal)
+      if (result) return this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, result.status.code, result.status.success, managed.shell)
+      cancel()
+      const status = await terminate()
+      return `Error: foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.\n${
+        this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, status.code, status.success, managed.shell)}`
+    } finally {
+      cancel()
+      await terminate()
+    }
+  }
+
+  private async executeForegroundNode(
+    script: string,
+    scriptArgs: string[],
+    cwd: string,
+    timeoutMs: number,
+    context: ExecutionContext,
+    cancel: () => void,
+  ): Promise<string> {
+    const bridge = startToolBridge(context.tools, context)
+    let directory: string | undefined
+    let handle: NodeChildHandle | undefined
+    let cleanup: Promise<ManagedProcessStatus> | undefined
+    const terminate = () => cleanup ??= this.cleanupForeground(context,
+      () => terminateProcessTree(handle!.child, handle!.exitPromise, true))
+    try {
+      await mkdir(join(this.workspace, '.eval'), { recursive: true })
+      directory = await mkdtemp(join(this.workspace, '.eval', 'exec-node-'))
+      const module = join(directory, 'script.mts')
+      await writeFile(module, generatePreamble(context.tools.names()) + '\n' + script)
+      handle = await spawnNodeChild({ module, args: scriptArgs, cwd }, this.workspace, bridge.url,
+        { isolated: true, signal: context.signal })
+      const result = await waitForExit(handle.exitPromise, timeoutMs, context.signal)
+      if (result) return formatNodeResult(handle, result.status)
+      cancel()
+      const status = await terminate()
+      return JSON.stringify({ ...JSON.parse(formatNodeResult(handle, status)), ok: false,
+        error: `Foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.` }, null, 2)
+    } finally {
+      cancel()
+      try { if (handle) await terminate() }
+      finally {
+        bridge.cleanup()
+        if (directory) await rm(directory, { recursive: true, force: true })
+      }
+    }
   }
 
   private async executeNodeScript(

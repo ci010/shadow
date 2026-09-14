@@ -1,4 +1,6 @@
 import { AbstractChannel, ChannelAdmissionError } from './base.ts'
+import type { ChannelCapabilities } from './capabilities.ts'
+import { randomUUID } from 'node:crypto'
 import { readFile, realpath } from 'node:fs/promises'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
@@ -7,6 +9,7 @@ import type { Hono } from 'hono'
 import { saveToUploads, sessionWorkspacePath } from '../utils/paths.ts'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { resolveSessionLocations } from '../sessions/locality.ts'
+import { isConfigObject, parseSessionConfigPatch, type SessionConfigPatch } from '../sessions/config-patch.ts'
 
 function escapesRoot(root: string, target: string): boolean {
   const rel = relative(root, target)
@@ -48,6 +51,14 @@ export async function resolveSessionMediaPath(
  */
 export class WebChannel extends AbstractChannel {
   readonly name = 'web'
+
+  override getCapabilities(): ChannelCapabilities {
+    return {
+      conversation: 'web', format: 'markdown', codeBlocks: true, tables: true,
+      outboundMedia: ['image', 'file', 'audio', 'video'], updates: 'stream',
+      threads: 'none', decisions: 'native',
+    }
+  }
   private workspace: string
 
   /**
@@ -103,6 +114,13 @@ export class WebChannel extends AbstractChannel {
       // live without a manual refresh.
       if (!toRequest && !toSync) this.pushToEventStream(msg)
     })
+    this.bus.on('session.message.appended', ({ sessionId, physicalSessionId, message }) => {
+      if (!sessionId.startsWith('web:') || message.role !== 'user') return
+      const first = typeof message.content === 'string' ? message.content
+        : message.content?.[0]?.type === 'text' ? message.content[0].text : ''
+      if (!first || !/^<event\s/.test(first)) return
+      this.broadcastEvent(sessionId.slice(4), { event: 'session_message', physicalSessionId, message })
+    })
   }
 
   async start(app: Hono): Promise<void> {
@@ -125,9 +143,19 @@ export class WebChannel extends AbstractChannel {
         }
         const sessionId = `${this.name}:${chatId}`
         const state = this.sessionManager?.getSessionState(sessionId)
+        const parentSessionId = formData.get('parentSessionId')
+        if (parentSessionId !== null && (typeof parentSessionId !== 'string' || !parentSessionId)) {
+          return c.json({ error: 'Invalid parent session ID' }, 400)
+        }
+        const parent = !state && parentSessionId
+          ? this.sessionManager?.getSessionState(parentSessionId)
+          : undefined
+        if (!state && parentSessionId && !parent) {
+          return c.json({ error: 'Parent conversation not found' }, 404)
+        }
         const workdir = resolveSessionLocations(
           this.workspace,
-          state ?? { sessionId },
+          state ?? parent ?? { sessionId },
           undefined,
           this.sessionManager?.workdirCapabilityLookup,
         ).workdir
@@ -142,7 +170,7 @@ export class WebChannel extends AbstractChannel {
           /[^a-zA-Z0-9_\-.\u4e00-\u9fff]/g,
           '_',
         )
-        const safeName = `web_${Date.now()}_${baseName}${ext}`
+        const safeName = `web_${randomUUID()}_${baseName}${ext}`
 
         const buf = new Uint8Array(await file.arrayBuffer())
         const relativePath = await saveToUploads(
@@ -237,8 +265,8 @@ export class WebChannel extends AbstractChannel {
         timeoutMs?: number
       }>()
 
-      if (!body.content) {
-        return c.json({ error: 'content is required' }, 400)
+      if (!body.content && (!body.media || body.media.length === 0)) {
+        return c.json({ error: 'content or media is required' }, 400)
       }
 
       const chatId = body.chatId ?? 'web-default'
@@ -298,18 +326,20 @@ export class WebChannel extends AbstractChannel {
 
     // ── POST /api/chat/send — accept a message and return SSE stream ──
     app.post('/api/chat/send', async (c) => {
-      const body = await c.req.json<{
-        chatId: string
-        content: string
-        senderId?: string
-        media?: string[]
-        parentChatId?: string
-        parentSessionId?: string
-        forkAt?: number
-        retry?: boolean
-        stream?: boolean
-      }>()
-
+      let rawBody: unknown
+      try {
+        rawBody = await c.req.json()
+      } catch {
+        return c.json({ error: 'invalid_json' }, 400)
+      }
+      if (!isConfigObject(rawBody)) return c.json({ error: 'invalid_request' }, 400)
+      let configPatch: SessionConfigPatch | undefined
+      try {
+        if ('config' in rawBody) configPatch = parseSessionConfigPatch(rawBody.config)
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error
+        return c.json({ error: error.message }, 400)
+      }
       const {
         chatId,
         content,
@@ -320,9 +350,20 @@ export class WebChannel extends AbstractChannel {
         forkAt,
         retry,
         stream,
-      } = body
-      if (!chatId || (!content && !retry)) {
-        return c.json({ error: 'chatId and content are required' }, 400)
+      } = rawBody
+      if (typeof chatId !== 'string' || !chatId ||
+          (content !== undefined && typeof content !== 'string') ||
+          (senderId !== undefined && typeof senderId !== 'string') ||
+          (parentChatId !== undefined && typeof parentChatId !== 'string') ||
+          (parentSessionId !== undefined && typeof parentSessionId !== 'string') ||
+          (forkAt !== undefined && (typeof forkAt !== 'number' || !Number.isSafeInteger(forkAt) || forkAt < 0)) ||
+          (retry !== undefined && typeof retry !== 'boolean') ||
+          (stream !== undefined && typeof stream !== 'boolean') ||
+          (media !== undefined && (!Array.isArray(media) || !media.every(item => typeof item === 'string')))) {
+        return c.json({ error: 'invalid_request' }, 400)
+      }
+      if (!content && !retry && (!media || media.length === 0)) {
+        return c.json({ error: 'chatId and content or media are required' }, 400)
       }
 
       const requestId = crypto.randomUUID()
@@ -335,11 +376,20 @@ export class WebChannel extends AbstractChannel {
           await this.sessionManager?.buildSession(sessionId, {
             id: `${this.name}:${parentChatId}`,
             ...(forkAt != null ? { index: forkAt } : {}),
-          })
+          }, { parentSessionId: null })
         } else if (parentSessionId) {
           await this.sessionManager?.buildSession(sessionId, {
             id: parentSessionId,
-          })
+          }, { parentSessionId: null })
+        }
+      }
+
+      if (configPatch) {
+        if (!this.sessionManager) return c.json({ error: 'sessions_unavailable' }, 501)
+        try {
+          await this.sessionManager.applySessionConfigPatch(sessionId, configPatch, true)
+        } catch (error) {
+          return c.json({ error: error instanceof Error ? error.message : 'config_update_failed' }, 500)
         }
       }
 
@@ -611,6 +661,8 @@ export class WebChannel extends AbstractChannel {
         media: msg.media,
         usage: msg.usage,
         toolCall: msg.toolCall,
+        toolCallId: msg.toolCallId,
+        toolName: msg.toolName,
       })
       const encoder = new TextEncoder()
       controller.enqueue(encoder.encode(`data: ${data}\n\n`))
@@ -652,17 +704,22 @@ export class WebChannel extends AbstractChannel {
    * connected browsers render it live without a manual refresh.
    */
   private pushToEventStream(msg: OutboundMessage): void {
-    const set = this.eventStreams.get(msg.chatId)
-    if (!set || set.size === 0) return
-
-    const data = JSON.stringify({
+    this.broadcastEvent(msg.chatId, {
       event: msg.event ?? 'response',
       content: msg.content,
       done: msg.done ?? false,
       media: msg.media,
       usage: msg.usage,
       toolCall: msg.toolCall,
+      toolCallId: msg.toolCallId,
+      toolName: msg.toolName,
     })
+  }
+
+  private broadcastEvent(chatId: string, payload: unknown): void {
+    const set = this.eventStreams.get(chatId)
+    if (!set || set.size === 0) return
+    const data = JSON.stringify(payload)
     const encoder = new TextEncoder()
     const chunk = encoder.encode(`data: ${data}\n\n`)
 
@@ -673,6 +730,6 @@ export class WebChannel extends AbstractChannel {
         set.delete(controller)
       }
     }
-    if (set.size === 0) this.eventStreams.delete(msg.chatId)
+    if (set.size === 0) this.eventStreams.delete(chatId)
   }
 }

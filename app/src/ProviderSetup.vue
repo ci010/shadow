@@ -1,11 +1,13 @@
 <template>
   <section class="provider-setup" aria-labelledby="provider-setup-title">
-    <p class="eyebrow">MODEL ACCESS</p>
-    <h1 id="provider-setup-title">{{ status?.ready ? 'Provider settings' : 'Connect a model provider' }}</h1>
-    <p class="lead">Sign in with GitHub Copilot, or configure an API key or local model endpoint before starting a chat.</p>
+    <h2 id="provider-setup-title" ref="title" class="setup-title" tabindex="-1">
+      <span v-if="mode === 'add'" class="i-lucide-plus" aria-hidden="true" />
+      {{ mode === 'edit' ? `${providerDisplayName(status?.provider ?? '')} settings` : mode === 'add' ? 'Add provider' : 'Connect a model provider' }}
+    </h2>
+    <p class="lead">{{ lead }}</p>
     <p v-if="error || message" class="notice error" role="alert">{{ error || message }}</p>
-    <p v-if="status && !status.ready" class="notice">{{ status.provider }} is not ready. {{ readinessMessage }}</p>
-    <div class="method-tabs" aria-label="Authentication method">
+    <p v-if="status?.reason && !status.ready && mode !== 'add'" class="notice">{{ providerDisplayName(status.provider) }} is not ready. {{ readinessMessage }}</p>
+    <div v-if="mode !== 'edit' && !excludedProviders.includes('copilot')" class="method-tabs" aria-label="Authentication method">
       <button :aria-pressed="method === 'copilot'" :disabled="busy || saving" @click="method = 'copilot'">GitHub Copilot</button>
       <button :aria-pressed="method === 'key'" :disabled="busy || saving" @click="method = 'key'">API key / local provider</button>
     </div>
@@ -33,50 +35,65 @@
 
     <form v-else class="method-panel" @submit.prevent="saveProvider">
       <label>Provider
-        <select v-model="provider" :disabled="saving" @change="changeProvider">
-          <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
-          <option value="deepseek">DeepSeek</option><option value="openrouter">OpenRouter</option>
-          <option value="gemini">Google Gemini</option><option value="groq">Groq</option>
+        <select v-model="provider" :disabled="saving || mode === 'edit'" @change="changeProvider">
+          <option v-for="preset in availablePresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
           <option value="custom">Local / OpenAI-compatible</option>
           <option v-if="!knownProviders.includes(provider)" :value="provider">{{ provider }}</option>
         </select>
       </label>
       <label v-if="provider === 'custom'">Provider name
-        <input v-model="customProvider" required pattern="[a-z][a-z0-9_-]*" placeholder="local">
+        <input v-model="customProvider" required pattern="[a-z][a-z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
       </label>
       <label>Model <input v-model="model" required placeholder="Model ID from your provider" :disabled="saving"></label>
       <label>API base URL <input v-model="baseUrl" type="url" :required="provider === 'custom'" placeholder="Provider default, or http://127.0.0.1:11434/v1" :disabled="saving"></label>
       <label>API key <input v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
         :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? 'Leave blank to keep the saved key' : provider === 'custom' ? 'Optional for local endpoints' : 'Enter your provider API key'"></label>
       <p class="help">Keys are saved by Main in this installation's configuration, never in browser storage. Keyless local endpoints do not require a key.</p>
-      <div class="actions"><button class="primary" :disabled="saving">{{ saving ? 'Saving...' : 'Save provider and continue' }}</button></div>
+      <div class="actions"><button class="primary" :disabled="saving">{{ saving ? 'Saving...' : 'Save and use provider' }}</button></div>
     </form>
     <div class="footer-actions">
       <button :disabled="busy || saving" @click="$emit('retry')">Recheck configuration</button>
-      <button v-if="status?.ready" :disabled="saving" @click="close">Back to workspace</button>
+      <button v-if="mode === 'edit'" :disabled="busy || saving" @click="$emit('cancel')">Done editing</button>
+      <button v-else-if="canClose || status?.ready" :disabled="saving" @click="close">Back to workspace</button>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
+  providerDisplayName, providerPresets,
   type LoginView, type ProviderSetupStatus,
 } from './provider-setup.ts'
 
-const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error?: string }>()
-const emit = defineEmits<{ configured: []; retry: []; close: [] }>()
-const knownProviders = ['openai', 'anthropic', 'deepseek', 'openrouter', 'gemini', 'groq', 'custom']
-const method = ref(props.status?.authMode === 'copilot' ? 'copilot' : 'key')
-const initialProvider = props.status?.provider === 'copilot' ? 'openai' : props.status?.provider ?? 'openai'
+const props = withDefaults(defineProps<{
+  apiBase: string; status: ProviderSetupStatus | null; error?: string
+  mode?: 'setup' | 'add' | 'edit'; excludedProviders?: string[]; canClose?: boolean; active?: boolean
+}>(), { mode: 'setup', excludedProviders: () => [], active: true })
+const emit = defineEmits<{ configured: []; retry: []; close: []; cancel: []; saving: [value: boolean] }>()
+const title = ref<HTMLElement | null>(null)
+defineExpose({ focusTitle: () => title.value?.focus() })
+const knownProviders = [...providerPresets.map(item => item.id), 'custom']
+const lead = computed(() => props.mode === 'edit'
+  ? 'Update this provider, then choose a model to use for new turns.'
+  : props.excludedProviders.includes('copilot')
+    ? 'Configure an API key or add a named local model endpoint.'
+    : 'Sign in with GitHub Copilot, or configure an API key or local model endpoint.')
+const availablePresets = computed(() => providerPresets.filter(item => props.mode !== 'add' || !props.excludedProviders.includes(item.id)))
+const method = ref(props.status?.authMode === 'copilot' && props.mode !== 'add' ? 'copilot' : 'key')
+const initialProvider = props.mode === 'add' ? availablePresets.value[0]?.id ?? 'custom'
+  : props.status?.provider === 'copilot' ? 'openai' : props.status?.provider ?? 'openai'
 const provider = ref(props.status?.authMode === 'none' || !knownProviders.includes(initialProvider) ? 'custom' : initialProvider)
-const customProvider = ref(provider.value === 'custom' ? initialProvider : 'local')
-const model = ref(props.status?.authMode === 'copilot' ? 'gpt-4.1' : props.status?.model ?? 'gpt-4.1')
-const baseUrl = ref(props.status?.authMode === 'copilot' ? '' : props.status?.baseUrl ?? '')
+const customProvider = ref(props.mode !== 'add' && provider.value === 'custom' ? initialProvider : 'local')
+const model = ref(props.mode === 'add' || props.status?.authMode === 'copilot'
+  ? providerPresets.find(item => item.id === initialProvider)?.model ?? ''
+  : props.status?.model ?? 'gpt-4.1')
+const baseUrl = ref(props.mode === 'add' || props.status?.authMode === 'copilot' ? '' : props.status?.baseUrl ?? '')
 const apiKey = ref('')
 const message = ref('')
 const saving = ref(false)
+watch(saving, value => emit('saving', value), { flush: 'sync' })
 const copied = ref(false)
 const login = ref<LoginView>({ state: 'idle' })
 let mounted = true
@@ -106,21 +123,22 @@ const loginMessage = computed(() => login.value.error ?? ({
 }[login.value.state]))
 
 function changeProvider() {
-  const defaults: Record<string, string> = {
-    openai: 'gpt-4.1', anthropic: 'claude-sonnet-4-6', deepseek: 'deepseek-chat',
-    openrouter: 'anthropic/claude-sonnet-4.6', gemini: 'gemini-2.5-pro', groq: 'llama-3.3-70b-versatile',
-  }
-  model.value = defaults[provider.value] ?? ''
+  model.value = providerPresets.find(item => item.id === provider.value)?.model ?? ''
   baseUrl.value = ''
   apiKey.value = ''
   message.value = ''
 }
 async function saveProvider() {
+  const name = provider.value === 'custom' ? customProvider.value.trim() : provider.value
+  if (props.mode === 'add' && props.excludedProviders.includes(name)) {
+    message.value = 'This provider is already configured. Use its card above to update it, or choose a different name.'
+    return
+  }
   saving.value = true
   message.value = ''
   try {
     const result = await client.save({
-      provider: provider.value === 'custom' ? customProvider.value.trim() : provider.value,
+      provider: name,
       model: model.value.trim(),
       ...(apiKey.value ? { apiKey: apiKey.value } : {}),
       baseUrl: baseUrl.value.trim(),
@@ -157,6 +175,7 @@ async function openGitHub() {
   } catch { message.value = 'Could not open the browser. Open https://github.com/login/device manually.' }
 }
 const leave = () => { void controller.cancel() }
+watch(() => props.active, active => { if (!active) leave() })
 window.addEventListener('beforeunload', leave)
 onBeforeUnmount(() => {
   mounted = false
@@ -167,10 +186,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.provider-setup { max-width: 680px; margin: 24px auto; padding: 30px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); background: var(--c-bg-card); color: var(--c-text); }
-.eyebrow { color: var(--c-success); font-size: 11px; font-weight: 700; letter-spacing: .1em; }
-h1 { font-size: 24px; margin: 8px 0 14px; } h2 { font-size: 17px; }
+.provider-setup { max-width: 680px; min-width: 0; margin: 24px auto; padding: 30px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); background: var(--c-bg-card); color: var(--c-text); }
+.setup-title { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; font-size: 20px; overflow-wrap: anywhere; }
+.setup-title span { width: 20px; height: 20px; flex-shrink: 0; }
+h2 { font-size: 17px; }
 .lead, .method-panel p { color: var(--c-text-secondary); line-height: 1.6; }
+.lead { margin: 0 0 24px; max-width: 70ch; }
 .method-tabs, .actions, .footer-actions, .device-code { display: flex; flex-wrap: wrap; gap: 10px; }
 .method-tabs { margin: 22px 0; }.method-tabs [aria-pressed="true"] { border-color: var(--c-success); color: var(--c-success); }
 button { padding: 9px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-soft); font: inherit; cursor: pointer; }

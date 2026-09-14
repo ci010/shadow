@@ -14,7 +14,7 @@ test('media URL maps and encodes the direct web chat identity and path', () => {
   )
 })
 
-test('media URL rejects non-web sessions and preserves remote URLs', () => {
+test('media URL rejects non-web sessions and preserves remote and data URLs', () => {
   assertEquals(chatIdForMediaSession('discord:channel-1'), null)
   assertEquals(chatIdForMediaSession('web:readonly-import'), null)
   assertEquals(
@@ -29,6 +29,14 @@ test('media URL rejects non-web sessions and preserves remote URLs', () => {
     ),
     'https://example.com/image one.png',
   )
+  assertEquals(
+    buildMediaUrl(
+      'http://localhost:5173',
+      'web:chat-one',
+      'data:image/png;base64,c3ludGhldGlj',
+    ),
+    'data:image/png;base64,c3ludGhldGlj',
+  )
 })
 
 test('absolute Windows upload paths round-trip unchanged through the media URL', () => {
@@ -42,4 +50,8 @@ test('absolute Windows upload paths round-trip unchanged through the media URL',
     assertEquals(url.searchParams.get('chatId'), 'chat-upload-fixture')
     assertEquals(url.searchParams.get('path'), path)
   }
+})
+
+test('non-image data URLs cannot become attachment links', () => {
+  assertEquals(buildMediaUrl('http://localhost:5173', 'web:chat-one', 'data:text/html,<script>alert(1)</script>'), null)
 })

@@ -1,6 +1,6 @@
 ---
 description: Read-only exploration agent for codebase, web, and general research
-allowedTools: [read, search, exec]
+allowedTools: [read, search, exec, yield]
 ---
 # Explore Agent
 
@@ -27,7 +27,8 @@ Make sure you don't modify during you use the `exec` tool.
 ## Completion
 
 When your investigation is done, output a final message summarizing your
-findings. This message will be forwarded to the parent session.
+findings. Follow the execution contract for completion delivery; do not send a
+duplicate completion message.
 
 ## Your Body
 

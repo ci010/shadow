@@ -55,6 +55,7 @@ import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './devel
 import { framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
 import { installProjectDirectoryPicker } from './project-directories.js'
 import { installChatContextPickers } from './chat-context.js'
+import { installDocumentTabShortcuts } from './document-tabs.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
@@ -142,6 +143,7 @@ export function createMainWindow(target: RendererTarget): BrowserWindow {
   const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
   removeNativeMenus(Menu, window)
   installWindowControls(ipcMain, window)
+  installDocumentTabShortcuts(window)
   installProjectDirectoryPicker(ipcMain, window, async () => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory', 'createDirectory'],

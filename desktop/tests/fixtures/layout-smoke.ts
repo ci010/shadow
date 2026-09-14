@@ -89,6 +89,14 @@ const server = createServer(async (request, response) => {
       return
     }
     if (await projects.handle(request, response, path)) return
+    if (path === '/api/provider/configured') {
+      json({ providers: providerReady ? [...new Set(['copilot', selectedProvider])].map(provider => ({
+        provider, selected: provider === selectedProvider,
+        authMode: provider === 'copilot' ? 'copilot' : provider === 'openai' ? 'api-key' : 'none',
+        hasApiKey: false, model: provider === selectedProvider ? selectedModel : undefined,
+      })) : [] })
+      return
+    }
     if (path === '/api/provider/setup') {
       if (request.method === 'POST') {
         let body = ''
@@ -407,7 +415,7 @@ async function runProjects(window: BrowserWindow, width: number, desktop: boolea
   await clickTab(window, 'Chat')
   await waitFor(window, `document.querySelectorAll('.project-folder').length === ${projects.projects.length}`)
   await showSidebar()
-  await evaluate(window, `Array.from(document.querySelectorAll('.project-folder[aria-expanded="false"]')).forEach(node => node.click())`)
+  await evaluate(window, `Array.from(document.querySelectorAll('.project-toggle[aria-expanded="false"]')).forEach(node => node.click())`)
   await waitFor(window, `document.querySelectorAll('.project-session-row').length === ${sessions.length}`)
   await evaluate(window, `Array.from(document.querySelectorAll('.legacy-chats .session-select')).find(node => node.title.includes(${JSON.stringify(sessionId)})).click()`)
   await waitFor(window, `document.querySelector('.chat-heading-copy')?.textContent.includes(${JSON.stringify(sessionId)})`)
@@ -424,9 +432,9 @@ async function runProjects(window: BrowserWindow, width: number, desktop: boolea
   const empty = projects.projects.find((project) => project.id === projects.initialEmptyId)!
   const tree = projects.projects.find((project) => project.id === projects.treeId)!
   check(await evaluate(window, `${group(empty.path)}?.textContent.includes('No conversations yet')`), `${label}: an empty registered folder must remain visible`)
-  await evaluate(window, `${folder(empty.path)}.click()`)
+  await evaluate(window, `${group(empty.path)}.querySelector('.project-toggle').click()`)
   check(await evaluate(window, `!${group(empty.path)}?.querySelector('.project-conversations')`), `${label}: collapse must hide empty project contents`)
-  await evaluate(window, `${folder(empty.path)}.click()`)
+  await evaluate(window, `${group(empty.path)}.querySelector('.project-toggle').click()`)
   await evaluate(window, `${group(tree.path)}.querySelector('.lineage-toggle').click()`)
   await waitFor(window, `${group(tree.path)}?.querySelectorAll('.project-session-row').length === 1`)
   await evaluate(window, `${group(tree.path)}.querySelector('.lineage-toggle').click()`)
@@ -438,7 +446,7 @@ async function runProjects(window: BrowserWindow, width: number, desktop: boolea
   })()`), `${label}: physical parent/child lineage must be retained inside project grouping`)
   check(await evaluate(window, `document.querySelectorAll('.legacy-chats .project-session-row').length === 88`), `${label}: legacy Chats must retain all unassociated sessions`)
   check(await evaluate(window, `(() => {
-    const name = ${folder(tree.path)}.querySelector('.project-name');
+    const name = ${folder(tree.path)}.querySelector('.tree-label');
     return name.scrollWidth > name.clientWidth && getComputedStyle(name).textOverflow === 'ellipsis';
   })()`), `${label}: long project names must ellipsize rather than expand the sidebar`)
   await scrollProof(window, '.projects-scroll')
@@ -524,8 +532,8 @@ async function runProjects(window: BrowserWindow, width: number, desktop: boolea
         await state('Clone failed')
         check(await evaluate(window, `Boolean(document.querySelector('.project-dialog')) && document.querySelector('.clone-status')?.textContent.includes('partial checkout')`), `${label}: failed cancellation must retain modal recovery guidance`)
       }
-      await clickTab(window, 'Providers')
-      await waitForTab(window, 'Providers')
+      await clickTab(window, 'Settings')
+      await waitForTab(window, 'Settings')
       check(projects.operations.get(failedCancelId)?.state === 'failed', `${label}: ${trigger} cancellation must preserve its terminal failure`)
       await clickTab(window, 'Chat')
       await waitForTab(window, 'Chat')
@@ -555,8 +563,8 @@ async function runProjects(window: BrowserWindow, width: number, desktop: boolea
     await state('Starting clone…')
     const deactivatedId = projects.cloneInputs.at(-1)!.operationId
     try {
-      await clickTab(window, 'Providers')
-      await waitForTab(window, 'Providers')
+      await clickTab(window, 'Settings')
+      await waitForTab(window, 'Settings')
       check(projects.cancelled.has(deactivatedId), `${label}: cached Chat deactivation must cancel an unacknowledged clone`)
       check(await evaluate(window, `!document.querySelector('.project-dialog') && !document.querySelector('#project-actions')`), `${label}: navigation must remove teleported project surfaces`)
     } finally { projects.acknowledgements.get(deactivatedId)?.() }
@@ -564,7 +572,7 @@ async function runProjects(window: BrowserWindow, width: number, desktop: boolea
     await waitForTab(window, 'Chat')
   }
   await showSidebar()
-  await evaluate(window, `Array.from(document.querySelectorAll('.project-folder[aria-expanded="false"]')).forEach(node => node.click())`)
+  await evaluate(window, `Array.from(document.querySelectorAll('.project-toggle[aria-expanded="false"]')).forEach(node => node.click())`)
   await evaluate(window, `Array.from(document.querySelectorAll('.legacy-chats .session-select')).find(node => node.title.includes(${JSON.stringify(sessionId)})).click()`)
   await waitFor(window, `document.querySelector('.chat-heading-copy')?.textContent.includes(${JSON.stringify(sessionId)})`)
   const metrics = await measure(window)
@@ -626,7 +634,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
       scale: 1,
     })
     await waitFor(window, `document.querySelectorAll('.project-folder').length === 2 && document.querySelectorAll('.legacy-chats .project-session-row').length === 88`)
-    await evaluate(window, `Array.from(document.querySelectorAll('.project-folder[aria-expanded="false"]')).forEach(node => node.click()); document.querySelector('.legacy-chats .session-select').click()`)
+    await evaluate(window, `Array.from(document.querySelectorAll('.project-toggle[aria-expanded="false"]')).forEach(node => node.click()); document.querySelector('.legacy-chats .session-select').click()`)
     await waitFor(window, `document.querySelectorAll('.chat-bubble').length === 72 && document.querySelector('.composer-model select')?.disabled === false`)
     await evaluate(window, `(() => {
       const point = { clientX: innerWidth - 1, clientY: innerHeight - 1, bubbles: true };
@@ -717,10 +725,10 @@ async function runViewport(origin: string, width: number, height: number, deskto
     check(providerReads > readsBeforeSave, `${label}: global model save must refresh provider status`)
     check(await draftRetained(), `${label}: draft or textarea identity lost after global model save/refresh`)
 
-    await clickTab(window, 'Providers')
-    await waitForTab(window, 'Providers')
+    await clickTab(window, 'Settings')
+    await waitForTab(window, 'Settings')
     await waitFor(window, `Boolean(document.querySelector('.provider-setup')) && !document.querySelector('.chat-workspace')`)
-    check(await evaluate(window, `location.pathname === '/providers'`), `${label}: Providers tab must navigate to /providers`)
+    check(await evaluate(window, `location.pathname === '/settings'`), `${label}: Settings tab must navigate to /settings`)
     check(await evaluate(window, `!window.layoutDraftInput.isConnected && window.layoutDraftInput.value === ${JSON.stringify(draft)}`), `${label}: KeepAlive must detach, not discard, Chat's textarea`)
     metrics = await measure(window)
     report(`${label}-providers`, metrics)
@@ -733,15 +741,17 @@ async function runViewport(origin: string, width: number, height: number, deskto
       select.dispatchEvent(new Event('change', { bubbles: true }));
     })()`)
     await waitFor(window, `document.querySelector('select[aria-label="Model for new turns"]')?.value === ${JSON.stringify(initialModel)} && !document.querySelector('select[aria-label="Model for new turns"]')?.disabled`)
-    check(await evaluate(window, `location.pathname === '/providers' && Boolean(document.querySelector('.provider-setup'))`), `${label}: global model changes must not leave Providers`)
+    check(await evaluate(window, `location.pathname === '/settings' && Boolean(document.querySelector('.provider-setup'))`), `${label}: global model changes must not leave Settings`)
     await clickTab(window, 'Chat')
     await waitForTab(window, 'Chat')
     await waitFor(window, `Boolean(document.querySelector('.composer-input textarea'))`)
     check(await draftRetained(), `${label}: Chat tab return lost draft or textarea identity`)
     check(await evaluate(window, 'location.pathname + location.search + location.hash') === chatUrl, `${label}: Chat tab must return to the remembered session URL`)
 
-    await clickTab(window, 'Providers')
+    await clickTab(window, 'Settings')
     await waitFor(window, `Boolean(document.querySelector('.provider-setup'))`)
+    await evaluate(window, `document.querySelector('[data-provider="copilot"] button').click()`)
+    await waitFor(window, `document.querySelector('.setup-title')?.textContent.includes('GitHub Copilot settings')`)
     await evaluate(window, `Array.from(document.querySelectorAll('.provider-setup button')).find(node => node.textContent.trim() === 'Sign in with GitHub Copilot').click()`)
     await waitFor(window, `Boolean(document.querySelector('.device-panel'))`)
     const pendingLogin = activeLogin
@@ -751,7 +761,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
     check(Boolean(pendingLogin && cancelledLogins.has(pendingLogin)), `${label}: leaving Providers must cancel the pending login`)
     check(await draftRetained(), `${label}: leaving pending Copilot login lost Chat draft`)
 
-    await clickTab(window, 'Providers')
+    await clickTab(window, 'Settings')
     await waitFor(window, `Boolean(document.querySelector('.provider-setup'))`)
     check(await evaluate(window, `!document.querySelector('.device-panel')`), `${label}: Providers must remount without stale pending login`)
     await evaluate(window, `Array.from(document.querySelectorAll('.provider-setup button')).find(node => node.textContent.trim() === 'Back to workspace').click()`)
@@ -786,9 +796,8 @@ async function runViewport(origin: string, width: number, height: number, deskto
       check(!window.isVisible() && !window.isMinimized(), `${label}: mock controls must not affect native window`)
     } else check(metrics.boxes['.window-controls'] === null, `${label}: browser must not render native window controls`)
 
-    await clickTab(window, 'Providers')
+    await clickTab(window, 'Settings')
     await waitFor(window, `Boolean(document.querySelector('.provider-setup'))`)
-    await evaluate(window, `Array.from(document.querySelectorAll('.provider-setup .method-tabs button')).find(node => node.textContent.includes('API key')).click()`)
     await waitFor(window, `Boolean(document.querySelector('.provider-setup form'))`)
     await evaluate(window, `(() => {
       const provider = document.querySelector('.provider-setup form select');
@@ -830,9 +839,9 @@ async function runViewport(origin: string, width: number, height: number, deskto
     selectedProvider = 'copilot'
     selectedModel = initialModel
     await window.loadURL(`${origin}/providers`)
-    await waitForTab(window, 'Providers')
+    await waitForTab(window, 'Settings')
     await waitFor(window, `Boolean(document.querySelector('.provider-setup'))`)
-    check(await evaluate(window, `location.pathname === '/providers' && !document.querySelector('.chat-workspace')`), `${label}: direct /providers entry must render the route, not Chat`)
+    check(await evaluate(window, `location.pathname === '/settings/providers' && !document.querySelector('.chat-workspace')`), `${label}: legacy /providers entry must render Settings, not Chat`)
     providersEntries += 1
     metrics = await measure(window)
     report(`${label}-direct-providers`, metrics)

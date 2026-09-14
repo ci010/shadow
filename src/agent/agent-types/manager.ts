@@ -80,7 +80,7 @@ export class AgentTypesManager {
     if (types.length === 0) return ''
     const lines = types.map((t) => {
       const tags: string[] = []
-      if (t.ephemeral) tags.push('ephemeral')
+      tags.push(`default mode: ${t.defaultMode}`)
       if (t.source === 'workspace') tags.push('custom')
       const suffix = tags.length ? ` (${tags.join(', ')})` : ''
       return `  <agent_type name="${t.name}">${t.description}${suffix}</agent_type>`

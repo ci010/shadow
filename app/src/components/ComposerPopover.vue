@@ -1,10 +1,10 @@
 <template>
-  <button ref="trigger" class="composer-control" :class="{ active: open }" :disabled="disabled" :aria-label="label" :title="title ?? label" aria-haspopup="dialog" :aria-expanded="open" @click="toggle" @keydown.down.prevent="show">
+  <button ref="trigger" class="composer-control" :class="{ active: open }" :disabled="disabled" :aria-disabled="disabled || busy" :aria-busy="busy" :aria-label="label" :title="title ?? label" aria-haspopup="dialog" :aria-expanded="open" @click="toggle" @keydown.down.prevent="show">
     <slot name="trigger" />
   </button>
   <Teleport to="body">
     <div v-if="open" class="composer-popover-backdrop" @pointerdown.self="close(false)">
-      <div ref="panel" class="composer-popover" role="dialog" :aria-label="label" :style="position" @keydown="keydown">
+      <div ref="panel" class="composer-popover" role="dialog" tabindex="-1" :aria-label="label" :style="position" @keydown="keydown">
         <slot :close="() => close(true)" />
       </div>
     </div>
@@ -14,14 +14,15 @@
 <script setup lang="ts">
 import { nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 
-const props = withDefaults(defineProps<{ label: string; title?: string; disabled?: boolean; width?: number }>(), { width: 340 })
+const props = withDefaults(defineProps<{ label: string; title?: string; disabled?: boolean; busy?: boolean; width?: number }>(), { width: 340 })
+const emit = defineEmits<{ opened: []; closed: [] }>()
 const open = ref(false)
 const trigger = ref<HTMLButtonElement>()
 const panel = ref<HTMLElement>()
 const position = ref<Record<string, string>>({})
 
 async function show() {
-  if (props.disabled || !trigger.value) return
+  if (props.disabled || props.busy || !trigger.value) return
   const rect = trigger.value.getBoundingClientRect()
   const width = Math.min(props.width, window.innerWidth - 24)
   const below = window.innerHeight - rect.bottom - 16
@@ -34,13 +35,16 @@ async function show() {
     maxHeight: `${Math.max(100, down ? below : above)}px`,
   }
   open.value = true
+  emit('opened')
   window.addEventListener('resize', dismiss)
   await nextTick()
-  panel.value?.querySelector<HTMLElement>('input, button:not(:disabled)')?.focus()
+  const target = panel.value?.querySelector<HTMLElement>('input, button:not(:disabled)') ?? panel.value
+  target?.focus({ preventScroll: true })
 }
 function close(restoreFocus = true) {
   if (!open.value) return
   open.value = false
+  emit('closed')
   window.removeEventListener('resize', dismiss)
   if (restoreFocus) trigger.value?.focus({ preventScroll: true })
 }
@@ -60,6 +64,7 @@ function keydown(event: KeyboardEvent) {
   buttons[next]?.focus()
 }
 watch(() => props.disabled, disabled => { if (disabled) close() })
+watch(() => props.busy, busy => { if (busy) close() })
 onDeactivated(dismiss)
 onUnmounted(dismiss)
 </script>
@@ -68,6 +73,7 @@ onUnmounted(dismiss)
 .composer-control { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; min-height: 32px; padding: 5px 9px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 .composer-control:hover, .composer-control.active { background: var(--c-bg-muted); color: var(--c-text); }
 .composer-control:disabled { opacity: .5; cursor: not-allowed; }
+.composer-control[aria-busy="true"] { cursor: progress; }
 .composer-control:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .composer-popover-backdrop { position: fixed; inset: 0; z-index: 950; }
 .composer-popover { position: fixed; display: flex; flex-direction: column; overflow: auto; padding: 7px; box-sizing: border-box; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 12px 36px var(--c-shadow); }

@@ -9,6 +9,12 @@ import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import { createWindowControlsApi } from './window-controls-preload.js'
 import { createProjectDirectoriesApi } from './project-directories.js'
 import { createChatContextApi } from './chat-context.js'
+import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from './document-tabs.js'
+
+const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction) => {
+  window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
+})
+window.addEventListener('unload', disposeDocumentTabs, { once: true })
 
 const api: ShadowDesktopApi = Object.freeze({
   windowControls: createWindowControlsApi(ipcRenderer),

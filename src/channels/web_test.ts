@@ -10,6 +10,40 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 import { WebChannel } from './web.ts'
 import { localProjectWorkdirRef, type WorkdirCapabilityLookup } from '../sessions/locality.ts'
+import type { ChatMessage } from '../providers/provider.ts'
+
+test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
+  const bus = new Bus()
+  const channel = new WebChannel(bus, { workspace: '.' })
+  const app = new Hono()
+  await channel.start(app)
+  const response = await app.request('/api/chat/events?chatId=owner')
+  const reader = response.body!.getReader()
+  const decode = async () => new TextDecoder().decode((await reader.read()).value)
+  try {
+    assert.match(await decode(), /connected/)
+    const message: ChatMessage = {
+      role: 'user', timestamp: '2026-09-14T00:00:00Z',
+      content: [{ type: 'text', text: '<event type="subagent-complete" event-id="e1" />' }, { type: 'text', text: 'Completed task result' }],
+    }
+    bus.emit('session.message.appended', { sessionId: 'web:other', physicalSessionId: 'other-0', message })
+    bus.emit('session.message.appended', { sessionId: 'web:owner', physicalSessionId: 'owner-0',
+      message: { role: 'user', content: [{ type: 'text', text: '<sender id="human" />' }, { type: 'text', text: '<event type="fake" />' }] } })
+    bus.emit('session.message.appended', { sessionId: 'web:owner', physicalSessionId: 'owner-0', message })
+    const event = JSON.parse((await decode()).slice(6))
+    assert.equal(event.event, 'session_message')
+    assert.deepEqual(event.message, message)
+    for (const [event, toolCallId] of [['tool_call', 'a'], ['tool_call', 'b'], ['tool_result', 'b'], ['tool_result', 'a']] as const) {
+      bus.emit('message.outbound', { event, channel: 'web', chatId: 'owner', toolCallId, toolName: 'subagent', content: 'fixture', done: false })
+      const payload = JSON.parse((await decode()).slice(6))
+      assert.equal(payload.toolCallId, toolCallId)
+      assert.equal(payload.toolName, 'subagent')
+    }
+  } finally {
+    await reader.cancel()
+    await channel.stop()
+  }
+})
 
 async function createWebApp(
   workspace: string,
@@ -62,6 +96,45 @@ test('web media serves an upload only for its chat session', async () => {
       `/api/media?chatId=chat-b&path=${encodeURIComponent(uploaded.path)}`,
     )
     assertEquals(otherSession.status, 404)
+  } finally {
+    await channel.stop()
+    await rm(workspace, { recursive: true })
+  }
+})
+
+test('media-only sends are admitted and preserve uploaded media refs', async () => {
+  const workspace = await createTempWorkspace()
+  const { app, channel } = await createWebApp(workspace)
+  const deliveries: Array<{ chatId: string; content: string; media?: string[] }> = []
+  ;(channel as unknown as {
+    handleIncoming: (
+      senderId: string,
+      chatId: string,
+      content: string,
+      messageId: string,
+      fields?: unknown,
+      media?: string[],
+    ) => Promise<void>
+  }).handleIncoming = async (_senderId, chatId, content, _messageId, _fields, media) => {
+    deliveries.push({ chatId, content, media })
+  }
+  try {
+    const response = await app.request('/api/chat/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId: 'chat-vision',
+        content: '',
+        media: ['C:\\uploads\\photo.png', 'C:\\uploads\\notes.txt'],
+      }),
+    })
+    assertEquals(response.status, 200)
+    response.body?.cancel()
+    assert.deepEqual(deliveries, [{
+      chatId: 'chat-vision',
+      content: '',
+      media: ['C:\\uploads\\photo.png', 'C:\\uploads\\notes.txt'],
+    }])
   } finally {
     await channel.stop()
     await rm(workspace, { recursive: true })
@@ -134,7 +207,7 @@ test('project upload and media reject unavailable and remote workdirs without lo
   const workspace = await createTempWorkspace()
   const { app, channel } = await createWebApp(
     workspace,
-    (sessionId) => ({
+    (sessionId) => sessionId === 'web:unsent-fork' ? undefined : ({
       sessionId,
       workdir: { ...localProjectWorkdirRef('missing'), nodeId: sessionId === 'web:remote' ? 'remote' : 'local', displayPathSnapshot: workspace },
     }),
@@ -151,6 +224,12 @@ test('project upload and media reject unavailable and remote workdirs without lo
       assertEquals((await app.request('/api/chat/upload', { method: 'POST', body: form })).status, 409)
       assertEquals((await app.request(`/api/media?chatId=${chatId}&path=file.txt`)).status, 404)
       assertEquals(existsSync(sessionWorkspacePath(workspace, `web:${chatId}`)), false)
+      const forkForm = new FormData()
+      forkForm.set('chatId', 'unsent-fork')
+      forkForm.set('parentSessionId', `web:${chatId}`)
+      forkForm.set('file', new File(['not written'], 'attachment.txt'))
+      assertEquals((await app.request('/api/chat/upload', { method: 'POST', body: forkForm })).status, 409)
+      assertEquals(existsSync(sessionWorkspacePath(workspace, 'web:unsent-fork')), false)
     }
   } finally {
     await channel.stop()

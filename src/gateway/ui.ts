@@ -84,15 +84,22 @@ export function uiPlugin(distDir: string): GatewayPlugin {
 
       let body = await readFile(filePath)
       let ext = extname(filePath).toLowerCase()
+      let entryPage = filePath === join(root, 'index.html')
 
       // SPA fallback: unknown route \u2192 index.html
       if (!body) {
         body = await readFile(join(root, 'index.html'))
         ext = '.html'
+        entryPage = true
       }
       if (!body) return c.notFound()
 
-      return new Response(body as BodyInit, {
+      // Keep file:// assets relative on disk, but resolve HTTP history routes
+      // from the gateway root rather than e.g. /chat/assets/.
+      const responseBody = entryPage
+        ? new TextDecoder().decode(body).replace(/\b(src|href)="\.\//g, '$1="/')
+        : body as BodyInit
+      return new Response(responseBody, {
         status: 200,
         headers: { 'Content-Type': MIME[ext] ?? 'application/octet-stream' },
       })

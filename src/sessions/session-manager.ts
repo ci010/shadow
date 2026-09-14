@@ -13,7 +13,7 @@ import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
 import { deriveSessionId, type InboundMessage } from '../bus/events.ts'
 import type { HandoffManager } from '../handoff/manager.ts'
-import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
+import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import { ImportTool } from '../tools/load-tool.ts'
 import { SessionTools, type Tools } from '../tools/registry.ts'
 import type { ExecShell } from '../tools/shell.ts'
@@ -26,7 +26,8 @@ import { newPhysicalSessionId } from '../utils/paths.ts'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
-import { LOCAL_NODE_ID, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
+import { LOCAL_NODE_ID, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
+import { isConfigObject, type SessionConfigPatch } from './config-patch.ts'
 import type { Executor } from '../execution/executor.ts'
 import type {
   SessionConfig,
@@ -36,11 +37,18 @@ import type {
   SessionStore,
 } from './session-store.ts'
 import { Session } from './session.ts'
+import { YieldError, YieldManager } from './yield.ts'
+import { parseYieldPolicy, type YieldPolicy, type YieldRequest } from './yield-contract.ts'
+import { allowedSubagentModes, isExecutionMode, type ExecutionMode } from './execution-mode.ts'
+import { delegationOwner, MAX_CALL_TIMEOUT_MS } from './execution-scope.ts'
+import { CallTools } from './call-tools.ts'
+import type { ExecutionContext } from '../agent/agent.ts'
 import {
   channelMessageInput,
   inputContext,
   type DeliveryReceipt,
   type SessionInput,
+  type SessionTurnFact,
 } from './input.ts'
 
 export type { SessionState, SessionStore } from './session-store.ts'
@@ -83,6 +91,8 @@ export interface SleepConfig {
 }
 
 export interface SessionManagerDeps {
+  /** Host/test deadline override: integer 1–120000 ms; default 120000 ms. */
+  callTimeoutMs?: number
   workspace: string
   store: SessionStore
   handoffManager: HandoffManager
@@ -101,6 +111,9 @@ export interface SessionManagerDeps {
   workdirCapabilityLookup?: WorkdirCapabilityLookup
   remoteExecutor?: Executor
   getLlmRuntimeConfig?: () => LlmRuntimeConfig
+  getYieldPolicy?: () => YieldPolicy
+  deliverYield?: (message: import('../bus/events.ts').OutboundMessage) => Promise<void>
+  getKnownContextWindow?: (model: string) => number | null
   /** Called when a session stops (idle timeout, crash, or explicit stop). */
   onSessionStopped?: (sessionId: string) => void
   sleep?: SleepConfig
@@ -143,7 +156,17 @@ export function sessionPromptLocality(
   }
 }
 
+interface BlockingCallFrame {
+  callerId: string
+  tools: CallTools
+  input?: SessionInput
+  session?: EphemeralSession
+  blockedReason?: string
+  cancelled: boolean
+}
+
 export class SessionManager {
+  readonly yields: YieldManager
   /** Registry of active per-session event loops. */
   private sessions: Record<string, Session | EphemeralSession> = {}
   private preparations = new Map<string, Promise<unknown>>()
@@ -153,6 +176,212 @@ export class SessionManager {
   private reportSubscription?: string
   private sessionStates: Record<string, SessionState> = {}
   private readonly sleepInactivityMs: number
+  private readonly executionAdmissions = new Map<string, Promise<string>>()
+  private readonly reporting = new Map<string, Promise<void>>()
+  private readonly completionEvents = new Map<string, { sourceId: string; targetId: string }>()
+  private readonly deleting = new Set<string>()
+  private readonly calls = new Map<string, BlockingCallFrame>()
+
+  isWaitingForCall(sessionId: string): boolean {
+    return [...this.calls.values()].some(frame => frame.callerId === sessionId)
+  }
+
+  getDelegationOwner(sessionId: string): string | undefined {
+    return delegationOwner(this.sessionStates[sessionId])
+  }
+
+  getAllowedSubagentModes(sessionId: string): readonly ExecutionMode[] {
+    const state = this.sessionStates[sessionId]
+    return allowedSubagentModes(state?.mode ?? 'session', !!delegationOwner(state))
+  }
+
+  assertCanCreateChild(sessionId: string, mode: ExecutionMode): void {
+    const state = this.sessionStates[sessionId]
+    if (!state) throw new Error('Delegation requires an existing owner session.')
+    if (state.mode === 'call') this.blockCall(sessionId, 'Leaf calls cannot create subagents.')
+    if (state.mode === 'task' && ['completed', 'failed', 'cancelled'].includes(state.executionStatus ?? '')) {
+      throw new Error('A terminal task cannot create more work.')
+    }
+    if (this.deleting.has(sessionId)) throw new Error('Delegation owner is being deleted.')
+    if (!this.getAllowedSubagentModes(sessionId).includes(mode)) throw new Error(`Execution mode "${mode}" is not allowed from this session.`)
+    const role = this.resolveAgentTypeTools(state.agentType)
+    if (role.allowedTools?.length ? !role.allowedTools.includes('subagent') : role.blockedTools?.includes('subagent')) {
+      throw new Error('The owner role does not permit subagent creation.')
+    }
+    const seen = new Set<string>()
+    let current: string | undefined = sessionId
+    while (current) {
+      if (seen.has(current) || seen.size >= 32) throw new Error('Cyclic or excessively deep delegation lineage.')
+      seen.add(current)
+      current = delegationOwner(this.sessionStates[current])
+    }
+  }
+
+  private blockCall(sessionId: string, reason: string): never {
+    const frame = this.calls.get(sessionId)
+    if (frame) {
+      frame.blockedReason = reason
+      this.sessions[sessionId]?.cancel()
+    }
+    throw new Error(`Blocked: ${reason} Partial work and side effects are not rolled back.`)
+  }
+
+  async startCall(sessionId: string, task: string, context: ExecutionContext): Promise<string> {
+    const state = this.sessionStates[sessionId]
+    if (!state || state.mode !== 'call' || delegationOwner(state) !== context.sessionId) throw new Error('Call admission requires its actual owner.')
+    try {
+      this.assertCanCreateChild(context.sessionId, 'call')
+      if (context.toolCallName && context.toolCallName !== 'subagent') {
+        throw new Error('Blocking calls require native subagent invocation; a script bridge cannot guarantee the caller remains attached.')
+      }
+      context.signal.throwIfAborted()
+    } catch (error) {
+      state.executionStatus = context.signal.aborted ? 'cancelled' : 'failed'
+      await this.saveState(sessionId, state)
+      throw error
+    }
+    const role = this.resolveAgentTypeTools(state.agentType)
+    const tools = new CallTools(context.tools, this.workspace, role.allowedTools, role.blockedTools)
+    const frame: BlockingCallFrame = {
+      callerId: context.sessionId, tools, cancelled: false,
+    }
+    this.calls.set(sessionId, frame)
+    tools.setExecutionScope('call', [], reason => {
+      frame.blockedReason = reason
+      this.sessions[sessionId]?.cancel()
+    })
+    const cancel = () => { frame.cancelled = true; this.sessions[sessionId]?.cancel() }
+    context.signal.addEventListener('abort', cancel, { once: true })
+    const timer = setTimeout(() => {
+      frame.blockedReason = 'Leaf call deadline exceeded; inspect its partial work before retrying.'
+      cancel()
+    }, this.deps.callTimeoutMs ?? MAX_CALL_TIMEOUT_MS)
+    let snapshotLength = 0
+    try {
+      const history = this.getActiveSession(context.sessionId)?.history ?? (await this.getHistory(context.sessionId)).messages
+      const snapshot = structuredClone(sanitizeToolPairs(sanitizeToolPairs(history))).filter(message => message.role !== 'system')
+      snapshotLength = snapshot.length
+      await this.store.appendMessages(SessionManager.currentPhysicalId(state),
+        snapshot.map(message => ({ ...message, timestamp: message.timestamp ?? new Date().toISOString() })))
+      context.signal.throwIfAborted()
+      if (frame.cancelled) throw new Error(frame.blockedReason ?? 'Call cancelled before admission.')
+      frame.input = {
+        kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), policy: 'queue', content: task,
+        source: { kind: 'session', sessionId: context.sessionId, inputId: context.messageId, senderName: context.senderName },
+      }
+      await this.deliver(sessionId, frame.input)
+      const child = frame.session
+      if (!child) throw new Error('Call session was not admitted.')
+      if (context.signal.aborted || frame.cancelled) child.cancel()
+      await child.completion
+      const fact = child.result
+      const ownHistory = child.history.slice(snapshotLength + 1)
+      let declaredBlocked: { reason?: string; partialWork?: string } | undefined
+      let declaredFailure: string | undefined
+      try {
+        const value = JSON.parse(fact?.content ?? '')
+        if (value && value.status === 'blocked') declaredBlocked = {
+          reason: typeof value.reason === 'string' ? value.reason : 'Caller input or permission is required.',
+          partialWork: typeof value.partialWork === 'string' ? value.partialWork : undefined,
+        }
+        if (value && value.status === 'failed') declaredFailure = typeof value.error === 'string'
+          ? value.error : 'Leaf call reported a failure.'
+      } catch { /* Ordinary final text is valid. */ }
+      if (!declaredBlocked && /^(?:\s|[#*])*(?:status:\s*)?(?:blocked\b|无法继续|受阻)/i.test(fact?.content ?? '')) {
+        declaredBlocked = { reason: fact!.content.trim().split('\n')[0] }
+      }
+      if (!declaredFailure && /^(?:\s|[#*])*(?:status:\s*)?(?:failed\b|失败)/i.test(fact?.content ?? '')) {
+        declaredFailure = fact!.content.trim().split('\n')[0]
+      }
+      const blockedReason = frame.blockedReason ?? declaredBlocked?.reason
+      const status = frame.blockedReason || declaredBlocked ? 'blocked' : declaredFailure ? 'failed' : fact?.status ?? 'cancelled'
+      const receipt = {
+        sessionId, executionId: sessionId, mode: 'call', status,
+        result: fact?.content ?? '',
+        ...(blockedReason ? { blockedReason } : {}),
+        ...(fact?.error || declaredFailure ? { error: fact?.error ?? declaredFailure } : {}),
+        partialWork: status === 'completed' ? '' : declaredBlocked?.partialWork ?? ownHistory
+          .filter(message => message.role === 'assistant' && typeof message.content === 'string')
+          .at(-1)?.content ?? '',
+        sideEffectsMayHaveOccurred: ownHistory.some(message => message.role === 'tool'),
+      }
+      state.executionStatus = status === 'blocked' ? 'failed' : status
+      await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{ call_result: receipt }])
+      await this.saveState(sessionId, state)
+      return JSON.stringify(receipt)
+    } catch (error) {
+      frame.session?.cancel()
+      await frame.session?.completion
+      const status = context.signal.aborted ? 'cancelled' : frame.blockedReason ? 'blocked' : 'failed'
+      state.executionStatus = status === 'blocked' ? 'failed' : status
+      const receipt = { sessionId, executionId: sessionId, mode: 'call', status,
+        result: '', error: errMsg(error), partialWork: '', blockedReason: frame.blockedReason,
+        sideEffectsMayHaveOccurred: !!frame.session }
+      await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{ call_result: receipt }])
+      await this.saveState(sessionId, state)
+      return JSON.stringify(receipt)
+    } finally {
+      clearTimeout(timer)
+      context.signal.removeEventListener('abort', cancel)
+      this.calls.delete(sessionId)
+      tools.resetDynamic()
+    }
+  }
+
+  executeOnce(key: string, operation: () => Promise<string>): Promise<string> {
+    const existing = this.executionAdmissions.get(key)
+    if (existing) return existing
+    const work = Promise.resolve().then(async () => {
+      const state = Object.values(this.sessionStates).find(state => state.executionKey === key)
+      if (state) return this.executionReceipt(state.sessionId)
+      return operation()
+    })
+    this.executionAdmissions.set(key, work)
+    const cleanup = () => {
+      if (this.executionAdmissions.get(key) === work) this.executionAdmissions.delete(key)
+    }
+    void work.then(cleanup, cleanup)
+    return work
+  }
+
+  private async executionReceipt(sessionId: string): Promise<string> {
+    const state = this.sessionStates[sessionId]
+    if (state.mode === 'call') {
+      let result: unknown
+      for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
+        if (record.call_result) result = record.call_result
+      }
+      return JSON.stringify(result ?? {
+        sessionId, executionId: sessionId, mode: 'call', status: 'cancelled', result: '',
+        error: 'Previous call interrupted; it will not be replayed.', sideEffectsMayHaveOccurred: true,
+      })
+    }
+    return JSON.stringify({
+      sessionId, executionId: state.executionId, mode: state.mode,
+      status: state.executionStatus,
+      message: 'Execution admitted. Its final result is delivered asynchronously.',
+    })
+  }
+
+  canSendSessionMessage(sourceId: string, targetId: string): boolean {
+    if (this.sessionStates[sourceId]?.mode === 'call') {
+      try { this.blockCall(sourceId, 'Leaf calls cannot send messages.') } catch { return false }
+    }
+    return this.canReceiveSessionMessage(targetId)
+  }
+
+  async startChild(sessionId: string, task: string, context: ExecutionContext): Promise<DeliveryReceipt> {
+    const state = this.sessionStates[sessionId]
+    if (delegationOwner(state) !== context.sessionId || !state) throw new Error('Child admission requires its actual owner.')
+    this.assertCanCreateChild(context.sessionId, state.mode ?? 'session')
+    if (state.mode === 'call') throw new Error('Leaf calls must use blocking admission.')
+    const initialInput: SessionInput = {
+      kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(),
+      source: { kind: 'session', sessionId: context.sessionId, inputId: context.messageId, senderName: context.senderName },
+      policy: 'queue', content: task,
+    }
+    return this.deliver(sessionId, initialInput)
+  }
 
   /** Derive the current physical session ID from state. */
   static currentPhysicalId(state: SessionState): string {
@@ -162,7 +391,65 @@ export class SessionManager {
   constructor(
     private readonly deps: SessionManagerDeps,
   ) {
+    if (deps.callTimeoutMs !== undefined && (!Number.isInteger(deps.callTimeoutMs)
+      || deps.callTimeoutMs < 1 || deps.callTimeoutMs > MAX_CALL_TIMEOUT_MS)) {
+      throw new RangeError(`callTimeoutMs must be between 1 and ${MAX_CALL_TIMEOUT_MS}.`)
+    }
     this.sleepInactivityMs = deps.sleep?.inactivityMs ?? 15 * 60 * 1_000
+    this.yields = new YieldManager({
+      assertCanYield: id => {
+        if (this.sessionStates[id]?.mode === 'call') this.blockCall(id, 'Leaf calls cannot yield; the caller must decide and issue a new call.')
+      },
+      getState: id => this.getSessionState(id),
+      getPolicy: id => this.getYieldPolicy(id),
+      notifyUser: request => this.notifyYieldUser(request),
+      notifyParent: request => this.notifyYieldParent(request),
+    })
+  }
+
+  getYieldPolicy(sessionId: string): YieldPolicy {
+    return parseYieldPolicy(this.getSessionConfig(sessionId).yield ?? this.deps.getYieldPolicy?.() ?? { timeoutMs: null })
+  }
+
+  private async notifyYieldUser(request: YieldRequest): Promise<void> {
+    const separator = request.sessionId.indexOf(':')
+    if (separator < 1 || request.sessionId.startsWith('web:')) return
+    const message: import('../bus/events.ts').OutboundMessage = {
+      event: 'response', channel: request.sessionId.slice(0, separator), chatId: request.sessionId.slice(separator + 1),
+      content: [
+        request.question,
+        ...request.options.map((option, index) => `${index + 1}. ${option}${option === request.defaultOption ? ' (default)' : ''}`),
+        `Reply with /yield ${request.id} <1|2|3|cancel>.`,
+        request.deadline ? `At ${request.deadline}, the default will be used if unanswered.` : 'Waiting for your answer; no automatic default.',
+      ].join('\n'),
+      done: true,
+      yieldRequest: request,
+    }
+    if (this.deps.deliverYield) await this.deps.deliverYield(message)
+    else this.deps.bus.emit('message.outbound', message)
+  }
+
+  private async notifyYieldParent(request: YieldRequest): Promise<void> {
+    const parentId = request.recipient.sessionId
+    const parent = this.getSessionState(parentId)
+    if (!parent) throw new YieldError('unavailable', 'The parent session no longer exists.')
+    const definitions = this.getToolDefinitions(parentId,
+      this.getActiveSession(parentId) ? undefined : this.resolveAgentTypeTools(parent.agentType))
+    if (!definitions.some(tool => tool.name === 'yield')) {
+      throw new YieldError('unavailable', 'The parent must have the yield tool enabled to answer.')
+    }
+    await this.deliver(parentId, {
+      kind: 'message', id: request.id, timestamp: new Date().toISOString(),
+      source: { kind: 'session', sessionId: request.sessionId, senderName: 'Subagent' },
+      policy: 'steering',
+      content: [
+        'Your subagent is paused awaiting your decision.',
+        JSON.stringify(request),
+        'Answer using the yield tool with action="answer", request_id set to the id above, and option set to one exact option.',
+        'Do not merely send a message to the child; that does not resolve this request.',
+        'After answering, continue your original task.',
+      ].join('\n'),
+    })
   }
 
   get workspace(): string {
@@ -189,30 +476,15 @@ export class SessionManager {
     console.info('[session-manager] Provider hot-swapped')
   }
 
-  /**
-   * Returns true if the given session's agent type is ephemeral.
-   * Used by MessageTool to block follow-up messages to ephemeral sessions.
-   */
+  /** Compatibility query: execution mode, never role, determines reusability. */
   isEphemeralSession(sessionId: string): boolean {
     const state = this.sessionStates[sessionId]
-    if (!state?.agentType) return false
-    const agentType = this.deps.agentTypes.resolve(state.agentType)
-    return agentType?.ephemeral ?? false
+    return !!state && state.mode !== 'session'
   }
 
-  /**
-   * Message-tool follow-ups are disallowed for ephemeral sessions, but their
-   * fresh prototypes still need an initial task. Call synchronously immediately
-   * before deliver; its preparation barrier reserves a pending first admission.
-   * This restriction does not apply to direct event delivery.
-   */
+  /** Task inputs are admitted atomically by their creator, never by MessageTool. */
   canReceiveSessionMessage(sessionId: string): boolean {
-    if (!this.isEphemeralSession(sessionId)) return true
-    const state = this.sessionStates[sessionId]
-    return !this.acceptedInputs.has(sessionId) &&
-      !this.preparations.has(sessionId) &&
-      !state?.lastActivityAt &&
-      !(state?.segmentIndex > 0)
+    return !this.isEphemeralSession(sessionId)
   }
 
   // ── Lifecycle (start / stop / dispatch / recovery) ──────────────────
@@ -221,46 +493,101 @@ export class SessionManager {
     if (this.stopPromise) await this.stopPromise
     this.stopPromise = undefined
     this.stopped = false
+    this.yields.start()
     // Load all session states into memory cache
     this.sessionStates = await this.store.listAllStates()
-    // Older states may omit activity timestamps. Their own stored messages
-    // distinguish an already-used ephemeral session from a fresh prototype.
     for (const state of Object.values(this.sessionStates)) {
-      if (!this.isEphemeralSession(state.sessionId) || state.lastActivityAt || state.segmentIndex > 0) continue
+      if (!isExecutionMode(state.mode)) {
+        // Built-in historical lifetimes are fixed, even when the current role was edited.
+        const historical = ['verify', 'reflector', 'soul-reflector', 'encapsulator'].includes(state.agentType ?? '')
+          ? 'task' : ['general', 'sub', 'explore', 'plan'].includes(state.agentType ?? 'general')
+          ? 'session' : this.deps.agentTypes.resolve(state.agentType ?? 'general')?.defaultMode ?? 'session'
+        state.mode = historical
+      }
+      if (state.mode !== 'session' && ['running', 'waiting', 'pending'].includes(state.executionStatus ?? '')) {
+        state.executionStatus = 'cancelled'
+      }
+      if (state.mode !== 'session') state.executionId ??= state.sessionId
+      await this.store.saveState(state.sessionId, state)
+    }
+    // Legacy one-shot records remain closed even when they predate lifecycle status.
+    for (const state of Object.values(this.sessionStates)) {
+      if (!this.isEphemeralSession(state.sessionId)) continue
+      if (state.lastActivityAt || state.segmentIndex > 0) this.acceptedInputs.add(state.sessionId)
+      let finalResponse = false
       for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
         if ((typeof record.role === 'string' && record.role !== 'system') || record.session_recovered) {
           this.acceptedInputs.add(state.sessionId)
-          break
+          finalResponse = record.role === 'assistant' && !(Array.isArray(record.tool_calls) && record.tool_calls.length)
         }
+      }
+      if (!state.executionStatus) {
+        state.executionStatus = this.acceptedInputs.has(state.sessionId) ? finalResponse ? 'completed' : 'cancelled' : 'pending'
+        await this.store.saveState(state.sessionId, state)
       }
     }
 
     if (this.reportSubscription) this.deps.bus.off(this.reportSubscription)
-    this.reportSubscription = this.deps.bus.on('session.turn.finished', async (fact) => {
-      if (fact.status === 'cancelled') return
-      const state = this.sessionStates[fact.sessionId]
-      if (!state?.reportTo || state.reportTo === fact.sessionId) return
-      const content = (fact.status === 'failed' ? fact.error : fact.content)?.trim()
-      if (!content && fact.status === 'completed') return
+    this.reportSubscription = this.deps.bus.on('session.turn.finished', fact => this.reportCompletion(fact))
+    for (const state of Object.values(this.sessionStates)) {
+      if (state.mode !== 'task' || state.completionReported || !state.lastActivityAt) continue
+      let fact: SessionTurnFact | undefined
+      for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
+        if (record.execution_receipt) fact = record.execution_receipt as SessionTurnFact
+      }
+      if (!fact && state.executionStatus === 'cancelled') {
+        fact = {
+          sessionId: state.sessionId, turnId: state.executionId ?? state.sessionId,
+          inputId: state.executionKey ?? state.sessionId,
+          source: { kind: 'session', sessionId: state.parentSessionId ?? state.parent?.id ?? state.sessionId },
+          status: 'cancelled', content: '', error: 'Execution interrupted by process restart.',
+        }
+      }
+      if (fact) await this.reportCompletion(fact)
+    }
+  }
 
-      await this.deps.events.emit({
-        type: fact.status === 'failed' ? 'subagent-failed' : 'subagent-complete',
-        source: 'subagent',
-        targetSessionId: state.reportTo,
-        senderName: 'Subagent',
-        content: content ?? 'Subagent request failed',
-        origin: {
-          sessionId: fact.sessionId,
-          inputId: fact.inputId,
-          source: { kind: 'session', sessionId: fact.sessionId },
-        },
-        meta: {
-          kind: 'subagent',
-          sourceSessionId: fact.sessionId,
-          agentType: state.agentType,
-        },
-      })
+  private reportCompletion(fact: SessionTurnFact): Promise<void> {
+    const state = this.sessionStates[fact.sessionId]
+    if (!state || state.mode === 'call') return Promise.resolve()
+    const oneShot = state.mode !== 'session'
+    const targetId = state.reportTo
+    if (!targetId || targetId === fact.sessionId || this.deleting.has(targetId)
+      || (oneShot && targetId === (state.parentSessionId ?? state.parent?.id) && !this.sessionStates[targetId])
+      || (oneShot && state.completionReported)
+      || (!oneShot && fact.status === 'cancelled')) return Promise.resolve()
+    const key = oneShot ? fact.sessionId : `${fact.sessionId}:${fact.turnId}`
+    const pending = this.reporting.get(key)
+    if (pending) return pending
+    const report = Promise.resolve().then(async () => {
+      const content = (fact.status === 'failed' ? fact.error : fact.content)?.trim()
+      if (!oneShot && !content && fact.status === 'completed') return
+      const eventId = oneShot ? `subagent-completion:${fact.sessionId}` : crypto.randomUUID()
+      this.completionEvents.set(eventId, { sourceId: fact.sessionId, targetId })
+      try {
+        await this.deps.events.emit({
+          id: eventId,
+          type: fact.status === 'failed' ? 'subagent-failed' : fact.status === 'cancelled' ? 'subagent-cancelled' : 'subagent-complete',
+          source: 'subagent', targetSessionId: targetId, senderName: 'Subagent',
+          content: content || (fact.status === 'cancelled' ? fact.error ?? 'Subagent execution cancelled.' : fact.status === 'failed' ? 'Subagent request failed' : 'Subagent completed.'),
+          origin: { sessionId: fact.sessionId, inputId: fact.inputId, source: { kind: 'session', sessionId: fact.sessionId } },
+          meta: {
+            kind: 'subagent', sourceSessionId: fact.sessionId, agentType: state.agentType,
+            ...(oneShot ? { mode: state.mode, executionId: state.executionId, executionStatus: fact.status } : {}),
+          },
+        })
+        if (oneShot) {
+          state.completionReported = true
+          await this.saveState(state.sessionId, state)
+        }
+      } finally {
+        this.completionEvents.delete(eventId)
+      }
     })
+    this.reporting.set(key, report)
+    const cleanup = () => { if (this.reporting.get(key) === report) this.reporting.delete(key) }
+    void report.then(cleanup, cleanup)
+    return report
   }
 
   /** Stops admissions immediately; resolves after active work and preparation quiesce. */
@@ -287,9 +614,11 @@ export class SessionManager {
       for (const result of completed) {
         if (result.status === 'rejected') errors.push(result.reason)
       }
+      await Promise.allSettled(this.reporting.values())
       if (errors.length) throw new AggregateError(errors, 'Session shutdown failed')
     })
     for (const session of sessions) stopSession(session)
+    this.yields.stop()
     return this.stopPromise
   }
 
@@ -306,27 +635,58 @@ export class SessionManager {
     const previous = this.preparations.get(sessionId) ?? Promise.resolve()
     const admission = previous.catch(() => {}).then(async (): Promise<DeliveryReceipt> => {
       if (this.stopped) throw new Error('Session manager stopped')
+      const state = this.sessionStates[sessionId]
+      const ownerId = delegationOwner(state)
+      const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId
+        : input.source.kind === 'event' ? input.source.origin?.sessionId : undefined
+      const completion = input.source.kind === 'event' ? this.completionEvents.get(input.source.eventId) : undefined
+      const trustedCompletion = completion?.sourceId === sourceSessionId && completion?.targetId === sessionId
+      if (sourceSessionId && this.sessionStates[sourceSessionId]?.mode === 'call') {
+        this.blockCall(sourceSessionId, 'Leaf calls cannot deliver messages or deferred events.')
+      }
+      if (state?.mode !== undefined && state.mode !== 'session') {
+        if (state.mode === 'call' && this.calls.get(sessionId)?.input !== input
+          && !(input.kind === 'control' && input.command.type === 'cancel')) {
+          throw new Error('Call input is private to its blocking admission.')
+        }
+        if (this.acceptedInputs.has(sessionId) || state.executionStatus && state.executionStatus !== 'pending') {
+          if (input.kind === 'control' && input.command.type === 'cancel') {
+            this.sessions[sessionId]?.cancel()
+            return { status: 'accepted', sessionId, inputId: input.id }
+          }
+          throw new Error(`Execution "${sessionId}" does not accept subsequent inputs; create a new ${state.mode}.`)
+        }
+      }
       const config = llm ?? this.deps.getLlmRuntimeConfig?.()
       if (!config) throw new Error('Session delivery requires LLM runtime configuration')
+      const deliveryInput = input
       let session: Session | EphemeralSession | undefined = this.sessions[sessionId]
       if (session && !session.accepting) {
         await session.completion
         session = undefined
       }
       const created = !session
-      if (!session) session = await this.createActiveSession(sessionId, input)
+      if (!session) session = await this.createActiveSession(sessionId, deliveryInput)
+      if (!trustedCompletion && state?.mode !== 'session' && ownerId && (this.deleting.has(ownerId) || !this.sessionStates[ownerId])) {
+        session.stop()
+        throw new DOMException('Execution owner was deleted before admission.', 'AbortError')
+      }
       if (this.stopped) {
         session.stop()
         throw new Error('Session manager stopped')
       }
+      if (this.calls.get(sessionId)?.cancelled) {
+        session.stop()
+        throw new DOMException('Call cancelled before admission.', 'AbortError')
+      }
       try {
-        session.dispatch(input, config)
+        session.dispatch(deliveryInput, config)
       } catch (error) {
         if (created) session.stop()
         throw error
       }
       this.acceptedInputs.add(sessionId)
-      this.deps.bus.emit('session.input.accepted', { sessionId, input })
+      this.deps.bus.emit('session.input.accepted', { sessionId, input: deliveryInput })
       return { status: 'accepted', sessionId, inputId: input.id }
     })
     this.preparations.set(sessionId, admission)
@@ -342,11 +702,12 @@ export class SessionManager {
     if (this.stopped) throw new Error('Session manager stopped')
     const onStopped = (id: string) => {
       delete this.sessions[id]
+      if (ctx.state.mode !== 'session') this.yields.cancelSession(id, 'The one-shot parent finished before answering.')
       this.deps.bus.emit('session.ended', { sessionId: id, agentType: ctx.state.agentType })
       this.deps.onSessionStopped?.(id)
     }
 
-    if (ctx.resolvedAgentType.ephemeral) {
+    if (ctx.state.mode !== 'session') {
       const sess = new EphemeralSession(
         this.deps.workspace,
         sessionId,
@@ -360,6 +721,8 @@ export class SessionManager {
         this.deps.remoteExecutor,
       )
       sess.onStopped = onStopped
+      const frame = this.calls.get(sessionId)
+      if (frame) frame.session = sess
       this.sessions[sessionId] = sess
       return sess
     } else {
@@ -406,6 +769,8 @@ export class SessionManager {
 
     let recovered = 0
     for (const state of allStates) {
+      if (state.mode !== 'session') continue
+      if (state.executionStatus && ['completed', 'failed', 'cancelled'].includes(state.executionStatus)) continue
       // Skip stale sessions
       if (!state.lastActivityAt || state.lastActivityAt < cutoff) continue
 
@@ -496,6 +861,11 @@ export class SessionManager {
       preloadTools?: Record<string, string[]>
       workspaceRoot?: string
       workdir?: WorkdirRefV1
+      mode?: ExecutionMode
+      parentSessionId?: string | null
+      executionKey?: string
+      parentToolCallId?: string
+      config?: SessionConfig
     },
   ): Promise<void> {
     const existing = this.sessionStates[sessionId]
@@ -512,6 +882,14 @@ export class SessionManager {
       throw new TypeError(
         `[session-manager] buildSession: unknown agent type "${stateFields?.agentType}"`,
       )
+    }
+    if (stateFields?.mode !== undefined && !isExecutionMode(stateFields.mode)) throw new TypeError('Invalid execution mode.')
+    const mode = stateFields?.mode ?? agent.defaultMode
+    const ownerId = stateFields?.parentSessionId === null ? undefined
+      : stateFields?.parentSessionId ?? (parent?.index === undefined && stateFields !== undefined ? parent?.id : undefined)
+    if (ownerId) this.assertCanCreateChild(ownerId, mode)
+    if (mode === 'call' && (!ownerId || stateFields?.reportTo !== undefined)) {
+      throw new Error('Calls require a permitted structural owner and cannot use report_to.')
     }
 
     const ts = new Date().toISOString()
@@ -530,6 +908,8 @@ export class SessionManager {
       maxTokens: agent?.maxTokens,
       thinking: agent?.thinking,
       reasoningEffort: agent?.reasoningEffort,
+      ...stateFields?.config,
+      ...(stateFields?.model ? { model: stateFields.model } : {}),
     }
 
     const parentState = parent ? this.sessionStates[parent.id] : undefined
@@ -540,6 +920,11 @@ export class SessionManager {
       ? parentWorkdir
       : undefined
     const state: SessionState = {
+      mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
+      executionStatus: 'pending',
+      parentSessionId: ownerId ?? null,
+      executionKey: stateFields?.executionKey,
+      parentToolCallId: stateFields?.parentToolCallId,
       sessionId,
       segmentIndex: 0,
       config,
@@ -554,6 +939,7 @@ export class SessionManager {
       description: stateFields?.description,
       preloadTools: stateFields?.preloadTools,
     }
+    if (state.mode !== 'session') state.executionId = sessionId
 
     await this.saveState(sessionId, state)
   }
@@ -619,7 +1005,7 @@ export class SessionManager {
 
   /**
    * Record a child session ID on the parent session state.
-   * Only call for non-ephemeral parents — ephemeral sessions skip persistence.
+   * Only reusable child sessions belong in this managed list.
    */
   async addChild(
     parentSessionId: string,
@@ -654,7 +1040,7 @@ export class SessionManager {
     > = []
     for (const childId of state.children) {
       const childState = this.sessionStates[childId]
-      if (!childState) continue
+      if (!childState || childState.mode !== 'session') continue
       results.push({
         sessionId: childId,
         agentType: childState.agentType ?? 'sub',
@@ -669,6 +1055,22 @@ export class SessionManager {
   getSessionConfig(sessionId: string): SessionConfig {
     const state = this.sessionStates[sessionId]
     return state?.config ?? {}
+  }
+
+  async applySessionConfigPatch(
+    sessionId: string,
+    patch: SessionConfigPatch,
+    create = false,
+  ): Promise<void> {
+    const state = this.sessionStates[sessionId] ??
+      (create ? await this.getOrCreateState(sessionId) : null)
+    if (!state) throw new Error('session_not_found')
+    const config = { ...state.config, ...patch.set }
+    for (const key of patch.unset) delete config[key]
+    const next = Object.keys(config).length ? config : undefined
+    // Keep the active session's state reference, but only publish durable changes.
+    await this.store.saveState(sessionId, { ...state, config: next })
+    state.config = next
   }
 
   async setSessionConfig(
@@ -714,12 +1116,32 @@ export class SessionManager {
     return deleted
   }
 
+  private async stopOwnedChildren(ownerId: string, seen = new Set<string>()): Promise<void> {
+    if (seen.has(ownerId)) return
+    seen.add(ownerId)
+    for (const child of Object.values(this.sessionStates)) {
+      if (delegationOwner(child) !== ownerId || seen.has(child.sessionId)) continue
+      const marked = !this.deleting.has(child.sessionId)
+      if (marked) this.deleting.add(child.sessionId)
+      try {
+        this.yields.cancelSession(child.sessionId, 'Owner session deleted.')
+        const execution = this.sessions[child.sessionId]
+        execution?.stop()
+        await execution?.completion
+        await this.stopOwnedChildren(child.sessionId, seen)
+      } finally {
+        if (marked) this.deleting.delete(child.sessionId)
+      }
+    }
+  }
+
   private async _deleteSessionRecursive(
     sessionId: string,
     deleted: string[],
   ): Promise<void> {
     const state = this.sessionStates[sessionId]
-    if (!state) return
+    if (!state || this.deleting.has(sessionId)) return
+    this.deleting.add(sessionId)
 
     // Cascade: delete children first
     if (state.children?.length) {
@@ -727,13 +1149,23 @@ export class SessionManager {
         await this._deleteSessionRecursive(childId, deleted)
       }
     }
+    await this.stopOwnedChildren(sessionId)
+
+    // Ephemeral children may not be in state.children, but cannot keep waiting
+    // or resume a provider call after their decision recipient is deleted.
+    for (const [id, child] of Object.entries(this.sessions)) {
+      const request = this.yields.get(id)
+      if (request?.recipient.kind === 'parent' && request.recipient.sessionId === sessionId) child.cancel()
+    }
 
     // Stop active session if running
     const active = this.sessions[sessionId]
     if (active) {
       active.stop()
+      await active.completion
       delete this.sessions[sessionId]
     }
+    this.yields.cancelSession(sessionId, 'Session deleted.')
 
     // Delete all physical segment logs (segment 0 through segmentIndex)
     for (let i = 0; i <= state.segmentIndex; i++) {
@@ -752,12 +1184,60 @@ export class SessionManager {
     this.acceptedInputs.delete(sessionId)
 
     deleted.push(sessionId)
+    this.deleting.delete(sessionId)
   }
 
   // ── Queries (state, history, tools, context) ───────────────────────
 
   getSessionState(sessionId: string): SessionState | null {
     return this.sessionStates[sessionId] ?? null
+  }
+
+  async getSessionDetails(sessionId: string, physicalId?: string) {
+    const state = this.getSessionState(sessionId)
+    if (!state) return null
+    const segments = Array.from({ length: state.segmentIndex + 1 }, (_, index) =>
+      newPhysicalSessionId(sessionId, index))
+    if (physicalId !== undefined && !segments.includes(physicalId)) return null
+    const selected = physicalId ?? segments[segments.length - 1]!
+    let usage: LLMResponseUsage | null = null
+    let usedTokens: number | null = null
+    // Legacy assistant records can repeat the last response's usage. They cannot
+    // support reliable cumulative accounting, so expose only the latest known call.
+    for (const segment of physicalId === undefined ? segments : [selected]) {
+      for await (const record of this.store.readSessionLog(segment)) {
+        if (record.role !== 'assistant') continue
+        const value = record.usage
+        if (!isConfigObject(value)) continue
+        const { promptTokens, completionTokens, totalTokens } = value
+        if (typeof promptTokens !== 'number' || typeof completionTokens !== 'number' || typeof totalTokens !== 'number' ||
+          ![promptTokens, completionTokens, totalTokens].every(token => Number.isSafeInteger(token) && token >= 0)) continue
+        usage = { promptTokens, completionTokens, totalTokens }
+        if (segment === selected) usedTokens = usage.promptTokens
+      }
+    }
+    const workdir = resolveSessionLocations(
+      this.workspace, state, undefined, this.workdirCapabilityLookup,
+    ).workdir
+    const remote = workdir.workdir.nodeId !== LOCAL_NODE_ID
+    const model = state.config?.model ?? this.deps.getLlmRuntimeConfig?.().model
+    const window = model ? this.deps.getKnownContextWindow?.(model) : null
+    return {
+      sessionId,
+      name: await this.getFirstUserMessage(sessionId),
+      workdir: {
+        kind: remote ? 'remote' as const : 'local' as const,
+        displayPath: remote
+          ? workdir.workdir.displayPathSnapshot ?? null
+          : workdir.available && workdir.locality === 'local' ? workdir.path : null,
+      },
+      usage,
+      usageScope: 'latest-call' as const,
+      context: {
+        usedTokens,
+        windowTokens: typeof window === 'number' && Number.isSafeInteger(window) && window > 0 ? window : null,
+      },
+    }
   }
 
   getActiveSession(sessionId: string): Session | EphemeralSession | undefined {
@@ -902,9 +1382,13 @@ export class SessionManager {
     }
 
     // For inactive / historical sessions, filter using behavior
-    const allDefs = this.deps.tools.getDefinitions()
+    const policy = behaviorOverride ?? (sessionId && this.sessionStates[sessionId]
+      ? this.resolveAgentTypeTools(this.sessionStates[sessionId].agentType) : {})
+    const scoped = new SessionTools(this.deps.tools, this.workspace, policy.allowedTools, policy.blockedTools)
+    if (sessionId) scoped.setExecutionScope(this.sessionStates[sessionId]?.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
+    const allDefs = scoped.getDefinitions()
     const filtered = allDefs.filter((d) =>
-      isToolAllowed(behaviorOverride ?? {}, d.function.name, d.optIn)
+      isToolAllowed(policy, d.function.name, d.optIn)
     )
 
     return filtered.map((d) => ({
@@ -964,6 +1448,8 @@ export class SessionManager {
       sessionId,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       agent: agentType,
+      mode: state?.mode ?? agentType.defaultMode,
+      parentSessionId: delegationOwner(state),
       projectName: state?.projectName,
       ...sessionPromptLocality(state),
     }
@@ -1031,6 +1517,8 @@ export class SessionManager {
     const state: SessionState = {
       sessionId,
       segmentIndex: 0,
+      mode: 'session',
+      executionStatus: 'pending',
     }
     await this.saveState(sessionId, state)
 
@@ -1059,6 +1547,8 @@ export class SessionManager {
       admin: msg.admin,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       agent: resolvedAgentType,
+      mode: state.mode,
+      parentSessionId: delegationOwner(state),
       projectName: state.projectName,
       ...sessionPromptLocality(state),
     }
@@ -1071,12 +1561,13 @@ export class SessionManager {
       ...history,
     ]
 
-    const sessionTools = new SessionTools(
+    const sessionTools = this.calls.get(sessionId)?.tools ?? new SessionTools(
       this.deps.tools,
       this.deps.workspace,
       allowedTools,
       blockedTools,
     )
+    if (!this.calls.has(sessionId)) sessionTools.setExecutionScope(state.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
 
     // Import tools specified by parent (e.g., subagent preload_tools param)
     if (state.preloadTools && Object.keys(state.preloadTools).length > 0) {

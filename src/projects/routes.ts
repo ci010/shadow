@@ -2,6 +2,8 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from 'hono'
 import type { GatewayPlugin } from '../gateway/types.ts'
+import { serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
+import { serveLocalGit } from '../gateway/local-git.ts'
 import type { CloneOperation, ProjectRecord } from './contracts.ts'
 import { CloneTerminationError, runGitClone, validateCloneUrl, validateDirectoryName, type GitCloneRunner } from './git.ts'
 import { absoluteDirectoryPath, existingDirectory, ProjectError, ProjectRegistry, UUID_PATTERN } from './registry.ts'
@@ -74,6 +76,33 @@ export class ProjectService {
 
   readonly plugin: GatewayPlugin = (app) => {
     app.get('/api/projects', (c) => c.json({ projects: this.#options.registry.list() }))
+    for (const operation of ['status', 'diff'] as const) {
+      app.get(`/api/projects/:id/git/${operation}`, async c => {
+        try {
+          this.#assertOpen()
+          const project = await this.#options.registry.requireAvailable(c.req.param('id'))
+          return await serveLocalGit(c, project.path, operation)
+        } catch (error) {
+          return errorResponse(c, error)
+        }
+      })
+    }
+    // Read-only /:id/{files,raw,preview,static/*} uses the registered folder,
+    // independently of sessions. Only POST /:id/sessions materializes a conversation.
+    for (const operation of ['files', 'raw', 'preview', 'static'] as const) {
+      app.get(`/api/projects/:id/${operation}${operation === 'static' ? '/*' : ''}`, async (c) => {
+        try {
+          this.#assertOpen()
+          const project = await this.#options.registry.requireAvailable(c.req.param('id'))
+          const path = operation === 'static' ? staticFilePath(c) : c.req.query('path') ?? ''
+          if (path === null) return c.json({ error: 'invalid_path' }, 400)
+          return await serveLocalFiles(c, project.path, { projectId: project.id },
+            operation === 'static' ? 'raw' : operation, path)
+        } catch (error) {
+          return errorResponse(c, error)
+        }
+      })
+    }
     app.post('/api/projects/register', async (c) => {
       try {
         this.#assertOpen()

@@ -1,5 +1,9 @@
 import type { Hono } from 'hono'
+import { delegationOwner } from './execution-scope.ts'
 import type { SessionManager } from './session-manager.ts'
+import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
+import { YieldError } from './yield.ts'
+import { isSelfReflectionId } from './session-purpose.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
 import {
@@ -9,59 +13,16 @@ import {
   type WorkdirResolution,
   type WorkdirUnavailableReason,
 } from './locality.ts'
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { extname, resolve, sep } from 'node:path'
+import { extname, resolve } from 'node:path'
+import { filePreviewLimit, serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
+import { isTextEncoding } from '../gateway/text-encoding.ts'
+import { serveLocalGit } from '../gateway/local-git.ts'
+export { resolveInWorkspace } from '../gateway/local-files.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import {
   executeRemoteFilesystemText,
   RemoteFilesystemError,
 } from '../execution/remote-filesystem-client.ts'
-
-/** Map a file extension to a best-effort MIME type for raw serving. */
-const MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.bmp': 'image/bmp',
-  '.ico': 'image/x-icon',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
-  '.pdf': 'application/pdf',
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.json': 'application/json',
-  '.map': 'application/json',
-  '.xml': 'application/xml',
-  '.wasm': 'application/wasm',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.otf': 'font/otf',
-  '.eot': 'application/vnd.ms-fontobject',
-  '.txt': 'text/plain; charset=utf-8',
-  '.md': 'text/markdown; charset=utf-8',
-}
-
-/** Resolve `relPath` within `baseDir`, returning null on traversal escape. */
-export function resolveInWorkspace(
-  baseDir: string,
-  relPath: string,
-): string | null {
-  const cleaned = relPath.replace(/^[/\\]+/, '')
-  const target = resolve(baseDir, cleaned)
-  if (target !== baseDir && !target.startsWith(baseDir + sep)) return null
-  return target
-}
 
 export type WorkdirUnavailableAction =
   | 'connect_node'
@@ -154,13 +115,26 @@ function remoteFilesystemStatus(error: RemoteFilesystemError): 400 | 404 | 503 {
 function sessionFileBase(
   sessions: SessionManager,
   key: string,
-): WorkdirResolution {
-  return resolveSessionFileBase(
+): WorkdirResolution & { scope?: 'home' } {
+  const state = sessions.getSessionState(key)
+  const base = resolveSessionFileBase(
     sessions.workspace,
     key,
-    sessions.getSessionState(key) ?? undefined,
+    state ?? undefined,
     sessions.workdirCapabilityLookup,
   )
+  if (!state || !base.available || base.locality !== 'local') return base
+  const visited = new Set<string>()
+  let ancestor: string | undefined = key
+  while (ancestor && !visited.has(ancestor)) {
+    visited.add(ancestor)
+    if (isSelfReflectionId(ancestor)) {
+      // This is a browsing root, not a change to the agent's execution workdir.
+      return { ...base, path: resolve(sessions.workspace), scope: 'home' }
+    }
+    ancestor = sessions.getSessionState(ancestor)?.parent?.id
+  }
+  return base
 }
 
 /**
@@ -168,16 +142,33 @@ function sessionFileBase(
  *
  * - `GET  /api/sessions`       — list all logical sessions
  * - `GET  /api/sessions/graph` — session graph with parent-child edges
+ * - `GET  /api/sessions/:key/details` — read-only identity, workdir, and usage
  * - `GET  /api/sessions/:key/files`   — list a directory in the session workspace
  * - `GET  /api/sessions/:key/raw`     — raw file bytes (image/video/audio previews)
  * - `GET  /api/sessions/:key/static/*`— static file serving (HTML pages + relative assets)
  * - `GET  /api/sessions/:key/preview` — truncated text preview of a file
+ * - `GET  /api/sessions/:key/git/status` — scoped HEAD/index/workdir changes
+ * - `GET  /api/sessions/:key/git/diff` — bounded HEAD-to-workdir text diff
  * - `GET  /api/sessions/:key`  — paginated history for a session
  */
 export function sessionsApiPlugin(
   sessions: SessionManager | undefined,
 ): GatewayPlugin {
   return (app: Hono) => {
+    for (const operation of ['status', 'diff'] as const) {
+      app.get(`/api/sessions/:key/git/${operation}`, async c => {
+        if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+        const key = c.req.param('key')
+        const base = sessionFileBase(sessions, key)
+        if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
+        if (base.locality === 'remote') {
+          return operation === 'status'
+            ? c.json({ available: false, reason: 'remote_unsupported', entries: [] })
+            : c.json({ error: 'remote_unsupported', message: 'Remote Git inspection is not supported. No local folder was used.' }, 501)
+        }
+        return serveLocalGit(c, base.path, operation, base.scope)
+      })
+    }
     app.get('/api/sessions', async (c) => {
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
@@ -193,6 +184,11 @@ export function sessionsApiPlugin(
       const list = await sessions.listSessions()
 
       const nodes: Array<{
+        mode: string
+        agentType: string
+        parentSessionId: string | null
+        executionId?: string
+        executionStatus: string
         physicalId: string
         logicalId: string
         projectId?: string
@@ -205,10 +201,21 @@ export function sessionsApiPlugin(
       const enrichedSessions = []
       for (const session of list) {
         const state = sessions.getSessionState(session.sessionId)
+        const execution = {
+          mode: state?.mode ?? 'session',
+          agentType: state?.agentType ?? 'general',
+          parentSessionId: delegationOwner(state) ?? null,
+          waitingForCall: !!sessions.isWaitingForCall?.(session.sessionId),
+          executionId: state?.executionId,
+          parentToolCallId: state?.parentToolCallId,
+          executionStatus: sessions.isWaitingForCall?.(session.sessionId) || sessions.yields.get(session.sessionId)
+            ? 'waiting' : state?.executionStatus ?? (state?.lastActivityAt ? 'completed' : 'pending'),
+        }
         const firstMsg = await sessions.getFirstUserMessage(session.sessionId)
         enrichedSessions.push({
           ...session,
-          title: firstMsg ?? undefined,
+          ...execution,
+          title: execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined,
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
@@ -219,6 +226,7 @@ export function sessionsApiPlugin(
           const parentPhysicalId = state?.parent?.physicalId ??
             null
           nodes.push({
+            ...execution,
             physicalId,
             logicalId: session.sessionId,
             projectId: state?.projectId,
@@ -233,7 +241,50 @@ export function sessionsApiPlugin(
       return c.json({ sessions: enrichedSessions, nodes })
     })
 
-    // ── PATCH /api/sessions/:key/config — update per-session model config ──
+    app.get('/api/sessions/:key/details', async (c) => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = decodeURIComponent(c.req.param('key'))
+      const details = await sessions.getSessionDetails(key, c.req.query('physicalId'))
+      return details
+        ? c.json(details)
+        : c.json({ error: 'session_not_found', key }, 404)
+    })
+
+    app.get('/api/sessions/:key/yield', (c) => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = c.req.param('key')
+      if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+      return c.json({ request: sessions.yields.get(key) })
+    })
+
+    app.on(['POST', 'DELETE'], '/api/sessions/:key/yield', async (c) => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = c.req.param('key')
+      if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+      let body: unknown
+      try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
+      const cancel = c.req.method === 'DELETE'
+      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'requestId' && (cancel || key !== 'option'))
+        || typeof body.requestId !== 'string' || !body.requestId || (!cancel && typeof body.option !== 'string')) {
+        return c.json({ error: 'invalid_request', message: cancel ? 'Supply the current requestId.' : 'Supply requestId and one exact option.' }, 400)
+      }
+      try {
+        if (cancel) {
+          sessions.yields.cancelUser(key, body.requestId)
+          sessions.getActiveSession(key)?.cancel()
+          return c.json({ cancelled: true })
+        }
+        if (typeof body.option !== 'string') return c.json({ error: 'invalid_request' }, 400)
+        return c.json({ answer: sessions.yields.answerUser(key, body.requestId, body.option) })
+      } catch (error) {
+        if (!(error instanceof YieldError)) throw error
+        const status = error.code === 'not_found' ? 404 : error.code === 'forbidden' ? 403
+          : error.code === 'conflict' ? 409 : error.code === 'unavailable' ? 503 : 400
+        return c.json({ error: error.code, message: error.message }, status)
+      }
+    })
+
+    // ── PATCH /api/sessions/:key/config — update per-session config ──
     app.patch('/api/sessions/:key/config', async (c) => {
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
@@ -244,45 +295,21 @@ export function sessionsApiPlugin(
         return c.json({ error: 'session_not_found', key }, 404)
       }
 
-      let body: Record<string, unknown>
+      let body: unknown
       try {
         body = await c.req.json()
       } catch {
         return c.json({ error: 'invalid_json' }, 400)
       }
 
-      // A `null` value clears the key so it falls back to the global config.
-      const setPatch: Record<string, unknown> = {}
-      const unsetKeys: Array<'model' | 'thinking' | 'reasoningEffort'> = []
-
-      if ('model' in body) {
-        const v = body.model
-        if (v === null) unsetKeys.push('model')
-        else if (typeof v === 'string' && v.trim()) setPatch.model = v
-        else return c.json({ error: 'invalid_model' }, 400)
+      let patch
+      try {
+        patch = parseSessionConfigPatch(body, true)
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error
+        return c.json({ error: error.message }, 400)
       }
-
-      if ('reasoningEffort' in body) {
-        const v = body.reasoningEffort
-        if (v === null) unsetKeys.push('reasoningEffort')
-        else if (v === 'high' || v === 'max') setPatch.reasoningEffort = v
-        else return c.json({ error: 'invalid_reasoningEffort' }, 400)
-      }
-
-      if ('thinking' in body) {
-        const v = body.thinking as { type?: unknown } | null
-        if (v === null) unsetKeys.push('thinking')
-        else if (v?.type === 'enabled' || v?.type === 'disabled') {
-          setPatch.thinking = { type: v.type }
-        } else return c.json({ error: 'invalid_thinking' }, 400)
-      }
-
-      if (Object.keys(setPatch).length > 0) {
-        await sessions.setSessionConfig(key, setPatch)
-      }
-      for (const k of unsetKeys) {
-        await sessions.unsetSessionConfig(key, k)
-      }
+      await sessions.applySessionConfigPatch(key, patch)
 
       return c.json({ key, config: sessions.getSessionConfig(key) })
     })
@@ -362,6 +389,7 @@ export function sessionsApiPlugin(
           return c.json({
             key,
             path: path === '.' ? '' : path,
+            workdir: { kind: 'remote', displayPath: base.workdir.displayPathSnapshot ?? null },
             entries,
           })
         } catch (error) {
@@ -375,42 +403,7 @@ export function sessionsApiPlugin(
           throw error
         }
       }
-      const target = resolveInWorkspace(base.path, relPath)
-      if (!target) {
-        return c.json({ error: 'invalid_path' }, 400)
-      }
-      try {
-        const dirents = await readdir(target, { withFileTypes: true })
-        const entries = await Promise.all(
-          dirents.map(async (d) => {
-            const full = resolve(target, d.name)
-            let size = 0
-            let mtime: string | null = null
-            try {
-              const info = await stat(full)
-              size = info.size
-              mtime = info.mtime?.toISOString() ?? null
-            } catch { /* ignore stat errors */ }
-            const isDir = d.isDirectory()
-            return {
-              name: d.name,
-              type: isDir ? 'dir' as const : 'file' as const,
-              ext: isDir ? '' : extname(d.name).toLowerCase(),
-              size,
-              mtime,
-            }
-          }),
-        )
-        // Directories first, then files — both alphabetical.
-        entries.sort((a, b) => {
-          if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
-          return a.name.localeCompare(b.name)
-        })
-        const rel = relPath.replace(/^[/\\]+/, '')
-        return c.json({ key, path: rel, entries })
-      } catch {
-        return c.json({ error: 'not_found', path: relPath }, 404)
-      }
+      return serveLocalFiles(c, base.path, { key }, 'files', relPath, undefined, base.scope)
     })
 
     // Serve the raw bytes of a file (used for image/video/audio previews).
@@ -427,27 +420,7 @@ export function sessionsApiPlugin(
       if (base.locality === 'remote') {
         return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
       }
-      const target = resolveInWorkspace(base.path, relPath)
-      if (!target) {
-        return c.json({ error: 'invalid_path' }, 400)
-      }
-      try {
-        const info = await stat(target)
-        if (!info.isFile()) {
-          return c.json({ error: 'not_a_file' }, 400)
-        }
-        const bytes = await readFile(target)
-        const mime = MIME_BY_EXT[extname(target).toLowerCase()] ??
-          'application/octet-stream'
-        return c.body(bytes, 200, {
-          'Content-Type': mime,
-          'Content-Length': String(info.size),
-          'Cache-Control': 'no-cache',
-          'Access-Control-Allow-Origin': '*',
-        })
-      } catch {
-        return c.json({ error: 'not_found', path: relPath }, 404)
-      }
+      return serveLocalFiles(c, base.path, { key }, 'raw', relPath)
     })
 
     // Static file serving: like opening a local file directly, so an HTML page's
@@ -458,16 +431,8 @@ export function sessionsApiPlugin(
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
       const key = decodeURIComponent(c.req.param('key'))
-      const pathname = new URL(c.req.url).pathname
-      const marker = '/static/'
-      const idx = pathname.indexOf(marker)
-      const rawRest = idx >= 0 ? pathname.slice(idx + marker.length) : ''
-      let relPath: string
-      try {
-        relPath = decodeURIComponent(rawRest)
-      } catch {
-        return c.json({ error: 'invalid_path' }, 400)
-      }
+      const relPath = staticFilePath(c)
+      if (relPath === null) return c.json({ error: 'invalid_path' }, 400)
       const base = sessionFileBase(sessions, key)
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
@@ -475,47 +440,25 @@ export function sessionsApiPlugin(
       if (base.locality === 'remote') {
         return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
       }
-      const target = resolveInWorkspace(base.path, relPath)
-      if (!target) {
-        return c.json({ error: 'invalid_path' }, 400)
-      }
-      try {
-        const info = await stat(target)
-        if (!info.isFile()) {
-          return c.json({ error: 'not_a_file' }, 400)
-        }
-        const bytes = await readFile(target)
-        const mime = MIME_BY_EXT[extname(target).toLowerCase()] ??
-          'application/octet-stream'
-        return c.body(bytes, 200, {
-          'Content-Type': mime,
-          'Content-Length': String(info.size),
-          'Cache-Control': 'no-cache',
-          // Allow subresources (e.g. @font-face) to load inside the
-          // sandboxed, null-origin preview iframe.
-          'Access-Control-Allow-Origin': '*',
-        })
-      } catch {
-        return c.json({ error: 'not_found', path: relPath }, 404)
-      }
+      return serveLocalFiles(c, base.path, { key }, 'raw', relPath)
     })
 
     // Return a truncated text preview of a file (used for text tiles).
     app.get('/api/sessions/:key/preview', async (c) => {
+      const encoding = c.req.query('encoding') ?? 'auto'
+      if (!isTextEncoding(encoding)) return c.json({ error: 'invalid_text_encoding' }, 400)
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
       const key = decodeURIComponent(c.req.param('key'))
       const relPath = c.req.query('path') ?? ''
-      const maxBytes = Math.min(
-        Math.max(parseInt(c.req.query('maxBytes') ?? '4096', 10) || 4096, 256),
-        65536,
-      )
+      const maxBytes = filePreviewLimit(c.req.query('maxBytes'))
       const base = sessionFileBase(sessions, key)
       if (!base.available) {
         return c.json(workdirUnavailableApiResult(key, base), 503)
       }
       if (base.locality === 'remote') {
+        if (encoding !== 'auto' && encoding !== 'utf-8') return c.json({ error: 'remote_encoding_unavailable' }, 501)
         const path = normalizeRemoteWorkspacePath(relPath)
         if (!path) return c.json({ error: 'invalid_path' }, 400)
         const executor = sessions.remoteExecutor
@@ -541,9 +484,10 @@ export function sessionsApiPlugin(
             key,
             path: relPath,
             binary: false,
+            encoding: 'utf-8',
             size: bytes.length,
             truncated: bytes.length > slice.length,
-            content: new TextDecoder().decode(slice),
+            content: new TextDecoder().decode(slice, { stream: bytes.length > slice.length }),
           })
         } catch (error) {
           if (error instanceof RemoteFilesystemError) {
@@ -556,32 +500,7 @@ export function sessionsApiPlugin(
           throw error
         }
       }
-      const target = resolveInWorkspace(base.path, relPath)
-      if (!target) {
-        return c.json({ error: 'invalid_path' }, 400)
-      }
-      try {
-        const info = await stat(target)
-        if (!info.isFile()) {
-          return c.json({ error: 'not_a_file' }, 400)
-        }
-        const buf = await readFile(target)
-        const slice = buf.subarray(0, maxBytes)
-        // Heuristic binary detection: a NUL byte in the sampled range.
-        if (slice.includes(0)) {
-          return c.json({ key, path: relPath, binary: true, size: info.size })
-        }
-        return c.json({
-          key,
-          path: relPath,
-          binary: false,
-          size: info.size,
-          truncated: info.size > slice.length,
-          content: new TextDecoder().decode(slice),
-        })
-      } catch {
-        return c.json({ error: 'not_found', path: relPath }, 404)
-      }
+      return serveLocalFiles(c, base.path, { key }, 'preview', relPath, maxBytes, base.scope)
     })
 
     app.get('/api/sessions/stages', async (c) => {
@@ -589,12 +508,14 @@ export function sessionsApiPlugin(
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
       const list = await sessions.listSessions()
-      const stages: Record<string, 'idle' | 'llm' | 'tool' | 'inactive'> = {}
+      const stages: Record<string, 'idle' | 'llm' | 'tool' | 'inactive' | 'waiting'> = {}
+      const waitingForCalls: Record<string, boolean> = {}
       for (const s of list) {
         const active = sessions.getActiveSession(s.sessionId)
-        stages[s.sessionId] = active ? active.phase : 'inactive'
+        waitingForCalls[s.sessionId] = !!sessions.isWaitingForCall?.(s.sessionId)
+        stages[s.sessionId] = waitingForCalls[s.sessionId] || sessions.yields.get(s.sessionId) ? 'waiting' : active ? active.phase : 'inactive'
       }
-      return c.json({ stages })
+      return c.json({ stages, waitingForCalls })
     })
 
     app.get('/api/sessions/:key/stage', async (c) => {
@@ -602,6 +523,8 @@ export function sessionsApiPlugin(
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
       const key = decodeURIComponent(c.req.param('key'))
+      if (sessions.isWaitingForCall?.(key)) return c.json({ stage: 'waiting', waitingForCall: true })
+      if (sessions.yields.get(key)) return c.json({ stage: 'waiting' })
       const active = sessions.getActiveSession(key)
       if (active) {
         return c.json({ stage: active.phase })

@@ -153,6 +153,9 @@ remains the primary way to run the agent without Electron.
    Tool calls are grouped according to read-only metadata: compatible read-only
    calls can run together; other calls are sequenced. Results are appended as
    paired tool messages before the next model call.
+   `yield` holds that tool call while `SessionManager.yields` waits for a
+   correlated human/parent answer or a configured default timeout. No separate
+   provider loop is created; parent requests enter the normal session mailbox.
 6. **Finish or continue.** No tool calls ends the turn. A context-limit response
    can trigger persistent-session compaction and retry; ordinary errors and
    cancellation follow the session error path. A real `session.turn.finished`
@@ -190,7 +193,24 @@ the common loop works with completed `chat` responses and tool events.
 
 ## Sessions and continuity
 
-### Persistent versus ephemeral
+### Roles and execution modes
+
+`agent_type` selects the role, instructions, and tool constraints. `mode` is a
+separate per-execution contract: `session` is reusable, `task` is a fresh
+one-assignment worker with asynchronous completion, and `call` is a bounded
+invocation inheriting a caller-context snapshot and returning its final result
+through the original blocking tool call. Session/task return after admission,
+not model completion; their caller can work independently or finish its turn.
+There is no independently configurable
+`ephemeral` execution flag. Agent definitions provide `defaultMode`, not a fixed
+lifetime. Mode is stored with execution state rather than inferred repeatedly
+from a role that can be edited later.
+
+The delegation capability matrix is enforced at runtime as well as described in
+the prompt: root reusable session → session/task; reusable sub-session → task/call;
+task → call; call → none. Role tool restrictions can narrow this further. Structural
+delegation ownership identifies a sub-session; neither the agent type's visibility
+flag nor context-only fork ancestry establishes coordination authority.
 
 - `Session` owns an inbox, active turn, abort controller, steering queue,
   compaction, and inactivity timer. Different logical sessions can operate
@@ -202,11 +222,12 @@ the common loop works with completed `chat` responses and tool events.
   Event defaults and trailing-debounce flushes are explicitly queued, including
   during LLM/tool work; they cannot accidentally take the human-interruption path.
   Silent inputs only record content. Retry/cancel/compact are distinct controls;
-  debounce exists only in the event router, not as a fourth execution mode.
+  debounce exists only in the event router, not as another admission policy.
 - `EphemeralSession` serializes admitted work without persistent-session steering,
   idle sleep, or compaction. Admission does not wait for the model; lifetime end
-  follows actual processing. Its transcript **is still persisted**. “Ephemeral”
-  describes the execution lifecycle, not absence of stored data.
+  follows actual processing. Its transcript **is still persisted**. The internal
+  class name describes one-shot execution, not a public role property or absence
+  of stored data.
 
 The default persistent-session inactivity period is 15 minutes. Sleep releases
 active session resources and dynamically imported tools; state/history remain.
@@ -216,7 +237,7 @@ compaction creates a continuation before the loop stops.
 ### Logical history, physical segments, and subagents
 
 `SessionState` holds a stable logical session ID, current segment index, activity
-and token values, settings, parent/children, agent type, project, report target,
+and token values, settings, parent/children, agent type, execution mode, project, report target,
 workdir, and preload tools. Physical logs are generated from a sanitized ID and
 segment number. Compaction starts a new segment linked to the previous one;
 forks can inherit a parent segment up to a record index. History assembly
@@ -239,18 +260,63 @@ directory picker. Project HTTP routes use the existing gateway authorization
 boundary. This local workflow does not implement remote workdir parity or Git
 worktree/branch management.
 
-`subagent` **creates the session but does not send its task**. The parent uses
-`message` afterward. When supported, a channel thread is created; otherwise a
-synthetic session ID is used. Child sessions inherit the root spawner's workdir
-ownership, not an isolated git worktree. Persisted `reportTo` routing consumes real
-turn facts and sends `subagent-complete` or `subagent-failed` to the callback session.
+`subagent` accepts the initial `task` directly. It is optional for reusable
+sessions and required for task/call execution. Session mode still supports
+creation followed by `message`. Tasks/calls start their assignment as part of
+creation and do not accept later message-tool assignments. Child sessions inherit
+the spawner's workdir ownership, not an isolated git worktree.
+
+For asynchronous session/task execution, persisted `reportTo` routing consumes
+real turn facts and sends `subagent-complete` or `subagent-failed` to the callback.
 UI command responses, tool projections, and `outbound.done` cannot produce a
-spurious completion report. The `message` tool waits for target acceptance before
-displaying its sent projection.
-Fresh ephemeral subagents can receive their initial task; concurrent or later
-message-tool follow-ups are rejected, including after recovery of an already-used
-session. This does not turn ephemeral execution into a persistent conversational agent.
-This supports coder/verifier patterns without making verification automatic.
+spurious completion report. Calls have no `report_to`: the original tool invocation
+awaits their final result and no separate completion event is emitted to the caller.
+The message tool enforces execution/ownership boundaries as well as waiting for
+target acceptance before displaying its sent projection.
+
+Call context is a snapshot, not a live shared message array. Internal tool calls
+and intermediate responses stay in the child trace. Calls are blocking leaves:
+no yield, session messaging, subagent creation, or deferred coordination. Missing
+information/permission returns as a blocker, including partial work and side
+effects, so the caller can decide or yield before another invocation. No yield
+decision continuation or asynchronous one-shot child-receipt lifecycle is needed.
+Caller cancellation stops its call, and cancellation/errors preserve paired tool
+history. Ordinary session/task yield still uses actual-parent delivery. Persisted
+trace does not imply a blocked in-memory call survives a backend restart.
+
+Call receipts retain their structured `completed`, `blocked`, `failed`, or
+`cancelled` status without generic tool-output truncation. A model can return raw
+JSON with `status: "blocked"`, `reason`, and `partialWork`, or `status: "failed"`
+and `error` (including partial work/side effects), to make non-success explicit.
+Only native subagent tool invocation supports blocking calls; embedding one in
+exec/scripts/invoke_tool is rejected because those wrappers do not establish the
+same caller-bound lifetime. Calls have a 120-second execution deadline and up to
+10 seconds of cancellation cleanup.
+
+Leaf calls retain role-permitted local exec with a foreground-only policy.
+Its `timeout_ms` is 1–120000, defaults to 120000, and cannot be zero. Timeout/abort
+waits for managed process-tree cleanup rather than detaching work or scheduling a
+background completion event. Remote foreground exec inside calls is explicitly
+unsupported; this does not change ordinary session/task execution. These lifecycle
+rules do not constitute an OS sandbox or roll back external side effects.
+
+The session graph exposes mode, role, structural parent, execution status, and the
+optional native `parentToolCallId`. Both JSONL and SQLite preserve this correlation
+field; older records can still be matched through their tool admission receipts.
+The UI keeps reusable conversations in its tree and displays delegated one-shot
+tasks/calls as inspectable execution cards at their originating native tool calls,
+not in a separate footer. Outbound tool events retain their IDs so parallel
+results cannot overwrite or cross-pair. Executions without a matching native call
+in the loaded history (such as older segments or script-created work) retain
+compact inspector links under Other execution traces, rather than losing access
+or guessing an invocation from a description. After a user-role message is persisted,
+`session.message.appended` notifies observers; the web channel forwards received
+event envelopes on the owning chat's persistent SSE stream. Completion bodies
+are expanded inline, with raw metadata secondary, consistently with loaded
+history. They are not synthetic assistant replies or additional call completions.
+System reflection remains a separate
+root activity. Internal execution records are retained even when they are not
+listed as ordinary conversations.
 
 ### Compaction is continuity, not full memory reconstruction
 
@@ -269,8 +335,14 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
 
 `ContextBuilder` concatenates providers in registration order:
 
-1. **Guideline:** selected agent prompt plus applicable safety/chat/tool
-   fragments.
+1. **Guideline:** selected agent prompt plus safety/chat/tool fragments and the
+   execution contract. Safety does not depend on execution lifetime. Delegation,
+   decision, messaging, and shell guidance is scoped by execution mode, structural
+   ownership, and role tool permissions. Root sessions receive session/task
+   instructions, reusable sub-sessions task/call, and tasks call only, further
+   narrowed by the role. Leaf calls receive no coordination-tool usage guide or
+   background-execution advice. Tool descriptions and parameter schemas use the
+   same scope, rather than advertising unavailable modes.
 2. **Workspace:** Home, effective local workdir or remote/unavailable capability,
    VFS entry points, and `SOUL.md` according to agent-type policy.
 3. **Runtime/identity:** platform and shell information, channel/user/admin
@@ -286,12 +358,19 @@ themselves rewrite the prompt of an already-running turn.
 
 Runtime types are parsed from
 `src/agent/agent-types/agents/<name>/AGENT.md` and workspace `agents/<name>/AGENT.md`.
-Frontmatter controls tool allow/block lists, ephemeral behavior, skills/Soul
+Frontmatter controls tool allow/block lists, default execution mode, skills/Soul
 inclusion, model settings, and visibility. Existing built-ins include `general`,
 `sub`, `explore`, `plan`, `verify`, `reflector`, `encapsulator`, and
 `soul-reflector`; retained definitions such as `general-legacy` are not a second
 engine. Root repository `AGENTS.md` is a contributor guide, not one of these
 runtime definitions.
+
+Legacy `ephemeral` frontmatter maps to `defaultMode` with a visible deprecation
+warning; conflicting old/new fields are rejected. `soul` is an explicit role
+context preference, independent of mode. The general role prompt favors direct
+work for simple continuous tasks and leaves concrete mode selection and completion
+instructions to the scoped guide. It no longer requires every nontrivial action
+to create agents or an alignment document.
 
 ### File-backed memory layers
 
@@ -316,8 +395,9 @@ project/shared modified paths when such signals exist, and capped. With no
 project/file signals, related events can still be included up to the cap.
 This is **relevance selection, not a privacy boundary**.
 
-The current keyword inclusion rule is specifically “not ephemeral and not named
-`sub`”; it is not a generic parent/child authorization check. The index reads the
+The keyword index is included for the main `general` and `general-legacy` roles,
+independently of their execution mode; it is not a parent/child authorization
+check. The index reads the
 global category directories, not the proposed per-project keyword hierarchy
 everywhere. Working-set tracking captures the `write` tool path, not all edits
 made by shell commands, MCP tools, other applications, or all descendants.
@@ -390,7 +470,8 @@ MCP connections.
 | `search` | Unified glob/grep/web search; ripgrep discovery/install helpers |
 | `exec` | Managed local shell processes and inline script/tool-bridge execution |
 | `kill`, `continuation`, `v:bg` | Cancel background work, attach continuation text, and inspect task status/output |
-| `message`, `subagent` | Cross-session messaging and session creation |
+| `message`, `subagent` | Authorized session messaging and role-independent session/task/call execution |
+| `yield` | Three-option decision requests, actual-parent routing, correlated answers and configurable waiting |
 | `plan_write`, `update_convention`, `log` | Plan state, scoped constraints, structured knowledge logging |
 | `event_subscribe` | Subscribe to normalized system events |
 | Lazy tools | Cron, project operations, search/MCP/tool factories |
@@ -401,6 +482,46 @@ changing directory in one command does not change later invocations.
 Its `shell: "node"` mode executes inline TypeScript in a Node child with a
 session tool bridge. OS-shell names such as `pwsh`, `bash`, or `cmd` select the
 ordinary managed-process path.
+
+`yield` is called directly, not through the Node script bridge. Its question
+has exactly three distinct options and one default. Root sessions expose the
+question to the human; a child addresses its stored parent, not `reportTo`.
+Only that parent can answer through `yield(action="answer")`; human answers
+use the session yield HTTP endpoint or the `/yield` channel command. The
+coordinator checks recipient, request ID and exact option before resolving
+the suspended call. Session stages report `waiting` while a request is active.
+
+Global `tools.yield.timeoutMs` defaults to indefinite waiting (`null`).
+`SessionConfig.yield` can override it, including explicit indefinite waiting;
+removing the override restores the global default. Positive timeouts choose
+the declared default on the backend, with timeout provenance in the tool
+result. Policy is captured when each question opens. Cancellation never
+chooses a default. This workflow is not an authorization or capability
+approval mechanism.
+
+Calls, results and policy overrides persist through the normal JSONL/SQLite
+paths. Waiters/timers are process-local, are cancelled on shutdown/deletion,
+and are not resurrected after restart; normal interrupted-tool history
+recovery still applies.
+
+The `write` tool returns a bounded success report after the filesystem operation
+completes: path, mode, UTF-8 bytes written, resulting line count, and line-numbered
+boundary excerpts. Edits also report the actual matching strategy and replacement
+count; CRLF normalization, no-op edits, and the fuzzy fallback's single-region
+behavior with `g` are explicit. Replacement text is literal, including `$&`.
+Full writes show the head/tail, edits show surrounding context, and appends show
+the old/new seam. Long lines show clipped windows around the change; their column
+labels use UTF-16 code units. Reports cap output at 8,000 characters, 24 snippets,
+and four replacement regions, with omissions labeled.
+
+These previews describe the written payload and pre-write context, not a separate
+post-write read-back or a guarantee against concurrent modifications. Remote
+append reads its previous contents through the owning capability before the
+append job; missing files start at line 1. If the existing content exceeds the
+remote read limit or is not readable as text, the append can still succeed, but
+its preview explicitly uses appended-text-relative lines without a whole-file
+range. Other remote read failures stop the operation. Local append uses append
+mode rather than rewriting the previously read contents.
 
 ### Virtual filesystem
 
@@ -512,10 +633,68 @@ field exists in the schema. WeChat uses the iLink implementation; a
 `wechatDesktop` schema entry is not a separately wired desktop channel.
 Likewise, a comment mentioning Telegram is not a shipped Telegram adapter.
 
+Settings combines the existing provider UI with QQ, Feishu, and Discord setup.
+`GET /api/channels` returns public configuration, credential-presence flags, and
+runtime state; `PATCH /api/channels/:id` validates and persists partial settings
+through the configuration store, then applies the selected channel's lifecycle.
+These are Main-administration endpoints, not unauthenticated platform callbacks.
+Enabling connects or reconnects; disabling stops the adapter without erasing its
+credentials. Omitted secrets remain unchanged and are never returned to the UI.
+Reconfiguration is serialized, and replaced adapters cannot publish stale
+connection updates or deliver old inbound events.
+
+Configuration is not connectivity: QQ and Discord become connected on gateway
+readiness, not merely after saving credentials. Feishu reports `running` because
+its SDK does not expose verifiable connection readiness. That SDK runs in a
+terminable worker so disconnect can stop its pending requests and retries; the
+session/agent loop remains in Main. Failed connections report sanitized status
+messages; external configuration changes can require a restart or reapplication
+through Channels. UI status polling pauses when the Channels section is hidden.
+
 `AbstractChannel` provides sender allowlisting and response update behavior.
 No/empty `allowFrom` means allow all; direct chats are admin by default, selected
 groups may be admin, and the web channel is always-admin at this layer.
 Those are local-agent trust assumptions, not a multi-tenant account system.
+
+Adapters declare destination-specific capabilities in
+`src/channels/capabilities.ts`: conversation kind, formatting, outbound media,
+updates, native threads, and decision presentation. `ChannelManager` filters out
+missing, disconnected, stale, or failed-cleanup connections. Runtime prompt
+assembly uses this capability snapshot together with role/execution-mode scope;
+thread creation checks capabilities again at execution. A platform name or an
+`update`/`createThread` method alone does not enable that feature. Progressive
+output also respects the adapter's declared update support.
+
+Only reusable `session` children request native threads. `task` and `call`
+children remain internal executions; unsupported external reusable children use
+virtual addresses, never fabricated platform chat IDs. Existing browser child
+sessions remain browser-addressable. Platform thread/topic placement is separate
+from logical delegation ownership and does not change its depth limits.
+
+Discord checks the destination and permissions before creating a public thread.
+Feishu keeps root message IDs as compatible routing handles, but only treats
+messages carrying actual topic metadata as topic traffic; ordinary reply ancestry
+is not a child session. Topic creation must be confirmed before returning a
+successful handle. Card replacement is not CardKit streaming. QQ exposes its
+implemented group/C2C/guild differences without advertising unimplemented stream
+or button APIs; iLink declares text/image output and no editing or threads.
+
+`yield` keeps one semantic tool. Discord/Feishu native controls call the same
+coordinator as text choices, using validated request IDs and choice indexes rather
+than model-generated commands. The requesting human's channel identity is frozen
+in the in-memory waiter; other group members cannot answer or cancel it.
+External root requests without a human source fail explicitly. Native presentation
+has an isolated text fallback, and production delivery errors reject the waiter
+instead of leaving an apparently delivered question waiting forever. These channel
+decisions bypass the ordinary progressive response buffer. Parent-directed requests
+and authenticated application-side decisions retain their existing authorization.
+Raw platform messaging/history/moderation APIs are not added to base tools.
+
+These changes do not select an execution node. A new external-channel root without
+an explicit workdir uses Main's `<workspace>/<safeSessionId>` managed directory;
+session storage stays under Main's `<workspace>/.sessions`. Remote execution
+requires a workdir capability; automatic per-channel/group node selection remains
+unimplemented.
 
 Uploads are normally placed under the session's `uploads` directory. Message
 construction and media helpers translate supported attachments for providers
@@ -779,7 +958,7 @@ baked into the image.
 | `src/index.ts` | Application service graph, registration, startup/shutdown |
 | `src/runtime` | CLI/process roles, bootstrap schemas, readiness/control, Child composition |
 | `src/agent` | Message router, identity, memory, prompts, process/background managers |
-| `src/sessions` | Persistent/ephemeral loops, state/history stores, locality, session APIs |
+| `src/sessions` | Session/task/call execution, state/history stores, locality, session APIs |
 | `src/handoff` | Context-threshold decisions and continuation synthesis |
 | `src/providers` | Provider contracts, adapters, aggregation, model registry/auth APIs |
 | `src/tools`, `src/eval` | Tool implementations, dynamic invocation, local script bridge |

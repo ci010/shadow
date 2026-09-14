@@ -20,7 +20,7 @@ export function sessionPlugin(
         source: t.source,
         allowedTools: t.allowedTools,
         blockedTools: t.blockedTools,
-        ephemeral: t.ephemeral,
+        defaultMode: t.defaultMode,
         model: t.model,
         temperature: t.temperature,
         maxTokens: t.maxTokens,

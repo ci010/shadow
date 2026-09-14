@@ -11,6 +11,7 @@
  */
 
 import type { Hono } from 'hono'
+import { basename } from 'node:path'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type {
@@ -20,17 +21,18 @@ import type {
 } from '../utils/feishu_sdk.ts'
 import {
   Client,
-  EventDispatcher,
   FeishuApiError,
-  LoggerLevel,
-  WSClient,
 } from '../utils/feishu_sdk.ts'
 import { Span } from '../utils/otel.ts'
 import { readMediaFile, saveToUploads } from '../utils/paths.ts'
 import { RingSet } from '../utils/ring-set.ts'
-import { errMsg } from '../utils/truncate.ts'
 import { AbstractChannel } from './base.ts'
 import type { VoicePipeline } from '../voice/mod.ts'
+import type { SessionManager } from '../sessions/session-manager.ts'
+import { resolveSessionLocations } from '../sessions/locality.ts'
+import type { YieldRequest } from '../sessions/yield-contract.ts'
+import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
+import { FeishuWorkerTransport, type FeishuTransport, type FeishuTransportOptions, type FeishuCardHandler, type FeishuCardResponse } from './feishu-transport.ts'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,10 +54,25 @@ export interface FeishuChannelOptions {
   adminChats?: string[]
   /** Voice pipeline for STT transcription (optional) */
   voicePipeline?: VoicePipeline
+  /** Read persisted child ownership to recover root-message routing after restart. */
+  sessionManager?: Pick<SessionManager, 'getSessionState'>
+  transportFactory?: (
+    options: FeishuTransportOptions,
+    onEvent: (event: Record<string, unknown>) => void,
+    onState: (state: 'running' | 'error' | 'disconnected') => void,
+    onCard: FeishuCardHandler,
+  ) => FeishuTransport
 }
 
 // Emoji types: THUMBSUP, OK, EYES, DONE, OnIt, HEART
 const SEEN_EMOJI = 'OnIt'
+const CHAT_CACHE_LIMIT = 500
+const CHAT_CACHE_TTL_MS = 30_000
+
+interface FeishuConversation {
+  conversation?: 'direct' | 'group'
+  eligible: boolean
+}
 
 // Non-text message type display labels (mirrors Python reference)
 const MSG_TYPE_MAP: Readonly<Record<string, string>> = {
@@ -258,10 +275,21 @@ export class FeishuChannel extends AbstractChannel {
   private voicePipeline?: VoicePipeline
 
   private _client: Client | null = null
-  private _dispatcher: EventDispatcher | null = null
-  private _wsClient: WSClient | null = null
+  private _wsClient: FeishuTransport | null = null
+  private readonly transportFactory: NonNullable<FeishuChannelOptions['transportFactory']>
+  private static readonly routeOwners = new WeakMap<Hono, { current?: FeishuChannel }>()
+  private routeOwner?: { current?: FeishuChannel }
+  private generation = 0
+  private controller = new AbortController()
   private _running = false
   private _botOpenId: string | null = null
+  private readonly sessionManager?: FeishuChannelOptions['sessionManager']
+  private readonly topicParents = new Map<string, string>()
+  private readonly conversations = new Map<string, 'direct' | 'group'>()
+  private readonly chatMetadata = new Map<string, {
+    expiresAt: number
+    result: Promise<FeishuConversation>
+  }>()
 
   // Dedup cache: recently seen message IDs to avoid double-processing
   private _seenIds = new RingSet<string>(200)
@@ -280,32 +308,33 @@ export class FeishuChannel extends AbstractChannel {
     this.verificationToken = opts.verificationToken ?? ''
     this.workspace = opts.workspace ?? '.'
     this.voicePipeline = opts.voicePipeline
+    this.sessionManager = opts.sessionManager
+    this.transportFactory = opts.transportFactory ?? ((options, onEvent, onState, onCard) =>
+      new FeishuWorkerTransport(options, onEvent, onState, undefined, onCard))
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-  @Span('FeishuChannel.start')
-  async start(app: Hono): Promise<void> {
-    if (!this.appId || !this.appSecret) {
-      console.warn('[feishu] appId and appSecret are required; skipping')
-      return
-    }
-
+  static registerRoutes(app: Hono): void {
     // ── Register gateway proxy ────────────────────────────────────────────
     // Proxy /feishu/* → https://open.feishu.cn/* with tenant_access_token
-    app.all('/feishu/*', async (c) => {
-      if (!this._client) {
+    const existingOwner = FeishuChannel.routeOwners.get(app)
+    const owner = existingOwner ?? {}
+    FeishuChannel.routeOwners.set(app, owner)
+    if (!existingOwner) app.all('/feishu/*', async (c) => {
+      const channel = owner.current
+      if (!channel?._client) {
         return c.json({ error: 'feishu_client_not_initialized' }, 503)
       }
       let token: string
       try {
-        token = await this._client._getTokenManager().getTenantAccessToken()
-      } catch (err) {
+        token = await channel._client._getTokenManager().getTenantAccessToken()
+      } catch {
         return c.json({
           error: 'token_fetch_failed',
-          detail: err instanceof Error ? err.message : String(err),
         }, 502)
       }
+      if (owner.current !== channel) return c.json({ error: 'feishu_client_not_initialized' }, 503)
       const url = new URL(c.req.url)
       const upstreamUrl = `https://open.feishu.cn${
         url.pathname.replace(/^\/feishu/, '')
@@ -328,14 +357,26 @@ export class FeishuChannel extends AbstractChannel {
           status: upstream.status,
           headers: resHeaders,
         })
-      } catch (err) {
+      } catch {
         return c.json({
           error: 'upstream_failed',
-          detail: err instanceof Error ? err.message : String(err),
         }, 502)
       }
     })
+  }
 
+  @Span('FeishuChannel.start')
+  async start(app: Hono): Promise<void> {
+    if (!this.appId || !this.appSecret) {
+      throw new Error('Feishu credentials are required')
+    }
+    const generation = ++this.generation
+    this.controller = new AbortController()
+    this.setAccepting(true)
+    this.reportState('connecting')
+    FeishuChannel.registerRoutes(app)
+    this.routeOwner = FeishuChannel.routeOwners.get(app)!
+    this.routeOwner.current = this
     this._running = true
 
     // REST client (for sending messages and reactions)
@@ -345,32 +386,32 @@ export class FeishuChannel extends AbstractChannel {
       disableTokenCache: false,
     })
 
-    // Event dispatcher — registers only im.message.receive_v1
-    this._dispatcher = new EventDispatcher({
-      encryptKey: this.encryptKey,
-      verificationToken: this.verificationToken,
-    }).register({
-      'im.message.receive_v1': (data: Record<string, unknown>) =>
-        this._onMessage(data),
-    })
-
-    // WebSocket long connection (no public IP required)
-    this._wsClient = new WSClient({
+    this._wsClient = this.transportFactory({
       appId: this.appId,
       appSecret: this.appSecret,
-      loggerLevel: LoggerLevel.warn,
+      encryptKey: this.encryptKey,
+      verificationToken: this.verificationToken,
+    }, (data) => {
+      if (!this._running || this.generation !== generation) return
+      void this._onMessage(data).catch(() => console.warn('[feishu] Incoming message handling failed'))
+    }, (state) => {
+      if (this._running && this.generation === generation) this.reportState(state)
+    }, async (data) => {
+      if (!this._running || this.generation !== generation) {
+        return { toast: { type: 'error', content: 'Channel is disconnected.' } }
+      }
+      return this._onCardAction(data)
     })
 
     // Fetch bot's own open_id for mention detection
-    this._fetchBotInfo().catch((err) =>
+    this._fetchBotInfo().catch(() =>
       console.warn(
         '[feishu] Could not fetch bot info (mention detection disabled)',
-        err,
       )
     )
 
     // Start in background; reconnect on error
-    this._startWsLoop()
+    this._wsClient.start()
     console.info('[feishu] Bot started with WebSocket long connection')
     console.info('[feishu] No public IP or webhook needed')
   }
@@ -378,18 +419,156 @@ export class FeishuChannel extends AbstractChannel {
   @Span('FeishuChannel.stop')
   async stop(): Promise<void> {
     this._running = false
-    try {
-      this._wsClient?.close()
-    } catch {
-      // ignore
-    }
+    this.controller.abort()
+    ++this.generation
+    this.setAccepting(false)
+    if (this.routeOwner?.current === this) this.routeOwner.current = undefined
+    const transport = this._wsClient
     this._wsClient = null
-    this._dispatcher = null
     this._client = null
+    this.topicParents.clear()
+    this.conversations.clear()
+    this.chatMetadata.clear()
+    this._botOpenId = null
+    await transport?.stop()
+    this.reportState('disconnected')
     console.info('[feishu] Bot stopped')
   }
 
   // ── Send ──────────────────────────────────────────────────────────────────
+
+  override async getCapabilities(chatId: string): Promise<ChannelCapabilities> {
+    return this._getCapabilities(chatId)
+  }
+
+  private async _getCapabilities(chatId: string, refresh = false): Promise<ChannelCapabilities> {
+    const client = this._client
+    if (!client) return unavailableCapabilities()
+    const parentId = this._topicParent(chatId)
+    if (this._isThreadChatId(chatId) && !parentId) return unavailableCapabilities()
+    const destination = parentId ?? chatId
+    const { conversation, eligible } = await this._conversationMetadata(destination, refresh)
+    if (this._client !== client) return unavailableCapabilities()
+    if (!conversation || (parentId && conversation !== 'group')) return unavailableCapabilities()
+    let outboundMedia: ChannelCapabilities['outboundMedia'] = ['image', 'file']
+    try { this._mediaSessionId(chatId) } catch { outboundMedia = [] }
+    return {
+      conversation: parentId ? 'thread' : conversation,
+      format: 'card', codeBlocks: true, tables: true, outboundMedia,
+      updates: 'replace', threads: !parentId && eligible ? 'topic' : 'none', decisions: 'buttons',
+    }
+  }
+
+  private _conversationMetadata(chatId: string, refresh: boolean): Promise<FeishuConversation> {
+    const client = this._client
+    if (!client) return Promise.resolve({ eligible: false })
+    const cached = this.chatMetadata.get(chatId)
+    if (!refresh && cached && cached.expiresAt > Date.now()) return cached.result
+    const result = (async (): Promise<FeishuConversation> => {
+      if (chatId.startsWith('oc_')) {
+        try {
+          const response = await client.im.chat.get({ path: { chat_id: chatId } })
+          if (this._client !== client) return { eligible: false }
+          if (response.code === 0) {
+            if (response.data?.chat_status === 'dissolved') return { eligible: false }
+            const mode = response.data?.chat_mode
+            if (mode === 'p2p') return { conversation: 'direct', eligible: false }
+            if (mode === 'group' || mode === 'topic') {
+              return { conversation: 'group', eligible: response.data?.chat_post_permission === 'all' }
+            }
+          }
+        } catch { /* Inbound chat_type identifies conversation type, not posting rights. */ }
+      }
+      return { conversation: this.conversations.get(chatId), eligible: false }
+    })()
+    this.chatMetadata.delete(chatId)
+    this.chatMetadata.set(chatId, { expiresAt: Date.now() + CHAT_CACHE_TTL_MS, result })
+    if (this.chatMetadata.size > CHAT_CACHE_LIMIT) this.chatMetadata.delete(this.chatMetadata.keys().next().value!)
+    return result
+  }
+
+  override async presentDecision(chatId: string, request: YieldRequest, content: string): Promise<void> {
+    const client = this._client
+    if (!client) throw new Error('Feishu channel is disconnected')
+    const card: InteractiveCard = {
+      config: { wide_screen_mode: true },
+      elements: [
+        ...buildCardElements(content),
+        {
+          tag: 'action',
+          actions: [...request.options.map((label, index) => ({
+            tag: 'button', text: { tag: 'plain_text', content: label },
+            type: label === request.defaultOption ? 'primary' : 'default',
+            value: { kind: 'shadow_yield', requestId: request.id, chatId, option: index + 1 },
+          })), {
+            tag: 'button', text: { tag: 'plain_text', content: 'Cancel' }, type: 'default',
+            value: { kind: 'shadow_yield', requestId: request.id, chatId, option: 'cancel' },
+          }],
+        },
+      ] as InteractiveCard['elements'],
+    }
+    const data = { msg_type: 'interactive', content: JSON.stringify(card) }
+    const response = this._isThreadChatId(chatId)
+      ? await client.im.message.reply({ path: { message_id: chatId }, data: { ...data, reply_in_thread: true } })
+      : await client.im.message.create({
+        params: { receive_id_type: chatId.startsWith('oc_') ? 'chat_id' : 'open_id' },
+        data: { ...data, receive_id: chatId },
+      })
+    if (response.code !== 0 || !response.data?.message_id) throw new Error('Feishu decision delivery failed')
+    this._trackBotMessage(response.data.message_id)
+  }
+
+  private async _onCardAction(event: Record<string, unknown>): Promise<FeishuCardResponse> {
+    const record = (value: unknown): Record<string, unknown> =>
+      value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+    const value = record(record(event.action).value)
+    const context = record(event.context)
+    const operator = record(event.operator)
+    const senderId = operator.open_id
+    const outerChatId = context.open_chat_id
+    const { chatId, requestId, option } = value
+    if (value.kind !== 'shadow_yield' || typeof senderId !== 'string' || !senderId
+      || typeof outerChatId !== 'string' || !outerChatId.startsWith('oc_')
+      || typeof chatId !== 'string' || typeof requestId !== 'string' || !requestId || requestId.length > 200
+      || (option !== 1 && option !== 2 && option !== 3 && option !== 'cancel')
+      || (chatId !== outerChatId && this._topicParent(chatId) !== outerChatId)) {
+      return { toast: { type: 'error', content: 'Invalid decision action.' } }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        this.answerDecision({ chatId, senderId, requestId, option }).then((): FeishuCardResponse =>
+          ({ toast: { type: 'success', content: 'Decision accepted.' } })),
+        new Promise<FeishuCardResponse>(resolve => {
+          timer = setTimeout(() => resolve({ toast: { type: 'info', content: 'Decision is still being processed.' } }), 1_500)
+        }),
+      ])
+    } catch {
+      return { toast: { type: 'error', content: 'Unable to accept this decision. It may have expired or require another user.' } }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private _topicParent(rootId: string): string | undefined {
+    if (!this._isThreadChatId(rootId)) return undefined
+    const state = this.sessionManager?.getSessionState(`${this.name}:${rootId}`)
+    // Completion redirects do not establish topic ownership.
+    const parent = state?.parentSessionId ?? state?.parent?.id
+    if (parent !== undefined) return parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
+    return this.topicParents.get(rootId)
+  }
+
+  private _mediaSessionId(chatId: string): string {
+    const sessionId = `${this.name}:${chatId}`
+    const state = this.sessionManager?.getSessionState(sessionId)
+    const locations = resolveSessionLocations(this.workspace, state ?? { sessionId })
+    if (!locations.workdir.available || locations.workdir.locality !== 'local'
+      || locations.workdir.path !== locations.sessionDataDir) {
+      throw new Error('Feishu media requires a local managed session workspace')
+    }
+    return state?.workspaceRoot ?? sessionId
+  }
 
   @Span('FeishuChannel.send')
   async send(msg: OutboundMessage): Promise<string | null> {
@@ -447,7 +626,7 @@ export class FeishuChannel extends AbstractChannel {
             if (!isReplyBadRequest) throw err
 
             console.warn(
-              `[feishu] Reply target rejected, fallback to normal send: ${err.message}`,
+              '[feishu] Reply target rejected, fallback to normal send',
             )
             res = await this._client.im.message.create({
               params: { receive_id_type: receiveIdType },
@@ -471,7 +650,7 @@ export class FeishuChannel extends AbstractChannel {
 
         if (res.code !== 0) {
           console.warn(
-            `[feishu] Failed to send message: code=${res.code}, msg=${res.msg}`,
+            `[feishu] Failed to send message: code=${res.code}`,
           )
         } else if (res.data?.message_id) {
           this._trackBotMessage(res.data.message_id)
@@ -491,7 +670,7 @@ export class FeishuChannel extends AbstractChannel {
         }
       }
     } catch (err) {
-      console.error('[feishu] Error sending message', err)
+      console.error('[feishu] Error sending message')
     }
     return firstMessageId
   }
@@ -519,18 +698,19 @@ export class FeishuChannel extends AbstractChannel {
       })
       if (res.code !== 0) {
         console.warn(
-          `[feishu] Failed to update message ${messageId}: code=${res.code}, msg=${res.msg}`,
+          `[feishu] Failed to update message: code=${res.code}`,
         )
       }
       // Send any new media attachments
       if (media && media.length > 0) {
         const receiveIdType = chatId.startsWith('oc_') ? 'chat_id' : 'open_id'
         for (const mediaPath of media) {
-          await this._sendMedia(chatId, receiveIdType, mediaPath)
+          if (this._isThreadChatId(chatId)) await this._sendMediaToThread(chatId, mediaPath)
+          else await this._sendMedia(chatId, receiveIdType, mediaPath)
         }
       }
     } catch (err) {
-      console.warn(`[feishu] Error updating message ${messageId}`, errMsg(err))
+      console.warn('[feishu] Error updating message')
     }
   }
 
@@ -548,7 +728,7 @@ export class FeishuChannel extends AbstractChannel {
     try {
       const { filename, data: fileData, ext } = await readMediaFile(
         this.workspace,
-        `${this.name}:${chatId}`,
+        this._mediaSessionId(chatId),
         mediaPath,
       )
 
@@ -563,7 +743,7 @@ export class FeishuChannel extends AbstractChannel {
         const uploadRes = await this._client.im.image.create(form)
         if (uploadRes.code !== 0 || !uploadRes.data?.image_key) {
           console.warn(
-            `[feishu] Failed to upload image ${filename}: code=${uploadRes.code}, msg=${uploadRes.msg}`,
+            `[feishu] Failed to upload image: code=${uploadRes.code}`,
           )
           return
         }
@@ -577,7 +757,7 @@ export class FeishuChannel extends AbstractChannel {
         })
         if (sendRes.code !== 0) {
           console.warn(
-            `[feishu] Failed to send image message: code=${sendRes.code}, msg=${sendRes.msg}`,
+            `[feishu] Failed to send image message: code=${sendRes.code}`,
           )
         } else if (sendRes.data?.message_id) {
           this._trackBotMessage(sendRes.data.message_id)
@@ -605,7 +785,7 @@ export class FeishuChannel extends AbstractChannel {
         const uploadRes = await this._client.im.file.create(form)
         if (uploadRes.code !== 0 || !uploadRes.data?.file_key) {
           console.warn(
-            `[feishu] Failed to upload file ${filename}: code=${uploadRes.code}, msg=${uploadRes.msg}`,
+            `[feishu] Failed to upload file: code=${uploadRes.code}`,
           )
           return
         }
@@ -619,14 +799,14 @@ export class FeishuChannel extends AbstractChannel {
         })
         if (sendRes.code !== 0) {
           console.warn(
-            `[feishu] Failed to send file message: code=${sendRes.code}, msg=${sendRes.msg}`,
+            `[feishu] Failed to send file message: code=${sendRes.code}`,
           )
         } else if (sendRes.data?.message_id) {
           this._trackBotMessage(sendRes.data.message_id)
         }
       }
     } catch (err) {
-      console.error(`[feishu] Error sending media ${mediaPath}`, err)
+      console.error('[feishu] Error sending media')
     }
   }
 
@@ -643,7 +823,9 @@ export class FeishuChannel extends AbstractChannel {
     parentChatId: string,
     name: string,
   ): Promise<string | null> {
-    if (!this._client) return null
+    if (!this._client || (await this._getCapabilities(parentChatId, true)).threads !== 'topic') return null
+    const client = this._client
+    if (!client) return null
 
     try {
       const receiveIdType = parentChatId.startsWith('oc_')
@@ -658,7 +840,7 @@ export class FeishuChannel extends AbstractChannel {
           content: `**${name}**`,
         }] as InteractiveCard['elements'],
       }
-      const res = await this._client.im.message.create({
+      const res = await client.im.message.create({
         params: { receive_id_type: receiveIdType },
         data: {
           receive_id: parentChatId,
@@ -669,16 +851,17 @@ export class FeishuChannel extends AbstractChannel {
 
       if (res.code !== 0 || !res.data?.message_id) {
         console.warn(
-          `[feishu] Failed to create thread starter: code=${res.code}, msg=${res.msg}`,
+          `[feishu] Failed to create thread starter: code=${res.code}`,
         )
         return null
       }
 
       const rootMessageId = res.data.message_id
+      if (this._client !== client) return null
       this._trackBotMessage(rootMessageId)
 
       // Reply with reply_in_thread to create the topic
-      const replyRes = await this._client.im.message.reply({
+      const replyRes = await client.im.message.reply({
         path: { message_id: rootMessageId },
         data: {
           msg_type: 'text',
@@ -689,19 +872,22 @@ export class FeishuChannel extends AbstractChannel {
 
       if (replyRes.code !== 0) {
         console.warn(
-          `[feishu] Failed to create thread topic: code=${replyRes.code}, msg=${replyRes.msg}`,
+          `[feishu] Failed to create thread topic: code=${replyRes.code}`,
         )
-        // Still return rootMessageId — the starter message exists, thread just wasn't promoted
+        return null
       } else if (replyRes.data?.message_id) {
         this._trackBotMessage(replyRes.data.message_id)
       }
+      if (!replyRes.data?.message_id || !replyRes.data.thread_id?.startsWith('omt_') || this._client !== client) return null
+      this.topicParents.set(rootMessageId, parentChatId)
+      if (this.topicParents.size > CHAT_CACHE_LIMIT) this.topicParents.delete(this.topicParents.keys().next().value!)
 
       console.info(
         `[feishu] Created thread "${name}" with root message ${rootMessageId}`,
       )
       return rootMessageId
     } catch (err) {
-      console.error('[feishu] Error creating thread', err)
+      console.error('[feishu] Error creating thread')
       return null
     }
   }
@@ -709,6 +895,7 @@ export class FeishuChannel extends AbstractChannel {
   // ── Incoming message handler ──────────────────────────────────────────────
 
   private async _onMessage(data: Record<string, unknown>): Promise<void> {
+    const generation = this.generation
     try {
       const message = data['message'] as Record<string, unknown> | undefined
       const sender = data['sender'] as Record<string, unknown> | undefined
@@ -722,7 +909,7 @@ export class FeishuChannel extends AbstractChannel {
             | string
             | undefined
 
-      if (!messageId || !senderId) return
+      if (!messageId || !senderId || !this.isAllowed(senderId)) return
 
       // Dedup — Feishu may deliver the same event multiple times
       if (!this._seenIds.add(messageId)) return
@@ -730,6 +917,20 @@ export class FeishuChannel extends AbstractChannel {
       const chatId = message['chat_id'] as string | undefined ?? senderId
       const chatType = message['chat_type'] as string | undefined // 'p2p' | 'group'
       const msgType = message['message_type'] as string | undefined ?? 'unknown'
+      if (chatType !== 'group' && chatType !== 'p2p') return
+      const outerChatId = chatId.startsWith('oc_') ? chatId : senderId
+      const isGroup = chatType === 'group'
+      const conversation = isGroup ? 'group' : 'direct'
+      if (this.conversations.get(outerChatId) !== conversation) this.chatMetadata.delete(outerChatId)
+      this.conversations.set(outerChatId, conversation)
+      if (this.conversations.size > CHAT_CACHE_LIMIT) this.conversations.delete(this.conversations.keys().next().value!)
+      const threadId = message['thread_id']
+      const rootId = message['root_id']
+      // root_id also appears on ordinary replies: only omt_ identifies a topic.
+      const managedTopic = isGroup && typeof threadId === 'string' && threadId.startsWith('omt_')
+        && typeof rootId === 'string' && rootId.startsWith('om_')
+        && this._topicParent(rootId) === outerChatId
+      const replyTo = managedTopic ? rootId as string : outerChatId
 
       // Hoist mentions early — used for both @bot stripping and mention detection
       const mentions = message['mentions'] as
@@ -774,7 +975,7 @@ export class FeishuChannel extends AbstractChannel {
           messageId,
           msgType,
           message,
-          `${this.name}:${chatId?.startsWith('oc_') ? chatId : senderId}`,
+          replyTo,
         )
         content = result.content
         if (result.media) fileMedia = result.media
@@ -786,27 +987,17 @@ export class FeishuChannel extends AbstractChannel {
 
       if (!content && !fileMedia) return
 
-      // If chatId is a group chat (oc_ prefix), reply there; otherwise reply to the user.
-      // Feishu may deliver group @mention events with chat_type='p2p', so rely on the
-      // chat_id format rather than chat_type for routing.
-      const replyTo = chatId?.startsWith('oc_') ? chatId : senderId
-
-      // Use chatType to determine actual group vs P2P for the mention filter.
-      // Note: P2P chats also have oc_-prefixed chat_ids, so chat_id format alone
-      // is not reliable for this check.
-      const isGroup = chatType === 'group'
-
       // In group chats, only respond if the bot is @mentioned or the user is
       // replying to one of the bot's own messages.
       let silent = false
-      if (isGroup && this._botOpenId) {
+      if (isGroup && !managedTopic) {
         const mentioned = mentions?.some((m) => {
           const id = m['id'] as Record<string, string> | undefined
           return id?.['open_id'] === this._botOpenId
         }) ?? false
 
         const parentId = message['parent_id'] as string | undefined
-        const isReplyToBot = !!parentId && this._botMessageIds.has(parentId)
+        const isReplyToBot = !threadId && !!parentId && this._botMessageIds.has(parentId)
 
         if (!mentioned && !isReplyToBot) silent = true
       }
@@ -819,6 +1010,7 @@ export class FeishuChannel extends AbstractChannel {
 
       // Best-effort display name: resolve from contact API with local cache
       const authorName = await this._fetchUserName(senderId)
+      if (!this._running || this.generation !== generation) return
 
       await this.handleIncoming(
         senderId,
@@ -834,7 +1026,7 @@ export class FeishuChannel extends AbstractChannel {
         fileMedia,
       )
     } catch (err) {
-      console.error('[feishu] Error handling message', err)
+      console.error('[feishu] Error handling message')
     }
   }
 
@@ -865,7 +1057,6 @@ export class FeishuChannel extends AbstractChannel {
       console.debug(
         '[feishu] Could not resolve display name for',
         openId,
-        errMsg(err),
       )
     }
     // Cache the fallback too so we don't keep retrying on every message
@@ -879,12 +1070,13 @@ export class FeishuChannel extends AbstractChannel {
     messageId: string,
     msgType: 'file' | 'image',
     message: Record<string, unknown>,
-    sessionId: string,
+    chatId: string,
   ): Promise<{ content: string; media?: string[] }> {
     const fallback = MSG_TYPE_MAP[msgType] ?? `[${msgType}]`
     if (!this._client) return { content: fallback }
 
     try {
+      const sessionId = this._mediaSessionId(chatId)
       const rawContent = message['content'] as string | undefined
       if (!rawContent) return { content: fallback }
 
@@ -902,6 +1094,10 @@ export class FeishuChannel extends AbstractChannel {
       }
 
       if (!fileKey) return { content: fallback }
+      fileName = basename(fileName.replace(/\\/g, '/'))
+      if (!fileName || fileName === '.' || fileName === '..') {
+        fileName = `file_${messageId.replace(/[^a-zA-Z0-9_-]/g, '_')}`
+      }
 
       // Download resource from Feishu API
       // The SDK returns a Buffer for binary responses
@@ -929,7 +1125,7 @@ export class FeishuChannel extends AbstractChannel {
 
       return { content: '', media: [relativePath] }
     } catch (err) {
-      console.error(`[feishu] Failed to download ${msgType}`, err)
+      console.error(`[feishu] Failed to download ${msgType}`)
       return { content: fallback }
     }
   }
@@ -974,7 +1170,7 @@ export class FeishuChannel extends AbstractChannel {
       console.info(`[feishu] Audio transcribed: ${text.substring(0, 80)}...`)
       return text
     } catch (err) {
-      console.error('[feishu] Failed to transcribe audio', err)
+      console.error('[feishu] Failed to transcribe audio')
       return '[audio]'
     }
   }
@@ -1001,7 +1197,7 @@ export class FeishuChannel extends AbstractChannel {
     try {
       const { filename, data: fileData, ext } = await readMediaFile(
         this.workspace,
-        `${this.name}:${threadRootId}`,
+        this._mediaSessionId(threadRootId),
         mediaPath,
       )
 
@@ -1061,7 +1257,7 @@ export class FeishuChannel extends AbstractChannel {
         if (res.data?.message_id) this._trackBotMessage(res.data.message_id)
       }
     } catch (err) {
-      console.error(`[feishu] Error sending media to thread ${mediaPath}`, err)
+      console.error('[feishu] Error sending media to thread')
     }
   }
 
@@ -1075,9 +1271,12 @@ export class FeishuChannel extends AbstractChannel {
 
   private async _fetchBotInfo(): Promise<void> {
     if (!this._client) return
+    const generation = this.generation
     try {
       const token = await this._client._getTokenManager().getTenantAccessToken()
+      if (!this._running || this.generation !== generation) return
       const res = await fetch('https://open.feishu.cn/open-apis/bot/v3/info', {
+        signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000)]),
         headers: { Authorization: `Bearer ${token}` },
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -1086,10 +1285,11 @@ export class FeishuChannel extends AbstractChannel {
         bot?: { open_id?: string }
       }
       if (json.code !== 0) throw new Error(`code=${json.code}`)
+      if (!this._running || this.generation !== generation) return
       this._botOpenId = json.bot?.open_id ?? null
       console.info(`[feishu] Bot open_id: ${this._botOpenId}`)
     } catch (err) {
-      console.warn('[feishu] Failed to fetch bot info', err)
+      if (this._running && this.generation === generation) console.warn('[feishu] Failed to fetch bot info')
     }
   }
 
@@ -1107,27 +1307,12 @@ export class FeishuChannel extends AbstractChannel {
       })
       if (res.code !== 0) {
         console.debug(
-          `[feishu] Could not add reaction: code=${res.code}, msg=${res.msg}`,
+          `[feishu] Could not add reaction: code=${res.code}`,
         )
       }
     } catch (err) {
-      console.debug('[feishu] Error adding reaction', err)
+      console.debug('[feishu] Error adding reaction')
     }
   }
 
-  // ── WebSocket start ───────────────────────────────────────────────────────
-  // The SDK handles reconnection internally via autoReconnect=true and the
-  // WebSocket 'close' event. start() resolves immediately (fire-and-forget
-  // reConnect call inside), so we must only call it once.
-
-  private _startWsLoop(): void {
-    if (!this._wsClient || !this._dispatcher) return
-    this._wsClient
-      .start({ eventDispatcher: this._dispatcher })
-      .catch((err) => {
-        if (this._running) {
-          console.warn('[feishu] WebSocket start error', err)
-        }
-      })
-  }
 }

@@ -24,6 +24,7 @@ import { readMediaFile, saveToUploads } from '../utils/paths.ts'
 import { RingSet } from '../utils/ring-set.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { AbstractChannel } from './base.ts'
+import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 
 // ---------------------------------------------------------------------------
 // Endpoints & constants
@@ -133,6 +134,19 @@ export interface QQChannelOptions {
 export class QQChannel extends AbstractChannel {
   readonly name = 'qq'
 
+  override getCapabilities(chatId: string): ChannelCapabilities {
+    const target = parseChatId(chatId)
+    if (!target) return unavailableCapabilities()
+    const v2 = target.kind === 'group' || target.kind === 'c2c'
+    return {
+      conversation: target.kind === 'c2c' || target.kind === 'dms' ? 'direct' : 'group',
+      format: this.markdown ? 'markdown' : 'plain',
+      codeBlocks: false, tables: false,
+      outboundMedia: v2 ? ['image', 'file', 'video', 'audio'] : ['image'],
+      updates: 'none', threads: 'none', decisions: 'text',
+    }
+  }
+
   // QQ group/C2C messages cannot be edited, so opt out of progressive updates:
   // the base class sends each outbound chunk as an independent message.
   override update = undefined
@@ -156,6 +170,10 @@ export class QQChannel extends AbstractChannel {
   private seq: number | null = null
   private gatewayUrl: string | null = null
   private stopping = false
+  private controller = new AbortController()
+  private reconnectTimer?: ReturnType<typeof setTimeout>
+  private identifyTimer?: ReturnType<typeof setTimeout>
+  private heartbeatAcknowledged = true
   private botAppId: string | null = null
 
   // Dedup recently seen message IDs (gateway may redeliver)
@@ -185,9 +203,11 @@ export class QQChannel extends AbstractChannel {
   @Span('QQChannel.start')
   async start(_app: Hono): Promise<void> {
     if (!this.appId || !this.secret) {
-      console.warn('[qq] appId and secret are required; skipping')
-      return
+      throw new Error('QQ credentials are required')
     }
+    this.controller = new AbortController()
+    this.setAccepting(true)
+    this.reportState('connecting')
     this.stopping = false
     this.botAppId = this.appId
 
@@ -198,16 +218,29 @@ export class QQChannel extends AbstractChannel {
   @Span('QQChannel.stop')
   stop(): Promise<void> {
     this.stopping = true
+    this.setAccepting(false)
+    this.controller.abort()
+    clearTimeout(this.reconnectTimer)
+    clearTimeout(this.identifyTimer)
+    this.reconnectTimer = undefined
+    this.identifyTimer = undefined
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
     }
     try {
-      this.ws?.close()
+      if (this.ws) {
+        this.ws.onopen = this.ws.onmessage = this.ws.onclose = this.ws.onerror = null
+        this.ws.close()
+      }
     } catch {
       // ignore
     }
     this.ws = null
+    this.accessToken = null
+    this.sessionId = null
+    this.seq = null
+    this.reportState('disconnected')
     console.info('[qq] Channel stopped')
     return Promise.resolve()
   }
@@ -224,14 +257,15 @@ export class QQChannel extends AbstractChannel {
       return this.accessToken
     }
 
-    const res = await fetch(TOKEN_URL, {
+    const res = await this.request(TOKEN_URL, {
+      signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000)]),
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: this.appId, clientSecret: this.secret }),
     })
     if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`token request failed: status=${res.status} ${text}`)
+      await res.body?.cancel()
+      throw new Error(`QQ token request failed: status=${res.status}`)
     }
     const data = await res.json() as {
       access_token?: string
@@ -240,7 +274,7 @@ export class QQChannel extends AbstractChannel {
     }
     if (!data.access_token) {
       throw new Error(
-        `token response missing access_token: ${data.message ?? ''}`,
+        'QQ token response missing access token',
       )
     }
     const expiresIn = Number(data.expires_in ?? 7200)
@@ -293,7 +327,7 @@ export class QQChannel extends AbstractChannel {
         }
       }
     } catch (err) {
-      console.error('[qq] Error sending message', errMsg(err))
+      console.error('[qq] Error sending message')
     }
     return firstMessageId
   }
@@ -357,14 +391,14 @@ export class QQChannel extends AbstractChannel {
     headers: Record<string, string>,
     body: Record<string, unknown>,
   ): Promise<{ ok: boolean; id: string | null }> {
-    const res = await fetch(`${this.apiBase}${path}`, {
+    const res = await this.request(`${this.apiBase}${path}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
     })
     if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      console.warn(`[qq] Send failed (${path}): status=${res.status} ${text}`)
+      await res.body?.cancel()
+      console.warn(`[qq] Send failed: status=${res.status}`)
       return { ok: false, id: null }
     }
     const data = await res.json().catch(() => ({})) as { id?: string }
@@ -427,15 +461,15 @@ export class QQChannel extends AbstractChannel {
     const copy = new Uint8Array(data.byteLength)
     copy.set(data)
     form.append('file_image', new Blob([copy]), filename)
-    const res = await fetch(`${this.apiBase}${sendPath}`, {
+    const res = await this.request(`${this.apiBase}${sendPath}`, {
       method: 'POST',
       headers: { Authorization: `QQBot ${token}`, 'X-Union-Appid': this.appId },
       body: form,
     })
     if (!res.ok) {
-      const text = await res.text().catch(() => '')
+      await res.body?.cancel()
       console.warn(
-        `[qq] Guild media send failed (${sendPath}): status=${res.status} ${text}`,
+        `[qq] Guild media send failed: status=${res.status}`,
       )
     }
   }
@@ -458,7 +492,7 @@ export class QQChannel extends AbstractChannel {
     const digest = (algorithm: 'md5' | 'sha1', bytes: Uint8Array): string =>
       createHash(algorithm).update(bytes).digest('hex')
 
-    const prepareRes = await fetch(`${this.apiBase}${preparePath}`, {
+    const prepareRes = await this.request(`${this.apiBase}${preparePath}`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -501,7 +535,7 @@ export class QQChannel extends AbstractChannel {
       )
       const uploadBytes = new Uint8Array(new ArrayBuffer(bytes.byteLength))
       uploadBytes.set(bytes)
-      const putRes = await fetch(part.presigned_url, {
+      const putRes = await this.request(part.presigned_url, {
         method: 'PUT',
         body: uploadBytes,
       })
@@ -510,7 +544,7 @@ export class QQChannel extends AbstractChannel {
       }
 
       const finishPath = `${resourcePath}/upload_part_finish`
-      const finishRes = await fetch(`${this.apiBase}${finishPath}`, {
+      const finishRes = await this.request(`${this.apiBase}${finishPath}`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -528,7 +562,7 @@ export class QQChannel extends AbstractChannel {
       }
     }
 
-    const uploadRes = await fetch(`${this.apiBase}${resourcePath}/files`, {
+    const uploadRes = await this.request(`${this.apiBase}${resourcePath}/files`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ upload_id: prepared.upload_id }),
@@ -544,13 +578,14 @@ export class QQChannel extends AbstractChannel {
 
   // ── WebSocket gateway ──────────────────────────────────────────────────────
 
-  @Span('QQChannel.getGatewayUrl')
   private async getGatewayUrl(): Promise<string> {
     const headers = await this.authHeaders()
-    const res = await fetch(`${this.apiBase}/gateway`, { headers })
+    const res = await this.request(`${this.apiBase}/gateway`, {
+      headers, signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000)]),
+    })
     if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new Error(`gateway request failed: status=${res.status} ${text}`)
+      await res.body?.cancel()
+      throw new Error(`QQ gateway request failed: status=${res.status}`)
     }
     const data = await res.json() as { url?: string }
     if (!data.url) throw new Error('gateway response missing url')
@@ -558,20 +593,27 @@ export class QQChannel extends AbstractChannel {
   }
 
   private async connect(): Promise<void> {
+    if (this.stopping) return
+    const controller = this.controller
+    this.reportState('connecting')
     try {
       this.gatewayUrl = await this.getGatewayUrl()
-    } catch (err) {
-      console.error('[qq] Failed to fetch gateway URL', errMsg(err))
+    } catch {
+      if (this.stopping || this.controller !== controller) return
+      this.reportState('error')
+      console.error('[qq] Failed to fetch gateway URL')
       this.scheduleReconnect()
       return
     }
 
-    console.debug(`[qq] Connecting to gateway: ${this.gatewayUrl}`)
-    this.ws = new WebSocket(this.gatewayUrl)
+    if (this.stopping) return
+    const ws = new WebSocket(this.gatewayUrl)
+    this.ws = ws
 
     this.ws.onopen = () => console.debug('[qq] WebSocket connected')
 
     this.ws.onmessage = (event: MessageEvent) => {
+      if (this.stopping || this.ws !== ws) return
       let data: {
         op: number
         d: Record<string, unknown> | null
@@ -595,6 +637,7 @@ export class QQChannel extends AbstractChannel {
           else this.identify()
           break
         case OP_HEARTBEAT_ACK:
+          this.heartbeatAcknowledged = true
           break
         case OP_RECONNECT:
           console.info('[qq] Gateway requested reconnect')
@@ -604,43 +647,60 @@ export class QQChannel extends AbstractChannel {
           console.warn('[qq] Invalid session, re-identifying')
           this.sessionId = null
           this.seq = null
-          setTimeout(() => this.identify(), 2000)
+          this.reportState('connecting')
+          clearTimeout(this.identifyTimer)
+          this.identifyTimer = setTimeout(() => {
+            if (!this.stopping && this.ws === ws) void this.identify()
+          }, 2000)
           break
         case OP_DISPATCH:
           this.handleDispatch(data.t ?? '', data.d ?? {}).catch((err) =>
-            console.error('[qq] Error in handleDispatch', errMsg(err))
+            console.error('[qq] Incoming message handling failed')
           )
           break
       }
     }
 
     this.ws.onclose = (event: CloseEvent) => {
+      if (this.stopping || this.ws !== ws) return
+      this.ws = null
+      this.reportState('disconnected')
+      clearTimeout(this.identifyTimer)
       console.warn(
-        `[qq] WebSocket closed: code=${event.code}, reason=${event.reason}`,
+        `[qq] WebSocket closed: code=${event.code}`,
       )
       if (this.heartbeatTimer) {
         clearInterval(this.heartbeatTimer)
         this.heartbeatTimer = null
       }
+      if ([4004, 4010, 4011, 4013, 4014].includes(event.code)) {
+        this.reportState('error')
+        return
+      }
       if (!this.stopping) this.scheduleReconnect()
     }
 
-    this.ws.onerror = (event: Event) => {
-      console.error(
-        '[qq] WebSocket error',
-        (event as ErrorEvent)?.message ?? event,
-      )
+    this.ws.onerror = () => {
+      if (this.stopping || this.ws !== ws) return
+      this.reportState('error')
+      console.error('[qq] WebSocket error')
     }
   }
 
   private scheduleReconnect(): void {
-    if (this.stopping) return
+    if (this.stopping || this.reconnectTimer) return
     console.info('[qq] Reconnecting in 5s...')
-    setTimeout(
-      () =>
-        this.connect().catch((err) =>
-          console.error('[qq] Reconnect failed', errMsg(err))
-        ),
+    this.reconnectTimer = setTimeout(
+      () => {
+        this.reconnectTimer = undefined
+        if (this.stopping) return
+        void this.connect().catch(() => {
+          if (this.stopping) return
+          this.reportState('error')
+          console.error('[qq] Reconnect failed')
+          this.scheduleReconnect()
+        })
+      },
       5000,
     )
   }
@@ -648,8 +708,10 @@ export class QQChannel extends AbstractChannel {
   private async identify(): Promise<void> {
     try {
       if (this.ws?.readyState !== WebSocket.OPEN) return
+      const ws = this.ws
       const token = await this.getAccessToken()
-      this.ws.send(JSON.stringify({
+      if (this.stopping || this.ws !== ws || ws.readyState !== WebSocket.OPEN) return
+      ws.send(JSON.stringify({
         op: OP_IDENTIFY,
         d: {
           token: `QQBot ${token}`,
@@ -658,16 +720,20 @@ export class QQChannel extends AbstractChannel {
           properties: {},
         },
       }))
-    } catch (err) {
-      console.warn('[qq] Identify send failed', errMsg(err))
+    } catch {
+      if (this.stopping) return
+      this.reportState('error')
+      console.warn('[qq] Identify send failed')
     }
   }
 
   private async resume(): Promise<void> {
     try {
       if (this.ws?.readyState !== WebSocket.OPEN) return
+      const ws = this.ws
       const token = await this.getAccessToken()
-      this.ws.send(JSON.stringify({
+      if (this.stopping || this.ws !== ws || ws.readyState !== WebSocket.OPEN) return
+      ws.send(JSON.stringify({
         op: OP_RESUME,
         d: {
           token: `QQBot ${token}`,
@@ -675,20 +741,35 @@ export class QQChannel extends AbstractChannel {
           seq: this.seq,
         },
       }))
-    } catch (err) {
-      console.warn('[qq] Resume send failed', errMsg(err))
+    } catch {
+      if (this.stopping) return
+      this.reportState('error')
+      console.warn('[qq] Resume send failed')
     }
   }
 
   private startHeartbeat(intervalMs: number): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    this.heartbeatAcknowledged = true
+    if (!Number.isFinite(intervalMs) || intervalMs < 100 || intervalMs > 300_000) {
+      this.reportState('error')
+      this.ws?.close()
+      return
+    }
     this.heartbeatTimer = setInterval(() => {
       try {
         if (this.ws?.readyState === WebSocket.OPEN) {
+          if (!this.heartbeatAcknowledged) {
+            this.reportState('disconnected')
+            this.ws.close()
+            return
+          }
+          this.heartbeatAcknowledged = false
           this.ws.send(JSON.stringify({ op: OP_HEARTBEAT, d: this.seq }))
         }
       } catch (err) {
-        console.warn('[qq] Heartbeat send failed', errMsg(err))
+        this.reportState('error')
+        console.warn('[qq] Heartbeat send failed')
       }
     }, intervalMs)
   }
@@ -700,6 +781,7 @@ export class QQChannel extends AbstractChannel {
     data: Record<string, unknown>,
   ): Promise<void> {
     if (event === 'READY') {
+      this.reportState('connected')
       this.sessionId = (data.session_id as string) ?? null
       const user = data.user as Record<string, string> | undefined
       console.info(
@@ -710,6 +792,7 @@ export class QQChannel extends AbstractChannel {
       return
     }
     if (event === 'RESUMED') {
+      this.reportState('connected')
       console.info('[qq] Session resumed')
       return
     }
@@ -823,7 +906,7 @@ export class QQChannel extends AbstractChannel {
       // QQ media URLs sometimes omit the scheme
       if (!/^https?:\/\//.test(url)) url = `https://${url}`
       try {
-        const res = await fetch(url)
+        const res = await this.request(url)
         if (!res.ok) {
           console.warn(`[qq] Failed to download attachment: ${res.status}`)
           continue

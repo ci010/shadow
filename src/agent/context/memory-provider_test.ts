@@ -7,15 +7,16 @@ import type { SessionPromptContext } from './builder.ts'
 import type { AgentTypeDefinition } from '../agent-types/types.ts'
 import type { SessionConfig } from '../../sessions/session-store.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
+import type { ExecutionMode } from '../../sessions/execution-mode.ts'
 
-function agent(name: string, ephemeral = false): AgentTypeDefinition {
+function agent(name: string, defaultMode: ExecutionMode = 'session'): AgentTypeDefinition {
   return {
     name,
     description: '',
     prompt: '',
-    ephemeral,
+    defaultMode,
     source: 'builtin',
-  } as AgentTypeDefinition
+  }
 }
 
 function ctx(
@@ -82,12 +83,12 @@ test('memory provider — keyword index is main-agent-only', async () => {
     const main = await provider.getPromptSection(ctx('discord:1', agent('general')))
     assert((main ?? '').includes('**Long-term keywords**'))
 
-    // Sub-agents (the 'sub' type and any ephemeral agent) skip the index.
+    // Keyword indexing belongs to the main role, not the execution lifetime.
     const sub = await provider.getPromptSection(ctx('discord:1', agent('sub')))
     assert(!(sub ?? '').includes('**Long-term keywords**'))
 
     const eph = await provider.getPromptSection(
-      ctx('discord:1', agent('reflector', true)),
+      ctx('discord:1', agent('reflector', 'task')),
     )
     assert(!(eph ?? '').includes('**Long-term keywords**'))
   })

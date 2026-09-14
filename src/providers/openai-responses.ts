@@ -1,4 +1,4 @@
-import type { ThinkingConfig } from '../agent/llm-config.ts'
+import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { spanAttributes } from '../utils/otel.ts'
 import {
@@ -64,12 +64,22 @@ function annotation(value: unknown): ResponsesOutputAnnotation {
   }
 }
 
-function outputItem(value: unknown): ResponsesOutputItem {
+function outputItem(value: unknown, provider?: string): ResponsesOutputItem {
   if (!object(value)) invalid('invalid output item')
   if (value.status !== undefined && value.status !== 'completed') invalid('output item is not completed')
   const id = value.id === undefined ? {} : { id: text(value.id, true) }
   const status = value.status === undefined ? {} : { status: 'completed' as const }
   if (value.type === 'reasoning') {
+    if (provider === 'deepseek') {
+      if (!Array.isArray(value.content)) invalid('invalid DeepSeek reasoning content')
+      return {
+        type: 'reasoning', ...id, ...status, summary: [],
+        content: value.content.map((part) => {
+          if (!object(part) || part.type !== 'reasoning_text') invalid('invalid DeepSeek reasoning content')
+          return { type: 'reasoning_text', text: text(part.text) }
+        }),
+      }
+    }
     if (!Array.isArray(value.summary)) invalid('invalid reasoning summary')
     return {
       type: 'reasoning', ...id, ...status,
@@ -114,19 +124,25 @@ function input(messages: ChatMessage[], provider: string | undefined, model: str
   const result: unknown[] = []
   for (const message of messages) {
     const state: unknown = message.provider_state
-    if (message.role === 'assistant' && provider === 'copilot' &&
+    if (message.role === 'assistant' && (provider === 'copilot' || provider === 'deepseek') &&
       object(state) && state.provider === provider && state.model === model) {
       if (state.outputItems !== undefined) {
         if (!Array.isArray(state.outputItems)) invalid('invalid provider continuation items')
-        result.push(...state.outputItems.map(outputItem))
+        result.push(...state.outputItems.map(item => outputItem(item, provider)))
         continue
       }
+      if (provider === 'deepseek') invalid('missing DeepSeek continuation items')
       if (!Array.isArray(state.reasoning)) invalid('invalid provider reasoning state')
       for (const value of state.reasoning) {
         const item = reasoningItem(value)
         if (!item) invalid('invalid provider reasoning state')
         result.push(item)
       }
+    }
+    if (message.role === 'assistant' && provider === 'deepseek') {
+      // Legacy Chat Completions records have no Responses items to replay.
+      const reasoning = state == null ? message.reasoning_content ?? '' : ''
+      result.push({ type: 'reasoning', content: [{ type: 'reasoning_text', text: reasoning }] })
     }
     const parts = typeof message.content === 'string'
       ? [{ type: 'text' as const, text: message.content }]
@@ -276,10 +292,11 @@ async function streamResponse(response: Response, signal?: AbortSignal): Promise
         if (!object(event.part)) invalid('invalid content part')
         parts[partIndex] = event.part
       } else if (/\.(delta|done)$/.test(type) &&
-        (summary || type.startsWith('response.output_text.') || type.startsWith('response.refusal.'))) {
+        (summary || type.startsWith('response.reasoning_text.') || type.startsWith('response.output_text.') || type.startsWith('response.refusal.'))) {
         const refusal = type.startsWith('response.refusal.')
+        const reasoningText = type.startsWith('response.reasoning_text.')
         const field = refusal ? 'refusal' : 'text'
-        const part = parts[partIndex] ??= { type: summary ? 'summary_text' : refusal ? 'refusal' : 'output_text' }
+        const part = parts[partIndex] ??= { type: summary ? 'summary_text' : reasoningText ? 'reasoning_text' : refusal ? 'refusal' : 'output_text' }
         if (!object(part)) invalid('invalid text content part')
         const value = type.endsWith('.delta') ? event.delta : event[field]
         if (typeof value !== 'string') invalid('invalid text delta')
@@ -310,7 +327,7 @@ function finalResponse(value: unknown, model: string, provider?: string): LLMRes
   const reasoning: string[] = []
   const state: ResponsesProviderState['reasoning'] = []
   const toolCalls: LLMResponse['toolCalls'] = []
-  const outputItems = value.output.map(outputItem)
+  const outputItems = value.output.map(item => outputItem(item, provider))
   for (const item of outputItems) {
     if (item.type === 'function_call') {
       const args = parseJson(item.arguments)
@@ -321,7 +338,7 @@ function finalResponse(value: unknown, model: string, provider?: string): LLMRes
         content.push(part.type === 'output_text' ? part.text : part.refusal)
       }
     } else if (item.type === 'reasoning') {
-      for (const part of item.summary) reasoning.push(part.text)
+      for (const part of provider === 'deepseek' ? item.content ?? [] : item.summary) reasoning.push(part.text)
       const opaque = reasoningItem(item)
       if (opaque) state.push(opaque)
     }
@@ -338,10 +355,10 @@ function finalResponse(value: unknown, model: string, provider?: string): LLMRes
   }
   return {
     content: content.length ? content.join('\n') : null,
-    reasoningContent: null,
-    reasoningText: reasoning.length ? reasoning.join('\n') : null,
+    reasoningContent: provider === 'deepseek' && reasoning.length ? reasoning.join('\n') : null,
+    reasoningText: provider !== 'deepseek' && reasoning.length ? reasoning.join('\n') : null,
     toolCalls, model: typeof value.model === 'string' ? value.model : model, usage,
-    ...(provider === 'copilot' ? { providerState: { provider, model, reasoning: state, outputItems } } : {}),
+    ...(provider === 'copilot' || provider === 'deepseek' ? { providerState: { provider, model, reasoning: state, outputItems } } : {}),
   }
 }
 
@@ -358,7 +375,7 @@ export async function openaiResponses(params: {
   providerName?: string
   signal?: AbortSignal
   thinking?: ThinkingConfig
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: ReasoningEffort
 }): Promise<LLMResponse> {
   params.signal?.throwIfAborted()
   spanAttributes({
@@ -367,11 +384,16 @@ export async function openaiResponses(params: {
   })
   const body: ObjectValue = {
     model: params.model, input: input(params.messages, params.providerName, params.model),
-    stream: true, store: false, include: ['reasoning.encrypted_content'],
+    stream: true, store: false,
   }
+  if (params.providerName !== 'deepseek') body.include = ['reasoning.encrypted_content']
   if (params.maxTokens !== undefined) body.max_output_tokens = params.maxTokens
   if (params.temperature !== undefined) body.temperature = params.temperature
-  if (params.reasoningEffort) body.reasoning = { effort: params.reasoningEffort }
+  if (params.thinking?.type === 'disabled') {
+    body.reasoning = { effort: 'none' }
+  } else if (params.providerName === 'deepseek') {
+    body.reasoning = { effort: params.reasoningEffort ?? 'high' }
+  } else if (params.reasoningEffort) body.reasoning = { effort: params.reasoningEffort }
   if (params.tools.length) body.tools = params.tools.map(({ function: fn }) => ({
     type: 'function', name: fn.name, description: fn.description, parameters: fn.parameters, strict: false,
   }))

@@ -23,6 +23,7 @@
 import type { OutboundMessage } from './events.ts'
 import type { SystemEvent } from '../events/types.ts'
 import type { AcceptedSessionInput, SessionTurnFact } from '../sessions/input.ts'
+import type { ChatMessage } from '../providers/provider.ts'
 
 const MAX_BUFFER_SIZE = 200
 
@@ -35,6 +36,7 @@ export interface BusTopics {
   'app.lifecycle': { action: 'start' | 'stop' }
   'session.ended': { sessionId: string; agentType?: string }
   'session.input.accepted': AcceptedSessionInput
+  'session.message.appended': { sessionId: string; physicalSessionId: string; message: ChatMessage }
   'session.turn.finished': SessionTurnFact
 }
 

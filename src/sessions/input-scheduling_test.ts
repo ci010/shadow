@@ -92,7 +92,7 @@ async function fixture(options: {
   const tools = new Tools(workspace)
   const store = new JsonlSessionStore(join(workspace, 'sessions'))
   await store.init()
-  const state: SessionState = { sessionId: 'test:queue', segmentIndex: 0, ...options.state }
+  const state: SessionState = { sessionId: 'test:queue', segmentIndex: 0, mode: options.ephemeral ? 'task' : 'session', ...options.state }
   await store.saveState(state.sessionId, state)
   const reports: Array<Record<string, any>> = []
   let preparations = 0
@@ -109,7 +109,7 @@ async function fixture(options: {
       },
     },
     agentTypes: {
-      resolve: () => ({ name: 'fixture', description: '', prompt: '', ephemeral: options.ephemeral }),
+      resolve: () => ({ name: 'fixture', description: '', prompt: '', defaultMode: options.ephemeral ? 'task' : 'session' }),
     },
   } as unknown as SessionManagerDeps) : undefined
   await manager?.start()
@@ -355,7 +355,7 @@ test('idle inbox does not accumulate abort listeners', async () => {
   } finally { await f.close() }
 })
 
-for (const ephemeral of [false, true]) {
+for (const ephemeral of [false]) {
   test(`${ephemeral ? 'ephemeral' : 'persistent'} concurrent admission is ordered, nonblocking, and shares one session`, async () => {
     const f = await fixture({ manager: true, ephemeral })
     try {
@@ -382,18 +382,16 @@ for (const ephemeral of [false, true]) {
   })
 }
 
-test('ephemeral interactive input serializes without steering or aborting', async () => {
+test('task interactive follow-up is rejected without aborting the initial execution', async () => {
   const f = await fixture({ manager: true, ephemeral: true })
   try {
     await f.manager.deliver(f.state.sessionId, input('first'))
     await waitFor(() => f.calls.length === 1)
-    await f.manager.deliver(f.state.sessionId, input('second', 'interactive'))
+    await assert.rejects(f.manager.deliver(f.state.sessionId, input('second', 'interactive')), /does not accept subsequent inputs/)
     assert.equal(f.calls[0].signal.aborted, false)
     f.calls[0].resolve(done())
-    await waitFor(() => f.calls.length === 2)
-    f.calls[1].resolve(done())
     await waitFor(() => f.ended.length === 1)
-    assert.equal(f.facts.length, 2)
+    assert.equal(f.facts.length, 1)
   } finally { await f.close() }
 })
 
@@ -468,7 +466,7 @@ test('ephemeral unsupported compaction rejects admission without aborting accept
     assert.equal(f.manager.requestCompact(f.state.sessionId, llm), false)
     await assert.rejects(
       f.manager.deliver(f.state.sessionId, control('unsupported-again', 'compact')),
-      /Compaction is not supported/,
+      /does not accept subsequent inputs/,
     )
     assert.equal(f.calls[0].signal.aborted, false)
     assert.deepEqual(f.accepted, ['task'])
@@ -525,10 +523,10 @@ for (const outcome of ['content', 'empty', 'null', 'failure', 'cancel'] as const
   })
 }
 
-test('message-tool admission allows a fresh ephemeral task but not concurrent or later follow-ups', async () => {
+test('task executions reject message-tool admissions and subsequent direct events', async () => {
   const f = await fixture({ manager: true, ephemeral: true, state: { agentType: 'fixture' } })
   try {
-    assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId), true)
+    assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId), false)
     const receipt = f.manager.deliver(f.state.sessionId, input('initial-task'))
     assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId), false)
     await receipt
@@ -537,10 +535,7 @@ test('message-tool admission allows a fresh ephemeral task but not concurrent or
     f.calls[0].resolve(done())
     await waitFor(() => f.ended.length === 1)
     assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId), false)
-    await f.manager.deliver(f.state.sessionId, input('direct-event'))
-    await waitFor(() => f.calls.length === 2)
-    f.calls[1].resolve(done())
-    await waitFor(() => f.ended.length === 2)
+    await assert.rejects(f.manager.deliver(f.state.sessionId, input('direct-event')), /does not accept subsequent inputs/)
     assert.equal(f.manager.canReceiveSessionMessage('test:ordinary'), true)
   } finally { await f.close() }
 })
@@ -552,7 +547,7 @@ test('failed ephemeral preparation releases the initial-task reservation', async
     const delivery = f.manager.deliver(f.state.sessionId, input('unaccepted'))
     assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId), false)
     await assert.rejects(delivery, /requires LLM runtime configuration/)
-    assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId), true)
+    assert.equal(f.manager.canReceiveSessionMessage(f.state.sessionId), false)
     assert.equal(f.accepted.length, 0)
   } finally { await f.close() }
 })
@@ -573,7 +568,7 @@ test('recovered ephemeral use is recognized from activity or legacy local histor
     await restored.start()
     assert.equal(restored.canReceiveSessionMessage('test:used'), false)
     assert.equal(restored.canReceiveSessionMessage(f.state.sessionId), false)
-    assert.equal(restored.canReceiveSessionMessage('test:fresh'), true)
+    assert.equal(restored.canReceiveSessionMessage('test:fresh'), false)
   } finally { await restored?.stop(); await f.close() }
 })
 
@@ -590,7 +585,8 @@ for (const ephemeral of [false, true]) {
       await waitFor(() => f.calls.length === 1)
       f.calls[0].resolve({ content: null, toolCalls: [{ id: 'wait', name: 'fixture_wait', arguments: {} }] })
       await waitFor(() => f.manager.getActiveSession(f.state.sessionId)?.phase === 'tool')
-      await f.manager.deliver(f.state.sessionId, input('queued'))
+      if (ephemeral) await assert.rejects(f.manager.deliver(f.state.sessionId, input('queued')), /does not accept subsequent inputs/)
+      else await f.manager.deliver(f.state.sessionId, input('queued'))
       const stopping = f.manager.stop()
       assert.equal(f.calls[0].signal.aborted, true)
       assert.equal(f.manager.stop(), stopping)

@@ -1,4 +1,4 @@
-import { deepEqual as assertEquals } from 'node:assert/strict'
+import { deepEqual as assertEquals, match, rejects, doesNotMatch } from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ExecutionContext } from '../agent/agent.ts'
 import type {
@@ -12,11 +12,21 @@ import { WriteTool } from './filesystem.ts'
 
 class FilesystemExecutor implements Executor {
   readonly requests: JobRequestV1[] = []
+  constructor(readonly readFailure?: string, readonly writeFailure?: string, readonly before = 'before value after') {}
 
   async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
     this.requests.push(request)
     const timestamp = new Date().toISOString()
     let sequence = 0
+    const failure = request.operation === 'filesystem.read' ? this.readFailure : this.writeFailure
+    if (failure) {
+      yield {
+        version: 1, jobId: request.jobId, sequence, timestamp, type: 'failed',
+        receipt: { version: 1, jobId: request.jobId, nodeId: request.nodeId, state: 'failed', finishedAt: timestamp,
+          reason: { code: failure, message: failure, retryable: false } },
+      }
+      return
+    }
     if (request.operation === 'filesystem.read') {
       yield {
         version: 1,
@@ -24,7 +34,7 @@ class FilesystemExecutor implements Executor {
         sequence: sequence++,
         timestamp,
         type: 'stdout',
-        chunk: 'before value after',
+        chunk: this.before,
       }
     }
     yield {
@@ -70,17 +80,19 @@ function context(executor: Executor): ExecutionContext {
   }
 }
 
-test('WriteTool appends through one remote capability job', async () => {
+test('WriteTool reads the remote append seam and appends through its capability', async () => {
   const executor = new FilesystemExecutor()
   const result = await new WriteTool('.').execute(
     { path: 'notes.txt', content: 'next', flag: 'a' },
     context(executor),
   )
 
-  assertEquals(result, '📝 notes.txt (appended)')
-  assertEquals(executor.requests.length, 1)
-  assertEquals(executor.requests[0].operation, 'filesystem.write')
-  assertEquals(executor.requests[0].args, {
+  match(result, /Success: append notes.txt/)
+  match(result, /L1: before value afternext/)
+  assertEquals(result.split('\n')[2], 'Line changes: +1 -1.')
+  assertEquals(executor.requests.length, 2)
+  assertEquals(executor.requests[1].operation, 'filesystem.write')
+  assertEquals(executor.requests[1].args, {
     path: 'notes.txt',
     content: 'next',
     mode: 'append',
@@ -94,7 +106,10 @@ test('WriteTool edits remote content with capability read then write', async () 
     context(executor),
   )
 
-  assertEquals(result, '✏️ notes.txt')
+  match(result, /Success: edit notes.txt/)
+  match(result, /Replacements: 1; match: exact/)
+  match(result, /L1: before changed after/)
+  assertEquals(result.split('\n')[2], 'Line changes: +1 -1.')
   assertEquals(executor.requests.map((request) => request.operation), [
     'filesystem.read',
     'filesystem.write',
@@ -104,4 +119,91 @@ test('WriteTool edits remote content with capability read then write', async () 
     content: 'before changed after',
     mode: 'replace',
   })
+})
+
+test('remote overwrites observe before text and report only after successful completion', async () => {
+  const executor = new FilesystemExecutor()
+  const result = await new WriteTool('.').execute({ path: 'new.txt', content: 'hello\n' }, context(executor))
+  assertEquals(executor.requests.map(request => request.operation), ['filesystem.read', 'filesystem.write'])
+  assertEquals(result.split('\n')[2], 'Line changes: +1 -1.')
+  match(result, /L1: hello/)
+  const failed = new FilesystemExecutor(undefined, 'path-denied')
+  await rejects(new WriteTool('.').execute({ path: 'bad.txt', content: 'hello' }, context(failed)), /path-denied/)
+})
+
+test('remote append with unreadable large content reports relative lines, never fabricated whole-file bounds', async () => {
+  const executor = new FilesystemExecutor('filesystem-result-too-large')
+  const result = await new WriteTool('.').execute({ path: 'large.txt', content: 'next\n', flag: 'a' }, context(executor))
+  match(result, /Append boundary unavailable/)
+  assertEquals(result.split('\n')[2], 'Line changes: unavailable.')
+  match(result, /Line changes unavailable:.*filesystem-result-too-large/)
+  match(result, /relative to the appended text/)
+  doesNotMatch(result, /Appended range:/)
+  assertEquals(executor.requests[1].args, { path: 'large.txt', content: 'next\n', mode: 'append' })
+})
+
+test('remote append creates missing files but does not ignore authorization failures', async () => {
+  const missing = new FilesystemExecutor('file-not-found')
+  match(await new WriteTool('.').execute({ path: 'new.txt', content: 'new', flag: 'a' }, context(missing)), /Appended range: L1-L1/)
+  const denied = new FilesystemExecutor('capability-denied')
+  await rejects(new WriteTool('.').execute({ path: 'new.txt', content: 'new', flag: 'a' }, context(denied)), /capability-denied/)
+  assertEquals(denied.requests.length, 1)
+})
+
+test('remote full overwrites preserve write-only semantics with explicit unknown observations', async () => {
+  for (const failure of ['capability-denied', 'path-denied', 'filesystem-result-too-large', 'file-type-denied', 'filesystem-io-failed']) {
+    const executor = new FilesystemExecutor(failure)
+    const result = await new WriteTool('.').execute({ path: 'write-only.txt', content: 'next' }, context(executor))
+    match(result, /^Success: write/)
+    assertEquals(result.split('\n')[2], 'Line changes: unavailable.')
+    match(result, new RegExp(`Line changes unavailable:.*${failure}`))
+    assertEquals(executor.requests[1].args, { path: 'write-only.txt', content: 'next', mode: 'replace' })
+  }
+})
+
+test('remote missing files are empty before writes and appends', async () => {
+  for (const flag of ['', 'a']) {
+    const executor = new FilesystemExecutor('file-not-found')
+    const result = await new WriteTool('.').execute({ path: 'new.txt', content: 'one\ntwo\n', flag }, context(executor))
+    assertEquals(result.split('\n')[2], 'Line changes: +2 -0.')
+  }
+})
+
+test('remote counts use full observed text for overwrite, global edit and append', async () => {
+  const cases = [
+    { before: 'old\nkeep\nold\n', args: { content: 'new\nkeep\nnew\n' }, expected: '+2 -2' },
+    { before: 'old\nkeep\nold\n', args: { match: 'old', content: 'new', flag: 'g' }, expected: '+2 -2' },
+    { before: 'a\r\nb\r\n', args: { content: 'a\nb\n' }, expected: '+0 -0' },
+    { before: 'a\n', args: { content: 'b\n', flag: 'a' }, expected: '+1 -0' },
+    { before: 'seam', args: { content: '+next\nlast\n', flag: 'a' }, expected: '+2 -1' },
+    { before: 'old\n', args: { match: 'old\n', content: '' }, expected: '+0 -1' },
+  ]
+  for (const { before, args, expected } of cases) {
+    const executor = new FilesystemExecutor(undefined, undefined, before)
+    const result = await new WriteTool('.').execute({ path: 'file.txt', ...args }, context(executor))
+    assertEquals(result.split('\n')[2], `Line changes: ${expected}.`)
+  }
+})
+
+test('remote pre-read cancellation propagates without attempting an overwrite', async () => {
+  for (const failure of ['cancelled', 'aborted']) {
+    const executor = new FilesystemExecutor(failure)
+    await rejects(new WriteTool('.').execute({ path: 'file.txt', content: 'new' }, context(executor)), new RegExp(failure))
+    assertEquals(executor.requests.length, 1)
+  }
+  const abort = new AbortController()
+  const executor = new FilesystemExecutor()
+  const wrapped: Executor = {
+    ...executor,
+    getStatus: executor.getStatus.bind(executor),
+    cancel: executor.cancel.bind(executor),
+    async *execute(request) {
+      for await (const event of executor.execute(request)) yield event
+      abort.abort()
+    },
+  }
+  await rejects(new WriteTool('.').execute({ path: 'file.txt', content: 'new' }, {
+    ...context(wrapped), signal: abort.signal,
+  }), { name: 'AbortError' })
+  assertEquals(executor.requests.length, 1)
 })

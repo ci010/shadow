@@ -55,23 +55,23 @@
         </div>
       </aside>
       <div v-if="showSetup" class="setup-content-scroll">
-        <ProvidersView v-bind="providerViewProps" v-on="providerViewEvents" />
+        <SettingsView v-bind="providerViewProps" v-on="providerViewEvents" />
       </div>
-      <p v-else-if="providerError && route.name !== 'providers'" class="provider-error" role="alert">{{ providerError }} Use the Providers tab to reconnect.</p>
+      <p v-else-if="providerError && route.name !== 'settings'" class="provider-error" role="alert">{{ providerError }} Open Settings → Providers to reconnect.</p>
       <div
-        v-if="hasReadyProvider || !isMain"
+        v-if="hasReadyProvider || !isMain || route.name === 'settings'"
         v-show="!showSetup"
         class="route-content"
         :class="{ 'chat-route': route.name === 'chat' }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
-        <KeepAlive :key="resolvedBase" include="ChatTab">
+        <KeepAlive :key="resolvedBase" include="ChatWorkspace">
           <component
             :is="Component"
             v-if="!showSetup"
             :key="viewRoute.name"
-            v-bind="viewRoute.name === 'providers' ? providerViewProps : { apiBase: resolvedBase }"
-            v-on="viewRoute.name === 'providers' ? providerViewEvents : {}"
+            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: resolvedBase }"
+            v-on="viewRoute.name === 'settings' ? providerViewEvents : {}"
             @update:log-count="logCount = $event"
           />
         </KeepAlive>
@@ -88,10 +88,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
-import ProvidersView from './components/ProvidersView.vue'
+import SettingsView from './components/SettingsView.vue'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
 import DesktopFrame from './DesktopFrame.vue'
-import { modelSelectionInput, provideModelSelection } from './model-selection.ts'
+import { modelDisplayName, modelSelectionInput, provideModelSelection } from './model-selection.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -131,7 +131,7 @@ const providerReady = computed(() => providerStatus.value?.ready === true)
 const checkingProvider = ref(true)
 const hasReadyProvider = ref(false)
 const savingModel = ref(false)
-const showSetup = computed(() => isMain.value && !providerReady.value)
+const showSetup = computed(() => isMain.value && !providerReady.value && route.name !== 'settings')
 const providerError = ref('')
 const providerViewProps = computed(() => ({
   apiBase: resolvedBase.value,
@@ -150,7 +150,7 @@ let providerRequest: AbortController | undefined
 provideModelSelection({
   current: currentModel,
   options: modelOptions,
-  disabled: computed(() => !providerReady.value || checkingProvider.value || savingModel.value),
+  disabled: computed(() => !providerReady.value),
   loading: computed(() => checkingProvider.value || savingModel.value),
   error: providerError,
   select: onModelChange,
@@ -210,13 +210,15 @@ function providerConfigured() {
 
 async function onModelChange(model: string) {
   if (!model || !providerStatus.value || savingModel.value) return
+  const input = modelSelectionInput(model, providerStatus.value.provider)
+  if (input.provider === providerStatus.value.provider && modelDisplayName(model) === modelDisplayName(currentModel.value)) return
   savingModel.value = true
   providerError.value = ''
   try {
     const result = await createProviderSetupClient(resolvedBase.value).save(
-      modelSelectionInput(model, providerStatus.value.provider),
+      input,
     )
-    if (!result.ready) throw new Error('The selected provider is not ready. The model was not changed; check the Providers tab.')
+    if (!result.ready) throw new Error('The selected provider is not ready. The model was not changed; check Settings → Providers.')
     currentModel.value = result.model
     providerStatus.value = result
     window.dispatchEvent(new CustomEvent('shadow:config-changed'))
@@ -308,7 +310,7 @@ onUnmounted(() => {
   left: -16px;
   width: 32px;
   height: 32px;
-  border-radius: var(--radius-circle);
+  border-radius: 50%;
   background: #a0a0a0;
   pointer-events: none;
   will-change: transform;

@@ -8,7 +8,7 @@ export type NavigationGroup = 'primary' | 'diagnostics'
 export type AppRouteName =
   | 'chat'
   | 'nodes'
-  | 'providers'
+  | 'settings'
   | 'approvals'
   | 'agents'
   | 'spans'
@@ -43,8 +43,8 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
     childLocal: true,
   },
   {
-    name: 'providers',
-    label: 'Providers',
+    name: 'settings',
+    label: 'Settings',
     group: 'primary',
     scopes: ['main:admin'],
     modes: ['main'],

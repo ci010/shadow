@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import type { InboundMessage } from '../bus/events.ts'
@@ -106,6 +106,37 @@ test('sender envelope records chat type without changing human text', async () =
 })
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: image source mapping reaches model context and survives storage reopen`, async t => {
+    await mkdir('.test-data', { recursive: true })
+    const directory = await mkdtemp(join(process.cwd(), '.test-data', 'image-source-'))
+    let store: SessionStore = new Store(directory)
+    t.after(async () => { store.close?.(); await rm(directory, { recursive: true, force: true }) })
+    const uploadedPath = join(directory, 'uploaded-marked.png')
+    const originalPath = join(directory, 'project', 'original.png')
+    const bytes = Buffer.from('synthetic marked image')
+    await writeFile(uploadedPath, bytes)
+    const content = 'Image references (source metadata):\n'
+      + `- Attached image: ${JSON.stringify(uploadedPath)}\n`
+      + `  Original file: ${JSON.stringify(originalPath)}\n`
+      + '  Version: marked copy; original file unchanged.'
+    const built = await buildUserChatMessage(userInput({ ...inbound, content, media: [uploadedPath] }), directory, directory)
+    assert.equal(built.role, 'user')
+    assert(Array.isArray(built.content))
+    assert.deepEqual(built.content.slice(1), [
+      { type: 'text', text: content },
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${bytes.toString('base64')}`, detail: 'auto' } },
+    ])
+    await store.init()
+    await store.appendMessages('image_source-0', [{ ...built, timestamp: inbound.timestamp }])
+    store.close?.()
+    store = new Store(directory)
+    await store.init()
+    const restored = []
+    for await (const record of store.readSessionLog('image_source-0')) restored.push(record)
+    assert.equal(restored.length, 1)
+    assert.deepEqual(restored[0]!.content, built.content)
+  })
+
   test(`${Store.name}: sender chat type and legacy envelopes survive storage reopen`, async (t) => {
     await mkdir('.test-data', { recursive: true })
     const directory = await mkdtemp(join(process.cwd(), '.test-data', 'message-author-'))

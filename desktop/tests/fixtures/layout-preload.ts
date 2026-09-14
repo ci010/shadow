@@ -1,4 +1,5 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
+import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from '../../src/document-tabs.js'
 import type { ShadowDesktopApi, DesktopWindowState } from '../../src/ipc-contract.js'
 import type { MainRuntimeContext } from '../../src/bootstrap/coordinator.js'
 import type { WizardState } from '../../src/wizard/state-machine.js'
@@ -23,6 +24,11 @@ const listeners = new Set<(value: DesktopWindowState) => void>()
 const projectDirectories: Array<string | null> = []
 let projectPickerCalls = 0
 const unused = async (): Promise<never> => { throw new Error('Unsupported layout fixture action') }
+
+const disposeDocumentShortcuts = receiveDocumentTabShortcuts(ipcRenderer, direction => {
+  window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
+})
+window.addEventListener('unload', disposeDocumentShortcuts, { once: true })
 
 const api: ShadowDesktopApi = {
   projects: {

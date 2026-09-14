@@ -1,7 +1,11 @@
 import type { ChatMessage } from '../providers/provider.ts'
-import type { ThinkingConfig } from '../agent/llm-config.ts'
+import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ExecShell } from '../tools/shell.ts'
 import type { WorkdirRefV1 } from './locality.ts'
+import type { YieldPolicy } from './yield-contract.ts'
+import type { ExecutionMode } from './execution-mode.ts'
+
+export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
 // ── Shared types ────────────────────────────────────────────────────────────
 
@@ -18,7 +22,9 @@ export interface SessionConfig {
   /** DeepSeek thinking mode toggle */
   thinking?: ThinkingConfig
   /** DeepSeek reasoning effort level */
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: ReasoningEffort
+  /** Omitted inherits global policy; null timeout waits indefinitely. */
+  yield?: YieldPolicy
 }
 
 export interface SessionParent {
@@ -31,6 +37,18 @@ export interface SessionParent {
 }
 
 export interface SessionState {
+  /** Frozen execution lifetime; absent only in legacy records. */
+  mode?: ExecutionMode
+  executionStatus?: ExecutionStatus
+  executionId?: string
+  /** Structural owner, independent of the historical fork snapshot. */
+  parentSessionId?: string | null
+  /** Stable tool invocation key, used to reject/reuse duplicate execution admissions. */
+  executionKey?: string
+  /** Native parent tool invocation, for linking a running execution before its receipt returns. */
+  parentToolCallId?: string
+  /** One-shot completion has been admitted to its recipient. */
+  completionReported?: boolean
   /** Logical session key (e.g. "discord:123") */
   sessionId: string
   /** 0-based index of the current physical session segment (incremented on each compaction). */

@@ -19,6 +19,7 @@ import type { LlmRuntimeConfig } from './agent/llm-config.ts'
 import { MemoryStore } from './agent/memory.ts'
 import { sessionPlugin } from './agent/routes.ts'
 import { createConfigCommand } from './commands/handlers/config.ts'
+import { createYieldCommand } from './commands/handlers/yield.ts'
 import { createDumpPromptCommand } from './commands/handlers/dump-prompt.ts'
 import { createHelpCommand } from './commands/handlers/help.ts'
 import {
@@ -60,6 +61,7 @@ import { ReadTool } from './tools/read.ts'
 import { Tools } from './tools/registry.ts'
 import { ExecTool } from './tools/shell.ts'
 import { SubagentTool } from './tools/subagent.ts'
+import { YieldTool } from './tools/yield.ts'
 import {
   createBgTasksHandler,
   createEventsHandler,
@@ -71,6 +73,7 @@ import { VirtualFs } from './vfs/virtual-fs.ts'
 
 import { Bus } from './bus/bus.ts'
 import { ChannelManager } from './channels/manager.ts'
+import { channelSetupPlugin } from './channels/setup.ts'
 import { loadConfig } from './config/loader.ts'
 import { configPlugin } from './config/routes.ts'
 import { ConfigStore } from './config/store.ts'
@@ -94,7 +97,7 @@ import {
   detectProvider,
 } from './providers/factory.ts'
 import { parseModelSpec } from './providers/aggregated.ts'
-import { resolveContextWindow } from './providers/model-registry.ts'
+import { MODEL_CONTEXT_WINDOWS, resolveContextWindow } from './providers/model-registry.ts'
 import { providerPlugin } from './providers/routes.ts'
 import { CopilotAuthenticator } from './providers/copilot.ts'
 import { ProviderSetup } from './providers/setup.ts'
@@ -490,7 +493,7 @@ export async function startMainRuntime(
   )
 
   const context = new ContextBuilder(workspace)
-  const sessions = new SessionManager({
+  const sessions: SessionManager = new SessionManager({
     workspace,
     store: sessionStore,
     handoffManager,
@@ -506,6 +509,14 @@ export async function startMainRuntime(
     agentTypes,
     events,
     getLlmRuntimeConfig: () => llm,
+    getYieldPolicy: () => activeConfig.tools.yield ?? { timeoutMs: null },
+    deliverYield: message => channels.deliverDecision(message),
+    getKnownContextWindow: (modelSpec) => {
+      const { model } = parseModelSpec(modelSpec)
+      const provider = resolvePrimaryProviderName(modelSpec)
+      return activeConfig.providers[provider]?.modelContextWindows?.[model] ??
+        MODEL_CONTEXT_WINDOWS[model] ?? null
+    },
     workdirCapabilityLookup,
     remoteExecutor: mainCluster.remoteExecutor,
     onSessionStopped: (id) => backgroundTasks.handleSessionStopped(id),
@@ -520,6 +531,7 @@ export async function startMainRuntime(
     identity,
     getSkillsSummary: (admin) => skills.getMetadataSummary(admin) || '',
     getAgentTypesSummary: () => agentTypes.getAgentTypesSummary(),
+    getChannelCapabilities: (channel, chatId) => channels.getCapabilities(channel, chatId),
     getActiveSubagents: (parentSessionId) =>
       sessions.getChildren(parentSessionId) ?? Promise.resolve([]),
   }))
@@ -582,6 +594,7 @@ export async function startMainRuntime(
 
   commandDispatcher.register(createHelpCommand(commandDispatcher))
   commandDispatcher.register(createConfigCommand(sessions))
+  commandDispatcher.register(createYieldCommand(sessions))
   commandDispatcher.register(createCompactCommand(sessions))
   commandDispatcher.register(createDumpPromptCommand(agent))
   commandDispatcher.register(createStatusCommand(sessions))
@@ -592,11 +605,16 @@ export async function startMainRuntime(
     new MessageTool(
       bus,
       (id) => sessions.canReceiveSessionMessage(id),
-      (id) => sessions.getSessionState(id)?.parent,
+      (id) => {
+        const owner = sessions.getDelegationOwner(id)
+        return owner ? { id: owner } : undefined
+      },
       (parentId) => sessions.getSessionState(parentId)?.children,
       deliverInput,
+      (source, target) => sessions.canSendSessionMessage(source, target),
     ),
   )
+  tools.register(new YieldTool(sessions.yields))
 
   // ── Cron service ──────────────────────────────────────────────────
   const cronService = new CronService(workspace, config.cron.timezone)
@@ -709,6 +727,7 @@ export async function startMainRuntime(
       provider = newProvider
       llm = newLlm
       activeConfig = newConfig
+      channels.updateConfig(newConfig)
       providerSetup.invalidate()
     },
   })
@@ -717,6 +736,8 @@ export async function startMainRuntime(
     getConfig: () => activeConfig,
     auth: copilotAuth,
   })
+  const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg))
+  await channels.init()
   const projects = new ProjectService({
     registry: projectRegistry,
     createSession: async (project) => {
@@ -742,6 +763,11 @@ export async function startMainRuntime(
     sessionsApiPlugin(sessions),
     projects.plugin,
     providerSetup.plugin(),
+    channelSetupPlugin({
+      store: configStore,
+      runtime: channels,
+      authorize: (request) => authorizeMainNodeInventory(request, launchCredential, clientAddresses),
+    }),
     providerPlugin(() => provider, () => providerSetup.status()),
     configPlugin({ store: configStore }),
   ], {
@@ -750,8 +776,6 @@ export async function startMainRuntime(
   })
 
   // ── Channel manager ───────────────────────────────────────────────
-  const channels = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg))
-  await channels.init()
   // Each channel registers its own routes (e.g. feishu proxy) onto the app
   await channels.startAll(app)
 
@@ -818,6 +842,7 @@ export async function startMainRuntime(
   }
   const shutdownRuntime = async () => {
     localControl.markStopping()
+    channels.beginShutdown()
     await projects.dispose()
     await providerSetup.dispose()
     console.info('[main] Shutting down...')

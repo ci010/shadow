@@ -109,6 +109,138 @@ async function settle(setup: ProviderSetup, id: string): Promise<void> {
   assert.notEqual(setup.get(id)?.state, 'pending', 'Flow did not settle')
 }
 
+function inventoryEnvironment(t: TestContext): void {
+  const original = new Map<string, string | undefined>()
+  for (const name of ['OPENAI', 'ANTHROPIC', 'DEEPSEEK', 'OPENROUTER', 'GEMINI', 'GROQ', 'STEPFUN', 'KIMI']) {
+    const key = `${name}_API_KEY`
+    original.set(key, process.env[key])
+    delete process.env[key]
+  }
+  t.after(() => {
+    for (const [key, value] of original) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+}
+
+test('configured inventory lists meaningful providers, selected model and safe fields without probes or writes', async (t) => {
+  inventoryEnvironment(t)
+  const f = fixture(t, {
+    agent: { model: 'gpt-4o@openai', quickModel: 'unused@unconfigured', temperature: 0.2 },
+    providers: {
+      openai: { apiKey: 'synthetic-openai-key' },
+      anthropic: { apiKey: 'synthetic-anthropic-key', quickModel: 'not-the-selected-model' },
+      local: { baseUrl: 'http://127.0.0.1:11434/v1' },
+      quick: { quickModel: 'small' },
+      windows: { modelContextWindows: { large: 100_000 } },
+      copilot: {},
+      blank: {},
+    },
+  }, undefined, (async () => { assert.fail('Inventory must not probe provider readiness') }) as typeof fetch)
+  t.mock.method(f.auth.auth, 'getApiKey', () => { assert.fail('Inventory must not refresh authentication') })
+  t.mock.method(f.setup, 'status', () => { assert.fail('Inventory must not check status') })
+  t.mock.method(f.store, 'read', () => { assert.fail('Inventory must use the active config') })
+  t.mock.method(f.store, 'update', () => { assert.fail('Inventory must not save config') })
+  const before = readFileSync(f.path, 'utf8')
+  const active = structuredClone(f.active())
+  const authFiles = [...f.auth.files]
+  const response = await f.app.request('/api/provider/configured')
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  const body = await response.json()
+  assert.deepEqual(body, { providers: [
+    { provider: 'openai', authMode: 'api-key', hasApiKey: true, selected: true, model: 'gpt-4o@openai', baseUrl: 'https://api.openai.com/v1' },
+    { provider: 'anthropic', authMode: 'api-key', hasApiKey: true, selected: false, baseUrl: 'https://api.anthropic.com/v1' },
+    { provider: 'copilot', authMode: 'copilot', hasApiKey: false, selected: false },
+    { provider: 'local', authMode: 'none', hasApiKey: false, selected: false, baseUrl: 'http://127.0.0.1:11434/v1' },
+    { provider: 'quick', authMode: 'api-key', hasApiKey: false, selected: false },
+    { provider: 'windows', authMode: 'api-key', hasApiKey: false, selected: false },
+  ] })
+  assert.doesNotMatch(JSON.stringify(body), /synthetic-|ready|quickModel|modelContextWindows|temperature/)
+  assert.deepEqual(await (await f.app.request('/api/provider/configured')).json(), body)
+  assert.equal(readFileSync(f.path, 'utf8'), before)
+  assert.deepEqual(f.active(), active)
+  assert.deepEqual([...f.auth.files], authFiles)
+  assert.equal(f.applyCount(), 0)
+  assert.deepEqual(f.auth.calls, [])
+})
+
+test('configured inventory excludes default selections and blank placeholders but includes explicit Copilot', async (t) => {
+  inventoryEnvironment(t)
+  for (const raw of [
+    {},
+    { agent: { model: 'gpt-4o' } },
+    { agent: { model: 'small@custom' }, providers: { custom: {} } },
+    { providers: { openai: {}, anthropic: { apiKey: '', baseUrl: '', quickModel: '', modelContextWindows: {} }, blank: { apiKey: ' ', baseUrl: ' ', quickModel: ' ' } } },
+  ]) {
+    const f = fixture(t, raw)
+    const before = readFileSync(f.path, 'utf8')
+    assert.deepEqual(await (await f.app.request('/api/provider/configured')).json(), { providers: [] })
+    assert.equal(readFileSync(f.path, 'utf8'), before)
+    assert.equal(f.applyCount(), 0)
+  }
+  const f = fixture(t, { providers: { copilot: {} } })
+  assert.deepEqual(await (await f.app.request('/api/provider/configured')).json(), { providers: [
+    { provider: 'copilot', authMode: 'copilot', hasApiKey: false, selected: true, model: f.active().agent.model },
+  ] })
+})
+
+test('configured inventory includes environment credentials, respects explicit empty keys and infers selection', async (t) => {
+  inventoryEnvironment(t)
+  process.env.OPENAI_API_KEY = 'synthetic-env-openai'
+  process.env.GEMINI_API_KEY = 'synthetic-env-gemini'
+  process.env.DEEPSEEK_API_KEY = 'synthetic-env-overridden'
+  const f = fixture(t, { agent: { model: 'gpt-4o' }, providers: { deepseek: { apiKey: '' } } })
+  assert.deepEqual(await (await f.app.request('/api/provider/configured')).json(), { providers: [
+    { provider: 'openai', authMode: 'api-key', hasApiKey: true, selected: true, model: 'gpt-4o', baseUrl: 'https://api.openai.com/v1' },
+    { provider: 'gemini', authMode: 'api-key', hasApiKey: true, selected: false, baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  ] })
+  assert.deepEqual(f.active().providers, { deepseek: { apiKey: '' } })
+  assert.equal(f.applyCount(), 0)
+  assert.deepEqual(f.auth.calls, [])
+})
+
+test('configured inventory includes nonselected cached Copilot without getting or refreshing credentials', async (t) => {
+  inventoryEnvironment(t)
+  for (const cache of ['access', 'valid-key', 'expired-key', 'empty'] as const) {
+    const auth = authHarness({ existing: cache === 'valid-key' })
+    if (cache === 'access') auth.files.set('access-token', 'synthetic-cached-access')
+    if (cache === 'expired-key') auth.files.set('api-key.json', JSON.stringify({ ...key, expires_at: epoch / 1000 - 1 }))
+    const f = fixture(t, { agent: { model: 'small@local' }, providers: { local: { baseUrl: 'http://localhost:11434/v1' } } }, auth)
+    t.mock.method(auth.auth, 'getApiKey', () => { assert.fail('Inventory must not get an API key') })
+    const before = [...auth.files]
+    const { providers } = await (await f.app.request('/api/provider/configured')).json()
+    assert.deepEqual(providers[0], { provider: 'local', authMode: 'none', hasApiKey: false, selected: true, model: 'small@local', baseUrl: 'http://localhost:11434/v1' })
+    assert.deepEqual(providers.slice(1), cache === 'access' || cache === 'valid-key'
+      ? [{ provider: 'copilot', authMode: 'copilot', hasApiKey: false, selected: false }]
+      : [])
+    assert.deepEqual([...auth.files], before)
+    assert.deepEqual(auth.calls, [])
+    assert.equal(f.applyCount(), 0)
+  }
+})
+
+test('configured inventory omits malformed or credential-bearing base URLs without leaking config', async (t) => {
+  inventoryEnvironment(t)
+  for (const baseUrl of [
+    'https://synthetic-user:synthetic-password@fixture.invalid/v1',
+    'https://fixture.invalid/v1?token=synthetic-secret',
+    'https://fixture.invalid/v1#synthetic-secret',
+    'file:///synthetic-secret',
+    'not-a-url-synthetic-secret',
+  ]) {
+    const f = fixture(t, {
+      agent: { model: 'small@custom' },
+      providers: { custom: { baseUrl, apiKey: 'synthetic-api-secret', quickModel: 'private-model', modelContextWindows: { private: 1000 } } },
+    })
+    assert.deepEqual(await (await f.app.request('/api/provider/configured')).json(), { providers: [
+      { provider: 'custom', authMode: 'api-key', hasApiKey: true, selected: true, model: 'small@custom' },
+    ] })
+    assert.deepEqual(f.auth.calls, [])
+  }
+})
+
 test('provider-aware readiness covers missing keys, local/custom endpoints and Copilot without OpenAI credentials', async (t) => {
   for (const [raw, provider, mode, ready] of [
     [{ agent: { model: 'gpt-4o' }, providers: { openai: { apiKey: '' } } }, 'openai', 'api-key', false],

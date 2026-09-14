@@ -120,7 +120,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     private approvalAuthority?: LocalApprovalAuthority,
   ) {}
 
-  async startProcess(args: ProcessExecuteArgsV1): Promise<ManagedProcess> {
+  async startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal }): Promise<ManagedProcess> {
     const parsed = parseProcessArgs(args)
     if (!parsed) {
       throw new TypeError('Invalid ProcessExecuteArgsV1')
@@ -131,6 +131,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       parsed.env,
       parsed.shell,
       parsed.args,
+      ...(options === undefined ? [] as const : [options] as const),
     )
   }
 

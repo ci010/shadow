@@ -1,4 +1,5 @@
-import type { ThinkingConfig } from '../llm-config.ts'
+import type { ReasoningEffort, ThinkingConfig } from '../llm-config.ts'
+import type { ExecutionMode } from '../../sessions/execution-mode.ts'
 
 export interface AgentTypeDefinition {
   /** Unique name: 'general', 'sub', 'explore', 'eval', 'plan', or user-defined */
@@ -11,15 +12,15 @@ export interface AgentTypeDefinition {
   allowedTools?: string[]
   /** Blacklist — these tools are removed from the full set */
   blockedTools?: string[]
-  /** Each spawn gets unique session ID, cannot be continued */
-  ephemeral: boolean
+  /** Default invocation contract; callers may select another mode. */
+  defaultMode: ExecutionMode
   /** 'builtin' or 'workspace' */
   source: 'builtin' | 'workspace'
   /** Directory path for workspace-defined types */
   dirPath?: string
   /** When false, skills context is not loaded for this agent type */
   skills?: boolean
-  /** When true on ephemeral agents, SOUL.md is loaded into context */
+  /** Include SOUL.md unless explicitly false, independently of execution mode. */
   soul?: boolean
   /** When true, agent is system-level and hidden from agent type summary */
   root?: boolean
@@ -33,5 +34,5 @@ export interface AgentTypeDefinition {
   /** DeepSeek thinking mode toggle */
   thinking?: ThinkingConfig
   /** DeepSeek reasoning effort level */
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: ReasoningEffort
 }

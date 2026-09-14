@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
-  parseDeviceLogin, parseProviderSetup, type DeviceLogin, type LoginView,
+  parseConfiguredProviders, parseDeviceLogin, parseProviderSetup, type DeviceLogin, type LoginView,
 } from './provider-setup.ts'
 
 const pending: DeviceLogin = {
@@ -10,6 +10,25 @@ const pending: DeviceLogin = {
   verificationUri: COPILOT_VERIFICATION_URL, expiresAt: 4_000_000_000_000, intervalMs: 5000,
 }
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+test('configured inventory validates records, drops extra secrets, and forwards cancellation', async () => {
+  const provider = { provider: 'local', authMode: 'none', hasApiKey: false, selected: true, model: 'qwen@local', baseUrl: 'http://127.0.0.1:11434/v1' }
+  assert.deepEqual(parseConfiguredProviders({ providers: [{ ...provider, apiKey: 'synthetic-private-key' }] }), [provider])
+  for (const value of [
+    {}, { providers: {} }, { providers: [null] }, { providers: [{ ...provider, selected: 'true' }] },
+    { providers: [{ ...provider, authMode: 'unknown' }] }, { providers: [provider, provider] },
+    { providers: [provider, { ...provider, provider: 'another' }] },
+    { providers: [{ ...provider, baseUrl: 5 }] },
+  ]) assert.throws(() => parseConfiguredProviders(value), /invalid provider list/)
+  const controller = new AbortController()
+  const client = createProviderSetupClient('http://fixture.invalid', async (input, init) => {
+    assert.equal(input, 'http://fixture.invalid/api/provider/configured')
+    assert.equal(init?.signal, controller.signal)
+    return Response.json({ providers: [provider] })
+  })
+  assert.deepEqual(await client.configured(controller.signal), [provider])
+  assert.deepEqual(parseConfiguredProviders({ providers: [] }), [])
+})
 
 function harness(result: DeviceLogin | Error = { loginId: pending.loginId, state: 'succeeded' }) {
   const views: LoginView[] = []

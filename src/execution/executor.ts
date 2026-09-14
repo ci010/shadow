@@ -16,7 +16,7 @@ export interface ProcessExecuteArgsV1 {
 }
 
 export interface LocalProcessExecutor {
-  startProcess(args: ProcessExecuteArgsV1): Promise<ManagedProcess>
+  startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal }): Promise<ManagedProcess>
 }
 
 export interface Executor {

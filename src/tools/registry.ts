@@ -4,12 +4,16 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import type { Tool, ToolDefinition, ToolExecutionHook } from './tool.ts'
 import type { ExecutionContext } from '../agent/agent.ts'
 import type { McpConnection } from '../mcp/client.ts'
+import type { ExecutionMode } from '../sessions/execution-mode.ts'
+import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
+
+const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'event_subscribe', 'cron', 'continuation', 'kill'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
-/** Tools whose results should NOT be auto-truncated (they handle their own). */
-const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep'])
+/** Self-limited outputs and structured execution receipts must remain intact. */
+const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent'])
 
 /**
  * Central registry of all available tools.
@@ -79,6 +83,8 @@ export class Tools {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    const denial = context.tools?.executionDenial?.(name, args)
+    if (denial) return denial
     const s = trace.getActiveSpan()
     s?.setAttributes({
       tool_name: name,
@@ -98,6 +104,7 @@ export class Tools {
 
       await this.onBefore(name, args, context)
       let result = await tool.execute(args, context)
+      context.signal?.throwIfAborted()
       // Run post-execution hooks
       result = await this.onAfter(name, args, result, context)
 
@@ -230,6 +237,9 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  private readonly foreground = new Set<Promise<unknown>>()
+  private readonly foregroundScopes = new Map<AbortSignal, Set<Promise<unknown>>>()
+  private scope?: { mode: ExecutionMode; modes: readonly ExecutionMode[]; blocked?: (reason: string) => void }
   private resetCallbacks: Array<() => void | Promise<void>> = []
   /** Session-scoped MCP connection cache, keyed by server name. */
   private mcpConns = new Map<
@@ -254,6 +264,8 @@ export class SessionTools extends Tools {
 
   /** Check if a tool name passes the allow/block policy. */
   private isToolAllowed(name: string): boolean {
+    if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
+    if (name === 'subagent' && this.scope?.modes.length === 0) return false
     if (this.allowed) return this.allowed.has(name)
     // Opt-in tools are hidden unless explicitly in allowedTools
     const tool = this.tools.get(name) ?? this.base.get(name)
@@ -290,6 +302,8 @@ export class SessionTools extends Tools {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    const denial = this.executionDenial(name, args)
+    if (denial) return denial
     if (!this.isDynamicToolAllowed(name)) {
       return `Error: dynamic tool "${name}" is not available for this agent type.`
     }
@@ -305,6 +319,7 @@ export class SessionTools extends Tools {
   }
 
   private isDynamicToolAllowed(name: string): boolean {
+    if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
     if (this.allowed) return this.allowed.has('invoke_tool')
     return !this.blocked?.has(name)
   }
@@ -312,6 +327,82 @@ export class SessionTools extends Tools {
   /** Whether a name belongs to the active session-only tool layer. */
   hasDynamic(name: string): boolean {
     return this.tools.has(name)
+  }
+
+  setExecutionScope(mode: ExecutionMode, modes: readonly ExecutionMode[], blocked?: (reason: string) => void): void {
+    this.scope = { mode, modes: [...modes], blocked }
+  }
+
+  get executionMode(): ExecutionMode | undefined { return this.scope?.mode }
+
+  runForeground<T>(parentSignal: AbortSignal, operation: (signal: AbortSignal, cancel: () => void) => Promise<T>): Promise<T> {
+    const controller = new AbortController()
+    const signal = AbortSignal.any([parentSignal, controller.signal])
+    const children = new Set<Promise<unknown>>()
+    const parent = this.foregroundScopes.get(parentSignal)
+    this.foregroundScopes.set(signal, children)
+    const cancel = () => controller.abort()
+    const pending = Promise.resolve().then(() => operation(signal, cancel)).finally(async () => {
+      cancel()
+      while (children.size) await Promise.allSettled([...children])
+      this.foregroundScopes.delete(signal)
+    })
+    this.foreground.add(pending)
+    parent?.add(pending)
+    const remove = () => { this.foreground.delete(pending); parent?.delete(pending) }
+    void pending.then(remove, remove)
+    return pending
+  }
+
+  async waitForForeground(): Promise<void> {
+    while (this.foreground.size) await Promise.allSettled([...this.foreground])
+  }
+
+  executionDenial(name: string, args: Record<string, unknown>): string | undefined {
+    if (name === 'invoke_tool' && typeof args.name === 'string') {
+      return this.executionDenial(args.name, typeof args.args === 'object' && args.args !== null ? args.args as Record<string, unknown> : {})
+    }
+    if (this.scope?.mode === 'call' && name === 'exec' && args.timeout_ms !== undefined
+      && (typeof args.timeout_ms !== 'number' || !Number.isInteger(args.timeout_ms)
+        || args.timeout_ms < 1 || args.timeout_ms > MAX_CALL_TIMEOUT_MS)) {
+      return this.rejectExecution(`Call exec requires timeout_ms between 1 and ${MAX_CALL_TIMEOUT_MS}; background execution is forbidden.`)
+    }
+    if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) {
+      const reason = `${name} is unavailable in a leaf call; return to the caller for coordination or deferred-capable execution.`
+      this.scope.blocked?.(reason)
+      return `Blocked: ${reason} Partial work and side effects are not rolled back.`
+    }
+    if (name === 'subagent' && this.scope && !this.scope.modes.includes('session') && args.mode === undefined) {
+      return `Error: mode is required in this scope; choose ${this.scope.modes.join(', ')}.`
+    }
+
+    if (name === 'subagent' && this.scope && typeof args.mode === 'string'
+      && !this.scope.modes.includes(args.mode as ExecutionMode)) {
+      return `Error: this session may create only: ${this.scope.modes.join(', ') || 'nothing'}.`
+    }
+  }
+
+  rejectExecution(reason: string): string {
+    if (this.scope?.mode === 'call') {
+      this.scope.blocked?.(reason)
+      return `Blocked: ${reason} Partial work and side effects are not rolled back.`
+    }
+    return `Error: ${reason}`
+  }
+
+  /** Blocking callers retain ownership of borrowed tool resources until the child returns. */
+  snapshot(): SessionTools {
+    const base = new Tools(this.workspace)
+    for (const name of this.names()) {
+      const tool = this.get(name)
+      if (tool) base.register(tool)
+    }
+    const copy = new SessionTools(base, this.workspace,
+      this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined)
+    for (const tool of this.tools.values()) {
+      if (this.canUseDynamic(tool.name)) copy.registerDynamic(tool)
+    }
+    return copy
   }
 
   /** Register a callback to run when the session resets (e.g. disconnect MCP). */
@@ -349,9 +440,44 @@ export class SessionTools extends Tools {
   }
 
   override getDefinitions(): ToolDefinition[] {
+    const scope = this.scope
     return this.base.getDefinitions().filter((d) =>
       this.isToolAllowed(d.function.name)
-    )
+    ).map(def => def.function.name === 'subagent' && scope
+      ? { ...def, function: { ...def.function,
+        description: scope.modes.includes('call')
+          ? `${scope.modes.includes('task') ? 'Start an asynchronous task, or invoke' : 'Invoke'} a blocking bounded leaf call directly. Available modes: ${scope.modes.join(', ')}.`
+          : 'Create an asynchronous reusable session or one-time task. Available modes: session, task.',
+        parameters: {
+        ...def.function.parameters,
+        required: scope.modes.includes('session') ? def.function.parameters.required
+          : [...new Set([...(def.function.parameters.required ?? []), 'mode', 'task'])],
+        properties: {
+          ...Object.fromEntries(Object.entries(def.function.parameters.properties)
+            .filter(([name]) => name !== 'report_to' || scope.modes.includes('task'))),
+          mode: { ...def.function.parameters.properties.mode, enum: [...scope.modes],
+            description: scope.modes.includes('session')
+              ? 'Session/task return an admitted ID immediately. Omission uses the selected role default only when allowed.'
+              : `Required. ${scope.modes.includes('task') ? 'Task returns an admitted ID immediately. ' : ''}Call waits for the final result and cannot yield, message, or delegate.`,
+          },
+          task: { ...def.function.parameters.properties.task,
+            description: scope.modes.includes('session')
+              ? 'Initial work. Required for task; optional for session.'
+              : 'Required initial work: a bounded assignment with an expected result.',
+          },
+          agent_type: { ...def.function.parameters.properties.agent_type,
+            description: `Agent role from Runtime's available types. ${scope.modes.includes('call')
+              ? 'For call, omission inherits your role and an explicit role cannot widen your capabilities.'
+              : 'Defaults to "sub".'}${scope.modes.includes('call') && scope.modes.includes('task') ? ' For task, defaults to "sub".' : ''}`,
+          },
+        },
+      } } } : def.function.name === 'exec' && this.scope?.mode === 'call'
+      ? { ...def, function: { ...def.function, description: `${def.function.description} In calls, execution stays foreground; timeout or cancellation terminates owned processes.`,
+        parameters: { ...def.function.parameters, properties: { ...def.function.parameters.properties,
+          timeout_ms: { type: 'integer', minimum: 1, maximum: MAX_CALL_TIMEOUT_MS, default: MAX_CALL_TIMEOUT_MS,
+            description: 'Foreground execution limit in milliseconds. Timeout terminates the process; the enclosing call deadline may expire sooner. Background execution is forbidden.' },
+        } },
+      } } : def)
   }
 
   override getChatTextDisplay(
@@ -366,8 +492,10 @@ export class SessionTools extends Tools {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    const denial = this.executionDenial(name, args)
+    if (denial) return denial
     if (!this.isToolAllowed(name)) {
-      return `Error: tool "${name}" is not available for this agent type.`
+      return this.rejectExecution(`tool "${name}" is not available for this agent type.`)
     }
     return this.base.execute(name, args, context)
   }

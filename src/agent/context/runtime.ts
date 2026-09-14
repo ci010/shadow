@@ -6,16 +6,39 @@ import {
 import { IdentityManager } from '../identity.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { getArch, getOs } from '../../utils/runtime.ts'
+import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
+import { unavailableCapabilities, type ChannelCapabilities } from '../../channels/capabilities.ts'
 
-// ── Channel-specific formatting hints ────────────────────────────────
-
-const CHANNEL_HINTS: Record<string, string> = {
-  discord: [
-    '## Discord Platform Formatting',
+export function channelCapabilityPrompt(
+  channel: string,
+  capabilities: ChannelCapabilities,
+  canCreateSession: boolean,
+  canYield: boolean,
+  canMessage: boolean,
+): string {
+  const lines = [
+    '## Channel Capabilities',
     '',
-    '- No markdown tables — use bullet lists.',
-    '- Wrap multiple links in `<>` to suppress embeds.',
-  ].join('\n'),
+    `- Conversation: ${capabilities.conversation}. Output format: ${capabilities.format}.`,
+    `- Code blocks: ${capabilities.codeBlocks ? 'supported' : 'not verified; prefer plain text'}. Tables: ${capabilities.tables ? 'supported' : 'use lists instead'}.`,
+    `- Outbound media: ${capabilities.outboundMedia.join(', ') || 'none verified'}. Receiving an attachment does not imply it can be sent back.`,
+    `- Output updates: ${capabilities.updates}. The adapter handles formatting, uploads, splitting and delivery limits; do not write raw API/card JSON.`,
+    '- Normal replies are sent automatically.',
+    ...(canMessage ? ['- The message tool communicates with other agent sessions, not arbitrary platform recipients.'] : []),
+    canCreateSession && capabilities.threads !== 'none'
+      ? `- Reusable subagent sessions can get a ${capabilities.threads} thread/topic. The runtime creates and binds it; do not create another one yourself.`
+      : '- No new native thread/topic is available in this scope. Reusable subagents, when permitted, remain internal conversations.',
+    '- Tasks report completion to their configured recipient; calls return through their originating tool call. Neither creates a native thread.',
+    '- Platform conversations do not grant delegation permissions. A public thread/topic is not a private workspace.',
+    ...(canYield ? [
+      `- Ask decisions with yield. Presentation: ${capabilities.decisions === 'buttons' ? 'native choices with text fallback' : capabilities.decisions === 'native' ? 'native application controls' : 'numbered text choices'}. Do not invent clickable controls.`,
+    ] : []),
+  ]
+  if (channel === 'discord') lines.push('- Avoid unsolicited mentions. Wrap links in <> when embeds are not wanted. Archived threads are not deleted agent sessions.')
+  if (channel === 'feishu') lines.push('- Ordinary reply ancestry is not a topic. Topic visibility follows its containing chat; do not change the group-wide message mode.')
+  if (channel === 'qq') lines.push('- QQ private, group and guild destinations have different capabilities. Keep essential content readable after plain-text fallback. Delayed/proactive delivery is subject to reply windows and quotas; do not promise it.')
+  if (channel === 'wechat') lines.push('- This adapter uses WeChat iLink, not WeCom or official accounts. Do not assume group threads, interactive cards or generic file sending.')
+  return lines.join('\n')
 }
 
 async function getIdentity(
@@ -31,6 +54,7 @@ export interface RuntimeProviderDeps {
   identity: IdentityManager
   getSkillsSummary: (admin: boolean) => string
   getAgentTypesSummary: () => string
+  getChannelCapabilities?: (channel: string, chatId: string) => ChannelCapabilities | Promise<ChannelCapabilities>
   getActiveSubagents?: (parentSessionId: string) => Promise<
     Array<{
       sessionId: string
@@ -53,6 +77,9 @@ export function runtimeIdentityProvider(
       const platform = `${getOs()} ${getArch()}`
       const defaultShell = ctx.defaultExecShell ?? defaultManagedShell()
       const detectedShells = await availableExecShells()
+      const delegationModes = isToolAllowed(ctx.agent, 'subagent')
+        ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId)
+        : []
 
       const lines = [
         '# Runtime',
@@ -69,20 +96,21 @@ export function runtimeIdentityProvider(
         '  - node | inline TypeScript runtime',
       ]
 
-      if (!ctx.agent.ephemeral) {
-        lines.push(
+      lines.push(
           '',
           '## Current Session',
           '',
           `- **Channel**: ${ctx.channel}`,
           `- **Chat ID**: ${ctx.chatId}`,
+          `- **Execution Mode**: ${ctx.mode ?? ctx.agent.defaultMode}`,
+          `- **Allowed Delegation Modes**: ${delegationModes.join(', ') || 'none'}`,
+          ...(ctx.parentSessionId ? [`- **Delegation Parent**: ${ctx.parentSessionId}`] : []),
           ...(ctx.chatName ? [`- **Chat Name**: ${ctx.chatName}`] : []),
           `- **Chat Type**: ${ctx.isGroup ? 'Group' : 'Direct'}`,
           `- **Self-code (src/) writes**: ${
             ctx.admin ? 'ALLOWED' : 'NOT ALLOWED'
           }`,
-        )
-      }
+      )
 
       if (ctx.isGroup) {
         lines.push(
@@ -103,11 +131,12 @@ export function runtimeIdentityProvider(
         )
       }
 
-      // Channel-specific formatting hints
-      const channelHint = CHANNEL_HINTS[ctx.channel]
-      if (channelHint) {
-        lines.push('', channelHint)
-      }
+      const capabilities = await deps.getChannelCapabilities?.(ctx.channel, ctx.chatId) ?? unavailableCapabilities()
+      lines.push('', channelCapabilityPrompt(
+        ctx.channel, capabilities, delegationModes.includes('session'),
+        (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'yield'),
+        (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'message'),
+      ))
 
       const identityInfo = await getIdentity(ctx, deps.identity)
       if (identityInfo) {
@@ -126,8 +155,7 @@ export function runtimeIdentityProvider(
       }
 
       // Agent types summary — only show to types that can spawn subagents
-      const agentType = ctx.agent
-      const canSpawn = isToolAllowed(agentType, 'subagent')
+      const canSpawn = delegationModes.length > 0
       if (canSpawn) {
         const agentTypesSummary = deps.getAgentTypesSummary()
         if (agentTypesSummary) lines.push(agentTypesSummary, '')

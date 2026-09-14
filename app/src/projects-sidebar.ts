@@ -1,4 +1,7 @@
 import type { ProjectRecord } from '../../src/projects/contracts.ts'
+import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
+import { isSelfReflectionId } from '../../src/sessions/session-purpose.ts'
+import { isExecutionStatus, persistentConversations, type ExecutionStatus } from './subagent-executions.ts'
 
 export const PROJECT_ACTIONS = [
   { id: 'open', label: 'Open folder' },
@@ -14,11 +17,17 @@ export interface SidebarSession {
   isDirectChat: boolean
   isCurrent: boolean
   parentSessionId: string | null
+  contextParentSessionId?: string | null
   depth: number
+  mode?: 'session' | 'task' | 'call'
+  agentType?: string
+  executionStatus?: ExecutionStatus
+  waitingForCall?: boolean
+  parentToolCallId?: string
   config?: {
     model?: string
     thinking?: { type: 'enabled' | 'disabled' }
-    reasoningEffort?: 'high' | 'max'
+    reasoningEffort?: ReasoningEffort
   }
 }
 
@@ -26,14 +35,23 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** Context-only forks belong in navigation, never in delegation ownership. */
+export function sessionNavigationParent(session: SidebarSession | undefined): string | null {
+  if (!session) return null
+  return session.parentSessionId
+    ?? (session.mode !== 'task' && session.mode !== 'call' ? session.contextParentSessionId : null)
+    ?? null
+}
+
 function flattenSessions(sessions: SidebarSession[]): SidebarSession[] {
   const ids = new Set(sessions.map(s => s.sessionId))
   const children = new Map<string, SidebarSession[]>()
   for (const session of sessions) {
-    if (session.parentSessionId && ids.has(session.parentSessionId)) {
-      const siblings = children.get(session.parentSessionId) ?? []
+    const parent = sessionNavigationParent(session)
+    if (parent && ids.has(parent)) {
+      const siblings = children.get(parent) ?? []
       siblings.push(session)
-      children.set(session.parentSessionId, siblings)
+      children.set(parent, siblings)
     }
   }
   const visited = new Set<string>()
@@ -45,7 +63,8 @@ function flattenSessions(sessions: SidebarSession[]): SidebarSession[] {
     for (const child of children.get(session.sessionId) ?? []) walk(child, depth + 1)
   }
   for (const session of sessions) {
-    if (!session.parentSessionId || !ids.has(session.parentSessionId)) walk(session, 0)
+    const parent = sessionNavigationParent(session)
+    if (!parent || !ids.has(parent)) walk(session, 0)
   }
   // A malformed lineage must not hide conversations or recurse forever.
   for (const session of sessions) walk(session, 0)
@@ -66,12 +85,20 @@ export function parseSessionGraph(value: unknown): SidebarSession[] {
     const parent = physicalToLogical.get(node.parentPhysicalId)
     if (parent && parent !== node.logicalId) parents.set(node.logicalId, parent)
   }
+  const sessionIds = new Set<string>()
   return flattenSessions(value.sessions.map((session: unknown) => {
-    if (!isRecord(session) || typeof session.sessionId !== 'string' || !session.sessionId
+    if (!isRecord(session) || typeof session.sessionId !== 'string' || !session.sessionId.trim() || sessionIds.has(session.sessionId)
       || (session.projectId !== undefined && typeof session.projectId !== 'string')
       || (session.title !== undefined && typeof session.title !== 'string')
+      || (session.mode !== undefined && session.mode !== 'session' && session.mode !== 'task' && session.mode !== 'call')
+      || (session.agentType !== undefined && (typeof session.agentType !== 'string' || !session.agentType))
+      || (session.parentSessionId !== undefined && session.parentSessionId !== null && (typeof session.parentSessionId !== 'string' || !session.parentSessionId))
+      || (session.executionStatus !== undefined && !isExecutionStatus(session.executionStatus))
+      || (session.waitingForCall !== undefined && typeof session.waitingForCall !== 'boolean')
+      || (session.parentToolCallId !== undefined && (typeof session.parentToolCallId !== 'string' || !session.parentToolCallId))
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
-    const direct = session.sessionId.startsWith('web:chat-')
+    sessionIds.add(session.sessionId)
+    const direct = session.sessionId.startsWith('web:chat-') && session.mode !== 'task' && session.mode !== 'call'
     const config = isRecord(session.config) ? session.config : undefined
     return {
       sessionId: session.sessionId,
@@ -80,38 +107,69 @@ export function parseSessionGraph(value: unknown): SidebarSession[] {
       projectId: session.projectId as string | undefined,
       isDirectChat: direct,
       isCurrent: !!session.current,
-      parentSessionId: parents.get(session.sessionId) ?? null,
+      parentSessionId: session.parentSessionId !== undefined ? session.parentSessionId as string | null : parents.get(session.sessionId) ?? null,
+      contextParentSessionId: session.parentSessionId === null && session.mode !== 'task' && session.mode !== 'call'
+        ? parents.get(session.sessionId) ?? null : undefined,
       depth: 0,
+      mode: session.mode as SidebarSession['mode'],
+      agentType: session.agentType as string | undefined,
+      executionStatus: session.executionStatus as ExecutionStatus | undefined,
+      waitingForCall: session.waitingForCall as boolean | undefined,
+      parentToolCallId: session.parentToolCallId as string | undefined,
       config: config ? {
         model: typeof config.model === 'string' ? config.model : undefined,
         thinking: isRecord(config.thinking) && (config.thinking.type === 'enabled' || config.thinking.type === 'disabled')
           ? { type: config.thinking.type } : undefined,
-        reasoningEffort: config.reasoningEffort === 'high' || config.reasoningEffort === 'max' ? config.reasoningEffort : undefined,
+        reasoningEffort: isReasoningEffort(config.reasoningEffort) ? config.reasoningEffort : undefined,
       } : undefined,
     }
   }))
 }
 
 export function groupProjectSessions(projects: ProjectRecord[], sessions: SidebarSession[]) {
+  sessions = persistentConversations(sessions)
   const projectIds = new Set(projects.map(project => project.id))
+  const children = new Map<string, string[]>()
+  const pending: string[] = []
+  for (const session of sessions) {
+    if (isSelfReflectionId(session.sessionId)) pending.push(session.sessionId)
+    const parent = sessionNavigationParent(session)
+    if (parent) {
+      const siblings = children.get(parent) ?? []
+      siblings.push(session.sessionId)
+      children.set(parent, siblings)
+      if (isSelfReflectionId(parent)) pending.push(parent)
+    }
+  }
+  const reflectionIds = new Set<string>()
+  for (let index = 0; index < pending.length; index++) {
+    const id = pending[index]
+    if (reflectionIds.has(id)) continue
+    reflectionIds.add(id)
+    pending.push(...(children.get(id) ?? []))
+  }
+  const regular = sessions.filter(session => !reflectionIds.has(session.sessionId))
   return {
     projects: projects.map(project => ({
       project,
-      sessions: flattenSessions(sessions.filter(session => session.projectId === project.id)),
+      sessions: flattenSessions(regular.filter(session => session.projectId === project.id)),
     })),
-    chats: flattenSessions(sessions.filter(session => !session.projectId || !projectIds.has(session.projectId))),
+    chats: flattenSessions(regular.filter(session => !session.projectId || !projectIds.has(session.projectId))),
+    reflections: flattenSessions(sessions.filter(session => reflectionIds.has(session.sessionId))),
   }
 }
 
 export function visibleSessions(sessions: SidebarSession[], collapsed: ReadonlySet<string>): SidebarSession[] {
   const byId = new Map(sessions.map(session => [session.sessionId, session]))
   return sessions.filter(session => {
+    // A root chosen while flattening a cycle must remain available to expand it.
+    if (session.depth === 0) return true
     const visited = new Set([session.sessionId])
-    let parent = session.parentSessionId
+    let parent = sessionNavigationParent(session)
     while (parent && byId.has(parent) && !visited.has(parent)) {
       if (collapsed.has(parent)) return false
       visited.add(parent)
-      parent = byId.get(parent)!.parentSessionId
+      parent = sessionNavigationParent(byId.get(parent))
     }
     return true
   })

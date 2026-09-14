@@ -82,40 +82,36 @@ export function workspaceProvider(
         )
       }
 
-      // Load SOUL.md for non-ephemeral agents, or ephemeral agents with soul: true
-      if (!ctx.agent.ephemeral || ctx.agent.soul) {
+      if (ctx.agent.soul !== false) {
         const soul = await readFileIfExists(workspacePath(workspace, 'SOUL.md'))
         if (soul?.trim()) {
           lines.push('', soul.trim())
         }
       }
 
-      if (!ctx.agent.ephemeral) {
+      lines.push(
+        '',
+        '## Memory',
+        '',
+        'Use stored memories as relevant context, not as a substitute for current evidence.',
+        'Your memory lives under `v:memory/` — read and search there.',
+        '',
+        '### Recap If Needed',
+        '- Use `read` or `search` on `v:memory/` to recap relevant memories.',
+        '',
+      )
+
+      if (isToolAllowed(ctx.agent, 'write')) {
         lines.push(
-          '',
-          '## Memory',
-          '',
-          'You wake up fresh each session. These memories are your continuity.',
-          'Capture what matters. Decisions, context, things to remember.',
-          'Your memory lives under `v:memory/` — read, search, and write there.',
-          '',
-          '### Recap If Needed',
-          '- Use `read` or `search` on `v:memory/` to recap relevant memories.',
+          '### Write It Down',
+          '- **Memory is limited** — if you want to remember something, write it under `v:memory/`',
+          '- "Mental notes" don\'t survive session restarts. Files do.',
+          '- When someone says "remember this" → update the relevant file under `v:memory/`',
+          '- When you learn a lesson → update the relevant memory file, or update relevant skills or create one',
+          "- When you make a mistake → document it so future-you doesn't repeat it",
+          '- Memory files form a **knowledge graph** — use markdown links (not bare code spans) when referencing files. The system validates your writes and reports issues in the tool result. Fix any reported issues.',
           '',
         )
-
-        if (isToolAllowed(ctx.agent, 'write')) {
-          lines.push(
-            '### Write It Down',
-            '- **Memory is limited** — if you want to remember something, write it under `v:memory/`',
-            '- "Mental notes" don\'t survive session restarts. Files do.',
-            '- When someone says "remember this" → update the relevant file under `v:memory/`',
-            '- When you learn a lesson → update the relevant memory file, or update relevant skills or create one',
-            "- When you make a mistake → document it so future-you doesn't repeat it",
-            '- Memory files form a **knowledge graph** — use markdown links (not bare code spans) when referencing files. The system validates your writes and reports issues in the tool result. Fix any reported issues.',
-            '',
-          )
-        }
       }
       return lines.join('\n')
     },

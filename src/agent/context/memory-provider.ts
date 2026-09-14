@@ -20,7 +20,7 @@ export function memoryProvider(
         ctx.projectName,
       )
       // Long-term keyword index is main-agent-only (sub-agents skip it).
-      const isMain = !ctx.agent.ephemeral && ctx.agent.name !== 'sub'
+      const isMain = ctx.agent.name === 'general' || ctx.agent.name === 'general-legacy'
       const keywords = isMain ? await memory.readKeywords() : ''
       const events = await memory.readEvents(ctx.sessionId, {
         currentProject: ctx.projectName,

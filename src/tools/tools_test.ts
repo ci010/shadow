@@ -1,4 +1,6 @@
 import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { allowedSubagentModes, type ExecutionMode } from '../sessions/execution-mode.ts'
 import '../testing/snapshot.ts'
 import { Bus } from '../bus/bus.ts'
 import { SessionTools, Tools } from './registry.ts'
@@ -14,6 +16,8 @@ import { LogTool } from './log.ts'
 import { MessageTool } from './message.ts'
 import { EventSubscribeTool } from './event-subscribe.ts'
 import { SubagentTool } from './subagent.ts'
+import { YieldTool } from './yield.ts'
+import type { YieldManager } from '../sessions/yield.ts'
 import { ConventionTool } from './convention.ts'
 import { MemoryStore } from '../agent/memory.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
@@ -88,6 +92,7 @@ function buildBaseTools(): Tools {
   tools.register(
     new MessageTool(bus, () => true, () => undefined, () => undefined, deliver),
   )
+  tools.register(new YieldTool(stub<YieldManager>()))
   tools.register(new EventSubscribeTool(events))
   tools.register(
     new SubagentTool(
@@ -127,4 +132,39 @@ test('tools — tool surface per agent type', async (t) => {
       st.assert.snapshot(session.names().join('\n'))
     })
   }
+})
+
+test('scoped tool descriptions match the modes advertised to the model', () => {
+  const base = buildBaseTools()
+  const cases: Array<[ExecutionMode, boolean]> = [
+    ['session', false], ['session', true], ['task', true], ['call', true],
+  ]
+  for (const [mode, parent] of cases) {
+    const tools = new SessionTools(base, WORKSPACE)
+    const modes = allowedSubagentModes(mode, parent)
+    tools.setExecutionScope(mode, modes)
+    const definitions = tools.getDefinitions()
+    const subagent = definitions.find(def => def.function.name === 'subagent')?.function
+    if (!modes.length) {
+      assert.equal(subagent, undefined)
+      for (const name of ['yield', 'message']) {
+        assert(!definitions.some(def => def.function.name === name))
+      }
+      const exec = definitions.find(def => def.function.name === 'exec')!
+      assert.doesNotMatch(JSON.stringify(exec), /fire-and-forget|NOT killed|0 = run in background/)
+      continue
+    }
+    assert(subagent)
+    assert.deepEqual(subagent.parameters.properties.mode.enum, modes)
+    if (!modes.includes('call')) {
+      assert.doesNotMatch(JSON.stringify(subagent), /\bcall\b|blocking|leaf/)
+    } else {
+      assert.match(subagent.description, /blocking bounded leaf call/)
+      assert(subagent.parameters.required?.includes('mode'))
+      assert(subagent.parameters.required?.includes('task'))
+      assert.doesNotMatch(subagent.parameters.properties.task.description!, /optional/)
+    }
+    if (mode === 'task') assert(!('report_to' in subagent.parameters.properties))
+  }
+  assert.deepEqual(base.get('subagent')!.parameters.properties.mode.enum, ['session', 'task', 'call'])
 })

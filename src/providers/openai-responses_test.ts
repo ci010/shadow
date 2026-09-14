@@ -285,16 +285,36 @@ for (const [index, outputItems] of invalidOutputStates.entries()) {
   })
 }
 
-test('temperature and reasoning effort are optional and never translated from thinking fields', async (t) => {
-  const calls = harness(t, [Response.json(completed()), Response.json(completed())])
+test('temperature and reasoning effort are optional and enabled thinking does not invent an effort', async (t) => {
+  const calls = harness(t, Array.from({ length: 3 }, () => Response.json(completed())))
   await openaiResponses({ ...defaults, temperature: 0, reasoningEffort: 'high' })
   await openaiResponses(defaults)
+  await openaiResponses({ ...defaults, thinking: { type: 'enabled' } })
   assert.equal(calls[0].body.temperature, 0)
   assert.deepEqual(calls[0].body.reasoning, { effort: 'high' })
   for (const name of ['temperature', 'reasoning', 'thinking', 'reasoning_effort', 'max_output_tokens', 'tools']) {
     assert.ok(!(name in calls[1].body), name)
+    assert.ok(!(name in calls[2].body), name)
   }
 })
+
+for (const providerName of ['openai', 'copilot', 'deepseek', 'custom']) {
+  test(`${providerName} Responses maps disabled thinking to none ahead of inherited effort`, async (t) => {
+    const options = [
+      { thinking: { type: 'disabled' as const } },
+      { thinking: { type: 'disabled' as const }, reasoningEffort: 'high' as const },
+      { thinking: { type: 'enabled' as const }, reasoningEffort: 'high' as const },
+      {},
+    ]
+    const calls = harness(t, options.map(() => Response.json(completed())))
+    for (const option of options) await openaiResponses({ ...defaults, providerName, ...option })
+    assert.deepEqual(calls.map(call => call.body.reasoning), [
+      { effort: 'none' }, { effort: 'none' }, { effort: 'high' },
+      providerName === 'deepseek' ? { effort: 'high' } : undefined,
+    ])
+    assert.ok(calls.every(call => !('thinking' in call.body) && !('reasoning_effort' in call.body)))
+  })
+}
 
 test('SSE CRLF, UTF-8 chunk boundaries and multiline data use completed output without double counting', async (t) => {
   const output = [opaque, { ...message('Final 🐈'), phase: 'final_answer' }, call]

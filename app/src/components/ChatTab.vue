@@ -1,20 +1,22 @@
 <template>
   <div
+    ref="paneRoot"
     class="chat-workspace"
-    :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId }"
+    :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId, 'is-embedded': embedded }"
   >
-    <button class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Projects</button>
-    <button v-if="mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close projects" @click="mobileSidebarOpen = false" />
+    <button v-if="!embedded" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Projects</button>
+    <button v-if="!embedded && mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close projects" @click="mobileSidebarOpen = false" />
     <ProjectsSidebar
+      v-if="!embedded"
       :api-base="apiBase"
       :sessions="allSessions"
-      :active-session-id="activeSessionId"
+      :active-session-id="childSessionId || activeSessionId"
       :draft-project-id="draft.project?.id"
       :collapsed="collapsedSessions"
       :stages="displayedSessionStages"
       :sessions-loading="sessionsLoading"
       :sessions-error="sessionsError"
-      @select="selectSession($event); mobileSidebarOpen = false"
+      @select="requestSession($event); mobileSidebarOpen = false"
       @delete="deleteSession"
       @toggle="toggleCollapse"
       @reload="loadSessionList"
@@ -22,6 +24,13 @@
       @draft="createNewWebChat"
     />
 
+    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSession?.sessionId ?? ''" :project-id="!activeSessionId ? draft.project?.id : undefined"
+      :context-key="fileContextKey" :explorer-enabled="!embedded"
+      :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
+      :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
+      @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
+      @image-context="handleImageContext" @image-busy="handleImageBusy">
+    <template #actions><slot name="pane-actions" /></template>
     <!-- Chat area -->
     <div class="chat-panel" :class="{ 'is-draft': !activeSessionId }">
       <div v-if="!activeSessionId" class="draft-heading">
@@ -40,127 +49,57 @@
         <p v-else class="draft-scratch">From scratch &middot; No project folder</p>
       </div>
       <template v-else>
-        <!-- Header -->
-        <div class="chat-header px-4 py-3 border-b border-default flex items-center justify-between" style="background: var(--c-frosted); backdrop-filter: blur(4px)">
-          <div class="chat-heading-copy">
-            <div class="text-xs text-ink/50 font-600 uppercase tracking-widest">{{ isDirectChat ? 'Direct Chat' : 'Session (readonly)' }}</div>
-            <div class="chat-session-meta text-sm font-mono text-ink/70">
-              <span>{{ activeSessionId }}</span>
-              <SessionActivity :stage="sessionStage" :title="stageError || undefined" />
-            </div>
-            <div class="session-config-badges">
-              <span v-if="activeSessionConfig.model" class="config-badge model">{{ activeSessionConfig.model }}</span>
-              <span class="config-badge" :class="activeSessionConfig.thinking?.type === 'enabled' ? 'thinking-on' : 'thinking-off'">thinking: {{ activeSessionConfig.thinking?.type ?? 'default' }}</span>
-              <span class="config-badge effort">effort: {{ activeSessionConfig.reasoningEffort ?? 'default' }}</span>
-            </div>
-          </div>
-          <button class="btn btn-sm" @click="loadCurrentSession">Refresh</button>
-        </div>
-
-        <div class="conversation-tabs" role="tablist" aria-label="Session view">
-          <button id="conversation-tab" role="tab" aria-controls="conversation-panel" :aria-selected="activePanel === 'conversation'" :tabindex="activePanel === 'conversation' ? 0 : -1" :class="{ active: activePanel === 'conversation' }" @click="switchPanel('conversation')" @keydown="handlePanelKey($event, 'conversation')">Conversation</button>
-          <button id="diagnosis-tab" role="tab" aria-controls="diagnosis-panel" :aria-selected="activePanel === 'diagnosis'" :tabindex="activePanel === 'diagnosis' ? 0 : -1" :class="{ active: activePanel === 'diagnosis' }" @click="switchPanel('diagnosis')" @keydown="handlePanelKey($event, 'diagnosis')">
-            <span class="i-lucide-activity w-4 h-4" aria-hidden="true" />Diagnosis
+        <div class="conversation-heading-row">
+          <button v-if="embedded && executionParent" class="btn btn-sm" aria-label="Back to owning execution" @click="inspectExecution(executionParent.sessionId)">
+            <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+          <SessionHeading :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
+            :name="activeSessionName" :physical-id="viewingPhysicalId" :revision="detailsRevision"
+            :active="visible && route.name === 'chat' && !!activeSession" />
+          <button :id="domId('diagnosis-toggle')" class="diagnosis-toggle" :aria-controls="domId('diagnosis-panel')"
+            :aria-pressed="activePanel === 'diagnosis'" :title="activePanel === 'diagnosis' ? 'Back to conversation' : 'Open diagnosis'"
+            @click="switchPanel(activePanel === 'diagnosis' ? 'conversation' : 'diagnosis')">
+            <span class="i-lucide-activity" aria-hidden="true" />Diagnosis
           </button>
         </div>
-        <SessionDiagnosis v-if="diagnosisOpened" v-show="activePanel === 'diagnosis'" id="diagnosis-panel" role="tabpanel" aria-labelledby="diagnosis-tab"
+        <SessionDiagnosis v-if="diagnosisOpened" v-show="activePanel === 'diagnosis'" :id="domId('diagnosis-panel')" role="region" aria-label="Session diagnosis" :id-prefix="embedded ? paneId : undefined"
           :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
-          :active="activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
+          :active="visible && conversationDocumentVisible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
           :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
 
         <!-- Messages -->
-        <div v-show="activePanel === 'conversation'" id="conversation-panel" class="chat-history" role="tabpanel" aria-labelledby="conversation-tab">
-        <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-3 chat-messages" style="position: relative;" @click="handleChatAreaClick">
-          <!-- SVG filter for hand-drawn highlight edges -->
-          <svg width="0" height="0" style="position: absolute;">
-            <filter id="highlight-rough">
-              <feTurbulence type="turbulence" baseFrequency="0.05 0.08" numOctaves="3" seed="2" result="noise" />
-              <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G" />
-            </filter>
-          </svg>
-          <!-- Selection highlight overlay -->
-          <div
-            v-for="(r, i) in highlightRects"
-            :key="'hl-' + i"
-            class="selection-highlight-overlay"
-            :style="{ top: r.top + 'px', left: (r.left - 2) + 'px', width: (r.width + 4) + 'px', height: (r.height + 2) + 'px' }"
-          />
+        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history">
+        <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-3 chat-messages" style="position: relative;">
           <div v-if="loadingHistory" class="text-sm text-ink/50">Loading history...</div>
-          <div v-else-if="messages.length === 0" class="text-sm text-ink/40 select-none">No messages yet. Send one below.</div>
+          <div v-else-if="messages.length === 0 && !composerError" class="text-sm text-ink/40 select-none">{{ isExecution ? 'No execution trace yet.' : 'No messages yet. Send one below.' }}</div>
+          <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
+          <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
           <!-- Segment navigation: view previous (top) -->
           <div v-if="previousPhysicalId && !viewingPhysicalId" class="segment-nav">
-            <button class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment">&#8592; View previous session</button>
+            <button class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" /> View previous session</button>
           </div>
-          <template v-for="(msg, idx) in messages" :key="idx">
-            <!-- Tool call -->
-            <div v-if="msg.event === 'tool_call'" class="tool-group">
-              <div class="tool-call-header" @click="toggleToolCall(idx)">
-                <span class="tool-icon">&#9881;</span>
-                <span class="tool-name">{{ parseToolCall(msg).name }}</span>
-                <span v-if="!expandedToolCalls.has(idx)" class="tool-args-summary">{{ parseToolCall(msg).argsSummary }}</span>
-                <span class="tool-call-toggle">{{ expandedToolCalls.has(idx) ? '&#9660;' : '&#9654;' }}</span>
-              </div>
-              <pre v-if="expandedToolCalls.has(idx)" class="tool-call-detail">{{ parseToolCall(msg).argsFull }}</pre>
-              <!-- If next message is the matching tool_result, render it inline -->
-              <div
-                v-if="messages[idx + 1]?.event === 'tool_result'"
-                class="tool-result"
-                :class="{ collapsed: !expandedToolResults.has(idx + 1) }"
-              >
-                <div class="tool-result-header" @click="toggleToolResult(idx + 1)">
-                  <span class="tool-result-toggle">{{ expandedToolResults.has(idx + 1) ? '&#9660;' : '&#9654;' }}</span>
-                  <span class="tool-result-title">Result</span>
-                </div>
-                <pre class="tool-result-content">{{ messages[idx + 1].content }}</pre>
-                <div v-if="messages[idx + 1].usage" class="usage-info">
-                  <span class="usage-badge">{{ messages[idx + 1].usage!.promptTokens.toLocaleString() }} <span v-if="usageDelta(idx + 1)" class="usage-delta">(+{{ usageDelta(idx + 1)!.prompt.toLocaleString() }})</span> prompt</span>
-                  <span class="usage-badge">{{ messages[idx + 1].usage!.completionTokens.toLocaleString() }} <span v-if="usageDelta(idx + 1)" class="usage-delta">(+{{ usageDelta(idx + 1)!.completion.toLocaleString() }})</span> completion</span>
-                  <span class="usage-badge total">{{ messages[idx + 1].usage!.totalTokens.toLocaleString() }} <span v-if="usageDelta(idx + 1)" class="usage-delta">(+{{ usageDelta(idx + 1)!.total.toLocaleString() }})</span> total</span>
-                </div>
-              </div>
-            </div>
-            <!-- Tool result (standalone, skip if already rendered with its tool_call above) -->
-            <div
-              v-else-if="msg.event === 'tool_result' && messages[idx - 1]?.event !== 'tool_call'"
-              class="tool-group"
-            >
-              <div
-                class="tool-result"
-                :class="{ collapsed: !expandedToolResults.has(idx) }"
-              >
-                <div class="tool-result-header" @click="toggleToolResult(idx)">
-                  <span class="tool-result-toggle">{{ expandedToolResults.has(idx) ? '&#9660;' : '&#9654;' }}</span>
-                  <span class="tool-result-title">{{ msg.toolName ? `${msg.toolName} result` : 'Tool result' }}</span>
-                </div>
-                <pre class="tool-result-content">{{ msg.content }}</pre>
-              </div>
-            </div>
-            <!-- Skip tool_result that was already rendered paired with tool_call above -->
-            <template v-else-if="msg.event === 'tool_result' && messages[idx - 1]?.event === 'tool_call'" />
+          <details v-if="unlinkedExecutions.length" class="unlinked-executions">
+            <summary>Other execution traces · {{ unlinkedExecutions.length }}</summary>
+            <p>These executions have no matching tool call in this loaded history.</p>
+            <button v-for="execution in unlinkedExecutions" :key="execution.sessionId" class="btn btn-sm"
+              @click="inspectExecution(execution.sessionId)">{{ execution.label }} <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
+          </details>
+          <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${idx}`">
+            <ExecutionMessage v-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
+              @inspect="inspectExecution" @interact="clearSelection">
+              <div v-if="inlineExecutions.entries.get(idx)!.output" class="prose" v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
+            </ExecutionMessage>
+            <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!"
+              :running="streaming && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
+              @interact="clearSelection" />
+            <template v-else-if="msg.event === 'tool_call' || msg.event === 'tool_result'" />
             <!-- System event (not a user message) -->
-            <div
-              v-else-if="msg.role === 'user' && msg.isSystemEvent"
-              class="system-event"
-              :class="{ expanded: expandedEvents.has(idx) }"
-            >
-              <div class="system-event-header" @click="toggleEvent(idx)">
-                <span class="system-event-type">{{ msg.eventMeta?.type ?? 'event' }}</span>
-                <span class="system-event-source">{{ msg.eventMeta?.source ?? 'system' }}</span>
-                <span v-if="msg.eventMeta?.attrs?.status" class="system-event-status" :class="msg.eventMeta.attrs.status">{{ msg.eventMeta.attrs.status }}</span>
-                <span class="system-event-toggle">{{ expandedEvents.has(idx) ? '&#9660;' : '&#9654;' }}</span>
-              </div>
-              <div v-if="msg.eventMeta?.attrs?.title && !expandedEvents.has(idx)" class="system-event-title">{{ msg.eventMeta.attrs.title }}</div>
-              <div v-if="expandedEvents.has(idx)" class="system-event-body">
-                <div v-if="msg.eventMeta?.attrs" class="system-event-attrs">
-                  <div v-for="(val, key) in msg.eventMeta.attrs" :key="key" class="system-event-attr">
-                    <span class="system-event-attr-key">{{ key }}</span>
-                    <span class="system-event-attr-val">{{ val }}</span>
-                  </div>
-                </div>
-                <div v-if="msg.content" class="system-event-content prose" v-html="renderMarkdown(msg.content)" />
-              </div>
-            </div>
+            <ConversationEvent v-else-if="msg.role === 'user' && msg.isSystemEvent && msg.eventMeta"
+              :meta="msg.eventMeta" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
+              @inspect="inspectExecution" @interact="clearSelection">
+              <div v-if="msg.content" class="prose" v-html="renderMarkdown(msg.content)" />
+            </ConversationEvent>
             <!-- Compaction summary (previous conversation context) -->
             <div
               v-else-if="msg.isSummary"
@@ -177,9 +116,7 @@
               class="chat-bubble"
               :class="[
                 msg.role === 'user' ? 'chat-user' : 'chat-assistant',
-                { 'has-selection': msg.role === 'assistant' && selectedMsgIndex === idx },
               ]"
-              :data-msg-idx="idx"
               role="article"
               :aria-label="msg.role === 'user' ? (msg.senderName ? `Message from ${msg.senderName}` : 'User message') : 'Assistant message'"
             >
@@ -187,23 +124,23 @@
               <!-- Reasoning / thinking content (collapsible) -->
               <div v-if="msg.reasoningContent || msg.reasoningText" class="thinking-block">
                 <div class="thinking-header" @click="toggleThinking(idx)">
-                  <span class="thinking-icon">&#128161;</span>
+                  <span class="thinking-icon i-lucide-brain w-4 h-4" aria-hidden="true" />
                   <span class="thinking-label">Thinking</span>
-                  <span class="thinking-toggle">{{ expandedThinking.has(idx) ? '&#9660;' : '&#9654;' }}</span>
+                  <span class="thinking-toggle w-3 h-3" :class="expandedThinking.has(idx) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" aria-hidden="true" />
                 </div>
                 <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
               </div>
               <div class="chat-content prose" v-html="renderMarkdown(msg.content)" />
               <div
-                v-if="isErrorMessage(msg) && idx === messages.length - 1 && !streaming"
+                v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !streaming && !awaitingCall"
                 class="retry-row"
               >
-                <button class="btn btn-sm retry-btn" @click="retryLastRequest">&#8635; Retry</button>
+                <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Retry</button>
               </div>
               <div v-if="msg.media?.length" class="chat-media">
                 <template v-for="(src, mIdx) in msg.media" :key="mIdx">
                   <img
-                    v-if="resolveMediaUrl(src)"
+                    v-if="isImageMedia(src) && resolveMediaUrl(src)"
                     :src="resolveMediaUrl(src)!"
                     class="chat-media-img"
                     loading="lazy"
@@ -221,26 +158,6 @@
               </div>
             </div>
           </template>
-          <!-- Streaming: tool calls -->
-          <div v-if="streamingToolCall" class="tool-group">
-            <div class="tool-call-label">
-              <span class="tool-icon">&#9881;</span>
-              <span class="tool-args">{{ streamingToolCall }}</span>
-            </div>
-          </div>
-          <!-- Streaming: tool results -->
-          <div v-if="streamingToolResult" class="tool-group">
-            <div
-              class="tool-result"
-              :class="{ collapsed: !streamToolResultExpanded }"
-            >
-              <div class="tool-result-header" @click="streamToolResultExpanded = !streamToolResultExpanded">
-                <span class="tool-result-toggle">{{ streamToolResultExpanded ? '&#9660;' : '&#9654;' }}</span>
-                <span class="tool-result-title">Result</span>
-              </div>
-              <pre class="tool-result-content">{{ streamingToolResult }}</pre>
-            </div>
-          </div>
           <!-- Streaming response -->
           <div v-if="streaming && streamContent" class="chat-bubble chat-assistant" role="article" aria-label="Assistant message">
             <div class="chat-content">
@@ -250,38 +167,51 @@
           </div>
           <!-- Segment navigation: back to current + view older (bottom) -->
           <div v-if="viewingPhysicalId" class="segment-nav">
-            <button class="btn btn-sm segment-nav-btn" @click="goBackToCurrentSegment">Back to current &#8594;</button>
+            <button class="btn btn-sm segment-nav-btn" @click="goBackToCurrentSegment">Back to current <span class="i-lucide-arrow-right w-3.5 h-3.5" aria-hidden="true" /></button>
             <span class="segment-nav-label">Viewing previous session</span>
-            <button v-if="previousPhysicalId" class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment">&#8592; View older session</button>
+            <button v-if="previousPhysicalId" class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" /> View older session</button>
           </div>
         </div>
-        <MessageHistoryRail :entries="historyMarkers" :container="messagesContainer" />
-        </div>
-        <div v-if="sessionWorking && !viewingPhysicalId && activePanel === 'conversation'" class="chat-working" :class="sessionStage" role="status" aria-live="polite">
-          <SessionActivity :stage="sessionStage" />
-          <span class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
-          <span class="working-wave" aria-hidden="true"><i /><i /><i /></span>
+        <MessageHistoryRail :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
         </div>
       </template>
+    </div>
+    <template #composer>
+      <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible }">
+        <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
+          <SessionActivity :stage="sessionStage" />
+          <span class="chat-working-detail">{{ isCall ? 'Call · inherited context · blocking' : 'Task · fresh context · async' }} · Read-only trace</span>
+        </div>
+        <div v-else-if="sessionWorking && !viewingPhysicalId" class="chat-working" :class="sessionStage" role="status" aria-live="polite">
+          <SessionActivity :stage="sessionStage" />
+          <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
+          <span v-if="!isWaitingStage(sessionStage)" class="working-wave" aria-hidden="true"><i /><i /><i /></span>
+        </div>
+        <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
+          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled" />
 
         <!-- Input (direct-chat only) -->
-        <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" v-show="activePanel === 'conversation'" class="chat-composer">
+        <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" class="chat-composer">
           <div v-if="canResend" class="resend-bar">
-            <button class="resend-btn" @click="resendLastMessage()">&#8635; Resend last message</button>
+            <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Resend last message</button>
           </div>
-          <div class="composer-box">
-          <!-- Selection indicator -->
-          <div v-if="selectedText" class="selection-indicator">
-            <div class="selection-preview" @click="scrollToSelection">
-              <span class="selection-text">"{{ truncateText(selectedText, 120) }}"</span>
-            </div>
-            <button class="selection-dismiss" @click="clearSelection">&times;</button>
+          <div class="composer-box" :class="{ 'image-drop-target': imageDropTarget }"
+            @dragover="handleImageDragOver" @dragleave="handleImageDragLeave" @drop="handleImageDrop">
+          <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
+          <div v-if="pendingAttachments.length" class="composer-context composer-attachments" aria-label="Attached files">
+            <span v-for="attachment in pendingAttachments" :key="attachment.key" class="context-chip attachment-chip" :class="{ 'attachment-reference': attachment.sourceKey }" :title="attachment.source?.path ?? attachment.file.name">
+              <img v-if="attachment.previewUrl" :src="attachment.previewUrl" class="attachment-thumb" :alt="attachment.file.name">
+              <span v-else class="context-icon i-lucide-paperclip" aria-hidden="true" />
+              <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">Image reference</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
+              <button :disabled="streaming || preparingSend" :aria-label="`Remove ${attachment.file.name}`" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+            </span>
           </div>
           <div v-if="contextItems.length" class="composer-context" aria-label="Attached context">
             <span v-for="(item, index) in contextItems" :key="`${item.kind}:${item.path}`" class="context-chip" :title="item.path">
               <span class="context-icon" :class="item.kind === 'folder' ? 'i-lucide-folder' : 'i-lucide-file'" aria-hidden="true" />
               <span>{{ chatContextName(item.path) }}</span>
-              <button :disabled="streaming || preparingSend" :aria-label="`Remove ${chatContextName(item.path)}`" @click="contextItems.splice(index, 1)">&times;</button>
+              <button :disabled="streaming || preparingSend" :aria-label="`Remove ${chatContextName(item.path)}`" @click="contextItems.splice(index, 1)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
             </span>
           </div>
           <div class="composer-input">
@@ -291,46 +221,36 @@
               placeholder="Ask anything, or add files and folders for context..."
               aria-label="Message"
               rows="3"
-              :disabled="streaming || preparingSend"
+              :disabled="streaming || preparingSend || awaitingCall"
               @keydown="handleKeyDown"
               @input="autoResize"
+              @paste="handleComposerPaste"
             />
           </div>
           <div class="composer-toolbar">
             <div class="composer-controls">
-              <ComposerPopover label="Add context" :title="canPickContext ? 'Add files or folders as context' : 'File and folder context requires the local Main desktop app'" :disabled="!canPickContext || pickingContext || streaming || preparingSend" :width="220">
+              <ComposerPopover label="Add attachments or context" :title="composerPopoverTitle" :disabled="!canOpenComposerPopover || pickingContext || streaming || preparingSend || awaitingCall" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
-                  <button class="context-action" @click="close(); pickContext('file')">
+                  <button class="context-action" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
                     <span class="context-icon i-lucide-file-plus" aria-hidden="true" />
                     Add file
                   </button>
-                  <button class="context-action" @click="close(); pickContext('folder')">
+                  <button class="context-action" :disabled="!canPickContext" @click="close(); pickContext('folder')">
                     <span class="context-icon i-lucide-folder-plus" aria-hidden="true" />
                     Add folder
                   </button>
+                  <button v-if="canPickContext" class="context-action" @click="close(); openAttachmentPicker()">
+                    <span class="context-icon i-lucide-image-plus" aria-hidden="true" />
+                    Upload image / file
+                  </button>
                 </template>
               </ComposerPopover>
-              <ModelSelector />
+              <ModelSelector :settings="reasoningSettings" :settings-disabled="streaming || preparingSend || pickingContext || awaitingCall" :busy="savingSettings" @change-settings="changeReasoningSettings" />
             </div>
-            <div v-if="selectedText" class="composer-send-actions">
-              <button
-                class="btn"
-                :disabled="!canSend"
-                @click="askInline"
-              >
-                Send
-              </button>
-              <button
-                class="btn btn-fork"
-                :disabled="!canSend"
-                @click="askInFork"
-              >
-                Ask BTW
-              </button>
-            </div>
+            <div class="composer-submit">
+            <span class="composer-hint" role="status">{{ imageEditsBusy.size ? 'Preparing marked image...' : imageDropTarget ? 'Drop image to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : preparingSend ? 'Starting conversation...' : 'Enter to send · Shift+Enter for a new line' }}</span>
             <button
-              v-else
               class="composer-send"
               :disabled="!canSend"
               aria-label="Send message"
@@ -339,21 +259,26 @@
             >
               <span class="i-lucide-arrow-up w-5 h-5" aria-hidden="true" />
             </button>
+            </div>
           </div>
           </div>
           <p v-if="composerError" class="composer-error" role="alert">{{ composerError }}</p>
-          <div class="composer-hint">{{ pickingContext ? 'Choosing context...' : preparingSend ? 'Starting conversation...' : 'Enter to send · Shift+Enter for a new line' }}</div>
+          <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
         </div>
-    </div>
-
+      </div>
+    </template>
+    </FileWorkbench>
+    <SelectionMenu ref="selectionMenu" :container="messagesContainer"
+      :active="visible && keyboardActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
+      :can-quote="canQuoteSelection" @quote="quoteSelection" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef, reactive, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, shallowRef, reactive, computed, nextTick, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { Marked } from 'marked'
 import katex from 'katex'
 import { buildMediaUrl } from '../media-url.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
@@ -361,22 +286,38 @@ import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
 import ComposerPopover from './ComposerPopover.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
+import FileWorkbench from './files/FileWorkbench.vue'
+import SelectionMenu from './SelectionMenu.vue'
+import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
+import YieldQuestion from './YieldQuestion.vue'
+import ExecutionMessage from './ExecutionMessage.vue'
+import ConversationEvent from './ConversationEvent.vue'
+import { inlineExecutionMessages } from '../execution-messages.ts'
+import { parseChatEvent, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
+import { executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
 import ProjectsSidebar from './ProjectsSidebar.vue'
 import { parseSessionGraph, type SidebarSession } from '../projects-sidebar.ts'
 import { createProjectsClient, type ProjectRecord } from '../projects-client.ts'
 import { addChatContext, chatContextName, composeChatMessage, createChatDraft, type ChatContextItem } from '../chat-draft.ts'
+import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { userMessageMarkers } from '../message-history.ts'
-import { isWorkingStage, parseSessionStages, type SessionStage, type WorkingStage } from '../session-activity.ts'
-import { canRedirectComposerKey, isComposerTypingKey } from '../composer-autofocus.ts'
+import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, parseSessionStages, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
 import { groupSenderNames } from '../message-author.ts'
+import SessionHeading from './SessionHeading.vue'
+import { updateSessionSettings, type ReasoningSettings } from '../session-settings.ts'
+import { childConversationTarget } from '../conversation-split.ts'
+import ToolActivityGroup from './ToolActivityGroup.vue'
+import { groupToolActivity } from '../tool-activity.ts'
 
 const route = useRoute()
 const router = useRouter()
 
-marked.setOptions({ breaks: true })
+const marked = new Marked({ breaks: true })
 marked.use({
   renderer: {
     link({ href, title, text }) {
@@ -395,24 +336,64 @@ const KATEX_TAGS = [
 ]
 const KATEX_ATTRS = ['mathvariant', 'encoding', 'xmlns', 'display', 'stretchy', 'fence', 'separator', 'lspace', 'rspace', 'accent', 'accentunder', 'columnalign', 'columnlines', 'columnspacing', 'rowlines', 'rowspacing', 'frame', 'framespacing', 'rowalign', 'columnwidth', 'width', 'height', 'depth', 'voffset', 'linethickness', 'scriptlevel', 'minsize', 'maxsize', 'movablelimits', 'notation', 'aria-hidden']
 
-const props = defineProps<{ apiBase: string }>()
+const props = withDefaults(defineProps<{
+  apiBase: string
+  embedded?: boolean
+  sessionId?: string
+  childSessionId?: string
+  enableChildPane?: boolean
+  keyboardActive?: boolean
+  visible?: boolean
+}>(), { embedded: false, enableChildPane: false, keyboardActive: true, visible: true })
+const emit = defineEmits<{
+  'open-child': [target: { primaryId: string; childId: string }]
+  'primary-change': [id: string]
+  'child-navigation': [id: string]
+  deleted: [id: string]
+}>()
+const paneId = useId()
+const domId = (id: string) => props.embedded ? `${paneId}-${id}` : id
+const paneRoot = ref<HTMLElement>()
+const composerDock = ref<HTMLElement>()
+const dockHeight = ref(0)
+let dockObserver: ResizeObserver | undefined
+let mounted = false
+let disposed = false
 
 const installation = useInstallationContext()
 const projectsClient = createProjectsClient(props.apiBase)
 const draft = shallowRef(createChatDraft(projectsClient))
 const contextItems = ref<ChatContextItem[]>([])
+const pendingAttachments = ref<PendingChatAttachment[]>([])
+const imageEditsBusy = ref(new Set<string>())
+const imageDropTarget = ref(false)
 const composerError = ref('')
+const readonlyContextError = ref('')
 const preparingSend = ref(false)
 const pickingContext = ref(false)
+const attachmentInput = ref<HTMLInputElement>()
+const canAttachFiles = computed(() => typeof File === 'function' && typeof FormData === 'function')
 const canPickContext = computed(() => installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
-const canSend = computed(() => (!!inputText.value.trim() || contextItems.value.length > 0) && !streaming.value && !preparingSend.value && !pickingContext.value)
+const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
+const composerPopoverTitle = computed(() =>
+  canAttachFiles.value && canPickContext.value
+    ? 'Add files or folders'
+    : canAttachFiles.value
+    ? 'Add files, or use the local Main desktop app to attach folders'
+    : 'Folder context requires the local Main desktop app')
+const canSend = computed(() => !isExecution.value && !awaitingCall.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
+  inputText.value,
+  contextItems.value.length,
+  pendingAttachments.value.length,
+) && !streaming.value && !preparingSend.value && !pickingContext.value && !savingSettings.value && imageEditsBusy.value.size === 0)
 let sendRequest: AbortController | undefined
 let historyRequest: AbortController | undefined
-const activeSessionId = ref('')
+const activeSessionId = ref(props.embedded ? props.sessionId ?? '' : '')
+const fileContextKey = computed(() => activeSessionId.value || `project:${draft.value.project?.id ?? 'scratch'}`)
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
   const id = activeSessionId.value
-  return id.startsWith('web:chat-')
+  return id.startsWith('web:chat-') && (!props.embedded || !!activeSession.value) && !isExecution.value
 })
 const chatInput = ref<HTMLTextAreaElement>()
 const messagesContainer = ref<HTMLElement>()
@@ -421,40 +402,83 @@ const streaming = ref(false)
 const streamPhase = ref<WorkingStage>()
 const streamContent = ref('')
 const streamTimestamp = ref<string>()
-const streamingToolCall = ref('')
 const streamingToolCallData = ref<{ name: string; arguments: Record<string, unknown> } | null>(null)
-const streamingToolResult = ref('')
-const streamToolResultExpanded = ref(false)
 const inputText = ref('')
 const mobileSidebarOpen = ref(false)
 
 // ── Session stage polling (batch) ────────────────────────────────────────────
 const sessionStages = ref<Record<string, SessionStage>>({})
 const stageError = ref('')
-const displayedSessionStages = computed(() => {
-  if (!activeSessionId.value || !streaming.value) return sessionStages.value
-  return { ...sessionStages.value, [activeSessionId.value]: streamPhase.value ?? 'llm' }
-})
+const displayedSessionStages = computed(() => executionStages(allSessions.value, resolveDisplayedStages(
+  sessionStages.value, activeSessionId.value, streaming.value, streamPhase.value,
+)))
 const sessionStage = computed<SessionStage | null>(() =>
   activeSessionId.value ? (displayedSessionStages.value[activeSessionId.value] ?? null) : null,
 )
 const sessionWorking = computed(() => isWorkingStage(sessionStage.value))
-const activeSessionConfig = computed<SessionConfigInfo>(() => {
-  const session = activeSessionId.value
-    ? allSessions.value.find(s => s.sessionId === activeSessionId.value)?.config
-    : undefined
-  const g = globalConfig.value
-  return {
-    model: session?.model ?? g.model ?? (g.provider ? `${g.provider} (default)` : undefined),
-    thinking: session?.thinking ?? g.thinking,
-    reasoningEffort: session?.reasoningEffort ?? g.reasoningEffort,
-  }
+const awaitingCall = computed(() => sessionStage.value === 'waiting-for-call')
+function handleYieldCancelled(sessionId: string): void {
+  if (activeSessionId.value !== sessionId) return
+  sendRequest?.abort()
+  flushStreamingTool()
+  streaming.value = false
+  streamPhase.value = undefined
+  void pollSessionStages()
+}
+const activeSession = computed(() => allSessions.value.find(session => session.sessionId === activeSessionId.value))
+const selectedMode = ref<SidebarSession['mode']>()
+const isExecution = computed(() => !!activeSessionId.value && isOneShot({ mode: activeSession.value?.mode ?? selectedMode.value }))
+const isCall = computed(() => !!activeSessionId.value && (activeSession.value?.mode ?? selectedMode.value) === 'call')
+const executionParent = computed(() => allSessions.value.find(session =>
+  session.sessionId === activeSession.value?.parentSessionId && isOneShot(session)))
+const activeSessionName = computed(() => {
+  const session = activeSession.value
+  if (session?.label && session.label !== session.sessionId && session.label !== session.sessionId.replace('web:', '')) return session.label
+  return messages.value.find(message => message.role === 'user' && !message.isSystemEvent && !message.isSummary)?.content.trim().split('\n')[0] || 'Conversation'
 })
+const detailsRevision = ref(0)
+const settingsOverride = ref<ReasoningSettings>()
+const pendingDraftSettings = ref<ReasoningSettings>()
+const reasoningSettings = computed<ReasoningSettings>(() => settingsOverride.value ?? activeSession.value?.config ?? {})
+const savingSettings = ref(false)
+const settingsError = ref('')
+let settingsRequest: AbortController | undefined
+
+async function changeReasoningSettings(patch: ReasoningSettings): Promise<void> {
+  if (isExecution.value || awaitingCall.value) return
+  if (savingSettings.value || streaming.value || preparingSend.value || pickingContext.value) return
+  if ((!('thinking' in patch) || (patch.thinking?.type ?? null) === (reasoningSettings.value.thinking?.type ?? null))
+    && (!('reasoningEffort' in patch) || (patch.reasoningEffort ?? null) === (reasoningSettings.value.reasoningEffort ?? null))) return
+  settingsError.value = ''
+  if (!activeSession.value) {
+    settingsOverride.value = { ...reasoningSettings.value, ...patch }
+    pendingDraftSettings.value = settingsOverride.value
+    return
+  }
+  const sessionId = activeSessionId.value
+  const controller = new AbortController()
+  settingsRequest = controller
+  savingSettings.value = true
+  try {
+    const settings = await updateSessionSettings(props.apiBase, sessionId, patch, controller.signal)
+    if (controller.signal.aborted) return
+    settingsOverride.value = settings
+    allSessions.value = allSessions.value.map(session => session.sessionId === sessionId ? {
+      ...session, config: { ...session.config, thinking: settings.thinking ?? undefined, reasoningEffort: settings.reasoningEffort ?? undefined },
+    } : session)
+  } catch (cause) {
+    if (!controller.signal.aborted) settingsError.value = cause instanceof Error ? cause.message : 'Could not save conversation settings. Please try again.'
+  } finally {
+    if (settingsRequest === controller) { settingsRequest = undefined; savingSettings.value = false }
+  }
+}
 let stageInterval: ReturnType<typeof setInterval> | null = null
 let stageRequest: AbortController | undefined
+let lastReadonlyRefresh = 0
 
 async function pollSessionStages(): Promise<void> {
-  if (stageRequest) return
+  if (stageRequest || !props.visible) return
+  if (!sessionListRequest && Date.now() - lastGraphRefresh >= 3000) void loadSessionList()
   const controller = new AbortController()
   stageRequest = controller
   try {
@@ -462,8 +486,13 @@ async function pollSessionStages(): Promise<void> {
     if (!res.ok) throw new Error('Session activity is unavailable.')
     const stages = parseSessionStages(await res.json())
     if (!controller.signal.aborted) {
+      const previous = sessionStages.value[activeSessionId.value]
       sessionStages.value = stages
       stageError.value = ''
+      if (conversationDocumentVisible.value && activeSessionId.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && activePanel.value === 'conversation' && !historyRequest
+        && shouldRefreshReadonlyHistory(stages[activeSessionId.value], previous, Date.now() - lastReadonlyRefresh)) {
+        void loadReadonlySession(true)
+      }
     }
   } catch {
     if (!controller.signal.aborted) {
@@ -494,6 +523,7 @@ function stopStagePolling(): void {
 // live without a manual page refresh.
 let eventStream: EventSource | null = null
 let bgStreamState: StreamState = { accumulated: '' }
+let requestStreamState: StreamState | undefined
 
 function connectEventStream(chatId: string): void {
   disconnectEventStream()
@@ -507,12 +537,14 @@ function connectEventStream(chatId: string): void {
     if (viewingPhysicalId.value) return
     try {
       const payload = JSON.parse(ev.data)
-      streaming.value = true
-      if (applyStreamPayload(payload, bgStreamState)) {
+      if (payload.event !== 'session_message') streaming.value = true
+      if (applyStreamPayload(payload, payload.event === 'session_message' ? requestStreamState ?? bgStreamState : bgStreamState)) {
         streaming.value = false
         void loadSessionList()
       }
-    } catch { /* ignore malformed data lines */ }
+    } catch {
+      composerError.value = 'Could not read a live conversation update. Reopen the conversation to reload its history.'
+    }
   }
   es.onerror = () => {
     // EventSource reconnects automatically; nothing to do.
@@ -526,6 +558,7 @@ function disconnectEventStream(): void {
   }
   bgStreamState.accumulated = ''
   bgStreamState.timestamp = undefined
+  requestStreamState = undefined
   streamTimestamp.value = undefined
 }
 
@@ -553,28 +586,17 @@ const compactionSummary = computed(() => {
   return ''
 })
 
-const activePanel = ref<'conversation' | 'diagnosis'>('conversation')
+type ConversationPanel = 'conversation' | 'diagnosis'
+const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
-function switchPanel(panel: 'conversation' | 'diagnosis'): void {
+const conversationDocumentVisible = ref(true)
+const composerVisible = computed(() => !conversationDocumentVisible.value || activePanel.value === 'conversation')
+const canQuoteSelection = computed(() => (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value && !streaming.value && !preparingSend.value && !awaitingCall.value)
+function switchPanel(panel: ConversationPanel): void {
   activePanel.value = panel
   if (panel === 'diagnosis') diagnosisOpened.value = true
+  else if (activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && !historyRequest) void loadReadonlySession(true)
 }
-function handlePanelKey(event: KeyboardEvent, panel: 'conversation' | 'diagnosis'): void {
-  const next = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
-    ? (panel === 'conversation' ? 'diagnosis' : 'conversation')
-    : event.key === 'Home' ? 'conversation' : event.key === 'End' ? 'diagnosis' : undefined
-  if (!next) return
-  event.preventDefault()
-  switchPanel(next)
-  document.getElementById(`${next}-tab`)?.focus()
-}
-const globalConfig = ref<{ model?: string; provider?: string; thinking?: { type: 'enabled' | 'disabled' }; reasoningEffort?: 'high' | 'max' }>({})
-interface SessionConfigInfo {
-  model?: string
-  thinking?: { type: 'enabled' | 'disabled' }
-  reasoningEffort?: 'high' | 'max'
-}
-
 interface ChatMsg {
   role: string
   content: string
@@ -582,6 +604,7 @@ interface ChatMsg {
   timestamp?: string
   event?: string
   toolName?: string
+  toolCallId?: string
   toolCall?: { name: string; arguments: Record<string, unknown> }
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
   media?: string[]
@@ -592,7 +615,7 @@ interface ChatMsg {
   /** True for system events (subagent-complete, heartbeat, etc.) — rendered differently from user messages. */
   isSystemEvent?: boolean
   /** Parsed event metadata: type, source name, and all XML attributes from the <event .../> tag. */
-  eventMeta?: { type: string; source: string; attrs: Record<string, string> }
+  eventMeta?: ChatEventMeta
   /** True for compaction summary messages — the first message after a session compact. */
   isSummary?: boolean
   /** True when this bubble is a failed-request notice that can be retried. */
@@ -600,14 +623,21 @@ interface ChatMsg {
 }
 
 const messages = ref<ChatMsg[]>([])
+const displayMessages = computed(() => messages.value)
+const inlineExecutions = computed(() => inlineExecutionMessages(
+  displayMessages.value, allSessions.value, activeSessionId.value, sessionStages.value, streaming.value,
+))
+const unlinkedExecutions = computed(() => {
+  const linked = new Set([...inlineExecutions.value.entries.values()].map(execution => execution.sessionId))
+  return ownedExecutions(allSessions.value, activeSessionId.value).filter(execution => !linked.has(execution.sessionId))
+})
+const toolActivity = computed(() => groupToolActivity(displayMessages.value, inlineExecutions.value.excluded))
 const allSessions = ref<SidebarSession[]>([])
 const sessionsLoading = ref(false)
 const sessionsError = ref('')
 let sessionListRequest: AbortController | undefined
+let lastGraphRefresh = 0
 const collapsedSessions = reactive(new Set<string>())
-const expandedToolResults = reactive(new Set<number>())
-const expandedToolCalls = reactive(new Set<number>())
-const expandedEvents = reactive(new Set<number>())
 const expandedThinking = reactive(new Set<number>())
 
 // ── Segment navigation state ─────────────────────────────────────────────────
@@ -616,9 +646,8 @@ const viewingPhysicalId = ref<string | null>(null)
 const physicalIdStack = ref<string[]>([])
 
 // ── Text selection state ──────────────────────────────────────────────────────
-const selectedText = ref('')
-const selectedMsgIndex = ref(-1)
-const selectedElement = ref<HTMLElement | null>(null)
+const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
+const workbench = ref<InstanceType<typeof FileWorkbench>>()
 
 function buildUrl(path: string, params?: Record<string, string>): string {
   const url = new URL(path, props.apiBase)
@@ -630,31 +659,8 @@ function buildUrl(path: string, params?: Record<string, string>): string {
   return url.toString()
 }
 
-function toggleToolResult(idx: number): void {
-  clearSelection()
-  if (expandedToolResults.has(idx)) {
-    expandedToolResults.delete(idx)
-  } else {
-    expandedToolResults.add(idx)
-  }
-}
-
-function toggleToolCall(idx: number): void {
-  clearSelection()
-  if (expandedToolCalls.has(idx)) {
-    expandedToolCalls.delete(idx)
-  } else {
-    expandedToolCalls.add(idx)
-  }
-}
-
-function toggleEvent(idx: number): void {
-  clearSelection()
-  if (expandedEvents.has(idx)) {
-    expandedEvents.delete(idx)
-  } else {
-    expandedEvents.add(idx)
-  }
+function sourceForEvent(meta: ChatEventMeta): SidebarSession | undefined {
+  return allSessions.value.find(session => session.sessionId === eventSourceSession(meta))
 }
 
 function toggleThinking(idx: number): void {
@@ -666,47 +672,17 @@ function toggleThinking(idx: number): void {
   }
 }
 
-/** Parse tool call into name and formatted args. Uses structured toolCall data when available. */
-function parseToolCall(msg: ChatMsg): { name: string; argsSummary: string; argsFull: string } {
-  if (msg.toolCall) {
-    const { name, arguments: args } = msg.toolCall
-    const argsFull = JSON.stringify(args, null, 2)
-    const argsSummary = Object.entries(args)
-      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-      .join(', ')
-    return { name, argsSummary, argsFull }
-  }
-  // Fallback: parse from content string "name({...json...})"
-  const content = msg.content
-  const parenIdx = content.indexOf('(')
-  if (parenIdx === -1) return { name: content, argsSummary: '', argsFull: '' }
-  const name = content.slice(0, parenIdx)
-  const argsRaw = content.slice(parenIdx + 1, content.endsWith(')') ? -1 : undefined)
-  let argsFull = argsRaw
-  let argsSummary = argsRaw
-  try {
-    const parsed = JSON.parse(argsRaw)
-    argsFull = JSON.stringify(parsed, null, 2)
-    argsSummary = Object.entries(parsed)
-      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-      .join(', ')
-  } catch { /* use raw */ }
-  return { name, argsSummary, argsFull }
-}
-
 // ── History collapsing (from raw ChatMessage[] to ChatMsg[]) ─────────────────
 
 /** Strip `<sender ... />` and `<event ... />` XML metadata tags from text. */
 const META_TAG_RE = /^<(?:sender|event)\s[^>]*\/>\s*/
-/** Detect `<event ... />` metadata tag (system event, not a user message). */
-const EVENT_TAG_RE = /^<event\s/
 /** Match `MEDIA:<path-or-url>` lines in assistant content. */
 const MEDIA_LINE_RE = /^MEDIA:(\S+)$/gm
 
 interface RawMessage {
   role: string
   timestamp?: string
-  content: string | Array<{ type: string; text?: string }> | null
+  content: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> | null
   reasoning_content?: string | null
   reasoning_text?: string | null
   tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>
@@ -731,36 +707,12 @@ function rawTextContent(msg: RawMessage, stripMeta = false): string {
   return text
 }
 
-/** Parse `<event type="..." key="val" ... />` tag into attributes map. Returns null if not an event tag. */
-const EVENT_ATTR_RE = /(\w[\w-]*)="([^"]*)"/g
-function parseEventTag(text: string): Record<string, string> | null {
-  if (!EVENT_TAG_RE.test(text)) return null
-  // Extract the tag itself
-  const tagMatch = text.match(/^<event\s([^>]*)\/>/)
-  if (!tagMatch) return null
-  const attrs: Record<string, string> = {}
-  let m: RegExpExecArray | null
-  EVENT_ATTR_RE.lastIndex = 0
-  while ((m = EVENT_ATTR_RE.exec(tagMatch[1])) !== null) {
-    attrs[m[1]] = m[2]
-  }
-  return attrs
-}
-
-/** Check if the first content part starts with `<event .../>`. Returns parsed attrs + source if true. */
-function detectEvent(msg: RawMessage): { attrs: Record<string, string>; source: string } | null {
-  if (msg.role !== 'user') return null
-  let firstText: string | undefined
-  if (Array.isArray(msg.content) && msg.content.length > 0) {
-    const first = msg.content[0]
-    if (first.type === 'text' && first.text) firstText = first.text
-  } else if (typeof msg.content === 'string') {
-    firstText = msg.content
-  }
-  if (!firstText) return null
-  const attrs = parseEventTag(firstText)
-  if (!attrs) return null
-  return { attrs, source: msg.name ?? attrs.kind ?? 'system' }
+function rawMediaContent(msg: RawMessage): string[] {
+  if (!Array.isArray(msg.content)) return []
+  return msg.content.flatMap(part =>
+    part.type === 'image_url' && typeof part.image_url?.url === 'string' && part.image_url.url
+      ? [part.image_url.url]
+      : [])
 }
 
 /** Extract `MEDIA:<path>` lines from text, returning cleaned text + media array. */
@@ -784,19 +736,21 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
     if (msg.role === 'system') { i++; continue }
 
     if (msg.role === 'user') {
-      const ev = detectEvent(msg)
+      const ev = parseChatEvent(msg)
       const content = rawTextContent(msg, true)
+      const media = rawMediaContent(msg)
       if (msg.name === '__compaction_summary__') {
         out.push({ role: 'user', content, isSummary: true })
       } else if (ev) {
         out.push({
           role: 'user',
-          content,
+          ...ev,
           isSystemEvent: true,
-          eventMeta: { type: ev.attrs.type ?? 'event', source: ev.source, attrs: ev.attrs },
         })
       } else {
-        out.push({ role: 'user', content, senderName: senderNames[i], timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : undefined })
+        const entry: ChatMsg = { role: 'user', content, senderName: senderNames[i], timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : undefined }
+        if (media.length > 0) entry.media = media
+        out.push(entry)
       }
       i++
       continue
@@ -808,11 +762,18 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
 
         if (cur.role === 'assistant') {
           const rawText = rawTextContent(cur)
+          const rawMedia = rawMediaContent(cur)
           if (rawText) {
             const { text, media } = extractMedia(rawText)
             const entry: ChatMsg = { role: 'assistant', content: text, timestamp: cur.timestamp }
             if (cur.usage) entry.usage = cur.usage
-            if (media.length > 0) entry.media = media
+            if (media.length > 0 || rawMedia.length > 0) entry.media = [...media, ...rawMedia]
+            if (cur.reasoning_content) entry.reasoningContent = cur.reasoning_content
+            if (cur.reasoning_text) entry.reasoningText = cur.reasoning_text
+            out.push(entry)
+          } else if (rawMedia.length > 0) {
+            const entry: ChatMsg = { role: 'assistant', content: '', timestamp: cur.timestamp, media: rawMedia }
+            if (cur.usage) entry.usage = cur.usage
             if (cur.reasoning_content) entry.reasoningContent = cur.reasoning_content
             if (cur.reasoning_text) entry.reasoningText = cur.reasoning_text
             out.push(entry)
@@ -830,7 +791,8 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
               })
               peek++
             }
-            const resultById = new Map<string, { content: string; name?: string }>()
+            const resultById = new Map<string, typeof toolResults[number]>()
+            const consumedResults = new Set<typeof toolResults[number]>()
             for (const tr of toolResults) {
               if (tr.toolCallId) resultById.set(tr.toolCallId, tr)
             }
@@ -845,15 +807,18 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                 content: `${tc.function.name}(${tc.function.arguments})`,
                 event: 'tool_call',
                 toolName: tc.function.name,
+                toolCallId: tc.id,
                 toolCall: { name: tc.function.name, arguments: parsedArgs },
               })
-              const result = resultById.get(tc.id) ?? toolResults[j]
-              if (result?.content) {
+              const result = resultById.size ? resultById.get(tc.id) : toolResults[j]
+              if (result) {
+                consumedResults.add(result)
                 const entry: ChatMsg = {
                   role: 'assistant',
                   content: result.content,
                   event: 'tool_result',
                   toolName: result.name,
+                  toolCallId: tc.id,
                 }
                 // Attach usage to the last tool_result when assistant had no text content
                 if (cur.usage && !rawText && j === cur.tool_calls.length - 1) {
@@ -861,6 +826,12 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                 }
                 out.push(entry)
               }
+            }
+            for (const result of toolResults) {
+              if (!consumedResults.has(result)) out.push({
+                role: 'assistant', event: 'tool_result', content: result.content,
+                toolName: result.name, toolCallId: result.toolCallId,
+              })
             }
 
             // Skip past consumed tool messages
@@ -892,25 +863,11 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
 
 // ── Session list ──────────────────────────────────────────────────────────────
 
-async function loadGlobalConfig(): Promise<void> {
-  try {
-    const res = await fetch(buildUrl('/api/config'))
-    if (res.ok) {
-      const data = await res.json()
-      globalConfig.value = {
-        model: data.agent?.model,
-        provider: data.agent?.provider,
-        thinking: data.agent?.thinking,
-        reasoningEffort: data.agent?.reasoningEffort,
-      }
-    }
-  } catch { /* ignore */ }
-}
-
 async function loadSessionList(): Promise<void> {
   sessionListRequest?.abort()
   const controller = new AbortController()
   sessionListRequest = controller
+  lastGraphRefresh = Date.now()
   sessionsLoading.value = true
   sessionsError.value = ''
   try {
@@ -919,7 +876,13 @@ async function loadSessionList(): Promise<void> {
     })
     if (!res.ok) throw new Error('Cannot load conversations. Check Main and retry.')
     const data = await res.json()
-    if (!controller.signal.aborted) allSessions.value = parseSessionGraph(data)
+    if (!controller.signal.aborted) {
+      const sessions = parseSessionGraph(data)
+      const selected = sessions.find(session => session.sessionId === activeSessionId.value)
+      if (activeSession.value && !selected) composerError.value = 'This conversation or execution is no longer available. Close it and refresh the conversation list.'
+      if (selected) selectedMode.value = selected.mode
+      allSessions.value = sessions
+    }
   } catch (cause) {
     if (!controller.signal.aborted) sessionsError.value = cause instanceof Error && cause.message.startsWith('Cannot ')
       ? cause.message : 'Cannot load conversations. Check Main and retry.'
@@ -939,16 +902,132 @@ function toggleCollapse(sessionId: string): void {
   }
 }
 
-function createNewWebChat(project?: ProjectRecord): void {
+function createNewWebChat(project?: ProjectRecord, syncRoute = true): void {
   resetConversation()
   draft.value = createChatDraft(projectsClient, project)
   activeSessionId.value = ''
   mobileSidebarOpen.value = false
-  void router.replace({ name: 'chat' })
-  void nextTick(() => {
+  if (!props.embedded && syncRoute) {
+    emit('primary-change', '')
+    void router.replace({ name: 'chat' })
+  }
+  void nextTick(async () => {
+    workbench.value?.showConversation()
+    await nextTick()
     autoResize()
-    chatInput.value?.focus({ preventScroll: true })
+    if (props.visible && props.keyboardActive) chatInput.value?.focus({ preventScroll: true })
   })
+}
+
+function clearPendingAttachments(): void {
+  revokeChatAttachmentPreviews(pendingAttachments.value)
+  pendingAttachments.value = []
+  imageEditsBusy.value.clear()
+  imageDropTarget.value = false
+  if (attachmentInput.value) attachmentInput.value.value = ''
+}
+
+function handleImageBusy(update: ImageContextBusy): void {
+  if (update.contextKey !== fileContextKey.value || disposed) return
+  if (update.busy) imageEditsBusy.value.add(update.sourceKey)
+  else imageEditsBusy.value.delete(update.sourceKey)
+}
+
+function handleImageContext(update: ImageContextUpdate): void {
+  if (update.contextKey !== fileContextKey.value || disposed) return
+  if (update.file && (!canQuoteSelection.value || !canAttachFiles.value)) {
+    composerError.value = 'This conversation cannot receive an image right now. Retry after the current message finishes.'
+    return
+  }
+  try {
+    if (update.file && !update.source) throw new Error('The image source is unavailable. Reopen the image before attaching it.')
+    pendingAttachments.value = updateImageAttachment(pendingAttachments.value, update.sourceKey, update.file, { source: update.source })
+  } catch (cause) {
+    composerError.value = cause instanceof Error ? cause.message : 'Could not attach the marked image. Try again.'
+  }
+}
+
+function isImageDrop(data: DataTransfer | null): boolean {
+  return hasImageReference(data) || !!data && Array.from(data.types).includes('Files')
+}
+
+function handleImageDragOver(event: DragEvent): void {
+  if (!isImageDrop(event.dataTransfer)) return
+  event.preventDefault()
+  const allowed = canQuoteSelection.value && canAttachFiles.value
+  if (event.dataTransfer) event.dataTransfer.dropEffect = allowed ? 'copy' : 'none'
+  imageDropTarget.value = allowed
+}
+
+function handleImageDragLeave(event: DragEvent): void {
+  if (event.currentTarget instanceof Node && event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+  imageDropTarget.value = false
+}
+
+function handleImageDrop(event: DragEvent): void {
+  if (!isImageDrop(event.dataTransfer)) return
+  event.preventDefault()
+  event.stopPropagation()
+  imageDropTarget.value = false
+  if (!canQuoteSelection.value || !canAttachFiles.value) {
+    composerError.value = 'This conversation cannot receive an image right now.'
+    return
+  }
+  try {
+    const reference = readImageReference(event.dataTransfer)
+    if (reference) {
+      pendingAttachments.value = updateImageAttachment(pendingAttachments.value, reference.sourceKey, reference.file, { source: reference.source })
+    } else {
+      const images = clipboardImageFiles(event.dataTransfer)
+      if (!images.length) throw new Error('Drop an image file here, or use Add file for other attachments.')
+      pendingAttachments.value = appendChatAttachments(pendingAttachments.value, images)
+    }
+    composerError.value = ''
+  } catch (cause) {
+    composerError.value = cause instanceof Error ? cause.message : 'Could not attach the image. Drag it again.'
+  }
+}
+
+function removePendingAttachment(key: string): void {
+  const attachment = pendingAttachments.value.find(item => item.key === key)
+  if (!attachment) return
+  revokeChatAttachmentPreviews([attachment])
+  pendingAttachments.value = pendingAttachments.value.filter(item => item.key !== key)
+}
+
+function openAttachmentPicker(): void {
+  composerError.value = ''
+  if (!canAttachFiles.value || !attachmentInput.value) {
+    composerError.value = 'File attachments are unavailable.'
+    return
+  }
+  attachmentInput.value.value = ''
+  attachmentInput.value.click()
+}
+
+function handleAttachmentInput(event: Event): void {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  const files = Array.from(input.files ?? [])
+  if (files.length === 0) return
+  pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
+  input.value = ''
+  chatInput.value?.focus({ preventScroll: true })
+}
+
+function handleComposerPaste(event: ClipboardEvent): void {
+  if (!canQuoteSelection.value || !canAttachFiles.value) { event.preventDefault(); return }
+  try {
+    const images = clipboardImageFiles(event.clipboardData)
+    if (!images.length) return
+    // Keep native text paste/undo when the clipboard also contains plain text.
+    if (!event.clipboardData?.getData('text/plain')) event.preventDefault()
+    pendingAttachments.value = appendChatAttachments(pendingAttachments.value, images)
+    composerError.value = ''
+  } catch (cause) {
+    event.preventDefault()
+    composerError.value = cause instanceof Error ? cause.message : 'Could not paste the image. Paste again or use Add file.'
+  }
 }
 
 async function pickContext(kind: ChatContextItem['kind']): Promise<void> {
@@ -989,6 +1068,7 @@ async function deleteSession(sessionId: string): Promise<void> {
       return
     }
     // Clear active view if deleted session was selected
+    emit('deleted', sessionId)
     if (activeSessionId.value === sessionId) {
       createNewWebChat()
     }
@@ -1000,6 +1080,12 @@ async function deleteSession(sessionId: string): Promise<void> {
 
 function resetConversation(): void {
   sessionSelectionGeneration++
+  settingsRequest?.abort()
+  settingsRequest = undefined
+  savingSettings.value = false
+  settingsError.value = ''
+  settingsOverride.value = undefined
+  pendingDraftSettings.value = undefined
   activePanel.value = 'conversation'
   diagnosisOpened.value = false
   sendRequest?.abort()
@@ -1012,33 +1098,70 @@ function resetConversation(): void {
   streaming.value = false
   streamPhase.value = undefined
   inputText.value = ''
+  clearPendingAttachments()
   contextItems.value = []
   composerError.value = ''
+  readonlyContextError.value = ''
   clearSelection()
   disconnectEventStream()
   messages.value = []
   streamContent.value = ''
   streamTimestamp.value = undefined
-  streamingToolCall.value = ''
   streamingToolCallData.value = null
-  streamingToolResult.value = ''
   systemPrompt.value = ''
   tools.value = []
   previousPhysicalId.value = null
   viewingPhysicalId.value = null
   physicalIdStack.value = []
-  expandedToolResults.clear()
-  expandedToolCalls.clear()
-  expandedEvents.clear()
   expandedThinking.clear()
 }
 
-function selectSession(sessionId: string): void {
+function requestSession(sessionId: string): void {
+  if (sessionId === activeSessionId.value && !props.childSessionId) return
+  if (props.enableChildPane) {
+    const target = childConversationTarget(allSessions.value, sessionId, activeSessionId.value)
+    if (target) {
+      if (target.primaryId !== activeSessionId.value) selectSession(target.primaryId, false)
+      emit('open-child', target)
+      return
+    }
+    if (props.childSessionId && sessionId === activeSessionId.value) {
+      emit('primary-change', sessionId)
+      void router.replace({ name: 'chat', params: { sessionId } })
+      return
+    }
+  }
+  selectSession(sessionId)
+}
+
+function inspectExecution(sessionId: string): void {
+  if (props.embedded) emit('child-navigation', sessionId)
+  else requestSession(sessionId)
+}
+
+function selectSession(sessionId: string, syncRoute = true): void {
   resetConversation()
   activeSessionId.value = sessionId
-  void router.replace({ name: 'chat', params: { sessionId } })
+  selectedMode.value = allSessions.value.find(session => session.sessionId === sessionId)?.mode
+  if (!props.embedded && syncRoute) {
+    emit('primary-change', sessionId)
+    void router.replace({ name: 'chat', params: { sessionId } })
+  }
+  void loadSessionList()
   void loadCurrentSession()
 }
+
+function restoreSession(sessionId: string): void {
+  if (!mounted || props.embedded || activeSessionId.value === sessionId) return
+  if (!sessionId) createNewWebChat(undefined, false)
+  else if (allSessions.value.some(session => session.sessionId === sessionId)) selectSession(sessionId, false)
+}
+
+function focusConversation(): void {
+  const target = chatInput.value?.getClientRects().length ? chatInput.value : paneRoot.value?.querySelector<HTMLElement>('.document-tabs [aria-selected="true"]')
+  target?.focus({ preventScroll: true })
+}
+defineExpose({ restoreSession, focusConversation, activeSessionId, allSessions })
 
 // ── History ───────────────────────────────────────────────────────────────────
 
@@ -1090,7 +1213,7 @@ async function loadDirectChat(): Promise<void> {
   if (!controller.signal.aborted) connectEventStream(chatId)
 }
 
-async function loadReadonlySession(): Promise<void> {
+async function loadReadonlySession(background = false): Promise<void> {
   historyRequest?.abort()
   const controller = new AbortController()
   historyRequest = controller
@@ -1098,35 +1221,45 @@ async function loadReadonlySession(): Promise<void> {
 
   // Read-only sessions have no live web input; ensure any event stream is closed.
   disconnectEventStream()
-  loadingHistory.value = true
+  let followBottom = false
+  if (!background) loadingHistory.value = true
+  lastReadonlyRefresh = Date.now()
   try {
     // Fetch all history + context in parallel
     const [histRes, ctxRes] = await Promise.all([
-      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), { signal: controller.signal }),
-      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal }),
+      fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`, { shallow: 'true' }), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]) }),
+      background ? Promise.resolve(null) : fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal }),
     ])
 
+    if (!histRes.ok) throw new Error('Could not update this conversation. Reopen it to retry.')
     const histData = await histRes.json()
     if (controller.signal.aborted) return
+    const container = messagesContainer.value
+    followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     const rawMessages: RawMessage[] = histData.messages ?? []
     messages.value = collapseHistory(rawMessages)
     previousPhysicalId.value = histData.previousPhysicalId ?? null
-    viewingPhysicalId.value = null
-    physicalIdStack.value = []
+    if (!background) {
+      viewingPhysicalId.value = null
+      physicalIdStack.value = []
+    }
+    composerError.value = ''
 
-    if (ctxRes.ok) {
+    if (ctxRes && !ctxRes.ok) readonlyContextError.value = 'Could not load execution context. Reopen it to retry.'
+    if (ctxRes?.ok) {
       const ctxData = await ctxRes.json()
       if (controller.signal.aborted) return
+      readonlyContextError.value = ''
       systemPrompt.value = ctxData.systemPrompt ?? ''
       tools.value = ctxData.tools ?? []
     }
-  } catch {
-    if (!controller.signal.aborted) messages.value = []
+  } catch (cause) {
+    if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : 'Could not update this conversation. Reopen it to retry.'
   } finally {
     if (historyRequest === controller) {
       historyRequest = undefined
       loadingHistory.value = false
-      scrollToBottom()
+      if (!background || followBottom) scrollToBottom()
     }
   }
 }
@@ -1174,11 +1307,7 @@ async function goBackToCurrentSegment(): Promise<void> {
 function handleKeyDown(e: KeyboardEvent): void {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault()
-    if (selectedText.value) {
-      askInline()
-    } else {
-      sendMessage()
-    }
+    void sendMessage()
   }
 }
 
@@ -1188,12 +1317,15 @@ interface StreamState { accumulated: string; timestamp?: string }
 
 /** A decoded SSE payload emitted by the web channel. */
 interface StreamPayload {
-  event?: 'response' | 'tool_call' | 'tool_result'
+  event?: 'response' | 'tool_call' | 'tool_result' | 'session_message'
   content?: string
   done?: boolean
   media?: string[]
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number }
   toolCall?: { name: string; arguments: Record<string, unknown> }
+  toolCallId?: string
+  toolName?: string
+  message?: RawMessage
 }
 
 /**
@@ -1204,6 +1336,23 @@ interface StreamPayload {
  */
 function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean {
   const event = payload.event ?? 'response'
+  if (event === 'session_message') {
+    const parsed = payload.message && parseChatEvent(payload.message)
+    if (!parsed) throw new Error('Invalid live event message')
+    const eventId = parsed.eventMeta.attrs['event-id']
+    if (eventId && messages.value.some(message => message.eventMeta?.attrs['event-id'] === eventId)) return false
+    if (state.accumulated) {
+      messages.value.push({ role: 'assistant', content: state.accumulated, timestamp: state.timestamp })
+      state.accumulated = ''
+      state.timestamp = undefined
+      streamContent.value = ''
+      streamTimestamp.value = undefined
+    }
+    messages.value.push({ role: 'user', isSystemEvent: true, ...parsed })
+    void loadSessionList()
+    scrollToBottom()
+    return false
+  }
   streamPhase.value = event === 'tool_call' ? 'tool' : 'llm'
 
   if (event === 'tool_call') {
@@ -1215,26 +1364,18 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
       streamContent.value = ''
       streamTimestamp.value = undefined
     }
-    // Flush previous tool result
-    flushStreamingTool()
-    streamingToolCall.value = payload.content ?? ''
     streamingToolCallData.value = payload.toolCall ?? null
+    messages.value.push({
+      role: 'assistant', event: 'tool_call', content: payload.content ?? '',
+      toolCall: payload.toolCall, toolCallId: payload.toolCallId, toolName: payload.toolName,
+    })
     scrollToBottom()
   } else if (event === 'tool_result') {
-    // Commit the tool_call, show tool_result
-    if (streamingToolCall.value || streamingToolCallData.value) {
-      const msg: ChatMsg = {
-        role: 'assistant',
-        content: streamingToolCall.value,
-        event: 'tool_call',
-      }
-      if (streamingToolCallData.value) msg.toolCall = streamingToolCallData.value
-      messages.value.push(msg)
-      streamingToolCall.value = ''
-      streamingToolCallData.value = null
-    }
-    streamingToolResult.value = payload.content ?? ''
-    streamToolResultExpanded.value = false
+    messages.value.push({
+      role: 'assistant', event: 'tool_result', content: payload.content ?? '',
+      toolCallId: payload.toolCallId, toolName: payload.toolName,
+    })
+    if (payload.toolName === 'subagent' || streamingToolCallData.value?.name === 'subagent') void loadSessionList()
     scrollToBottom()
   } else {
     // response event
@@ -1249,6 +1390,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
   }
 
   if (payload.done) {
+    detailsRevision.value++
     streamPhase.value = undefined
     flushStreamingTool()
     if (state.accumulated) {
@@ -1269,10 +1411,25 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
   return false
 }
 
-async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: string; retry?: boolean; retryContent?: string }): Promise<void> {
+async function sendMessage(overrideContent?: string, opts?: {
+  parentSessionId?: string
+  retry?: boolean
+  retryContent?: string
+  retryMedia?: string[]
+}): Promise<void> {
+  if (isExecution.value) {
+    composerError.value = 'Tasks and calls are read-only. Send a message in the owning conversation instead.'
+    return
+  }
+  if (awaitingCall.value) return
+  if (props.embedded && !activeSession.value && !opts?.parentSessionId) {
+    composerError.value = 'This child conversation is unavailable. Close it and refresh the conversation list.'
+    return
+  }
   const retry = opts?.retry === true
   const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
-  if ((!content && !retry) || streaming.value || preparingSend.value || pickingContext.value) return
+  const attachments = retry ? [] : [...pendingAttachments.value]
+  if ((!content && !retry && attachments.length === 0) || streaming.value || preparingSend.value || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
   const generation = sessionSelectionGeneration
   const controller = new AbortController()
   sendRequest = controller
@@ -1280,6 +1437,7 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
   preparingSend.value = startingDraft
   composerError.value = ''
   let accepted = false
+  let messageAdded = retry
 
   try {
     const sessionId = activeSessionId.value || await draft.value.prepare(controller.signal)
@@ -1289,25 +1447,23 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
     historyRequest = undefined
     loadingHistory.value = false
     activeSessionId.value = sessionId
-    void router.replace({ name: 'chat', params: { sessionId } })
+    if (!props.embedded) void router.replace({ name: 'chat', params: { sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })
     preparingSend.value = false
-    if (!retry) {
-      messages.value.push({ role: 'user', content, timestamp: new Date().toISOString() })
-      inputText.value = ''
-      contextItems.value = []
-      if (chatInput.value) chatInput.value.style.height = 'auto'
-    }
+    workbench.value?.showConversation()
+    activePanel.value = 'conversation'
     clearSelection()
     streaming.value = true
     streamPhase.value = 'llm'
     streamContent.value = ''
     streamTimestamp.value = undefined
-    streamingToolCall.value = ''
-    streamingToolResult.value = ''
-    streamToolResultExpanded.value = false
+    streamingToolCallData.value = null
     scrollToBottom()
 
     const chatId = sessionId.replace('web:', '')
+    const uploadedAttachments = retry ? [] : await uploadChatAttachments(props.apiBase, chatId, attachments, controller.signal, fetch, opts?.parentSessionId)
+    const uploadedMedia = retry ? [...(opts?.retryMedia ?? [])] : uploadedAttachments.map(attachment => attachment.path)
+    const messageContent = composeImageReferenceMessage(content, uploadedAttachments)
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     const payload: Record<string, unknown> = {
       chatId,
       senderId: 'admin',
@@ -1316,10 +1472,21 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
       payload.retry = true
       // Fallback content used only if the original request never reached the backend.
       if (opts?.retryContent) payload.content = opts.retryContent
+      if (uploadedMedia.length > 0) payload.media = uploadedMedia
     } else {
-      payload.content = content
+      payload.content = messageContent
+      if (uploadedMedia.length > 0) payload.media = uploadedMedia
+      const msg: ChatMsg = { role: 'user', content: messageContent, timestamp: new Date().toISOString() }
+      if (uploadedMedia.length > 0) msg.media = uploadedMedia
+      messages.value.push(msg)
+      messageAdded = true
+      inputText.value = ''
+      clearPendingAttachments()
+      contextItems.value = []
+      if (chatInput.value) chatInput.value.style.height = 'auto'
     }
     if (opts?.parentSessionId) payload.parentSessionId = opts.parentSessionId
+    if (pendingDraftSettings.value) payload.config = pendingDraftSettings.value
 
     const res = await fetch(buildUrl('/api/chat/send'), {
       method: 'POST',
@@ -1333,6 +1500,7 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
     }
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     accepted = true
+    pendingDraftSettings.value = undefined
     if (!eventStream) connectEventStream(chatId)
     void loadSessionList()
 
@@ -1341,6 +1509,7 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
     const decoder = new TextDecoder()
     let buffer = ''
     const streamState: StreamState = { accumulated: '' }
+    requestStreamState = streamState
 
     while (true) {
       const { value, done } = await reader.read()
@@ -1361,7 +1530,9 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
             void loadSessionList()
             return
           }
-        } catch { /* skip malformed data lines */ }
+        } catch {
+          composerError.value = 'Could not read a live conversation update. Reopen the conversation to reload its history.'
+        }
       }
     }
 
@@ -1370,24 +1541,26 @@ async function sendMessage(overrideContent?: string, opts?: { parentSessionId?: 
     if (streamState.accumulated) {
       messages.value.push({ role: 'assistant', content: streamState.accumulated, timestamp: streamState.timestamp })
     }
+    detailsRevision.value++
   } catch (err) {
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
-    if (!activeSessionId.value) {
+    if (!activeSessionId.value || !messageAdded) {
       composerError.value = err instanceof Error ? err.message : 'Could not start the conversation. Retry.'
     } else {
       messages.value.push({ role: 'assistant', content: `Error: ${err}`, isError: true, timestamp: new Date().toISOString() })
     }
   } finally {
     if (generation === sessionSelectionGeneration) {
-      if (sendRequest === controller) sendRequest = undefined
+      if (sendRequest === controller) {
+        sendRequest = undefined
+        requestStreamState = undefined
+      }
       preparingSend.value = false
       streaming.value = false
       streamPhase.value = undefined
       streamContent.value = ''
       streamTimestamp.value = undefined
-      streamingToolCall.value = ''
       streamingToolCallData.value = null
-      streamingToolResult.value = ''
       scrollToBottom()
       if (accepted && !systemPrompt.value) void loadCurrentSession()
     }
@@ -1416,38 +1589,20 @@ function retryLastRequest(): void {
   const retryContent = last && last.role === 'user' && typeof last.content === 'string'
     ? last.content
     : undefined
-  void sendMessage(undefined, { retry: true, retryContent })
+  const retryMedia = last && last.role === 'user' ? last.media : undefined
+  void sendMessage(undefined, { retry: true, retryContent, retryMedia })
 }
 
-/** Commit any in-flight streaming tool call/result into the messages array. */
+/** Tool events are committed immediately so parallel results cannot overwrite each other. */
 function flushStreamingTool(): void {
-  if (streamingToolCall.value || streamingToolCallData.value) {
-    const msg: ChatMsg = {
-      role: 'assistant',
-      content: streamingToolCall.value,
-      event: 'tool_call',
-    }
-    if (streamingToolCallData.value) msg.toolCall = streamingToolCallData.value
-    messages.value.push(msg)
-    streamingToolCall.value = ''
-    streamingToolCallData.value = null
-  }
-  if (streamingToolResult.value) {
-    messages.value.push({
-      role: 'assistant',
-      content: streamingToolResult.value,
-      event: 'tool_result',
-    })
-    streamingToolResult.value = ''
-    streamToolResultExpanded.value = false
-  }
+  streamingToolCallData.value = null
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function scrollToBottom(): void {
   nextTick(() => {
-    if (activePanel.value !== 'conversation') return
+    if (!props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
     const el = messagesContainer.value
     if (el) el.scrollTop = el.scrollHeight
   })
@@ -1473,11 +1628,21 @@ function usageDelta(idx: number): { prompt: number; completion: number; total: n
 const FILE_REF_RE = /\[file:\s*([^\]]+)\]/g
 const IMAGE_EXT_SET = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'svg', 'avif', 'heic', 'heif'])
 
+function isImageMedia(path: string): boolean {
+  if (path.startsWith('data:image/')) return true
+  try {
+    const ext = new URL(path).pathname.split('.').pop()?.toLowerCase() ?? ''
+    return IMAGE_EXT_SET.has(ext)
+  } catch {
+    const ext = path.split('.').pop()?.toLowerCase() ?? ''
+    return IMAGE_EXT_SET.has(ext)
+  }
+}
+
 function preprocessFileRefs(text: string): string {
   return text.replace(FILE_REF_RE, (_match, rawPath: string) => {
     const path = rawPath.trim()
-    const ext = path.split('.').pop()?.toLowerCase() ?? ''
-    if (IMAGE_EXT_SET.has(ext)) {
+    if (isImageMedia(path)) {
       const url = resolveMediaUrl(path)
       if (!url) return _match
       return `<img src="${url}" alt="${path}" class="chat-inline-img" loading="lazy" />`
@@ -1572,178 +1737,31 @@ function openMediaUrl(path: string): void {
   if (url) globalThis.open(url, '_blank')
 }
 
-// ── Text selection handling ───────────────────────────────────────────────────
-
-const highlightRects = ref<Array<{ top: number; left: number; width: number; height: number }>>([])
-
-/** Compute overlay rects from the current browser selection, relative to the messages container. */
-function captureHighlightRects(sel: Selection): void {
-  highlightRects.value = []
-  if (sel.rangeCount === 0 || !messagesContainer.value) return
-
-  const range = sel.getRangeAt(0)
-  const containerRect = messagesContainer.value.getBoundingClientRect()
-  const scrollTop = messagesContainer.value.scrollTop
-  const scrollLeft = messagesContainer.value.scrollLeft
-
-  // Collect all raw client rects
-  const raw: Array<{ top: number; left: number; width: number; height: number; right: number; bottom: number }> = []
-  for (const r of range.getClientRects()) {
-    if (r.width === 0 || r.height === 0) continue
-    raw.push({
-      top: r.top - containerRect.top + scrollTop,
-      left: r.left - containerRect.left + scrollLeft,
-      width: r.width,
-      height: r.height,
-      right: r.right - containerRect.left + scrollLeft,
-      bottom: r.bottom - containerRect.top + scrollTop,
-    })
-  }
-
-  // Remove rects that fully contain a smaller rect (keep only the tightest)
-  const filtered = raw.filter((a) => {
-    return !raw.some((b) =>
-      a !== b &&
-      a.top <= b.top && a.left <= b.left &&
-      a.right >= b.right && a.bottom >= b.bottom
-    )
-  })
-
-  highlightRects.value = filtered.map(({ top, left, width, height }) => ({ top, left, width, height }))
-}
-
-function handleTextSelection(): void {
-  if (route.name !== 'chat' || activePanel.value !== 'conversation') return
-  if (!isDirectChat.value) return // readonly sessions – no selection actions
-  const sel = window.getSelection()
-  if (!sel || sel.isCollapsed || !sel.toString().trim()) return
-
-  // Walk up from the selection anchor to find if it's inside a selectable area
-  let node: Node | null = sel.anchorNode
-  let msgEl: HTMLElement | null = null
-  let isAssistant = false
-  while (node && node !== messagesContainer.value) {
-    if (node instanceof HTMLElement) {
-      // Assistant chat bubble
-      if (node.dataset.msgIdx !== undefined && node.classList.contains('chat-assistant')) {
-        msgEl = node
-        isAssistant = true
-        break
-      }
-      // System event (expanded body content)
-      if (node.classList.contains('system-event') && node.classList.contains('expanded')) {
-        msgEl = node
-        break
-      }
-      // Tool result content (only when expanded)
-      if (node.classList.contains('tool-result') && !node.classList.contains('collapsed')) {
-        msgEl = node
-        break
-      }
-    }
-    node = node.parentNode
-  }
-  if (!msgEl) return
-
-  selectedText.value = sel.toString().trim()
-  selectedMsgIndex.value = isAssistant ? parseInt(msgEl.dataset.msgIdx!, 10) : -1
-  selectedElement.value = msgEl
-  captureHighlightRects(sel)
-}
-
-/** Dismiss selection when clicking blank space or user messages inside the chat area. */
-function handleChatAreaClick(e: MouseEvent): void {
-  if (!selectedText.value) return
-  const target = e.target as HTMLElement
-
-  // Walk up to check if click is inside a selectable area — if so, don't dismiss
-  let node: HTMLElement | null = target
-  while (node && node !== messagesContainer.value) {
-    if (node.dataset.msgIdx !== undefined && node.classList.contains('chat-assistant')) return
-    if (node.classList.contains('tool-group')) return
-    if (node.classList.contains('system-event')) return
-    node = node.parentElement
-  }
-
-  clearSelection()
-}
-
 function clearSelection(): void {
-  selectedText.value = ''
-  selectedMsgIndex.value = -1
-  selectedElement.value = null
-  highlightRects.value = []
+  selectionMenu.value?.dismiss()
 }
 
-function truncateText(text: string, max: number): string {
-  return text.length <= max ? text : text.slice(0, max) + '...'
-}
-
-function scrollToSelection(): void {
-  const container = messagesContainer.value
-  if (!container) return
-  // Scroll to the first highlight rect for precision
-  if (highlightRects.value.length > 0) {
-    const firstRect = highlightRects.value[0]
-    const targetTop = firstRect.top - container.clientHeight / 3
-    container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
-    return
-  }
-  if (selectedElement.value) {
-    selectedElement.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-}
-
-function buildSelectionMessage(userQuestion: string): string {
-  const quote = selectedText.value
-  if (!quote) return userQuestion
-  const quotedLines = quote.split('\n').map(l => `> ${l}`).join('\n')
-  return `${quotedLines}\n\n${userQuestion}`
-}
-
-async function askInline(): Promise<void> {
-  const question = inputText.value.trim()
-  if (!question || streaming.value) return
-  const content = buildSelectionMessage(question)
-  await sendMessage(content)
-}
-
-async function askInFork(): Promise<void> {
-  const question = inputText.value.trim()
-  if (!question || streaming.value) return
-
-  const quote = selectedText.value
-  const quotedLines = quote ? quote.split('\n').map(l => `> ${l}`).join('\n') : ''
-  const content = [
-    '[Branched conversation — the user wants to explore a specific part of the previous discussion in a separate thread.]',
-    '',
-    quotedLines,
-    '',
-    question,
-  ].filter(Boolean).join('\n')
-
-  const parentSessionId = activeSessionId.value
-  const context = [...contextItems.value]
-  collapsedSessions.delete(parentSessionId)
-  resetConversation()
-  contextItems.value = context
-  // Sending establishes parent lineage; fetching the empty child first would not.
-  activeSessionId.value = `web:chat-${crypto.randomUUID()}`
-  await sendMessage(content, { parentSessionId })
-}
-
-function handleResize(): void {
-  if (highlightRects.value.length > 0) clearSelection()
+function quoteSelection(text: string): void {
+  const input = chatInput.value
+  if (!input || input.disabled || input.readOnly) return
+  const quote = insertQuote(inputText.value, text, input.selectionStart, input.selectionEnd)
+  inputText.value = quote.text
+  void nextTick(() => {
+    input.focus({ preventScroll: true })
+    input.setSelectionRange(quote.caret, quote.caret)
+    autoResize()
+  })
 }
 
 function handleTypingFocus(e: KeyboardEvent): void {
-  if (activePanel.value !== 'conversation' || !isComposerTypingKey(e)) return
+  if (!props.visible || !conversationDocumentVisible.value || !props.keyboardActive || !paneRoot.value?.getClientRects().length || activePanel.value !== 'conversation' || !isComposerFocusKey(e)) return
   const input = chatInput.value
   if (!input) return
-  const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"], [role="slider"], [role="listbox"]'
+  const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"], [role="slider"], [role="listbox"], .workbench-explorer'
   const editing = [e.target, document.activeElement].some(target => target instanceof Element && !!target.closest(editable))
-  const overlayOpen = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="menu"], .project-dialog-backdrop, .project-menu-backdrop, .composer-popover-backdrop'))
-    .some(element => element.getClientRects().length > 0)
+  const overlayOpen = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="menu"], .project-dialog-backdrop, .project-menu-backdrop, .composer-popover-backdrop, .workbench-explorer.drawer'))
+    .some(element => element.getClientRects().length > 0
+      && (!element.classList.contains('hover-info-popup') || element.contains(document.activeElement)))
   if (!canRedirectComposerKey(e, {
     available: route.name === 'chat' && (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value
       && !input.disabled && !input.readOnly && !preparingSend.value && !pickingContext.value,
@@ -1751,43 +1769,75 @@ function handleTypingFocus(e: KeyboardEvent): void {
     overlayOpen,
   })) return
 
-  e.preventDefault()
+  // Keep native editing/undo and IME text events; event.key is not necessarily committed text.
   input.focus({ preventScroll: true })
-  // Insert the triggering character once; subsequent keys use normal textarea input.
-  input.setRangeText(e.key, input.selectionStart, input.selectionEnd, 'end')
-  inputText.value = input.value
-  autoResize()
 }
 
-document.addEventListener('mouseup', handleTextSelection)
 document.addEventListener('keydown', handleTypingFocus)
-window.addEventListener('resize', handleResize)
-const onGlobalConfigChanged = () => { void loadGlobalConfig() }
+const onGlobalConfigChanged = () => { detailsRevision.value++ }
 window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
+  disposed = true
+  dockObserver?.disconnect()
+  settingsRequest?.abort()
   sessionSelectionGeneration++
   sendRequest?.abort()
   historyRequest?.abort()
   sessionListRequest?.abort()
-  document.removeEventListener('mouseup', handleTextSelection)
   document.removeEventListener('keydown', handleTypingFocus)
-  window.removeEventListener('resize', handleResize)
   window.removeEventListener('shadow:config-changed', onGlobalConfigChanged)
   stopStagePolling()
   disconnectEventStream()
+  clearPendingAttachments()
 })
 
 onMounted(async () => {
-  await Promise.all([loadSessionList(), loadGlobalConfig()])
-  startStagePolling()
+  await loadSessionList()
+  if (disposed) return
+  mounted = true
+  if (props.visible) startStagePolling()
+  if (props.embedded) {
+    await loadEmbeddedSession(props.sessionId ?? '')
+    return
+  }
   // Restore session from route param
   const routeSessionId = route.params.sessionId as string | undefined
   if (routeSessionId && allSessions.value.some(s => s.sessionId === routeSessionId)) {
-    selectSession(routeSessionId)
+    selectSession(routeSessionId, false)
   }
 })
+async function loadEmbeddedSession(id: string): Promise<void> {
+  if (!allSessions.value.some(session => session.sessionId === id)) await loadSessionList()
+  if (disposed || props.sessionId !== id) return
+  if (allSessions.value.some(session => session.sessionId === id)) selectSession(id, false)
+  else {
+    resetConversation()
+    activeSessionId.value = id
+    composerError.value = 'This child conversation is unavailable. Close it and refresh the conversation list.'
+  }
+}
+watch(() => props.sessionId, id => {
+  if (mounted && props.embedded && id && id !== activeSessionId.value) void loadEmbeddedSession(id)
+})
+watch(() => props.visible, visible => {
+  if (!mounted) return
+  if (visible) startStagePolling()
+  else stopStagePolling()
+})
+watch(composerDock, element => {
+  dockObserver?.disconnect()
+  if (!element) return
+  dockObserver = new ResizeObserver(() => {
+    if (!props.visible || !composerVisible.value || !element.getClientRects().length) return
+    const container = messagesContainer.value
+    const followBottom = container && container.scrollHeight - container.scrollTop - container.clientHeight < 32
+    dockHeight.value = element.getBoundingClientRect().height
+    if (followBottom) void nextTick(() => { if (container) container.scrollTop = container.scrollHeight })
+  })
+  dockObserver.observe(element)
+}, { flush: 'post' })
 const canResend = computed(() => {
-  if (streaming.value) return false
+  if (streaming.value || awaitingCall.value) return false
   if (messages.value.length === 0) return false
   const lastMsg = messages.value[messages.value.length - 1]
   return lastMsg.role === 'user'
@@ -1796,7 +1846,7 @@ const historyMarkers = computed(() => userMessageMarkers(messages.value))
 
 function resendLastMessage() {
   const lastUserMsg = [...messages.value].reverse().find(m => m.role === 'user')
-  sendMessage(lastUserMsg?.content, { retry: true })
+  void sendMessage(undefined, { retry: true, retryContent: lastUserMsg?.content, retryMedia: lastUserMsg?.media })
 }
 </script>
 
@@ -1804,20 +1854,28 @@ function resendLastMessage() {
 .chat-workspace {
   position: relative;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-width: 0;
   min-height: 0;
   height: 100%;
 }
-.conversation-tabs { display: flex; flex-shrink: 0; gap: 24px; padding: 0 24px; border-bottom: 1px solid var(--c-border); }
-.conversation-tabs button { display: inline-flex; align-items: center; gap: 6px; position: relative; padding: 13px 0; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 13px; cursor: pointer; }
-.conversation-tabs button.active { color: var(--c-text); font-weight: 550; }
-.conversation-tabs button.active::after { position: absolute; content: ''; height: 2px; inset: auto 0 -1px; background: var(--c-blue); border-radius: var(--radius-sm); }
-.conversation-tabs button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
-.chat-panel { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.chat-panel.is-draft { justify-content: center; overflow-y: auto; padding: 40px 0 80px; box-sizing: border-box; }
+.diagnosis-toggle { display: inline-flex; align-items: center; flex-shrink: 0; gap: 6px; min-height: 32px; padding: 6px 8px; margin-right: 12px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.diagnosis-toggle > span { display: block; width: 16px; height: 16px; }
+.diagnosis-toggle:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.diagnosis-toggle[aria-pressed="true"] { background: var(--c-selection-bg); color: var(--c-blue); }
+.diagnosis-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.chat-panel { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+.conversation-heading-row { display: flex; align-items: center; flex-shrink: 0; min-width: 0; }
+.conversation-heading-row > :deep(.session-heading) { flex: 1; }
+.conversation-dock { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; pointer-events: none; z-index: 3; }
+.conversation-dock > * { pointer-events: auto; }
+.conversation-dock > .chat-working:last-child { margin-bottom: 16px; }
+.conversation-dock.in-flow { position: static; flex: 0 0 auto; }
+.chat-workspace.is-embedded { display: flex; width: 100%; }
+.is-embedded :deep(.session-heading) { padding: 4px 8px; }
+.chat-panel.is-draft { flex: 0 0 auto; }
 .draft-heading { flex-shrink: 0; box-sizing: border-box; width: min(100%, 720px); padding: 0 24px; margin: 0 auto 30px; text-align: center; color: var(--c-text); }
 .draft-mark { width: 64px; height: 64px; margin: 0 auto 22px; color: var(--c-text-secondary); }
 .draft-mark svg { width: 100%; height: 100%; }
@@ -1830,15 +1888,13 @@ function resendLastMessage() {
 .draft-project strong { color: var(--c-text); font-size: 24px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
 .draft-project-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
 .draft-heading .draft-scratch { margin-top: 14px; }
-.chat-header { flex-shrink: 0; gap: 10px; }
-.chat-session-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; }
-.chat-heading-copy { min-width: 0; overflow-wrap: anywhere; }
-.chat-header > button { flex-shrink: 0; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
-.chat-messages { min-height: 0; min-width: 0; padding-right: 56px; overflow-wrap: anywhere; overscroll-behavior: contain; }
+.chat-messages { min-height: 0; min-width: 0; padding-right: 56px; padding-bottom: calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
 .chat-working { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--c-blue) 22%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 5%, var(--c-bg-card)); color: var(--c-blue); }
 .chat-working.tool { border-color: color-mix(in srgb, var(--c-warning, #d49a35) 28%, var(--c-border)); background: color-mix(in srgb, var(--c-warning, #d49a35) 6%, var(--c-bg-card)); color: var(--c-warning, #d49a35); }
 .chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
+.execution-summary { flex-wrap: wrap; border-color: var(--c-border); background: var(--c-bg-soft); }
+.execution-summary .chat-working-detail { display: block; white-space: normal; }
 .working-wave { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; height: 16px; margin-left: auto; }
 .working-wave i { width: 3px; height: 13px; border-radius: var(--radius-sm); background: currentColor; animation: working-wave 1.2s ease-in-out infinite; }
 .working-wave i:nth-child(2) { animation-delay: .15s; }
@@ -1847,40 +1903,48 @@ function resendLastMessage() {
 @media (prefers-reduced-motion: reduce) { .working-wave i { animation: none; } }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: 860px; margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); transition: border-color .15s ease; }
-.composer-box:focus-within { border-color: var(--c-text-secondary); }
+.composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-text-secondary); }
+.composer-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .composer-input { display: flex; min-width: 0; }
 .composer-input textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 78px; max-height: min(240px, 28dvh); overflow-y: auto; resize: none; padding: 3px 4px 10px; border: 0; outline: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; line-height: 1.6; }
 .composer-input textarea::placeholder { color: var(--c-text-secondary); }
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 4px; min-width: 0; }
-.composer-controls { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: calc(100% - 42px); }
-.composer-send, .composer-send-actions { margin-left: auto; flex-shrink: 0; }
-.composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-circle); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
+.composer-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: calc(100% - 42px); }
+.composer-send { margin-left: auto; flex-shrink: 0; }
+.composer-box.image-drop-target { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .composer-send:disabled { opacity: .35; cursor: not-allowed; }
 .composer-send:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 .composer-send:focus-visible, .context-action:focus-visible, .context-chip button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.composer-send-actions { display: flex; gap: 8px; }
 .composer-context { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 10px; }
 .context-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 5px 4px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text-secondary); font-size: 12px; }
+.attachment-chip { max-width: min(100%, 240px); }
+.attachment-thumb { width: 24px; height: 24px; flex-shrink: 0; border-radius: var(--radius-control); object-fit: cover; }
+.attachment-reference { max-width: min(100%, 340px); padding-left: 5px; gap: 10px; }
+.attachment-reference .attachment-thumb { width: 72px; height: 48px; object-fit: contain; background: var(--c-bg); }
+.attachment-caption { display: flex; flex-direction: column; gap: 4px; }
+.attachment-caption > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-reference-label { color: var(--c-text-secondary); font-size: 11px; }
+.attachment-source-path { color: var(--c-text-secondary); font-size: 11px; }
+.context-chip.attachment-reference button { width: 32px; min-height: 32px; }
 .context-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-icon { flex-shrink: 0; width: 17px; height: 17px; }
 .context-chip button { flex-shrink: 0; padding: 0 3px; border: 0; background: transparent; color: var(--c-text-secondary); font-size: 17px; cursor: pointer; }
 .context-action { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .context-action:hover { background: var(--c-bg-muted); }
+.context-action:disabled { opacity: .5; cursor: not-allowed; }
 .composer-error { margin: 8px 4px; color: var(--c-error); font-size: 12px; overflow-wrap: anywhere; }
-.composer-hint { margin-top: 9px; text-align: center; color: var(--c-text-secondary); font-size: 11px; opacity: .65; }
+.composer-submit { display: flex; align-items: center; gap: 10px; margin-left: auto; min-width: 0; max-width: 100%; }
+.composer-hint { min-width: 0; text-align: right; color: var(--c-text-secondary); font-size: 11px; line-height: 1.4; }
 .mobile-sessions-toggle { display: none; }
 .mobile-sidebar-backdrop { display: none; }
-@media (max-width: 1000px) {
-  .chat-workspace { grid-template-columns: 240px minmax(0, 1fr); }
-}
 @media (max-width: 700px) {
   .chat-workspace { grid-template-columns: minmax(0, 1fr); }
+  .chat-workspace:not(.is-embedded) > :deep(.file-workbench) { --workbench-top-offset: 36px; padding-top: var(--workbench-top-offset); box-sizing: border-box; }
   .sessions-sidebar { display: none; position: absolute; inset: 36px auto 0 0; width: min(280px, 82%); z-index: 12; box-shadow: 8px 0 24px var(--c-shadow-soft); }
   .mobile-sessions-open .sessions-sidebar { display: flex; }
   .mobile-sidebar-backdrop { display: block; position: absolute; inset: 36px 0 0; z-index: 11; border: 0; background: rgb(0 0 0 / 25%); }
   .mobile-sessions-toggle { display: block; position: absolute; top: 6px; left: 8px; z-index: 13; }
-  .chat-header { padding-top: 42px; }
-  .chat-panel.is-draft { padding: 58px 0 28px; }
   .draft-heading { margin-bottom: 18px; }
   .draft-mark { width: 48px; height: 48px; margin-bottom: 16px; }
   .draft-project { padding: 14px; gap: 12px; }
@@ -1932,137 +1996,6 @@ function resendLastMessage() {
 .btn-sm {
   padding: 0.25rem 0.5rem;
   font-size: 0.7rem;
-}
-
-/* ── System event ─────────────────────────────────────────── */
-
-.system-event {
-  align-self: stretch;
-  border: 1px solid var(--c-purple-border);
-  padding: 0.3rem 0.5rem;
-  border-radius: var(--radius-surface);
-  background: var(--c-purple-soft);
-  font-size: 0.7rem;
-  color: var(--c-text-body);
-  transition: background 0.1s ease;
-}
-
-.system-event:hover {
-  background: var(--c-purple-soft-bg);
-}
-
-.system-event-header {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  cursor: pointer;
-  user-select: none;
-}
-
-.system-event-type {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 0.6rem;
-  font-weight: 600;
-  color: var(--c-purple);
-  letter-spacing: 0.02em;
-}
-
-.system-event-source {
-  font-size: 0.55rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  border-radius: var(--radius-sm);
-  padding: 0.05em 0.35em;
-  background: var(--c-purple-soft-bg);
-  color: var(--c-purple);
-  white-space: nowrap;
-}
-
-.system-event-status {
-  font-size: 0.5rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  border-radius: var(--radius-sm);
-  padding: 0.05em 0.35em;
-  background: var(--c-bg-muted);
-  color: var(--c-text-muted);
-}
-
-.system-event-status.completed {
-  background: var(--c-success-bg);
-  color: var(--c-success);
-}
-
-.system-event-status.failed,
-.system-event-status.error {
-  background: var(--c-error-bg);
-  color: var(--c-error);
-}
-
-.system-event-toggle {
-  flex-shrink: 0;
-  font-size: 0.45rem;
-  margin-left: auto;
-  color: var(--c-text-faint);
-}
-
-.system-event-title {
-  margin-top: 0.15rem;
-  font-size: 0.65rem;
-  color: var(--c-text-muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.system-event-body {
-  margin-top: 0.25rem;
-}
-
-.system-event-attrs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 0.4rem;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--c-border);
-  margin-bottom: 0.25rem;
-}
-
-.system-event-attr {
-  display: flex;
-  gap: 0.2rem;
-  align-items: baseline;
-  font-size: 0.55rem;
-}
-
-.system-event-attr-key {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-weight: 600;
-  color: var(--c-text-muted);
-}
-
-.system-event-attr-val {
-  color: var(--c-text-body);
-  word-break: break-all;
-}
-
-.system-event-content {
-  font-size: 0.7rem;
-  line-height: 1.5;
-  color: var(--c-text-secondary);
-}
-
-.system-event-content :deep(pre) {
-  background: var(--c-bg-muted);
-  color: var(--c-text);
-  border-radius: var(--radius-sm);
-  padding: 0.35rem;
-  font-size: 0.65rem;
-  overflow-x: auto;
-  margin: 0.3rem 0;
 }
 
 /* ── Chat media ──────────────────────────────────────────── */
@@ -2164,6 +2097,16 @@ function resendLastMessage() {
   gap: 0.5rem;
 }
 
+.chat-messages > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card)) {
+  min-width: 0;
+  max-width: var(--conversation-item-max-width);
+  align-self: flex-start;
+}
+
+.system-event, .compaction-summary, .execution-card {
+  width: 100%;
+}
+
 .chat-bubble {
   max-width: 80%;
   padding: 0.5rem 0.75rem;
@@ -2190,7 +2133,6 @@ function resendLastMessage() {
 /* ── Compaction summary ───────────────────────────────────── */
 
 .compaction-summary {
-  align-self: stretch;
   border: 1px dashed var(--c-info, #6366f1);
   border-radius: var(--radius-surface);
   overflow: hidden;
@@ -2222,6 +2164,11 @@ function resendLastMessage() {
 
 /* ── Segment navigation bar ──────────────────────────────── */
 
+.unlinked-executions { margin: 8px 0 16px; color: var(--c-text-secondary); font-size: 12px; }
+.unlinked-executions summary { cursor: pointer; }
+.unlinked-executions button { display: flex; margin: 6px 0; max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+.unlinked-executions summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+
 .segment-nav {
   display: flex;
   align-items: center;
@@ -2243,58 +2190,6 @@ function resendLastMessage() {
   color: var(--c-info, #6366f1);
   font-weight: 600;
   font-size: 0.75rem;
-}
-
-/* ── Selection highlight on assistant bubble ──────────────── */
-
-.chat-assistant.has-selection {
-  border-color: var(--c-blue, #3b82f6);
-  box-shadow:
-    0 0 0 1px var(--c-blue, #3b82f6),
-    0 0 12px rgba(59, 130, 246, 0.15),
-    0 0 24px rgba(59, 130, 246, 0.06);
-  transition: border-color 0.2s ease, box-shadow 0.3s ease;
-}
-
-.chat-assistant.has-selection::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.06), transparent 60%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.chat-assistant.has-selection {
-  position: relative;
-}
-
-.chat-assistant.has-selection .chat-content ::selection {
-  background: rgba(59, 130, 246, 0.25);
-  color: inherit;
-}
-
-/* ── Inline selection highlight overlay ────────────────────── */
-
-.chat-messages:has(.selection-highlight-overlay) ::selection {
-  background: transparent;
-}
-
-.selection-highlight-overlay {
-  position: absolute;
-  pointer-events: none;
-  z-index: 1;
-  background: rgba(250, 204, 21, 0.4);
-  border-radius: var(--radius-sm);
-  filter: url(#highlight-rough);
-  animation: hl-fade-in 0.25s ease-out;
-}
-
-@keyframes hl-fade-in {
-  from {
-    background: rgba(250, 204, 21, 0.65);
-  }
 }
 
 .chat-sender {
@@ -2362,84 +2257,6 @@ function resendLastMessage() {
   font-size: 0.8rem;
 }
 
-/* ── Tool call / result ────────────────────────────────────── */
-
-.tool-group {
-  align-self: flex-start;
-  max-width: 85%;
-  border: 1px solid var(--c-border);
-  font-size: 0.75rem;
-  background: var(--c-frosted);
-  border-radius: var(--radius-surface);
-  padding: 0.3rem 0.6rem;
-}
-
-.tool-call-label,
-.tool-call-header {
-  display: flex;
-  align-items: baseline;
-  gap: 0.3rem;
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 0.7rem;
-  color: var(--c-text-body);
-  line-height: 1.4;
-  cursor: pointer;
-  user-select: none;
-}
-
-.tool-call-header:hover {
-  color: var(--c-text-secondary);
-}
-
-.tool-icon {
-  flex-shrink: 0;
-  font-size: 0.75rem;
-}
-
-.tool-name {
-  font-weight: 600;
-  color: var(--c-text-secondary);
-  flex-shrink: 0;
-}
-
-.tool-args {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.tool-args-summary {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  color: var(--c-text-muted);
-  font-size: 0.65rem;
-}
-
-.tool-call-toggle {
-  flex-shrink: 0;
-  font-size: 0.5rem;
-  margin-left: auto;
-  color: var(--c-text-faint);
-}
-
-.tool-call-detail {
-  margin: 0.25rem 0 0;
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 0.65rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--c-text-secondary);
-  background: var(--c-bg-muted);
-  border-radius: var(--radius-control);
-  padding: 0.4rem 0.5rem;
-  max-height: 300px;
-  overflow: auto;
-}
-
 /* ── Usage badges ─────────────────────────────────────────── */
 
 .usage-info {
@@ -2473,157 +2290,6 @@ function resendLastMessage() {
   font-weight: 400;
 }
 
-.tool-result {
-  margin-top: 0.25rem;
-  border-radius: var(--radius-control);
-  background: var(--c-bg-soft);
-  padding: 0.3rem 0.5rem;
-  transition: background 0.1s ease;
-}
-
-.tool-result:hover {
-  background: var(--c-bg-muted);
-}
-
-.tool-result-header {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  font-size: 0.6rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--c-text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-.tool-result-toggle {
-  font-size: 0.5rem;
-}
-
-.tool-result-content {
-  margin: 0.25rem 0 0;
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 0.65rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--c-text-secondary);
-}
-
-.tool-result.collapsed .tool-result-content {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-/* ── Selection indicator ──────────────────────────────────── */
-
-.selection-indicator {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.35rem;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--c-selection-border);
-  border-radius: var(--radius-control);
-  background: var(--c-selection-bg);
-  font-size: 0.75rem;
-}
-
-.selection-preview {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 0.3rem;
-  cursor: pointer;
-}
-
-.selection-label {
-  font-weight: 600;
-  color: var(--c-blue);
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-.selection-text {
-  font-style: italic;
-  color: var(--c-text-body);
-  font-size: 0.7rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.selection-dismiss {
-  border: none;
-  background: transparent;
-  color: var(--c-text-faint);
-  font-size: 0.9rem;
-  line-height: 1;
-  padding: 0.1rem 0.2rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: color 0.1s ease, background 0.1s ease;
-}
-
-.selection-dismiss:hover {
-  color: var(--c-text-body);
-  background: var(--c-bg-muted);
-}
-
-.btn-fork {
-  background: var(--c-purple);
-  border-color: var(--c-purple);
-  font-size: 0.7rem;
-}
-
-/* ── Session config badges ───────────────────────────────── */
-
-.session-config-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-top: 0.25rem;
-}
-
-.config-badge {
-  font-size: 0.55rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  border-radius: var(--radius-sm);
-  padding: 0.1em 0.4em;
-  white-space: nowrap;
-  background: var(--c-bg-muted);
-  color: var(--c-text-secondary, var(--c-text-body));
-}
-
-.config-badge.model {
-  background: var(--c-blue-bg, rgba(59, 130, 246, 0.15));
-  color: var(--c-blue, #3b82f6);
-}
-
-.config-badge.thinking-on {
-  background: var(--c-warning-bg, rgba(245, 158, 11, 0.15));
-  color: var(--c-warning, #f59e0b);
-}
-
-.config-badge.thinking-off {
-  background: var(--c-bg-muted);
-  color: var(--c-text-faint);
-}
-
-.config-badge.effort {
-  background: var(--c-purple-soft, rgba(139, 92, 246, 0.1));
-  color: var(--c-purple, #8b5cf6);
-}
 .resend-bar {
   display: flex;
   justify-content: center;

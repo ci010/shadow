@@ -17,9 +17,9 @@ name: my-agent
 description: One-line description shown in agent type listings
 allowedTools: [read, search, exec]    # Whitelist (takes precedence over blockedTools)
 blockedTools: [subagent]              # Blacklist (ignored if allowedTools is set)
-ephemeral: false                      # true = fire-and-forget, each spawn gets a unique session
+defaultMode: session                  # session | task | call; callers may override
 skills: true                          # Load skills context into system prompt (default: true)
-soul: false                           # Load SOUL.md (only applies to ephemeral agents)
+soul: true                            # Load SOUL.md, independently of execution mode
 model: claude-sonnet-4-20250514         # Model override (optional)
 temperature: 0.7                      # Temperature override (optional)
 maxTokens: 8192                       # Max tokens override (optional)
@@ -40,9 +40,9 @@ All fields are optional. Minimal AGENT.md can be just a prompt body with no fron
 | `description` | string | first 200 chars | Shown in agent type listings |
 | `allowedTools` | string[] | all | Tool whitelist (takes precedence) |
 | `blockedTools` | string[] | none | Tool blacklist |
-| `ephemeral` | boolean | false | Fire-and-forget session per spawn |
+| `defaultMode` | string | session | Default execution contract: session, task, or call |
 | `skills` | boolean | true | Include skills context |
-| `soul` | boolean | false | Include SOUL.md (ephemeral only) |
+| `soul` | boolean | true | Include SOUL.md independently of execution mode |
 | `model` | string | inherited | LLM model override |
 | `temperature` | number | inherited | Sampling temperature |
 | `maxTokens` | number | inherited | Max response tokens |
@@ -59,7 +59,22 @@ All fields are optional. Minimal AGENT.md can be just a prompt body with no fron
    - Specify output format expectations
    - Include constraints and boundaries
    - Reference the audience (parent agent vs. human)
-4. **Use `ephemeral: true`** for one-shot tasks that don't need conversation continuity.
+4. **Separate role from execution** — use `defaultMode: task` when independent
+   one-shot work is a good default. The same role can still run in session or call
+   mode. Role prompts must not claim a fixed lifetime or always-fresh context.
+5. **Migrate old definitions** — legacy `ephemeral: true` is read as
+   `defaultMode: task`, and false as session, with a deprecation warning.
+   Replace the old field; do not specify both. Set `soul` explicitly when needed.
+
+`defaultMode` is a preference, not permission to bypass the caller's delegation
+scope. Root sessions can create session/task; reusable sub-sessions can create
+task/call; tasks can create only call. Session/task start asynchronously; calls
+block their caller and cannot yield, message, delegate, or schedule deferred
+coordination. Calls return missing decisions as blockers for the caller to handle.
+Sub-sessions and tasks must select mode explicitly. Only a root session may omit
+mode to use an allowed role default; unsupported defaults or modes fail.
+If a task role should be able to use leaf calls, include `subagent` in its tool
+allowlist (or do not block it); the runtime still enforces the permitted mode.
 
 ## Example: Research Agent
 

@@ -344,6 +344,9 @@ test('ChannelManager preserves outbound FIFO published before dispatch', async (
 test('empty completion clears progressive replies through ChannelManager without blank sends or updates', async () => {
   class ProgressiveChannel extends AbstractChannel {
     readonly name = 'test'
+    override async getCapabilities(chatId: string) {
+      return { ...await super.getCapabilities(chatId), updates: 'replace' as const }
+    }
     sent: OutboundMessage[] = []
     updates: Array<{ messageId: string; content: string }> = []
     async start(): Promise<void> {}

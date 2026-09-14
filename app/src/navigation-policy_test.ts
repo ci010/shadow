@@ -16,7 +16,7 @@ test('local Main admin sees product and diagnostic routes', () => {
   assertEquals(routeNames(context), [
     'chat',
     'nodes',
-    'providers',
+    'settings',
     'agents',
     'spans',
     'logs',
@@ -62,10 +62,10 @@ test('Main node administration requires nodes:admin', () => {
   assertEquals(routeNames(context), ['nodes'])
 })
 
-test('Providers is a Main administration tab in the primary navigation group', () => {
+test('Settings replaces Providers as the Main administration tab', () => {
   const context = createLocalMainAdminContext('http://localhost')
-  assertEquals(navigationFor(context).find((item) => item.name === 'providers'), {
-    name: 'providers', label: 'Providers', group: 'primary',
+  assertEquals(navigationFor(context).find((item) => item.name === 'settings'), {
+    name: 'settings', label: 'Settings', group: 'primary',
   })
   assertEquals(routeNames({ ...context, uiScopes: ['chat:read'] }), ['chat'])
 })

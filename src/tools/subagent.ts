@@ -6,23 +6,20 @@ import type { ChannelManager } from '../channels/manager.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
+import { isExecutionMode } from '../sessions/execution-mode.ts'
 
-/**
- * Tool for spawning sub-agent sessions.
- *
- * Creates a session with the specified agent type, optionally in a
- * platform thread. Does NOT send a task message — the parent must
- * use the `message` tool to communicate with the subagent after creation.
- *
- * Completion routing (report_to) is handled persistently by
- * SessionManager's bus listener.
- */
+/** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
   readonly name = 'subagent'
-  readonly description = 'Spawn a sub-agent session. Use the message tool to send tasks to it.'
+  readonly description = 'Create an asynchronous session/task, or invoke a blocking bounded leaf call. Available modes depend on this session’s execution mode and structural ownership. Blocking calls must use this tool directly, not an exec/invoke bridge.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
+      mode: {
+        type: 'string', enum: ['session', 'task', 'call'],
+        description: 'Session/task return an accepted ID immediately. Call waits for its final result and cannot coordinate, yield, or delegate. Mode is required outside root sessions; at root, omission uses the selected role’s defaultMode only when allowed.',
+      },
+      task: { type: 'string', description: 'Initial work. Required for task/call; optional for session.' },
       description: {
         type: 'string',
         description: 'Short description of the sub-agent session\'s purpose.',
@@ -30,7 +27,7 @@ export class SubagentTool implements Tool {
       agent_type: {
         type: 'string',
         description:
-          'Agent type to use. Defaults to "sub". ' +
+          'Agent role. Defaults to "sub"; explicit call mode inherits the caller role when omitted. ' +
           'Available types are listed in the Runtime section of the system prompt.',
       },
       report_to: {
@@ -61,10 +58,18 @@ export class SubagentTool implements Tool {
     args: Record<string, unknown>,
     ctx: ExecutionContext,
   ): Promise<string> {
+    const denied = ctx.tools?.executionDenial?.('subagent', args)
+    if (denied) return denied
     const description = args.description != null ? String(args.description) : ''
     if (!description) return 'Error: description is required'
 
-    const typeName = args.agent_type != null ? String(args.agent_type) : 'sub'
+    if (args.mode !== undefined && !isExecutionMode(args.mode)) return 'Error: mode must be session, task, or call.'
+    const allowedModes = this.sessions.getAllowedSubagentModes(ctx.sessionId)
+    if (args.mode === undefined && !allowedModes.includes('session')) {
+      return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
+    }
+    const parentState = this.sessions.getSessionState(ctx.sessionId)
+    const typeName = args.agent_type != null ? String(args.agent_type) : args.mode === 'call' ? parentState?.agentType ?? 'general' : 'sub'
     const reportTo = args.report_to != null ? String(args.report_to) : undefined
     const preloadTools = args.preload_tools && typeof args.preload_tools === 'object' && !Array.isArray(args.preload_tools)
       ? Object.fromEntries(
@@ -79,6 +84,18 @@ export class SubagentTool implements Tool {
     if (!agentType) {
       return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.allNames().join(', ')}`
     }
+    const mode = args.mode ?? agentType.defaultMode ?? 'session'
+    if (mode === 'call' && reportTo !== undefined) return 'Error: call mode cannot use report_to.'
+    const task = typeof args.task === 'string' ? args.task.trim() : ''
+    if (mode !== 'session' && !task) return `Error: task is required for mode="${mode}".`
+    if (reportTo !== undefined && !/^[^:]+:.+$/.test(reportTo)) return 'Error: report_to must be a session ID in channel:chatId format.'
+    const executionKey = ctx.toolCallId && ctx.toolCallName === 'subagent'
+      ? `${ctx.physicalSessionId}:${ctx.messageId}:${ctx.toolCallId}` : crypto.randomUUID()
+    return this.sessions.executeOnce(executionKey, async () => {
+    this.sessions.assertCanCreateChild(ctx.sessionId, mode)
+    if (mode === 'call' && ctx.toolCallName && ctx.toolCallName !== 'subagent') {
+      throw new Error('Blocking calls require native subagent invocation; a script bridge cannot guarantee the caller remains attached.')
+    }
 
     const originChannel = ctx.channel ?? 'system'
     const originChatId = ctx.chatId ?? 'direct'
@@ -87,34 +104,20 @@ export class SubagentTool implements Tool {
 
     // 1. Determine chatId and channel.
     const createThread = this.channels.createThread.bind(this.channels)
-    const threadName = agentType.ephemeral
-      ? `[${typeName}] ${description.slice(0, 80)}`
-      : `Subagent: ${description.slice(0, 80)}`
-    const threadId = await createThread?.(originChannel, originChatId, threadName).catch((err) => {
+    const threadName = `Subagent: ${description.slice(0, 80)}`
+    const threadId = mode !== 'session' ? null : await createThread(originChannel, originChatId, threadName).catch((err) => {
       console.warn('[subagent] Thread creation failed, using synthetic chatId', errMsg(err))
       return null
     })
 
     const isThread = !!threadId
     const chatId = threadId ?? `${typeName}-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
-    const channel = (isThread || !agentType.ephemeral) ? originChannel : 'virtual'
+    const channel = isThread || (mode === 'session' && originChannel === 'web') ? originChannel : 'virtual'
     const sessionId = `${channel}:${chatId}`
 
-    // Resolve callback target: report_to overrides the default (parent session)
-    let callbackChannel = originChannel
-    let callbackChatId = originChatId
-    if (reportTo) {
-      const colonIdx = reportTo.indexOf(':')
-      if (colonIdx > 0) {
-        callbackChannel = reportTo.slice(0, colonIdx)
-        callbackChatId = reportTo.slice(colonIdx + 1)
-      }
-    }
-
-    const parentSessionId = `${originChannel}:${originChatId}`
+    const parentSessionId = ctx.sessionId
 
     // 2. Resolve parent lineage and create session prototype.
-    const parentState = this.sessions.getSessionState(parentSessionId)
     const parentPhysicalId = parentState ? newPhysicalSessionId(parentState.sessionId, parentState.segmentIndex) : undefined
     // Share the spawner's working directory: inherit its workspaceRoot if it is
     // itself a subagent, otherwise the spawner owns the folder (use its id).
@@ -124,28 +127,54 @@ export class SubagentTool implements Tool {
       parentPhysicalId ? { id: parentSessionId, physicalId: parentPhysicalId } : undefined,
       {
         agentType: typeName,
-        reportTo: `${callbackChannel}:${callbackChatId}`,
+        mode,
+        executionKey,
+        parentToolCallId: ctx.toolCallName === 'subagent' ? ctx.toolCallId : undefined,
+        parentSessionId,
+        reportTo: mode === 'call' ? undefined : reportTo ?? parentSessionId,
+        config: mode === 'call' ? {
+          ...structuredClone(parentState?.config ?? {}),
+          ...(ctx.model !== undefined ? { model: ctx.model } : {}),
+          ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
+          ...(ctx.maxTokens !== undefined ? { maxTokens: ctx.maxTokens } : {}),
+          ...(ctx.thinking !== undefined ? { thinking: structuredClone(ctx.thinking) } : {}),
+          ...(ctx.reasoningEffort !== undefined ? { reasoningEffort: ctx.reasoningEffort } : {}),
+        } : undefined,
         originUser: ctx.senderName,
         description,
         preloadTools,
         workspaceRoot,
         workdir: parentState?.workdir,
         projectId: parentState?.projectId,
+        projectName: parentState?.projectName,
       },
     )
 
-    // 3. Persist child sessionId on parent state (non-ephemeral parents only).
-    if (!agentType.ephemeral) {
-      const parentIsEphemeral = await this.sessions.isEphemeralSession(parentSessionId)
-      if (!parentIsEphemeral) {
-        await this.sessions.addChild(parentSessionId, sessionId)
+    // 3. Only reusable children belong to the managed child list.
+    if (mode === 'session') {
+      await this.sessions.addChild(parentSessionId, sessionId)
+    }
+    if (mode === 'call') return this.sessions.startCall(sessionId, task, ctx)
+    if (task) {
+      try {
+        await this.sessions.startChild(sessionId, task, ctx)
+      } catch (error) {
+        await this.sessions.deleteSession(sessionId)
+        throw error
       }
     }
 
     const locator = isThread
       ? `Thread created in ${channel}:${originChatId}`
       : `Virtual session (no thread)`
-    return `Subagent (${typeName}) created. ${locator}. Session ID: "${sessionId}". Use the message tool to send tasks to it.`
+    return JSON.stringify({
+      sessionId, executionId: mode === 'task' ? sessionId : undefined, mode, agentType: typeName,
+      status: task ? 'running' : 'pending',
+      message: mode === 'session'
+        ? `Subagent created. ${locator}. Use message for subsequent tasks.`
+        : 'Task started. The final result will be reported asynchronously.',
+    })
+    })
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {

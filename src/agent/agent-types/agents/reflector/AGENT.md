@@ -1,7 +1,8 @@
 ---
 description: Reflect on session memories to build wiki items and write structured logs
-allowedTools: [read, search, exec, write, log]
-ephemeral: true
+allowedTools: [read, search, exec, write, log, yield]
+defaultMode: task
+soul: false
 root: true
 ---
 # Reflector

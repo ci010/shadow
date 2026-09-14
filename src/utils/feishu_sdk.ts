@@ -327,7 +327,7 @@ interface ApiResp {
 }
 
 interface ImMessageCreateResp extends ApiResp {
-  data?: { message_id?: string }
+  data?: { message_id?: string; thread_id?: string; root_id?: string }
 }
 
 interface ImImageCreateResp extends ApiResp {
@@ -365,6 +365,11 @@ class Client {
 
   /** `client.im.message.create(…)` */
   readonly im = {
+    chat: {
+      get: (req: { path: { chat_id: string } }): Promise<ApiResp & {
+        data?: { chat_mode?: string; chat_status?: string; chat_post_permission?: string }
+      }> => apiRequest(this._tokens, 'GET', `/open-apis/im/v1/chats/${encodeURIComponent(req.path.chat_id)}`),
+    },
     message: {
       create: (req: {
         params: { receive_id_type: string }
@@ -826,7 +831,7 @@ class WSClient {
   private _dispatcher: EventDispatcher | null = null
   private _logger: Logger
   /** Deduplication cache: message_id → expiry timestamp (ms) */
-  private _seenMessages: Map<string, number> = new Map()
+  private _seenMessages = new Map<string, { expiry: number; response: Promise<{ code: number; data?: unknown }> }>()
   private static readonly _SEEN_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
   constructor(opts: WSClientOptions) {
@@ -1027,7 +1032,7 @@ class WSClient {
 
     if (frame.type === WS_FRAME_TYPE_DATA) {
       const msgType = getHeader('type')
-      if (msgType !== WS_MSG_TYPE_EVENT) return
+      if (msgType !== WS_MSG_TYPE_EVENT && msgType !== 'card') return
 
       const messageId = getHeader('message_id') ?? ''
       const sumStr = getHeader('sum')
@@ -1048,17 +1053,18 @@ class WSClient {
       if (messageId) {
         const now = Date.now()
         // Evict expired entries
-        for (const [id, expiry] of this._seenMessages) {
-          if (now > expiry) this._seenMessages.delete(id)
+        for (const [id, entry] of this._seenMessages) {
+          if (now > entry.expiry) this._seenMessages.delete(id)
         }
-        if (this._seenMessages.has(messageId)) {
+        const existing = this._seenMessages.get(messageId)
+        if (existing) {
           this._logger.debug(
             `Duplicate message_id=${messageId}, ACKing without dispatch`,
           )
-          this._sendAck(frame, 200)
+          const result = await existing.response
+          this._sendAck(frame, result.code, 0, result.data)
           return
         }
-        this._seenMessages.set(messageId, now + WSClient._SEEN_TTL_MS)
       }
 
       // Parse event payload
@@ -1073,16 +1079,20 @@ class WSClient {
 
       // Dispatch, then ACK with result code
       const startTime = Date.now()
-      let code = 200
-      if (this._dispatcher) {
+      const response = (async (): Promise<{ code: number; data?: unknown }> => {
         try {
-          await this._dispatcher.invoke(eventObj)
-        } catch (err) {
-          this._logger.warn('Dispatcher error', err)
-          code = 500
+          return { code: 200, data: await this._dispatcher?.invoke(eventObj) }
+        } catch {
+          this._logger.warn('Dispatcher error')
+          return { code: 500 }
         }
+      })()
+      if (messageId) {
+        this._seenMessages.set(messageId, { expiry: Date.now() + WSClient._SEEN_TTL_MS, response })
+        if (this._seenMessages.size > 1_000) this._seenMessages.delete(this._seenMessages.keys().next().value!)
       }
-      this._sendAck(frame, code, Date.now() - startTime)
+      const result = await response
+      this._sendAck(frame, result.code, Date.now() - startTime, result.data)
     }
   }
 
@@ -1090,13 +1100,16 @@ class WSClient {
    * Send an ACK response for a DATA frame.
    * Echoes all original headers, appends biz_rt, and sets payload to {code}.
    */
-  private _sendAck(frame: WsFrame, code: number, elapsedMs = 0): void {
+  private _sendAck(frame: WsFrame, code: number, elapsedMs = 0, data?: unknown): void {
     if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return
     const ackHeaders: WsHeader[] = [
       ...frame.headers,
       { key: 'biz_rt', value: String(elapsedMs) },
     ]
-    const payload = new TextEncoder().encode(JSON.stringify({ code }))
+    const payload = new TextEncoder().encode(JSON.stringify({
+      code,
+      ...(data === undefined ? {} : { data: Buffer.from(JSON.stringify(data)).toString('base64') }),
+    }))
     // Echo SeqID, LogID, service back so the server can correlate the ACK
     // to the delivered event and mark it as acknowledged.
     const ack = encodeFrame({

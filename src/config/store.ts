@@ -1,7 +1,7 @@
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { resolveConfigPath } from './loader.ts'
-import { ConfigSchema, type Config } from './schema.ts'
+import { ChannelsSchema, ConfigSchema, type Config } from './schema.ts'
 
 export const REDACTED_SECRET = '__SHADOW_REDACTED__'
 type RawConfig = Record<string, unknown>
@@ -96,6 +96,27 @@ export class ConfigStore {
       if (provider.apiKey === undefined && active?.providers[name]?.apiKey) {
         provider.apiKey = active.providers[name].apiKey
       }
+    }
+    // Channel setup also supports environment-only credentials. Keep those in
+    // memory, without copying them into the serialized document.
+    for (const id of ['qq', 'feishu', 'discord'] as const) {
+      const current: Record<string, unknown> | undefined = active?.channels[id]
+      if (!current) continue
+      const rawChannels = isRecord(raw) && isRecord(raw.channels) ? raw.channels : {}
+      const entry = isRecord(rawChannels[id]) ? rawChannels[id] : {}
+      const previousChannels = isRecord(previous.channels) ? previous.channels : {}
+      const previousEntry = isRecord(previousChannels[id]) ? previousChannels[id] : {}
+      const inherited: Record<string, unknown> = {}
+      for (const field of ['appId', 'secret', 'token', 'appSecret', 'encryptKey', 'verificationToken']) {
+        if (entry[field] === undefined && previousEntry[field] === undefined && current[field] !== undefined) {
+          inherited[field] = current[field]
+        }
+      }
+      if (!Object.keys(inherited).length) continue
+      if (entry.enabled === undefined) inherited.enabled = current.enabled
+      Object.assign(parsed.channels, ChannelsSchema.parse({
+        [id]: { ...parsed.channels[id], ...inherited },
+      }))
     }
     signal?.throwIfAborted()
     writePrivateFile(path, JSON.stringify(raw, null, 2) + '\n')

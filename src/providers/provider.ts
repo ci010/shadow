@@ -1,4 +1,4 @@
-import type { ThinkingConfig } from '../agent/llm-config.ts'
+import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 
 /**
@@ -24,6 +24,8 @@ export type ResponsesOutputItem =
     status?: 'completed'
     encrypted_content?: string | null
     summary: Array<{ type: 'summary_text'; text: string }>
+    /** DeepSeek replays plain-text reasoning rather than encrypted state. */
+    content?: Array<{ type: 'reasoning_text'; text: string }>
   }
   | {
     type: 'message'
@@ -47,7 +49,7 @@ export type ResponsesOutputItem =
 
 /** Provider-only stateless Responses continuity, scoped to its issuing provider/model. */
 export interface ResponsesProviderState {
-  provider: 'copilot'
+  provider: 'copilot' | 'deepseek'
   model: string
   reasoning: Array<{
     type: 'reasoning'
@@ -158,7 +160,7 @@ export interface LLMProviderOptions {
   /** DeepSeek thinking mode toggle */
   thinking?: ThinkingConfig
   /** DeepSeek reasoning effort level */
-  reasoningEffort?: 'high' | 'max'
+  reasoningEffort?: ReasoningEffort
 }
 
 /**

@@ -1,6 +1,5 @@
-// Shared helpers for browsing a session's workspace files via the
-// `/api/sessions/:key/...` endpoints. Kept framework-light so both the
-// sidebar tree and the main "desktop" view can reuse the same logic.
+// Shared helpers for browsing session workdirs or registered Main-local projects.
+import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/gateway/text-encoding.ts'
 
 export interface FileEntry {
   name: string
@@ -13,9 +12,13 @@ export interface FileEntry {
 export interface DirListing {
   path: string
   entries: FileEntry[]
+  workdir?: { kind: 'local' | 'remote'; displayPath: string | null; scope?: 'home' }
 }
 
 export interface FilePreview {
+  encoding?: DecodedTextEncoding
+  encodingWarning?: string
+  sourcePath?: string
   binary: boolean
   size: number
   truncated?: boolean
@@ -29,15 +32,7 @@ const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov'])
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg'])
 const PDF_EXTS = new Set(['.pdf'])
 const HTML_EXTS = new Set(['.html', '.htm'])
-const TEXT_EXTS = new Set([
-  '.txt', '.md', '.markdown', '.json', '.jsonl', '.js', '.ts', '.tsx', '.jsx',
-  '.css', '.scss', '.xml', '.yml', '.yaml', '.csv', '.log',
-  '.py', '.sh', '.bash', '.zsh', '.toml', '.ini', '.cfg', '.conf', '.env',
-  '.vue', '.go', '.rs', '.c', '.cc', '.cpp', '.h', '.hpp', '.java', '.kt',
-  '.rb', '.php', '.sql', '.gitignore', '.dockerfile',
-])
-
-/** Classify a file by extension for choosing a preview renderer. */
+/** Unknown extensions use the bounded text preview, which detects binary data. */
 export function fileKind(ext: string): FileKind {
   const e = ext.toLowerCase()
   if (IMAGE_EXTS.has(e)) return 'image'
@@ -45,8 +40,7 @@ export function fileKind(ext: string): FileKind {
   if (AUDIO_EXTS.has(e)) return 'audio'
   if (PDF_EXTS.has(e)) return 'pdf'
   if (HTML_EXTS.has(e)) return 'html'
-  if (TEXT_EXTS.has(e)) return 'text'
-  return 'other'
+  return 'text'
 }
 
 /** A monochrome glyph used as a fallback icon per file kind / directory. */
@@ -95,19 +89,35 @@ function buildUrl(apiBase: string, path: string, params: Record<string, string>)
   return url.toString()
 }
 
-/** Client for a session's workspace file endpoints. */
-export function useSessionFiles(apiBase: string) {
-  const encKey = (sessionId: string) => encodeURIComponent(sessionId)
+/** A project ID selects registry-backed routes, never a renderer-supplied path. */
+export function useSessionFiles(apiBase: string, projectId?: string) {
+  const root = (sessionId: string) => projectId
+    ? `/api/projects/${encodeURIComponent(projectId)}`
+    : `/api/sessions/${encodeURIComponent(sessionId)}`
 
-  async function listDir(sessionId: string, path = ''): Promise<DirListing> {
-    const url = buildUrl(apiBase, `/api/sessions/${encKey(sessionId)}/files`, { path })
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`listDir failed: ${res.status}`)
-    return await res.json() as DirListing
+  async function listDir(sessionId: string, path = '', signal?: AbortSignal): Promise<DirListing> {
+    const url = buildUrl(apiBase, `${root(sessionId)}/files`, { path })
+    const res = await fetch(url, { signal })
+    if (!res.ok) throw await fileRequestError(res)
+    const data: unknown = await res.json()
+    if (!isRecord(data) || typeof data.path !== 'string' || !Array.isArray(data.entries) || !data.entries.every(isFileEntry)) {
+      throw new Error('Invalid file listing received. Refresh to retry.')
+    }
+    let workdir: DirListing['workdir']
+    if (data.workdir !== undefined) {
+      if (!isRecord(data.workdir) || (data.workdir.kind !== 'local' && data.workdir.kind !== 'remote')
+        || (data.workdir.displayPath !== null && typeof data.workdir.displayPath !== 'string')
+        || (data.workdir.scope !== undefined && (data.workdir.scope !== 'home' || data.workdir.kind !== 'local'))) {
+        throw new Error('Invalid workspace information received. Refresh to retry.')
+      }
+      workdir = { kind: data.workdir.kind, displayPath: data.workdir.displayPath,
+        ...(data.workdir.scope === 'home' ? { scope: 'home' as const } : {}) }
+    }
+    return { path: data.path, entries: data.entries, ...(workdir ? { workdir } : {}) }
   }
 
   function rawUrl(sessionId: string, path: string): string {
-    return buildUrl(apiBase, `/api/sessions/${encKey(sessionId)}/raw`, { path })
+    return buildUrl(apiBase, `${root(sessionId)}/raw`, { path })
   }
 
   /**
@@ -121,17 +131,55 @@ export function useSessionFiles(apiBase: string) {
       .split('/')
       .map((s) => encodeURIComponent(s))
       .join('/')
-    return new URL(`/api/sessions/${encKey(sessionId)}/static/${segments}`, apiBase).toString()
+    return new URL(`${root(sessionId)}/static/${segments}`, apiBase).toString()
   }
 
-  async function preview(sessionId: string, path: string, maxBytes = 4096): Promise<FilePreview> {
-    const url = buildUrl(apiBase, `/api/sessions/${encKey(sessionId)}/preview`, {
+  async function preview(sessionId: string, path: string, maxBytes = 4096, signal?: AbortSignal, encoding: TextEncoding = 'auto'): Promise<FilePreview> {
+    const url = buildUrl(apiBase, `${root(sessionId)}/preview`, {
       path,
       maxBytes: String(maxBytes),
+      ...(encoding !== 'auto' ? { encoding } : {}),
     })
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`preview failed: ${res.status}`)
-    return await res.json() as FilePreview
+    const res = await fetch(url, { signal })
+    if (!res.ok) throw await fileRequestError(res)
+    const data: unknown = await res.json()
+    if (!isRecord(data) || typeof data.binary !== 'boolean' || typeof data.size !== 'number' || !Number.isFinite(data.size) || data.size < 0
+      || (!data.binary && typeof data.content !== 'string')
+      || (data.sourcePath !== undefined && typeof data.sourcePath !== 'string')
+      || (data.encoding !== undefined && (!isTextEncoding(data.encoding) || data.encoding === 'auto'))
+      || (data.encodingWarning !== undefined && typeof data.encodingWarning !== 'string')
+      || (data.content !== undefined && typeof data.content !== 'string') || (data.truncated !== undefined && typeof data.truncated !== 'boolean')) {
+      throw new Error('Invalid file preview received. Reopen the file to retry.')
+    }
+    if (encoding !== 'auto' && data.encoding !== encoding) {
+      throw new Error('Main did not apply the selected text encoding. Restart Main and reopen the file.')
+    }
+    return { binary: data.binary, size: data.size, content: data.content, truncated: data.truncated,
+      ...(data.encoding !== undefined ? { encoding: data.encoding } : {}),
+      ...(typeof data.encodingWarning === 'string' ? { encodingWarning: data.encodingWarning } : {}),
+      ...(typeof data.sourcePath === 'string' ? { sourcePath: data.sourcePath } : {}) }
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null
+  }
+  function isFileEntry(value: unknown): value is FileEntry {
+    return isRecord(value) && typeof value.name === 'string' && !!value.name && !/[\/\\]/.test(value.name)
+      && value.name !== '.' && value.name !== '..' && (value.type === 'dir' || value.type === 'file')
+      && typeof value.ext === 'string' && typeof value.size === 'number' && Number.isFinite(value.size) && value.size >= 0
+      && (value.mtime === null || typeof value.mtime === 'string')
+  }
+  async function fileRequestError(response: Response): Promise<Error> {
+    const data: unknown = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null
+    const code = isRecord(data) ? data.error : undefined
+    if (code === 'invalid_text_encoding') return new Error('This text encoding is unsupported. Choose another encoding.')
+    if (code === 'remote_encoding_unavailable') return new Error('Encoding changes are not supported by this remote workdir. No local file was used.')
+    if (code === 'remote_workdir_requires_executor') return new Error('This remote workdir does not support this file operation yet. No local folder was used.')
+    if (code === 'workdir_unavailable' || code === 'remote_filesystem_failed') return new Error('The session workdir is unavailable. Check the owning node and retry.')
+    if (code === 'folder_unavailable') return new Error('The project folder is unavailable or has changed. Restore it or open the folder again.')
+    if (response.status === 404) return new Error('This file or folder is no longer available. Refresh the file tree.')
+    if (response.status === 401 || response.status === 403) return new Error('Access to these files was denied.')
+    return new Error(`Could not load files (${response.status}). Retry when Main is available.`)
   }
 
   return { listDir, rawUrl, staticUrl, preview }
