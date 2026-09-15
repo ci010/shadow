@@ -1,4 +1,5 @@
-import { deepEqual as assertEquals } from 'node:assert/strict'
+import assert, { deepEqual as assertEquals } from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { navigationFor } from './navigation-policy.ts'
 import {
@@ -85,4 +86,12 @@ test('diagnostic routes are grouped without adding a product route', () => {
     .map((item) => item.name)
 
   assertEquals(diagnostics, ['agents', 'spans', 'logs'])
+})
+
+test('app content follows navigation without a persistent runtime status row', async () => {
+  const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
+  assert.doesNotMatch(app, /runtime-status|runtime-dot|roleLabel|mainConnectionLabel/)
+  assert.match(app, /<main class="app-main">/)
+  assert.match(app, /v-if="showChildRecovery"/)
+  assert.match(app, /<router-link :to="\{ name: 'nodes' \}">Manage this node<\/router-link>/)
 })

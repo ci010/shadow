@@ -5,7 +5,7 @@ export type Group = { readonly: boolean; calls: ToolCall[] }
 export function groupTools(toolCalls: ToolCall[], reg: Tools): Array<Group> {
   const groups: Group[] = []
   for (const tc of toolCalls) {
-    const isRo = reg.isReadonly(tc.name)
+    const isRo = reg.isReadonly(tc.name, tc.arguments)
     const last = groups[groups.length - 1]
     if (last && last.readonly === isRo) {
       last.calls.push(tc)

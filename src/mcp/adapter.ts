@@ -1,5 +1,4 @@
-import { uspan } from '../utils/otel.ts'
-import type { Tools } from '../tools/registry.ts'
+import type { ExecutionContext } from '../agent/agent.ts'
 import type { Tool, ToolParameters } from '../tools/tool.ts'
 import type { McpConnection, McpToolInfo } from './client.ts'
 
@@ -27,40 +26,7 @@ export class McpToolAdapter implements Tool {
     return `🔧 ${this.toolInfo.name}${summary ? ` (${summary})` : ''}`
   }
 
-  async execute(args: Record<string, unknown>): Promise<string> {
-    return this.connection.callTool(this.toolInfo.name, args)
+  async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+    return this.connection.callTool(this.toolInfo.name, args, context.signal)
   }
-}
-
-/**
- * Discover all tools from all MCP connections and register them
- * into the local ToolRegistry.
- */
-export async function registerMcpTools(
-  connections: McpConnection[],
-  registry: Tools,
-): Promise<string[]> {
-  const registered: string[] = []
-  using _span = uspan('registerMcpTools')
-  for (const conn of connections) {
-    try {
-      const tools = await conn.listTools()
-      for (const t of tools) {
-        const adapter = new McpToolAdapter(conn, t)
-        registry.register(adapter)
-        console.debug(`Registered MCP tool: ${adapter.name}`)
-        registered.push(adapter.name)
-      }
-      console.info(
-        `Registered ${tools.length} tools from MCP server "${conn.config.name}"`,
-      )
-    } catch (err) {
-      console.error(
-        `Failed to list MCP tools from server "${conn.config.name}"`,
-        err,
-      )
-    }
-  }
-
-  return registered
 }

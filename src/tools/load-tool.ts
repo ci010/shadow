@@ -4,9 +4,12 @@ import { readFile, stat as nodeStat } from 'node:fs/promises'
 import type { ExecutionContext } from '../agent/agent.ts'
 import { McpToolAdapter } from '../mcp/adapter.ts'
 import { McpConnection } from '../mcp/client.ts'
+import { parseMcpServerConfig } from '../mcp/config.ts'
+import { mcpCleanupFailure, mcpFailure } from '../mcp/errors.ts'
+import { toolSearchScore } from './search-tools.ts'
 import type { McpServerConfig } from '../config/schema.ts'
 import type { Tool, ToolParameters } from './tool.ts'
-import type { SessionTools } from './registry.ts'
+import { toolInvocationContract, type SessionTools } from './registry.ts'
 import type { ChromeManager } from '../utils/chrome-manager.ts'
 import { registerTypeScriptLoader } from '../utils/typescript.ts'
 import { getOrganizationScope } from '../otel/scope.ts'
@@ -91,14 +94,8 @@ function isScriptToolModule(
   )
 }
 
-function invocationContract(tools: Tool[]): string {
-  const contracts = tools.map((tool) =>
-    JSON.stringify({ name: tool.name, parameters: tool.parameters }),
-  )
-  return (
-    'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
-    contracts.join('\n')
-  )
+interface ImportOptions {
+  signal: AbortSignal
 }
 
 /**
@@ -197,13 +194,17 @@ function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
  * are cleared on sleep so they never persist across session boundaries.
  */
 export class ImportTool implements Tool {
+  private readonly configured = new Map<string, McpLoadable>()
+  private readonly builtins: Map<string, LoadableEntry>
+  private readonly sessions = new Set<SessionTools>()
+  private readonly imports = new WeakMap<SessionTools, Promise<unknown>>()
   private readonly scope = getOrganizationScope()
   private readonly organizationId?: string
   private readonly browserKeys = new WeakMap<SessionTools, Map<string, string>>()
   readonly name = 'import_tool'
   readonly description = 'Import a tool or MCP server into the current session. ' +
     'Source: v:tools/<name> for pre-registered, .ts for script tools, .json for MCP config files. ' +
-    'Active until sleep.'
+    'Read v:tools for available sources. Returns current tool contracts before execution. Active until sleep or configuration changes.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -217,6 +218,10 @@ export class ImportTool implements Tool {
         description: 'Extra string arguments. For MCP tools: CLI flags (e.g. ["--remote-debugging-port=9223"]). ' +
           'For .ts modules: passed to the module\'s optional init(args) function.',
       },
+      server: {
+        type: 'string',
+        description: 'Optional server name when importing a multi-server JSON config. Omit to import all entries.',
+      },
     },
     required: ['source'],
   }
@@ -226,10 +231,148 @@ export class ImportTool implements Tool {
     private workspace: string,
     private chromeManager?: ChromeManager,
   ) {
+    this.builtins = new Map(loadable)
     this.organizationId = this.scope?.organizationId ?? chromeManager?.organizationId
     if (this.scope && chromeManager && chromeManager.organizationId !== this.organizationId) {
       throw new Error('Import tool Chrome organization binding mismatch')
     }
+  }
+
+  async updateMcpServers(servers: McpServerConfig[]): Promise<void> {
+    const next = new Map<string, McpLoadable>()
+    for (const server of servers) {
+      const config = parseMcpServerConfig(server.name, server)
+      if (next.has(config.name)) throw new Error(`Duplicate MCP server "${config.name}"`)
+      const existing = this.configured.get(config.name)
+      next.set(config.name, existing && JSON.stringify(existing.config) === JSON.stringify(config)
+        ? existing : { config })
+    }
+    const changed = new Set<string>()
+    for (const name of new Set([...this.configured.keys(), ...next.keys()])) {
+      if (this.configured.get(name) === next.get(name)) continue
+      changed.add(name)
+      const entry = next.get(name) ?? this.builtins.get(name)
+      if (entry) this.loadable.set(name, entry)
+      else this.loadable.delete(name)
+    }
+    this.configured.clear()
+    for (const [name, entry] of next) this.configured.set(name, entry)
+    const results = await Promise.allSettled([...this.sessions].map(tools => tools.invalidateMcpServers(changed)))
+    const failures = results.filter(result => result.status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'MCP catalog updated, but old connection cleanup failed')
+  }
+
+  catalogEntries(tools: SessionTools): Array<{ name: string; content: string }> {
+    if ((!tools.has('import_tool') && !tools.has('search')) || !tools.has('invoke_tool')) return []
+    return [...this.loadable].map(([name, entry]) => ({
+      name,
+      content: JSON.stringify({
+        source: `${VIRTUAL_TOOLS_PREFIX}${name}`,
+        kind: isMcpLoadable(entry) ? 'mcp' : 'tool',
+        description: isMcpLoadable(entry)
+          ? entry.config.description ?? `MCP server ${entry.config.name} (${entry.config.transport})`
+          : isFactoryLoadable(entry) ? `On-demand tool ${name}` : entry.description,
+      }),
+    }))
+  }
+
+  readCatalog(name: string, tools: SessionTools): string {
+    const entries = this.catalogEntries(tools)
+    if (!name) return entries.length ? entries.map(entry => entry.content).join('\n')
+      : 'No dynamic tool sources are available for this agent.'
+    return entries.find(entry => entry.name === name)?.content ?? `Error: unknown or unavailable source "${name}".`
+  }
+
+  async searchTools(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+    if (!context.tools.has('search') || !context.tools.has('invoke_tool')) {
+      return 'Error: tool search and invocation are not available for this agent type.'
+    }
+    if (args.query !== undefined && typeof args.query !== 'string') return 'Error: query must be a string.'
+    const query = typeof args.query === 'string' ? args.query.trim() : ''
+    if (query.length > 500) return 'Error: query must contain at most 500 characters.'
+    const limit = args.limit === undefined ? 3 : args.limit
+    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 10) {
+      return 'Error: limit must be an integer from 1 through 10.'
+    }
+    const offset = args.offset === undefined ? 0 : args.offset
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
+      return 'Error: offset must be a nonnegative safe integer.'
+    }
+    if (args.source !== undefined && (typeof args.source !== 'string' || !args.source.trim())) {
+      return 'Error: source must be a nonempty catalog source.'
+    }
+    const selected = typeof args.source === 'string'
+      ? args.source.replace(/^v:tools\//, '') : undefined
+    if (selected !== undefined && !this.loadable.has(selected)) return `Error: unknown catalog source "${selected}".`
+    const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
+    return this.withImports(context.tools, signal, async () => {
+      const candidates = new Map<string, { tool: Tool; source?: string }>()
+      const errors: Array<{ source: string; message: string }> = []
+      const searchedSources: string[] = []
+      const deferredSources: string[] = []
+      const sources = [...this.loadable].filter(([name]) => selected === undefined || name === selected)
+      const scan = async ([name, entry]: [string, LoadableEntry]) => {
+        const source = `${VIRTUAL_TOOLS_PREFIX}${name}`
+        if (selected === undefined && (isFactoryLoadable(entry) ||
+          (isMcpLoadable(entry) && (!this.configured.has(name) || entry.config.name === 'chrome-devtools' ||
+            entry.chromeManager || entry.sharedConn?.chromeManager)))) {
+          deferredSources.push(source)
+          return
+        }
+        const denied = this.contextError(source, context)
+        if (denied) {
+          errors.push({ source, message: denied })
+          return
+        }
+        try {
+          const result = await this.loadByName(name, context.tools, [], {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
+          })
+          signal.throwIfAborted()
+          if (typeof result === 'string') {
+            errors.push({ source, message: result })
+            return
+          }
+          searchedSources.push(source)
+          for (const tool of result) {
+            if (context.tools.canUseDynamic(tool.name)) candidates.set(tool.name, { tool, source })
+          }
+        } catch (error) {
+          signal.throwIfAborted()
+          errors.push({ source, message: mcpFailure(error, {
+            phase: 'connect', source, config: isMcpLoadable(entry) ? entry.config : undefined,
+          }).message })
+        }
+      }
+      for (let start = 0; start < sources.length; start += 3) {
+        signal.throwIfAborted()
+        const outcomes = await Promise.allSettled(sources.slice(start, start + 3).map(scan))
+        signal.throwIfAborted()
+        const failed = outcomes.find(result => result.status === 'rejected')
+        if (failed?.status === 'rejected') throw failed.reason
+      }
+      if (selected === undefined) {
+        for (const tool of context.tools.activeDynamicTools()) {
+          if (!candidates.has(tool.name)) candidates.set(tool.name, { tool })
+        }
+      }
+      const ranked = [...candidates.values()]
+        .filter(({ tool }) => context.tools.hasDynamic(tool.name))
+        .map(candidate => ({ ...candidate, score: toolSearchScore(query, candidate.tool, candidate.source) }))
+        .filter(candidate => candidate.score > 0)
+        .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name, 'en'))
+      return JSON.stringify({
+        tools: ranked.slice(offset, offset + limit).map(({ tool, source }) => ({
+          name: tool.name, source, description: tool.description, parameters: tool.parameters,
+        })),
+        totalMatches: ranked.length,
+        hasMore: ranked.length > offset + limit,
+        nextOffset: ranked.length > offset + limit ? offset + limit : null,
+        searchedSources: searchedSources.sort(),
+        deferredSources: deferredSources.sort(),
+        errors,
+      })
+    })
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -242,9 +385,44 @@ export class ImportTool implements Tool {
   async importSource(
     args: Record<string, unknown>,
     tools: SessionTools,
-  ) {
-    const path = args.source ? String(args.source) : undefined
-    const extraArgs = Array.isArray(args.args) ? args.args.map(String) : []
+    options: { signal?: AbortSignal } = {},
+  ): Promise<string> {
+    const signal = options.signal ? AbortSignal.any([options.signal, tools.dynamicSignal]) : tools.dynamicSignal
+    return this.withImports(tools, signal, () => this.performImport(args, tools, { signal }))
+  }
+
+  private async withImports<T>(tools: SessionTools, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
+    if (!this.sessions.has(tools)) {
+      this.sessions.add(tools)
+      tools.onReset(() => { this.sessions.delete(tools) })
+    }
+    const pending = (this.imports.get(tools) ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => {
+        signal.throwIfAborted()
+        return action()
+      })
+    this.imports.set(tools, pending)
+    try {
+      return await pending
+    } finally {
+      if (this.imports.get(tools) === pending) this.imports.delete(tools)
+    }
+  }
+
+  private async performImport(
+    args: Record<string, unknown>,
+    tools: SessionTools,
+    options: ImportOptions,
+  ): Promise<string> {
+    const path = typeof args.source === 'string' ? args.source : undefined
+    if (args.args !== undefined && (!Array.isArray(args.args) || !args.args.every(arg => typeof arg === 'string'))) {
+      return 'Error: args must be an array of strings.'
+    }
+    if (args.server !== undefined && (typeof args.server !== 'string' || !args.server.trim())) {
+      return 'Error: server must be a nonempty string.'
+    }
+    const extraArgs: string[] = Array.isArray(args.args) ? args.args : []
 
     if (!path) {
       return 'Error: `source` is required. Use v:tools/<name> for pre-registered tools, .ts for script tools, .json for MCP config files.'
@@ -252,24 +430,29 @@ export class ImportTool implements Tool {
 
     // Virtual tool path: v:tools/<name>
     if (path.startsWith(VIRTUAL_TOOLS_PREFIX)) {
+      if (args.server !== undefined) return 'Error: server selects an entry in a JSON config; omit it for virtual sources.'
       const name = path.slice(VIRTUAL_TOOLS_PREFIX.length)
       if (!name) {
-        const available = [...this.loadable.keys()]
-        return available.length > 0
-          ? `Available tools: ${available.join(', ')}`
-          : 'No tools are currently available to load.'
+        return this.readCatalog('', tools)
       }
-      return await this.loadByName(name, tools, extraArgs)
+      const entry = this.loadable.get(name)
+      const result = await this.loadByName(name, tools, extraArgs, options)
+      if (typeof result === 'string') return result
+      const summary = entry && isMcpLoadable(entry)
+        ? `Loaded ${result.length} tool(s) from MCP server "${name}" for this session.`
+        : `Tool "${name}" loaded for this session.`
+      return `${summary}\n${toolInvocationContract(result)}`
     }
 
     // JSON MCP config file
     if (path.endsWith('.json')) {
-      return await this.loadFromJsonConfig(path, tools)
+      return await this.loadFromJsonConfig(path, tools, extraArgs, args.server, options)
     }
 
     // TypeScript module
     if (path.endsWith('.ts')) {
-      return await this.loadFromPath(path, tools, extraArgs)
+      if (args.server !== undefined) return 'Error: server selects an entry in a JSON config; omit it for script tools.'
+      return await this.loadFromPath(path, tools, extraArgs, options)
     }
 
     return `Error: unrecognized source "${path}". Use v:tools/<name>, a .ts module path, or a .json MCP config file.`
@@ -279,7 +462,12 @@ export class ImportTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
-    const source = String(args.source ?? '')
+    const error = this.contextError(String(args.source ?? ''), context)
+    if (error) return error
+    return await this.importSource(args, context.tools, { signal: context.signal })
+  }
+
+  private contextError(source: string, context: ExecutionContext): string | undefined {
     const entry = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? this.loadable.get(source.slice(VIRTUAL_TOOLS_PREFIX.length)) : undefined
     if (entry && isMcpLoadable(entry)) {
       const manager = entry.chromeManager ?? entry.sharedConn?.chromeManager ?? this.chromeManager
@@ -288,22 +476,25 @@ export class ImportTool implements Tool {
         return 'Error: import tool Chrome organization binding mismatch'
       }
     }
-    return await this.importSource(args, context.tools)
+    return undefined
   }
 
   /** Import the catalog entry that owns a dynamic tool name, when determinable. */
   async importForInvocation(
     toolName: string,
     sessionTools: SessionTools,
+    signal?: AbortSignal,
   ): Promise<string | undefined> {
     if (!sessionTools.canUseDynamic(toolName)) return undefined
     if (sessionTools.hasDynamic(toolName)) return undefined
+    const activeSignal = signal ? AbortSignal.any([signal, sessionTools.dynamicSignal]) : sessionTools.dynamicSignal
+    const load = (name: string) => this.withImports(sessionTools, activeSignal, async () => {
+      const result = await this.loadByName(name, sessionTools, [], { signal: activeSignal })
+      return typeof result === 'string' ? result : undefined
+    })
 
     if (this.loadable.has(toolName)) {
-      return await this.importSource(
-        { source: `${VIRTUAL_TOOLS_PREFIX}${toolName}` },
-        sessionTools,
-      )
+      return await load(toolName)
     }
 
     const separator = toolName.indexOf('__')
@@ -316,8 +507,9 @@ export class ImportTool implements Tool {
       if (!isMcpLoadable(entry) || entry.config.name !== serverName) continue
       if (entry.toolFilter && !entry.toolFilter.has(unprefixedName)) continue
 
-      result = await this.loadByName(catalogName, sessionTools, [])
+      result = await load(catalogName)
       if (sessionTools.hasDynamic(toolName)) return result
+      result ??= `Error: tool "${toolName}" is not advertised by server "${serverName}". Use search with space "tools:" for current tool IDs.`
     }
     return result
   }
@@ -326,7 +518,8 @@ export class ImportTool implements Tool {
     name: string,
     tools: SessionTools,
     extraArgs: string[],
-  ): Promise<string> {
+    options: ImportOptions,
+  ): Promise<Tool[] | string> {
     const entry = this.loadable.get(name)
     if (!entry) {
       const available = [...this.loadable.keys()]
@@ -337,24 +530,26 @@ export class ImportTool implements Tool {
     }
 
     if (isMcpLoadable(entry)) {
-      return await this.loadMcp(name, entry, tools, extraArgs)
+      return await this.loadMcp(name, entry, tools, extraArgs, options)
     }
 
     if (isFactoryLoadable(entry)) {
-      return await this.loadFactory(name, entry, tools)
+      return await this.loadFactory(name, entry, tools, options)
     }
 
     // Plain Tool
+    options.signal.throwIfAborted()
     tools.registerDynamic(entry)
-    return `Tool "${name}" loaded for this session.\n${invocationContract([entry])}`
+    return [entry]
   }
 
   private async loadMcp(
     name: string,
     entry: McpLoadable,
     sessionTools: SessionTools,
-    extraCliArgs: string[] = [],
-  ): Promise<string> {
+    extraCliArgs: string[],
+    options: ImportOptions,
+  ): Promise<Tool[] | string> {
     // If this entry shares a connection with another loadable, resolve it
     const connOwner = entry.sharedConn ?? entry
     const connKey = extraCliArgs.length > 0
@@ -437,165 +632,160 @@ export class ImportTool implements Tool {
       }
     }
 
-    // Get existing connection from session cache
-    let cached = sessionTools.getMcpConn(connKey)
-
-    // Reconnect if args changed since last connection
-    if (cached && JSON.stringify(cached.activeArgs) !== JSON.stringify(effectiveArgs)) {
-      try {
-        await cached.conn.disconnect()
-      } catch { /* ignore */ }
-      sessionTools.removeMcpConn(connKey)
-      cached = undefined
+    if (connOwner.config.transport !== 'stdio' && effectiveArgs.length) {
+      return 'Error: extra CLI arguments apply only to stdio MCP servers.'
     }
-
-    // Connect if no existing connection in this session
-    if (!cached) {
-      const config = { ...connOwner.config, args: effectiveArgs }
-      const conn = new McpConnection(config, this.workspace)
-      try {
-        await conn.connect()
-      } catch (err) {
-        return `Error connecting to MCP server "${name}": ${err instanceof Error ? err.message : String(err)
-          }`
-      }
-      sessionTools.setMcpConn(connKey, conn, effectiveArgs)
-      cached = { conn, activeArgs: effectiveArgs }
-    }
-
-    // List tools (reconnect once on failure — e.g. process died)
-    let tools
     try {
-      tools = await cached.conn.listTools()
-    } catch {
-      // Reconnect and retry
-      const config = { ...connOwner.config, args: effectiveArgs }
-      const conn = new McpConnection(config, this.workspace)
-      try {
-        await conn.connect()
-        tools = await conn.listTools()
-      } catch (err) {
-        sessionTools.removeMcpConn(connKey)
-        return `Error connecting to MCP server "${name}": ${err instanceof Error ? err.message : String(err)
-          }`
+      const adapters = await this.connectMcp(
+        { ...connOwner.config, args: effectiveArgs }, connKey, sessionTools, entry.toolFilter, options,
+        () => this.loadable.get(name) === entry,
+      )
+      return adapters
+    } catch (error) {
+      if (!(options.signal.reason instanceof Error && options.signal.reason.name === 'TimeoutError')) {
+        options.signal.throwIfAborted()
       }
-      sessionTools.setMcpConn(connKey, conn, effectiveArgs)
-      cached = { conn, activeArgs: effectiveArgs }
+      return `Error importing MCP server "${name}": ${mcpFailure(error, {
+        phase: 'connect', config: connOwner.config, source: `${VIRTUAL_TOOLS_PREFIX}${name}`,
+      }).message}`
     }
-
-    // Apply tool filter if configured
-    const filtered = entry.toolFilter
-      ? tools.filter((t) => entry.toolFilter!.has(t.name))
-      : tools
-
-    const adapters = filtered.map((t) => new McpToolAdapter(cached.conn, t))
-    for (const adapter of adapters) sessionTools.registerDynamic(adapter)
-
-    const toolNames = filtered.map((t) => `${entry.config.name}__${t.name}`).join(
-      ', ',
-    )
-    return `Loaded ${filtered.length} tool(s) from MCP server "${name}" for this session: ${toolNames}\n${invocationContract(adapters)}`
   }
 
-  /** Dynamically connect to an MCP server specified inline and register its tools. */
-  private async loadDynamicMcp(
-    mcp: Record<string, unknown>,
+  private async connectMcp(
+    config: McpServerConfig,
+    connKey: string,
     sessionTools: SessionTools,
-  ): Promise<string> {
-    const serverName = mcp.name ? String(mcp.name) : `mcp-${Date.now()}`
-    const transport = (mcp.transport ? String(mcp.transport) : 'stdio') as McpServerConfig['transport']
-    const command = mcp.command ? String(mcp.command) : undefined
-    const args = Array.isArray(mcp.args) ? mcp.args.map(String) : undefined
-    const url = mcp.url ? String(mcp.url) : undefined
-    const env = mcp.env && typeof mcp.env === 'object' && !Array.isArray(mcp.env)
-      ? Object.fromEntries(Object.entries(mcp.env).map(([k, v]) => [k, String(v)]))
-      : undefined
-
-    if (transport === 'stdio' && !command) {
-      return 'Error: `command` is required for stdio transport'
+    filter: Set<string> | undefined,
+    options: ImportOptions,
+    isCurrent: () => boolean = () => true,
+  ): Promise<Tool[]> {
+    const checkCurrent = () => {
+      options.signal.throwIfAborted()
+      if (!isCurrent()) throw new Error('MCP configuration changed during import; import the source again.')
     }
-    if ((transport === 'sse' || transport === 'streamable-http') && !url) {
-      return `Error: \`url\` is required for ${transport} transport`
+    checkCurrent()
+    let cached = sessionTools.getMcpConn(connKey)
+    if (cached && JSON.stringify(cached.conn.config) !== JSON.stringify(config)) {
+      await sessionTools.disconnectMcpConn(connKey)
+      cached = undefined
     }
-
-    const config: McpServerConfig = { name: serverName, transport, command, args, url, env }
-    const conn = new McpConnection(config, this.workspace)
-
+    const connect = async () => {
+      checkCurrent()
+      const conn = new McpConnection(config, this.workspace)
+      try {
+        await conn.connect(options.signal)
+        checkCurrent()
+        sessionTools.setMcpConn(connKey, conn, config.args ?? [])
+        conn.setToolsChangedHandler(() => {
+          if (sessionTools.getMcpConn(connKey)?.conn === conn) sessionTools.invalidateMcpTools(connKey)
+        })
+        return sessionTools.getMcpConn(connKey)!
+      } catch (error) {
+        if (sessionTools.getMcpConn(connKey)?.conn === conn) sessionTools.removeMcpConn(connKey)
+        const context = { phase: 'connect' as const, config }
+        try {
+          await conn.disconnect()
+        } catch (cleanupError) {
+          throw mcpCleanupFailure(error, cleanupError, context)
+        }
+        throw mcpFailure(error, context)
+      }
+    }
+    cached ??= await connect()
     try {
-      await conn.connect()
-    } catch (err) {
-      return `Error connecting to MCP server "${serverName}": ${err instanceof Error ? err.message : String(err)
-        }`
+      const version = cached.version
+      const tools = await cached.conn.listTools(options.signal)
+      checkCurrent()
+      if (sessionTools.getMcpConn(connKey) !== cached || version !== cached.version) {
+        throw new Error('MCP tool list changed during import; import the source again.')
+      }
+      sessionTools.refreshMcpTools(connKey, JSON.stringify(tools))
+      const connection = cached.conn
+      const adapters = tools.filter(tool => !filter || filter.has(tool.name))
+        .map(tool => new McpToolAdapter(connection, tool))
+        .filter(tool => sessionTools.canUseDynamic(tool.name))
+      for (const adapter of adapters) sessionTools.registerDynamic(adapter, connKey)
+      return adapters
+    } catch (error) {
+      const context = { phase: 'list_tools' as const, config }
+      try {
+        await sessionTools.disconnectMcpConn(connKey)
+      } catch (cleanupError) {
+        throw mcpCleanupFailure(error, cleanupError, context)
+      }
+      throw mcpFailure(error, context)
     }
-
-    // Store connection in session cache — cleaned up on resetDynamic()
-    sessionTools.setMcpConn(serverName, conn, args ?? [])
-
-    let tools
-    try {
-      tools = await conn.listTools()
-    } catch (err) {
-      await conn.disconnect().catch(() => { })
-      return `Error listing tools from MCP server "${serverName}": ${err instanceof Error ? err.message : String(err)
-        }`
-    }
-
-    const adapters = tools.map((t) => new McpToolAdapter(conn, t))
-    for (const adapter of adapters) sessionTools.registerDynamic(adapter)
-
-    const toolNames = tools.map((t) => `${serverName}__${t.name}`).join(', ')
-    return `Loaded ${tools.length} tool(s) from MCP server "${serverName}": ${toolNames}\n${invocationContract(adapters)}`
   }
 
   /** Load an MCP server from a JSON config file. Supports standard and shim formats. */
   private async loadFromJsonConfig(
     jsonPath: string,
     sessionTools: SessionTools,
+    extraArgs: string[],
+    selectedServer: unknown,
+    options: ImportOptions,
   ): Promise<string> {
     const absolutePath = isAbsolute(jsonPath) ? jsonPath : resolve(this.workspace, jsonPath)
 
     let text: string
     try {
       text = await readFile(absolutePath, 'utf8')
-    } catch {
-      return `Error: MCP config file not found at "${absolutePath}"`
+    } catch (error) {
+      return `Error: ${mcpFailure(error, { phase: 'read_config', source: absolutePath }).message}`
     }
 
-    let data: Record<string, unknown>
+    let configs: McpServerConfig[]
     try {
-      data = JSON.parse(text)
-    } catch {
-      return `Error: invalid JSON in "${absolutePath}"`
+      const data: unknown = JSON.parse(text)
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('MCP config must be an object')
+      if ('mcpServers' in data) {
+        if (!data.mcpServers || typeof data.mcpServers !== 'object' || Array.isArray(data.mcpServers)) {
+          throw new Error('mcpServers must be an object')
+        }
+        const entries = Object.entries(data.mcpServers)
+        if (!entries.length) throw new Error('mcpServers is empty')
+        if (selectedServer !== undefined && !entries.some(([name]) => name === selectedServer)) {
+          throw new Error('Selected MCP server does not exist in this file')
+        }
+        configs = entries.filter(([name]) => selectedServer === undefined || name === selectedServer)
+          .map(([name, value]) => parseMcpServerConfig(name, value))
+      } else {
+        const name = 'name' in data && typeof data.name === 'string' ? data.name : basename(absolutePath, '.json')
+        if (selectedServer !== undefined && selectedServer !== name) throw new Error('Selected MCP server does not match this config')
+        configs = [parseMcpServerConfig(name, data)]
+      }
+      if (extraArgs.length && configs.some(config => config.transport !== 'stdio')) {
+        throw new Error('Extra CLI arguments apply only to stdio MCP servers')
+      }
+    } catch (error) {
+      return `Error: invalid MCP config: ${mcpFailure(error, { phase: 'validate_config', source: absolutePath }).message}`
     }
 
-    // Standard format: { mcpServers: { "name": { command, args, env } } }
-    if (data.mcpServers && typeof data.mcpServers === 'object' && !Array.isArray(data.mcpServers)) {
-      const entries = Object.entries(data.mcpServers as Record<string, unknown>)
-      if (entries.length === 0) return 'Error: mcpServers is empty'
-      const [name, value] = entries[0]
-      return await this.loadDynamicMcp(
-        { name, ...(value as Record<string, unknown>) },
-        sessionTools,
-      )
+    const results: string[] = []
+    for (const config of configs) {
+      options.signal.throwIfAborted()
+      try {
+        const adapters = await this.connectMcp(
+          { ...config, args: [...(config.args ?? []), ...extraArgs] },
+          config.name, sessionTools, undefined, options,
+        )
+        results.push(`Loaded ${adapters.length} tool(s) from MCP server "${config.name}".\n${toolInvocationContract(adapters)}`)
+      } catch (error) {
+        options.signal.throwIfAborted()
+        results.push(`Error importing MCP server "${config.name}": ${mcpFailure(error, {
+          phase: 'connect', config, source: absolutePath,
+        }).message}`)
+      }
     }
-
-    // Shim format: { command, args, env }
-    if (data.command) {
-      const serverName = basename(absolutePath, '.json')
-      return await this.loadDynamicMcp(
-        { name: serverName, ...data },
-        sessionTools,
-      )
-    }
-
-    return 'Error: JSON must contain either `mcpServers` (standard format) or `command` (shim format)'
+    return results.join('\n\n')
   }
 
   private async loadFactory(
     name: string,
     entry: FactoryLoadable,
     sessionTools: SessionTools,
-  ): Promise<string> {
+    options: ImportOptions,
+  ): Promise<Tool[] | string> {
     let result: Tool | Tool[]
     try {
       result = await entry.factory()
@@ -604,16 +794,18 @@ export class ImportTool implements Tool {
         }`
     }
     const tools = Array.isArray(result) ? result : [result]
+    options.signal.throwIfAborted()
     for (const t of tools) {
       sessionTools.registerDynamic(t)
     }
-    return `Tool "${name}" loaded for this session.\n${invocationContract(tools)}`
+    return tools
   }
 
   private async loadFromPath(
     path: string,
     sessionTools: SessionTools,
-    initArgs: string[] = [],
+    initArgs: string[],
+    options: ImportOptions,
   ): Promise<string> {
     const absolutePath = isAbsolute(path) ? path : resolve(this.workspace, path)
 
@@ -652,7 +844,8 @@ export class ImportTool implements Tool {
     }
 
     const tool = new ScriptToolAdapter(mod)
+    options.signal.throwIfAborted()
     sessionTools.registerDynamic(tool)
-    return `Custom tool "${tool.name}" loaded for this session.\n${invocationContract([tool])}`
+    return `Custom tool "${tool.name}" loaded for this session.\n${toolInvocationContract([tool])}`
   }
 }

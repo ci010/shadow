@@ -23,19 +23,6 @@
     <div class="app-shell">
     <div class="mouse-glow-layer" aria-hidden="true"><div ref="glowEl" class="mouse-glow" /></div>
 
-    <div class="runtime-status-bar" aria-label="Runtime status">
-      <div class="runtime-status-inner">
-        <span class="runtime-status-item"><strong>Role</strong> {{ roleLabel }}</span>
-        <span class="runtime-status-item">
-          <span class="runtime-dot" :class="installationContext.mainConnection" />
-          <strong>Main</strong> {{ mainConnectionLabel }}<template v-if="installationContext.mainLatencyMs !== null"> · {{ installationContext.mainLatencyMs }} ms</template>
-        </span>
-        <span class="runtime-status-item runtime-status-node" :title="installationContext.localNodeId">
-          <strong>Local node</strong> {{ installationContext.localNodeId }}
-        </span>
-      </div>
-    </div>
-
     <main class="app-main">
       <div v-if="['agents', 'spans', 'logs'].includes(String(route.name))" class="resource-scope" aria-label="Organization scope">
         Organization
@@ -93,13 +80,6 @@ const installationContext = useInstallationContext()
 const resolvedBase = computed(() => installationContext.value.apiBase)
 const contentBase = computed(() => typeof route.params.organizationId === 'string' && route.name !== 'chat'
   ? organizationBase(resolvedBase.value, route.params.organizationId) : resolvedBase.value)
-const roleLabel = computed(() => installationContext.value.mode === 'main' ? 'Main' : 'Child')
-const mainConnectionLabel = computed(() => {
-  if (installationContext.value.mainConnection === 'connected') return 'Connected'
-  if (installationContext.value.mainConnection === 'connecting') return 'Reconnecting'
-  if (installationContext.value.mainConnection === 'unpaired') return 'Unpaired'
-  return 'Offline'
-})
 const showChildRecovery = computed(() =>
   installationContext.value.mode === 'child' &&
   installationContext.value.mainConnection !== 'connected'
@@ -260,87 +240,6 @@ onUnmounted(() => {
 .resource-scope { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--c-border); color: var(--c-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .resource-scope a { color: var(--c-text); }
 
-/* ── System bar ────────────────────────────────────────────── */
-
-.runtime-status-bar {
-  flex: 0 0 auto;
-  min-width: 0;
-  border-bottom: 1px solid var(--c-border);
-  background: var(--c-bg-soft);
-}
-
-.runtime-status-inner {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  height: 30px;
-  padding: 0 0.75rem;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.runtime-status-inner::-webkit-scrollbar {
-  display: none;
-}
-
-.runtime-status-item {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  min-width: 0;
-  padding: 0 0.65rem;
-  border-left: 1px solid var(--c-border);
-  color: var(--c-text-secondary);
-  font-size: 0.64rem;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.runtime-status-item:first-child {
-  padding-left: 0;
-  border-left: 0;
-}
-
-.runtime-status-item strong {
-  color: var(--c-text-muted);
-  font-size: 0.56rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.runtime-status-node {
-  max-width: min(28vw, 260px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.runtime-status-link {
-  color: var(--c-text-secondary);
-  text-decoration: none;
-}
-
-.runtime-status-link:hover {
-  color: var(--c-text);
-}
-
-.runtime-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-circle);
-  background: var(--c-success);
-}
-
-.runtime-dot.connecting {
-  background: var(--c-warn);
-}
-
-.runtime-dot.offline,
-.runtime-dot.unpaired {
-  background: var(--c-error);
-}
-
 .app-main {
   flex: 1;
   min-height: 0;
@@ -454,9 +353,6 @@ onUnmounted(() => {
 }
 
 @media (max-width: 760px) {
-  .runtime-status-node {
-    max-width: 11rem;
-  }
   @media (max-width: 1100px) { .tab-group-label { display: none; } .tab { padding-inline: 7px; font-size: 10px; } }
 
   .recovery-panel,

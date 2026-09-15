@@ -13,25 +13,25 @@ metadata:
 Chrome DevTools MCP gives you full browser control: navigate, click, fill forms,
 take screenshots, read page content, and run JavaScript in the page.
 
-All Chrome tools are session-scoped. Call each one through
-`invoke_tool({ name: "chrome-devtools__<tool>", args: { ... } })`. The first
-call automatically starts the required Chrome DevTools MCP server and imports
-the matching tool set.
+All Chrome tools are session-scoped. Search the appropriate source for the
+installed MCP version's current contracts, then call tools through
+`invoke_tool({ name: "chrome-devtools__<tool>", args: { ... } })`.
 
-## Automatic Loading
+## Contract Discovery
 
-The default tool set is imported when you first call a common input,
-navigation, or snapshot tool, for example `chrome-devtools__navigate_page`.
-Calls to a full-only tool such as `chrome-devtools__emulate` automatically
-import the full set instead.
+Use `search(query="navigate page", space="tools:chrome-devtools")`
+to obtain only relevant contracts, or invoke a known exact tool ID directly.
+Shadow connects lazily and validates arguments before executing; no explicit
+import is required. A full-only tool such as `chrome-devtools__emulate` resolves
+the full source automatically. Global search does not launch this browser unless
+the source is explicitly selected.
 
 Chrome is auto-detected and launched with remote debugging enabled; no manual
 setup is required.
 
 ## Explicit Import
 
-Use `import_tool` before invocation only when you must configure the connection
-or inspect the authoritative schemas provided by the installed MCP version:
+Use `import_tool` to obtain authoritative schemas or configure the connection:
 
 ```
 import_tool(source="v:tools/chrome-devtools")
@@ -70,7 +70,7 @@ Do not attach a manually launched browser or copy a host profile as a workaround
 
 ### Full (`chrome-devtools-full`)
 
-Loads everything the default set does **not** include:
+Includes the default set and these additional tools:
 
 | Category | Tools |
 |----------|-------|

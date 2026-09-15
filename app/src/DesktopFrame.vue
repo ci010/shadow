@@ -1,7 +1,7 @@
 <template>
   <div class="desktop-frame" :class="{ 'native-desktop': controls }">
     <header class="desktop-title-bar" aria-label="Shadow">
-      <span class="desktop-brand" aria-hidden="true">S</span>
+      <img class="desktop-brand" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
       <span class="desktop-window-title">Shadow</span>
       <div v-if="$slots.navigation" class="chrome-navigation"><slot name="navigation" /></div>
       <div class="chrome-drag-space" aria-hidden="true" />
@@ -27,6 +27,7 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { observeDesktopWindow } from './desktop-window.ts'
+import shadowLogo from './assets/shadow-logo.png'
 
 const controls = window.shadowDesktop?.windowControls
 const maximized = ref(false)
@@ -54,7 +55,7 @@ onBeforeUnmount(() => unsubscribe?.())
 .desktop-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
 .desktop-title-bar { flex: 0 0 var(--desktop-title-height); min-width: 0; display: flex; align-items: center; gap: 10px; padding-left: 12px; background: var(--c-bg-card, #f7f9f7); color: var(--c-text, #18211d); border-bottom: 1px solid var(--c-border, #d8ddd9); z-index: 100; user-select: none; }
 .native-desktop .desktop-title-bar { -webkit-app-region: drag; }
-.desktop-brand { display: grid; place-items: center; width: 20px; height: 20px; color: white; background: #147a57; border-radius: var(--radius-control); font: 700 13px Georgia, serif; }
+.desktop-brand { display: block; width: 24px; height: 24px; object-fit: contain; }
 .desktop-brand, .desktop-window-title { flex-shrink: 0; }
 .desktop-window-title { font: 600 12px "Segoe UI", sans-serif; }
 .chrome-navigation { min-width: 0; flex: 0 1 auto; -webkit-app-region: no-drag; }

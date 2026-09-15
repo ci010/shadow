@@ -295,7 +295,9 @@ function documentChecks(metrics: Measurements, label: string): void {
   check(metrics.title === 'Shadow', `${label}: document.title must be Shadow`)
   check(metrics.frames === 1, `${label}: expected one DesktopFrame, received ${metrics.frames}`)
   bounded(metrics, '.desktop-title-bar', label)
-  bounded(metrics, '.runtime-status-bar', label)
+  check(metrics.boxes['.runtime-status-bar'] === null, `${label}: runtime status must not occupy a second header row`)
+  check(Math.abs(box(metrics, '.app-main').top - box(metrics, '.desktop-content').top) <= 1,
+    `${label}: app content must begin directly below navigation`)
   if (metrics.desktop) bounded(metrics, '.window-controls', label)
   check(!metrics.legacyProviderButton, `${label}: legacy .provider-settings-btn must be removed`)
   check(metrics.activeTabs.length === 1, `${label}: exactly one top-level tab must have aria-current=page`)
@@ -323,11 +325,10 @@ function chatChecks(metrics: Measurements, label: string, mobile: boolean, tools
     const sidebar = box(metrics, '.sessions-sidebar')
     const list = box(metrics, '.projects-scroll')
     check(Math.abs(sidebar.left) <= 1, `${label}: .sessions-sidebar must touch the left edge`)
-    check(Math.abs(sidebar.top - box(metrics, '.runtime-status-bar').bottom) <= 1, `${label}: .sessions-sidebar must start immediately below chrome`)
+    check(Math.abs(sidebar.top - box(metrics, '.desktop-title-bar').bottom) <= 1, `${label}: .sessions-sidebar must start immediately below chrome`)
     check(['auto', 'scroll'].includes(list.overflowY) && list.scrollHeight > list.clientHeight,
       `${label}: .projects-scroll must scroll internally`)
     check(Math.abs(box(metrics, '.desktop-title-bar').height - 44) <= 1, `${label}: title bar should be 44px`)
-    check(Math.abs(box(metrics, '.runtime-status-bar').height - 30) <= 1, `${label}: status bar should be 30px`)
   }
   if (toolsOpen) {
     bounded(metrics, '.right-pane', label)

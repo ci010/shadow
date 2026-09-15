@@ -6,18 +6,17 @@ export interface DynamicToolImporter {
   importForInvocation(
     toolName: string,
     sessionTools: SessionTools,
+    signal?: AbortSignal,
   ): Promise<string | undefined>
 }
 
 /**
- * Execute an active dynamic tool, importing known catalog tools on first use.
- * Dynamic tool schemas are documented by the skill that activates them,
- * rather than being appended to the provider's function definitions.
+ * Resolve a known tool lazily and validate its current schema before execution.
  */
 export class InvokeTool implements Tool {
   readonly name = 'invoke_tool'
   readonly description =
-    'Execute a session tool by name. Known catalog tools are imported automatically on first use. Read its skill for the tool name and parameter schema before calling.'
+    'Execute a tool by its exact name. Known catalog tools are connected lazily; arguments are validated against the current schema before execution. Use search with space "tools:" to find names, descriptions and schemas. No separate import is required for catalog tools. Skills are optional guidance.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -27,7 +26,7 @@ export class InvokeTool implements Tool {
       },
       args: {
         type: 'object',
-        description: 'Arguments for the named tool, matching the schema documented by its skill.',
+        description: 'Arguments for the named tool, matching its current imported contract.',
       },
     },
     required: ['name', 'args'],
@@ -52,10 +51,10 @@ export class InvokeTool implements Tool {
     }
 
     if (!context.tools.hasDynamic(name) && this.importer) {
-      const result = await this.importer.importForInvocation(name, context.tools)
+      const result = await this.importer.importForInvocation(name, context.tools, context.signal)
       if (!context.tools.hasDynamic(name)) {
-        const detail = result ? ` ${result}` : ''
-        return `Error: dynamic tool "${name}" is not active and could not be imported automatically.${detail}`
+        if (result) return result.startsWith('Error') ? result : `Error: ${result}`
+        return `Error: dynamic tool "${name}" is not active and could not be imported automatically. Use search with space "tools:" for current tool IDs.`
       }
     }
 

@@ -83,9 +83,10 @@ function buildBaseTools(): Tools {
       backgroundTasks,
     ),
   )
-  tools.register(new SearchTool(WORKSPACE))
-  tools.register(new ImportTool(new Map<string, LoadableEntry>(), WORKSPACE))
-  tools.register(new InvokeTool())
+  const importer = new ImportTool(new Map<string, LoadableEntry>(), WORKSPACE)
+  tools.register(new SearchTool(WORKSPACE, undefined, undefined, importer))
+  tools.register(importer)
+  tools.register(new InvokeTool(importer))
   tools.register(new BackgroundTaskTool(backgroundTasks))
   tools.register(new ContinuationTool(backgroundTasks))
   tools.register(new LogTool(WORKSPACE))

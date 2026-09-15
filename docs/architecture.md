@@ -689,18 +689,27 @@ truncation to a Home-local scratch file. Hook failures are logged rather than
 treated as authorization failures.
 
 `SessionTools` filters base tools by agent type and owns a session-only dynamic
-layer. **Imported tool schemas are not added to the base definitions sent to
-the model.** `import_tool` returns invocation contracts; `invoke_tool({name,
-args})` executes the active imported tool. In allowlist mode, access to dynamic
+layer. **Dynamic tool schemas are not added to the base definitions sent to
+the model.** `search` with `space: "tools:"` returns only matching invocation contracts;
+`invoke_tool({name, args})` resolves known catalog IDs lazily and validates
+arguments before execution. There is no "contract already disclosed" flag or
+extra first-call round trip. Invalid arguments return only the affected tool's
+contract, without execution; unsupported schemas fail closed. Validators are
+scoped to tool instances, so reused schema IDs cannot alias across sources or
+versions. Validation is not authorization. In allowlist mode, access to dynamic
 tools is gated by `invoke_tool`; this must be considered when designing agent
 tool policies. Sleep/reset clears dynamic tools and disconnects session-owned
-MCP connections.
+MCP connections. Configuration changes and MCP tool-list notifications invalidate
+affected adapters, including tools borrowed by blocking call snapshots.
+After context compaction, an agent can search for an exact ID again if it needs
+the schema; runtime correctness does not depend on a stale disclosure marker.
 
 | Facility | Main implementation |
 | --- | --- |
 | `read` | Local text/directories, supported media/URLs, VFS; bounded remote UTF-8 read path |
 | `write` | Create/overwrite, append, or match-and-replace edit; local checks and remote workdir path |
-| `search` | Unified glob/grep/web search; ripgrep discovery/install helpers |
+| `search` | Unified glob/grep/web/tools search; targeted contracts and paginated empty-query tool listing |
+| `invoke_tool` | Lazy connections and current-schema argument validation |
 | `exec` | Managed local shell processes and inline script/tool-bridge execution |
 | `kill`, `continuation`, `v:bg` | Cancel background work, attach continuation text, and inspect task status/output |
 | `message`, `subagent` | Authorized session messaging and role-independent session/task/call execution |
@@ -763,6 +772,8 @@ mode rather than rewriting the previously read contents.
 - `v:sessions`: conversation history;
 - `v:bg`: background status/output;
 - `v:skills`: skill bodies/categories/resources;
+- `v:tools`: dynamic tool and MCP source discovery without starting servers or
+  revealing commands, environment values, URLs, or authentication headers;
 - `v:memory`: shared file-backed knowledge;
 - `v:events`: event subscriptions.
 
@@ -778,13 +789,35 @@ read via `v:skills` when needed. Built-ins live in `src/skills/builtin`;
 workspace skills can shadow them and are watched for changes. Metadata supports
 platform/architecture, category/core presentation, and admin visibility.
 These filters are not an execution sandbox for scripts referenced by a skill.
+Skills are optional workflow guidance, not an MCP admission requirement. A server
+does not need a corresponding skill; a workflow may use several servers, and
+several skills may guide use of the same server. Live import results, rather than
+copied skill examples, are authoritative for tool schemas.
 
 ### Dynamic imports and MCP
+
+[`search-tools.ts`](../src/tools/search-tools.ts) ranks names and descriptions
+lexically, returning complete schemas only for the top matches (default 3,
+maximum 10). The importer shares session lifetime, connection invalidation and
+serialized import coordination between search and invocation. Search lists
+configured MCP servers in batches of up to three, with per-source MCP discovery
+timeouts, but does not call their tools. It reports searched, failed and deferred
+sources rather than implying an exhaustive successful search when discovery
+failed. Built-in browser/factory initialization requires explicit source selection.
+Active session tools are also searchable. It does not introduce a persisted index,
+an embedding provider or a second tool registry.
 
 `import_tool` accepts a registered virtual source, a TypeScript tool module, or
 a JSON MCP configuration. A script module exposes metadata/parameters and
 `execute(args, callTool)`, optionally `init`; it can compose existing tools.
 Importing such a module executes trusted host code, not sandboxed data.
+JSON imports accept both `type` and `transport` with consistent validation.
+An `mcpServers` record imports all entries unless `server` selects one; the selected
+set is validated before connecting. Extra CLI arguments apply only to stdio.
+Multi-server connection failures are reported per server, without undoing successful
+imports. Re-imports reuse unchanged session connections; changing a connection
+releases the old one. Imports within a session are serialized, and sleep cancels
+pending imports so they cannot repopulate a reset session.
 
 User-authored TypeScript uses Node's `registerHooks` and
 `stripTypeScriptTypes` in transform mode, rather than requiring packaged `tsx`.
@@ -793,10 +826,54 @@ their extensions. JSX and decorators are not supported in user scripts.
 Backend source decorators are handled by the build compiler instead.
 
 `McpConnection` uses the MCP SDK for stdio, SSE, and streamable HTTP transports.
-Adapters translate MCP tool definitions/results to Shadow's tool contract.
-Configured servers are initially offered as lazy sources. A separate
-`McpManager`/watcher path can reload config servers into the base registry; do
-not assume all MCP lifetime is exclusively per-session.
+HTTP authentication can use configured headers; Shadow does not automatically
+authorize OAuth or retry an executing tool with another transport. Tool discovery
+follows pagination, and cancellation reaches startup and RPC requests.
+Text-only successful results remain text. Errors, structured
+results, and non-text content are preserved in a JSON envelope with `isError`,
+`content`, and `structuredContent`; protocol-private `_meta` is not projected.
+Shadow's tool-result interface is still a string: retaining image/audio/resource
+blocks is not native multimodal rendering or automatic resource fetching.
+[`mcp/text.ts`](../src/mcp/text.ts) normalizes Unicode escapes in string tokens of
+complete JSON text, before tool-result truncation. It preserves exact numeric
+literals, duplicate keys and nested string values; it does not blindly unescape
+arbitrary text or change a `rawResponse` string into an object. Historical records
+remain unchanged.
+
+[`mcp/errors.ts`](../src/mcp/errors.ts) provides sanitized `mcp_error` diagnostics
+inside the existing string tool-result interface. These retain the failing phase
+(config read/validation, connection, listing, invocation, cleanup), server/source,
+available HTTP/RPC/OS codes, safe cause messages, and recovery guidance.
+Stdio stderr is captured in bounded memory and sanitized before inclusion on
+failure. Known configured/inherited credential values and credential-shaped text
+are redacted; arbitrary SDK objects, headers, protocol data and raw causes are
+not attached to the exception. This is not a guarantee of detecting every
+unlabelled secret emitted by an arbitrary server.
+
+Cleanup failures are reported alongside the primary failure, not instead of it.
+Listing failures no longer trigger a hidden reconnect/retry. The agent receives
+the diagnostic through explicit or implicit import and can attempt bounded
+recovery; its tool guidance asks it to explain the server, phase, sanitized cause
+and required help to the user when needed. The existing conversation/tool-result
+projection is reused; there is no new automatic notification or credential repair
+service. A failed `tools/call` reports an unknown execution outcome and is not
+marked safe to retry automatically.
+
+Configured servers are always lazy catalog sources, including after config
+reload. `McpManager`/watcher updates that catalog and invalidates affected
+session connections; it never registers raw MCP tools in the base registry.
+Discovery through `read("v:tools")` exposes source names and descriptions without
+connections; `search({space: "tools:<source>", query})` returns individual tool contracts.
+An empty, whitespace or omitted tools query lists contracts in stable name order.
+`limit` (default 3, maximum 10) and `offset` bound results; `nextOffset` continues
+the list or search. Partial failures and deferred sources remain explicit.
+Complete tool contracts bypass generic result truncation; other search spaces
+retain their existing result limits. File/web searches retain parallel-read
+scheduling, while tool discovery is conservatively serialized because it can
+connect subprocesses and update session imports.
+Known IDs can be invoked directly with current-schema validation. Explicit
+`import_tool` remains compatible for whole-source, JSON/script and custom-argument
+imports; skills are optional guidance around these paths.
 
 Chrome DevTools is split into common and full lazy entries sharing a connection.
 `ChromeManager` allocates session-specific debugging ports/profiles and releases

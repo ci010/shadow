@@ -1,10 +1,6 @@
 import type { McpServerConfig } from '../config/schema.ts'
-import type { Tools } from '../tools/registry.ts'
 import { loadConfig, resolveConfigPath } from '../config/loader.ts'
-import { McpConnection } from './client.ts'
-import { registerMcpTools } from './adapter.ts'
 import { FsWatcher, watchFs } from '../utils/fs-watcher.ts'
-import type { McpManager } from './manager.ts'
 
 export class McpWatcher {
   private watcher: FsWatcher | null = null
@@ -16,9 +12,7 @@ export class McpWatcher {
   private stopping = false
 
   constructor(
-    private manager: McpManager,
-    private registry: Tools,
-    private workspace?: string,
+    private updateCatalog: (servers: McpServerConfig[]) => Promise<void>,
     private readonly scopedConfigPath?: string,
   ) {}
 
@@ -48,8 +42,6 @@ export class McpWatcher {
       this.watchTask = null
     }
     await this.reloadPromise
-    await this.disconnectAll()
-    this.unregisterTools()
   }
 
   private async runWatchLoop(watcher: FsWatcher): Promise<void> {
@@ -57,7 +49,9 @@ export class McpWatcher {
       for await (const _event of watcher) {
         this.scheduleReload()
       }
-    } catch {}
+    } catch (error) {
+      if (!this.stopping) console.error('[mcp-watcher] Configuration watch failed', error)
+    }
   }
 
   private scheduleReload(): void {
@@ -89,73 +83,15 @@ export class McpWatcher {
   }
 
   private async reloadWithServers(servers: McpServerConfig[]): Promise<void> {
-    await this.runReload(async () => {
-      this.unregisterTools()
-      await this.disconnectAll()
-
-      if (servers.length === 0) {
-        return
-      }
-
-      console.log(`[mcp-watcher] Loading MCP servers: ${servers.map((s) => s.name).join(', ')}`)
-
-      const connections: McpConnection[] = []
-      for (const cfg of servers) {
-        const conn = new McpConnection(cfg, this.workspace)
-        try {
-          await conn.connect()
-          connections.push(conn)
-        } catch (err) {
-          console.error(
-            `[mcp-watcher] Failed to connect MCP server: ${cfg.name}`,
-            err,
-          )
-        }
-      }
-
-      this.manager.setConnections(connections)
-      const toolNames = await registerMcpTools(
-        this.manager.connectionsList(),
-        this.registry,
-      )
-      this.manager.setToolNames(toolNames)
-      console.info('[mcp-watcher] Reloaded MCP servers')
-    })
-  }
-
-  private async runReload(action: () => Promise<void>): Promise<void> {
-    if (this.reloadPromise) {
-      await this.reloadPromise
-      return
+    // A later update must still run after a failed update, without dropping it.
+    const pending = (this.reloadPromise ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => this.updateCatalog(servers))
+    this.reloadPromise = pending
+    try {
+      await pending
+    } finally {
+      if (this.reloadPromise === pending) this.reloadPromise = null
     }
-
-    this.reloadPromise = (async () => {
-      try {
-        await action()
-      } catch (err) {
-        console.error('[mcp-watcher] Failed to reload MCP servers', err)
-      } finally {
-        this.reloadPromise = null
-      }
-    })()
-
-    await this.reloadPromise
-  }
-
-  private unregisterTools(): void {
-    const names = this.manager.toolNamesList()
-    if (names.length === 0) return
-    for (const name of names) {
-      this.registry.unregister(name)
-    }
-    this.manager.clearToolNames()
-  }
-
-  private async disconnectAll(): Promise<void> {
-    const connections = this.manager.connectionsList()
-    for (const conn of connections) {
-      await conn.disconnect().catch(() => {})
-    }
-    this.manager.clearConnections()
   }
 }

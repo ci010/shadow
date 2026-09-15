@@ -49,8 +49,9 @@ test('invoke_tool executes active dynamic tools without exposing them', async ()
   assert(contract.includes('"properties":{"value":{"type":"string"}}'))
 
   const lazySession = new SessionTools(base, '/workspace')
+  const lazyInvoke = new InvokeTool(importer)
   assertEquals(
-    await new InvokeTool(importer).execute(
+    await lazyInvoke.execute(
       { name: 'dynamic_echo', args: { value: 'lazy first invoke' } },
       { tools: lazySession } as ExecutionContext,
     ),

@@ -2,7 +2,7 @@
 	<main class="setup-shell">
 		<section class="setup-panel" aria-labelledby="setup-title">
 			<header class="setup-header">
-				<div class="brand-mark" aria-hidden="true">S</div>
+				<img class="brand-mark" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
 				<div>
 					<p class="eyebrow">Shadow setup</p>
 					<h1 id="setup-title">{{ heading }}</h1>
@@ -157,6 +157,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import shadowLogo from './assets/shadow-logo.png'
 import {
 	commitMainDirectoryChoice,
 	loadMainDirectorySelection,
@@ -328,7 +329,7 @@ async function launchMain(): Promise<void> {
 }
 .setup-panel { width: min(640px, 100%); min-height: 470px; padding: 34px 38px; border: 1px solid #cdd5d0; border-radius: var(--radius-overlay); background: rgba(255, 255, 255, .94); box-shadow: 0 20px 60px rgba(25, 49, 39, .12); }
 .setup-header { display: grid; grid-template-columns: 44px 1fr auto; gap: 14px; align-items: center; }
-.brand-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: var(--radius-control); color: white; background: var(--ink); font: 700 22px/1 Georgia, serif; }
+.brand-mark { width: 44px; height: 44px; display: block; object-fit: contain; }
 .eyebrow { margin: 0 0 2px; color: var(--accent); font-size: 12px; font-weight: 700; text-transform: uppercase; }
 h1 { margin: 0; font: 600 25px/1.2 Georgia, "Times New Roman", serif; letter-spacing: 0; }
 .step-count { color: var(--muted); font-size: 12px; }

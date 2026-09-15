@@ -7,7 +7,10 @@ metadata:
 
 # Cron Scheduling
 
-The `cron` tool is lazy-loaded automatically on its first `invoke_tool` call.
+Use `search(query="cron", space="tools:cron")` when you need the current
+contract, then invoke `cron` directly. No separate import is required; arguments
+are validated before execution. Do not invoke an add/remove operation merely to
+discover its schema.
 
 ## Tool Contract
 
@@ -34,7 +37,7 @@ Use `invoke_tool` with `name: "cron"` and an `args` object:
 
 - **Cron expression**: `"0 9 * * *"` (daily at 9 AM), `"*/30 * * * *"` (every 30 min)
 - **Interval shorthand**: `"every 5m"`, `"every 1h"`, `"every 30s"`
-- **One-time**: set `once: "true"` to auto-delete after first run
+- **One-time**: set `once: true` to auto-delete after first run
 
 ## Add a Job
 

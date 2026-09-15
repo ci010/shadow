@@ -15,6 +15,10 @@ export class CallTools extends SessionTools {
   override hasDynamic(name: string): boolean {
     return this.canUseDynamic(name) && (super.hasDynamic(name) || this.caller.hasDynamic(name))
   }
+  override activeDynamicTools() {
+    const tools = new Map([...this.caller.activeDynamicTools(), ...super.activeDynamicTools()].map(tool => [tool.name, tool]))
+    return [...tools.values()].filter(tool => this.canUseDynamic(tool.name))
+  }
   override async execute(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
     const denial = this.executionDenial(name, args)
     if (denial) return denial

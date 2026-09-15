@@ -7,7 +7,10 @@ metadata:
 
 # Project Management
 
-The `project` tool is lazy-loaded automatically on its first `invoke_tool` call:
+Use `search(query="project", space="tools:project")` when you need the
+current contract, then use `invoke_tool` as below. No separate import is required;
+arguments are validated before execution. Use search, not a create/update call,
+to discover the schema.
 
 ```json
 {

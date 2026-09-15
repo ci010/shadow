@@ -6,6 +6,9 @@ import type { ExecutionContext } from '../agent/agent.ts'
 import type { McpConnection } from '../mcp/client.ts'
 import type { ExecutionMode } from '../sessions/execution-mode.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
+import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
+import { redactMcpText } from '../mcp/errors.ts'
 
 const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'event_subscribe', 'cron', 'continuation', 'kill'])
 
@@ -13,7 +16,14 @@ const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent'])
+const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool'])
+
+export function toolInvocationContract(tools: Tool[]): string {
+  return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
+    tools.map(tool => JSON.stringify({
+      name: tool.name, description: tool.description, parameters: tool.parameters,
+    })).join('\n')
+}
 
 /**
  * Central registry of all available tools.
@@ -111,6 +121,7 @@ export class Tools {
       if (
         result.length > this.truncationThreshold &&
         !EXEMPT_TOOLS.has(name) &&
+        !(name === 'search' && typeof args.space === 'string' && args.space.split(':', 1)[0] === 'tools') &&
         !(context.remoteWorkdir && name === 'exec')
       ) {
         result = await this.truncateAndSave(name, result)
@@ -218,8 +229,9 @@ export class Tools {
   }
 
   /** Check if a tool is readonly (safe to run in parallel). */
-  isReadonly(name: string): boolean {
-    return this.get(name)?.readonly === true
+  isReadonly(name: string, args: Record<string, unknown> = {}): boolean {
+    const readonly = this.get(name)?.readonly
+    return typeof readonly === 'function' ? readonly(args) : readonly === true
   }
 
   /** All registered tool names. */
@@ -238,6 +250,9 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  private dynamicLifetime = new AbortController()
+  private readonly validators = new WeakMap<Tool, JsonSchemaValidator<unknown>>()
+  private readonly dynamicResources = new Map<string, { active: boolean }>()
   private readonly foreground = new Set<Promise<unknown>>()
   private readonly foregroundScopes = new Map<AbortSignal, Set<Promise<unknown>>>()
   private scope?: { mode: ExecutionMode; modes: readonly ExecutionMode[]; blocked?: (reason: string) => void }
@@ -245,7 +260,7 @@ export class SessionTools extends Tools {
   /** Session-scoped MCP connection cache, keyed by server name. */
   private mcpConns = new Map<
     string,
-    { conn: McpConnection; activeArgs: string[] }
+    { conn: McpConnection; activeArgs: string[]; resource: { active: boolean }; toolsSignature?: string; version: number }
   >()
   /** Tool whitelist — if set, only these tools are available. */
   private readonly allowed: Set<string> | undefined
@@ -278,22 +293,62 @@ export class SessionTools extends Tools {
   /** Get a cached MCP connection for this session. */
   getMcpConn(
     name: string,
-  ): { conn: McpConnection; activeArgs: string[] } | undefined {
+  ): { conn: McpConnection; activeArgs: string[]; version: number } | undefined {
     return this.mcpConns.get(name)
   }
 
   /** Cache an MCP connection for this session. */
   setMcpConn(name: string, conn: McpConnection, activeArgs: string[]): void {
-    this.mcpConns.set(name, { conn, activeArgs })
+    if (this.mcpConns.has(name)) throw new Error(`MCP connection "${name}" must be disconnected before replacement`)
+    this.mcpConns.set(name, { conn, activeArgs, resource: { active: true }, version: 0 })
+  }
+
+  invalidateMcpTools(name: string): void {
+    const cached = this.mcpConns.get(name)
+    if (!cached) return
+    cached.resource.active = false
+    cached.resource = { active: true }
+    cached.version++
+  }
+
+  refreshMcpTools(name: string, signature: string): void {
+    const cached = this.mcpConns.get(name)
+    if (!cached) throw new Error(`Missing MCP connection "${name}"`)
+    if (cached.toolsSignature !== undefined && cached.toolsSignature !== signature) this.invalidateMcpTools(name)
+    cached.toolsSignature = signature
   }
 
   /** Remove a cached MCP connection (e.g. on reconnect failure). */
   removeMcpConn(name: string): void {
+    const cached = this.mcpConns.get(name)
+    if (cached) cached.resource.active = false
     this.mcpConns.delete(name)
   }
 
+  async disconnectMcpConn(name: string): Promise<void> {
+    const cached = this.mcpConns.get(name)
+    this.removeMcpConn(name)
+    if (cached) await cached.conn.disconnect()
+  }
+
+  async invalidateMcpServers(names: ReadonlySet<string>): Promise<void> {
+    const closing = [...this.mcpConns].filter(([, cached]) => names.has(cached.conn.config.name))
+      .map(([key]) => this.disconnectMcpConn(key))
+    const outcomes = await Promise.allSettled(closing)
+    const failures = outcomes.filter(result => result.status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'MCP connection cleanup failed')
+  }
+
+  get dynamicSignal(): AbortSignal { return this.dynamicLifetime.signal }
+
   /** Register a tool for the current session only. */
-  registerDynamic(tool: Tool): void {
+  registerDynamic(tool: Tool, connectionKey?: string): void {
+    this.dynamicResources.delete(tool.name)
+    if (connectionKey !== undefined) {
+      const connection = this.mcpConns.get(connectionKey)
+      if (!connection) throw new Error(`Missing MCP connection "${connectionKey}"`)
+      this.dynamicResources.set(tool.name, connection.resource)
+    }
     this.register(tool) // writes into this.tools (the dynamic layer)
   }
 
@@ -308,8 +363,26 @@ export class SessionTools extends Tools {
     if (!this.isDynamicToolAllowed(name)) {
       return `Error: dynamic tool "${name}" is not available for this agent type.`
     }
-    if (!this.tools.has(name)) {
+    if (!this.hasDynamic(name)) {
       return `Error: dynamic tool "${name}" is not active for this session.`
+    }
+    context.signal?.throwIfAborted()
+    const tool = this.tools.get(name)!
+    let validate = this.validators.get(tool)
+    if (!validate) {
+      try {
+        validate = new AjvJsonSchemaValidator().getValidator(tool.parameters as JsonSchemaType)
+        this.validators.set(tool, validate)
+      } catch (error) {
+        const reason = redactMcpText(error instanceof Error ? error.message : String(error), { phase: 'validate_config' })
+        return `Error: invalid or unsupported input schema for "${name}"; no tool was executed. ${reason}. Ask the server owner to correct the schema.\n` +
+          toolInvocationContract([tool])
+      }
+    }
+    const validation = validate(args)
+    if (!validation.valid) {
+      return `Error: invalid arguments for "${name}"; no tool was executed. ${validation.errorMessage}\n` +
+        toolInvocationContract([tool])
     }
     return await super.execute(name, args, context)
   }
@@ -327,7 +400,15 @@ export class SessionTools extends Tools {
 
   /** Whether a name belongs to the active session-only tool layer. */
   hasDynamic(name: string): boolean {
+    if (this.dynamicResources.get(name)?.active === false) {
+      this.tools.delete(name)
+      this.dynamicResources.delete(name)
+    }
     return this.tools.has(name)
+  }
+
+  activeDynamicTools(): Tool[] {
+    return [...this.tools.values()].filter(tool => this.canUseDynamic(tool.name) && this.hasDynamic(tool.name))
   }
 
   setExecutionScope(mode: ExecutionMode, modes: readonly ExecutionMode[], blocked?: (reason: string) => void): void {
@@ -401,7 +482,11 @@ export class SessionTools extends Tools {
     const copy = new SessionTools(base, this.workspace,
       this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined)
     for (const tool of this.tools.values()) {
-      if (this.canUseDynamic(tool.name)) copy.registerDynamic(tool)
+      if (this.canUseDynamic(tool.name) && this.hasDynamic(tool.name)) {
+        copy.registerDynamic(tool)
+        const resource = this.dynamicResources.get(tool.name)
+        if (resource) copy.dynamicResources.set(tool.name, resource)
+      }
     }
     return copy
   }
@@ -413,10 +498,14 @@ export class SessionTools extends Tools {
 
   /** Clear all session-scoped tools and run cleanup callbacks (called on sleep). */
   resetDynamic(): void {
+    this.dynamicLifetime.abort()
+    this.dynamicLifetime = new AbortController()
     this.tools.clear()
+    this.dynamicResources.clear()
     // Disconnect all session-owned MCP connections
-    for (const { conn } of this.mcpConns.values()) {
-      conn.disconnect().catch(() => {})
+    for (const { conn, resource } of this.mcpConns.values()) {
+      resource.active = false
+      conn.disconnect().catch(error => console.error('[mcp] Session connection cleanup failed', error))
     }
     this.mcpConns.clear()
     const cbs = this.resetCallbacks.splice(0)

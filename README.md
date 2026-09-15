@@ -343,6 +343,13 @@ The same backend applies the saved settings without a separate UI-only config.
 The desktop window uses a custom, draggable title bar with minimize,
 maximize/restore, and close controls; it has no native application menu.
 Navigation (including Providers) and window controls share one Shadow header.
+The header, setup, and recovery screens use `app/src/assets/shadow-logo.png`.
+The matching browser favicon is `app/public/favicon.png`; the multi-resolution
+Windows icon in `desktop/assets/icon.ico` is used by both the desktop window and
+the installer build. Renderer branding updates through Vite during development;
+native window icon changes require restarting Electron.
+Content begins directly below navigation without a persistent runtime status row;
+device roles, connection status, and node IDs remain available in **Nodes**.
 Projects dock to the left edge; the session list and chat history scroll
 independently while the composer stays visible. Narrow browser windows expose
 Projects through a toggle. New conversations start as a centered, unsent draft.
@@ -844,6 +851,53 @@ distributed setup/Child flows remain WIP.
 Tests support targeted execution with
 `pnpm exec node --import tsx --test src/runtime/backend-cli_test.ts`.
 Use `pnpm test:update` only when snapshot changes are intentional.
+
+## MCP and optional skills
+
+Configured MCP servers stay in a lazy catalog, including after configuration
+reloads; their tools are not added to the model's base function list.
+`search({space: "tools:", query, limit?, offset?})` searches names/descriptions and returns
+only matching tools' exact names and complete schemas (default 3, maximum 10).
+Use `space: "tools:mail"` to select a source. Empty, whitespace or omitted query
+lists tools in stable name order; pass `nextOffset` as `offset` to get the next
+page (`null` means the end). The same `search` tool retains grep:/glob:/web:;
+there is no separate tool-discovery function in the base tool list.
+It uses keyword ranking, not embeddings. Search discovers metadata from
+configured servers without executing their tools. Failures and deferred
+browser/factory sources are explicit; select a deferred source to initialize it.
+`read("v:tools")` remains a connection-free source listing.
+
+Use `invoke_tool({name, args})` directly for a known tool ID. It connects lazily
+and validates arguments against the current schema before execution, with no
+separate import/disclosure round trip. Invalid arguments return the target
+tool's contract without executing. Changed configuration/tool listings invalidate
+old adapters; sleeping clears session imports, which known IDs can recreate.
+There is no persisted "schema already seen" flag. Skills remain optional workflow
+guidance, not a prerequisite for search or invocation.
+
+Both main configuration and imported MCP JSON accept `type` or `transport`
+(`stdio`, `sse`, or `streamable-http`); conflicting values are rejected. Standard
+`mcpServers` JSON imports all entries by default, or selects one with the
+`import_tool` `server` argument. Extra CLI arguments apply only to stdio servers.
+HTTP transports accept configured headers, but do not automate OAuth login.
+Keep credentials out of committed configuration.
+
+Import failures return a structured `mcp_error` diagnostic, including the failure
+phase, available HTTP/RPC/OS codes, sanitized causes, and whether retry or user
+help is appropriate. Tool discovery no longer silently reconnects and hides the
+first failure. Agents are instructed to make only bounded recovery attempts and
+ask for specific help when authentication, permissions or repeated failures
+require it. This does not automate credential changes or retry tool side effects.
+
+`import_tool` remains available for JSON/script imports and custom connection
+arguments, but loading an entire server is no longer the normal discovery path.
+MCP calls preserve structured results, error flags, and non-text content blocks
+as JSON when needed. These are still textual tool results, not native model
+image/audio attachments. Valid JSON text has Unicode string escapes normalized
+for readability, without changing values, numeric literals or nested strings
+such as `rawResponse`. Existing stored traces are not rewritten.
+See the [architecture reference](docs/architecture.md)
+for session lifetime and execution boundaries.
 
 ## Existing cron jobs
 

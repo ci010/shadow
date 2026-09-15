@@ -1732,10 +1732,14 @@ export class SessionManager {
         try {
           const importTool = sessionTools.get('import_tool') as ImportTool
           if (importTool) {
-            await importTool.importSource({
+            const imported = await importTool.importSource({
               source: `v:tools/${toolName}`,
               args: toolArgs,
             }, sessionTools)
+            if (imported.startsWith('Error') || imported.startsWith('Unknown tool')) {
+              console.warn(`[session-manager] Could not preload tool "${toolName}": ${imported}`)
+              continue
+            }
             console.info(
               `[session-manager] Preloaded tool "${toolName}" for session ${sessionId}`,
             )

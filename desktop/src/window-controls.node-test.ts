@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { IPC_CHANNELS } from './ipc-contract.js'
 import {
@@ -47,6 +48,7 @@ test('desktop windows are frameless with no overlay or native application menu',
   assert.equal(options.frame, false)
   assert.equal(options.titleBarOverlay, undefined)
   assert.equal(options.autoHideMenuBar, undefined)
+  assert.equal(options.icon, fileURLToPath(new URL('../assets/icon.ico', import.meta.url)))
   assert.deepEqual(options.webPreferences, {
     preload: 'C:\\test\\preload.cjs',
     contextIsolation: true,

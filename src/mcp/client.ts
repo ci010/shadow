@@ -1,10 +1,17 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-// import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import { CallToolResultSchema, ToolListChangedNotificationSchema, type ContentBlock } from '@modelcontextprotocol/sdk/types.js'
 import { env as sysEnv } from 'node:process'
+import { Readable } from 'node:stream'
 import type { McpServerConfig } from '../config/schema.ts'
 import { Span } from '../utils/otel.ts'
 import { loadDotEnv } from '../utils/env.ts'
+import { parseMcpServerConfig } from './config.ts'
+import { mcpCleanupFailure, mcpFailure, mcpSecrets, type McpPhase } from './errors.ts'
+import { readableMcpText } from './text.ts'
 
 export interface McpToolInfo {
   name: string
@@ -12,31 +19,116 @@ export interface McpToolInfo {
   inputSchema: Record<string, unknown>
 }
 
+interface ConnectionState {
+  client: Client
+  abort: AbortController
+  transport?: Transport
+  ready: boolean
+  stderr: string
+  transportError?: Error
+}
+
+function publicContent(block: ContentBlock): Record<string, unknown> {
+  // SDK schemas strip unknown fields; _meta remains protocol-private.
+  const { _meta, ...content } = block
+  if (block.type === 'resource') {
+    const { _meta: resourceMeta, ...resource } = block.resource
+    return { ...content, resource }
+  }
+  if (block.type === 'text') return { ...content, text: readableMcpText(block.text) }
+  return content
+}
+
+async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort: () => void = () => {}
+  const cancelled = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  })
+  try {
+    return await Promise.race([operation, cancelled])
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+}
+
 /**
  * Manages a connection to a single external MCP server.
  */
 export class McpConnection {
-  private client: Client
-  private transport: StdioClientTransport | null = null
+  private state?: ConnectionState
+  private toolsChangedHandler?: () => void
+  private diagnosticSecrets: string[] = []
 
   constructor(
     readonly config: McpServerConfig,
     private readonly cwd?: string,
-  ) {
-    this.client = new Client({ name: 'bot-agent', version: '0.1.0' }, {})
-  }
+  ) {}
 
   @Span('McpConnection.connect')
-  async connect(): Promise<void> {
-    switch (this.config.transport) {
+  async connect(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    if (this.state) throw new Error('MCP connection is already connected or connecting')
+    let config: McpServerConfig
+    try {
+      config = parseMcpServerConfig(this.config.name, this.config)
+    } catch (error) {
+      throw mcpFailure(error, { phase: 'validate_config', config: this.config })
+    }
+    const state: ConnectionState = {
+      client: new Client({ name: 'bot-agent', version: '0.1.0' }, {}),
+      abort: new AbortController(),
+      ready: false,
+      stderr: '',
+    }
+    this.state = state
+    state.client.onerror = error => { state.transportError = error }
+    state.client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      if (this.state === state && state.ready) this.toolsChangedHandler?.()
+    })
+    const startupSignal = signal
+      ? AbortSignal.any([signal, state.abort.signal])
+      : state.abort.signal
+    try {
+      const transport = await this.createTransport(config, startupSignal)
+      // Client.connect also closes failed initialization. Share cleanup so a
+      // concurrent abort cannot close the same transport twice.
+      const close = transport.close.bind(transport)
+      let closing: Promise<void> | undefined
+      transport.close = () => closing ??= close()
+      state.transport = transport
+      startupSignal.throwIfAborted()
+      await abortable(state.client.connect(transport, { signal: startupSignal }), startupSignal)
+      startupSignal.throwIfAborted()
+      state.ready = true
+      state.transportError = undefined
+    } catch (error) {
+      const failure = this.safeFailure(error, 'connect', startupSignal, state.stderr)
+      try {
+        await state.transport?.close()
+      } catch (cleanupError) {
+        throw mcpCleanupFailure(failure, cleanupError, {
+          phase: 'connect', config: this.config, secrets: this.diagnosticSecrets,
+        })
+      } finally {
+        if (this.state === state) this.state = undefined
+      }
+      throw failure
+    }
+  }
+
+  private async createTransport(config: McpServerConfig, signal: AbortSignal): Promise<Transport> {
+    switch (config.transport) {
       case 'stdio': {
-        if (!this.config.command) {
+        if (!config.command) {
           throw new Error(
             `MCP server "${this.config.name}" requires a command for stdio transport`,
           )
         }
         // Merge workspace .env (lowest priority) → process env → config env (highest priority)
         const dotEnv = this.cwd ? await loadDotEnv(this.cwd) : {}
+        signal.throwIfAborted()
         const mergedEnv = {
           ...dotEnv,
           ...Object.fromEntries(
@@ -44,48 +136,128 @@ export class McpConnection {
               entry[1] !== undefined
             ),
           ),
-          ...this.config.env as Record<string, string>,
+          ...config.env,
         }
-        this.transport = new StdioClientTransport({
-          command: this.config.command,
-          args: this.config.args,
+        this.diagnosticSecrets = mcpSecrets(config, mergedEnv)
+        const transport = new StdioClientTransport({
+          command: config.command,
+          args: config.args,
           env: Object.keys(mergedEnv).length > 0 ? mergedEnv : undefined,
           cwd: this.cwd,
+          stderr: 'pipe',
         })
-        await this.client.connect(this.transport)
-        break
+        const state = this.state
+        let exceeded = false
+        const stderr = transport.stderr
+        if (stderr instanceof Readable) stderr.setEncoding('utf8')
+        stderr?.on('data', (chunk: string | Buffer) => {
+          if (!state || exceeded) return
+          state.stderr += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+          if (state.stderr.length > 32_768) {
+            state.stderr = '[stderr omitted: exceeded diagnostic capture limit]'
+            exceeded = true
+          }
+        })
+        return transport
       }
-      case 'sse':
+      case 'sse': {
+        if (!config.url) throw new Error('SSE transport requires a URL')
+        return new SSEClientTransport(new URL(config.url), {
+          requestInit: { headers: config.headers },
+        })
+      }
       case 'streamable-http': {
-        // TODO: implement SSE / streamable-http transports
-        throw new Error(
-          `Transport "${this.config.transport}" not yet implemented`,
-        )
+        if (!config.url) throw new Error('Streamable HTTP transport requires a URL')
+        return new StreamableHTTPClientTransport(new URL(config.url), {
+          requestInit: { headers: config.headers },
+          reconnectionOptions: {
+            maxRetries: 0,
+            initialReconnectionDelay: 1000,
+            maxReconnectionDelay: 1000,
+            reconnectionDelayGrowFactor: 1,
+          },
+        })
       }
+      default:
+        throw new Error('Invalid MCP transport')
     }
   }
 
   @Span('McpConnection.disconnect')
   async disconnect(): Promise<void> {
-    await this.client.close()
+    const state = this.state
+    if (!state) return
+    state.ready = false
+    state.abort.abort(new Error('MCP connection disconnected'))
+    try {
+      await state.transport?.close()
+    } catch (error) {
+      throw this.safeFailure(error, 'disconnect')
+    } finally {
+      if (this.state === state) this.state = undefined
+    }
   }
 
-  async listTools(): Promise<McpToolInfo[]> {
-    const result = await this.client.listTools()
-    return result.tools.map((t) => ({
-      name: t.name,
-      description: t.description ?? '',
-      inputSchema: t.inputSchema as Record<string, unknown>,
-    }))
+  private connectedClient(phase: McpPhase): Client {
+    if (!this.state?.ready) throw mcpFailure(new Error('MCP connection is not connected'), { phase, config: this.config })
+    return this.state.client
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-    const result = await this.client.callTool({ name, arguments: args })
-    // MCP returns content as an array of content blocks
-    const contents = result.content as Array<{ type: string; text?: string }>
-    return contents
-      .filter((c) => c.type === 'text' && c.text)
-      .map((c) => c.text!)
-      .join('\n')
+  setToolsChangedHandler(handler: (() => void) | undefined): void {
+    this.toolsChangedHandler = handler
+  }
+
+  private safeFailure(error: unknown, phase: McpPhase, signal?: AbortSignal, stderr = this.state?.stderr): unknown {
+    if (signal?.aborted && error === signal.reason && !(error instanceof Error && error.name === 'TimeoutError')) return error
+    return mcpFailure(error, {
+      phase, config: this.config, stderr, secrets: this.diagnosticSecrets,
+      transportError: this.state?.transportError,
+    })
+  }
+
+  async listTools(signal?: AbortSignal): Promise<McpToolInfo[]> {
+    signal?.throwIfAborted()
+    const client = this.connectedClient('list_tools')
+    if (this.state) this.state.transportError = undefined
+    const tools: McpToolInfo[] = []
+    const cursors = new Set<string>()
+    let cursor: string | undefined
+    do {
+      signal?.throwIfAborted()
+      const result = await client.listTools(cursor === undefined ? undefined : { cursor }, { signal })
+        .catch((error: unknown) => { throw this.safeFailure(error, 'list_tools', signal) })
+      tools.push(...result.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description ?? '',
+        inputSchema: tool.inputSchema,
+      })))
+      cursor = result.nextCursor
+      if (cursor !== undefined) {
+        if (cursors.has(cursor)) throw this.safeFailure(new Error('MCP tools/list returned a repeated pagination cursor'), 'list_tools', signal)
+        cursors.add(cursor)
+      }
+    } while (cursor !== undefined)
+    return tools
+  }
+
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted()
+    if (this.state) this.state.transportError = undefined
+    const raw = await this.connectedClient('call_tool').callTool({ name, arguments: args }, CallToolResultSchema, { signal })
+      .catch((error: unknown) => { throw this.safeFailure(error, 'call_tool', signal) })
+    const parsed = CallToolResultSchema.safeParse(raw)
+    if (!parsed.success) throw this.safeFailure(new Error('Malformed MCP tool result'), 'call_tool', signal)
+    const result = parsed.data
+    if (!result.isError && result.structuredContent === undefined && result.content.every((block) => block.type === 'text')) {
+      return result.content
+        .filter((block) => block.type === 'text' && block.text)
+        .map((block) => readableMcpText(block.text))
+        .join('\n')
+    }
+    return JSON.stringify({
+      isError: result.isError ?? false,
+      content: result.content.map(publicContent),
+      ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
+    })
   }
 }

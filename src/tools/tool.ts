@@ -31,8 +31,8 @@ export interface Tool {
   readonly description: string
   /** JSON Schema for the parameters object. */
   readonly parameters: ToolParameters
-  /** If true, this tool only reads state and never mutates it. Readonly tools can always be called in parallel. */
-  readonly readonly?: boolean
+  /** True (or true for these arguments) means the call only reads state and can run in parallel. */
+  readonly readonly?: boolean | ((args: Record<string, unknown>) => boolean)
   /** Explicitly opts the tool into capability-backed remote workspace handling. */
   readonly supportsRemoteWorkdir?: boolean
   /** If true, this tool is opt-in only — hidden unless explicitly listed in allowedTools. */

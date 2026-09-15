@@ -134,21 +134,30 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "search",
-      "description": "Search files or the web via the \`space\` scheme.",
+      "description": "Search files, the web, or available tools via the \`space\` scheme. tools: returns exact tool names, descriptions and complete parameter schemas for invoke_tool; no separate import is needed. Tool discovery may connect MCP servers but never executes their tools.",
       "parameters": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
-            "description": "Glob pattern, regex, or keywords depending on space."
+            "description": "Glob pattern, regex, or keywords depending on space. For tools:, empty, whitespace or omitted query lists tools; otherwise searches names and descriptions."
           },
           "space": {
             "type": "string",
-            "description": "grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search."
+            "description": "grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. tools:[source] — tool contracts (e.g. tools:mail); tools: searches configured sources and active tools. Browser/factory sources require explicit selection."
+          },
+          "limit": {
+            "type": "integer",
+            "default": 3,
+            "description": "tools: only. Maximum complete tool contracts per page (1-10); default 3."
+          },
+          "offset": {
+            "type": "integer",
+            "default": 0,
+            "description": "tools: only. Nonnegative result offset; use nextOffset to continue listing or searching."
           }
         },
         "required": [
-          "query",
           "space"
         ]
       }
@@ -158,7 +167,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "import_tool",
-      "description": "Import a tool or MCP server into the current session. Source: v:tools/<name> for pre-registered, .ts for script tools, .json for MCP config files. Active until sleep.",
+      "description": "Import a tool or MCP server into the current session. Source: v:tools/<name> for pre-registered, .ts for script tools, .json for MCP config files. Read v:tools for available sources. Returns current tool contracts before execution. Active until sleep or configuration changes.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -172,6 +181,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
               "type": "string"
             },
             "description": "Extra string arguments. For MCP tools: CLI flags (e.g. [\\"--remote-debugging-port=9223\\"]). For .ts modules: passed to the module's optional init(args) function."
+          },
+          "server": {
+            "type": "string",
+            "description": "Optional server name when importing a multi-server JSON config. Omit to import all entries."
           }
         },
         "required": [
@@ -184,7 +197,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "invoke_tool",
-      "description": "Execute a session tool by name. Known catalog tools are imported automatically on first use. Read its skill for the tool name and parameter schema before calling.",
+      "description": "Execute a tool by its exact name. Known catalog tools are connected lazily; arguments are validated against the current schema before execution. Use search with space \\"tools:\\" to find names, descriptions and schemas. No separate import is required for catalog tools. Skills are optional guidance.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -194,7 +207,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "args": {
             "type": "object",
-            "description": "Arguments for the named tool, matching the schema documented by its skill."
+            "description": "Arguments for the named tool, matching its current imported contract."
           }
         },
         "required": [

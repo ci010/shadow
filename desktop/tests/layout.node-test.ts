@@ -12,6 +12,10 @@ const sourceDirectory = dirname(fileURLToPath(import.meta.url))
 const repository = resolve(sourceDirectory, '..', '..')
 const require = createRequire(import.meta.url)
 
+test('branding assets decode in the built renderer and native desktop window', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'branding-smoke')
+})
+
 test('built Vue layout stays bounded in isolated hidden Electron viewports', {
   timeout: 150_000,
 }, async (t) => {

@@ -1,6 +1,7 @@
 import type { ExecutionContext } from '../agent/agent.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'
+import type { ImportTool } from './load-tool.ts'
 import { detectRipgrep, GlobTool, GrepTool, installRipgrep } from './ripgrep.ts'
 
 /**
@@ -15,27 +16,30 @@ function parseSpace(space: string): { scheme: string; qualifier: string } {
 }
 
 /**
- * Unified search tool that dispatches to glob, grep, or web search
+ * Unified search tool that dispatches to glob, grep, web, or tool search
  * based on the URI-style `space` parameter.
  */
 export class SearchTool implements Tool {
   readonly name = 'search'
-  readonly readonly = true
-  readonly description = 'Search files or the web via the `space` scheme.'
+  readonly readonly = (args: Record<string, unknown>) =>
+    typeof args.space === 'string' && ['glob', 'grep', 'web'].includes(parseSpace(args.space).scheme)
+  readonly description = 'Search files, the web, or available tools via the `space` scheme. tools: returns exact tool names, descriptions and complete parameter schemas for invoke_tool; no separate import is needed. Tool discovery may connect MCP servers but never executes their tools.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       query: {
         type: 'string',
-        description: 'Glob pattern, regex, or keywords depending on space.',
+        description: 'Glob pattern, regex, or keywords depending on space. For tools:, empty, whitespace or omitted query lists tools; otherwise searches names and descriptions.',
       },
       space: {
         type: 'string',
         description:
-          'grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search.',
+          'grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. tools:[source] — tool contracts (e.g. tools:mail); tools: searches configured sources and active tools. Browser/factory sources require explicit selection.',
       },
+      limit: { type: 'integer', default: 3, description: 'tools: only. Maximum complete tool contracts per page (1-10); default 3.' },
+      offset: { type: 'integer', default: 0, description: 'tools: only. Nonnegative result offset; use nextOffset to continue listing or searching.' },
     },
-    required: ['query', 'space'],
+    required: ['space'],
   }
 
   private glob: GlobTool
@@ -48,6 +52,7 @@ export class SearchTool implements Tool {
     workspace: string,
     private webSearchTool?: Tool,
     virtualFs?: VirtualFs,
+    private importer?: ImportTool,
   ) {
     this.workspace = workspace
     this.glob = new GlobTool(workspace, virtualFs)
@@ -77,8 +82,19 @@ export class SearchTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
-    const { scheme, qualifier } = parseSpace(String(args.space))
-    const query = String(args.query)
+    if (typeof args.space !== 'string') return 'Error: space must be a string.'
+    const { scheme, qualifier } = parseSpace(args.space)
+    if (scheme === 'tools') {
+      if (!this.importer) return 'Error: tool discovery is not configured for this search tool.'
+      return this.importer.searchTools({
+        query: args.query,
+        source: qualifier || undefined,
+        limit: args.limit,
+        offset: args.offset,
+      }, context)
+    }
+    if (typeof args.query !== 'string') return 'Error: query must be a string for file or web search.'
+    const query = args.query
 
     switch (scheme) {
       case 'glob':
@@ -135,7 +151,7 @@ export class SearchTool implements Tool {
       }
 
       default:
-        return `Unknown search space: "${scheme}". Use grep:, glob:, or web:.`
+        return `Unknown search space: "${scheme}". Use grep:, glob:, web:, or tools:.`
     }
   }
 

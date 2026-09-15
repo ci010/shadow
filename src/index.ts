@@ -353,9 +353,6 @@ export async function createOrganizationRuntime(
     factory: searxngFactory,
   })
 
-  // Unified search tool �?delegates to glob, grep, and web search
-  tools.register(new SearchTool(workspace, webSearchTool, vfs))
-
   // Chrome DevTools MCP — two loadable entries for progressive disclosure:
   //   chrome-devtools      → common tools (input, navigation, snapshot)
   //   chrome-devtools-full → remaining tools (emulation, performance, network, console)
@@ -416,14 +413,8 @@ export async function createOrganizationRuntime(
     sharedConn: chromeDevToolsEntry,
   })
 
-  // Register config MCP servers as lazy-loadable entries
-  for (const server of config.mcp.servers ?? []) {
-    loadable.set(server.name, {
-      config: server,
-    })
-  }
-
   const importTool = new ImportTool(loadable, workspace, chromeManager)
+  tools.register(new SearchTool(workspace, webSearchTool, vfs, importTool))
   tools.register(importTool)
   tools.register(new InvokeTool(importTool))
 
@@ -553,10 +544,19 @@ export async function createOrganizationRuntime(
     (sid) => sessions.getSessionState(sid)?.projectName ?? undefined,
   ))
 
-  const mcpManager = new McpManager(tools, [], workspace, configStore.configPath)
+  const mcpManager = new McpManager(
+    servers => importTool.updateMcpServers(servers), config.mcp.servers, configStore.configPath,
+  )
   cleanup.push(() => mcpManager.stopWatching())
 
   // ── Virtual filesystem mounts ─────────────────────────────────────────
+
+  vfs.mount(
+    'v:tools',
+    'discover dynamic tool and MCP sources without connecting; use search with space tools:<name> for current tool contracts',
+    (name, context) => importTool.readCatalog(name, context.tools),
+    context => importTool.catalogEntries(context.tools),
+  )
 
   const sessionsVfs = createSessionsHandler(sessions)
   vfs.mount(

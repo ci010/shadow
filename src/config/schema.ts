@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { parseMcpServerConfig } from '../mcp/config.ts'
 import { MAX_YIELD_TIMEOUT_MS } from '../sessions/yield-contract.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 
@@ -99,23 +100,6 @@ export const ChannelsSchema = z.object({
 // ── MCP configs ─────────────────────────────────────────────────────────────
 
 /**
- * Schema for a single MCP server entry in the config file.
- * `name` is derived from the record key; `type` defaults to "stdio".
- */
-const McpServerEntrySchema = z.object({
-  /** Transport type. Defaults to "stdio". */
-  type: z.enum(['stdio', 'sse', 'streamable-http']).default('stdio'),
-  /** Command for stdio transport */
-  command: z.string().optional(),
-  /** Args for stdio transport */
-  args: z.array(z.string()).optional(),
-  /** URL for sse / streamable-http transport */
-  url: z.string().optional(),
-  /** Environment variables passed to the child process */
-  env: z.record(z.string()).optional(),
-})
-
-/**
  * Config file format: record of server name → server config.
  *
  * ```json
@@ -127,18 +111,22 @@ const McpServerEntrySchema = z.object({
  * Transformed into `{ servers: McpServerConfig[] }` after parsing.
  */
 export const McpSchema = z
-  .record(z.string(), McpServerEntrySchema)
+  .record(z.string(), z.unknown())
   .default({})
-  .transform((record) => ({
-    servers: Object.entries(record).map(([name, cfg]) => ({
-      name,
-      transport: cfg.type,
-      command: cfg.command,
-      args: cfg.args,
-      url: cfg.url,
-      env: cfg.env,
-    })),
-  }))
+  .transform((record, ctx) => {
+    const servers: McpServerConfig[] = []
+    for (const [name, input] of Object.entries(record)) {
+      try {
+        servers.push(parseMcpServerConfig(name, input))
+      } catch (error) {
+        if (!(error instanceof z.ZodError)) throw error
+        for (const issue of error.issues) {
+          ctx.addIssue({ ...issue, path: [name, ...issue.path] })
+        }
+      }
+    }
+    return { servers }
+  })
 
 /**
  * Resolved MCP server config with name and transport (post-transform).
@@ -151,6 +139,8 @@ export interface McpServerConfig {
   args?: string[]
   url?: string
   env?: Record<string, string>
+  headers?: Record<string, string>
+  description?: string
 }
 
 // ── Agent configs ───────────────────────────────────────────────────────────

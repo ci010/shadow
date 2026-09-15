@@ -98,7 +98,7 @@ test('web admission, channel fanout, commands and retry follow one directed inpu
     name: 'probe', description: 'fixture command', adminOnly: true,
     async execute() { commandsRun++; return 'Command handled' },
   })
-  const mcpManager = new McpManager(tools, [], workspace)
+  const mcpManager = new McpManager(async () => {})
   t.mock.method(mcpManager, 'startWatching', () => {})
   const agent = new AgentApp({
     identity,
