@@ -168,6 +168,9 @@ watch(() => props.active, active => {
   else if (!active) { request?.abort(); request = undefined; loading.value = false; previewEntry.value = null }
 })
 watch(workspaceKey, () => { previewEntry.value = null })
+watch(() => props.gitStatus, status => {
+  if (status && !status.available) changesOnly.value = false
+})
 onUnmounted(() => request?.abort())
 defineExpose({ reload })
 </script>

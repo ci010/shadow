@@ -77,4 +77,7 @@ test('Git clients use registered IDs, preserve abort signals and report server e
   assert.equal((await createGitFilesClient('http://main', 'web:chat-one').diff('src/a.ts', signal)).path, 'src/a.ts')
   t.mock.method(globalThis, 'fetch', async () => Response.json({ message: 'Git command timed out. Retry.' }, { status: 503 }))
   await assert.rejects(createGitFilesClient('http://main', '', 'project-a').status(signal), /timed out/)
+  const diagnostic = 'Git inspection failed. Check repository access and integrity; no changes were made. [Git status; stage=exit; exit=128; cause=unsafe_ownership]'
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ error: 'git_failed', message: diagnostic }, { status: 500 }))
+  await assert.rejects(createGitFilesClient('http://main', 'web:chat-fixture').status(signal), { message: diagnostic })
 })

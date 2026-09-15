@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process'
 import type { Stats } from 'node:fs'
-import { lstat, open, opendir, realpath } from 'node:fs/promises'
+import { lstat, open, opendir, realpath, stat } from 'node:fs/promises'
+import { devNull } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
+import { getSystemErrorMap } from 'node:util'
 import { structuredPatch } from 'diff'
 import type { Context } from 'hono'
 import { resolveInWorkspace } from './local-files.ts'
@@ -15,13 +17,62 @@ export const MAX_GIT_FILE_BYTES = 256 * 1024
 const MAX_FILES = 5000
 const MAX_PROCESSES = 4
 let processes = 0
+type GitOperation = 'rev-parse' | 'config' | 'ls-files' | 'status' | 'check-ignore' | 'symbolic-ref' | 'show-ref' | 'ls-tree' | 'cat-file'
+interface GitFailureDiagnostic {
+  operation: GitOperation
+  stage: 'workdir' | 'spawn' | 'execute' | 'exit'
+  osCode?: string
+  exitCode?: number | null
+  cause?: 'unsafe_ownership' | 'permission_denied' | 'invalid_configuration' | 'invalid_repository' | 'unsupported_command' | 'workdir_unavailable'
+}
+const systemErrorCodes = new Set([...getSystemErrorMap().values()].map(([name]) => name))
 export class GitReadError extends Error {
-  constructor(readonly code: string, message: string, readonly status: 400 | 404 | 409 | 413 | 500 | 503 | 504 = 500) {
-    super(message)
+  constructor(readonly code: string, message: string, readonly status: 400 | 404 | 409 | 413 | 500 | 503 | 504 = 500,
+    readonly diagnostic?: GitFailureDiagnostic) {
+    super(diagnostic ? `${message} [${[
+      `Git ${diagnostic.operation}`, `stage=${diagnostic.stage}`,
+      diagnostic.osCode ? `os=${diagnostic.osCode}` : '',
+      diagnostic.exitCode !== undefined ? `exit=${diagnostic.exitCode ?? 'none'}` : '',
+      diagnostic.cause ? `cause=${diagnostic.cause}` : '',
+    ].filter(Boolean).join('; ')}]` : message)
   }
 }
 interface GitReadContext { root: string; base: string; prefix: string; signal: AbortSignal; config: string[] }
-interface GitOutput { code: number; stdout: Buffer; stderr: string }
+interface GitOutput { operation: GitOperation; code: number | null; stdout: Buffer; stderr: string }
+
+function systemErrorCode(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+  return typeof code === 'string' && systemErrorCodes.has(code) ? code : 'UNKNOWN'
+}
+function gitFailureCause(stderr: string): GitFailureDiagnostic['cause'] {
+  // Classify diagnostics into fixed labels; never return Git's paths, config
+  // values, URLs, or arbitrary stderr in an API response or log.
+  if (/detected dubious ownership|unsafe repository/i.test(stderr)) return 'unsafe_ownership'
+  if (/permission denied|access is denied|operation not permitted/i.test(stderr)) return 'permission_denied'
+  if (/bad config|invalid config|unable to read config/i.test(stderr)) return 'invalid_configuration'
+  if (/corrupt|index file smaller|bad signature|invalid gitfile|not a git repository:|bad object|invalid object/i.test(stderr)) return 'invalid_repository'
+  if (/unknown option|unknown switch|unrecognized option|usage: git/i.test(stderr)) return 'unsupported_command'
+}
+function workdirFailure(operation: GitOperation, error: unknown, stage: 'workdir' | 'spawn' = 'workdir'): GitReadError {
+  return new GitReadError('git_cwd_unavailable', 'Git working directory is unavailable. Check folder access and retry; no changes were made.', 503,
+    { operation, stage, osCode: systemErrorCode(error), cause: 'workdir_unavailable' })
+}
+async function gitSpawnFailure(cwd: string, operation: GitOperation, error: unknown): Promise<GitReadError> {
+  const osCode = systemErrorCode(error)
+  if (osCode === 'ENOENT' || osCode === 'ENOTDIR') {
+    try {
+      if (!(await stat(cwd)).isDirectory()) return workdirFailure(operation, error, 'spawn')
+    } catch (cause) {
+      if (systemErrorCode(cause) === 'UNKNOWN') throw cause
+      return workdirFailure(operation, error, 'spawn')
+    }
+  }
+  return new GitReadError(osCode === 'ENOENT' ? 'git_unavailable' : 'git_failed',
+    osCode === 'ENOENT' ? 'Git is not installed or is unavailable on the owning device.'
+      : osCode === 'EACCES' || osCode === 'EPERM' ? 'Git inspection could not start. Check executable and folder permissions.'
+      : 'Git inspection could not start.', 503,
+    { operation, stage: 'spawn', osCode, ...(osCode === 'EACCES' || osCode === 'EPERM' ? { cause: 'permission_denied' as const } : {}) })
+}
 
 function failure(code: string, message: string, status: GitReadError['status'] = 500): never {
   throw new GitReadError(code, message, status)
@@ -54,19 +105,27 @@ async function stopTree(pid: number): Promise<void> {
     })
   })
 }
-async function git(cwd: string, args: string[], signal: AbortSignal, config: string[] = [], maxOutput = MAX_OUTPUT, input?: Buffer): Promise<GitOutput> {
+async function git(cwd: string, args: [GitOperation, ...string[]], signal: AbortSignal, config: string[] = [], maxOutput = MAX_OUTPUT, input?: Buffer): Promise<GitOutput> {
   cancelled(signal)
   if (processes >= MAX_PROCESSES) failure('git_busy', 'Too many Git inspections are running. Retry shortly.', 503)
+  const operation = args[0]
   processes++
   try {
     return await new Promise<GitOutput>((done, reject) => {
-      const child = spawn('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=',
-        '-c', 'diff.external=', '-c', 'diff.renames=true', ...config, ...args], {
-        cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32',
-        env: { ...environment(), ...(args[0] === 'check-ignore' ? { GIT_LITERAL_PATHSPECS: '0' } : {}) },
-        stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-      })
+      let child: ReturnType<typeof spawn>
+      try {
+        child = spawn('git', ['--no-pager', '-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${devNull}`,
+          '-c', 'diff.external=', '-c', 'diff.renames=true', ...config, ...args], {
+          cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32',
+          env: { ...environment(), ...(args[0] === 'check-ignore' ? { GIT_LITERAL_PATHSPECS: '0' } : {}) },
+          stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+        })
+      } catch (cause) {
+        void gitSpawnFailure(cwd, operation, cause).then(reject, reject)
+        return
+      }
       let error: Error | undefined
+      let spawnError: Error | undefined
       let stopping: Promise<void> | undefined
       let total = 0
       const stdout: Buffer[] = []
@@ -75,18 +134,18 @@ async function git(cwd: string, args: string[], signal: AbortSignal, config: str
         if (child.pid === undefined || stopping) return
         stopping = stopTree(child.pid)
         void stopping.catch(() => {
-          error = new GitReadError('git_stop_failed', 'Git inspection could not stop its process tree.', 503)
+          error = new GitReadError('git_stop_failed', 'Git inspection could not stop its process tree.', 503, { operation, stage: 'execute' })
           child.kill('SIGKILL')
         })
       }
       const timer = setTimeout(() => {
-        error = new GitReadError('git_timeout', 'Git inspection timed out. Retry with a smaller workdir.', 504)
+        error = new GitReadError('git_timeout', 'Git inspection timed out. Retry with a smaller workdir.', 504, { operation, stage: 'execute' })
         stop()
       }, 5000)
       const collect = (list: Buffer[], chunk: Buffer) => {
         total += chunk.length
         if (total > maxOutput) {
-          error = new GitReadError('git_output_limit', 'Git inspection exceeded its output limit. Choose a smaller workdir.', 413)
+          error = new GitReadError('git_output_limit', 'Git inspection exceeded its output limit. Choose a smaller workdir.', 413, { operation, stage: 'execute' })
           stop()
         } else list.push(chunk)
       }
@@ -97,9 +156,7 @@ async function git(cwd: string, args: string[], signal: AbortSignal, config: str
         child.stdin!.end(input)
       }
       child.once('error', cause => {
-        error = (cause as NodeJS.ErrnoException).code === 'ENOENT'
-          ? new GitReadError('git_unavailable', 'Git is not installed or is unavailable on the owning device.', 503)
-          : new GitReadError('git_failed', 'Git inspection could not start.', 503)
+        spawnError = cause
       })
       signal.addEventListener('abort', stop, { once: true })
       child.once('close', async code => {
@@ -109,7 +166,8 @@ async function git(cwd: string, args: string[], signal: AbortSignal, config: str
           if (stopping) await stopping
           cancelled(signal)
           if (error) throw error
-          done({ code: code ?? -1, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString('utf8') })
+          if (spawnError) throw await gitSpawnFailure(cwd, operation, spawnError)
+          done({ operation, code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString('utf8') })
         } catch (cause) {
           reject(cause instanceof GitReadError ? cause : new GitReadError('git_stop_failed', 'Git inspection could not stop its process tree.', 503))
         }
@@ -123,8 +181,17 @@ function text(bytes: Buffer): string {
   catch { return failure('git_invalid_output', 'Git returned paths that are not valid UTF-8.') }
 }
 function checked(output: GitOutput): Buffer {
-  if (output.code !== 0) failure('git_failed', 'Git inspection failed. Check repository access and integrity; no changes were made.')
+  if (output.code !== 0) throw new GitReadError('git_failed', 'Git inspection failed. Check repository access and integrity; no changes were made.', 500,
+    { operation: output.operation, stage: 'exit', exitCode: output.code, cause: gitFailureCause(output.stderr) })
   return output.stdout
+}
+export function isNonRepositoryResult(output: Pick<GitOutput, 'code' | 'stderr'>): boolean {
+  if (output.code !== 128) return false
+  // Git can write warnings before its fatal discovery diagnostic. Match the
+  // diagnostic, not the start of stderr or the broader "not a git repository:"
+  // error used for broken gitdir references.
+  const diagnostics = output.stderr.split(/\r?\n/).filter(line => /^(fatal|error):/.test(line))
+  return diagnostics.length === 1 && /^fatal: (?:not a git repository \(or any of the parent directories\): \.git|not a git repository \(or any parent up to mount point .+\)|this operation must be run in a work tree)$/.test(diagnostics[0]!)
 }
 function within(base: string, path: string): boolean {
   const rel = relative(base, path)
@@ -136,9 +203,11 @@ function relativeFile(path: string): boolean {
 async function context(base: string, inputSignal?: AbortSignal): Promise<GitReadContext | undefined> {
   const signal = AbortSignal.any([...(inputSignal ? [inputSignal] : []), AbortSignal.timeout(15_000)])
   cancelled(signal)
-  const canonical = await realpath(base)
+  let canonical: string
+  try { canonical = await realpath(base) }
+  catch (error) { throw workdirFailure('rev-parse', error) }
   const found = await git(canonical, ['rev-parse', '--show-toplevel'], signal)
-  if (found.code !== 0 && /^fatal: (not a git repository\b|this operation must be run in a work tree)/.test(found.stderr)) return
+  if (isNonRepositoryResult(found)) return
   const root = await realpath(text(checked(found)).replace(/\r?\n$/, ''))
   if (!within(root, canonical)) failure('invalid_path', 'The workdir is outside the Git working tree.', 400)
   const prefix = relative(root, canonical).replaceAll('\\', '/')

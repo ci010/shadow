@@ -1228,11 +1228,19 @@ Git status and diff endpoints dispatch `workdir.git.status` / `workdir.git.diff`
 to the owning Child. `CapabilityGit` resolves its configured workdir root and
 reuses the local read-only Git implementation, including HEAD/index/workdir
 semantics, path scoping, disabled hooks/filters, cancellation and size limits.
+Hooks are disabled with Node's platform null-device path (`os.devNull`), not an
+empty `core.hooksPath`: Git 2.55 VFS rejects the empty path even during repository
+discovery (`rev-parse`).
 Main and the renderer share validated Git response contracts. JSON results are
 bounded to 4 MiB; job output is chunked and the Child waits for transport capacity
 rather than overflowing its outbound queue. Errors, missing Git and non-repository
 folders remain distinct; none triggers Main-local Git fallback. These UI routes
 do not clone, stage, commit or switch branches.
+Read-only Git failures retain safe operation/stage, actual exit or OS codes, and
+fixed cause labels in their diagnostic message. Missing/inaccessible workdirs
+are distinct from a missing Git executable. Raw stderr, arguments, paths,
+configuration and environment values are not exposed; unexpected failures are
+not silently treated as ordinary non-repository folders.
 Authenticated Child advertisements can include bounded display-only workspace
 paths, negotiated with `workdir-display-v1`; older peers omit this optional
 metadata. The header uses current registry metadata rather than trusting a

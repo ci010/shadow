@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import childProcess, { execFile, type SpawnOptions } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { devNull } from 'node:os'
 import { join } from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import { ProcessManager } from '../agent/process-manager.ts'
@@ -36,7 +38,7 @@ function fake(output: string, completed = true) {
 
 test('remote Git uses the Child workdir for status and HEAD diff, with no prompts or Git mutation', async t => {
   const { root, folders } = await projectFixture(t)
-  const git = (...args: string[]) => exec('git', ['-c', 'core.autocrlf=false', '-c', 'core.hooksPath=',
+  const git = (...args: string[]) => exec('git', ['-c', 'core.autocrlf=false', '-c', `core.hooksPath=${devNull}`,
     '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-C', folders, ...args])
   await git('init', '--quiet')
   await mkdir(join(folders, 'inside'))
@@ -74,7 +76,11 @@ test('remote Git uses the Child workdir for status and HEAD diff, with no prompt
 
 test('remote Git reports non-repositories, invalid arguments and unknown bindings explicitly', async t => {
   const { root, folders } = await projectFixture(t)
-  await exec('git', ['init', '--bare', '--quiet', root])
+  const spawn = childProcess.spawn
+  t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: SpawnOptions) =>
+    spawn(command, args, { ...options, env: { ...options.env, GIT_CEILING_DIRECTORIES: root } }))
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
   const handler = new CapabilityGit([{ capabilityId: 'workdir', rootPath: folders }])
   const local = new LocalExecutor(new ProcessManager(), 'child', [handler])
   assert.deepEqual(await executeRemoteGit(target(local), 'status'), { status: 200, body: { available: false, reason: 'not_repository', entries: [] } })
@@ -92,6 +98,12 @@ test('remote Git reports non-repositories, invalid arguments and unknown binding
     const response = JSON.parse(await handler.execute({ ...request, args }, signal()))
     assert.equal(response.status, 400)
   }
+  await writeFile(join(folders, '.git'), 'gitdir: missing-repository\n')
+  const broken = await executeRemoteGit(target(local), 'status')
+  assert.equal(broken.status, 500)
+  assert('error' in broken.body && broken.body.error === 'git_failed')
+  assert.match(broken.body.message, /\[Git rev-parse; stage=exit; exit=128; cause=invalid_repository\]/)
+  assert(!broken.body.message.includes(root), 'Remote Git diagnostics must not expose device paths')
 })
 
 test('remote Git rejects malformed, oversized, incomplete and cross-file results without falling back', async () => {

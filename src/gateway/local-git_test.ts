@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import childProcess, { execFile, type SpawnOptions } from 'node:child_process'
+import { renameSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { devNull } from 'node:os'
 import { join } from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
 import test, { type TestContext } from 'node:test'
 import { promisify } from 'node:util'
 import { Hono } from 'hono'
-import { localGitDiff, localGitStatus, MAX_GIT_FILE_BYTES, serveLocalGit } from './local-git.ts'
+import { GitReadError, isNonRepositoryResult, localGitDiff, localGitStatus, MAX_GIT_FILE_BYTES, serveLocalGit } from './local-git.ts'
 import { projectFixture } from '../projects/test-fixtures.ts'
 import { ProjectRegistry } from '../projects/registry.ts'
 import { ProjectService } from '../projects/routes.ts'
@@ -13,6 +16,133 @@ import { sessionsApiPlugin } from '../sessions/routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 
 const exec = promisify(execFile)
+test('Git discovery classifies only absence of a worktree, including warning-prefixed Windows diagnostics', () => {
+  const absent = 'fatal: not a git repository (or any of the parent directories): .git'
+  for (const stderr of [absent, `${absent}\r\n`, `warning: fixture advisory\r\n${absent}\r\n`,
+    'fatal: not a git repository (or any parent up to mount point /fixture)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n',
+    'fatal: this operation must be run in a work tree\n']) {
+    assert.equal(isNonRepositoryResult({ code: 128, stderr }), true, stderr)
+    assert.equal(isNonRepositoryResult({ code: 1, stderr }), false)
+  }
+  for (const stderr of ["fatal: not a git repository: 'C:/fixture/broken.git'\n",
+    'fatal: invalid gitfile format: .git\n', 'fatal: detected dubious ownership in repository at C:/fixture\n',
+    'fatal: unable to access C:/fixture/.git/config: Permission denied\n', 'fatal: bad config line 1\n',
+    `error: could not read configuration\n${absent}\n`, `fatal: Permission denied\n${absent}\n`]) {
+    assert.equal(isNonRepositoryResult({ code: 128, stderr }), false, stderr)
+  }
+})
+
+test('ordinary folders return normal unavailable Git status without creating a repository', async t => {
+  const { root, folders } = await projectFixture(t)
+  // Only the test subprocess receives a discovery ceiling: the fixture is
+  // inside the developer checkout but must exercise genuine absent-repo Git.
+  const spawn = childProcess.spawn
+  t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: SpawnOptions) =>
+    spawn(command, args, { ...options, env: { ...options.env, GIT_CEILING_DIRECTORIES: root } }))
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  await writeFile(join(folders, 'ordinary.txt'), 'normal file\n')
+  const app = new Hono()
+  app.get('/git/status', c => serveLocalGit(c, folders, 'status'))
+  const result = await app.request('/git/status')
+  assert.equal(result.status, 200)
+  assert.deepEqual(await result.json(), { available: false, reason: 'not_repository', entries: [] })
+  await assert.rejects(localGitDiff(folders, 'ordinary.txt'), (error: any) => error.code === 'not_repository')
+  assert.equal(await readFile(join(folders, 'ordinary.txt'), 'utf8'), 'normal file\n')
+  await assert.rejects(readFile(join(folders, '.git')), (error: any) => error.code === 'ENOENT')
+  await writeFile(join(folders, '.git'), 'gitdir: missing-repository\n')
+  assert.equal((await app.request('/git/status')).status, 500, 'A broken gitdir is not a non-Git folder')
+  t.mock.method(childProcess, 'spawn', (_command: string, args: string[], options: SpawnOptions) =>
+    spawn(join(root, 'missing-git-executable'), args, options))
+  syncBuiltinESMExports()
+  const unavailable = await app.request('/git/status')
+  assert.equal(unavailable.status, 200)
+  assert.deepEqual(await unavailable.json(), { available: false, reason: 'git_unavailable', entries: [] },
+    'Missing Git must retain its distinct unavailable reason')
+  await assert.rejects(localGitDiff(folders, 'ordinary.txt'), error => {
+    assert(error instanceof GitReadError)
+    assert.equal(error.code, 'git_unavailable')
+    assert.deepEqual(error.diagnostic, { operation: 'rev-parse', stage: 'spawn', osCode: 'ENOENT' })
+    assert.match(error.message, /Git rev-parse; stage=spawn; os=ENOENT/)
+    return true
+  })
+})
+
+test('Git failure diagnostics expose only operation, exit code and fixed cause labels', async t => {
+  const { folders } = await projectFixture(t)
+  const spawn = childProcess.spawn
+  let stderr = ''
+  t.mock.method(childProcess, 'spawn', (_command: string, _args: string[], options: SpawnOptions) =>
+    spawn(process.execPath, ['-e', `process.stderr.write(${JSON.stringify(stderr)}); process.exit(128)`], options))
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  const cases = [
+    ['fatal: detected dubious ownership in repository at C:/private-fixture', 'unsafe_ownership'],
+    ['fatal: unable to access https://private-fixture.invalid: Permission denied', 'permission_denied'],
+    ['fatal: bad config line 7 in C:/private-fixture/config', 'invalid_configuration'],
+    ["fatal: not a git repository: 'C:/private-fixture/broken.git'", 'invalid_repository'],
+    ['error: unknown option private-fixture', 'unsupported_command'],
+    ['unexpected private-fixture diagnostic', undefined],
+  ] as const
+  const app = new Hono()
+  app.get('/git/status', c => serveLocalGit(c, folders, 'status'))
+  for (const [diagnostic, cause] of cases) {
+    stderr = `${diagnostic}\nprivate-fixture-secret=${'x'.repeat(8000)}\n`
+    const response = await app.request('/git/status')
+    const body = await response.json()
+    assert.equal(response.status, 500)
+    assert.equal(body.error, 'git_failed')
+    assert.equal(body.message, 'Git inspection failed. Check repository access and integrity; no changes were made.'
+      + ` [Git rev-parse; stage=exit; exit=128${cause ? `; cause=${cause}` : ''}]`)
+    assert(!JSON.stringify(body).includes('private-fixture'))
+    assert(!JSON.stringify(body).includes(folders))
+  }
+})
+
+test('Git spawn failures preserve safe OS codes without exposing native error messages', async t => {
+  const { folders } = await projectFixture(t)
+  let code = 'EACCES'
+  t.mock.method(childProcess, 'spawn', () => { throw Object.assign(new Error('private-fixture-secret'), { code }) })
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  for (const expected of ['EACCES', 'UNKNOWN']) {
+    code = expected === 'UNKNOWN' ? 'private-fixture-secret' : expected
+    await assert.rejects(localGitStatus(folders), error => {
+      assert(error instanceof GitReadError)
+      assert.equal(error.code, 'git_failed')
+      assert.equal(error.diagnostic?.operation, 'rev-parse')
+      assert.equal(error.diagnostic?.stage, 'spawn')
+      assert.equal(error.diagnostic?.osCode, expected)
+      assert(!error.message.includes('private-fixture'))
+      return true
+    })
+  }
+})
+
+test('a missing Git cwd is not misreported as a missing executable, including a spawn race', async t => {
+  const { root, folders } = await projectFixture(t)
+  await assert.rejects(localGitStatus(join(root, 'missing')), error => {
+    assert(error instanceof GitReadError)
+    assert.equal(error.code, 'git_cwd_unavailable')
+    assert.deepEqual(error.diagnostic, { operation: 'rev-parse', stage: 'workdir', osCode: 'ENOENT', cause: 'workdir_unavailable' })
+    assert(!error.message.includes(root))
+    return true
+  })
+  const spawn = childProcess.spawn
+  t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: SpawnOptions) => {
+    renameSync(folders, join(root, 'moved'))
+    return spawn(command, args, options)
+  })
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  await assert.rejects(localGitStatus(folders), error => {
+    assert(error instanceof GitReadError)
+    assert.equal(error.code, 'git_cwd_unavailable')
+    assert.deepEqual(error.diagnostic, { operation: 'rev-parse', stage: 'spawn', osCode: 'ENOENT', cause: 'workdir_unavailable' })
+    return true
+  })
+})
+
 async function fixture(t: TestContext, initialize = true) {
   const data = await projectFixture(t)
   // An enclosing synthetic bare repository prevents any upward discovery of
@@ -26,6 +156,33 @@ async function fixture(t: TestContext, initialize = true) {
   const commit = async () => { await git('add', '--all'); await git('commit', '--quiet', '-m', 'fixture') }
   return { ...data, git, write, commit }
 }
+
+test('Git inspection disables hooks with a nonempty null-device path compatible with VFS Git', async t => {
+  const { folders } = await fixture(t)
+  const hooks = join(folders, 'fixture-hooks')
+  await mkdir(hooks)
+  await writeFile(join(hooks, 'pre-commit'), '#!/bin/sh\necho fixture > hook-ran\n', { mode: 0o755 })
+  await exec('git', ['-C', folders, 'config', 'core.hooksPath', hooks])
+  await exec('git', ['-C', folders, 'hook', 'run', 'pre-commit'])
+  assert.equal((await readFile(join(folders, 'hook-ran'), 'utf8')).trim(), 'fixture')
+  await rm(join(folders, 'hook-ran'))
+  const spawn = childProcess.spawn
+  let discoveryFlags: string[] | undefined
+  t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: SpawnOptions) => {
+    assert.equal(command, 'git')
+    assert(args.includes(`core.hooksPath=${devNull}`))
+    assert(!args.includes('core.hooksPath='), 'VFS Git rejects an empty hooks path even during rev-parse')
+    const discovery = args.indexOf('rev-parse')
+    if (discovery >= 0) discoveryFlags = args.slice(0, discovery)
+    return spawn(command, args, options)
+  })
+  syncBuiltinESMExports()
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+  assert.equal((await localGitStatus(folders)).available, true)
+  assert(discoveryFlags)
+  await exec('git', [...discoveryFlags, '-C', folders, 'hook', 'run', '--ignore-missing', 'pre-commit'])
+  await assert.rejects(readFile(join(folders, 'hook-ran')), { code: 'ENOENT' })
+})
 
 test('Git compares HEAD to current workdir, combining staged and unstaged edits without mutation', async t => {
   const { folders, write, commit, git } = await fixture(t)
@@ -168,7 +325,13 @@ test('configured filter and fsmonitor commands are not executed and Git failures
   await assert.rejects(readFile(join(folders, 'filter-ran')))
   await assert.rejects(readFile(join(folders, 'monitor-ran')))
   await writeFile(join(folders, '.git', 'index'), 'corrupt index')
-  await assert.rejects(localGitStatus(folders), (error: any) => error.code === 'git_failed')
+  await assert.rejects(localGitStatus(folders), error => {
+    assert(error instanceof GitReadError)
+    assert.equal(error.code, 'git_failed')
+    assert.deepEqual(error.diagnostic, { operation: 'ls-files', stage: 'exit', exitCode: 128, cause: 'invalid_repository' })
+    assert(!error.message.includes(folders))
+    return true
+  })
 })
 
 test('conflicted files compare current conflict markers with HEAD without changing the index', async t => {

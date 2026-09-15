@@ -34,14 +34,23 @@ test('Git polling cancels old identities and hidden panes, preserving explicit f
   await pending
   assert.equal(state.error.value, 'Git unavailable')
   assert.equal(state.status.value?.entries[0]!.path, 'current.ts')
+  const recovered = state.refresh()
+  requests[3]!.finish(Response.json({ available: false, reason: 'not_repository', entries: [] }))
+  await recovered
+  assert.equal(state.error.value, '', 'An ordinary folder clears any prior Git failure')
+  assert.deepEqual(state.status.value, { available: false, reason: 'not_repository', entries: [] })
+  const failedAgain = state.refresh()
+  requests[4]!.finish(Response.json({ message: 'Git unavailable' }, { status: 503 }))
+  await failedAgain
+  assert.equal(state.error.value, 'Git unavailable', 'A real failure must remain visible after a non-repository result')
   void state.refresh()
   assert.equal(state.error.value, 'Git unavailable', 'Retain the error while retrying rather than flickering clean')
   active.value = false
   await nextTick()
-  assert.equal(requests[3]!.signal.aborted, true)
+  assert.equal(requests[5]!.signal.aborted, true)
   assert.equal(state.loading.value, false)
   source.projectId = 'third'
   await nextTick()
-  assert.equal(requests.length, 4, 'Hidden workdirs must not start Git reads')
+  assert.equal(requests.length, 6, 'Hidden workdirs must not start Git reads')
   assert.equal(state.status.value, undefined)
 })

@@ -162,6 +162,25 @@ test('empty root and nested directories stay blank while retaining their loaded 
   }
 })
 
+test('a workdir losing Git returns from Changes to its normal file tree', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTree', {
+    ...base, treeOnly: true, gitStatus: { available: true, entries: [{ path: 'changed.txt', status: 'modified' }] },
+  })
+  pending[0]!.finish({ path: '', entries: [entry] })
+  await settle()
+  state().changesOnly = true
+  await nextTick()
+  assert.equal(state().displayEntries[0].name, 'changed.txt')
+  props.gitStatus = { available: false, reason: 'not_repository', entries: [] }
+  await nextTick()
+  assert.equal(state().changesOnly, false)
+  assert.deepEqual(state().displayEntries, [entry])
+  assert.equal(state().loaded, true)
+  assert.equal(state().error, '')
+  assert.equal(pending.length, 1, 'Git availability must not reset the loaded files')
+})
+
 test('refresh retains loaded root entries and preview while reconciling unchanged data', async t => {
   const pending = requests(t)
   const { state } = mount(t, 'FileTree', { ...base, previewOnOpen: true })
