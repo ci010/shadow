@@ -1,8 +1,9 @@
 import type { Hono } from 'hono'
-import { extname, join, normalize, resolve } from 'node:path'
+import { extname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { readFile as nodeReadFile } from 'node:fs/promises'
 import { statSync } from 'node:fs'
 import type { GatewayPlugin } from './types.ts'
+import { isBackendPath } from './route-kind.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -67,18 +68,15 @@ export function uiPlugin(distDir: string): GatewayPlugin {
       const path = new URL(c.req.url).pathname
 
       // Don't shadow backend routes \u2014 let them 404 normally.
-      if (
-        path.startsWith('/v1/') ||
-        path.startsWith('/api/') ||
-        path.startsWith('/debug/')
-      ) {
+      if (isBackendPath(path)) {
         return c.notFound()
       }
 
       // Resolve requested file inside dist; reject path traversal.
       const rel = path === '/' ? 'index.html' : path.replace(/^\/+/, '')
       const filePath = normalize(join(root, rel))
-      if (!filePath.startsWith(root)) {
+      const scopedPath = relative(root, filePath)
+      if (isAbsolute(scopedPath) || scopedPath === '..' || scopedPath.startsWith('../') || scopedPath.startsWith('..\\')) {
         return c.text('Forbidden', 403)
       }
 
@@ -88,6 +86,7 @@ export function uiPlugin(distDir: string): GatewayPlugin {
 
       // SPA fallback: unknown route \u2192 index.html
       if (!body) {
+        if (path.startsWith('/assets/')) return c.notFound()
         body = await readFile(join(root, 'index.html'))
         ext = '.html'
         entryPage = true

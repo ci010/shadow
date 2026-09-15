@@ -52,6 +52,12 @@ When Chrome DevTools is imported automatically or explicitly:
 For parallel sessions (subagents), each gets its own port and isolated user
 data directory automatically — no manual allocation needed.
 
+In organization runtimes (including the default organization), profiles are
+fresh and private to the session. Host browser cookies, credentials, and profiles
+are never copied. Sign in separately if needed. Both tool sets reuse the same
+managed browser within a session; sleeping releases only that session's browser.
+Do not attach a manually launched browser or copy a host profile as a workaround.
+
 ## Tool sets
 
 ### Default (`chrome-devtools`)
@@ -100,21 +106,29 @@ testing, comparing sites), see `references/parallel-sessions.md`.
 
 ## Troubleshooting (advanced)
 
-If auto-launch fails, the error message will include the executable path,
-port, and user data directory that were attempted. Common fixes:
+If auto-launch fails, read the returned error. Common fixes:
 
 1. **Browser not found**: Set `tools.chrome.executablePath` in
-   `bot.config.json` to the correct browser path, or ask the user.
+   the organization's configuration to the correct browser path, or ask the user.
 2. **Port conflict**: The system auto-allocates ports, but if you need a
    specific port, pass it explicitly:
    ```
   import_tool(source="v:tools/chrome-devtools", args=["--remote-debugging-port=9223"])
    ```
-3. **Profile isolation**: To use a specific user data directory:
+3. **Organization connection/config errors**: Remove external endpoint,
+   auto-connect, profile, and launch flags from the import and the organization's
+   `.chrome-devtools.json`. Only a managed `--remote-debugging-port` and the
+   reviewed category/telemetry switches listed in `references/mcp-args.md` are
+   accepted. Occupied ports are rejected, never attached.
+
+The following manual options are **legacy non-organization usage only**; they
+are rejected by organization runtimes, including the default organization:
+
+1. **Explicit profile**: To use a specific user data directory:
    ```
   import_tool(source="v:tools/chrome-devtools", args=["--user-data-dir=<path>"])
    ```
-4. **Manual browser launch**: If auto-launch keeps failing, launch the browser
+2. **Manual browser launch**: Launch the browser
    manually with `--remote-debugging-port=9222`, then save config:
    ```json
    // workspace/.chrome-devtools.json
@@ -123,5 +137,6 @@ port, and user data directory that were attempted. Common fixes:
 
 ## MCP server options
 
-For the full list of CLI flags (viewport, proxy, headless, categories, etc.),
-see `references/mcp-args.md`.
+See `references/mcp-args.md` for the managed allowlist and the separate upstream
+CLI reference. Upstream support does not imply an option is permitted in an
+organization runtime.

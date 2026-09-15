@@ -14,3 +14,10 @@ export interface ChannelSetupStatus {
   config: Record<string, string | boolean | number | string[]>
   secrets: Record<string, boolean>
 }
+
+export interface BotInstanceStatus extends Omit<ChannelSetupStatus, 'id'> {
+  id: string
+  organizationId: string
+  platform: ChannelId
+  displayName: string
+}

@@ -30,7 +30,7 @@
         <p v-if="!hasSource" class="file-tree-note">Open a project folder or select a conversation to browse files.</p>
         <p v-else-if="changesOnly && gitLoading" class="file-tree-note" role="status">Loading changes...</p>
         <p v-else-if="changesOnly && !gitStatus?.available" class="file-tree-note">{{ gitUnavailableLabel(gitStatus?.reason) }}</p>
-        <p v-else-if="!changesOnly && loading && !loaded" class="file-tree-note" role="status">Loading files...</p>
+        <p v-else-if="!changesOnly && loading && !loaded" class="file-tree-note" role="status">{{ remote ? 'Loading remote files...' : 'Loading files...' }}</p>
         <div v-if="!changesOnly && error" class="file-tree-note error" role="alert">
           <p>{{ error }}</p><button class="btn btn-sm" @click="reload">Retry</button>
         </div>
@@ -59,7 +59,7 @@ import { changedDirectory, gitUnavailableLabel, type GitStatus } from '../../git
 import type { OpenFile } from '../../file-workbench.ts'
 import { canRetainHomeTree, fileEntryKey, fileWorkspaceKey, reconcileFileEntries, type FileTreeSource } from '../../file-tree-state.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; projectId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string }>(), { active: true })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; projectId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string; remote?: boolean }>(), { active: true, remote: false })
 const emit = defineEmits<{ open: [payload: OpenFile]; 'refresh-git': [] }>()
 const id = `file-tree-${useId()}`
 const changesOnly = ref(false)

@@ -204,7 +204,8 @@ export async function terminateProcessTree(
 ): Promise<ManagedProcessStatus> {
   const closed = () => (child.exitCode !== null || child.signalCode !== null)
     && (!child.stdout || child.stdout.destroyed) && (!child.stderr || child.stderr.destroyed)
-  if (child.pid !== undefined && !closed()) {
+  // A closed foreground shell can still leave children with redirected stdio.
+  if (child.pid !== undefined && (!closed() || (isolated && !isWindows))) {
     if (isWindows) {
       try {
         await promisify(execFile)(

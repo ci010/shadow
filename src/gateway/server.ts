@@ -23,6 +23,11 @@ export class GatewayClientAddressRegistry {
   resolve(request: Request): string {
     return this.#addresses.get(request) ?? ''
   }
+
+  inherit(source: Request, target: Request): void {
+    const address = this.#addresses.get(source)
+    if (address) this.#addresses.set(target, address)
+  }
 }
 
 export interface GatewayRouteOptions {

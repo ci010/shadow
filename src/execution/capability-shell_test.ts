@@ -7,7 +7,8 @@ import { ProcessManager } from '../agent/process-manager.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { CapabilityShell, parseWorkdirProcessArgs, WORKDIR_PROCESS_EXECUTE_OPERATION } from './capability-shell.ts'
 import { LocalExecutor } from './local-executor.ts'
-import { InMemoryLocalApprovalService } from './local-approval.ts'
+import { InMemoryLocalApprovalService, type LocalApprovalPolicy } from './local-approval.ts'
+import { CapabilityFilesystem } from './capability-filesystem.ts'
 import { RemoteExecutor } from './remote-executor.ts'
 import { executeRemoteShell } from './remote-shell-client.ts'
 import type { JobEventV1, JobRequestV1 } from './contracts.ts'
@@ -37,10 +38,11 @@ async function until(predicate: () => boolean): Promise<void> {
   assert.fail('Condition not reached')
 }
 
-function setup(root: string) {
+function setup(root: string, policy: LocalApprovalPolicy = 'grant') {
   const manager = new ProcessManager()
-  const approval = new InMemoryLocalApprovalService([{ capabilityId: 'root', displayName: 'Child project', policy: 'grant' }])
-  const local = new LocalExecutor(manager, 'child', [new CapabilityShell([{ capabilityId: 'root', rootPath: root }])], [], approval)
+  const approval = new InMemoryLocalApprovalService([{ capabilityId: 'root', displayName: 'Child project', policy }])
+  const workdirs = [{ capabilityId: 'root', rootPath: root }]
+  const local = new LocalExecutor(manager, 'child', [new CapabilityShell(workdirs), new CapabilityFilesystem(workdirs)], [], approval)
   const requests: JobRequestV1[] = []
   const events: JobEventV1[] = []
   const remote = new RemoteExecutor({
@@ -93,6 +95,28 @@ test('workdir shell requires a Child approval authority even when wire approval 
   })
 })
 
+test('trusted Child executes shell, file writes and reads without an approval roundtrip', async () => {
+  await withTempWorkspace(async root => {
+    const fixture = setup(root, 'none')
+    const output = await executeRemoteShell({
+      executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
+    }, { script: 'echo trusted-node' }, 10_000)
+    assert.match(output, /trusted-node/)
+    for (const [operation, args] of [
+      ['filesystem.write', { path: 'trusted.txt', content: 'trusted-files' }],
+      ['filesystem.read', { path: 'trusted.txt' }],
+    ] as const) {
+      const events = await collect(fixture.local.execute(request(args, { operation }), new AbortController().signal))
+      assert.equal(events.at(-1)?.type, 'completed')
+      assert(!events.some(event => event.type === 'awaiting-approval'))
+      if (operation === 'filesystem.read') assert(events.some(event => event.type === 'stdout' && event.chunk.includes('trusted-files')))
+    }
+    assert(!fixture.events.some(event => event.type === 'awaiting-approval'))
+    assert.deepEqual(fixture.approval.listPending(), [])
+    assert.deepEqual(fixture.approval.listGrants(), [])
+  })
+})
+
 test('remote shell waits for local approval, uses Child root, preserves stderr and nonzero receipts', async () => {
   await withTempWorkspace(async root => {
     const fixture = setup(root)
@@ -123,9 +147,16 @@ test('remote shell waits for local approval, uses Child root, preserves stderr a
   })
 })
 
-test('remote shell timeout and cancellation await owned process cleanup and keep partial output', async () => {
+test('remote shell timeout and cancellation await owned process cleanup and keep partial output', async (t) => {
+  const killedGroups: number[] = []
+  const kill = process.kill.bind(process)
+  t.mock.method(process, 'kill', (pid: number, signal?: NodeJS.Signals | number) => {
+    if (pid < 0 && signal === 'SIGKILL') killedGroups.push(pid)
+    return kill(pid, signal)
+  })
   await withTempWorkspace(async root => {
     for (const mode of ['deadline', 'cancel'] as const) {
+      killedGroups.length = 0
       const fixture = setup(root)
       const controller = new AbortController()
       const pending = executeRemoteShell({
@@ -146,6 +177,7 @@ test('remote shell timeout and cancellation await owned process cleanup and keep
       assert.notEqual(owned.exitedAt, undefined)
       assert.equal(fixture.manager.list().length, 0)
       assert.equal(fixture.events.filter(event => 'receipt' in event).length, 1)
+      if (process.platform !== 'win32') assert.deepEqual(killedGroups, [-owned.pid])
     }
   })
 })

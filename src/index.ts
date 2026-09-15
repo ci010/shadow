@@ -2,7 +2,6 @@ import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { readFile, stat as nodeStat, writeFile as nodeWriteFile } from 'node:fs/promises'
 import process from 'node:process'
-import { env } from 'node:process'
 import { getOs } from './utils/runtime.ts'
 import { Hono } from 'hono'
 import { AgentTypesManager } from './agent/agent-types/manager.ts'
@@ -36,9 +35,11 @@ import { McpManager } from './mcp/manager.ts'
 import { SessionManager } from './sessions/session-manager.ts'
 import { JsonlSessionStore } from './sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from './sessions/session-store-sqlite.ts'
+import type { SessionStore } from './sessions/session-store.ts'
 import { localProjectWorkdirRef, type WorkdirCapabilityLookup } from './sessions/locality.ts'
-import { ProjectRegistry } from './projects/registry.ts'
+import { ProjectError, ProjectRegistry } from './projects/registry.ts'
 import { ProjectService } from './projects/routes.ts'
+import { projectAccessMiddleware } from './projects/access.ts'
 import { SkillsManager } from './skills/loader.ts'
 import { BackgroundTaskTool, ContinuationTool } from './tools/background.ts'
 import { CommandHandlerManager } from './tools/commands/command-handler.ts'
@@ -63,6 +64,7 @@ import { ExecTool } from './tools/shell.ts'
 import { SubagentTool } from './tools/subagent.ts'
 import { YieldTool } from './tools/yield.ts'
 import { remoteSessionPlugin } from './sessions/remote-session-routes.ts'
+import { RemoteProjectOwnership } from './projects/remote-ownership.ts'
 import {
   createBgTasksHandler,
   createEventsHandler,
@@ -74,22 +76,13 @@ import { VirtualFs } from './vfs/virtual-fs.ts'
 
 import { Bus } from './bus/bus.ts'
 import { ChannelManager } from './channels/manager.ts'
-import { channelSetupPlugin } from './channels/setup.ts'
+import { botSetupPlugin } from './channels/bot-setup.ts'
+import { BotInstanceStore } from './channels/bot-store.ts'
 import { loadConfig } from './config/loader.ts'
-import { configPlugin } from './config/routes.ts'
-import { ConfigStore } from './config/store.ts'
+import { organizationConfigPlugin } from './organizations/config-routes.ts'
 import { EventService } from './events/service.ts'
 import { CronService } from './cron/service.ts'
 
-import {
-  GatewayClientAddressRegistry,
-  registerGatewayRoutes,
-  resolveLaunchCredential,
-  serveGateway,
-  validateLaunchCredential,
-} from './gateway/server.ts'
-import { devProxyPlugin } from './gateway/dev-proxy.ts'
-import { uiPlugin } from './gateway/ui.ts'
 import { OtelStore } from './otel/store.ts'
 import { initializeNodeTelemetry } from './otel/runtime.ts'
 import { otelPlugin } from './otel/routes.ts'
@@ -100,8 +93,6 @@ import {
 import { parseModelSpec } from './providers/aggregated.ts'
 import { MODEL_CONTEXT_WINDOWS, resolveContextWindow } from './providers/model-registry.ts'
 import { providerPlugin } from './providers/routes.ts'
-import { CopilotAuthenticator } from './providers/copilot.ts'
-import { ProviderSetup } from './providers/setup.ts'
 import { sessionsApiPlugin } from './sessions/routes.ts'
 import { registerEvalBridgeRoute } from './eval/bridge.ts'
 import { SearchTool } from './tools/search.ts'
@@ -119,18 +110,18 @@ import {
   type BackendProcessHooks,
   parseBackendCliArguments,
 } from './runtime/backend-cli.ts'
-import { LocalRuntimeControl } from './runtime/local-control.ts'
-import { authorizeMainNodeInventory, mainLocalNodeInventory } from './runtime/node-inventory.ts'
 import {
   type ProcessEntryResult,
   runProcessEntry,
 } from './runtime/process-entry.ts'
-import {
-  createMainCluster,
-  MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
-} from './cluster/main-cluster.ts'
-import { AtomicFileRegistrySnapshotAdapter } from './cluster/persistence.ts'
 import { startProductionChildRuntime } from './runtime/production-child.ts'
+import { startOrganizationHost } from './organizations/host.ts'
+import type { OrganizationRuntime, OrganizationRuntimeDependencies } from './organizations/runtime.ts'
+import { migrateSessionOrganizations } from './organizations/session-migration.ts'
+import { EvalBridgeRuntime } from './eval/bridge.ts'
+import { DEFAULT_ORGANIZATION_ID } from './organizations/contracts.ts'
+import { OrganizationExecutor } from './organizations/executor.ts'
+import { LearningService } from './agent/learning.ts'
 
 export interface MainRuntimeHandle {
   readonly ready: Promise<void>
@@ -192,47 +183,56 @@ export async function startMainRuntime(
   config: Config,
   options: MainRuntimeOptions = {},
 ): Promise<MainRuntimeHandle> {
-  const configPath = options.configPath
-  const workspace = config.agent.workspace
-  const selfCodeRoot = await resolveSelfCodeRoot(workspace)
+  return startOrganizationHost(config, options, createOrganizationRuntime, await resolveSelfCodeRoot(config.agent.workspace))
+}
 
-  console.info(
-    `[main] Starting bot: workspace=${workspace}, model=${config.agent.model}`,
-  )
+export async function createOrganizationRuntime(
+  config: Config,
+  dependencies: OrganizationRuntimeDependencies,
+): Promise<OrganizationRuntime> {
+  const { scope, organization, mainCluster, copilotAuth, configStore } = dependencies
+  const workspace = config.agent.workspace
+  const selfCodeRoot = dependencies.selfCodeRoot
+  const cleanup: Array<() => unknown> = []
 
   // ── Create core components ────────────────────────────────
   const bus = new Bus()
+  cleanup.push(() => bus.stopAll())
   bus.declareQueue('message.outbound')
   let deliverInput: import('./sessions/input.ts').DeliverInput = async () => {
     throw new Error('Session delivery is not ready')
   }
   const events = new EventService(workspace, bus, (sessionId, input) => deliverInput(sessionId, input))
-  await events.start()
-  const copilotAuth = new CopilotAuthenticator()
+  cleanup.push(() => events.stop())
   let provider = createAggregatedProvider(config, copilotAuth)
   let activeConfig = config
   const backgroundTasks = new BackgroundTaskManager(bus, events)
+  cleanup.push(() => backgroundTasks.stop())
 
   // OTel ingest/query store (formerly the standalone observer in app/)
-  const otelDbPath = env.OTEL_DB_PATH ??
-    workspacePath(workspace, '.otel.db')
+  const otelDbPath = workspacePath(workspace, '.otel.db')
   const otelStore = new OtelStore(otelDbPath)
-  const telemetry = initializeNodeTelemetry(otelStore)
+  const telemetry = initializeNodeTelemetry(otelStore, { scope, organizationId: organization.id })
   let telemetryShutdown: Promise<void> | undefined
   const closeTelemetry = () => {
     telemetryShutdown ??= telemetry.shutdown().finally(() => otelStore.close())
     return telemetryShutdown
   }
   console.info(`[main] OTel store: ${otelDbPath}`)
+  console.info(`[organization:${organization.id}] Starting: workspace=${workspace}, model=${config.agent.model}`)
 
+  cleanup.push(closeTelemetry)
   try {
+    await events.start()
     return await startServices()
   } catch (error) {
-    await closeTelemetry()
+    for (const close of cleanup.reverse()) {
+      try { await close() } catch (cleanupError) { console.error('[organization] Startup cleanup failed', cleanupError) }
+    }
     throw error
   }
 
-  async function startServices(): Promise<MainRuntimeHandle> {
+  async function startServices(): Promise<OrganizationRuntime> {
   // ── Build tool registry ─────────────────────────────────────────────
   const vfs = new VirtualFs()
   const tools = new Tools(workspace)
@@ -249,48 +249,47 @@ export async function startMainRuntime(
   // ── Execution hooks ───────────────────────────────────────────────
   tools.addHook(new MemoryLinkCheckHook(workspace))
 
-  const identity = new IdentityManager(workspace)
+  const identity = new IdentityManager(workspace, organization.id)
 
   // ── Create gateway app early so we can pass it to Agent ──
   const app = new Hono()
-  const clientAddresses = new GatewayClientAddressRegistry()
-  const launchCredential = resolveLaunchCredential(
-    options.gateway?.launchCredential,
-    env.GATEWAY_LAUNCH_CREDENTIAL,
-    env.WINDOWS_USE_LAUNCH_TOKEN,
-  )
-  const mainCluster = await createMainCluster({
-    authorizeInventory: (request) =>
-      authorizeMainNodeInventory(request, launchCredential, clientAddresses),
-    localNodeInventory: () => mainLocalNodeInventory({
-      localNodeId: options.localNodeId ?? 'local',
-      implementationVersion: '0.1.0',
-      projects: projectRegistry,
-      shellAvailable: tools.has('exec'),
-    }),
-    snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(
-      options.clusterSnapshotPath ??
-        resolve(workspace, '.cluster', 'registry.v1.json'),
-    ),
-    localHello: {
-      protocolMajor: 1,
-      protocolMinor: 0,
-      implementationVersion: '0.1.0',
-      features: ['jobs-v1', 'capabilities-v1'],
-    },
-    authorizeOfferCreation: (request) =>
-      launchCredential
-        ? validateLaunchCredential(
-          request.headers.get('Authorization') ?? undefined,
-          launchCredential,
-        )
-        : false,
-    clientKey: (request) => clientAddresses.resolve(request),
-  })
-  const projectRegistry = new ProjectRegistry(resolve(workspace))
+  app.use('*', (_c, next) => scope.run(next))
+  const evalBridge = new EvalBridgeRuntime({ organizationId: organization.id, scope, gatewayBaseUrl: dependencies.gatewayBaseUrl })
+  cleanup.push(() => evalBridge.shutdown())
+  const projectRegistry = new ProjectRegistry(resolve(workspace), { organizationId: organization.id, catalog: dependencies.catalog })
   await projectRegistry.init()
-  const workdirCapabilityLookup: WorkdirCapabilityLookup = (ref) =>
-    projectRegistry.lookupWorkdir(ref) ?? mainCluster.workdirCapabilityLookup(ref)
+  app.use('*', projectAccessMiddleware(projectRegistry))
+  const ownsWorkdir = (ref: import('./sessions/locality.ts').WorkdirRefV1): boolean => {
+    if (projectRegistry.lookupWorkdir(ref)?.capability) return true
+    if (projectRegistry.ownsRemoteWorkdir(ref)) return true
+    if (projectRegistry.isRetiredWorkdir(ref)) return false
+    return sessions.listSessions().some(session => {
+      const workdir = sessions.getSessionState(session.sessionId)?.workdir
+      return workdir?.nodeId === ref.nodeId && workdir.capabilityId === ref.capabilityId
+    })
+  }
+  const workdirCapabilityLookup: WorkdirCapabilityLookup = ref =>
+    projectRegistry.lookupWorkdir(ref) ?? (ownsWorkdir(ref) ? mainCluster.workdirCapabilityLookup(ref) : { node: 'online' })
+  const remoteExecutor = new OrganizationExecutor(organization.id, mainCluster.remoteExecutor, request => {
+    if (request.sessionId === `project-identity:${organization.id}` && request.operation === 'workdir.identity') return
+    if (request.sessionId.startsWith('project:')) {
+      if (!projectRegistry.get(request.sessionId.slice('project:'.length))) {
+        throw new ProjectError('project_access_revoked', 'This folder is no longer available to this organization.', 409)
+      }
+    } else {
+      sessions.assertProjectAccess(request.sessionId)
+    }
+    if (!ownsWorkdir({ version: 1, nodeId: request.nodeId, capabilityId: request.capabilityId })) {
+      throw new ProjectError('project_access_revoked', 'This folder is no longer available to this organization.', 409)
+    }
+  }, (jobId, pending) => dependencies.catalog.recordRemoteJob(organization.id, jobId, pending))
+  projectRegistry.configureRemote(new RemoteProjectOwnership({
+    organizationId: organization.id,
+    catalog: dependencies.catalog,
+    executor: remoteExecutor,
+    lookup: mainCluster.workdirCapabilityLookup,
+    capability: ref => mainCluster.registry.listCapabilities(ref.nodeId).find(capability => capability.capabilityId === ref.capabilityId),
+  }))
 
   const execConfig = config.tools.exec
 
@@ -372,30 +371,16 @@ export async function startMainRuntime(
   )
   // Chrome config getter that re-reads from the config file so edits take effect
   // without a process restart (e.g. user sets tools.chrome.executablePath).
-  let cachedChromeConfig = config.tools.chrome ?? { basePort: 9222 }
-  let chromeConfigMtime = 0
   const chromeConfigGetter = (): {
     executablePath?: string
     basePort: number
   } => {
-    // Async re-read on next allocate() isn't possible from a sync getter,
-    // so we fire-and-forget a background refresh keyed on config file mtime.
-    const cfgPath = configPath
-    if (cfgPath) {
-      nodeStat(cfgPath).then(async (stat) => {
-        const mtime = stat.mtime?.getTime() ?? 0
-        if (mtime > chromeConfigMtime) {
-          chromeConfigMtime = mtime
-          try {
-            const fresh = await loadConfig(cfgPath)
-            cachedChromeConfig = fresh.tools.chrome ?? { basePort: 9222 }
-          } catch { /* keep previous */ }
-        }
-      }).catch(() => {})
-    }
-    return cachedChromeConfig
+    return activeConfig.tools.chrome ?? { basePort: 9222 }
   }
-  const chromeManager = new ChromeManager(workspace, chromeConfigGetter)
+  const chromeManager = new ChromeManager(workspace, chromeConfigGetter, {
+    organizationId: organization.id, portAllocator: dependencies.chromePortAllocator,
+  })
+  cleanup.push(() => chromeManager.releaseAll())
   const chromeDevToolsEntry: McpLoadable = {
     config: chromeDevToolsConfig,
     configPath: chromeDevToolsConfigPath,
@@ -460,12 +445,12 @@ export async function startMainRuntime(
   }
   await writePulse()
   const pulseTimer = setInterval(writePulse, 60_000)
+  cleanup.push(() => clearInterval(pulseTimer))
   bus.emit('app.lifecycle', { action: 'start' })
 
   // ── Create agent services ───────────────────────────────────────────
   const primaryProvider = resolvePrimaryProviderName(config.agent.model)
-  const quickModel = config.providers[primaryProvider]?.quickModel ??
-    config.agent.quickModel
+  const quickModel = config.agent.quickModel
   let llm = createLlmRuntimeConfig(config)
 
   const memory = new MemoryStore(workspace)
@@ -473,12 +458,16 @@ export async function startMainRuntime(
   tools.register(new ConventionTool(memory))
   const skills = new SkillsManager(workspace)
   const agentTypes = new AgentTypesManager(workspace)
+  cleanup.push(() => skills.stopWatching())
+  cleanup.push(() => agentTypes.stopWatching())
   const sessionsDir = workspacePath(workspace, '.sessions')
-  const sessionStore = config.agent.sessionStorage === 'sqlite'
+  const sessionStore: SessionStore = config.agent.sessionStorage === 'sqlite'
     ? new SqliteSessionStore(sessionsDir)
     : new JsonlSessionStore(sessionsDir)
 
   await sessionStore.init()
+  cleanup.push(() => sessionStore.close?.())
+  await migrateSessionOrganizations(sessionStore, organization.id)
 
   const handoffManager = new HandoffManager(
     provider,
@@ -492,9 +481,17 @@ export async function startMainRuntime(
     workspace,
     sessionStore,
   )
+  cleanup.push(() => handoffManager.stop())
 
   const context = new ContextBuilder(workspace)
   const sessions: SessionManager = new SessionManager({
+    organizationId: organization.id,
+    scope,
+    ownsProject: id => !!projectRegistry.get(id),
+    ownsWorkdir,
+    assertSessionProject: state => projectRegistry.assertSessionProject(state),
+    acquireProjectAccess: () => projectRegistry.acquireAccess(),
+    evalBridge,
     workspace,
     store: sessionStore,
     handoffManager,
@@ -519,9 +516,21 @@ export async function startMainRuntime(
         MODEL_CONTEXT_WINDOWS[model] ?? null
     },
     workdirCapabilityLookup,
-    remoteExecutor: mainCluster.remoteExecutor,
+    remoteExecutor,
+    getNodeInventory: () => {
+      const inventory = mainCluster.getNodeInventory()
+      return {
+        ...inventory,
+        nodes: inventory.nodes.map(node => ({
+          ...node,
+          capabilities: node.capabilities.filter(capability => capability.kind !== 'workdir' ||
+            ownsWorkdir({ version: 1, nodeId: node.role === 'main' ? 'local' : node.nodeId, capabilityId: capability.capabilityId })),
+        })).filter(node => node.role === 'main' || node.capabilities.some(capability => capability.kind === 'workdir')),
+      }
+    },
     onSessionStopped: (id) => backgroundTasks.handleSessionStopped(id),
   })
+  cleanup.push(() => sessions.stop())
   deliverInput = (sessionId, input) => sessions.deliver(sessionId, input)
 
   context.register(guidelineProvider())
@@ -529,10 +538,12 @@ export async function startMainRuntime(
     workspaceProvider(workspace, vfs, workdirCapabilityLookup),
   )
   context.register(runtimeIdentityProvider({
+    organizationId: organization.id,
     identity,
+    getOrganizationNodeInventory: id => id === organization.id ? sessions.getNodeInventory() : undefined,
     getSkillsSummary: (admin) => skills.getMetadataSummary(admin) || '',
     getAgentTypesSummary: () => agentTypes.getAgentTypesSummary(),
-    getChannelCapabilities: (channel, chatId) => channels.getCapabilities(channel, chatId),
+    getChannelCapabilities: (channel, chatId, address) => channels.getCapabilities(channel, chatId, address),
     getActiveSubagents: (parentSessionId) =>
       sessions.getChildren(parentSessionId) ?? Promise.resolve([]),
   }))
@@ -542,7 +553,8 @@ export async function startMainRuntime(
     (sid) => sessions.getSessionState(sid)?.projectName ?? undefined,
   ))
 
-  const mcpManager = new McpManager(tools, [], workspace)
+  const mcpManager = new McpManager(tools, [], workspace, configStore.configPath)
+  cleanup.push(() => mcpManager.stopWatching())
 
   // ── Virtual filesystem mounts ─────────────────────────────────────────
 
@@ -583,6 +595,7 @@ export async function startMainRuntime(
   // ── Create agent loop ──────────────────────────────────────────────
   const commandDispatcher = new CommandDispatcher()
   const agent = new AgentApp({
+    identity,
     bus,
     sessions,
     skills,
@@ -653,100 +666,72 @@ export async function startMainRuntime(
     events.unsubscribeByCronJob(jobId)
   })
 
-  // ── Learning pipelines ──────────────────────────────────────────────
-  // All pipelines use bus.poll: buffer events over an interval, aggregate in handler.
-
-  // Observe accepted activity, never the input delivery transport.
-  bus.poll<'session.input.accepted', Set<string>>(
-    'session.input.accepted',
-    {
-      intervalMs: config.learning.reflectIntervalMs,
-      init: () => new Set<string>(),
-      reduce: (acc, e) => {
-        if (!e.sessionId.startsWith('sleep:') && !e.sessionId.startsWith('heartbeat:')) {
-          acc.add(e.sessionId)
-        }
-        return acc
-      },
+  const learning = new LearningService(bus, scope, {
+    reflector: signal => {
+      signal.throwIfAborted()
+      return triggerReflectorFlush(sessions, signal)
     },
-    (sessionKeys) => {
-      if (sessionKeys.size === 0) return
-      // The aggregated keys just signal "activity happened"; the watermark diff
-      // determines exactly which sessions' increments to flush (dedup).
-      return triggerReflectorFlush(sessions)
-    },
-  )
-
-  // Encapsulator: poll reflector completions, drain every encapsulateIntervalMs
-  bus.poll(
-    'session.ended',
-    { intervalMs: config.learning.encapsulateIntervalMs },
-    (events) => {
-      if (!events.some((e) => e.agentType === 'reflector')) return
+    encapsulator: signal => {
       const today = new Date().toISOString().slice(0, 10)
       return sessions.startSession({
+        signal,
         channel: 'heartbeat',
         agentType: 'encapsulator',
         task:
           `Encapsulate: read event log at memory/events/${today}.jsonl and referenced wiki items. Encapsulate recurring complexity into a skill, tool/CLI, or dedicated agent.`,
       })
     },
-  )
-
-  // Soul-reflector: poll reflector completions, drain every soulIntervalMs
-  bus.poll(
-    'session.ended',
-    { intervalMs: config.learning.soulIntervalMs },
-    (events) => {
-      if (!events.some((e) => e.agentType === 'reflector')) return
+    soulReflector: signal => {
       const today = new Date().toISOString().slice(0, 10)
       return sessions.startSession({
+        signal,
         channel: 'heartbeat',
         agentType: 'soul-reflector',
         task:
           `Soul Reflect: read event log at memory/events/${today}.jsonl and identity wiki items under memory/identities/. Refine SOUL.md based on stable interaction patterns.`,
       })
     },
-  )
+  }, config.learning)
+  cleanup.push(() => learning.stop())
+  app.get('/api/learning', c => c.json(learning.status()))
 
-  console.info(
-    `[learning] Pipelines started (reflect: ${config.learning.reflectIntervalMs}ms, encapsulate: ${config.learning.encapsulateIntervalMs}ms, soul: ${config.learning.soulIntervalMs}ms)`,
-  )
-
-  let shutdown: () => Promise<void>
-  const localControl = new LocalRuntimeControl('main', () => shutdown())
-  const configStore = new ConfigStore({
-    configPath,
-    getConfig: () => activeConfig,
-    onChanged: (newConfig) => {
+  const updateConfig = (newConfig: Config) => {
       const newProvider = createAggregatedProvider(newConfig, copilotAuth)
-      const newPrimaryProvider = resolvePrimaryProviderName(newConfig.agent.model)
-      const newQuickModel = newConfig.providers[newPrimaryProvider]?.quickModel ??
-        newConfig.agent.quickModel
+      const newQuickModel = newConfig.agent.quickModel
       const newLlm = createLlmRuntimeConfig(newConfig)
+      learning.update(newConfig.learning)
       sessions.updateProvider(newProvider, newQuickModel)
       provider = newProvider
       llm = newLlm
       activeConfig = newConfig
       channels.updateConfig(newConfig)
-      providerSetup.invalidate()
-    },
+  }
+  const botStore = new BotInstanceStore({
+    organizationId: organization.id,
+    path: resolve(workspace, '..', 'config', 'bots.v1.json'),
+    ...(organization.id === DEFAULT_ORGANIZATION_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
-  const providerSetup = new ProviderSetup({
-    store: configStore,
-    getConfig: () => activeConfig,
-    auth: copilotAuth,
+  const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
+    organizationId: organization.id, instanceStore: botStore,
   })
-  const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg))
+  cleanup.push(() => channels.stopAll())
   await channels.init()
   const projects = new ProjectService({
     registry: projectRegistry,
-    createSession: async (project) => {
-      const chatId = `chat-${randomUUID()}`
+    remoteExecutor,
+    createSession: async (project, requestId) => {
+      const chatId = `chat-${requestId ?? randomUUID()}`
       const sessionId = `web:${chatId}`
+      const existing = sessions.getSessionState(sessionId)
+      if (existing) {
+        if (existing.projectId !== project.id) {
+          throw new ProjectError('project_request_conflict', 'This request ID belongs to another project.', 409)
+        }
+        return { sessionId, chatId }
+      }
       await sessions.buildSession(sessionId, undefined, {
         projectId: project.id,
-        workdir: {
+        workdir: project.kind === 'remote' ? project.workdir : {
           ...localProjectWorkdirRef(project.id),
           displayName: project.name,
           displayPathSnapshot: project.path,
@@ -755,30 +740,42 @@ export async function startMainRuntime(
       return { sessionId, chatId }
     },
   })
+  cleanup.push(() => projects.dispose())
+  const releaseProjectLifecycle = dependencies.catalog.configureProjectLifecycle(organization.id, {
+    assertIdle: () => {
+      projects.assertIdle()
+      if (sessions.hasProjectWork || backgroundTasks.hasRunningTasks || remoteExecutor.hasPendingJobs ||
+        processManager.list().some(process => !process.exitedAt)) {
+        throw new ProjectError('project_busy', 'Wait for active conversations, background work and remote jobs in this organization to finish or stop them, then retry.', 409)
+      }
+    },
+    invalidate: () => sessions.invalidateProjectSessions(),
+    sessionsToRetire: (project, claims) => sessions.projectDependentSessions(project.id, [
+      project.kind === 'remote' ? project.workdir : localProjectWorkdirRef(project.id),
+      ...claims.map(claim => claim.workdir),
+    ]),
+  })
+  cleanup.push(releaseProjectLifecycle)
 
-  registerGatewayRoutes(app, [
-    ...mainCluster.plugins,
-    localControl.plugin(),
+  for (const plugin of [
     otelPlugin(otelStore),
     sessionPlugin(sessions, agent, agentTypes),
     sessionsApiPlugin(sessions),
     remoteSessionPlugin({
       sessions,
-      authorize: request => authorizeMainNodeInventory(request, launchCredential, clientAddresses),
+      authorize: dependencies.authorize,
+      requireProjectOwnership: true,
+      projects: projectRegistry,
     }),
     projects.plugin,
-    providerSetup.plugin(),
-    channelSetupPlugin({
-      store: configStore,
+    botSetupPlugin({
+      store: botStore,
       runtime: channels,
-      authorize: (request) => authorizeMainNodeInventory(request, launchCredential, clientAddresses),
+      authorize: dependencies.authorize,
     }),
-    providerPlugin(() => provider, () => providerSetup.status()),
-    configPlugin({ store: configStore }),
-  ], {
-    launchCredential,
-    launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
-  })
+    providerPlugin(() => provider),
+    organizationConfigPlugin(configStore),
+  ]) plugin(app)
 
   // ── Channel manager ───────────────────────────────────────────────
   // Each channel registers its own routes (e.g. feishu proxy) onto the app
@@ -790,88 +787,45 @@ export async function startMainRuntime(
   )
 
   // Register eval bridge routes before starting the server.
-  registerEvalBridgeRoute(app)
-
-  // Frontend (registered LAST so the catch-all '*' route does not shadow API
-  // routes). Priority:
-  //   1. Vite dev server proxy (set VITE_DEV_URL, e.g. http://localhost:5273)
-  //      — used by `pnpm dev` so edits hot-reload instead of serving a
-  //      stale app/dist build.
-  //   2. Built static UI at <cwd>/app/dist (set UI_DIST_DIR to override)
-  //   3. Embedded UI at <module>/../app/dist (Electron sidecar
-  //      with the bundled frontend assets)
-  //   4. Nothing — the gateway just exposes the API.
-  const viteDevUrl = env.VITE_DEV_URL
-  if (viteDevUrl) {
-    devProxyPlugin(viteDevUrl)(app)
-  } else {
-    const uiDistCandidates = [
-      env.UI_DIST_DIR,
-      resolve(process.cwd(), 'app', 'dist'),
-      import.meta.dirname
-        ? resolve(import.meta.dirname, '..', 'app', 'dist')
-        : undefined,
-    ].filter((path): path is string => Boolean(path))
-
-    let uiDistDir: string | undefined
-    for (const candidate of uiDistCandidates) {
-      try {
-        if ((await nodeStat(candidate)).isDirectory()) {
-          uiDistDir = candidate
-          break
-        }
-      } catch { /* missing — try the next candidate */ }
-    }
-
-    if (uiDistDir) {
-      uiPlugin(uiDistDir)(app)
-    } else {
-      console.info(
-        `[gateway] UI dist not found (looked in: ${
-          uiDistCandidates.join(', ')
-        }) and VITE_DEV_URL not set — frontend not served`,
-      )
-    }
-  }
-
-  const gateway = serveGateway(app, {
-    ...options.gateway,
-    clientAddresses,
-  })
+  registerEvalBridgeRoute(app, evalBridge)
 
   // ── Graceful shutdown ─────────────────────────────────────────────
   let shutdownPromise: Promise<void> | undefined
-  shutdown = () => {
+  const shutdown = () => {
     shutdownPromise ??= shutdownRuntime()
     return shutdownPromise
   }
   const shutdownRuntime = async () => {
-    localControl.markStopping()
     channels.beginShutdown()
-    await projects.dispose()
-    await providerSetup.dispose()
+    const stopLearning = learning.stop()
     console.info('[main] Shutting down...')
-    const closeCluster = mainCluster.closeNodeConnections()
     bus.emit('app.lifecycle', { action: 'stop' })
     clearInterval(pulseTimer)
-    cronService.stop()
     const errors: unknown[] = []
     // Quiesce producers before draining output; one failed cleanup must not
     // leave the remaining channels, persistence writes, or gateway running.
     for (const close of [
+      () => cronService.stop(),
+      () => stopLearning,
+      () => projects.dispose(),
+      () => handoffManager.stop(),
+      () => backgroundTasks.stop(),
       () => agent.shutdown(),
+      () => skills.stopWatching(),
+      () => agentTypes.stopWatching(),
+      () => mcpManager.stopWatching(),
       () => channels.stopAll(),
       () => events.stop(),
       () => bus.stopAll(),
       () => chromeManager.releaseAll(),
-      () => closeCluster,
-      () => gateway.shutdown(),
-      () => mainCluster.save(),
+      () => evalBridge.shutdown(),
+      () => sessionStore.close?.(),
       () => closeTelemetry(),
+      releaseProjectLifecycle,
     ]) {
       try { await close() } catch (error) { errors.push(error) }
     }
-    if (errors.length) throw new AggregateError(errors, 'Main shutdown failed')
+    if (errors.length) throw new AggregateError(errors, 'Organization shutdown failed')
   }
 
   // ── Start everything ──────────────────────────────────────────────
@@ -879,29 +833,21 @@ export async function startMainRuntime(
 
   const startAgent = agent.start()
   const startCron = cronService.start()
-  const startGateway = gateway.finished
+  cleanup.push(() => cronService.stop())
+  cleanup.push(() => agent.shutdown())
+  cleanup.push(() => backgroundTasks.stop())
+  cleanup.push(() => handoffManager.stop())
+  cleanup.push(() => learning.stop())
+  cleanup.push(() => cronService.stop())
 
   // Recover sessions interrupted by the previous process exit.
-  sessions.recoverIncompleteSessions().catch((err) =>
-    console.warn('[main] Session recovery sweep failed:', err)
-  )
-
-  const ready = Promise.all([startAgent, startCron, gateway.ready]).then(() => {})
-  const finished = Promise.allSettled([
-    startAgent,
-    startCron,
-    startGateway,
-  ]).then(() => {})
-
-  try {
-    await ready
-  } catch (error) {
-    await shutdown().catch(() => {})
-    throw error
-  }
-  localControl.markReady()
+  const ready = Promise.all([startAgent, startCron]).then(async () => {
+    await sessions.recoverIncompleteSessions()
+  })
+  await ready
   console.info('[main] All services started')
-  return { ready, finished, shutdown }
+  return { app, projects: projectRegistry, ready, shutdown, updateConfig,
+    setGatewayBaseUrl: url => evalBridge.setGatewayBaseUrl(url) }
   }
 }
 
@@ -950,8 +896,8 @@ export function runRootProcessEntry(
       readTextFile: (path) => readFile(path, 'utf8'),
       process: hooks,
       env: {
-        GATEWAY_PORT: env.GATEWAY_PORT,
-        WINDOWS_USE_LAUNCH_TOKEN: env.WINDOWS_USE_LAUNCH_TOKEN,
+        GATEWAY_PORT: process.env.GATEWAY_PORT,
+        WINDOWS_USE_LAUNCH_TOKEN: process.env.WINDOWS_USE_LAUNCH_TOKEN,
       },
       includeSigterm: getOs() !== 'windows',
     },

@@ -5,7 +5,6 @@ import './styles.css'
 import App from './App.vue'
 import router from './router.ts'
 import { createInstallationContextProvider } from './composables/useInstallationContext.ts'
-import { createProductFixturesProvider } from './composables/useProductFixtures.ts'
 import { createLocalMainAdminContext } from './installation-context.ts'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
@@ -30,7 +29,6 @@ function mountMainApp(installationContext: InstallationContextV1): void {
 	createApp(App)
 		.use(router)
 		.use(createInstallationContextProvider(installationContext))
-		.use(createProductFixturesProvider())
 		.mount('#app')
 }
 

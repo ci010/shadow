@@ -27,6 +27,7 @@ interface SessionPrototypeV1 {
 }
 
 const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
+  'organizationId',
   'config',
   'parent',
   'workspaceRoot',
@@ -83,6 +84,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
 
   for (
     const key of [
+      'organizationId',
       'workspaceRoot',
       'agentType',
       'projectName',
@@ -323,6 +325,7 @@ export class SqliteSessionStore implements SessionStore {
       version: PROTOTYPE_VERSION,
       metadata: {
         ...this.prototypeMetadataExtras.get(sessionKey),
+        organizationId: state.organizationId,
         config: state.config,
         parent: state.parent,
         workspaceRoot: state.workspaceRoot,

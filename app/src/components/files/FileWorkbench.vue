@@ -3,6 +3,7 @@
     <button v-if="expanded && !wide" class="explorer-backdrop" aria-label="Dismiss files" @click="collapseExplorer" />
     <aside v-if="explorerAvailable" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" aria-label="File explorer" @keydown.esc.stop.prevent="collapseExplorer">
       <FileTree :api-base="apiBase" :session-id="sessionId" :project-id="projectId" tree-only :active="active && expanded"
+        :remote="remote"
         :git-status="gitStatus" :git-loading="gitLoading" :git-error="gitError" @refresh-git="refreshGit" @open="openFile">
         <template #actions>
           <HoverInfo text="Collapse files" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="workbench-button" aria-label="Collapse files" @click="collapseExplorer"><span class="i-lucide-panel-left-close" aria-hidden="true" /></button></HoverInfo>
@@ -71,7 +72,7 @@ import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.t
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
 import { closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type OpenFile } from '../../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; projectId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; projectId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false })
 const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
@@ -83,8 +84,9 @@ const resizeBounds = computed(() => sidebarWidthBounds(width.value, 180, 360))
 const explorerWidth = computed(() => clampSidebarWidth(preferredWidth.value, resizeBounds.value))
 const wide = computed(() => width.value >= 760)
 const preference = ref<boolean>()
+const remoteExpanded = ref(false)
 const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.projectId))
-const expanded = computed(() => explorerAvailable.value && (preference.value ?? wide.value))
+const expanded = computed(() => explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? wide.value)))
 const tabs = ref<FileTabs>({ files: [], selected: '' })
 const gitActive = computed(() => explorerAvailable.value && props.active && (expanded.value || tabs.value.files.some(file => file.view === 'diff' && fileTabKey(file) === tabs.value.selected)))
 const { status: gitStatus, loading: gitLoading, error: gitError, revision: gitRevision, refresh: refreshGit } = useWorkdirGit(
@@ -101,7 +103,7 @@ function selectTab(path: string) {
 defineExpose({ showConversation: () => selectTab('') })
 function openFile(file: OpenFile) {
   tabs.value = openFileTab(tabs.value, file)
-  if (!wide.value) preference.value = false
+  if (!wide.value) { preference.value = false; remoteExpanded.value = false }
   void nextTick(() => {
     const tab = document.getElementById(tabId(fileTabKey(file)))
     tab?.focus({ preventScroll: true })
@@ -190,13 +192,16 @@ function nativeDocumentKey(event: Event) {
 function compositionStart() { composing = true }
 function compositionEnd() { composing = false }
 function collapseExplorer() {
-  preference.value = false
+  if (props.remote) remoteExpanded.value = false
+  else preference.value = false
   explorerButton.value?.focus({ preventScroll: true })
 }
 function toggleExplorer() {
-  preference.value = !expanded.value
+  if (props.remote) remoteExpanded.value = !expanded.value
+  else preference.value = !expanded.value
 }
 watch(() => props.contextKey, (key, previous) => {
+  remoteExpanded.value = false
   if (previous !== undefined) cachedTabs.set(previous, tabs.value)
   tabs.value = cachedTabs.get(key) ?? { files: [], selected: '' }
 })

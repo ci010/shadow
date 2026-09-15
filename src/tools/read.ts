@@ -26,8 +26,6 @@ interface ReadCacheEntry {
   limit: number | undefined
 }
 
-const readCache = new Map<string, ReadCacheEntry>()
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function displayPath(absPath: string, workspace: string): string {
@@ -180,6 +178,7 @@ const nhm = new NodeHtmlMarkdown({
 // ── ReadTool ────────────────────────────────────────────────────────────────
 
 export class ReadTool implements Tool {
+  private readCache = new Map<string, ReadCacheEntry>()
   readonly name = 'read'
   readonly readonly = true
   readonly supportsRemoteWorkdir = true
@@ -264,7 +263,7 @@ export class ReadTool implements Tool {
     const mtime = stat.mtime?.getTime() ?? 0
     const sessionId = context.physicalSessionId
     const cacheKey = `${sessionId}\0${resolved}`
-    const cached = readCache.get(cacheKey)
+    const cached = this.readCache.get(cacheKey)
     if (
       cached &&
       cached.mtime === mtime &&
@@ -288,7 +287,7 @@ export class ReadTool implements Tool {
     validateContentTokens(content, ext)
 
     // ── Cache this read ──
-    readCache.set(cacheKey, { mtime, offset, limit })
+    this.readCache.set(cacheKey, { mtime, offset, limit })
 
     // ── Format output ──
     let result = showLineNumbers
@@ -486,10 +485,10 @@ export class ReadTool implements Tool {
   }
 
   /** Remove all cached read entries for a given session. Call on sleep/stop. */
-  static clearSession(sessionId: string): void {
+  clearSession(sessionId: string): void {
     const prefix = `${sessionId}\0`
-    for (const key of readCache.keys()) {
-      if (key.startsWith(prefix)) readCache.delete(key)
+    for (const key of this.readCache.keys()) {
+      if (key.startsWith(prefix)) this.readCache.delete(key)
     }
   }
 }

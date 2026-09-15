@@ -21,6 +21,7 @@ import { BackgroundTaskManager } from './background-task.ts'
 import { ContextBuilder, type SessionPromptContext } from './context/builder.ts'
 import { IdentityManager } from './identity.ts'
 import type { LlmRuntimeConfig } from './llm-config.ts'
+import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 
 test('web admission, channel fanout, commands and retry follow one directed input path', { timeout: 15_000 }, async (t) => {
   await mkdir('.test-data', { recursive: true })
@@ -82,9 +83,10 @@ test('web admission, channel fanout, commands and retry follow one directed inpu
   const store = new JsonlSessionStore(join(workspace, '.sessions'))
   await store.init()
   const agentTypes = new AgentTypesManager(workspace)
+  const identity = new IdentityManager(workspace)
   const sessions = new SessionManager({
     workspace, bus, provider, tools, context, store, events, agentTypes,
-    identity: new IdentityManager(workspace),
+    identity,
     handoffManager: new HandoffManager(provider, llm.contextWindow, { autoHandoff: false }, workspace, store),
     backgroundTasks: new BackgroundTaskManager(bus, events),
     getLlmRuntimeConfig: () => llm,
@@ -99,6 +101,7 @@ test('web admission, channel fanout, commands and retry follow one directed inpu
   const mcpManager = new McpManager(tools, [], workspace)
   t.mock.method(mcpManager, 'startWatching', () => {})
   const agent = new AgentApp({
+    identity,
     bus, sessions, events, agentTypes, commandDispatcher: commands,
     skills: new SkillsManager(workspace), mcpManager,
     getLlmRuntimeConfig: () => llm,
@@ -248,4 +251,28 @@ test('web admission, channel fanout, commands and retry follow one directed inpu
   assert.match(await rejected.text(), /Synthetic context unavailable/)
   assert(!accepted.some((entry) => entry.sessionId === 'web:reject'))
   assert.equal(legacyInbound, 0)
+
+  const commandReplies: OutboundMessage[] = []
+  bus.on('message.outbound', message => { if (message.metadata?.command) commandReplies.push(message) })
+  t.mock.getter(sessions, 'organizationId', () => 'org')
+  for (const botInstanceId of ['bot-a', 'bot-b']) {
+    const channelAddress = { organizationId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-chat' }
+    const receipt = await agent.receiveChannelMessage({
+      channel: 'discord', chatId: 'same-chat', channelAddress, senderId: 'alice', messageId: 'same-message',
+      content: '/probe', admin: true, timestamp: new Date().toISOString(),
+    })
+    assert.equal(receipt.sessionId, channelSessionId(channelAddress))
+    assert.deepEqual(commandReplies.at(-1)?.channelAddress, channelAddress)
+    assert.doesNotMatch((await identity.lookupByAccount('discord', 'alice', channelAddress)).personContext, /No profile found/)
+  }
+  const beforeCommands = commandsRun
+  const beforeAccepted = accepted.length
+  await assert.rejects(agent.receiveChannelMessage({
+    channel: 'discord', chatId: 'same-chat',
+    channelAddress: { organizationId: 'foreign', botInstanceId: 'bot-a', platform: 'discord', conversationId: 'same-chat' },
+    senderId: 'alice', messageId: 'foreign-command', content: '/probe', admin: true, timestamp: new Date().toISOString(),
+  }), /another organization/)
+  assert.equal(commandsRun, beforeCommands)
+  assert.equal(accepted.length, beforeAccepted)
+  assert.equal(commandReplies.length, 2)
 })

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { describe, test } from 'node:test'
 import { Bus } from '../bus/bus.ts'
-import type { OutboundMessage } from '../bus/events.ts'
+import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import type { LLMProvider, LLMResponse, ChatMessage } from '../providers/provider.ts'
 import type { HandoffManager } from '../handoff/manager.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
@@ -134,6 +134,43 @@ async function fixture(options: {
       }
     },
   }
+}
+
+for (const outcome of ['tools', 'failure', 'cancel'] as const) {
+  test(`organization bot address reaches every ${outcome} outbound event`, async () => {
+    const address = { organizationId: 'org-a', botInstanceId: 'bot-a', platform: 'qq', conversationId: 'shared-room' }
+    const f = await fixture({ state: { sessionId: channelSessionId(address), organizationId: address.organizationId } })
+    f.tools.register({
+      name: 'fixture_address', description: '', parameters: { type: 'object', properties: {} },
+      execute: async (_args, ctx) => {
+        assert.equal(ctx.organizationId, address.organizationId)
+        assert.deepEqual(ctx.channelAddress, address)
+        return 'Address retained'
+      },
+    })
+    try {
+      f.session.dispatch(input('first'), llm)
+      await waitFor(() => f.calls.length === 1)
+      if (outcome === 'tools') {
+        f.calls[0].resolve({ content: null, toolCalls: [{ id: 'tool-1', name: 'fixture_address', arguments: {} }] })
+        await waitFor(() => f.calls.length === 2)
+        f.calls[1].resolve(done())
+      } else if (outcome === 'failure') {
+        f.calls[0].reject(new Error('Fixture failure'))
+      } else {
+        f.session.dispatch(control('cancel', 'cancel'), llm)
+      }
+      await waitFor(() => f.facts.length === 1)
+      assert.deepEqual(f.outboundMessages.map(message => message.event),
+        outcome === 'tools' ? ['tool_call', 'tool_result', 'response'] : ['response'])
+      for (const message of f.outboundMessages) {
+        assert.deepEqual(message.channelAddress, address)
+        assert.equal(message.channel, address.platform)
+        assert.equal(message.chatId, address.conversationId)
+      }
+      assert.equal(f.facts[0].status, outcome === 'tools' ? 'completed' : outcome === 'failure' ? 'failed' : 'cancelled')
+    } finally { await f.close() }
+  })
 }
 
 // Before this refactor, the same fixture reproduced EventService's default

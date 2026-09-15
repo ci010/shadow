@@ -23,15 +23,18 @@ test('preview encoding is explicit and missing or invalid decoder metadata is no
 test('file requests retain the owning session, relative path and abort signal', async t => {
   const controller = new AbortController()
   let requested: URL | undefined
+  let requestSignal: AbortSignal | null | undefined
   t.mock.method(globalThis, 'fetch', async (input: string, init: RequestInit) => {
     requested = new URL(input)
-    assert.equal(init.signal, controller.signal)
+    requestSignal = init.signal
     return Response.json({ path: 'src', entries: [{ name: 'main.ts', type: 'file', ext: '.ts', size: 12, mtime: null }] })
   })
   const result = await useSessionFiles('http://localhost:3123').listDir('web:child/a', 'src', controller.signal)
   assert.equal(requested?.pathname, '/api/sessions/web%3Achild%2Fa/files')
   assert.equal(requested?.searchParams.get('path'), 'src')
   assert.equal(result.entries[0].name, 'main.ts')
+  controller.abort()
+  assert.equal(requestSignal?.aborted, true)
 })
 
 test('invalid listing names and malformed text responses are rejected', async t => {
@@ -93,14 +96,17 @@ test('project client scopes every operation to its registry ID without a session
   const files = useSessionFiles('http://localhost:3123', projectId)
   const controller = new AbortController()
   const requests: URL[] = []
+  const signals: AbortSignal[] = []
   const mock = t.mock.method(globalThis, 'fetch', async (input: string, init: RequestInit) => {
-    assert.equal(init.signal, controller.signal)
+    assert(init.signal)
+    signals.push(init.signal)
     requests.push(new URL(input))
     return Response.json({ path: '', entries: [] })
   })
   await files.listDir('', '', controller.signal)
   mock.mock.mockImplementation(async (input: string, init: RequestInit) => {
-    assert.equal(init.signal, controller.signal)
+    assert(init.signal)
+    signals.push(init.signal)
     requests.push(new URL(input))
     return Response.json({ binary: false, size: 8, content: '24.15.0\n', truncated: false })
   })
@@ -115,8 +121,23 @@ test('project client scopes every operation to its registry ID without a session
   assert.equal(html, `http://localhost:3123/api/projects/${projectId}/static/docs/a%20%23.html`)
   assert.equal(new URL('style.css', html).pathname, `/api/projects/${projectId}/static/docs/style.css`)
   assert.equal(mock.mock.callCount(), 2)
+  controller.abort()
+  assert(signals.every(signal => signal.aborted))
 })
 
+test('file request deadlines stop loading without retrying locally', async t => {
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    assert.equal(ms, 30_000)
+    return deadline.signal
+  })
+  const request = t.mock.method(globalThis, 'fetch', async (_input: string, init: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true })))
+  const listing = useSessionFiles('http://localhost').listDir('remote')
+  deadline.abort(new DOMException('Timed out', 'TimeoutError'))
+  await assert.rejects(listing, /Check the device connection and retry/)
+  assert.equal(request.mock.callCount(), 1)
+})
 test('unavailable projects and invalid project wire data do not fall back to session requests', async t => {
   const files = useSessionFiles('http://localhost', 'registered-id')
   const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({ error: 'folder_unavailable' }, { status: 409 }))

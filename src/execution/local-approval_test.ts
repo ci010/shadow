@@ -22,6 +22,26 @@ function request(overrides: Partial<JobRequestV1> = {}): JobRequestV1 {
   }
 }
 
+test('trusted node policy runs without prompts or grants and retains cancellation and shutdown', async () => {
+  const service = new InMemoryLocalApprovalService([{
+    capabilityId: 'workdir-1', displayName: 'Trusted workspace', policy: 'none',
+  }])
+  await service.start(new AbortController().signal)
+  let prompts = 0
+  for (const operation of ['filesystem.read', 'filesystem.write', 'workdir.process.execute', 'process.execute']) {
+    for (const approval of ['none', 'local-required'] as const) {
+      assertEquals(await service.authorize(request({ operation, approval }), new AbortController().signal, () => prompts++), true)
+    }
+  }
+  assertEquals(prompts, 0)
+  assertEquals(service.listPending(), [])
+  assertEquals(service.listGrants(), [])
+  assertEquals(await service.authorize(request({ capabilityId: 'unknown' }), new AbortController().signal, () => prompts++), false)
+  assertEquals(await service.authorize(request(), AbortSignal.abort(), () => prompts++), false)
+  await service.shutdown()
+  assertEquals(await service.authorize(request(), new AbortController().signal, () => prompts++), false)
+})
+
 test('local approval enforces policy scope and creates content-safe summaries', async () => {
   const service = new InMemoryLocalApprovalService([{
     capabilityId: 'workdir-1',

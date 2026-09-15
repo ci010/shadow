@@ -67,6 +67,7 @@ watch(() => props.disabled, disabled => { if (disabled) close() })
 watch(() => props.busy, busy => { if (busy) close() })
 onDeactivated(dismiss)
 onUnmounted(dismiss)
+defineExpose({ show })
 </script>
 
 <style scoped>

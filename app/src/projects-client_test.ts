@@ -19,6 +19,21 @@ test('projects and clones validate wire contracts and drop raw URLs, tokens and 
   assert.doesNotMatch(JSON.stringify(parsed), /synthetic|https:|raw log/)
 })
 
+test('remote project parsing retains opaque ownership and display metadata without treating its path as local', () => {
+  const remote = {
+    ...project, kind: 'remote', organizationId: 'a', path: '/display/only',
+    workdir: { version: 1, nodeId: 'child', capabilityId: 'workdir', displayName: 'Remote project', displayPathSnapshot: '/display/only' },
+    identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: ['b'.repeat(64)] },
+  }
+  assert.deepEqual(parseProject(remote), remote)
+  for (const invalid of [
+    { ...remote, workdir: undefined }, { ...remote, identity: undefined },
+    { ...remote, kind: 'local' }, { ...remote, kind: 'unknown' },
+    { ...remote, workdir: { ...remote.workdir, nodeId: '' } },
+  ]) assert.throws(() => parseProject(invalid))
+  assert.throws(() => parseCloneOperation({ ...running, state: 'succeeded', project: remote }, running.id), /invalid project response/)
+})
+
 test('client uses real project sessions and a caller-created clone ID, with no arbitrary workdir or session ID', async () => {
   const calls: Array<{ path: string; init?: RequestInit }> = []
   const client = createProjectsClient('http://main.invalid', async (path, init) => {
@@ -45,21 +60,52 @@ test('client uses real project sessions and a caller-created clone ID, with no a
 
 test('HTTP and malformed poll errors are visible and never echo server credentials', async () => {
   for (const status of [400, 401, 403, 404, 409, 500]) {
-    const client = createProjectsClient('', async () => response({ error: 'synthetic-secret' }, status))
+    const client = createProjectsClient('http://fixture', async () => response({ error: 'synthetic-secret' }, status))
     await assert.rejects(client.poll(running.id), error => error instanceof Error && !error.message.includes('synthetic-secret'))
   }
-  const client = createProjectsClient('', async () => response({ operation: { ...running, id: 'wrong' } }))
+  const client = createProjectsClient('http://fixture', async () => response({ operation: { ...running, id: 'wrong' } }))
   await assert.rejects(client.poll(running.id), /invalid project response/)
-  const invalidSession = createProjectsClient('', async () => response({ sessionId: 'other', chatId: 'chat-created' }))
+  const invalidSession = createProjectsClient('http://fixture', async () => response({ sessionId: 'other', chatId: 'chat-created' }))
   await assert.rejects(invalidSession.createSession(project.id), /invalid project response/)
 })
 
 test('structured project messages preserve actionable folder and clone recovery guidance', async () => {
   const message = 'The project folder changed. Open the folder again.'
-  const client = createProjectsClient('', async () => response({ error: 'folder_unavailable', message }, 409))
+  const client = createProjectsClient('http://fixture', async () => response({ error: 'folder_unavailable', message }, 409))
   await assert.rejects(client.createSession(project.id), { message })
   const recovery = 'Clone completed, but the project could not be saved. The folder was kept. Use Open folder to recover it.'
   assert.equal(parseCloneOperation({ ...running, state: 'failed', error: recovery }, running.id).error, recovery)
+})
+
+test('folder removal and movement use the owning org and validate committed ownership responses', async () => {
+  const calls: Array<{ path: string; init?: RequestInit }> = []
+  let reply: unknown = { removed: true, projectId: project.id }
+  const client = createProjectsClient('http://fixture/organizations/source/', async (path, init) => {
+    calls.push({ path: String(path), init })
+    return response(reply)
+  })
+  await client.remove(project.id)
+  assert.equal(calls[0].path, `http://fixture/organizations/source/api/projects/${project.id}`)
+  assert.equal(calls[0].init?.method, 'DELETE')
+  const moved = { ...project, id: 'new-project-identity', organizationId: 'target' }
+  reply = { organizationId: 'target', project: moved }
+  assert.deepEqual(await client.move(project.id, 'target'), moved)
+  assert.equal(calls[1].path, `http://fixture/organizations/source/api/projects/${project.id}/move`)
+  assert.deepEqual(JSON.parse(String(calls[1].init?.body)), { targetOrganizationId: 'target' })
+  for (const invalid of [{ removed: true, projectId: 'other' }, { removed: false, projectId: project.id }]) {
+    reply = invalid
+    await assert.rejects(client.remove(project.id), /invalid project response/)
+  }
+  for (const invalid of [
+    { organizationId: 'wrong', project: moved },
+    { organizationId: 'target', project: { ...moved, organizationId: 'source' } },
+  ]) {
+    reply = invalid
+    await assert.rejects(client.move(project.id, 'target'), /invalid project response/)
+  }
+  const busy = createProjectsClient('http://fixture/organizations/source/', async () =>
+    response({ error: 'project_busy', message: 'Stop active conversations using this folder before moving it.' }, 409))
+  await assert.rejects(busy.move(project.id, 'target'), /Stop active conversations/)
 })
 
 test('unsafe structured error messages fall back without displaying token URLs or Git logs', async () => {
@@ -70,7 +116,7 @@ test('unsafe structured error messages fall back without displaying token URLs o
     'authorization=synthetic-secret',
     'github_pat_synthetic-secret',
   ]) {
-    const client = createProjectsClient('', async () => response({ error: 'project_operation_failed', message }, 500))
+    const client = createProjectsClient('http://fixture', async () => response({ error: 'project_operation_failed', message }, 500))
     await assert.rejects(client.register(project.path), error => error instanceof Error && error.message !== message && !error.message.includes('synthetic-secret'))
   }
 })

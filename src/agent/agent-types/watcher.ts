@@ -11,6 +11,7 @@ export class AgentTypesWatcher {
   private watchTask: Promise<void> | null = null
   private reloadTimer: ReturnType<typeof setTimeout> | null = null
   private changedPaths = new Set<string>()
+  private reloadTask: Promise<void> = Promise.resolve()
 
   constructor(private manager: AgentTypesManager) {}
 
@@ -43,11 +44,14 @@ export class AgentTypesWatcher {
       await this.watchTask.catch(() => {})
       this.watchTask = null
     }
+    this.changedPaths.clear()
+    await this.reloadTask
   }
 
   private async runWatchLoop(watcher: FsWatcher): Promise<void> {
     try {
       for await (const event of watcher) {
+        if (this.watcher !== watcher) break
         for (const path of event.paths) {
           this.changedPaths.add(path)
         }
@@ -64,7 +68,7 @@ export class AgentTypesWatcher {
       this.reloadTimer = null
       const paths = new Set(this.changedPaths)
       this.changedPaths.clear()
-      void this.reloadChanged(paths)
+      this.reloadTask = this.reloadTask.then(() => this.reloadChanged(paths))
     }, 300)
   }
 

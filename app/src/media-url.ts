@@ -1,3 +1,5 @@
+import { apiUrl } from './api-url.ts'
+
 const DIRECT_WEB_SESSION_PREFIX = 'web:chat-'
 
 export function chatIdForMediaSession(sessionId: string): string | null {
@@ -19,7 +21,7 @@ export function buildMediaUrl(
   const chatId = chatIdForMediaSession(sessionId)
   if (!chatId) return null
 
-  const url = new URL('/api/media', apiBase)
+  const url = apiUrl(apiBase, '/api/media')
   url.searchParams.set('chatId', chatId)
   url.searchParams.set('path', path)
   return url.toString()

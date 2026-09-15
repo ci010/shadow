@@ -4,7 +4,6 @@ import type {
   ProcessManager,
 } from '../agent/process-manager.ts'
 import { terminateProcessTree } from '../agent/process-manager.ts'
-import nodeProcess from 'node:process'
 import { decodeChunks } from '../utils/decode-chunks.ts'
 import {
   type CancelReceiptV1,
@@ -64,14 +63,6 @@ const TERMINAL_STATES = new Set<JobStateV1>([
 const MAX_WORKDIR_PROCESS_OUTPUT_BYTES = 128 * 1024
 
 async function terminateWorkdirProcess(managed: ManagedProcess): Promise<ManagedProcessStatus> {
-  // A foreground shell may exit after spawning children with redirected stdio.
-  // Kill its owned POSIX group even when the shell's own pipes already closed.
-  if (nodeProcess.platform !== 'win32') {
-    try { nodeProcess.kill(-managed.pid, 'SIGKILL') }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-    }
-  }
   return await terminateProcessTree(managed.process, managed.exitPromise, true)
 }
 
@@ -280,8 +271,8 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
           })
           return
         }
-        if (output.length > 0) {
-          this.push(record, { type: 'stdout', chunk: output })
+        for (let offset = 0; offset < output.length; offset += 8192) {
+          this.push(record, { type: 'stdout', chunk: output.slice(offset, offset + 8192) })
         }
         this.finish(record, 'completed', 'completed')
       } catch (error) {

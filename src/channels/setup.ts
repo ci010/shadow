@@ -6,7 +6,7 @@ import type { GatewayPlugin } from '../gateway/types.ts'
 import { CHANNEL_IDS, type ChannelId, type ChannelSetupStatus, type ChannelState } from './setup-contract.ts'
 
 const labels: Record<ChannelId, string> = { qq: 'QQ', feishu: 'Feishu', discord: 'Discord' }
-const secretFields: Record<ChannelId, readonly string[]> = {
+export const secretFields: Record<ChannelId, readonly string[]> = {
   qq: ['secret', 'token'],
   feishu: ['appSecret', 'encryptKey', 'verificationToken'],
   discord: ['token'],
@@ -23,7 +23,7 @@ const common = {
   allowFrom: z.array(text.refine((value) => value.trim().length > 0)).max(1000).optional(),
   adminChats: z.array(text.refine((value) => value.trim().length > 0)).max(1000).optional(),
 }
-const schemas = {
+export const channelPatchSchemas = {
   qq: z.object({
     ...common, appId: text.optional(), secret: secret.optional(), token: secret.optional(),
     sandbox: z.boolean().optional(), intents: z.number().int().min(0).max(0xffffffff).optional(),
@@ -118,7 +118,7 @@ export function channelSetupPlugin(options: {
         return c.json({ error: 'invalid_json' }, 400)
       }
       const input = envelope.safeParse(body)
-      const patch = input.success ? schemas[id].safeParse(input.data.config) : undefined
+      const patch = input.success ? channelPatchSchemas[id].safeParse(input.data.config) : undefined
       if (!patch?.success) return c.json({ error: 'invalid_channel_config' }, 400)
       try {
         const channel = await options.runtime.updateChannel(id, (active) => options.store.update((raw) => {

@@ -1,3 +1,5 @@
+import { apiUrl } from './api-url.ts'
+
 export interface ProviderSetupStatus {
   provider: string
   model: string
@@ -139,7 +141,7 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
   async function json(path: string, init?: RequestInit): Promise<unknown> {
     let response: Response
     try {
-      response = await request(`${apiBase}${path}`, {
+      response = await request(apiUrl(apiBase, path).toString(), {
         ...init,
         signal: init?.signal ?? AbortSignal.timeout(30_000),
         headers: { 'Content-Type': 'application/json', ...init?.headers },

@@ -95,6 +95,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiUrl } from '../api-url.ts'
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SystemPromptCard from './SystemPromptCard.vue'
@@ -125,10 +126,7 @@ const route = useRoute()
 const router = useRouter()
 
 function buildUrl(path: string, params?: Record<string, string>): string {
-  const base = `${props.apiBase}${path}`
-  if (!params) return base
-  const qs = new URLSearchParams(params).toString()
-  return qs ? `${base}?${qs}` : base
+  return apiUrl(props.apiBase, path, params).toString()
 }
 
 const channels = ['heartbeat', 'web', 'discord', 'wechat', 'feishu']

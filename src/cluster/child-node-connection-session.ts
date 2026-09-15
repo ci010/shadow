@@ -45,6 +45,7 @@ export class ChildNodeConnectionSession {
   readonly #options: ChildNodeConnectionSessionOptions
   readonly #capabilities = new Map<string, CapabilityDescriptorV1>()
   readonly #outbound: NodeSessionInboundFrameV1[] = []
+  readonly #outboundSpace = new Set<() => void>()
   readonly #executions = new Set<AbortController>()
   readonly #closedResolver = Promise.withResolvers<DuplexCloseInfo>()
   readonly #authenticatedResolver = Promise.withResolvers<NegotiatedVersionV1>()
@@ -192,9 +193,14 @@ export class ChildNodeConnectionSession {
         'capability nodeId does not match the child connection',
       )
     }
+    const advertised = structuredClone(capability)
+    // Older Main versions reject unknown descriptor keys.
+    if (!this.#negotiated?.features.includes('workdir-display-v1')) {
+      delete advertised.displayPath
+    }
     this.#enqueue({
       type: 'capability-advertise',
-      capability: structuredClone(capability),
+      capability: advertised,
     })
     this.#capabilities.set(capability.capabilityId, structuredClone(capability))
     return structuredClone(capability)
@@ -243,6 +249,7 @@ export class ChildNodeConnectionSession {
     this.#state = 'closed'
     this.#closeInfo = structuredClone(info)
     this.#outbound.splice(0)
+    this.#releaseOutboundSpace()
     for (const execution of this.#executions) execution.abort(info.reason)
     this.#writerWake?.()
     if (!authenticated) {
@@ -351,6 +358,10 @@ export class ChildNodeConnectionSession {
           )
         }
         expectedSequence++
+        while (this.#outbound.length >= this.#options.maxOutboundQueue) {
+          await new Promise<void>(resolve => this.#outboundSpace.add(resolve))
+          this.#ensureOpen()
+        }
         this.#enqueue({ type: 'job-event', event: structuredClone(event) })
       }
     } catch (error) {
@@ -412,6 +423,7 @@ export class ChildNodeConnectionSession {
         this.#writerWake = undefined
         continue
       }
+      this.#releaseOutboundSpace()
       try {
         this.#outboundInFlight = true
         await this.#transport.send(frame)
@@ -424,6 +436,11 @@ export class ChildNodeConnectionSession {
         this.#outboundInFlight = false
       }
     }
+  }
+
+  #releaseOutboundSpace(): void {
+    for (const resolve of this.#outboundSpace) resolve()
+    this.#outboundSpace.clear()
   }
 
   #requireAuthenticated(): void {

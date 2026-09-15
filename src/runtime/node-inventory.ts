@@ -34,7 +34,7 @@ export function authorizeMainNodeInventory(
 export function mainLocalNodeInventory(options: {
   readonly localNodeId: string
   readonly implementationVersion: string
-  readonly projects: ProjectRegistry
+  readonly projects: Pick<ProjectRegistry, 'list' | 'lookupWorkdir'>
   readonly shellAvailable: boolean
 }): NodeInventoryEntry {
   return {
@@ -50,7 +50,7 @@ export function mainLocalNodeInventory(options: {
         displayName: 'Local shell',
         online: true,
       }] : []),
-      ...options.projects.list().map((project) => {
+      ...options.projects.list().filter(project => project.kind !== 'remote').map((project) => {
         const ref = localProjectWorkdirRef(project.id)
         return {
           capabilityId: ref.capabilityId,

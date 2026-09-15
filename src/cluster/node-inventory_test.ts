@@ -30,6 +30,7 @@ const capability: CapabilityDescriptorV1 = {
   capabilityId: 'workdir-1',
   kind: 'workdir',
   displayName: 'Remote folder',
+  displayPath: '/child/opaque/project',
   permissions: ['private-operation'],
   approvalPolicy: 'always',
   online: true,
@@ -123,6 +124,7 @@ test('restored inventory is offline and only projects allowlisted remote fields'
       capabilityId: 'workdir-1',
       kind: 'workdir',
       displayName: 'Remote folder',
+      displayPath: '/child/opaque/project',
       online: false,
     }],
   })
@@ -201,6 +203,7 @@ test('inventory follows actual node WebSocket authentication, advertisements and
   assert.equal(advertised.capabilities.length, 2)
   assert.equal(advertised.capabilities[0].online, false)
   assert.equal(advertised.capabilities[1].online, true)
+  assert.equal(advertised.capabilities[1].displayPath, '/child/opaque/project')
   socket.send(JSON.stringify({
     version: 1, sequence: 3, type: 'capability-withdraw',
     nodeId: auth.nodeId, capabilityId: 'new-workdir',
@@ -212,6 +215,7 @@ test('inventory follows actual node WebSocket authentication, advertisements and
   const disconnected = await remote()
   assert.equal(disconnected.connection, 'offline')
   assert.ok(disconnected.capabilities.every((value: { online: boolean }) => !value.online))
+  assert.equal(disconnected.capabilities[0].displayPath, '/child/opaque/project')
   const reconnected = new WebSocket(`${base.replace('http:', 'ws:')}/cluster/v1/node`)
   await new Promise<void>((resolve, reject) => {
     reconnected.addEventListener('open', () => resolve(), { once: true })

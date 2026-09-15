@@ -9,6 +9,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 import type { SessionTools } from './registry.ts'
 import type { ChromeManager } from '../utils/chrome-manager.ts'
 import { registerTypeScriptLoader } from '../utils/typescript.ts'
+import { getOrganizationScope } from '../otel/scope.ts'
 
 /**
  * Describes an MCP server that can be connected on-demand and whose tools
@@ -141,17 +142,47 @@ class ScriptToolAdapter implements Tool {
   }
 }
 
-/** Read the extra args from a config JSON file, or return [] if missing/invalid. */
-async function readConfigArgs(configPath: string): Promise<string[]> {
+/** Scoped browser config fails explicitly on malformed data; legacy imports remain permissive. */
+async function readConfigArgs(configPath: string, strict = false): Promise<string[]> {
   try {
     const text = await readFile(configPath, 'utf8')
     const data = JSON.parse(text)
+    if (strict && (!data || !Array.isArray(data.args) || !data.args.every((arg: unknown) => typeof arg === 'string'))) {
+      throw new Error('Chrome config must contain an args array of strings')
+    }
     if (Array.isArray(data.args)) return data.args.map(String)
-  } catch { /* file missing or invalid — no extra args */ }
+  } catch (error) {
+    if (strict && !(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
+  }
   return []
 }
 
 const VIRTUAL_TOOLS_PREFIX = 'v:tools/'
+
+/** Only reviewed non-connection switches may reach the managed browser adapter. */
+function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
+  const forwarded: string[] = []
+  let port: number | undefined
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    const separator = arg.indexOf('=')
+    const flag = separator < 0 ? arg : arg.slice(0, separator)
+    const value = separator < 0 ? undefined : arg.slice(separator + 1)
+    if (flag === '--remote-debugging-port') {
+      const raw = value ?? args[++i]
+      if (port !== undefined || !raw || !/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 65535) {
+        throw new Error('Managed Chrome requires one valid remote-debugging-port (1-65535)')
+      }
+      port = Number(raw)
+    } else if (/^--(?:no-)?(?:usage-statistics|usageStatistics|performance-crux|performanceCrux|category-emulation|categoryEmulation|category-performance|categoryPerformance|category-network|categoryNetwork)$/.test(flag) &&
+      (value === undefined || value === 'true' || value === 'false')) {
+      forwarded.push(arg)
+    } else {
+      throw new Error('Organization Chrome accepts only a managed remote-debugging-port and reviewed capability/telemetry switches; external endpoints, auto-connect, profiles and other launch options are not supported')
+    }
+  }
+  return { args: forwarded, port }
+}
 
 /**
  * Import a tool or side-effecting resource into the current session.
@@ -166,6 +197,9 @@ const VIRTUAL_TOOLS_PREFIX = 'v:tools/'
  * are cleared on sleep so they never persist across session boundaries.
  */
 export class ImportTool implements Tool {
+  private readonly scope = getOrganizationScope()
+  private readonly organizationId?: string
+  private readonly browserKeys = new WeakMap<SessionTools, Map<string, string>>()
   readonly name = 'import_tool'
   readonly description = 'Import a tool or MCP server into the current session. ' +
     'Source: v:tools/<name> for pre-registered, .ts for script tools, .json for MCP config files. ' +
@@ -191,7 +225,12 @@ export class ImportTool implements Tool {
     private loadable: Map<string, LoadableEntry>,
     private workspace: string,
     private chromeManager?: ChromeManager,
-  ) { }
+  ) {
+    this.organizationId = this.scope?.organizationId ?? chromeManager?.organizationId
+    if (this.scope && chromeManager && chromeManager.organizationId !== this.organizationId) {
+      throw new Error('Import tool Chrome organization binding mismatch')
+    }
+  }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
     const extra = Array.isArray(args.args) && args.args.length > 0
@@ -240,6 +279,15 @@ export class ImportTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    const source = String(args.source ?? '')
+    const entry = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? this.loadable.get(source.slice(VIRTUAL_TOOLS_PREFIX.length)) : undefined
+    if (entry && isMcpLoadable(entry)) {
+      const manager = entry.chromeManager ?? entry.sharedConn?.chromeManager ?? this.chromeManager
+      if ((entry.config.name === 'chrome-devtools' || entry.chromeManager || entry.sharedConn?.chromeManager) &&
+        context.organizationId !== (this.organizationId ?? manager?.organizationId)) {
+        return 'Error: import tool Chrome organization binding mismatch'
+      }
+    }
     return await this.importSource(args, context.tools)
   }
 
@@ -313,19 +361,58 @@ export class ImportTool implements Tool {
       ? `${connOwner.config.name}:${extraCliArgs.join(',')}`
       : connOwner.config.name
 
-    // Build the effective args: base config args + persistent config file args + caller args
-    const configArgs = entry.configPath
-      ? await readConfigArgs(entry.configPath)
-      : []
-    const effectiveArgs = [
-      ...(connOwner.config.args ?? []),
-      ...configArgs,
-      ...extraCliArgs,
-    ]
-
-    // Auto-launch Chrome if this entry has a chromeManager
-    const chromeManager = entry.chromeManager ?? (entry.sharedConn as McpLoadable | undefined)?.chromeManager
-    if (chromeManager) {
+    const chromeManager = entry.chromeManager ?? connOwner.chromeManager ??
+      (connOwner.config.name === 'chrome-devtools' ? this.chromeManager : undefined)
+    const scope = getOrganizationScope()
+    const organizationId = this.organizationId ?? scope?.organizationId ?? chromeManager?.organizationId
+    const managedChrome = organizationId !== undefined &&
+      (chromeManager !== undefined || connOwner.config.name === 'chrome-devtools' ||
+        name === 'chrome-devtools' || name === 'chrome-devtools-full')
+    if (managedChrome && (!chromeManager || chromeManager.organizationId !== organizationId ||
+      (scope && (scope.organizationId !== organizationId || (this.scope && scope !== this.scope))) ||
+      this.scope?.closed)) {
+      return 'Error: organization Chrome requires its own runtime-managed browser'
+    }
+    let configArgs: string[]
+    try {
+      const configPath = entry.configPath ?? connOwner.configPath
+      configArgs = configPath ? await readConfigArgs(configPath, managedChrome) : []
+    } catch (error) {
+      return `Error loading organization Chrome config: ${error instanceof Error ? error.message : String(error)}`
+    }
+    let effectiveArgs = [...(connOwner.config.args ?? []), ...configArgs, ...extraCliArgs]
+    if (managedChrome && chromeManager) {
+      let parsed: ReturnType<typeof managedChromeArgs>
+      try {
+        const [packageName, ...baseArgs] = connOwner.config.args ?? []
+        if (connOwner.config.transport !== 'stdio' || connOwner.config.url ||
+          !packageName || !/^chrome-devtools-mcp(?:@[a-zA-Z0-9.*^~+-]+)?$/.test(packageName)) {
+          throw new Error('Organization Chrome requires the built-in managed Chrome DevTools adapter')
+        }
+        parsed = managedChromeArgs([...baseArgs, ...configArgs, ...extraCliArgs])
+        effectiveArgs = [packageName, ...parsed.args]
+      } catch (error) {
+        return `Error loading organization Chrome: ${error instanceof Error ? error.message : String(error)}`
+      }
+      let keys = this.browserKeys.get(sessionTools)
+      if (!keys) {
+        keys = new Map()
+        this.browserKeys.set(sessionTools, keys)
+      }
+      let key = keys.get(connKey)
+      if (!key) {
+        key = crypto.randomUUID()
+        keys.set(connKey, key)
+        const allocationKey = key
+        sessionTools.onReset(async () => {
+          keys.delete(connKey)
+          await chromeManager.release(allocationKey)
+        })
+      }
+      const result = await chromeManager.allocate(key, parsed.port)
+      if ('error' in result) return `Error launching organization Chrome: ${result.error}`
+      effectiveArgs.push(...result.extraArgs)
+    } else if (chromeManager) {
       // Check if port/user-data-dir were explicitly provided
       const hasExplicitPort = effectiveArgs.some((a) => a.startsWith('--remote-debugging-port='))
       const hasExplicitDir = effectiveArgs.some((a) => a.startsWith('--user-data-dir='))

@@ -1,7 +1,7 @@
 import type { JobRequestV1 } from './contracts.ts'
 import { parseWorkdirProcessArgs, type WorkdirProcessArgs } from './capability-shell.ts'
 
-export type LocalApprovalPolicy = 'always' | 'session' | 'grant'
+export type LocalApprovalPolicy = 'none' | 'always' | 'session' | 'grant'
 export type LocalApprovalGrantScope = 'once' | 'session' | 'capability'
 
 export interface LocalApprovalCapability {
@@ -124,7 +124,8 @@ export class InMemoryLocalApprovalService implements LocalApprovalService {
     onPending: () => void,
   ): Promise<boolean> {
     const capability = this.#capabilities.get(request.capabilityId)
-    if (!capability || this.#stopped) return Promise.resolve(false)
+    if (!capability || this.#stopped || signal.aborted) return Promise.resolve(false)
+    if (capability.policy === 'none') return Promise.resolve(true)
     const forcePrompt = request.approval === 'local-required'
     if (!forcePrompt && this.#hasGrant(request, capability.policy)) {
       return Promise.resolve(true)

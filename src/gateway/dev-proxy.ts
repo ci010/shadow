@@ -14,20 +14,7 @@ import type { Hono } from 'hono'
 import type { WebSocket as ServerWebSocket } from 'ws'
 import type { GatewayPlugin } from './types.ts'
 import { upgradeGatewayWebSocket } from './websocket.ts'
-
-const BACKEND_PREFIXES = [
-  '/api/',
-  '/v1/',
-  '/debug/',
-  '/eval/',
-  '/wechat/',
-  '/feishu/',
-  '/cluster/',
-]
-
-function isBackendPath(path: string): boolean {
-  return BACKEND_PREFIXES.some((prefix) => path.startsWith(prefix))
-}
+import { isBackendPath } from './route-kind.ts'
 
 /** Pipe a websocket pair in both directions until either side closes. */
 function bridgeWebSockets(client: ServerWebSocket, upstream: WebSocket): void {

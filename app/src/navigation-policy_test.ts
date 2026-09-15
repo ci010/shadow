@@ -32,7 +32,6 @@ test('Main-facing navigation is scope-aware rather than role-gated', () => {
   assertEquals(routeNames(context), [
     'chat',
     'nodes',
-    'approvals',
     'agents',
     'spans',
     'logs',
@@ -49,7 +48,6 @@ test('restricted Child sees only routes allowed by its scopes', () => {
   assertEquals(routeNames(context), [
     'chat',
     'nodes',
-    'approvals',
   ])
 })
 
@@ -77,7 +75,7 @@ test('Child local surfaces do not require Main administration scopes', () => {
     uiScopes: [],
   }
 
-  assertEquals(routeNames(context), ['nodes', 'approvals'])
+  assertEquals(routeNames(context), ['nodes'])
 })
 
 test('diagnostic routes are grouped without adding a product route', () => {

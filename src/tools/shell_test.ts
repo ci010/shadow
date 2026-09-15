@@ -24,7 +24,7 @@ import type {
 } from '../execution/executor.ts'
 import { defaultManagedShell } from '../utils/exec-shell.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
-import { CommandHandlerManager } from './commands/command-handler.ts'
+import { CommandHandlerManager, type CommandContext } from './commands/command-handler.ts'
 import { ExecTool } from './shell.ts'
 import { ProcessManager as RealProcessManager } from '../agent/process-manager.ts'
 import { SessionTools, Tools } from './registry.ts'
@@ -135,17 +135,38 @@ function execTool(
   workspace: string,
   executor: LocalProcessExecutor,
   backgroundTasks = new RecordingBackgroundTasks(),
+  commandHandler = new CommandHandlerManager(),
 ): ExecTool {
   return new ExecTool(
     workspace,
     120_000,
-    new CommandHandlerManager(),
+    commandHandler,
     {} as ProcessManager,
     defaultManagedShell(),
     backgroundTasks as unknown as BackgroundTaskManager,
     executor,
   )
 }
+
+test('ExecTool command interception retains organization and exact bot identity without spawning', async () => {
+  const handler = new CommandHandlerManager()
+  const intercepted: CommandContext[] = []
+  handler.register('userlink', async context => {
+    intercepted.push(context)
+    return 'Handled'
+  })
+  const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
+  const tool = execTool(sandbox, executor, undefined, handler)
+  const address = { organizationId: 'org', botInstanceId: 'bot-a', platform: 'discord', conversationId: 'chat' }
+  const result = await tool.execute({ script: 'userlink verify qq target' }, {
+    ...context(sandbox), organizationId: 'org', channelAddress: address, channel: 'discord', chatId: 'chat',
+  })
+  assert.equal(result, 'Handled')
+  assert.equal(intercepted.length, 1)
+  assert.equal(intercepted[0].organizationId, 'org')
+  assert.deepEqual(intercepted[0].channelAddress, address)
+  assert.equal(executor.calls.length, 0)
+})
 
 test('ExecTool foreground LocalExecutor parity: stdout, stderr, cwd, shell, args, and dotenv', async () => {
   const workspace = await createTempWorkspace()

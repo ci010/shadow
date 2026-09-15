@@ -1,21 +1,22 @@
 <template>
-  <aside id="sessions-sidebar" ref="sidebar" class="projects-sidebar sessions-sidebar" :class="{ 'is-rail': isRail }" aria-label="Projects" :style="{ '--projects-width': `${isRail ? 64 : sidebarWidth}px` }">
-    <SidebarResizer v-if="desktop && resizeActive && !isRail" class="projects-resizer" :model-value="sidebarWidth" :bounds="resizeBounds"
+  <aside :id="grouped ? domId('sessions-sidebar') : 'sessions-sidebar'" ref="sidebar" class="projects-sidebar sessions-sidebar" :class="{ 'is-rail': isRail, 'is-grouped': grouped }" :aria-label="organizationName || 'Projects'" :style="{ '--projects-width': `${isRail ? 64 : sidebarWidth}px` }">
+    <SidebarResizer v-if="!grouped && desktop && resizeActive && !isRail" class="projects-resizer" :model-value="sidebarWidth" :bounds="resizeBounds"
       label="Resize projects" controls="sessions-sidebar" @update:model-value="preferredWidth = $event" />
     <header class="projects-header">
-      <h2 v-if="!isRail">Projects</h2>
+      <h2 v-if="!isRail"><button v-if="grouped" class="organization-toggle" :aria-expanded="groupExpanded" :aria-controls="domId('projects-navigation')" @click="groupExpanded = !groupExpanded"><span class="i-lucide-chevron-right w-3.5 h-3.5" :class="{ 'org-expanded': groupExpanded }" aria-hidden="true" />{{ organizationName }}</button><template v-else>Projects</template></h2>
       <div class="projects-header-actions">
-        <HoverInfo v-if="desktop" :text="isRail ? 'Expand projects' : 'Collapse projects'"><template #default="{ triggerProps }">
+        <slot name="organization-actions" />
+        <HoverInfo v-if="!grouped && desktop" :text="isRail ? 'Expand projects' : 'Collapse projects'"><template #default="{ triggerProps }">
           <button class="project-add projects-rail-toggle" v-bind="triggerProps" :aria-label="isRail ? 'Expand projects' : 'Collapse projects'" :aria-expanded="!isRail" aria-controls="projects-navigation" @click="railCollapsed = !railCollapsed">
             <span :class="isRail ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="w-4 h-4" aria-hidden="true" />
           </button>
         </template></HoverInfo>
         <HoverInfo text="Add project"><template #default="{ triggerProps }">
-          <button ref="menuButton" class="project-add" v-bind="triggerProps" aria-label="Add project" aria-haspopup="menu" :aria-expanded="menuOpen" aria-controls="project-actions" @click="toggleMenu" @keydown.down.prevent="openMenu"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
+          <button ref="menuButton" class="project-add" v-bind="triggerProps" :aria-label="organizationName ? `New work in ${organizationName}` : 'Add project'" aria-haspopup="menu" :aria-expanded="menuOpen" :aria-controls="domId('project-actions')" @click="toggleMenu" @keydown.down.prevent="openMenu"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
         </template></HoverInfo>
       </div>
     </header>
-    <div id="projects-navigation" class="projects-scroll" :aria-busy="loading || sessionsLoading">
+    <div v-show="!grouped || groupExpanded" :id="domId('projects-navigation')" class="projects-scroll" :aria-busy="loading || sessionsLoading">
       <p v-if="loading" class="sidebar-note" :class="{ 'rail-note': isRail }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading projects…</span></p>
       <div v-if="error && !isRail" class="sidebar-error" role="alert">
         <p>{{ error }}</p>
@@ -26,16 +27,23 @@
       <section v-for="group in groups.projects" :key="group.project.id" class="project-group">
         <TreeRow class="project-folder-row" :selected="selectedProjectId === group.project.id"
           :class="{ working: !!projectWorkingStage(group.sessions) }" :icon-only="isRail"
-          :label="group.project.name" :title="group.project.path" :expanded="expandedProjects.has(group.project.id)" separate-toggle
+          :label="group.project.name" :title="group.project.kind === 'remote' ? `${group.project.workdir.nodeId}: ${group.project.path}` : group.project.path" :expanded="expandedProjects.has(group.project.id)" separate-toggle
           button-class="project-folder" toggle-class="project-toggle"
           :toggle-label="`${expandedProjects.has(group.project.id) ? 'Collapse' : 'Expand'} project ${group.project.name}`"
-          @toggle="toggleProject(group.project.id)" @select="selectProject(group.project.id)">
-          <template #icon><span v-if="isRail" class="project-initial">{{ railInitial(group.project.name) }}</span><span v-else :class="expandedProjects.has(group.project.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
+          @toggle="toggleProject(group.project.id)" @select="selectProject(group.project.id)"
+          @contextmenu.prevent="grouped && openProjectActions(group.project, $event)">
+          <template #icon><span v-if="isRail" class="project-initial">{{ railInitial(group.project.name) }}</span><span v-else :class="group.project.kind === 'remote' ? 'i-lucide-monitor' : expandedProjects.has(group.project.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
           <template #meta><SessionActivity v-if="projectWorkingStage(group.sessions)" :stage="projectWorkingStage(group.sessions)" compact :title="undefined" /></template>
-          <template #actions><HoverInfo :text="`New conversation in ${group.project.name}`"><template #default="{ triggerProps }"><button class="project-add folder-add" v-bind="triggerProps" :aria-label="`New conversation in ${group.project.name}`" @click="startProjectDraft(group.project)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo></template>
+          <template #actions>
+            <HoverInfo :text="`New conversation in ${group.project.name}`"><template #default="{ triggerProps }"><button class="project-add folder-add" v-bind="triggerProps" :aria-label="`New conversation in ${group.project.name}`" @click="startProjectDraft(group.project)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
+            <button v-if="grouped" class="project-add folder-add folder-actions" :aria-label="`Folder actions for ${group.project.name}`"
+              aria-haspopup="menu" :aria-expanded="menuOpen && menuProject?.id === group.project.id" :aria-controls="domId('project-actions')"
+              @click="openProjectActions(group.project, $event)" @keydown.down.prevent="openProjectActions(group.project, $event)"><span class="i-lucide-ellipsis w-4 h-4" aria-hidden="true" /></button>
+          </template>
           <template #info="{ close }">
             <div class="project-info">
               <strong class="project-info-title">{{ group.project.name }}</strong>
+              <p v-if="group.project.kind === 'remote'">Remote device: {{ group.project.workdir.nodeId }}</p>
               <p class="project-info-path">{{ group.project.path }}</p>
               <p>{{ group.sessions.length }} {{ group.sessions.length === 1 ? 'conversation' : 'conversations' }}</p>
               <button class="project-info-new" @click="startProjectDraft(group.project); close()">New conversation</button>
@@ -49,8 +57,8 @@
           <ProjectSessionList :sessions="group.sessions" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
-      <section class="legacy-chats" aria-labelledby="legacy-chats-heading">
-        <h3 id="legacy-chats-heading" :class="{ 'rail-visually-hidden': isRail }">Chats</h3>
+      <section class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
+        <h3 :id="domId('legacy-chats-heading')" :class="{ 'rail-visually-hidden': isRail }">Chats</h3>
         <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading conversations…</span></p>
         <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">Retry conversations</button></div>
         <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Conversations unavailable. Retry conversations" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
@@ -61,7 +69,7 @@
         <HoverInfo :text="`Self reflection · ${groups.reflections.length} conversations`"><template #default="{ triggerProps }">
           <button type="button" class="self-reflection-toggle" :class="{ active: reflectionActive, working: !!reflectionWorkingStage }"
             v-bind="triggerProps" :aria-label="`Self reflection, ${groups.reflections.length} conversations${reflectionActive ? ', active conversation' : ''}`"
-            :aria-expanded="reflectionsExpanded" aria-controls="self-reflection-conversations" @click="reflectionsExpanded = !reflectionsExpanded">
+            :aria-expanded="reflectionsExpanded" :aria-controls="domId('self-reflection-conversations')" @click="reflectionsExpanded = !reflectionsExpanded">
             <span class="self-reflection-caret" aria-hidden="true"><span class="i-lucide-chevron-right" :class="{ open: reflectionsExpanded }" /></span>
             <span class="self-reflection-icon i-lucide-brain" aria-hidden="true" />
             <span class="self-reflection-label">Self reflection</span>
@@ -69,7 +77,7 @@
             <SessionActivity v-if="reflectionWorkingStage" :stage="reflectionWorkingStage" compact :title="undefined" />
           </button>
         </template></HoverInfo>
-        <div v-if="reflectionsExpanded" id="self-reflection-conversations" class="self-reflection-conversations">
+        <div v-if="reflectionsExpanded" :id="domId('self-reflection-conversations')" class="self-reflection-conversations">
           <p v-if="!groups.reflections.length && !isRail" class="sidebar-note">No self reflections yet.</p>
           <ProjectSessionList :sessions="groups.reflections" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed"
             :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
@@ -83,8 +91,8 @@
     <ProjectDialog :mode="dialogMode" :client="client" @close="dialogMode = null" @registered="projectRegistered" @status="cloneStatus = $event" />
     <Teleport to="body">
       <div v-if="menuOpen" class="project-menu-backdrop" @click.self="closeMenu(false)" @keydown.esc.prevent.stop="closeMenu(true)">
-        <div id="project-actions" ref="menu" class="project-menu" role="menu" aria-label="Add project" :style="menuPosition" @keydown="menuKeydown">
-          <button v-for="action in PROJECT_ACTIONS" :key="action.id" role="menuitem" @click="runAction(action.id)">{{ action.label }}</button>
+        <div :id="domId('project-actions')" ref="menu" class="project-menu" role="menu" :aria-label="menuProject ? `Folder actions for ${menuProject.name}` : 'Add project'" :style="menuPosition" @keydown="menuKeydown">
+          <button v-for="action in menuActions" :key="action.id" role="menuitem" @click="runAction(action.id)">{{ action.label }}</button>
         </div>
       </div>
     </Teleport>
@@ -92,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import ProjectDialog from './ProjectDialog.vue'
 import ProjectSessionList from './ProjectSessionList.vue'
 import TreeRow from './TreeRow.vue'
@@ -107,9 +115,13 @@ import { groupProjectSessions, PROJECT_ACTIONS, type SidebarSession } from '../p
 
 const props = defineProps<{
   apiBase: string
+  grouped?: boolean
+  organizationName?: string
+  projectRevision?: number
   sessions: SidebarSession[]
   activeSessionId: string
   draftProjectId?: string
+  remoteFolders?: boolean
   collapsed: ReadonlySet<string>
   stages: Record<string, string>
   sessionsLoading: boolean
@@ -121,9 +133,15 @@ const emit = defineEmits<{
   toggle: [id: string]
   reload: []
   scratch: []
+  remote: []
   draft: [project: ProjectRecord]
+  manage: [project: ProjectRecord, action: 'remove' | 'move']
 }>()
 const client = createProjectsClient(props.apiBase)
+const groupExpanded = ref(true)
+const componentId = useId()
+const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
+const projectActions = computed(() => PROJECT_ACTIONS.filter(action => action.id !== 'remote' || props.remoteFolders))
 const projects = ref<ProjectRecord[]>([])
 const groups = computed(() => groupProjectSessions(projects.value, props.sessions))
 const reflectionsExpanded = ref(false)
@@ -136,6 +154,11 @@ const error = ref('')
 const cloneStatus = ref<CloneView>({ state: 'idle' })
 const dialogMode = ref<'open' | 'clone' | null>(null)
 const menuOpen = ref(false)
+const menuProject = ref<ProjectRecord>()
+const menuActions = computed(() => menuProject.value
+  ? [{ id: 'move' as const, label: 'Move to organization...' }, { id: 'remove' as const, label: 'Remove folder...' }]
+  : projectActions.value)
+let menuAnchor: HTMLElement | undefined
 const menuButton = ref<HTMLElement>()
 const menu = ref<HTMLElement>()
 const menuPosition = ref({ top: '0px', left: '0px' })
@@ -144,7 +167,7 @@ const containerWidth = ref(0)
 const compact = ref(false)
 const desktop = ref(false)
 const railCollapsed = ref(false)
-const isRail = computed(() => desktop.value && railCollapsed.value)
+const isRail = computed(() => !props.grouped && desktop.value && railCollapsed.value)
 const resizeActive = ref(true)
 const preferredWidth = ref<number>()
 const resizeBounds = computed(() => sidebarWidthBounds(containerWidth.value, 200, 400))
@@ -221,16 +244,27 @@ function startProjectDraft(project: ProjectRecord) {
   expandedProjects.add(project.id)
   emit('draft', project)
 }
-async function openMenu() {
-  if (!menuButton.value) return
-  const rect = menuButton.value.getBoundingClientRect()
+async function showMenu(anchor: HTMLElement) {
+  menuAnchor = anchor
+  const rect = anchor.getBoundingClientRect()
   menuPosition.value = {
-    top: `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 152))}px`,
-    left: `${Math.max(8, Math.min(rect.right - 196, window.innerWidth - 204))}px`,
+    top: `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - (menuActions.value.length * 40 + 18)))}px`,
+    left: `${Math.max(8, Math.min(rect.right - 228, window.innerWidth - 236))}px`,
   }
   menuOpen.value = true
   await nextTick()
   menu.value?.querySelector<HTMLButtonElement>('button')?.focus()
+}
+function openMenu() {
+  menuProject.value = undefined
+  if (menuButton.value) return showMenu(menuButton.value)
+}
+function openProjectActions(project: ProjectRecord, event: MouseEvent | KeyboardEvent) {
+  if (!(event.currentTarget instanceof HTMLElement)) return
+  menuProject.value = project
+  const anchor = event.currentTarget.matches('button') ? event.currentTarget
+    : event.currentTarget.querySelector<HTMLButtonElement>('button.project-folder') ?? event.currentTarget
+  void showMenu(anchor)
 }
 function toggleMenu() {
   if (menuOpen.value) closeMenu(true)
@@ -238,11 +272,14 @@ function toggleMenu() {
 }
 function closeMenu(restoreFocus = false) {
   menuOpen.value = false
-  if (restoreFocus) menuButton.value?.focus({ preventScroll: true })
+  if (restoreFocus) menuAnchor?.focus({ preventScroll: true })
 }
-function runAction(id: typeof PROJECT_ACTIONS[number]['id']) {
+function runAction(id: typeof PROJECT_ACTIONS[number]['id'] | 'remove' | 'move') {
   closeMenu(true)
-  if (id === 'scratch') { selectedProjectId.value = ''; emit('scratch') }
+  if (id === 'remove' || id === 'move') {
+    if (menuProject.value) emit('manage', menuProject.value, id)
+  } else if (id === 'scratch') { selectedProjectId.value = ''; emit('scratch') }
+  else if (id === 'remote') { selectedProjectId.value = ''; emit('remote') }
   else dialogMode.value = id
 }
 function menuKeydown(event: KeyboardEvent) {
@@ -266,6 +303,12 @@ function deactivate() {
   loading.value = false
 }
 const closeOnResize = () => { closeMenu(); measureSidebar() }
+watch(() => props.projectRevision, () => {
+  listRequest?.abort()
+  listRequest = undefined
+  loading.value = false
+  void loadProjects()
+})
 onMounted(() => { observeSidebar(); void loadProjects(); window.addEventListener('resize', closeOnResize) })
 onActivated(() => { active = true; observeSidebar(); void loadProjects() })
 onDeactivated(deactivate)
@@ -274,6 +317,14 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 
 <style scoped>
 .projects-sidebar { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; box-sizing: border-box; border-right: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
+.projects-sidebar.is-grouped { width: 100%; flex: 0 0 auto; border-right: 0; }
+.is-grouped .projects-scroll { overflow: visible; flex: none; padding-bottom: 12px; }
+.is-grouped .projects-header { min-height: 48px; padding: 8px 10px; gap: 4px; }
+.is-grouped .projects-header h2 { flex: 1; min-width: 0; }
+.organization-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; overflow-wrap: anywhere; }
+.organization-toggle span { flex-shrink: 0; }
+.organization-toggle:hover { background: var(--c-bg-muted); }
+.org-expanded { transform: rotate(90deg); }
 .projects-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 60px; padding: 12px 16px 8px 20px; }
 .projects-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .projects-header-actions { display: flex; align-items: center; gap: 4px; }
@@ -293,7 +344,7 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .text-action { border: 0; padding: 3px 0; background: transparent; color: var(--c-text); text-decoration: underline; text-underline-offset: 3px; font: inherit; }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .project-menu-backdrop { position: fixed; inset: 0; z-index: 900; }
-.project-menu { position: fixed; display: flex; flex-direction: column; width: 196px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
+.project-menu { position: fixed; display: flex; flex-direction: column; width: 228px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
 .project-menu button { border: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: transparent; color: var(--c-text); font-size: 13px; text-align: left; }
 .project-menu button:hover, .project-menu button:focus-visible { background: var(--c-bg-muted); }
 .project-info { min-width: 0; }

@@ -12,10 +12,14 @@ import type { SkillsManager } from '../skills/loader.ts'
 import type { SessionTools } from '../tools/registry.ts'
 import type { ExecShell } from '../tools/shell.ts'
 import type { Executor } from '../execution/executor.ts'
+import type { ToolBridgeFactory } from '../eval/bridge.ts'
 import type { EventService } from '../events/service.ts'
+import type { IdentityManager } from './identity.ts'
 import { channelMessageInput, type DeliveryReceipt } from '../sessions/input.ts'
 
 export interface ExecutionContext extends MessageContext {
+  organizationId?: string
+  evalBridge?: ToolBridgeFactory
   inputSource?: 'user' | 'session' | 'event'
   /** Logical session ID (e.g. "discord:1234567890") */
   sessionId: string
@@ -57,6 +61,7 @@ export interface ExecutionContext extends MessageContext {
 }
 
 export interface AgentOptions {
+  identity?: IdentityManager
   bus: Bus
   // ── Pre-built services ──────────────────────────────────────────────
   sessions: SessionManager
@@ -76,6 +81,7 @@ export interface AgentOptions {
  * sleep monitoring, and service lifecycle.
  */
 export class AgentApp {
+  private identity?: IdentityManager
   private bus: Bus
   readonly sessions: SessionManager
   readonly skills: SkillsManager
@@ -87,6 +93,7 @@ export class AgentApp {
   private events: EventService
 
   constructor(opts: AgentOptions) {
+    this.identity = opts.identity
     this.bus = opts.bus
     this.sessions = opts.sessions
     this.skills = opts.skills
@@ -121,8 +128,22 @@ export class AgentApp {
 
   /** Only channel adapters enter the slash-command boundary. */
   async receiveChannelMessage(msg: InboundMessage): Promise<DeliveryReceipt> {
+    const release = this.sessions.acquireProjectAccess()
+    try { return await this.receiveChannelMessageWithAccess(msg) }
+    finally { release() }
+  }
+
+  private async receiveChannelMessageWithAccess(msg: InboundMessage): Promise<DeliveryReceipt> {
     if (!this.running) throw new Error('Agent is not accepting input')
+    if (this.sessions.organizationId && msg.channelAddress &&
+      msg.channelAddress.organizationId !== this.sessions.organizationId) {
+      throw new Error('Channel input belongs to another organization')
+    }
     const sessionId = deriveSessionId(msg)
+    this.sessions.assertProjectAccess(sessionId)
+    if (msg.senderId.trim()) {
+      await this.identity?.observeInboundAccount(msg.channel, msg.senderId, msg.chatId, msg.senderName, msg.channelAddress)
+    }
     const input = channelMessageInput(msg)
     const llm = this.getLlmRuntimeConfig()
     const output = input.kind === 'message' && input.policy === 'interactive'
@@ -157,6 +178,7 @@ export class AgentApp {
       event: 'response',
       channel: msg.channel,
       chatId: msg.chatId,
+      ...(msg.channelAddress ? { channelAddress: msg.channelAddress } : {}),
       content,
       replyTo: msg.platformMessageId,
       done: true,

@@ -1,4 +1,5 @@
 import type { ImageSource } from './image-context.ts'
+import { apiUrl } from './api-url.ts'
 
 export interface PendingChatAttachment {
   key: string
@@ -159,7 +160,7 @@ async function uploadOneChatAttachment(
   form.set('chatId', chatId)
   if (parentSessionId) form.set('parentSessionId', parentSessionId)
   form.set('file', attachment.file)
-  const response = await request(new URL('/api/chat/upload', apiBase), {
+  const response = await request(apiUrl(apiBase, '/api/chat/upload'), {
     method: 'POST',
     body: form,
     signal,

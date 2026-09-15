@@ -1,5 +1,6 @@
 import { deepEqual as assertEquals, rejects as assertRejects, throws as assertThrows } from 'node:assert/strict'
 import { test } from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import { rm, writeFile } from 'node:fs/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import type {
@@ -295,6 +296,75 @@ test('child node session handshakes, advertises, executes, streams, and withdraw
   assertEquals(child.withdrawCapability(capability.capabilityId), true)
   await waitFor(() => registry.listCapabilities(auth.nodeId).length === 0)
   await closePair(child, childRun, mainRun)
+})
+
+test('chunked job output waits for transport capacity instead of disconnecting a slow reader', { timeout: 5000 }, async () => {
+  const registry = approvedRegistry()
+  const pair = createInMemoryNodeDuplexPair()
+  const received: JobEventV1[] = []
+  const terminal = Promise.withResolvers<void>()
+  const main = new NodeConnectionSession(registry, pair.server, mainHello, {
+    maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000,
+    onJobEvent: event => { received.push(event); if (event.type === 'completed') terminal.resolve() },
+  })
+  const executor = new SuccessfulExecutor()
+  executor.execute = async function* (request) {
+    yield event(request.jobId, 0, 'accepted')
+    for (let sequence = 1; sequence <= 32; sequence++) {
+      yield event(request.jobId, sequence, 'stdout', { chunk: String(sequence) })
+    }
+    yield terminalEvent(request.jobId, 33, 'completed', 'completed')
+  }
+  const child = childSession({
+    incoming: pair.client.incoming, closed: pair.client.closed,
+    send: async message => { await delay(1); await pair.client.send(message) },
+    close: info => pair.client.close(info),
+  }, executor, { maxOutboundQueue: 1 })
+  const mainRun = main.run()
+  const childRun = child.run()
+  try {
+    await child.authenticated
+    child.advertiseCapability(capability)
+    while (!registry.listCapabilities(auth.nodeId).length) await delay(1)
+    main.dispatchJob(request)
+    await terminal.promise
+    assertEquals(received.map(event => event.sequence), Array.from({ length: 34 }, (_, i) => i))
+    assertEquals(child.state, 'authenticated')
+  } finally { await closePair(child, childRun, mainRun) }
+})
+
+test('workdir display metadata is advertised only when negotiated with Main', async () => {
+  for (const supported of [false, true]) {
+    const registry = approvedRegistry()
+    const pair = createInMemoryNodeDuplexPair()
+    const displayHello = { ...mainHello, features: [...mainHello.features, 'workdir-display-v1'] }
+    const main = new NodeConnectionSession(registry, pair.server, supported ? displayHello : mainHello, {
+      maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000,
+    })
+    const child = new ChildNodeConnectionSession(
+      pair.client, displayHello, auth, new SuccessfulExecutor(),
+      { maxOutboundQueue: 8, heartbeatTimeoutMs: 30_000 },
+    )
+    const mainRun = main.run()
+    const childRun = child.run()
+    try {
+      await child.authenticated
+      child.advertiseCapability({
+        ...capability, kind: 'workdir', displayPath: '/child/project',
+      })
+      await waitFor(() => registry.listCapabilities(auth.nodeId).length === 1)
+      const advertised = registry.listCapabilities(auth.nodeId)[0]
+      assertEquals(advertised.displayPath, supported ? '/child/project' : undefined)
+      assertThrows(() => child.advertiseCapability({
+        ...capability, kind: 'workdir', displayPath: '/child\nforged',
+      }), NodeSessionError)
+      assertThrows(() => child.advertiseCapability({
+        ...capability, nodeId: 'another-node', kind: 'workdir', displayPath: '/child/project',
+      }), NodeSessionError)
+    } finally {
+      await closePair(child, childRun, mainRun)
+    }
+  }
 })
 
 test('child node session executes a confined workdir read and rejects shell capability confusion', async () => {

@@ -61,15 +61,15 @@ test('client patches only selected channel and refuses unexpected success payloa
     return Response.json({ channel })
   })
   assert.deepEqual(await client.save('qq', { enabled: false }), channel)
-  const wrong = createChannelSettingsClient('', async () => Response.json({ channel: statuses()[1] }))
+  const wrong = createChannelSettingsClient('http://fixture', async () => Response.json({ channel: statuses()[1] }))
   await assert.rejects(wrong.save('qq', {}), /another channel/)
-  const denied = createChannelSettingsClient('', async () => new Response('credential-bearing SDK error', { status: 403 }))
+  const denied = createChannelSettingsClient('http://fixture', async () => new Response('credential-bearing SDK error', { status: 403 }))
   await assert.rejects(denied.list(), /Main administrator/)
 })
 test('Settings shell and channel forms compile and preserve accessible navigation and hidden drafts', async () => {
   const require = createRequire(new URL('./package.json', import.meta.url))
   const compiler = require('vue/compiler-sfc') as typeof import('vue/compiler-sfc')
-  for (const filename of ['SettingsView.vue', 'ChannelsView.vue']) {
+  for (const filename of ['SettingsView.vue', 'OrganizationSettings.vue', 'ChannelsView.vue']) {
     const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
     const { descriptor, errors } = compiler.parse(source, { filename })
     assert.deepEqual(errors, [])
@@ -79,11 +79,12 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
     if (filename === 'SettingsView.vue') {
       assert.match(source, /aria-label="Settings sections"/)
       assert.match(source, /ProvidersView v-show=/)
-      assert.match(source, /ChannelsView v-if="channelsOpened" v-show=/)
+      assert.doesNotMatch(source, /<ChannelsView/)
     }
+    if (filename === 'OrganizationSettings.vue') assert.match(source, /ChannelsView v-if="botsOpened" v-show=/)
   }
   const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
-  assert.match(app, /hasReadyProvider \|\| !isMain \|\| route.name === 'settings'/)
+  assert.doesNotMatch(app, /v-if="hasReadyProvider|v-if="showSetup"/, 'Shared provider readiness must not gate organization views')
   const router = await readFile(new URL('./router.ts', import.meta.url), 'utf8')
   assert.match(router, /path: '\/providers'.*redirect: '\/settings\/providers'/)
 })

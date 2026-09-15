@@ -10,6 +10,7 @@ export class SkillsWatcher {
   private watchTask: Promise<void> | null = null
   private reloadTimer: ReturnType<typeof setTimeout> | null = null
   private changedPaths = new Set<string>()
+  private reloadTask: Promise<void> = Promise.resolve()
 
   constructor(private skills: SkillsManager) {}
 
@@ -38,11 +39,14 @@ export class SkillsWatcher {
       await this.watchTask.catch(() => {})
       this.watchTask = null
     }
+    this.changedPaths.clear()
+    await this.reloadTask
   }
 
   private async runWatchLoop(watcher: FsWatcher): Promise<void> {
     try {
       for await (const event of watcher) {
+        if (this.watcher !== watcher) break
         for (const path of event.paths) {
           this.changedPaths.add(path)
         }
@@ -59,7 +63,7 @@ export class SkillsWatcher {
       this.reloadTimer = null
       const paths = new Set(this.changedPaths)
       this.changedPaths.clear()
-      void this.reloadChangedSkills(paths)
+      this.reloadTask = this.reloadTask.then(() => this.reloadChangedSkills(paths))
     }, 300)
   }
 

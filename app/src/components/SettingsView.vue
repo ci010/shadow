@@ -1,6 +1,6 @@
 <template>
   <div class="settings-view">
-    <header class="settings-heading"><h1>Settings</h1><p>Providers and channel connections for this Main.</p></header>
+    <header class="settings-heading"><h1>App settings</h1><p>Provider connections are shared. Model defaults, bots and learning belong to each organization.</p></header>
     <p v-if="!available" role="status">Settings are managed by Main administrators.</p>
     <div v-else class="settings-layout">
       <nav class="settings-navigation" aria-label="Settings sections">
@@ -12,29 +12,24 @@
       <div class="settings-section">
         <ProvidersView v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
           @configured="$emit('configured')" @retry="$emit('retry')" @close="$emit('close')" />
-        <ChannelsView v-if="channelsOpened" v-show="section === 'channels'" :api-base="apiBase" :available="available" :active="section === 'channels'" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import type { ProviderSetupStatus } from '../provider-setup.ts'
 import ProvidersView from './ProvidersView.vue'
-import ChannelsView from './ChannelsView.vue'
 
 const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean }>()
 defineEmits<{ configured: []; retry: []; close: [] }>()
 const route = useRoute()
 const sections = [
   { id: 'providers', label: 'Providers', icon: 'i-lucide-cpu' },
-  { id: 'channels', label: 'Channels', icon: 'i-lucide-radio' },
 ]
-const section = computed(() => route.name === 'settings' && route.params.section === 'channels' ? 'channels' : 'providers')
-const channelsOpened = ref(false)
-watch(section, value => { if (value === 'channels') channelsOpened.value = true }, { immediate: true })
+const section = computed(() => 'providers')
 </script>
 
 <style scoped>

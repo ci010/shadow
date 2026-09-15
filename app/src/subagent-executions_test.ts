@@ -151,7 +151,7 @@ test('mode surfaces compile without replacing existing composer, hidden preview 
       assert.doesNotMatch(source, /fetch\(/)
     }
     if (filename === 'ChatTab.vue') {
-      assert.match(source, /:explorer-enabled="!embedded"/)
+      assert.match(source, /:explorer-enabled="!embedded && \(!activeSessionId \|\| !!currentWorkdir\)"/)
       assert.match(source, /conversationDocumentVisible\.value && activeSessionId\.value/)
       assert.match(source, /if \(isExecution\.value\) \{\s*composerError\.value/)
       assert.match(source, /ctxRes && !ctxRes\.ok/)

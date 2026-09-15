@@ -44,12 +44,12 @@
       <label v-if="provider === 'custom'">Provider name
         <input v-model="customProvider" required pattern="[a-z][a-z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
       </label>
-      <label>Model <input v-model="model" required placeholder="Model ID from your provider" :disabled="saving"></label>
+      <label>Connection model <input v-model="model" required placeholder="Model ID from your provider" :disabled="saving"></label>
       <label>API base URL <input v-model="baseUrl" type="url" :required="provider === 'custom'" placeholder="Provider default, or http://127.0.0.1:11434/v1" :disabled="saving"></label>
       <label>API key <input v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
         :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? 'Leave blank to keep the saved key' : provider === 'custom' ? 'Optional for local endpoints' : 'Enter your provider API key'"></label>
       <p class="help">Keys are saved by Main in this installation's configuration, never in browser storage. Keyless local endpoints do not require a key.</p>
-      <div class="actions"><button class="primary" :disabled="saving">{{ saving ? 'Saving...' : 'Save and use provider' }}</button></div>
+      <div class="actions"><button class="primary" :disabled="saving">{{ saving ? 'Saving...' : 'Save provider connection' }}</button></div>
     </form>
     <div class="footer-actions">
       <button :disabled="busy || saving" @click="$emit('retry')">Recheck configuration</button>
@@ -76,7 +76,7 @@ const title = ref<HTMLElement | null>(null)
 defineExpose({ focusTitle: () => title.value?.focus() })
 const knownProviders = [...providerPresets.map(item => item.id), 'custom']
 const lead = computed(() => props.mode === 'edit'
-  ? 'Update this provider, then choose a model to use for new turns.'
+  ? 'Update this shared connection. Default models are configured separately in each organization.'
   : props.excludedProviders.includes('copilot')
     ? 'Configure an API key or add a named local model endpoint.'
     : 'Sign in with GitHub Copilot, or configure an API key or local model endpoint.')

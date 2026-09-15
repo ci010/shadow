@@ -12,11 +12,14 @@ export class McpWatcher {
   private reloadTimer: ReturnType<typeof setTimeout> | null = null
   private reloadPromise: Promise<void> | null = null
   private configPath: string | null = null
+  private startTask?: Promise<void>
+  private stopping = false
 
   constructor(
     private manager: McpManager,
     private registry: Tools,
     private workspace?: string,
+    private readonly scopedConfigPath?: string,
   ) {}
 
   async load(servers: McpServerConfig[]): Promise<void> {
@@ -25,10 +28,13 @@ export class McpWatcher {
 
   start(): void {
     if (this.watcher) return
-    this.startWatchingConfig()
+    this.stopping = false
+    this.startTask = this.startWatchingConfig().catch(error => console.error('[mcp-watcher] Cannot watch configuration', error))
   }
 
   async stop(): Promise<void> {
+    this.stopping = true
+    await this.startTask
     if (this.reloadTimer) {
       clearTimeout(this.reloadTimer)
       this.reloadTimer = null
@@ -41,6 +47,7 @@ export class McpWatcher {
       await this.watchTask.catch(() => {})
       this.watchTask = null
     }
+    await this.reloadPromise
     await this.disconnectAll()
     this.unregisterTools()
   }
@@ -54,6 +61,7 @@ export class McpWatcher {
   }
 
   private scheduleReload(): void {
+    if (this.stopping) return
     if (this.reloadTimer) clearTimeout(this.reloadTimer)
     this.reloadTimer = setTimeout(() => {
       this.reloadTimer = null
@@ -62,15 +70,16 @@ export class McpWatcher {
   }
 
   private async reloadFromConfig(): Promise<void> {
-    await this.runReload(async () => {
+    try {
       const config = await loadConfig(this.configPath ?? undefined)
+      if (this.stopping) return
       await this.reloadWithServers(config.mcp.servers)
-    })
+    } catch (error) { console.error('[mcp-watcher] Cannot reload configuration', error) }
   }
 
   private async startWatchingConfig(): Promise<void> {
-    this.configPath = await resolveConfigPath()
-    if (!this.configPath || this.watcher) return
+    this.configPath = this.scopedConfigPath ?? await resolveConfigPath()
+    if (!this.configPath || this.watcher || this.stopping) return
 
     this.watcher = watchFs(this.configPath)
     this.watchTask = this.runWatchLoop(this.watcher)

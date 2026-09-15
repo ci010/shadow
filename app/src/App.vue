@@ -4,7 +4,7 @@
         <nav class="tab-nav" aria-label="Main navigation">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
-            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name }" custom v-slot="{ isActive, navigate }">
+            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { organizationId: route.params.organizationId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
               <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">
                 {{ item.label }}
               </button>
@@ -33,17 +33,14 @@
         <span class="runtime-status-item runtime-status-node" :title="installationContext.localNodeId">
           <strong>Local node</strong> {{ installationContext.localNodeId }}
         </span>
-        <router-link
-          v-if="installationContext.mode === 'child'"
-          class="runtime-status-item runtime-status-link"
-          :to="{ name: 'approvals' }"
-        >
-          <strong>Approvals</strong>
-        </router-link>
       </div>
     </div>
 
     <main class="app-main">
+      <div v-if="['agents', 'spans', 'logs'].includes(String(route.name))" class="resource-scope" aria-label="Organization scope">
+        Organization
+        <router-link :to="{ name: 'organization-settings', params: { organizationId: route.params.organizationId, section: 'general' } }">{{ route.params.organizationId }}</router-link>
+      </div>
       <aside v-if="showChildRecovery" class="recovery-panel" role="status">
         <div class="recovery-copy">
           <strong>{{ recoveryTitle }}</strong>
@@ -51,26 +48,18 @@
         </div>
         <div class="recovery-links">
           <router-link :to="{ name: 'nodes' }">Manage this node</router-link>
-          <router-link :to="{ name: 'approvals' }">Review approvals</router-link>
         </div>
       </aside>
-      <div v-if="showSetup" class="setup-content-scroll">
-        <SettingsView v-bind="providerViewProps" v-on="providerViewEvents" />
-      </div>
-      <p v-else-if="providerError && route.name !== 'settings'" class="provider-error" role="alert">{{ providerError }} Open Settings → Providers to reconnect.</p>
       <div
-        v-if="hasReadyProvider || !isMain || route.name === 'settings'"
-        v-show="!showSetup"
         class="route-content"
-        :class="{ 'chat-route': route.name === 'chat' }"
+        :class="{ 'chat-route': route.name === 'chat' || route.name === 'organizations' }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
-        <KeepAlive :key="resolvedBase" include="ChatWorkspace">
+        <KeepAlive :key="resolvedBase" include="OrganizationsWorkspace,OrganizationSettings">
           <component
             :is="Component"
-            v-if="!showSetup"
-            :key="viewRoute.name"
-            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: resolvedBase }"
+            :key="viewRoute.name === 'chat' || viewRoute.name === 'organizations' ? 'organizations-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.organizationId ?? '')}`"
+            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, organizationId: viewRoute.params.organizationId, hostApiBase: resolvedBase, visible: route.name === 'chat' || route.name === 'organizations' }"
             v-on="viewRoute.name === 'settings' ? providerViewEvents : {}"
             @update:log-count="logCount = $event"
           />
@@ -88,10 +77,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
-import SettingsView from './components/SettingsView.vue'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
 import DesktopFrame from './DesktopFrame.vue'
-import { modelDisplayName, modelSelectionInput, provideModelSelection } from './model-selection.ts'
+import { organizationBase } from './api-url.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -103,6 +91,8 @@ const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
 
 const resolvedBase = computed(() => installationContext.value.apiBase)
+const contentBase = computed(() => typeof route.params.organizationId === 'string' && route.name !== 'chat'
+  ? organizationBase(resolvedBase.value, route.params.organizationId) : resolvedBase.value)
 const roleLabel = computed(() => installationContext.value.mode === 'main' ? 'Main' : 'Child')
 const mainConnectionLabel = computed(() => {
   if (installationContext.value.mainConnection === 'connected') return 'Connected'
@@ -123,15 +113,9 @@ const recoveryTitle = computed(() =>
 const logCount = ref(0)
 
 // ── Model selector ──────────────────────────────────────────
-const currentModel = ref('')
-const modelOptions = ref<string[]>([])
 const isMain = computed(() => installationContext.value.mode === 'main')
 const providerStatus = ref<ProviderSetupStatus | null>(null)
-const providerReady = computed(() => providerStatus.value?.ready === true)
 const checkingProvider = ref(true)
-const hasReadyProvider = ref(false)
-const savingModel = ref(false)
-const showSetup = computed(() => isMain.value && !providerReady.value && route.name !== 'settings')
 const providerError = ref('')
 const providerViewProps = computed(() => ({
   apiBase: resolvedBase.value,
@@ -147,37 +131,6 @@ const providerViewEvents = {
 }
 let providerGeneration = 0
 let providerRequest: AbortController | undefined
-provideModelSelection({
-  current: currentModel,
-  options: modelOptions,
-  disabled: computed(() => !providerReady.value),
-  loading: computed(() => checkingProvider.value || savingModel.value),
-  error: providerError,
-  select: onModelChange,
-})
-
-async function fetchModels(signal: AbortSignal, generation: number) {
-  try {
-    const res = await fetch(`${resolvedBase.value}/debug/models`, { signal })
-    if (generation !== providerGeneration) return
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) {
-        if (providerStatus.value) providerStatus.value = { ...providerStatus.value, ready: false, reason: 'invalid_credentials' }
-        providerError.value = 'Provider credentials were rejected. Sign in again or update the API key.'
-      } else {
-        providerError.value = 'Could not load models. Check your provider connection.'
-      }
-      return
-    }
-    const data = await res.json()
-    if (generation === providerGeneration) {
-      modelOptions.value = Array.isArray(data.models) ? data.models.filter((model: unknown) => typeof model === 'string') : []
-    }
-  } catch {
-    if (!signal.aborted && generation === providerGeneration) providerError.value = 'Could not load models. Check your network and provider settings.'
-  }
-}
-
 async function refreshProvider(refresh = false) {
   const generation = ++providerGeneration
   providerRequest?.abort()
@@ -190,10 +143,6 @@ async function refreshProvider(refresh = false) {
     const status = await createProviderSetupClient(resolvedBase.value).status(signal, refresh)
     if (generation !== providerGeneration) return
     providerStatus.value = status
-    currentModel.value = status.model
-    if (status.ready) hasReadyProvider.value = true
-    if (status.ready) await fetchModels(signal, generation)
-    else modelOptions.value = []
   } catch (error) {
     if (signal.aborted || generation !== providerGeneration) return
     providerStatus.value = null
@@ -208,29 +157,10 @@ function providerConfigured() {
   void router.push(lastChatLocation.value)
 }
 
-async function onModelChange(model: string) {
-  if (!model || !providerStatus.value || savingModel.value) return
-  const input = modelSelectionInput(model, providerStatus.value.provider)
-  if (input.provider === providerStatus.value.provider && modelDisplayName(model) === modelDisplayName(currentModel.value)) return
-  savingModel.value = true
-  providerError.value = ''
-  try {
-    const result = await createProviderSetupClient(resolvedBase.value).save(
-      input,
-    )
-    if (!result.ready) throw new Error('The selected provider is not ready. The model was not changed; check Settings → Providers.')
-    currentModel.value = result.model
-    providerStatus.value = result
-    window.dispatchEvent(new CustomEvent('shadow:config-changed'))
-  } catch (error) {
-    providerError.value = error instanceof Error ? error.message : 'Could not change the selected model.'
-  } finally {
-    savingModel.value = false
-  }
-}
-
 watch(resolvedBase, () => { void refreshProvider() })
-const onConfigChanged = () => { void refreshProvider(true) }
+const onConfigChanged = (event: Event) => {
+  if (!(event as CustomEvent<{ organizationId?: string }>).detail?.organizationId) void refreshProvider(true)
+}
 
 const navigationGroups = computed(() => {
   const items = navigationFor(installationContext.value)
@@ -327,6 +257,8 @@ onUnmounted(() => {
 }
 
 .provider-error { flex: 0 0 auto; color: var(--c-error); padding: 8px 12px; margin: 0; }
+.resource-scope { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--c-border); color: var(--c-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.resource-scope a { color: var(--c-text); }
 
 /* ── System bar ────────────────────────────────────────────── */
 

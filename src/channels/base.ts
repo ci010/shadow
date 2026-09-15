@@ -1,12 +1,16 @@
 import type { InboundMessage, OutboundMessage } from '../bus/events.ts'
+import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { Hono } from 'hono'
 import type { DeliveryReceipt, ReceiveChannelMessage } from '../sessions/input.ts'
 import type { ChannelState } from './setup-contract.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
 
 export interface ChannelDecision {
+  channelAddress?: ChannelAddress
   chatId: string
   senderId: string
   requestId: string
@@ -35,6 +39,11 @@ export class ChannelAdmissionError extends Error {
 export interface BaseChannel {
   /** Channel identifier (e.g., "discord", "telegram"). */
   readonly name: string
+  setBotScope?(scope: Omit<ChannelAddress, 'conversationId'>): void
+  setOrganizationScope?(scope: OrganizationScope): void
+  setIdentityHandler?(handler: (identity: string) => void): void
+  withConnection?<T>(operation: () => T): T
+  connectionGuard?(): () => void
 
   /** Configure explicit message admission before starting the channel. */
   setReceiver(receiver: ReceiveChannelMessage): void
@@ -69,10 +78,14 @@ export interface BaseChannel {
 export abstract class AbstractChannel implements BaseChannel {
   abstract readonly name: string
   private receiver?: ReceiveChannelMessage
+  private botScope?: Omit<ChannelAddress, 'conversationId'>
+  private identityHandler?: (identity: string) => void
   private statusListener?: (state: ChannelState) => void
   private accepting = true
   private decisionHandler?: ChannelDecisionHandler
   private requestController = new AbortController()
+  private connectionContext = new AsyncLocalStorage<AbortSignal>()
+  private organizationScope = getOrganizationScope()
   protected chatActiveMessage: Map<string, {
     messageId: string
     bufferedChunks: string[]
@@ -89,12 +102,61 @@ export abstract class AbstractChannel implements BaseChannel {
 
   acceptToolResults: boolean = false
 
+  setBotScope(scope: Omit<ChannelAddress, 'conversationId'>): void {
+    if (this.botScope) throw new Error('Channel scope is immutable')
+    if (!scope.organizationId || !scope.botInstanceId || scope.platform !== this.name) throw new TypeError('Invalid bot scope')
+    if (this.organizationScope && this.organizationScope.organizationId !== scope.organizationId) throw new TypeError('Bot telemetry scope mismatch')
+    this.botScope = Object.freeze({ ...scope })
+  }
+
+  setOrganizationScope(scope: OrganizationScope): void {
+    if ((this.organizationScope && this.organizationScope !== scope)
+      || (this.botScope && this.botScope.organizationId !== scope.organizationId)) {
+      throw new TypeError('Channel organization scope is immutable')
+    }
+    this.organizationScope = scope
+  }
+
+  protected bindCallback<A extends unknown[]>(callback: (...args: A) => void): (...args: A) => void {
+    return (...args) => {
+      if (this.organizationScope?.closed) return
+      if (this.organizationScope) this.organizationScope.run(() => callback(...args))
+      else callback(...args)
+    }
+  }
+
+  setIdentityHandler(handler: (identity: string) => void): void {
+    this.identityHandler = handler
+  }
+
+  protected reportIdentity(identity: string): void {
+    this.identityHandler?.(identity)
+  }
+
+  protected address(chatId: string): ChannelAddress | undefined {
+    return this.botScope ? { ...this.botScope, conversationId: chatId } : undefined
+  }
+
+  protected logicalSessionId(chatId: string): string {
+    this.assertConnection()
+    const address = this.address(chatId)
+    return address ? channelSessionId(address) : `${this.name}:${chatId}`
+  }
+
+  protected mediaSourceId(nativeId: string): string {
+    this.assertConnection()
+    return (this.botScope
+      ? `${this.botScope.organizationId}_${this.botScope.botInstanceId}_${this.name}_${nativeId}`
+      : `${this.name}_${nativeId}`).replace(/[^a-zA-Z0-9_-]/g, '_')
+  }
+
   setReceiver(receiver: ReceiveChannelMessage): void {
-    this.receiver = receiver
+    this.receiver = message => this.organizationScope
+      ? this.organizationScope.run(() => receiver(message)) : receiver(message)
   }
 
   setStatusListener(listener: (state: ChannelState) => void): void {
-    this.statusListener = listener
+    this.statusListener = this.bindCallback(listener)
   }
 
   getCapabilities(_chatId: string): ChannelCapabilities | Promise<ChannelCapabilities> {
@@ -102,14 +164,18 @@ export abstract class AbstractChannel implements BaseChannel {
   }
 
   setDecisionHandler(handler: ChannelDecisionHandler): void {
-    this.decisionHandler = handler
+    this.decisionHandler = decision => this.organizationScope
+      ? this.organizationScope.run(() => handler(decision)) : handler(decision)
   }
 
   protected async answerDecision(decision: ChannelDecision): Promise<string> {
+    this.assertConnection()
     if (!this.accepting) throw new ChannelAdmissionError('Channel is disconnected', 503)
     if (!this.isAllowed(decision.senderId)) throw new ChannelAdmissionError('Sender is not authorized', 403)
     if (!this.decisionHandler) throw new ChannelAdmissionError('Decision handler is unavailable', 503)
-    return this.decisionHandler(decision)
+    return this.decisionHandler({
+      ...decision, ...(this.botScope ? { channelAddress: this.address(decision.chatId) } : {}),
+    })
   }
 
   async presentDecision(chatId: string, _request: YieldRequest, content: string): Promise<void> {
@@ -117,7 +183,10 @@ export abstract class AbstractChannel implements BaseChannel {
   }
 
   async presentDecisionText(chatId: string, content: string): Promise<void> {
-    const messageId = await this.send({ channel: this.name, chatId, content, event: 'response', done: true })
+    const messageId = await this.send({
+      channel: this.name, chatId, content, event: 'response', done: true,
+      ...(this.botScope ? { channelAddress: this.address(chatId) } : {}),
+    })
     if (!messageId) throw new Error('Channel decision message was not acknowledged')
   }
 
@@ -132,8 +201,31 @@ export abstract class AbstractChannel implements BaseChannel {
     else this.chatActiveMessage.clear()
   }
 
+  withConnection<T>(operation: () => T): T {
+    this.assertConnection()
+    const run = () => this.connectionContext.run(this.requestController.signal, operation)
+    return this.organizationScope ? this.organizationScope.run(run) : run()
+  }
+
+  protected assertConnection(): void {
+    const source = this.connectionContext.getStore()
+    if (source && (source.aborted || source !== this.requestController.signal)) {
+      throw new ChannelAdmissionError('The source bot connection has changed', 503)
+    }
+  }
+
+  connectionGuard(): () => void {
+    const signal = this.requestController.signal
+    return () => {
+      if (signal.aborted || signal !== this.requestController.signal) {
+        throw new ChannelAdmissionError('The source bot connection has changed', 503)
+      }
+    }
+  }
+
   protected async request(input: string | URL, init: RequestInit = {}): Promise<Response> {
     try {
+      this.assertConnection()
       const signal = AbortSignal.any([
         this.requestController.signal, AbortSignal.timeout(60_000),
         ...(init.signal ? [init.signal] : []),
@@ -233,6 +325,7 @@ export abstract class AbstractChannel implements BaseChannel {
     >,
     media?: string[],
   ): Promise<DeliveryReceipt> {
+    this.assertConnection()
     if (!this.accepting) {
       throw new ChannelAdmissionError(`[${this.name}] Channel is disconnected`, 503)
     }
@@ -250,6 +343,7 @@ export abstract class AbstractChannel implements BaseChannel {
 
     const msg: InboundMessage = {
       ...fields,
+      ...(this.botScope ? { channelAddress: this.address(chatId) } : {}),
       channel: this.name,
       messageId,
       platformMessageId: messageId,

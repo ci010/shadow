@@ -11,7 +11,8 @@ import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from '../agent/identity.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
-import { deriveSessionId, type InboundMessage } from '../bus/events.ts'
+import type { OrganizationScope } from '../otel/scope.ts'
+import { channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
 import type { HandoffManager } from '../handoff/manager.ts'
 import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import { ImportTool } from '../tools/load-tool.ts'
@@ -27,6 +28,7 @@ import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
 import { LOCAL_NODE_ID, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
+import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
 import { isConfigObject, type SessionConfigPatch } from './config-patch.ts'
 import type { Executor } from '../execution/executor.ts'
 import type {
@@ -43,6 +45,7 @@ import { allowedSubagentModes, isExecutionMode, type ExecutionMode } from './exe
 import { delegationOwner, MAX_CALL_TIMEOUT_MS } from './execution-scope.ts'
 import { CallTools } from './call-tools.ts'
 import type { ExecutionContext } from '../agent/agent.ts'
+import type { ToolBridgeFactory } from '../eval/bridge.ts'
 import {
   channelMessageInput,
   inputContext,
@@ -91,6 +94,13 @@ export interface SleepConfig {
 }
 
 export interface SessionManagerDeps {
+  organizationId?: string
+  scope?: OrganizationScope
+  evalBridge?: ToolBridgeFactory
+  ownsProject?: (projectId: string) => boolean
+  ownsWorkdir?: (workdir: WorkdirRefV1) => boolean
+  assertSessionProject?: (state: SessionState) => void
+  acquireProjectAccess?: () => () => void
   /** Host/test deadline override: integer 1–120000 ms; default 120000 ms. */
   callTimeoutMs?: number
   workspace: string
@@ -109,6 +119,7 @@ export interface SessionManagerDeps {
   agentTypes: AgentTypesManager
   events: EventService
   workdirCapabilityLookup?: WorkdirCapabilityLookup
+  getNodeInventory?: () => NodeInventoryResponse
   remoteExecutor?: Executor
   getLlmRuntimeConfig?: () => LlmRuntimeConfig
   getYieldPolicy?: () => YieldPolicy
@@ -120,6 +131,7 @@ export interface SessionManagerDeps {
 }
 
 export interface StartSessionOptions {
+  signal?: AbortSignal
   /** Agent type name (e.g. 'reflector', 'general'). Required. */
   agentType: string
   /** The task/message content to send to the session. */
@@ -182,6 +194,53 @@ export class SessionManager {
   private readonly deleting = new Set<string>()
   private readonly calls = new Map<string, BlockingCallFrame>()
 
+  acquireProjectAccess(): () => void {
+    return this.deps.acquireProjectAccess?.() ?? (() => {})
+  }
+
+  assertProjectAccess(sessionId: string): void {
+    const visited = new Set<string>()
+    const check = (id: string) => {
+      if (visited.has(id)) return
+      visited.add(id)
+      const state = this.sessionStates[id]
+      if (!state) return
+      this.deps.assertSessionProject?.(state)
+      for (const parent of [state.parent?.id, state.parentSessionId, state.workspaceRoot]) {
+        if (parent) check(parent)
+      }
+    }
+    check(sessionId)
+  }
+
+  get hasProjectWork(): boolean {
+    return this.preparations.size > 0 || this.executionAdmissions.size > 0 ||
+      this.reporting.size > 0 || this.calls.size > 0 ||
+      Object.values(this.sessions).some(session => !(session instanceof Session) || !session.quiescent)
+  }
+
+  invalidateProjectSessions(): void {
+    for (const [id, session] of Object.entries(this.sessions)) {
+      try { this.assertProjectAccess(id) } catch { session.stop() }
+    }
+  }
+
+  projectDependentSessions(projectId: string, workdirs: readonly WorkdirRefV1[]): string[] {
+    const affected = new Set<string>()
+    for (const [id, state] of Object.entries(this.sessionStates)) {
+      if (state.projectId === projectId || state.workdir && workdirs.some(ref =>
+        ref.nodeId === state.workdir!.nodeId && ref.capabilityId === state.workdir!.capabilityId)) affected.add(id)
+    }
+    let previous = -1
+    while (previous !== affected.size) {
+      previous = affected.size
+      for (const [id, state] of Object.entries(this.sessionStates)) {
+        if ([state.parent?.id, state.parentSessionId, state.workspaceRoot].some(parent => parent && affected.has(parent))) affected.add(id)
+      }
+    }
+    return [...affected]
+  }
+
   isWaitingForCall(sessionId: string): boolean {
     return [...this.calls.values()].some(frame => frame.callerId === sessionId)
   }
@@ -196,6 +255,7 @@ export class SessionManager {
   }
 
   assertCanCreateChild(sessionId: string, mode: ExecutionMode): void {
+    this.assertProjectAccess(sessionId)
     const state = this.sessionStates[sessionId]
     if (!state) throw new Error('Delegation requires an existing owner session.')
     if (state.mode === 'call') this.blockCall(sessionId, 'Leaf calls cannot create subagents.')
@@ -227,6 +287,7 @@ export class SessionManager {
   }
 
   async startCall(sessionId: string, task: string, context: ExecutionContext): Promise<string> {
+    if (this.deps.organizationId && context.organizationId !== this.deps.organizationId) throw new Error('Call context belongs to another organization')
     const state = this.sessionStates[sessionId]
     if (!state || state.mode !== 'call' || delegationOwner(state) !== context.sessionId) throw new Error('Call admission requires its actual owner.')
     try {
@@ -364,6 +425,7 @@ export class SessionManager {
   }
 
   canSendSessionMessage(sourceId: string, targetId: string): boolean {
+    if (this.deps.organizationId && (!this.sessionStates[sourceId] || !this.sessionStates[targetId])) return false
     if (this.sessionStates[sourceId]?.mode === 'call') {
       try { this.blockCall(sourceId, 'Leaf calls cannot send messages.') } catch { return false }
     }
@@ -371,6 +433,7 @@ export class SessionManager {
   }
 
   async startChild(sessionId: string, task: string, context: ExecutionContext): Promise<DeliveryReceipt> {
+    if (this.deps.organizationId && context.organizationId !== this.deps.organizationId) throw new Error('Child context belongs to another organization')
     const state = this.sessionStates[sessionId]
     if (delegationOwner(state) !== context.sessionId || !state) throw new Error('Child admission requires its actual owner.')
     this.assertCanCreateChild(context.sessionId, state.mode ?? 'session')
@@ -391,6 +454,9 @@ export class SessionManager {
   constructor(
     private readonly deps: SessionManagerDeps,
   ) {
+    if (deps.scope && deps.scope.organizationId !== deps.organizationId) {
+      throw new Error('Session manager organization scope mismatch')
+    }
     if (deps.callTimeoutMs !== undefined && (!Number.isInteger(deps.callTimeoutMs)
       || deps.callTimeoutMs < 1 || deps.callTimeoutMs > MAX_CALL_TIMEOUT_MS)) {
       throw new RangeError(`callTimeoutMs must be between 1 and ${MAX_CALL_TIMEOUT_MS}.`)
@@ -414,8 +480,15 @@ export class SessionManager {
   private async notifyYieldUser(request: YieldRequest): Promise<void> {
     const separator = request.sessionId.indexOf(':')
     if (separator < 1 || request.sessionId.startsWith('web:')) return
+    const channelAddress = channelAddressFromSessionId(request.sessionId)
+    if (channelAddress && channelAddress.organizationId !== this.deps.organizationId) {
+      throw new YieldError('forbidden', 'The question belongs to another organization.')
+    }
     const message: import('../bus/events.ts').OutboundMessage = {
-      event: 'response', channel: request.sessionId.slice(0, separator), chatId: request.sessionId.slice(separator + 1),
+      event: 'response',
+      channel: channelAddress?.platform ?? request.sessionId.slice(0, separator),
+      chatId: channelAddress?.conversationId ?? request.sessionId.slice(separator + 1),
+      ...(channelAddress ? { channelAddress } : {}),
       content: [
         request.question,
         ...request.options.map((option, index) => `${index + 1}. ${option}${option === request.defaultOption ? ' (default)' : ''}`),
@@ -455,8 +528,14 @@ export class SessionManager {
   get workspace(): string {
     return this.deps.workspace
   }
+  get organizationId(): string | undefined {
+    return this.deps.organizationId
+  }
   get workdirCapabilityLookup(): WorkdirCapabilityLookup | undefined {
     return this.deps.workdirCapabilityLookup
+  }
+  getNodeInventory(): NodeInventoryResponse | undefined {
+    return this.deps.getNodeInventory?.()
   }
   get remoteExecutor(): Executor | undefined {
     return this.deps.remoteExecutor
@@ -484,6 +563,7 @@ export class SessionManager {
 
   /** Task inputs are admitted atomically by their creator, never by MessageTool. */
   canReceiveSessionMessage(sessionId: string): boolean {
+    if (this.deps.organizationId && !this.sessionStates[sessionId]) return false
     return !this.isEphemeralSession(sessionId)
   }
 
@@ -497,6 +577,12 @@ export class SessionManager {
     // Load all session states into memory cache
     this.sessionStates = await this.store.listAllStates()
     for (const state of Object.values(this.sessionStates)) {
+      if (this.deps.organizationId) {
+        const address = channelAddressFromSessionId(state.sessionId)
+        if (address && address.organizationId !== this.deps.organizationId) throw new Error('Bot session organization mismatch')
+        if (state.organizationId && state.organizationId !== this.deps.organizationId) throw new Error('Session organization mismatch')
+        state.organizationId = this.deps.organizationId
+      }
       if (!isExecutionMode(state.mode)) {
         // Built-in historical lifetimes are fixed, even when the current role was edited.
         const historical = ['verify', 'reflector', 'soul-reflector', 'encapsulator'].includes(state.agentType ?? '')
@@ -528,7 +614,8 @@ export class SessionManager {
     }
 
     if (this.reportSubscription) this.deps.bus.off(this.reportSubscription)
-    this.reportSubscription = this.deps.bus.on('session.turn.finished', fact => this.reportCompletion(fact))
+    const report = (fact: SessionTurnFact) => this.reportCompletion(fact)
+    this.reportSubscription = this.deps.bus.on('session.turn.finished', this.deps.scope?.bind(report) ?? report)
     for (const state of Object.values(this.sessionStates)) {
       if (state.mode !== 'task' || state.completionReported || !state.lastActivityAt) continue
       let fact: SessionTurnFact | undefined
@@ -635,10 +722,18 @@ export class SessionManager {
     const previous = this.preparations.get(sessionId) ?? Promise.resolve()
     const admission = previous.catch(() => {}).then(async (): Promise<DeliveryReceipt> => {
       if (this.stopped) throw new Error('Session manager stopped')
+      this.assertProjectAccess(sessionId)
       const state = this.sessionStates[sessionId]
       const ownerId = delegationOwner(state)
       const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId
         : input.source.kind === 'event' ? input.source.origin?.sessionId : undefined
+      if (this.deps.organizationId) {
+        const address = input.source.kind === 'user' ? input.source.sender.channelAddress : input.replyTo?.channelAddress
+        if (address && address.organizationId !== this.deps.organizationId) throw new Error('Input belongs to another organization')
+        if (sourceSessionId && (!this.sessionStates[sourceSessionId] || !state)) {
+          throw new Error('Session input references must belong to this organization')
+        }
+      }
       const completion = input.source.kind === 'event' ? this.completionEvents.get(input.source.eventId) : undefined
       const trustedCompletion = completion?.sourceId === sourceSessionId && completion?.targetId === sessionId
       if (sourceSessionId && this.sessionStates[sourceSessionId]?.mode === 'call') {
@@ -667,6 +762,7 @@ export class SessionManager {
       }
       const created = !session
       if (!session) session = await this.createActiveSession(sessionId, deliveryInput)
+      this.assertProjectAccess(sessionId)
       if (!trustedCompletion && state?.mode !== 'session' && ownerId && (this.deleting.has(ownerId) || !this.sessionStates[ownerId])) {
         session.stop()
         throw new DOMException('Execution owner was deleted before admission.', 'AbortError')
@@ -719,6 +815,7 @@ export class SessionManager {
         this.deps.store,
         this.deps.workdirCapabilityLookup,
         this.deps.remoteExecutor,
+        this.deps.evalBridge,
       )
       sess.onStopped = onStopped
       const frame = this.calls.get(sessionId)
@@ -742,6 +839,7 @@ export class SessionManager {
         this.sleepInactivityMs,
         this.deps.workdirCapabilityLookup,
         this.deps.remoteExecutor,
+        this.deps.evalBridge,
       )
       this.sessions[sessionId] = sess
       return sess
@@ -868,6 +966,13 @@ export class SessionManager {
       config?: SessionConfig
     },
   ): Promise<void> {
+    const release = this.acquireProjectAccess()
+    try { await this.buildSessionWithAccess(sessionId, parent, stateFields) }
+    finally { release() }
+  }
+
+  private async buildSessionWithAccess(...[sessionId, parent, stateFields]: Parameters<SessionManager['buildSession']>): Promise<void> {
+    this.deps.assertSessionProject?.({ sessionId, segmentIndex: 0, projectId: stateFields?.projectId, workdir: stateFields?.workdir })
     const existing = this.sessionStates[sessionId]
     if (existing) {
       throw new TypeError(
@@ -875,6 +980,20 @@ export class SessionManager {
       )
     }
 
+    if (this.deps.organizationId) {
+      const address = channelAddressFromSessionId(sessionId)
+      if (address && address.organizationId !== this.deps.organizationId) throw new Error('Bot session organization mismatch')
+      for (const reference of [parent?.id, stateFields?.workspaceRoot, stateFields?.reportTo, stateFields?.parentSessionId]) {
+        if (reference && !this.sessionStates[reference]) throw new Error('Session reference does not belong to this organization')
+        if (reference) this.assertProjectAccess(reference)
+      }
+      if (stateFields?.projectId && !this.deps.ownsProject?.(stateFields.projectId)) throw new Error('Project does not belong to this organization')
+      if (stateFields?.workdir && !this.deps.ownsWorkdir?.(stateFields.workdir)) throw new Error('Workdir does not belong to this organization')
+      const inherited = parent ? this.sessionStates[parent.id] : undefined
+      if (inherited?.projectId && stateFields?.projectId && stateFields.projectId !== inherited.projectId) {
+        throw new Error('Child sessions cannot switch projects')
+      }
+    }
     const agent = this.deps.agentTypes.resolve(
       stateFields?.agentType ?? 'general',
     )
@@ -896,6 +1015,7 @@ export class SessionManager {
     const physicalSessionId = newPhysicalSessionId(sessionId, 0)
 
     const startEvent: SessionStartEvent = {
+      organizationId: this.deps.organizationId,
       previous_physical_id: null,
       timestamp: ts,
     }
@@ -920,6 +1040,7 @@ export class SessionManager {
       ? parentWorkdir
       : undefined
     const state: SessionState = {
+      organizationId: this.deps.organizationId,
       mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
       executionStatus: 'pending',
       parentSessionId: ownerId ?? null,
@@ -950,6 +1071,7 @@ export class SessionManager {
    * @returns sessionId, or null if the agent type is unknown.
    */
   async startSession(opts: StartSessionOptions): Promise<string | null> {
+    opts.signal?.throwIfAborted()
     if (this.stopped) throw new Error('Session manager stopped')
     const agentType = this.deps.agentTypes.resolve(opts.agentType)
     if (!agentType) {
@@ -968,6 +1090,12 @@ export class SessionManager {
       undefined,
       { agentType: opts.agentType, model: opts.model },
     )
+    if (opts.signal?.aborted) {
+      const state = this.sessionStates[sessionId]
+      state.executionStatus = 'cancelled'
+      await this.saveState(sessionId, state)
+      opts.signal.throwIfAborted()
+    }
 
     // Build message content
     const content = opts.context
@@ -1011,6 +1139,9 @@ export class SessionManager {
     parentSessionId: string,
     childSessionId: string,
   ): Promise<void> {
+    if (this.deps.organizationId && (!this.sessionStates[parentSessionId] || !this.sessionStates[childSessionId])) {
+      throw new Error('Child and parent must belong to this organization')
+    }
     const state = this.sessionStates[parentSessionId]
     if (!state) return
     const children = state.children ?? []
@@ -1216,20 +1347,32 @@ export class SessionManager {
         if (segment === selected) usedTokens = usage.promptTokens
       }
     }
-    const workdir = resolveSessionLocations(
+    let workdir = resolveSessionLocations(
       this.workspace, state, undefined, this.workdirCapabilityLookup,
     ).workdir
+    try { this.assertProjectAccess(sessionId) }
+    catch { workdir = { available: false, workdir: workdir.workdir, reason: 'capability-revoked' } }
     const remote = workdir.workdir.nodeId !== LOCAL_NODE_ID
+    const node = this.getNodeInventory()?.nodes.find(node =>
+      remote ? node.nodeId === workdir.workdir.nodeId : node.role === 'main')
+    const capability = node?.capabilities.find(capability =>
+      capability.capabilityId === workdir.workdir.capabilityId && capability.kind === 'workdir')
     const model = state.config?.model ?? this.deps.getLlmRuntimeConfig?.().model
     const window = model ? this.deps.getKnownContextWindow?.(model) : null
     return {
+      ...(state.organizationId ? { organizationId: state.organizationId } : {}),
       sessionId,
       name: await this.getFirstUserMessage(sessionId),
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
-          ? workdir.workdir.displayPathSnapshot ?? null
+          ? capability?.displayPath ?? null
           : workdir.available && workdir.locality === 'local' ? workdir.path : null,
+        nodeId: node?.nodeId ?? workdir.workdir.nodeId,
+        ...(node ? { nodeName: node.displayName } : {}),
+        ...(capability ? { displayName: capability.displayName } : {}),
+        available: workdir.available,
+        availability: workdir.available ? 'available' as const : workdir.reason,
       },
       usage,
       usageScope: 'latest-call' as const,
@@ -1245,6 +1388,7 @@ export class SessionManager {
   }
 
   requestCompact(sessionId: string, llm: LlmRuntimeConfig): boolean {
+    this.assertProjectAccess(sessionId)
     const sess = this.sessions[sessionId]
     if (!(sess instanceof Session) || !sess.accepting) return false
     sess.dispatch({
@@ -1263,9 +1407,10 @@ export class SessionManager {
   }
 
   listSessions(): Array<
-    { sessionId: string; segmentIndex: number; lastActivityAt?: string; projectId?: string }
+    { organizationId?: string; sessionId: string; segmentIndex: number; lastActivityAt?: string; projectId?: string }
   > {
     return Object.values(this.sessionStates).map((s) => ({
+      ...(s.organizationId ? { organizationId: s.organizationId } : {}),
       sessionId: s.sessionId,
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,
@@ -1409,14 +1554,16 @@ export class SessionManager {
     systemPrompt: string
     tools: Array<{ name: string; description: string; parameters: unknown }>
   }> {
+    if (opts.sessionId) this.assertProjectAccess(opts.sessionId)
     let sessionId: string
     let channel: string
     let chatId: string
     if (opts.sessionId) {
       sessionId = opts.sessionId
+      const channelAddress = channelAddressFromSessionId(sessionId)
       const colonIdx = sessionId.indexOf(':')
-      channel = colonIdx >= 0 ? sessionId.slice(0, colonIdx) : sessionId
-      chatId = colonIdx >= 0 ? sessionId.slice(colonIdx + 1) : 'direct'
+      channel = channelAddress?.platform ?? (colonIdx >= 0 ? sessionId.slice(0, colonIdx) : sessionId)
+      chatId = channelAddress?.conversationId ?? (colonIdx >= 0 ? sessionId.slice(colonIdx + 1) : 'direct')
     } else {
       channel = opts.channel ?? 'heartbeat'
       chatId = opts.chatId ?? 'heartbeat'
@@ -1442,9 +1589,11 @@ export class SessionManager {
     }
 
     const promptCtx: SessionPromptContext = {
+      organizationId: this.deps.organizationId,
       behavior,
       channel,
       chatId,
+      channelAddress: channelAddressFromSessionId(sessionId),
       sessionId,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       agent: agentType,
@@ -1495,6 +1644,10 @@ export class SessionManager {
     sessionId: string,
     state: SessionState,
   ): Promise<void> {
+    if (this.deps.organizationId) {
+      if (state.organizationId && state.organizationId !== this.deps.organizationId) throw new Error('Session organization mismatch')
+      state.organizationId = this.deps.organizationId
+    }
     this.sessionStates[sessionId] = state
     await this.store.saveState(sessionId, state)
   }
@@ -1502,6 +1655,8 @@ export class SessionManager {
   private async getOrCreateState(
     sessionId: string,
   ): Promise<SessionState> {
+    const address = channelAddressFromSessionId(sessionId)
+    if (this.deps.organizationId && address && address.organizationId !== this.deps.organizationId) throw new Error('Bot session organization mismatch')
     const existing = this.sessionStates[sessionId]
     if (existing) return existing
 
@@ -1535,9 +1690,11 @@ export class SessionManager {
       .resolveAgentTypeTools(state.agentType)
 
     const promptCtx: SessionPromptContext = {
+      organizationId: this.deps.organizationId,
       behavior,
       channel: msg.channel,
       chatId: msg.chatId,
+      channelAddress: msg.channelAddress ?? channelAddressFromSessionId(sessionId),
       sessionId,
       chatName: msg.chatName,
       senderId: msg.senderId,

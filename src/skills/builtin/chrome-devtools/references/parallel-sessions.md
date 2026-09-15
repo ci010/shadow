@@ -1,5 +1,19 @@
 # Parallel Browser Sessions
 
+## Organization runtimes
+
+For organization sessions, including the default organization, preload
+`chrome-devtools` with no extra arguments in each subagent. The runtime allocates
+distinct ports and fresh profiles automatically. Never copy host credentials,
+reuse another session's profile, or attach an existing browser. Each session
+keeps the `chrome-devtools__*` namespace in its own tool overlay; different
+server names are unnecessary. Sleeping releases only that session's browser.
+
+## Legacy non-organization setup only
+
+The manual instructions below do not apply to organization runtimes and must
+not be used to work around a managed import error.
+
 When the user needs multiple independent browser sessions (e.g. comparing two
 sites, testing with different accounts, A/B testing), spawn each with its own
 browser instance on a **different debug port** and **separate user data folder**.

@@ -1,5 +1,6 @@
 import type { NodeInventoryCapability, NodeInventoryEntry, NodeInventoryResponse } from '../../src/cluster/node-inventory.ts'
 import { isRecord } from './projects-sidebar.ts'
+import { apiUrl, hostBase } from './api-url.ts'
 
 export type { NodeInventoryEntry }
 
@@ -66,7 +67,7 @@ export async function fetchNodeInventory(
   signal: AbortSignal,
   request: typeof fetch = fetch,
 ): Promise<NodeInventoryResponse> {
-  const response = await request(new URL(mode === 'child' ? '/local/v1/nodes' : '/nodes/v1', apiBase), {
+  const response = await request(apiUrl(hostBase(apiBase), mode === 'child' ? '/local/v1/nodes' : '/nodes/v1'), {
     signal, cache: 'no-store',
   })
   if (response.status === 401 || response.status === 403) {

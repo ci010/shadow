@@ -13,6 +13,7 @@
 import type { Hono } from 'hono'
 import { basename } from 'node:path'
 import type { OutboundMessage } from '../bus/events.ts'
+import { channelAddressFromSessionId } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type {
   InteractiveCard,
@@ -277,7 +278,7 @@ export class FeishuChannel extends AbstractChannel {
   private _client: Client | null = null
   private _wsClient: FeishuTransport | null = null
   private readonly transportFactory: NonNullable<FeishuChannelOptions['transportFactory']>
-  private static readonly routeOwners = new WeakMap<Hono, { current?: FeishuChannel }>()
+  private static readonly routeOwners = new WeakMap<Hono, { scoped: boolean; bots: Map<string, { current?: FeishuChannel }> }>()
   private routeOwner?: { current?: FeishuChannel }
   private generation = 0
   private controller = new AbortController()
@@ -315,13 +316,19 @@ export class FeishuChannel extends AbstractChannel {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-  static registerRoutes(app: Hono): void {
+  static registerRoutes(app: Hono, scoped = false): void {
     // ── Register gateway proxy ────────────────────────────────────────────
     // Proxy /feishu/* → https://open.feishu.cn/* with tenant_access_token
     const existingOwner = FeishuChannel.routeOwners.get(app)
-    const owner = existingOwner ?? {}
-    FeishuChannel.routeOwners.set(app, owner)
+    const routes = existingOwner ?? { scoped, bots: new Map<string, { current?: FeishuChannel }>() }
+    if (existingOwner && scoped && !existingOwner.scoped) throw new Error('Feishu route scope cannot change')
+    FeishuChannel.routeOwners.set(app, routes)
     if (!existingOwner) app.all('/feishu/*', async (c) => {
+      const path = new URL(c.req.url).pathname
+      const match = /\/feishu\/bots\/([^/]+)(\/.*)$/.exec(path)
+      const key = routes.scoped ? match?.[1] : 'legacy'
+      const owner = key ? routes.bots.get(key) : undefined
+      if (!owner) return c.json({ error: 'feishu_bot_unavailable' }, 503)
       const channel = owner.current
       if (!channel?._client) {
         return c.json({ error: 'feishu_client_not_initialized' }, 503)
@@ -337,7 +344,7 @@ export class FeishuChannel extends AbstractChannel {
       if (owner.current !== channel) return c.json({ error: 'feishu_client_not_initialized' }, 503)
       const url = new URL(c.req.url)
       const upstreamUrl = `https://open.feishu.cn${
-        url.pathname.replace(/^\/feishu/, '')
+        routes.scoped ? match![2] : url.pathname.replace(/^.*\/feishu/, '')
       }${url.search}`
       const reqHeaders = new Headers(c.req.raw.headers)
       reqHeaders.set('Authorization', `Bearer ${token}`)
@@ -345,12 +352,15 @@ export class FeishuChannel extends AbstractChannel {
       const body = c.req.method === 'GET' || c.req.method === 'HEAD'
         ? undefined
         : await c.req.raw.arrayBuffer()
+      if (owner.current !== channel) return c.json({ error: 'feishu_bot_unavailable' }, 503)
       try {
         const upstream = await fetch(upstreamUrl, {
           method: c.req.method,
           headers: reqHeaders,
           body,
+          signal: channel.controller.signal,
         })
+        if (owner.current !== channel) return c.json({ error: 'feishu_bot_unavailable' }, 503)
         const resHeaders = new Headers(upstream.headers)
         resHeaders.delete('content-encoding')
         return new Response(upstream.body, {
@@ -374,8 +384,13 @@ export class FeishuChannel extends AbstractChannel {
     this.controller = new AbortController()
     this.setAccepting(true)
     this.reportState('connecting')
-    FeishuChannel.registerRoutes(app)
-    this.routeOwner = FeishuChannel.routeOwners.get(app)!
+    const scope = this.address('route')
+    FeishuChannel.registerRoutes(app, !!scope)
+    const routes = FeishuChannel.routeOwners.get(app)!
+    const key = scope?.botInstanceId ?? 'legacy'
+    this.routeOwner = routes.bots.get(key) ?? {}
+    routes.bots.set(key, this.routeOwner)
+    if (this.routeOwner.current && this.routeOwner.current !== this) throw new Error('Feishu route already owned')
     this.routeOwner.current = this
     this._running = true
 
@@ -391,16 +406,19 @@ export class FeishuChannel extends AbstractChannel {
       appSecret: this.appSecret,
       encryptKey: this.encryptKey,
       verificationToken: this.verificationToken,
-    }, (data) => {
+    }, this.bindCallback((data) => {
       if (!this._running || this.generation !== generation) return
-      void this._onMessage(data).catch(() => console.warn('[feishu] Incoming message handling failed'))
-    }, (state) => {
-      if (this._running && this.generation === generation) this.reportState(state)
-    }, async (data) => {
+      void this.withConnection(() => this._onMessage(data)).catch(() => console.warn('[feishu] Incoming message handling failed'))
+    }), this.bindCallback((state) => {
+      if (this._running && this.generation === generation) {
+        this.setAccepting(state === 'running')
+        this.reportState(state)
+      }
+    }), async (data) => {
       if (!this._running || this.generation !== generation) {
         return { toast: { type: 'error', content: 'Channel is disconnected.' } }
       }
-      return this._onCardAction(data)
+      return this.withConnection(() => this._onCardAction(data))
     })
 
     // Fetch bot's own open_id for mention detection
@@ -448,6 +466,7 @@ export class FeishuChannel extends AbstractChannel {
     if (this._isThreadChatId(chatId) && !parentId) return unavailableCapabilities()
     const destination = parentId ?? chatId
     const { conversation, eligible } = await this._conversationMetadata(destination, refresh)
+    this.assertConnection()
     if (this._client !== client) return unavailableCapabilities()
     if (!conversation || (parentId && conversation !== 'group')) return unavailableCapabilities()
     let outboundMedia: ChannelCapabilities['outboundMedia'] = ['image', 'file']
@@ -488,6 +507,7 @@ export class FeishuChannel extends AbstractChannel {
   }
 
   override async presentDecision(chatId: string, request: YieldRequest, content: string): Promise<void> {
+    this.assertConnection()
     const client = this._client
     if (!client) throw new Error('Feishu channel is disconnected')
     const card: InteractiveCard = {
@@ -552,15 +572,21 @@ export class FeishuChannel extends AbstractChannel {
 
   private _topicParent(rootId: string): string | undefined {
     if (!this._isThreadChatId(rootId)) return undefined
-    const state = this.sessionManager?.getSessionState(`${this.name}:${rootId}`)
+    const state = this.sessionManager?.getSessionState(this.logicalSessionId(rootId))
     // Completion redirects do not establish topic ownership.
     const parent = state?.parentSessionId ?? state?.parent?.id
-    if (parent !== undefined) return parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
+    if (parent !== undefined) {
+      const address = channelAddressFromSessionId(parent)
+      const own = this.address(rootId)
+      if (address) return own && address.organizationId === own.organizationId && address.botInstanceId === own.botInstanceId
+        && address.platform === this.name && address.conversationId.startsWith('oc_') ? address.conversationId : undefined
+      return (!own || own.legacySessionId) && parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
+    }
     return this.topicParents.get(rootId)
   }
 
   private _mediaSessionId(chatId: string): string {
-    const sessionId = `${this.name}:${chatId}`
+    const sessionId = this.logicalSessionId(chatId)
     const state = this.sessionManager?.getSessionState(sessionId)
     const locations = resolveSessionLocations(this.workspace, state ?? { sessionId })
     if (!locations.workdir.available || locations.workdir.locality !== 'local'
@@ -572,6 +598,7 @@ export class FeishuChannel extends AbstractChannel {
 
   @Span('FeishuChannel.send')
   async send(msg: OutboundMessage): Promise<string | null> {
+    this.assertConnection()
     if (!this._client) {
       console.warn('[feishu] Client not initialized')
       return null
@@ -685,6 +712,7 @@ export class FeishuChannel extends AbstractChannel {
     content: string,
     media?: string[],
   ): Promise<void> {
+    this.assertConnection()
     if (!this._client) return
     try {
       const elements = buildCardElements(content)
@@ -731,6 +759,7 @@ export class FeishuChannel extends AbstractChannel {
         this._mediaSessionId(chatId),
         mediaPath,
       )
+      this.assertConnection()
 
       const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp'])
       const isImage = IMAGE_EXTS.has(ext)
@@ -741,6 +770,7 @@ export class FeishuChannel extends AbstractChannel {
         form.append('image_type', 'message')
         form.append('image', new Blob([fileData as BlobPart]), filename)
         const uploadRes = await this._client.im.image.create(form)
+        this.assertConnection()
         if (uploadRes.code !== 0 || !uploadRes.data?.image_key) {
           console.warn(
             `[feishu] Failed to upload image: code=${uploadRes.code}`,
@@ -783,6 +813,7 @@ export class FeishuChannel extends AbstractChannel {
         form.append('file_name', filename)
         form.append('file', new Blob([fileData as BlobPart]), filename)
         const uploadRes = await this._client.im.file.create(form)
+        this.assertConnection()
         if (uploadRes.code !== 0 || !uploadRes.data?.file_key) {
           console.warn(
             `[feishu] Failed to upload file: code=${uploadRes.code}`,
@@ -824,6 +855,7 @@ export class FeishuChannel extends AbstractChannel {
     name: string,
   ): Promise<string | null> {
     if (!this._client || (await this._getCapabilities(parentChatId, true)).threads !== 'topic') return null
+    this.assertConnection()
     const client = this._client
     if (!client) return null
 
@@ -857,6 +889,7 @@ export class FeishuChannel extends AbstractChannel {
       }
 
       const rootMessageId = res.data.message_id
+      this.assertConnection()
       if (this._client !== client) return null
       this._trackBotMessage(rootMessageId)
 
@@ -879,6 +912,7 @@ export class FeishuChannel extends AbstractChannel {
         this._trackBotMessage(replyRes.data.message_id)
       }
       if (!replyRes.data?.message_id || !replyRes.data.thread_id?.startsWith('omt_') || this._client !== client) return null
+      this.assertConnection()
       this.topicParents.set(rootMessageId, parentChatId)
       if (this.topicParents.size > CHAT_CACHE_LIMIT) this.topicParents.delete(this.topicParents.keys().next().value!)
 
@@ -1115,6 +1149,7 @@ export class FeishuChannel extends AbstractChannel {
       })
 
       // Save to the per-session uploads folder
+      this.assertConnection()
       const relativePath = await saveToUploads(
         this.workspace,
         sessionId,
@@ -1165,7 +1200,7 @@ export class FeishuChannel extends AbstractChannel {
       const text = await this.voicePipeline.processVoice(
         buf,
         '.ogg',
-        `feishu_${messageId}`,
+        this.mediaSourceId(messageId),
       )
       console.info(`[feishu] Audio transcribed: ${text.substring(0, 80)}...`)
       return text
@@ -1200,6 +1235,7 @@ export class FeishuChannel extends AbstractChannel {
         this._mediaSessionId(threadRootId),
         mediaPath,
       )
+      this.assertConnection()
 
       const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp'])
       const isImage = IMAGE_EXTS.has(ext)
@@ -1209,6 +1245,7 @@ export class FeishuChannel extends AbstractChannel {
         form.append('image_type', 'message')
         form.append('image', new Blob([fileData as BlobPart]), filename)
         const uploadRes = await this._client.im.image.create(form)
+        this.assertConnection()
         if (uploadRes.code !== 0 || !uploadRes.data?.image_key) {
           console.warn(
             `[feishu] Failed to upload image for thread: ${filename}`,
@@ -1242,6 +1279,7 @@ export class FeishuChannel extends AbstractChannel {
         form.append('file_name', filename)
         form.append('file', new Blob([fileData as BlobPart]), filename)
         const uploadRes = await this._client.im.file.create(form)
+        this.assertConnection()
         if (uploadRes.code !== 0 || !uploadRes.data?.file_key) {
           console.warn(`[feishu] Failed to upload file for thread: ${filename}`)
           return

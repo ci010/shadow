@@ -3,7 +3,7 @@ import { isRecord } from './projects-sidebar.ts'
 export interface SessionDetails {
   sessionId: string
   name: string | null
-  workdir: { kind: 'local' | 'remote'; displayPath: string | null }
+  workdir: { kind: 'local' | 'remote'; displayPath: string | null; nodeId?: string; nodeName?: string; displayName?: string; available?: boolean }
   usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null
   usageScope: 'session' | 'segment' | 'latest-call'
   context: { usedTokens: number | null; windowTokens: number | null }
@@ -34,11 +34,19 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
     || (value.usageScope !== 'session' && value.usageScope !== 'segment' && value.usageScope !== 'latest-call')) throw invalid()
   const usedTokens = nullableCount(value.context.usedTokens)
   const windowTokens = nullableCount(value.context.windowTokens)
+  for (const key of ['nodeId', 'nodeName', 'displayName']) {
+    if (value.workdir[key] !== undefined && typeof value.workdir[key] !== 'string') throw invalid()
+  }
+  if (value.workdir.available !== undefined && typeof value.workdir.available !== 'boolean') throw invalid()
   if (windowTokens === 0) throw invalid()
   return {
     sessionId,
     name: value.name,
-    workdir: { kind: value.workdir.kind === 'remote' ? 'remote' : 'local', displayPath: value.workdir.displayPath },
+    workdir: { kind: value.workdir.kind === 'remote' ? 'remote' : 'local', displayPath: value.workdir.displayPath,
+      ...(typeof value.workdir.nodeId === 'string' ? { nodeId: value.workdir.nodeId } : {}),
+      ...(typeof value.workdir.nodeName === 'string' ? { nodeName: value.workdir.nodeName } : {}),
+      ...(typeof value.workdir.displayName === 'string' ? { displayName: value.workdir.displayName } : {}),
+      ...(typeof value.workdir.available === 'boolean' ? { available: value.workdir.available } : {}) },
     usage: parseUsage(value.usage),
     usageScope: value.usageScope === 'session' ? 'session' : value.usageScope === 'segment' ? 'segment' : 'latest-call',
     context: { usedTokens, windowTokens },

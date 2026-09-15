@@ -7,10 +7,13 @@ import { env } from 'node:process'
 import { getOs } from './runtime.ts'
 import type { z } from 'zod'
 import type { ChromeToolSchema } from '../config/schema.ts'
+import { createServer } from 'node:net'
+import { getOrganizationScope } from '../otel/scope.ts'
 
 type ChromeConfig = z.infer<typeof ChromeToolSchema>
 
 interface ChromeSession {
+  lease?: ChromePortLease
   port: number
   userDataDir: string
   /** PID of the Chrome process we launched, or undefined if we reused an existing one. */
@@ -18,6 +21,72 @@ interface ChromeSession {
   /** Whether this session owns the Chrome process (i.e. we launched it). */
   owned: boolean
 }
+
+export interface ChromePortLease {
+  readonly port: number
+  release(): void
+}
+
+async function canBindPort(port: number): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE' || error.code === 'EACCES') resolve(false)
+      else reject(error)
+    })
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      server.close((error) => error ? reject(error) : resolve(true))
+    })
+  })
+}
+
+/** One host-owned allocator is shared across orgs; leases never share profiles or processes. */
+export class ChromePortAllocator {
+  private reservations = new Map<number, symbol>()
+
+  constructor(private available: (port: number) => Promise<boolean> = canBindPort) {}
+
+  async reserve(basePort: number, explicitPort?: number): Promise<ChromePortLease> {
+    const first = explicitPort ?? basePort
+    if (!Number.isInteger(first) || first < 1 || first > 65535) throw new TypeError('Invalid Chrome debug port')
+    const last = explicitPort === undefined ? Math.min(first + 99, 65535) : first
+    for (let port = first; port <= last; port++) {
+      if (this.reservations.has(port)) continue
+      const owner = Symbol('chrome-port')
+      this.reservations.set(port, owner)
+      try {
+        if (await this.available(port)) {
+          return {
+            port,
+            release: () => { if (this.reservations.get(port) === owner) this.reservations.delete(port) },
+          }
+        }
+      } catch (error) {
+        this.reservations.delete(port)
+        throw error
+      }
+      this.reservations.delete(port)
+    }
+    throw new Error('No unreserved Chrome debug port is available')
+  }
+}
+
+export interface ChromeRuntimeOperations {
+  detectChrome(path?: string): Promise<string | null>
+  isDebugPortActive(port: number): Promise<boolean>
+  isProcessAlive(pid: number): boolean | Promise<boolean>
+  launchChrome(path: string, port: number, userDataDir: string, signal: AbortSignal): Promise<{ pid: number } | { error: string }>
+  terminateChrome(pid: number): void | Promise<void>
+}
+
+export interface ChromeManagerOptions {
+  organizationId?: string
+  portAllocator?: ChromePortAllocator
+  /** Injectable process boundary; organization ownership checks cannot be overridden. */
+  runtime?: ChromeRuntimeOperations
+}
+
+type ChromeAllocation = { port: number; extraArgs: string[] } | { error: string }
 
 // Files/folders to copy from default profile for credential sharing
 const CREDENTIAL_FILES = [
@@ -209,11 +278,25 @@ async function copyDirRecursive(src: string, dst: string): Promise<void> {
 export class ChromeManager {
   private sessions = new Map<string, ChromeSession>()
   private cachedExePath: string | null | undefined = undefined
+  private pending = new Map<string, Promise<ChromeAllocation>>()
+  private releasing = new Map<string, Promise<void>>()
+  private stopped = false
+  private controller = new AbortController()
+  readonly organizationId?: string
 
   constructor(
     private workspace: string,
     private getConfig: () => ChromeConfig,
-  ) {}
+    private options: ChromeManagerOptions = {},
+  ) {
+    this.options = { ...options }
+    const scope = getOrganizationScope()
+    this.organizationId = options.organizationId ?? scope?.organizationId
+    if (scope && scope.organizationId !== this.organizationId) throw new Error('Chrome runtime organization mismatch')
+    if (this.organizationId !== undefined && (!this.organizationId.trim() || !options.portAllocator)) {
+      throw new Error('Organization Chrome requires a host-owned port allocator')
+    }
+  }
 
   /** Invalidate the cached executable path so the next allocate() re-detects. */
   invalidateCache(): void {
@@ -234,7 +317,67 @@ export class ChromeManager {
     sessionKey: string,
     explicitPort?: number,
     explicitUserDataDir?: string,
-  ): Promise<{ port: number; extraArgs: string[] } | { error: string }> {
+  ): Promise<ChromeAllocation> {
+    await this.releasing.get(sessionKey)
+    if (this.stopped) return { error: 'Chrome manager is stopped' }
+    if (this.organizationId !== undefined && explicitUserDataDir !== undefined) {
+      return { error: 'Organization browser profiles are runtime-managed; explicit user-data-dir is not supported' }
+    }
+    const pending = this.pending.get(sessionKey)
+    if (pending) return pending
+    const operation = this.organizationId === undefined
+      ? this.allocateLegacy(sessionKey, explicitPort, explicitUserDataDir)
+      : this.allocateIsolated(sessionKey, explicitPort)
+    this.pending.set(sessionKey, operation)
+    void operation.then(() => this.pending.delete(sessionKey), () => this.pending.delete(sessionKey))
+    return operation
+  }
+
+  private async allocateIsolated(sessionKey: string, explicitPort?: number): Promise<ChromeAllocation> {
+    const existing = this.sessions.get(sessionKey)
+    const active = this.options.runtime?.isDebugPortActive ?? isDebugPortActive
+    if (existing) {
+      if (explicitPort !== undefined && explicitPort !== existing.port) {
+        return { error: 'Chrome session already owns a different debug port' }
+      }
+      if (existing.pid !== undefined && await this.isProcessAlive(existing.pid) && await active(existing.port)) {
+        return { port: existing.port, extraArgs: [`--browserUrl=http://127.0.0.1:${existing.port}`] }
+      }
+      await this.releaseAllocated(sessionKey)
+    }
+    const exePath = await this.getExePath()
+    if (!exePath) return { error: 'Chrome/Edge/Brave executable not found. Configure tools.chrome.executablePath.' }
+    let lease: ChromePortLease | undefined
+    try {
+      lease = await this.options.portAllocator!.reserve(this.config.basePort ?? 9222, explicitPort)
+      if (await active(lease.port)) return { error: 'Reserved Chrome port is occupied; refusing to attach an unowned browser' }
+      this.controller.signal.throwIfAborted()
+      const userDataDir = resolve(this.workspace, '.browser', crypto.randomUUID())
+      await mkdir(userDataDir, { recursive: true })
+      const result = this.options.runtime
+        ? await this.options.runtime.launchChrome(exePath, lease.port, userDataDir, this.controller.signal)
+        : await this.launchChrome(exePath, lease.port, userDataDir, this.controller.signal)
+      if ('error' in result) return result
+      const port = lease.port
+      this.sessions.set(sessionKey, { port, userDataDir, pid: result.pid, owned: true, lease })
+      lease = undefined
+      if (this.stopped) {
+        await this.releaseAllocated(sessionKey)
+        return { error: 'Chrome manager stopped during allocation' }
+      }
+      return { port, extraArgs: [`--browserUrl=http://127.0.0.1:${port}`] }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      lease?.release()
+    }
+  }
+
+  private async allocateLegacy(
+    sessionKey: string,
+    explicitPort?: number,
+    explicitUserDataDir?: string,
+  ): Promise<ChromeAllocation> {
     // Already allocated for this session?
     const existing = this.sessions.get(sessionKey)
     if (existing) {
@@ -320,26 +463,63 @@ export class ChromeManager {
    * Release a Chrome session. If we own the process, kill it.
    */
   async release(sessionKey: string): Promise<void> {
+    await this.pending.get(sessionKey)
+    await this.releaseAllocated(sessionKey)
+  }
+
+  private releaseAllocated(sessionKey: string): Promise<void> {
+    const pending = this.releasing.get(sessionKey)
+    if (pending) return pending
+    const operation = this.terminateAllocated(sessionKey)
+    this.releasing.set(sessionKey, operation)
+    void operation.then(() => this.releasing.delete(sessionKey), () => this.releasing.delete(sessionKey))
+    return operation
+  }
+
+  private async terminateAllocated(sessionKey: string): Promise<void> {
     const session = this.sessions.get(sessionKey)
     if (!session) return
-    this.sessions.delete(sessionKey)
 
     if (session.owned && session.pid !== undefined) {
       try {
-        process.kill(session.pid, 'SIGTERM')
+        await this.terminateChrome(session.pid)
         console.info(`[chrome-manager] Killed Chrome process ${session.pid} on port ${session.port}`)
-      } catch {
-        // Process may have already exited
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
+          console.error(`[chrome-manager] Failed to stop owned Chrome process ${session.pid}`, error)
+          throw error
+        }
       }
     }
+    this.sessions.delete(sessionKey)
+    session.lease?.release()
   }
 
   /**
    * Release all sessions. Called on shutdown.
    */
   async releaseAll(): Promise<void> {
-    for (const key of [...this.sessions.keys()]) {
-      await this.release(key)
+    this.stopped = true
+    this.controller.abort(new Error('Chrome runtime stopped'))
+    await Promise.allSettled(this.pending.values())
+    const outcomes = await Promise.allSettled([...this.sessions.keys()].map((key) => this.release(key)))
+    const failures = outcomes.filter((outcome) => outcome.status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Failed to release owned Chrome sessions')
+  }
+
+  private async terminateChrome(pid: number): Promise<void> {
+    if (this.options.runtime) await this.options.runtime.terminateChrome(pid)
+    else process.kill(pid, 'SIGTERM')
+  }
+
+  private async isProcessAlive(pid: number): Promise<boolean> {
+    if (this.options.runtime) return this.options.runtime.isProcessAlive(pid)
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false
+      throw error
     }
   }
 
@@ -359,7 +539,7 @@ export class ChromeManager {
       }
     }
     this._lastConfigExe = configExe
-    const result = await detectChrome(configExe)
+    const result = await (this.options.runtime?.detectChrome ?? detectChrome)(configExe)
     if (result !== null) {
       this.cachedExePath = result
     }
@@ -395,9 +575,11 @@ export class ChromeManager {
     exePath: string,
     port: number,
     userDataDir?: string,
+    signal?: AbortSignal,
   ): Promise<{ pid: number } | { error: string }> {
     const args = [
       `--remote-debugging-port=${port}`,
+      '--remote-debugging-address=127.0.0.1',
       '--no-first-run',
     ]
     if (userDataDir) {
@@ -412,6 +594,8 @@ export class ChromeManager {
       const proc = childSpawn(exePath, args, {
         stdio: ['ignore', 'ignore', 'pipe'],
       })
+      let launchError: Error | undefined
+      proc.once('error', (error) => { launchError = error })
       const pid = proc.pid
       if (pid === undefined) {
         return { error: 'Chrome failed to start (no PID assigned)' }
@@ -425,6 +609,10 @@ export class ChromeManager {
       const maxAttempts = 20
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise((r) => setTimeout(r, 500))
+        if (launchError || signal?.aborted || proc.exitCode !== null || proc.signalCode !== null) {
+          if (proc.exitCode === null && proc.signalCode === null) proc.kill()
+          return { error: launchError?.message ?? (signal?.aborted ? 'Chrome runtime stopped' : 'Chrome process exited before its debug port was ready') }
+        }
         if (await isDebugPortActive(port)) {
           // Detach — let Chrome keep running after our process exits
           proc.unref()
@@ -434,6 +622,7 @@ export class ChromeManager {
 
       // Port never became active — surface any stderr output we captured.
       const stderr = Buffer.concat(stderrChunks).toString('utf8')
+      proc.kill()
       if (stderr.trim()) {
         return { error: `Chrome started but debug port ${port} never responded. Stderr: ${stderr.slice(0, 500)}` }
       }

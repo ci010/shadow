@@ -1,4 +1,5 @@
 import { isRecord } from './projects-sidebar.ts'
+import { apiUrl } from './api-url.ts'
 import { isGptModel, isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 
 export interface ReasoningSettings {
@@ -7,7 +8,7 @@ export interface ReasoningSettings {
 }
 
 export const effortOptions = [
-  { value: 'default', label: 'Default', description: 'Use global thinking and effort settings' },
+  { value: 'default', label: 'Default', description: 'Use organization thinking and effort settings' },
   { value: 'none', label: 'None', description: 'No thinking' },
   { value: 'low', label: 'Low', description: '' },
   { value: 'medium', label: 'Medium', description: '' },
@@ -41,7 +42,7 @@ export async function updateSessionSettings(
   signal: AbortSignal,
   request: typeof fetch = fetch,
 ): Promise<ReasoningSettings> {
-  const response = await request(`${apiBase}/api/sessions/${encodeURIComponent(sessionId)}/config`, {
+  const response = await request(apiUrl(apiBase, `/api/sessions/${encodeURIComponent(sessionId)}/config`).toString(), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),

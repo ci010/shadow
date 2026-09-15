@@ -2,15 +2,16 @@
   <div ref="workspace" class="conversation-workspace" :class="{ 'has-child': childId, 'is-split': split, 'is-resizing': !!drag }" :style="split ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLIT_HANDLE_WIDTH}px ${childWidth}px` } : undefined">
     <div v-show="!childId || wide" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
       <ChatTab ref="primary" :api-base="apiBase" enable-child-pane :child-session-id="childId"
-        :visible="route.name === 'chat' && (!childId || wide)" :keyboard-active="(!childId || wide) && activePane === 'primary'"
-        @open-child="openChild" @primary-change="primaryChanged" @deleted="sessionDeleted" />
+        :organization-id="organizationId" :organization-name="organizationName" :managed="managed" :session-id="sessionId" :initial-project="initialProject" :open-remote="openRemote"
+        :visible="visible && route.name === 'chat' && (!childId || wide)" :keyboard-active="visible && (!childId || wide) && activePane === 'primary'"
+        @open-child="openChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
     </div>
     <div v-if="split" class="conversation-resizer" role="separator" tabindex="0" aria-label="Resize child conversation"
       aria-orientation="vertical" aria-controls="child-conversation-pane" :aria-valuemin="bounds.min" :aria-valuemax="bounds.max" :aria-valuenow="childWidth"
       @pointerdown="startResize" @pointermove="resize" @pointerup="stopResize" @pointercancel="stopResize" @lostpointercapture="stopResize" @keydown="resizeKey" />
     <aside v-if="childId" id="child-conversation-pane" class="child-conversation" aria-label="Child conversation"
       @pointerdown.capture="activePane = 'child'" @focusin="activePane = 'child'">
-      <ChatTab :api-base="apiBase" embedded :session-id="childId" :visible="route.name === 'chat'" :keyboard-active="!wide || activePane === 'child'" @child-navigation="navigateChild">
+      <ChatTab :key="childId" :api-base="apiBase" :organization-id="organizationId" :organization-name="organizationName" embedded :session-id="childId" :visible="visible && route.name === 'chat'" :keyboard-active="visible && (!wide || activePane === 'child')" @child-navigation="navigateChild">
         <template #pane-actions>
           <button class="close-child" :aria-label="wide ? 'Close child conversation' : 'Back to main conversation'" :title="wide ? 'Close child conversation' : 'Back to main conversation'" @click="closeChild">
             <span class="w-4 h-4" :class="wide ? 'i-lucide-panel-right-close' : 'i-lucide-arrow-left'" aria-hidden="true" />
@@ -26,8 +27,10 @@ import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted,
 import { useRoute, useRouter } from 'vue-router'
 import ChatTab from './ChatTab.vue'
 import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_HANDLE_WIDTH, SPLIT_MIN_WIDTH } from '../conversation-split.ts'
+import type { ProjectRecord } from '../projects-client.ts'
 
-defineProps<{ apiBase: string }>()
+const props = withDefaults(defineProps<{ apiBase: string; organizationId?: string; organizationName?: string; managed?: boolean; sessionId?: string; initialProject?: ProjectRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string }>(), { visible: true })
+const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string] }>()
 const route = useRoute()
 const router = useRouter()
 const workspace = ref<HTMLElement>()
@@ -49,17 +52,20 @@ function primaryChanged() {
   activePane.value = 'primary'
 }
 function openChild(target: { primaryId: string; childId: string }) {
+  if (props.managed) { emit('navigate', target.primaryId, target.childId); return }
   childId.value = target.childId
   activePane.value = 'child'
-  void router.replace({ name: 'chat', params: { sessionId: target.primaryId }, query: { child: target.childId } })
+  void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId: target.primaryId }, query: { child: target.childId } })
 }
 function navigateChild(id: string) {
+  if (props.managed) { emit('navigate', props.sessionId ?? '', id); return }
   childId.value = id
   void router.replace({ query: { ...route.query, child: id } })
 }
 function closeChild() {
   primaryChanged()
-  void router.replace({ query: { ...route.query, child: undefined } })
+  if (props.managed) emit('navigate', props.sessionId ?? '')
+  else void router.replace({ query: { ...route.query, child: undefined } })
   void nextTick(() => primary.value?.focusConversation())
 }
 function sessionDeleted(id: string) {
@@ -104,7 +110,7 @@ function deactivate() {
 }
 watch(wide, value => { if (!value) stopResize() })
 watch(() => [route.name, route.params.sessionId, route.query.child], () => {
-  if (route.name !== 'chat') return
+  if (props.managed || route.name !== 'chat') return
   const id = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
   primary.value?.restoreSession(id)
   const nextChild = typeof route.query.child === 'string' && route.query.child !== id ? route.query.child : ''
@@ -112,6 +118,12 @@ watch(() => [route.name, route.params.sessionId, route.query.child], () => {
   childId.value = nextChild
   if (!childId.value) activePane.value = 'primary'
 }, { immediate: true })
+watch(() => props.childSessionId, id => {
+  if (!props.managed) return
+  childId.value = id && id !== props.sessionId ? id : ''
+  activePane.value = childId.value ? 'child' : 'primary'
+}, { immediate: true })
+defineExpose({ requestSession: (id: string) => primary.value?.requestSession(id) })
 onMounted(activate)
 onActivated(activate)
 onDeactivated(deactivate)

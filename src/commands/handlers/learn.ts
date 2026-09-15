@@ -44,7 +44,9 @@ type SessionDiffEntry = {
 async function computeSessionDiff(
   sessions: SessionManager,
   watermark: ReflectWatermark | null,
+  signal?: AbortSignal,
 ): Promise<{ entries: SessionDiffEntry[]; newWatermark: ReflectWatermark }> {
+  signal?.throwIfAborted()
   const allSessions = sessions.listSessions()
   // Filter out internal pipeline sessions
   const userSessions = allSessions.filter((s) => !s.sessionId.startsWith('heartbeat:'))
@@ -53,7 +55,9 @@ async function computeSessionDiff(
   const newWatermarkSessions: Record<string, WatermarkSession> = {}
 
   for (const s of userSessions) {
+    signal?.throwIfAborted()
     const { total } = await sessions.getHistory(s.sessionId, { offset: 0, pageSize: 0 })
+    signal?.throwIfAborted()
 
     // Record current state for the new watermark
     newWatermarkSessions[s.sessionId] = {
@@ -160,15 +164,19 @@ function createPipelines(): Record<string, PipelineDef> {
  */
 export async function triggerReflectorFlush(
   sessions: SessionManager,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  signal?.throwIfAborted()
   const watermark = await readWatermark(sessions.workspace)
-  const { entries, newWatermark } = await computeSessionDiff(sessions, watermark)
+  const { entries, newWatermark } = await computeSessionDiff(sessions, watermark, signal)
+  signal?.throwIfAborted()
   if (entries.length === 0) return false
 
   const sessionId = await sessions.startSession({
     channel: 'heartbeat',
     agentType: 'reflector',
     task: buildReflectorTask(entries),
+    signal,
   })
   if (!sessionId) throw new Error('Reflector session was not accepted')
   await writeWatermark(sessions.workspace, newWatermark)

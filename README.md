@@ -8,6 +8,103 @@ and can be hosted inside an **Electron** desktop application.
 pairing, execution capabilities, and product UI scaffolding exist, but they do
 not imply a production-ready distributed system.
 
+## Organizations
+
+Organizations are persistent ownership boundaries, not just sidebar folders.
+The sidebar shows multiple organization groups together: **there is no global
+organization switcher**. Their conversations, bots, and background runtimes can
+run concurrently; selecting a conversation does not retarget another group's
+work. Each group has projects, retained **Start from scratch** chats, and
+**Self reflection** activity.
+
+Each organization owns its Home, sessions, context, memory, identity/Soul,
+workspace skills and agent overrides, learning, bots, and diagnostics.
+**Self reflection** is a UI grouping within that ownership boundary, not a
+separate organization. A session belongs to one organization and at most one
+folder project. Local folder registration rejects another organization's folder
+and overlapping parent/child paths; project code stays in its original folder.
+Agent messaging, forks, and delegation cannot target another organization's
+sessions. This is application data/context isolation, **not an OS sandbox**:
+`exec`, imported code, and MCP still have the backend user's host permissions.
+
+Provider connections/credentials and device pairing remain App-wide.
+Organization settings (the gear beside its name) control **General**, **Models**,
+**Bots**, and **Learning**. Model defaults/parameters are independent per
+organization; conversation overrides remain local to that conversation.
+Changing shared provider credentials does not overwrite other organizations'
+model preferences. A failed organization reports its own startup error with
+**Retry organization startup**; healthy organizations remain usable.
+
+The Organizations sidebar resizes from its right edge (or with arrow keys on
+the resize handle) and collapses into a narrow organization-icon rail. Width
+and collapsed state are remembered on this installation. Selecting a rail icon
+expands that organization's group without changing the current conversation.
+
+Use a folder row's **...** menu, or right-click the row, to **Remove folder**
+or **Move to organization...**. Both actions change membership only: they never
+move or delete files on disk. Existing conversations, memory, and learning stay
+in the original organization; those conversations lose access to that folder.
+The destination starts with a new project identity, not transferred history.
+Stop active work in the source organization first; busy checks conservatively
+cover the whole source organization. Overlapping folder ownership and remote
+jobs whose termination is unconfirmed can also block the change. Unconfirmed
+remote jobs remain blocked across restart; automatic recovery is not yet
+implemented. These controls do not delete or merge organizations.
+
+### Existing data and storage
+
+At first startup, the stopped legacy Home is copied and verified into the
+renameable **Default** organization (`default`); old Home content, session
+history/IDs, memory, learned skills/identity, learning watermarks, and legacy bot
+configuration are retained there, not copied into every new organization.
+JSONL and SQLite session metadata receive the organization identity without
+regenerating conversation history. Fresh organizations start without inherited
+memory or bots, using shipped built-in skills/agent definitions.
+
+The actual host storage root is a **sibling** of the configured legacy Home:
+`${legacyHome}.organizations`. Each organization uses
+`organizations/<id>/workspace` under that root, with adjacent
+`config/organization.json` and `config/bots.v1.json`. The original Home is **not
+deleted**; shared provider credentials and the device registry retain their
+existing locations. Stop legacy writers before migration and back up real data.
+External symlinks/junctions inside Home are unsupported by automatic migration:
+startup stops for manual review rather than following them or silently dropping
+content. Conflicting targets, invalid recovery metadata, or a changed source
+also require review; do not delete the original Home or migration metadata to
+bypass the error. See [organization storage and routing](docs/architecture.md#organizations-ownership-storage-and-routing)
+for the layout and recovery boundary.
+
+Organization content requests use `/organizations/<id>/` plus their existing
+`api/...` or `v1/...` suffixes. The App catalog is `/api/organizations`; shared
+provider/device routes remain at the root. Unscoped legacy content routes always
+refer to **Default**, never whichever conversation happens to be visible.
+
+**Remote organization projects:** an updated Child advertising `workdir.identity`
+can verify and register its selected folder in the owning organization before
+the first session is created. Main checks Child-reported directory/ancestor
+identities, never canonicalizing a remote display path on Main. Another
+organization cannot claim an identical, aliased, or overlapping folder on that
+node. Existing migrated remote sessions retain their capability references and
+reserve ownership for Default; those reservations must be verified before new
+projects are opened on the same node.
+Registration and access to registered projects revalidate every saved claim and
+project on that device. An unavailable or retargeted **other** saved capability
+can therefore also block opening a new session in an existing project or reading
+its project resources. Ownership checks intentionally fail closed: restore and
+revalidate the affected capability, not a Main-local fallback. Existing session
+records remain preserved.
+
+Older Children without this operation return
+`409 remote_workdir_identity_unsupported` with `upgrade_node` for new project
+actions; existing remote sessions retain their supported execution paths.
+An unavailable device/workdir returns `503 remote_workdir_unavailable`.
+Update Main and Child, then reconnect. The Mac/WSL SSH test environments also
+need that Child rollout; they are not portable, autostart-capable releases.
+Passing native tests does not upgrade or restart already-running Child processes.
+Remote project listings, UTF-8 text previews, and Git inspection use the owning
+Child. Raw/static remote media remains unsupported (`501`), as does remote
+cloning. These additions do not complete distributed release hardening.
+
 ## Documentation
 
 | Document | Purpose |
@@ -118,19 +215,23 @@ rejected credentials. Readiness follows the selected provider, not just the
 presence of an OpenAI key. Each configured provider has a card; **Configure**
 opens its existing settings without exposing the saved key. The large **Add
 provider** card offers providers not yet configured and named local endpoints.
-Saving selects that provider and model for new turns. A card marked **Configured**
+Saving updates the shared provider connection; organization model defaults are
+managed separately. A card marked **Configured**
 means settings exist, not that its connection has been checked.
 
-**Settings → Channels** configures the existing **QQ, Feishu, and Discord** bot
-connections. Each channel shows configuration and runtime status separately, with
+**Organization settings → Bots** configures **QQ, Feishu, and Discord** bot
+instances. An organization can have several bots on the same platform, each with
+its own name, credentials, sender policy, and runtime lifecycle. Each bot shows
+configuration and runtime status separately, with
 setup instructions, **Save and connect**, **Connect**, and **Disconnect** actions.
 Advanced settings include sender allowlists and trusted admin group IDs. Saved
 credentials are never returned to the form; leave a password field blank to keep
 its existing value. Changes are saved on Main, not in browser storage. Only Main
-administrators can manage these settings. Channel setup remains accessible before
+administrators can manage these settings. Bot setup remains accessible before
 a model provider is ready; answering messages still requires a working provider.
-WeChat/iLink remains outside this settings flow. Old `/providers` links redirect
-to `/settings/providers`.
+Legacy WeChat/iLink adapters are not started by organization runtimes; their
+retained configuration is not a connected bot. Old `/providers` links
+redirect to `/settings/providers`; `/settings/channels` opens Default's Bots.
 QQ and Discord show **Connected** only after gateway readiness. Feishu shows
 **Running · connection unverified** because its SDK cannot confirm readiness to
 the UI. A saved configuration is not proof that platform credentials, event
@@ -152,7 +253,7 @@ Clients of Shadow's compatible chat API can preserve this continuation by
 round-tripping the assistant message's optional `provider_state` field unchanged.
 
 For GPT models, the conversation **Effort** menu offers **None, Low, Medium,
-High, XHigh, Max**, plus **Default** to inherit global settings. Explicit levels
+High, XHigh, Max**, plus **Default** to inherit organization settings. Explicit levels
 are sent unchanged as `reasoning_effort` for Chat Completions or
 `reasoning.effort` for Responses. **None** disables thinking and maps to `none`;
 it is distinct from **Default**. Provider/model capability checks still apply:
@@ -261,9 +362,9 @@ The composer has one compact model button showing the model and effort. Its menu
 contains only **Model** and **Effort**; each opens a submenu in the same popover.
 Model retains searchable options, provider labels, and the current selection
 marked. Back/Left returns to the two-row menu; Escape returns from a submenu,
-then closes the menu. It retains the existing global model-selection behavior; a
-model-only selector is also
-available in Settings → Providers from other views. Returning from Settings
+then closes the menu. Model selection is scoped to the conversation/draft;
+organization defaults are available in Organization settings → Models.
+Returning from Settings
 restores the existing chat and unsent draft; leaving settings cancels any pending
 device login, as does switching to Channels. Channel form drafts survive switching
 between settings sections, and status refreshes never overwrite those drafts.
@@ -281,7 +382,7 @@ configured model's known/explicit limit; no limit is invented for unknown models
 Effort combines thinking and reasoning intensity, scoped to the conversation.
 **None** disables thinking and clears the explicit intensity; **Low**, **High**,
 and **Max** enable thinking and set that effort together. **Default** clears both
-overrides and uses global settings. Model support still applies; provider
+overrides and uses organization settings. Model support still applies; provider
 rejections are surfaced rather than retrying with a different setting. Draft choices
 stay local until the first send; existing-session changes are persisted before
 sending another turn. Sidebar lineage/expand controls and conversation tool,
@@ -428,8 +529,11 @@ content. Diff quotes identify both sides' source lines. Binary or oversized
 diffs report their limits rather than showing a misleading empty text diff.
 Git reads refresh while the explorer or a diff is visible and never stage,
 commit, or otherwise modify the repository. Non-Git folders keep ordinary Files
-browsing; remote Git inspection is explicitly unavailable rather than falling
-back to Main's filesystem.
+browsing. Paired remote workdirs use the same Changes tree and diff previews:
+`workdir.git.status` and `workdir.git.diff` run Git on the owning Child, never on
+Main's filesystem. Both Main and Child must be updated; missing Git, unavailable
+nodes and unsupported older nodes report explicit errors. Remote results are
+validated and bounded to 4 MiB, with chunked transport for large diffs.
 Switching documents or toggling Diagnosis
 preserves the composer draft, attachments, history position and active response
 stream. The former System & Tools drawer is replaced by Diagnosis's **Trace**,
@@ -442,7 +546,7 @@ separate tracks. Turns and tool-call details can be folded in bulk, and search
 matches all entered terms across text and metadata. The expandable all-spans
 list includes nested execution spans.
 
-Execution timing is fetched from `GET /v1/query/session-spans` with an exact
+Execution timing is fetched from `GET /organizations/<id>/v1/query/session-spans` with an exact
 logical session ID and physical segment filter. The trace UI follows the
 `audit:read` visibility scope; the API inherits the gateway's existing configured
 launch-credential authentication (UI scopes are not server authorization).
@@ -455,8 +559,14 @@ not presented as historical per-call snapshots. Unsent drafts never fetch trace
 data or materialize sessions. Inspect older segments through Conversation's
 segment navigation before opening Diagnosis.
 
-The Projects header's **+** menu contains exactly **Open folder**, **Clone repo**,
-and **Start from scratch**. Open folder registers an existing directory using
+Each organization's Projects **+** menu contains **Open folder**, **Open remote folder**,
+**Clone repo**, and **Start from scratch**. Open remote folder opens a new draft
+with the remote-device picker already open. Choose a connected Child's advertised
+workspace; selection does not create a session before the first send. It does not
+register arbitrary paths on another machine. On send, Main verifies the Child's
+folder identity and registers the project in that organization; unsupported
+Children or ownership conflicts return an explicit error rather than using Main.
+Open folder registers an existing directory using
 Electron's native folder picker (the browser accepts an explicit Main-local path).
 Registered folders remain visible when empty. Each folder's own **+** opens a
 draft associated with that project. Its session is created on the first send;
@@ -516,18 +626,45 @@ local-only; remote exec fails explicitly. Local session/task exec behavior is un
 
 Session/task conversations bound to a connected Child workdir can run bounded
 foreground OS-shell commands through `workdir.process.execute`. The Child resolves
-the working directory from its configured capability root and applies its local
-approval policy. Omit `shell` to use the Child's default, not Main's detected shell.
+the working directory from its configured capability root. Paired nodes are
+trusted: supported commands and file operations run without per-operation
+approval or grants. Omit `shell` to use the Child's default, not Main's detected shell.
 Remote inline Node/TypeScript, background execution, and call-mode exec remain
 unsupported. Shell commands run as the Child user: a workdir is not an OS sandbox.
 
-Main's authenticated administrator API can create a dedicated remote conversation:
-`POST /api/sessions/remote` with `{"nodeId":"child-id","capabilityId":"workdir-id"}`.
+Main's authenticated administrator API has a dedicated remote-conversation path:
+`POST /organizations/<id>/api/sessions/remote` with
+`{"nodeId":"child-id","capabilityId":"workdir-id"}`.
+This verifies remote folder ownership and creates or reuses the organization's
+project before creating the conversation. An optional UUID `requestId` makes
+retries refer to the same conversation; reusing it for a different capability
+returns a conflict. The unscoped legacy endpoint targets Default.
+For an already registered project, first send instead uses
+`POST /organizations/<id>/api/projects/<project-id>/sessions`, also accepting
+an optional UUID `requestId` (an empty body remains supported). Remote projects
+revalidate their saved folder identity; retries reuse the conversation rather
+than selecting a new capability, and a request ID owned by another project is
+a `409` conflict.
 It accepts only an online workdir capability, not an absolute/display path, and
-returns `sessionId` and `chatId` for the normal chat endpoints. Its durable workdir
+returns `projectId`, `sessionId`, and `chatId` for the normal scoped chat endpoints. Its durable workdir
 reference uses the existing JSONL/SQLite session state. Existing conversations are
-not silently moved. A user-facing remote-workdir picker and live Child approval
-controls are still WIP; this endpoint does not replace pairing or Child approvals.
+not silently moved.
+
+In the Main app, start a new conversation and choose **Execution location** next
+to the model selector. Select a connected Child and its advertised workspace;
+the selection remains a draft until the first message is sent. Offline/revoked
+devices cannot be selected, and Main rechecks the capability when creating the
+conversation. The session header identifies its owning device and workspace.
+Switching the draft location does not move an existing conversation or transfer
+local attachments. Remote file browsing is opened explicitly and loads directly
+from the paired device; requests time out with a retryable message rather than
+loading indefinitely. Remote Git status and diffs use the owning node's repository
+and the same read-only inspection limits as local Git. Git staging, commits,
+branch management and remote cloning are not added by this UI.
+Pairing, connection authentication, revocation, workdir resolution and supported
+operation validation remain in place. There is no additional node approval UI.
+Update both Main and Child to use the `none` approval-policy contract; older
+Child versions may still require their legacy local approvals.
 
 For a blocked call outcome, the model returns raw JSON without Markdown fences:
 `{"status":"blocked","reason":"Missing decision or permission","partialWork":"Actions already taken and side effects"}`.
@@ -612,7 +749,8 @@ shows explicit connection/API errors rather than example devices. Unknown
 versions, last-seen times, and remote paths are omitted. A capability is shown as
 available only while its device is connected and the capability is online.
 This does not add pairing/revocation controls or complete remote execution parity.
-The Child Approvals screen remains separate, fixture-backed, and noninteractive.
+The retired Child Approvals route redirects to Nodes; paired devices need no
+additional operation approvals.
 After updating the backend, restart `pnpm desktop:dev` to enable the inventory API.
 Internal capability IDs and unconnected approval policies are not shown.
 

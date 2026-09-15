@@ -33,6 +33,9 @@ import {
 import { ChildLocalControlService } from './child-local-control.ts'
 import { childLocalNodeInventory } from './node-inventory.ts'
 import { CapabilityShell, WORKDIR_PROCESS_EXECUTE_OPERATION } from '../execution/capability-shell.ts'
+import { CapabilityGit, GIT_DIFF_OPERATION, GIT_STATUS_OPERATION } from '../execution/capability-git.ts'
+import { CapabilityWorkdirIdentity } from '../execution/capability-workdir-identity.ts'
+import { WORKDIR_IDENTITY_OPERATION } from '../execution/workdir-identity.ts'
 
 export interface ProductionChildOptions {
   readonly keyStore?: ProtectedDeviceKeyStore
@@ -83,7 +86,7 @@ export async function startProductionChildRuntime(
       kind: 'shell',
       displayName: 'Local shell',
       permissions: ['process.execute'],
-      approvalPolicy: 'grant',
+      approvalPolicy: 'none',
       online: true,
     },
     ...workdirs.map((workdir): CapabilityDescriptorV1 => ({
@@ -92,8 +95,9 @@ export async function startProductionChildRuntime(
       nodeId: config.localNodeId,
       kind: 'workdir',
       displayName: workdir.displayName,
-      permissions: [FILESYSTEM_READ_OPERATION, FILESYSTEM_WRITE_OPERATION, WORKDIR_PROCESS_EXECUTE_OPERATION],
-      approvalPolicy: 'grant',
+      displayPath: workdir.rootPath,
+      permissions: [FILESYSTEM_READ_OPERATION, FILESYSTEM_WRITE_OPERATION, WORKDIR_PROCESS_EXECUTE_OPERATION, GIT_STATUS_OPERATION, GIT_DIFF_OPERATION, WORKDIR_IDENTITY_OPERATION],
+      approvalPolicy: 'none',
       online: true,
     })),
   ]
@@ -106,7 +110,7 @@ export async function startProductionChildRuntime(
   const executor = new LocalExecutor(
     processManager,
     config.localNodeId,
-    [filesystem, new CapabilityShell(workdirs)],
+    [filesystem, new CapabilityShell(workdirs), new CapabilityGit(workdirs), new CapabilityWorkdirIdentity(workdirs)],
     ['process-execute'],
     approvalService,
   )
@@ -126,7 +130,7 @@ export async function startProductionChildRuntime(
       protocolMajor: 1,
       protocolMinor: 0,
       implementationVersion: '0.1.0',
-      features: ['jobs-v1', 'capabilities-v1'],
+      features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'],
     },
     authentication: {
       deviceId: reference.deviceId,

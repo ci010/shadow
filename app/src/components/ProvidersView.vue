@@ -8,10 +8,6 @@
           <component :is="embedded ? 'h2' : 'h1'" class="providers-title">Providers</component>
           <p>Manage your configured providers and add new connections.</p>
         </div>
-        <div v-if="status?.ready" class="settings-model-selector">
-          <span>Model for new turns</span>
-          <ModelSelector />
-        </div>
       </header>
       <p v-if="loading" role="status">Loading configured providers...</p>
       <div v-else-if="inventoryError" class="inventory-error" role="alert">
@@ -64,7 +60,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import ProviderSetup from '../ProviderSetup.vue'
-import ModelSelector from './ModelSelector.vue'
 import {
   createProviderSetupClient, providerDisplayName, providerPresets,
   type ConfiguredProvider, type ProviderSetupStatus,

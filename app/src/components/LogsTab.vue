@@ -109,6 +109,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiUrl } from '../api-url.ts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import LogList, { type LogEntry } from './LogList.vue'
 
@@ -211,7 +212,7 @@ const traceResponseMessages = computed<PromptMessage[]>(() => {
 })
 
 function buildUrl(path: string, params?: Record<string, string>): string {
-  const url = new URL(path, props.apiBase)
+  const url = apiUrl(props.apiBase, path)
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value)

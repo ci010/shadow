@@ -7,6 +7,7 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { activeSpan } from '../utils/otel.ts'
 import { initializeNodeTelemetry } from './runtime.ts'
 import { OtelStore } from './store.ts'
+import { createOrganizationScope, getOrganizationScope } from './scope.ts'
 
 test('Node telemetry persists asynchronous spans and correlated console logs', async () => {
   const store = new OtelStore(':memory:')
@@ -186,16 +187,18 @@ test('Node telemetry preserves parent context, events, and failures in its datab
   })
 })
 
-test('Node telemetry shares handles without duplicates and restores globals after final shutdown', async () => {
+test('Node telemetry shares handles within one scope and restores globals after final shutdown', async () => {
   const firstStore = new OtelStore(':memory:')
   const secondStore = new OtelStore(':memory:')
   const levels = ['debug', 'log', 'info', 'warn', 'error'] as const
   const originalConsole = levels.map((level) => console[level])
   const first = initializeNodeTelemetry(firstStore)
   const duplicate = initializeNodeTelemetry(firstStore)
-  const second = initializeNodeTelemetry(secondStore)
+  const scope = createOrganizationScope('second')
+  const second = initializeNodeTelemetry(secondStore, { scope })
   try {
-    activeSpan('both-stores', () => console.info('shared telemetry'))
+    activeSpan('host-store', () => console.info('host telemetry'))
+    scope.run(() => activeSpan('org-store', () => console.info('org telemetry')))
     assert.equal(firstStore.querySpans().length, 1)
     assert.equal(secondStore.querySpans().length, 1)
     assert.equal(firstStore.queryLogs().length, 1)
@@ -203,11 +206,12 @@ test('Node telemetry shares handles without duplicates and restores globals afte
 
     await first.shutdown()
     activeSpan('duplicate-retains-store', () => {})
+    scope.run(() => activeSpan('org-store', () => {}))
     assert.equal(firstStore.querySpans().length, 2)
     assert.equal(secondStore.querySpans().length, 2)
 
     await duplicate.shutdown()
-    activeSpan('remaining-store', () => console.warn('remaining telemetry'))
+    scope.run(() => activeSpan('remaining-store', () => console.warn('remaining telemetry')))
     assert.equal(firstStore.querySpans().length, 2)
     assert.equal(firstStore.queryLogs().length, 1)
     assert.equal(secondStore.querySpans().length, 3)
@@ -299,9 +303,11 @@ test('live spans clean up per-store only after its last telemetry handle shuts d
   const secondStore = new OtelStore(':memory:')
   const first = initializeNodeTelemetry(firstStore)
   const duplicate = initializeNodeTelemetry(firstStore)
-  const second = initializeNodeTelemetry(secondStore)
+  const scope = createOrganizationScope('second')
+  const second = initializeNodeTelemetry(secondStore, { scope })
   try {
     const running = trace.getTracer('test').startSpan('agent.chat', { attributes: { sessionId: 'parent' } })
+    const otherRunning = scope.run(() => trace.getTracer('test').startSpan('agent.chat', { attributes: { sessionId: 'parent' } }))
     assert.equal(firstStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 1)
     assert.equal(secondStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 1)
     await first.shutdown()
@@ -312,6 +318,7 @@ test('live spans clean up per-store only after its last telemetry handle shuts d
     await second.shutdown()
     assert.equal(secondStore.querySessionSpans({ sessionId: 'parent' }).entries.length, 0)
     running.end()
+    otherRunning.end()
     assert.equal(firstStore.countSpans(), 0)
     assert.equal(secondStore.countSpans(), 0)
   } finally {
@@ -320,6 +327,84 @@ test('live spans clean up per-store only after its last telemetry handle shuts d
     await second.shutdown()
     firstStore.close()
     secondStore.close()
+  }
+})
+
+test('organization telemetry routes interleaved timers, bound events and late span endings to exactly one owner', async () => {
+  const host = new OtelStore(':memory:')
+  const stores = [new OtelStore(':memory:'), new OtelStore(':memory:')]
+  const scopes = [createOrganizationScope('org-a'), createOrganizationScope('org-b')]
+  const hostHandle = initializeNodeTelemetry(host)
+  const handles = stores.map((store, i) => initializeNodeTelemetry(store, { scope: scopes[i] }))
+  try {
+    const callbacks = scopes.map((scope, i) => scope.run(() => scope.bind(() => {
+      assert.equal(getOrganizationScope(), scope)
+      activeSpan(`event-${i}`, () => console.info(`event-log-${i}`))
+    })))
+    await Promise.all(scopes.map((scope, i) => scope.run(async () => {
+      await activeSpan('agent.chat', async (span) => {
+        span.setAttribute('sessionId', 'same-session')
+        span.setAttribute('projectName', 'same-project')
+        await new Promise<void>((resolve) => setTimeout(resolve, i === 0 ? 12 : 2))
+        console.info(`timer-log-${i}`)
+        assert.equal(stores[i].querySessionSpans({ sessionId: 'same-session' }).entries.length, 1)
+        callbacks[1 - i]()
+        assert.equal(getOrganizationScope(), scope)
+      })
+    })))
+    stores.forEach((store, i) => {
+      assert.deepEqual((store.querySpans() as StoredSpan[]).map((span) => span.name).sort(), ['agent.chat', `event-${i}`])
+      assert.deepEqual((store.queryLogs() as StoredLog[]).map((log) => JSON.parse(log.body).stringValue).sort(), [`event-log-${i}`, `timer-log-${i}`])
+      const spans = store.querySpans() as StoredSpan[]
+      assert(spans.every((span) => span.parent_span_id === null))
+    })
+    activeSpan('host-only', () => console.info('host-log'))
+    const unknown = createOrganizationScope('unregistered')
+    unknown.run(() => activeSpan('unknown', () => console.warn('unregistered-org-log')))
+    assert.deepEqual((host.querySpans() as StoredSpan[]).map((span) => span.name), ['host-only'])
+    assert.equal(host.queryLogs().length, 1)
+
+    const late = scopes[0].run(() => trace.getTracer('test').startSpan('late'))
+    scopes[1].run(() => late.end())
+    assert((stores[0].querySpans() as StoredSpan[]).some((span) => span.name === 'late'))
+    assert(!(stores[1].querySpans() as StoredSpan[]).some((span) => span.name === 'late'))
+    const abandoned = scopes[0].run(() => trace.getTracer('test').startSpan('abandoned'))
+    await handles[0].shutdown()
+    scopes[0].close()
+    const replacementScope = createOrganizationScope('org-a')
+    const replacement = initializeNodeTelemetry(stores[0], { scope: replacementScope })
+    try {
+      abandoned.end()
+      assert(!(stores[0].querySpans() as StoredSpan[]).some((span) => span.name === 'abandoned'))
+      assert.throws(callbacks[0], /closed/)
+      callbacks[1]()
+      assert.equal(stores[1].queryLogs().length, 3)
+    } finally {
+      await replacement.shutdown()
+      replacementScope.close()
+    }
+  } finally {
+    for (const handle of handles) await handle.shutdown()
+    await hostHandle.shutdown()
+    for (const scope of scopes) scope.close()
+    for (const store of [host, ...stores]) store.close()
+  }
+})
+
+test('telemetry rejects ambiguous host and cross-organization store registrations', async () => {
+  const host = new OtelStore(':memory:')
+  const other = new OtelStore(':memory:')
+  const handle = initializeNodeTelemetry(host)
+  try {
+    assert.throws(() => initializeNodeTelemetry(other), /only one store/)
+    assert.throws(() => createOrganizationScope('org').run(() => initializeNodeTelemetry(other)), /explicit scope binding/)
+    assert.throws(() => initializeNodeTelemetry(host, { organizationId: 'other' }), /cannot be shared/)
+    assert.throws(() => initializeNodeTelemetry(other, { organizationId: 'wrong', scope: createOrganizationScope('actual') }), /does not match/)
+    assert.throws(() => createOrganizationScope(' '), /organizationId/)
+  } finally {
+    await handle.shutdown()
+    host.close()
+    other.close()
   }
 })
 

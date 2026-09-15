@@ -135,7 +135,7 @@ export class DiscordChannel extends AbstractChannel {
         try {
           const { filename, data: raw } = await readMediaFile(
             this.workspace,
-            `${this.name}:${msg.chatId}`,
+            this.logicalSessionId(msg.chatId),
             mediaPath,
           )
           // Copy into a plain ArrayBuffer so it's compatible with Blob
@@ -308,7 +308,7 @@ export class DiscordChannel extends AbstractChannel {
         try {
           const { filename, data: raw } = await readMediaFile(
             this.workspace,
-            `${this.name}:${chatId}`,
+            this.logicalSessionId(chatId),
             mediaPath,
           )
           const data = new Uint8Array(new ArrayBuffer(raw.byteLength))
@@ -595,6 +595,7 @@ export class DiscordChannel extends AbstractChannel {
   private async connect(): Promise<void> {
     if (this.stopping) return
     const controller = this.controller
+    this.setAccepting(true)
     this.reportState('connecting')
     const gatewayUrl = await this.getGatewayUrl()
     if (this.stopping || this.controller !== controller) return
@@ -602,11 +603,11 @@ export class DiscordChannel extends AbstractChannel {
     const ws = new WebSocket(gatewayUrl)
     this.ws = ws
 
-    this.ws.onopen = () => {
+    this.ws.onopen = this.bindCallback(() => {
       console.debug('WebSocket connected')
-    }
+    })
 
-    this.ws.onmessage = (event: MessageEvent) => {
+    this.ws.onmessage = this.bindCallback((event: MessageEvent) => {
       if (this.stopping || this.ws !== ws) return
       let data: {
         op: number
@@ -648,16 +649,17 @@ export class DiscordChannel extends AbstractChannel {
           }, 2000)
           break
         case 0: // Dispatch
-          this.handleDispatch(data.t!, data.d!).catch((err) =>
+          this.withConnection(() => this.handleDispatch(data.t!, data.d!)).catch((err) =>
             console.error('[discord] Incoming message handling failed')
           )
           break
       }
-    }
+    })
 
-    this.ws.onclose = (event: CloseEvent) => {
+    this.ws.onclose = this.bindCallback((event: CloseEvent) => {
       if (this.stopping || this.ws !== ws) return
       this.ws = null
+      this.setAccepting(false)
       this.reportState('disconnected')
       clearTimeout(this.identifyTimer)
       console.warn(
@@ -672,13 +674,13 @@ export class DiscordChannel extends AbstractChannel {
         return
       }
       this.scheduleReconnect()
-    }
+    })
 
-    this.ws.onerror = () => {
+    this.ws.onerror = this.bindCallback(() => {
       if (this.stopping || this.ws !== ws) return
       this.reportState('error')
       console.error('[discord] WebSocket error')
-    }
+    })
   }
 
   private scheduleReconnect(): void {
@@ -747,9 +749,17 @@ export class DiscordChannel extends AbstractChannel {
       this.capabilityCache.clear()
     }
     if (event === 'READY') {
-      this.reportState('connected')
       this.sessionId = data.session_id as string
       const user = data.user as Record<string, string>
+      try {
+        this.reportIdentity(user?.id ?? '')
+      } catch {
+        await this.stop()
+        this.reportState('error')
+        console.error('[discord] Bot identity is already bound or unavailable')
+        return
+      }
+      this.reportState('connected')
       this.botUserId = user?.id ?? null
       const application = data.application as Record<string, unknown> | undefined
       this.applicationId = isDiscordId(application?.id) && isDiscordId(user?.id)
@@ -835,7 +845,7 @@ export class DiscordChannel extends AbstractChannel {
         author?.id
 
       let silent = false
-      const sessionId = `${this.name}:${data.channel_id as string}`
+      const sessionId = this.logicalSessionId(data.channel_id as string)
       const state = await this.sessionManager?.getSessionState(sessionId)
       const sessionTriggerMode = state?.config?.triggerMode ?? this.triggerMode
 
@@ -888,7 +898,7 @@ export class DiscordChannel extends AbstractChannel {
       if (otherAttachments.length > 0) {
         const results = await Promise.all(
           otherAttachments.map((a) =>
-            this.downloadAttachment(a, `${this.name}:${channelId}`)
+            this.downloadAttachment(a, this.logicalSessionId(channelId))
           ),
         )
         const uris = results.filter(Boolean) as string[]
@@ -902,9 +912,9 @@ export class DiscordChannel extends AbstractChannel {
         console.log(
           `Thread ${channelId} has parent ${parentChannelId}, building session for thread...`,
         )
-        const sessionId = `${this.name}:${channelId}`
+        const sessionId = this.logicalSessionId(channelId)
         await this.sessionManager?.buildSession(sessionId, {
-          id: `${this.name}:${parentChannelId}`,
+          id: this.logicalSessionId(parentChannelId),
         })
       }
 
@@ -951,6 +961,7 @@ export class DiscordChannel extends AbstractChannel {
 
       const ext = extname(filename) || ''
       const saveName = `discord_${attachment.id ?? Date.now()}${ext}`
+      this.assertConnection()
       const relativePath = await saveToUploads(
         this.workspace,
         sessionId,
@@ -1007,7 +1018,7 @@ export class DiscordChannel extends AbstractChannel {
         const text = await this.voicePipeline.processVoice(
           buf,
           ext,
-          `discord_${attachId}`,
+          this.mediaSourceId(attachId),
         )
         results.push(text)
       } catch (err) {

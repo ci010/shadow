@@ -11,6 +11,7 @@ import type {
   SystemEvent,
 } from './types.ts'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
+import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
 
 const SUBSCRIPTIONS_FILE = '.events/subscriptions.json'
 const SOURCES_FILE = '.events/sources.json'
@@ -51,6 +52,7 @@ export class EventService {
   private sources = new Map<string, EventSourceDescriptor>()
   private sourcesPath: string
   private stopped = false
+  private deliveries = new Set<Promise<void>>()
   private persistenceTail: Promise<void> = Promise.resolve()
   private persistenceErrors = new Map<string, unknown>()
   /** Trailing-debounce buffers, keyed by session and coalescing key. */
@@ -66,7 +68,12 @@ export class EventService {
     }
   >()
 
-  constructor(private workspace: string, private bus: Bus, private deliver: DeliverInput) {
+  constructor(
+    private workspace: string,
+    private bus: Bus,
+    private deliver: DeliverInput,
+    private scope: OrganizationScope | undefined = getOrganizationScope(),
+  ) {
     this.subscriptionsPath = workspacePath(workspace, SUBSCRIPTIONS_FILE)
     this.sourcesPath = workspacePath(workspace, SOURCES_FILE)
   }
@@ -84,6 +91,7 @@ export class EventService {
     this.stopped = true
     for (const d of this.debouncers.values()) clearTimeout(d.timer)
     this.debouncers.clear()
+    await Promise.allSettled(this.deliveries)
     await this.flush()
   }
 
@@ -258,6 +266,17 @@ export class EventService {
   }
 
   private async dispatch(full: SystemEvent, excludedSessionId?: string): Promise<void> {
+    const operation = () => this.dispatchWithinScope(full, excludedSessionId)
+    await this.trackDelivery(this.scope ? this.scope.run(operation) : operation())
+  }
+
+  private trackDelivery(pending: Promise<void>): Promise<void> {
+    this.deliveries.add(pending)
+    void pending.then(() => this.deliveries.delete(pending), () => this.deliveries.delete(pending))
+    return pending
+  }
+
+  private async dispatchWithinScope(full: SystemEvent, excludedSessionId?: string): Promise<void> {
     this.assertRunning()
     this.bus.emit('system.event', full)
 
@@ -328,10 +347,10 @@ export class EventService {
       existing.count += 1
       existing.eventIds.push(evt.id)
       if (evt.origin) existing.origins.push(evt.origin)
-      existing.timer = setTimeout(() => { void this.flushDebounced(bufKey) }, windowMs)
+      existing.timer = setTimeout(() => { void this.trackDelivery(this.flushDebounced(bufKey)) }, windowMs)
       return
     }
-    const timer = setTimeout(() => { void this.flushDebounced(bufKey) }, windowMs)
+    const timer = setTimeout(() => { void this.trackDelivery(this.flushDebounced(bufKey)) }, windowMs)
     this.debouncers.set(bufKey, {
       timer,
       evt,

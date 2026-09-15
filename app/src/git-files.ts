@@ -1,37 +1,9 @@
 import type { FileEntry } from './composables/useSessionFiles.ts'
-
-export type GitChangeKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted' | 'typechanged'
-export interface GitChange {
-  path: string
-  originalPath?: string
-  status: GitChangeKind
-}
-export interface GitStatus {
-  available: boolean
-  reason?: 'not_repository' | 'remote_unsupported' | 'git_unavailable'
-  entries: GitChange[]
-}
-export interface GitHunk {
-  oldStart: number
-  oldLines: number
-  newStart: number
-  newLines: number
-  lines: string[]
-}
-export interface GitDiff {
-  sourcePath?: string
-  path: string
-  originalPath?: string
-  status: GitChangeKind
-  base: 'HEAD' | 'empty'
-  binary: boolean
-  truncated: boolean
-  hunks: GitHunk[]
-  notice?: string
-}
+import { apiUrl } from './api-url.ts'
+import { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk } from '../../src/gateway/git-contracts.ts'
+export { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk, type GitDiff } from '../../src/gateway/git-contracts.ts'
 
 const kinds: readonly GitChangeKind[] = ['conflicted', 'modified', 'typechanged', 'deleted', 'renamed', 'added', 'untracked']
-const reasons = ['not_repository', 'remote_unsupported', 'git_unavailable']
 const badges: Record<GitChangeKind, string> = {
   modified: 'M', added: 'A', deleted: 'D', renamed: 'R', untracked: 'U', conflicted: '!', typechanged: 'T',
 }
@@ -88,41 +60,6 @@ export function diffLines(hunk: GitHunk): DiffLine[] {
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
-function path(value: unknown): value is string {
-  return typeof value === 'string' && !!value && !value.includes('\0') && !value.includes('\\')
-    && value.split('/').every(part => !!part && part !== '.' && part !== '..')
-}
-function kind(value: unknown): value is GitChangeKind {
-  return typeof value === 'string' && kinds.some(kind => kind === value)
-}
-function change(value: unknown): value is GitChange {
-  return record(value) && path(value.path) && kind(value.status)
-    && (value.originalPath === undefined || path(value.originalPath))
-}
-function nonnegative(value: unknown): value is number { return Number.isSafeInteger(value) && Number(value) >= 0 }
-function hunk(value: unknown): value is GitHunk {
-  return record(value) && nonnegative(value.oldStart) && nonnegative(value.oldLines)
-    && nonnegative(value.newStart) && nonnegative(value.newLines) && Array.isArray(value.lines)
-    && value.lines.every(line => typeof line === 'string' && /^[ +\\-]/.test(line))
-    && value.lines.filter(line => /^[ -]/.test(line)).length === value.oldLines
-    && value.lines.filter(line => /^[ +]/.test(line)).length === value.newLines
-}
-export function parseGitStatus(value: unknown): GitStatus {
-  if (!record(value) || typeof value.available !== 'boolean' || !Array.isArray(value.entries) || !value.entries.every(change)
-    || (value.reason !== undefined && !reasons.includes(String(value.reason)))) throw new Error('Invalid Git status received. Refresh to retry.')
-  if (!value.available && value.entries.length) throw new Error('Unavailable Git status included file changes. Refresh to retry.')
-  return { available: value.available, entries: value.entries, ...(value.reason ? { reason: value.reason as GitStatus['reason'] } : {}) }
-}
-export function parseGitDiff(value: unknown, expectedPath: string): GitDiff {
-  if (!change(value) || value.path !== expectedPath || !record(value) || !['HEAD', 'empty'].includes(String(value.base))
-    || typeof value.binary !== 'boolean' || typeof value.truncated !== 'boolean'
-    || (value.sourcePath !== undefined && typeof value.sourcePath !== 'string')
-    || (value.notice !== undefined && typeof value.notice !== 'string')
-    || !Array.isArray(value.hunks) || !value.hunks.every(hunk)) throw new Error('Invalid file diff received. Refresh to retry.')
-  return { path: value.path, originalPath: value.originalPath, status: value.status, base: value.base as GitDiff['base'],
-    binary: value.binary, truncated: value.truncated, hunks: value.hunks, notice: value.notice,
-    ...(typeof value.sourcePath === 'string' ? { sourcePath: value.sourcePath } : {}) }
-}
 
 export function gitUnavailableLabel(reason: GitStatus['reason']): string {
   if (reason === 'remote_unsupported') return 'Git changes are not available for this remote workdir. No local folder was used.'
@@ -134,7 +71,7 @@ export function gitUnavailableLabel(reason: GitStatus['reason']): string {
 export function createGitFilesClient(apiBase: string, sessionId: string, projectId?: string) {
   const root = projectId ? `/api/projects/${encodeURIComponent(projectId)}` : `/api/sessions/${encodeURIComponent(sessionId)}`
   async function request(operation: string, signal: AbortSignal, file?: string): Promise<unknown> {
-    const url = new URL(`${root}/git/${operation}`, apiBase)
+    const url = apiUrl(apiBase, `${root}/git/${operation}`)
     if (file !== undefined) url.searchParams.set('path', file)
     const response = await fetch(url, { signal })
     const value: unknown = await response.json()

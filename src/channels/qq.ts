@@ -419,7 +419,7 @@ export class QQChannel extends AbstractChannel {
   ): Promise<void> {
     const { filename, data, ext } = await readMediaFile(
       this.workspace,
-      `${this.name}:${chatId}`,
+      this.logicalSessionId(chatId),
       mediaPath,
     )
 
@@ -595,6 +595,7 @@ export class QQChannel extends AbstractChannel {
   private async connect(): Promise<void> {
     if (this.stopping) return
     const controller = this.controller
+    this.setAccepting(true)
     this.reportState('connecting')
     try {
       this.gatewayUrl = await this.getGatewayUrl()
@@ -606,13 +607,13 @@ export class QQChannel extends AbstractChannel {
       return
     }
 
-    if (this.stopping) return
+    if (this.stopping || this.controller !== controller) return
     const ws = new WebSocket(this.gatewayUrl)
     this.ws = ws
 
-    this.ws.onopen = () => console.debug('[qq] WebSocket connected')
+    this.ws.onopen = this.bindCallback(() => console.debug('[qq] WebSocket connected'))
 
-    this.ws.onmessage = (event: MessageEvent) => {
+    this.ws.onmessage = this.bindCallback((event: MessageEvent) => {
       if (this.stopping || this.ws !== ws) return
       let data: {
         op: number
@@ -654,16 +655,17 @@ export class QQChannel extends AbstractChannel {
           }, 2000)
           break
         case OP_DISPATCH:
-          this.handleDispatch(data.t ?? '', data.d ?? {}).catch((err) =>
+          this.withConnection(() => this.handleDispatch(data.t ?? '', data.d ?? {})).catch((err) =>
             console.error('[qq] Incoming message handling failed')
           )
           break
       }
-    }
+    })
 
-    this.ws.onclose = (event: CloseEvent) => {
+    this.ws.onclose = this.bindCallback((event: CloseEvent) => {
       if (this.stopping || this.ws !== ws) return
       this.ws = null
+      this.setAccepting(false)
       this.reportState('disconnected')
       clearTimeout(this.identifyTimer)
       console.warn(
@@ -678,13 +680,13 @@ export class QQChannel extends AbstractChannel {
         return
       }
       if (!this.stopping) this.scheduleReconnect()
-    }
+    })
 
-    this.ws.onerror = () => {
+    this.ws.onerror = this.bindCallback(() => {
       if (this.stopping || this.ws !== ws) return
       this.reportState('error')
       console.error('[qq] WebSocket error')
-    }
+    })
   }
 
   private scheduleReconnect(): void {
@@ -898,7 +900,7 @@ export class QQChannel extends AbstractChannel {
       | undefined
     if (!attachments || attachments.length === 0) return undefined
 
-    const sessionId = `${this.name}:${chatId}`
+    const sessionId = this.logicalSessionId(chatId)
     const results: string[] = []
     for (const att of attachments) {
       let url = att.url as string | undefined
@@ -915,6 +917,7 @@ export class QQChannel extends AbstractChannel {
         const rawName = (att.filename as string) ?? `qq_${Date.now()}`
         const ext = extname(rawName) || guessExt(att.content_type as string)
         const saveName = `qq_${Date.now()}${ext}`
+        this.assertConnection()
         const rel = await saveToUploads(
           this.workspace,
           sessionId,

@@ -21,7 +21,7 @@ test('unified effort choices update thinking and effort together and represent d
 test('None and Default submit atomic session patches instead of a literal unsupported none effort', async () => {
   for (const effort of ['none', 'default'] as const) {
     const patch = reasoningSettingsForEffort(effort)
-    const result = await updateSessionSettings('', 'web:choice', patch, new AbortController().signal, async (_url, init) => {
+    const result = await updateSessionSettings('http://fixture', 'web:choice', patch, new AbortController().signal, async (_url, init) => {
       assert.deepEqual(JSON.parse(String(init?.body)), patch)
       return Response.json({ key: 'web:choice', config: effort === 'none' ? { thinking: { type: 'disabled' } } : {} })
     })
@@ -75,7 +75,7 @@ test('settings failures never look like successful updates', async () => {
     Response.json({ key: 'web:chat-one', config: { reasoningEffort: 'unsupported' } }),
     new Response('<html>old backend</html>'),
   ]) {
-    await assert.rejects(updateSessionSettings('', 'web:chat-one', { reasoningEffort: 'max' },
+    await assert.rejects(updateSessionSettings('http://fixture', 'web:chat-one', { reasoningEffort: 'max' },
       new AbortController().signal, async () => response))
   }
 })
@@ -83,7 +83,7 @@ test('settings failures never look like successful updates', async () => {
 test('GPT effort levels survive PATCH responses and refreshed session graphs', async () => {
   for (const reasoningEffort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
     const config = reasoningSettingsForEffort(reasoningEffort)
-    const result = await updateSessionSettings('', 'web:gpt', config,
+    const result = await updateSessionSettings('http://fixture', 'web:gpt', config,
       new AbortController().signal, async (_url, init) => {
         assert.deepEqual(JSON.parse(String(init?.body)), config)
         return Response.json({ key: 'web:gpt', config })

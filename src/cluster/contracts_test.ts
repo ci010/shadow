@@ -40,6 +40,9 @@ test('pairing and capability contracts validate states, versions, and unknown fi
     requestedAt: '2026-08-26T00:00:00.000Z',
   }
   assert(validatePairingNodeStateV1(pending).success)
+  for (const displayName of [' ', 'x'.repeat(257), 'Child\nforged', '\u202eChild']) {
+    assert.equal(validatePairingNodeStateV1({ ...pending, displayName }).success, false)
+  }
   assert.equal(validatePairingNodeStateV1({ ...pending, version: 2 }).success, false)
   assert.equal(validatePairingNodeStateV1({ ...pending, rawSecret: 'must-not-appear' }).success, false)
 
@@ -54,6 +57,8 @@ test('pairing and capability contracts validate states, versions, and unknown fi
     online: true,
   }
   assert(validateCapabilityDescriptorV1(capability).success)
+  assert(validateCapabilityDescriptorV1({ ...capability, approvalPolicy: 'none' }).success)
+  assert.equal(validateCapabilityDescriptorV1({ ...capability, approvalPolicy: 'invalid' }).success, false)
   assert.equal(validateCapabilityDescriptorV1({ ...capability, kind: 'root-access' }).success, false)
 })
 
@@ -84,6 +89,25 @@ test('registry snapshot contract is strict, versioned, and validates nested stat
     ...snapshot,
     consumedOfferIds: ['offer-consumed', 'offer-consumed'],
   }).success, false)
+})
+
+test('workdir display metadata is optional, bounded and display-only', () => {
+  const capability = {
+    version: 1, capabilityId: 'workdir', nodeId: 'child', kind: 'workdir',
+    displayName: '项目', permissions: [], approvalPolicy: 'session', online: true,
+  }
+  assert(validateCapabilityDescriptorV1(capability).success)
+  for (const displayPath of ['/home/user/project', 'Z:\\project', 'opaque:path', 'a'.repeat(4096)]) {
+    assert(validateCapabilityDescriptorV1({ ...capability, displayPath }).success)
+  }
+  for (const displayPath of [null, 7, '', ' ', 'a'.repeat(4097), '/a\nb', '/a\0b', '\u202eabc']) {
+    assert.equal(validateCapabilityDescriptorV1({ ...capability, displayPath }).success, false)
+  }
+  for (const displayName of ['', ' ', 'a'.repeat(257), 'a\nb', '\u2066fake']) {
+    assert.equal(validateCapabilityDescriptorV1({ ...capability, displayName }).success, false)
+  }
+  assert.equal(validateCapabilityDescriptorV1({ ...capability, kind: 'shell', displayPath: '/root' }).success, false)
+  assert.equal(validateCapabilityDescriptorV1({ ...capability, path: '/root' }).success, false)
 })
 
 test('node-control envelopes carry runtime-validated S2 jobs and events', () => {

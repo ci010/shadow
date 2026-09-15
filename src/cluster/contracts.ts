@@ -110,8 +110,10 @@ export interface CapabilityDescriptorV1 {
   nodeId: NodeId
   kind: 'workdir' | 'shell' | 'browser' | 'windows-ui' | 'gpu'
   displayName: string
+  /** Child-supplied display metadata only; never an execution path on Main. */
+  displayPath?: string
   permissions: string[]
-  approvalPolicy: 'always' | 'session' | 'grant'
+  approvalPolicy: 'none' | 'always' | 'session' | 'grant'
   online: boolean
 }
 
@@ -186,6 +188,19 @@ function requireString(
 ): void {
   if (typeof value[key] !== 'string' || value[key].length === 0) {
     errors.push(`${key} must be a non-empty string`)
+  }
+}
+
+function requireDisplayText(
+  value: Record<string, unknown>,
+  key: string,
+  maxLength: number,
+  errors: string[],
+): void {
+  const text = value[key]
+  if (typeof text !== 'string' || !text.trim() || text.length > maxLength ||
+    /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u.test(text)) {
+    errors.push(`${key} must be single-line display text of at most ${maxLength} characters`)
   }
 }
 
@@ -302,7 +317,7 @@ export function validatePairingNodeStateV1(
     if (value.credentialId !== undefined) {
       requireIdentifier(value, 'credentialId', errors)
     }
-    requireString(value, 'displayName', errors)
+    requireDisplayText(value, 'displayName', 256, errors)
     requireTimestamp(value, 'requestedAt', errors)
   } else if (value.state === 'approved' || value.state === 'revoked') {
     hasOnlyKeys(value, [
@@ -324,7 +339,7 @@ export function validatePairingNodeStateV1(
     }
     requireString(value, 'deviceIdentityFingerprint', errors)
     requireOptionalEd25519PublicKey(value, errors)
-    requireString(value, 'displayName', errors)
+    requireDisplayText(value, 'displayName', 256, errors)
     requireUniqueStringArray(value, 'uiScopes', errors, UI_SCOPES)
     requireUniqueStringArray(value, 'nodePrivileges', errors, NODE_PRIVILEGES)
     requireTimestamp(value, 'approvedAt', errors)
@@ -365,6 +380,7 @@ export function validateCapabilityDescriptorV1(
     'nodeId',
     'kind',
     'displayName',
+    'displayPath',
     'permissions',
     'approvalPolicy',
     'online',
@@ -375,9 +391,13 @@ export function validateCapabilityDescriptorV1(
   if (!['workdir', 'shell', 'browser', 'windows-ui', 'gpu'].includes(String(value.kind))) {
     errors.push('kind is unsupported')
   }
-  requireString(value, 'displayName', errors)
+  requireDisplayText(value, 'displayName', 256, errors)
+  if (value.displayPath !== undefined) {
+    if (value.kind !== 'workdir') errors.push('displayPath is only supported for workdir capabilities')
+    requireDisplayText(value, 'displayPath', 4096, errors)
+  }
   requireUniqueStringArray(value, 'permissions', errors)
-  if (!['always', 'session', 'grant'].includes(String(value.approvalPolicy))) {
+  if (!['none', 'always', 'session', 'grant'].includes(String(value.approvalPolicy))) {
     errors.push('approvalPolicy is unsupported')
   }
   if (typeof value.online !== 'boolean') errors.push('online must be boolean')

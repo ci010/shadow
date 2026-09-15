@@ -12,7 +12,11 @@
           <p v-if="loading" class="details-note" role="status">Loading session details...</p>
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>
           <dl class="details-identity">
-            <dt>Path</dt><dd>{{ details?.workdir.displayPath ?? 'Unavailable' }}</dd>
+            <template v-if="details?.workdir.kind === 'remote'">
+              <dt>Device</dt><dd>{{ details.workdir.nodeName || details.workdir.nodeId || 'Remote device' }}</dd>
+              <dt>Workspace</dt><dd>{{ details.workdir.displayName || 'Remote workspace' }}<template v-if="details.workdir.available === false"> (unavailable)</template></dd>
+            </template>
+            <dt>Path</dt><dd>{{ details?.workdir.displayPath ?? (details?.workdir.kind === 'remote' ? 'Not advertised by this device' : 'Unavailable') }}</dd>
             <dt>Session name</dt><dd>{{ name }}</dd>
             <dt>Session ID</dt><dd class="detail-id">{{ sessionId }}</dd>
           </dl>
@@ -41,19 +45,23 @@
 </template>
 
 <script setup lang="ts">
+import { apiUrl } from '../api-url.ts'
 import { computed, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import { chatContextName } from '../chat-draft.ts'
 import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; name: string; physicalId: string | null; revision: number; active: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; name: string; organizationName?: string; physicalId: string | null; revision: number; active: boolean }>()
+const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']] }>()
 const details = ref<SessionDetails | null>(null)
 const loading = ref(false)
 const error = ref('')
-const name = computed(() => details.value?.name?.trim() || props.name || 'Conversation')
-const folder = computed(() => details.value?.workdir.displayPath
+const name = computed(() => [props.organizationName, details.value?.name?.trim() || props.name || 'Conversation'].filter(Boolean).join(' / '))
+const folder = computed(() => details.value?.workdir.kind === 'remote'
+  ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || 'Remote device'} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : 'Remote folder')}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
+  : details.value?.workdir.displayPath
   ? chatContextName(details.value.workdir.displayPath)
-  : loading.value ? 'Loading folder...' : details.value?.workdir.kind === 'remote' ? 'Remote folder' : 'Folder unavailable')
+  : loading.value ? 'Loading folder...' : 'Folder unavailable')
 const percent = computed(() => details.value ? contextPercent(details.value.context) : null)
 let request: AbortController | undefined
 
@@ -65,12 +73,12 @@ async function loadDetails() {
   error.value = ''
   try {
     const query = props.physicalId ? `?${new URLSearchParams({ physicalId: props.physicalId })}` : ''
-    const response = await fetch(`${props.apiBase}/api/sessions/${encodeURIComponent(props.sessionId)}/details${query}`, {
+    const response = await fetch(apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.sessionId)}/details${query}`), {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
     })
     if (!response.ok) throw new Error(`Session details are unavailable (${response.status}). Reopen the menu to retry.`)
     const result = parseSessionDetails(await response.json(), props.sessionId)
-    if (!controller.signal.aborted) details.value = result
+    if (!controller.signal.aborted) { details.value = result; emit('workdir', result.workdir) }
   } catch (cause) {
     if (!controller.signal.aborted) {
       details.value = null

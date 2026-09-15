@@ -1,5 +1,7 @@
 import type { CloneOperation, ProjectRecord } from '../../src/projects/contracts.ts'
 import { isRecord } from './projects-sidebar.ts'
+import { apiUrl } from './api-url.ts'
+import { parseWorkdirIdentity } from '../../src/execution/workdir-identity.ts'
 
 export type { CloneOperation, ProjectRecord }
 
@@ -14,8 +16,30 @@ function safeProjectMessage(value: unknown): string | undefined {
 export function parseProject(value: unknown): ProjectRecord {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id
     || typeof value.name !== 'string' || !value.name || typeof value.path !== 'string' || !value.path
-    || typeof value.createdAt !== 'string') throw invalidResponse()
-  return { id: value.id, name: value.name, path: value.path, createdAt: value.createdAt }
+    || typeof value.createdAt !== 'string'
+    || (value.organizationId !== undefined && (typeof value.organizationId !== 'string' || !value.organizationId))
+    || (value.kind !== undefined && value.kind !== 'local' && value.kind !== 'remote')) throw invalidResponse()
+  const base = {
+    id: value.id, name: value.name, path: value.path, createdAt: value.createdAt,
+    ...(typeof value.organizationId === 'string' ? { organizationId: value.organizationId } : {}),
+  }
+  if (value.kind === 'remote') {
+    const workdir = value.workdir
+    if (!isRecord(workdir) || workdir.version !== 1 || typeof workdir.nodeId !== 'string' || !workdir.nodeId
+      || typeof workdir.capabilityId !== 'string' || !workdir.capabilityId
+      || (workdir.displayName !== undefined && typeof workdir.displayName !== 'string')
+      || (workdir.displayPathSnapshot !== undefined && typeof workdir.displayPathSnapshot !== 'string')) throw invalidResponse()
+    return {
+      ...base, kind: 'remote', identity: parseWorkdirIdentity(value.identity),
+      workdir: {
+        version: 1, nodeId: workdir.nodeId, capabilityId: workdir.capabilityId,
+        ...(typeof workdir.displayName === 'string' ? { displayName: workdir.displayName } : {}),
+        ...(typeof workdir.displayPathSnapshot === 'string' ? { displayPathSnapshot: workdir.displayPathSnapshot } : {}),
+      },
+    }
+  }
+  if (value.workdir !== undefined || value.identity !== undefined) throw invalidResponse()
+  return { ...base, ...(value.kind === 'local' ? { kind: 'local' as const } : {}) }
 }
 
 export function parseCloneOperation(value: unknown, id: string): CloneOperation {
@@ -24,6 +48,7 @@ export function parseCloneOperation(value: unknown, id: string): CloneOperation 
     || typeof value.destination !== 'string'
     || (value.error !== undefined && typeof value.error !== 'string')) throw invalidResponse()
   const project = value.project === undefined ? undefined : parseProject(value.project)
+  if (project?.kind === 'remote') throw invalidResponse()
   if (value.state === 'succeeded' && !project) throw invalidResponse()
   return {
     id, state: value.state as CloneOperation['state'], destination: value.destination, project,
@@ -44,7 +69,7 @@ export function createProjectsClient(apiBase: string, request: typeof fetch = fe
   async function json(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
     let response: Response
     try {
-      response = await request(`${apiBase}/api/projects${path}`, {
+      response = await request(apiUrl(apiBase, `/api/projects${path}`).toString(), {
         ...init,
         signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
         headers: { 'Content-Type': 'application/json' },
@@ -81,8 +106,22 @@ export function createProjectsClient(apiBase: string, request: typeof fetch = fe
     async register(path: string, signal?: AbortSignal) {
       return parseProject((await json('/register', { method: 'POST', body: JSON.stringify({ path }), signal })).project)
     },
-    async createSession(projectId: string, signal?: AbortSignal) {
-      const data = await json(`/${encodeURIComponent(projectId)}/sessions`, { method: 'POST', signal })
+    async remove(projectId: string, signal?: AbortSignal) {
+      const data = await json(`/${encodeURIComponent(projectId)}`, { method: 'DELETE', signal })
+      if (data.removed !== true || data.projectId !== projectId) throw invalidResponse()
+    },
+    async move(projectId: string, targetOrganizationId: string, signal?: AbortSignal) {
+      const data = await json(`/${encodeURIComponent(projectId)}/move`, {
+        method: 'POST', body: JSON.stringify({ targetOrganizationId }), signal,
+      })
+      const project = parseProject(data.project)
+      if (data.organizationId !== targetOrganizationId || project.organizationId !== targetOrganizationId) throw invalidResponse()
+      return project
+    },
+    async createSession(projectId: string, signal?: AbortSignal, requestId?: string) {
+      const data = await json(`/${encodeURIComponent(projectId)}/sessions`, {
+        method: 'POST', signal, ...(requestId ? { body: JSON.stringify({ requestId }) } : {}),
+      })
       if (typeof data.chatId !== 'string' || !data.chatId.startsWith('chat-')
         || data.sessionId !== `web:${data.chatId}`) throw invalidResponse()
       return { sessionId: data.sessionId as string, chatId: data.chatId }

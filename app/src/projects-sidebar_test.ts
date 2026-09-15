@@ -4,9 +4,10 @@ import { groupProjectSessions, isAbsoluteProjectPath, parseSessionGraph, PROJECT
 
 const project = { id: 'project-a', name: 'same-name', path: 'C:\\fixtures\\one', createdAt: '2026-09-10T00:00:00Z' }
 
-test('the project menu contains exactly the three specified actions in order', () => {
+test('the project menu keeps remote folders beside local folders', () => {
   assert.deepEqual(PROJECT_ACTIONS, [
     { id: 'open', label: 'Open folder' },
+    { id: 'remote', label: 'Open remote folder' },
     { id: 'clone', label: 'Clone repo' },
     { id: 'scratch', label: 'Start from scratch' },
   ])

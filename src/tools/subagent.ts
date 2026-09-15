@@ -7,6 +7,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
 import { isExecutionMode } from '../sessions/execution-mode.ts'
+import { channelAddressFromSessionId, channelSessionId } from '../bus/events.ts'
 
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
@@ -99,13 +100,19 @@ export class SubagentTool implements Tool {
 
     const originChannel = ctx.channel ?? 'system'
     const originChatId = ctx.chatId ?? 'direct'
+    const originAddress = ctx.channelAddress ?? channelAddressFromSessionId(ctx.sessionId)
+    if (originAddress && (originAddress.platform !== originChannel || originAddress.conversationId !== originChatId
+      || (ctx.organizationId !== undefined && originAddress.organizationId !== ctx.organizationId))) {
+      throw new Error('Subagent source bot address does not match its session context')
+    }
 
     console.info(`[subagent] Spawning ${typeName} subagent: ${description.slice(0, 100)}`)
 
     // 1. Determine chatId and channel.
     const createThread = this.channels.createThread.bind(this.channels)
     const threadName = `Subagent: ${description.slice(0, 80)}`
-    const threadId = mode !== 'session' ? null : await createThread(originChannel, originChatId, threadName).catch((err) => {
+    const threadId = mode !== 'session' ? null : await createThread(originChannel, originChatId, threadName, originAddress).catch((err) => {
+      if (originAddress) throw err
       console.warn('[subagent] Thread creation failed, using synthetic chatId', errMsg(err))
       return null
     })
@@ -113,7 +120,8 @@ export class SubagentTool implements Tool {
     const isThread = !!threadId
     const chatId = threadId ?? `${typeName}-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
     const channel = isThread || (mode === 'session' && originChannel === 'web') ? originChannel : 'virtual'
-    const sessionId = `${channel}:${chatId}`
+    const sessionId = isThread && originAddress
+      ? channelSessionId({ ...originAddress, conversationId: chatId }) : `${channel}:${chatId}`
 
     const parentSessionId = ctx.sessionId
 

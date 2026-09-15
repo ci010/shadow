@@ -6,13 +6,23 @@
 | --- | --- |
 | [Project README](../README.md) | Node/pnpm setup, running, builds, and deployment cautions |
 | [Contributor guide](../AGENTS.md) | Repository conventions and change boundaries |
-| [Architecture](architecture.md) | Features, execution flow, module map, persistence, extension points, and known limitations |
+| [Architecture](architecture.md) | Features, organization ownership/storage/routing, execution flow, persistence, and known limitations |
 
 **Status, September 2026:** the supported development direction is a direct
 Node.js 24.15+ backend with pnpm, a Vue web application, and an Electron host.
 Multi-device infrastructure is **work in progress**. Local agent behavior,
 implemented device infrastructure, and future product plans are different things.
 The architecture reference identifies those boundaries.
+
+Organization groups now have independently composed backend runtimes and Homes,
+not a global organization switcher or UI-only tags. Provider credentials and
+devices stay App-wide; model defaults, sessions, bots, and learning belong to an
+organization. See the [README organization guide](../README.md#organizations) and
+[source-backed architecture](architecture.md#organizations-ownership-storage-and-routing)
+for the sibling storage layout, default-organization migration, startup recovery,
+and verified remote-folder ownership with its Child upgrade boundary. This implementation does not
+establish OS sandboxing, multi-tenant authorization, or distributed release
+readiness. Mac/WSL SSH fixtures remain test environments, not portable installs.
 
 Source is authoritative for implementation behavior; package manifests are
 authoritative for commands. Documentation describes behavior but is not a

@@ -9,6 +9,7 @@ import type { Hono } from 'hono'
 import { saveToUploads, sessionWorkspacePath } from '../utils/paths.ts'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { resolveSessionLocations } from '../sessions/locality.ts'
+import { ProjectError } from '../projects/registry.ts'
 import { isConfigObject, parseSessionConfigPatch, type SessionConfigPatch } from '../sessions/config-patch.ts'
 
 function escapesRoot(root: string, target: string): boolean {
@@ -89,6 +90,7 @@ export class WebChannel extends AbstractChannel {
   private keepAliveTimer?: number
 
   private sessionManager?: SessionManager
+  private readonly subscriptions: string[] = []
 
   constructor(
     bus: Bus,
@@ -105,7 +107,7 @@ export class WebChannel extends AbstractChannel {
     this.acceptToolResults = true
 
     // Subscribe to all outbound messages and route to SSE / sync connections
-    this.bus.on('message.outbound', (msg) => {
+    this.subscriptions.push(this.bus.on('message.outbound', this.bindCallback((msg) => {
       if (msg.channel !== 'web') return
       const toRequest = this.pushToSSE(msg)
       const toSync = this.pushToSync(msg)
@@ -113,17 +115,47 @@ export class WebChannel extends AbstractChannel {
       // to the persistent per-chat event stream so open browsers receive them
       // live without a manual refresh.
       if (!toRequest && !toSync) this.pushToEventStream(msg)
-    })
-    this.bus.on('session.message.appended', ({ sessionId, physicalSessionId, message }) => {
+    })))
+    this.subscriptions.push(this.bus.on('session.message.appended', this.bindCallback(({ sessionId, physicalSessionId, message }) => {
       if (!sessionId.startsWith('web:') || message.role !== 'user') return
       const first = typeof message.content === 'string' ? message.content
         : message.content?.[0]?.type === 'text' ? message.content[0].text : ''
       if (!first || !/^<event\s/.test(first)) return
       this.broadcastEvent(sessionId.slice(4), { event: 'session_message', physicalSessionId, message })
-    })
+    })))
   }
 
   async start(app: Hono): Promise<void> {
+    for (const path of ['/api/chat/send', '/api/chat/message', '/api/chat/upload', '/api/media']) {
+      app.use(path, async (c, next) => {
+        const ids: string[] = []
+        if (c.req.method === 'GET') {
+          const chatId = c.req.query('chatId')
+          if (chatId) ids.push(`${this.name}:${chatId}`)
+        } else {
+          let body: Record<string, unknown> | undefined
+          try {
+            if (path.endsWith('/upload')) {
+              const form = await c.req.formData()
+              body = { chatId: form.get('chatId'), parentSessionId: form.get('parentSessionId') }
+            } else {
+              const value: unknown = await c.req.json()
+              if (isConfigObject(value)) body = value
+            }
+          } catch { /* The route reports malformed input. */ }
+          for (const key of ['chatId', 'parentChatId'] as const) {
+            if (typeof body?.[key] === 'string') ids.push(`${this.name}:${body[key]}`)
+          }
+          if (typeof body?.parentSessionId === 'string') ids.push(body.parentSessionId)
+        }
+        try { for (const id of ids) this.sessionManager?.assertProjectAccess?.(id) }
+        catch (error) {
+          if (error instanceof ProjectError) return c.json({ error: error.code, message: error.message }, error.status)
+          throw error
+        }
+        return next()
+      })
+    }
     // ── POST /api/chat/upload — save file into private session data ──
     app.post('/api/chat/upload', async (c) => {
       try {
@@ -278,10 +310,10 @@ export class WebChannel extends AbstractChannel {
           { content: string; media?: string[] }
         >(
           (resolve, reject) => {
-            const timer = setTimeout(() => {
+            const timer = setTimeout(this.bindCallback(() => {
               this.syncPending.delete(requestId)
               reject(new DOMException('Response timeout', 'TimeoutError'))
-            }, timeoutMs)
+            }), timeoutMs)
 
             this.syncPending.set(requestId, {
               resolve,
@@ -335,7 +367,7 @@ export class WebChannel extends AbstractChannel {
       if (!isConfigObject(rawBody)) return c.json({ error: 'invalid_request' }, 400)
       let configPatch: SessionConfigPatch | undefined
       try {
-        if ('config' in rawBody) configPatch = parseSessionConfigPatch(rawBody.config)
+        if ('config' in rawBody) configPatch = parseSessionConfigPatch(rawBody.config, true)
       } catch (error) {
         if (!(error instanceof TypeError)) throw error
         return c.json({ error: error.message }, 400)
@@ -584,7 +616,7 @@ export class WebChannel extends AbstractChannel {
 
     // Periodically ping open event streams so proxies/browsers keep them alive
     // and closed connections get pruned.
-    this.keepAliveTimer = setInterval(() => {
+    this.keepAliveTimer = setInterval(this.bindCallback(() => {
       const encoder = new TextEncoder()
       for (const [chatId, set] of this.eventStreams) {
         for (const controller of set) {
@@ -596,10 +628,12 @@ export class WebChannel extends AbstractChannel {
         }
         if (set.size === 0) this.eventStreams.delete(chatId)
       }
-    }, 25_000) as unknown as number
+    }), 25_000) as unknown as number
   }
 
   async stop(): Promise<void> {
+    this.setAccepting(false)
+    for (const subscription of this.subscriptions.splice(0)) this.bus.off(subscription)
     if (this.keepAliveTimer !== undefined) {
       clearInterval(this.keepAliveTimer)
       this.keepAliveTimer = undefined

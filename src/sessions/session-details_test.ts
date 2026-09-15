@@ -15,6 +15,8 @@ import { sessionsApiPlugin } from './routes.ts'
 import { localProjectWorkdirRef } from './locality.ts'
 import { Tools } from '../tools/registry.ts'
 import type { LLMProvider } from '../providers/provider.ts'
+import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
+import type { WorkdirCapabilityState } from './locality.ts'
 
 function makeManager(workspace: string, store: SessionStore, overrides: Partial<SessionManagerDeps> = {}) {
   return new SessionManager({
@@ -33,7 +35,7 @@ const usage = { promptTokens: 120, completionTokens: 30, totalTokens: 150 }
 const earlier = { promptTokens: 40, completionTokens: 10, totalTokens: 50 }
 const invalidConfigs = [
   null, [], false, 1, 'enabled',
-  { model: 'other' }, { extra: true }, { thinking: [] },
+  { model: '' }, { model: 12 }, { model: {} }, { extra: true }, { thinking: [] },
   { thinking: 'enabled' }, { thinking: {} }, { thinking: { type: 'auto' } },
   { thinking: { type: 'enabled', budget: 3 } },
   { reasoningEffort: 'unsupported' }, { reasoningEffort: false },
@@ -41,6 +43,70 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: remote details use current registry metadata and explicit availability`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      let availability: WorkdirCapabilityState = { node: 'online', capability: { kind: 'workdir', online: true } }
+      let inventory: NodeInventoryResponse = { version: 1, nodes: [{
+        nodeId: 'child', displayName: 'Registered Child', role: 'child', connection: 'connected',
+        capabilities: [{
+          capabilityId: 'project', kind: 'workdir', displayName: 'Registered Project',
+          displayPath: '/child/not-a-main-path', online: true,
+        }],
+      }] }
+      try {
+        const sessions = makeManager(workspace, store, {
+          workdirCapabilityLookup: () => availability,
+          getNodeInventory: () => inventory,
+        })
+        await sessions.start()
+        await sessions.buildSession('web:remote', undefined, { workdir: {
+          version: 1, nodeId: 'child', capabilityId: 'project',
+          displayName: 'Untrusted renderer label', displayPathSnapshot: 'Z:\\untrusted',
+        } })
+        deepEqual((await sessions.getSessionDetails('web:remote'))?.workdir, {
+          kind: 'remote', nodeId: 'child', nodeName: 'Registered Child', displayName: 'Registered Project',
+          displayPath: '/child/not-a-main-path', available: true, availability: 'available',
+        })
+        inventory = { version: 1, nodes: [{
+          ...inventory.nodes[0], displayName: 'Renamed Child', connection: 'offline',
+          capabilities: [{ ...inventory.nodes[0].capabilities[0], displayPath: '/child/moved', online: false }],
+        }] }
+        availability = { node: 'offline' }
+        const restarted = makeManager(workspace, store, {
+          workdirCapabilityLookup: () => availability,
+          getNodeInventory: () => inventory,
+        })
+        await restarted.start()
+        deepEqual((await restarted.getSessionDetails('web:remote'))?.workdir, {
+          kind: 'remote', nodeId: 'child', nodeName: 'Renamed Child', displayName: 'Registered Project',
+          displayPath: '/child/moved', available: false, availability: 'node-offline',
+        })
+        inventory = { version: 1, nodes: [{ ...inventory.nodes[0], connection: 'revoked', capabilities: [] }] }
+        availability = { node: 'revoked' }
+        deepEqual((await restarted.getSessionDetails('web:remote'))?.workdir, {
+          kind: 'remote', nodeId: 'child', nodeName: 'Renamed Child', displayPath: null,
+          available: false, availability: 'capability-revoked',
+        })
+        for (const [state, reason] of [
+          [{ node: 'missing' }, 'node-missing'],
+          [{ node: 'online' }, 'capability-missing'],
+          [{ node: 'online', capability: { kind: 'workdir', online: false } }, 'capability-offline'],
+          [{ node: 'online', capability: { kind: 'shell', online: true } }, 'incompatible'],
+        ] as const) {
+          availability = state
+          inventory = { version: 1, nodes: [] }
+          deepEqual((await restarted.getSessionDetails('web:remote'))?.workdir, {
+            kind: 'remote', nodeId: 'child', displayPath: null, available: false, availability: reason,
+          })
+        }
+      } finally {
+        store.close?.()
+      }
+    })
+  })
+
   test(`${Store.name}: details are read-only, segment-owned and expose latest-call usage`, async () => {
     await withTempWorkspace(async (workspace) => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -74,7 +140,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(await readdir(join(workspace, 'sessions'), { recursive: true }), before)
         deepEqual(await (await app.request('/api/sessions/web:one/details')).json(), {
           sessionId: 'web:one', name: 'Actual question',
-          workdir: { kind: 'local', displayPath: sessionWorkspacePath(workspace, 'web:owner') },
+          workdir: { kind: 'local', displayPath: sessionWorkspacePath(workspace, 'web:owner'), nodeId: 'local', available: true, availability: 'available' },
           usage, usageScope: 'latest-call',
           context: { usedTokens: 120, windowTokens: 8000 },
         })
@@ -82,15 +148,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(segment?.usage, earlier)
         equal(segment?.context.usedTokens, 40)
         for (const [id, workdir, expected] of [
-          ['project', localProjectWorkdirRef('p'), { kind: 'local', displayPath: join(workspace, 'project') }],
+          ['project', localProjectWorkdirRef('p'), { kind: 'local', displayPath: join(workspace, 'project'), nodeId: 'local', available: true, availability: 'available' }],
           ['remote', { version: 1 as const, nodeId: 'child', capabilityId: 'p', displayPathSnapshot: '/opaque/child/path' },
-            { kind: 'remote', displayPath: '/opaque/child/path' }],
+            { kind: 'remote', displayPath: null, nodeId: 'child', available: true, availability: 'available' }],
           ['unknown-remote', { version: 1 as const, nodeId: 'child', capabilityId: 'p' },
-            { kind: 'remote', displayPath: null }],
+            { kind: 'remote', displayPath: null, nodeId: 'child', available: true, availability: 'available' }],
           ['offline-remote', { version: 1 as const, nodeId: 'child', capabilityId: 'offline', displayPathSnapshot: 'Z:\\offline' },
-            { kind: 'remote', displayPath: 'Z:\\offline' }],
+            { kind: 'remote', displayPath: null, nodeId: 'child', available: false, availability: 'node-offline' }],
           ['offline-local', { version: 1 as const, nodeId: 'local', capabilityId: 'offline', displayPathSnapshot: 'Z:\\untrusted' },
-            { kind: 'local', displayPath: null }],
+            { kind: 'local', displayPath: null, nodeId: 'local', available: false, availability: 'node-offline' }],
         ] as const) {
           await sessions.buildSession(id, undefined, { workdir })
           await sessions.setSessionConfig(id, { model: 'unlisted' })
@@ -141,7 +207,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         }
         equal((await app.request('/api/chat/send', { method: 'POST', body: '{' })).status, 400)
         equal(admitted.length, 0)
-        const config = { thinking: { type: 'disabled' }, reasoningEffort: 'max' }
+        const config = { model: 'other', thinking: { type: 'disabled' }, reasoningEffort: 'max' }
         equal((await send({ chatId: 'draft', content: 'hi', stream: false, config })).status, 200)
         deepEqual(sessions.getSessionConfig('web:draft'), config)
         const restarted = makeManager(workspace, store)
@@ -149,14 +215,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(restarted.getSessionConfig('web:draft'), config)
         equal((await send({
           chatId: 'draft', retry: true, stream: false,
-          config: { thinking: null, reasoningEffort: null },
+          config: { model: null, thinking: null, reasoningEffort: null },
         })).status, 200)
         deepEqual(sessions.getSessionConfig('web:draft'), {})
         equal(admitted.length, 2)
         const patch = (body: unknown) => app.request('/api/sessions/web:draft/config', {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         })
-        for (const body of invalidConfigs.filter((value) => !(value && typeof value === 'object' && 'model' in value))) {
+        for (const body of invalidConfigs) {
           equal((await patch(body)).status, 400)
           deepEqual(sessions.getSessionConfig('web:draft'), {})
         }

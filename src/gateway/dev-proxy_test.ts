@@ -5,6 +5,34 @@ import { Hono } from 'hono'
 import { WebSocketServer } from 'ws'
 import { devProxyPlugin } from './dev-proxy.ts'
 import { serveGateway } from './server.ts'
+import { createServer } from 'node:http'
+
+test('dev proxy forwards org pages but never loops scoped backend requests through Vite', async () => {
+  const paths: string[] = []
+  const upstream = createServer((request, response) => {
+    paths.push(request.url ?? '')
+    response.writeHead(200, { 'Content-Type': 'text/html' })
+    response.end('<html>Vite page</html>')
+  })
+  upstream.listen(0, '127.0.0.1')
+  await once(upstream, 'listening')
+  const address = upstream.address()
+  assert(address && typeof address !== 'string')
+  const app = new Hono()
+  devProxyPlugin(`http://127.0.0.1:${address.port}`)(app)
+  try {
+    const page = await app.request('/organizations/default/settings/bots')
+    assert.equal(page.status, 200)
+    assert.equal(await page.text(), '<html>Vite page</html>')
+    for (const path of ['/organizations/default/api/missing', '/organizations/default/v1/query/logs', '/nodes/v1/missing']) {
+      assert.equal((await app.request(path)).status, 404)
+    }
+    assert.deepEqual(paths, ['/organizations/default/settings/bots'])
+  } finally {
+    upstream.closeAllConnections()
+    await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()))
+  }
+})
 
 test('dev proxy bridges text, binary, and HMR protocol using a native client', { timeout: 10_000 }, async () => {
   const upstream = new WebSocketServer({ host: '127.0.0.1', port: 0 })

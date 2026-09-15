@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Bus } from '../bus/bus.ts'
-import type { OutboundMessage } from '../bus/events.ts'
+import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import type { ExecutionContext } from '../agent/agent.ts'
 import type { DeliveryReceipt, SessionInput } from '../sessions/input.ts'
 import { EventService } from '../events/service.ts'
@@ -44,6 +44,21 @@ test('message tool awaits acceptance before displaying one session-origin messag
   assert.equal(displayed[0].chatId, 'target')
   assert.equal(displayed[0].content, 'task')
   assert.equal(displayed[0].done, false)
+})
+
+test('message projection carries the target bot address rather than the source or a platform-only address', async () => {
+  const bus = new Bus()
+  const displayed: OutboundMessage[] = []
+  bus.on('message.outbound', message => { displayed.push(message) })
+  const tool = new MessageTool(bus, () => true, () => undefined, () => [], async (sessionId, input) =>
+    ({ status: 'accepted', sessionId, inputId: input.id }))
+  for (const botInstanceId of ['bot-a', 'bot-b']) {
+    const address = { organizationId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-chat' }
+    await tool.execute({ sessionId: channelSessionId(address), content: 'Hello' }, { ...context(), organizationId: 'org' })
+    assert.deepEqual(displayed.at(-1)?.channelAddress, address)
+    assert.equal(displayed.at(-1)?.channel, 'discord')
+    assert.equal(displayed.at(-1)?.chatId, 'same-chat')
+  }
 })
 
 test('rejected cross-session delivery never produces a sent projection', async () => {

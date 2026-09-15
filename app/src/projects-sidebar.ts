@@ -5,6 +5,7 @@ import { isExecutionStatus, persistentConversations, type ExecutionStatus } from
 
 export const PROJECT_ACTIONS = [
   { id: 'open', label: 'Open folder' },
+  { id: 'remote', label: 'Open remote folder' },
   { id: 'clone', label: 'Clone repo' },
   { id: 'scratch', label: 'Start from scratch' },
 ] as const
@@ -71,7 +72,7 @@ function flattenSessions(sessions: SidebarSession[]): SidebarSession[] {
   return result
 }
 
-export function parseSessionGraph(value: unknown): SidebarSession[] {
+export function parseSessionGraph(value: unknown, organizationId?: string): SidebarSession[] {
   const invalid = () => new Error('Cannot read conversations from Main. Refresh to retry.')
   if (!isRecord(value) || !Array.isArray(value.sessions) || !Array.isArray(value.nodes)) throw invalid()
   const physicalToLogical = new Map<string, string>()
@@ -88,6 +89,8 @@ export function parseSessionGraph(value: unknown): SidebarSession[] {
   const sessionIds = new Set<string>()
   return flattenSessions(value.sessions.map((session: unknown) => {
     if (!isRecord(session) || typeof session.sessionId !== 'string' || !session.sessionId.trim() || sessionIds.has(session.sessionId)
+      || (organizationId !== undefined && session.organizationId !== undefined && session.organizationId !== organizationId)
+      || (organizationId !== undefined && session.parentOrganizationId !== undefined && session.parentOrganizationId !== organizationId)
       || (session.projectId !== undefined && typeof session.projectId !== 'string')
       || (session.title !== undefined && typeof session.title !== 'string')
       || (session.mode !== undefined && session.mode !== 'session' && session.mode !== 'task' && session.mode !== 'call')

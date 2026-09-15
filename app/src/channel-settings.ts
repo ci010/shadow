@@ -1,5 +1,6 @@
 import type { ChannelId, ChannelSetupStatus } from '../../src/channels/setup-contract.ts'
 import { isRecord } from './projects-sidebar.ts'
+import { apiUrl } from './api-url.ts'
 
 export type ChannelDraft = Record<string, string | boolean>
 export interface ChannelField {
@@ -139,7 +140,7 @@ export function createChannelSettingsClient(apiBase: string, request: typeof fet
   async function json(path: string, init: RequestInit): Promise<unknown> {
     let response: Response
     try {
-      response = await request(`${apiBase}${path}`, { ...init, headers: { 'Content-Type': 'application/json' },
+      response = await request(apiUrl(apiBase, path).toString(), { ...init, headers: { 'Content-Type': 'application/json' },
         signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) })
     } catch (error) {
       if (init.signal?.aborted) throw error

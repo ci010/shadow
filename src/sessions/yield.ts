@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { channelAddressFromSessionId } from '../bus/events.ts'
 import type { SessionState } from './session-store.ts'
 import {
   parseYieldPolicy, parseYieldQuestion,
@@ -75,11 +76,12 @@ export class YieldManager {
       throw new YieldError('invalid_request', error instanceof Error ? error.message : String(error))
     }
     const recipient = this.recipient(sessionId)
-    if (recipient.kind === 'user' && /^(discord|feishu|qq|wechat):/.test(sessionId) && !channelUser) {
+    const channelAddress = channelAddressFromSessionId(sessionId)
+    if (recipient.kind === 'user' && (channelAddress || /^(discord|feishu|qq|wechat):/.test(sessionId)) && !channelUser) {
       throw new YieldError('forbidden', 'A channel decision needs an initiating human. Return the blocker instead of publishing an unanswerable question.')
     }
     if (channelUser && (!channelUser.senderId.trim() || !channelUser.channel
-      || !sessionId.startsWith(`${channelUser.channel}:`))) {
+      || (channelAddress ? channelAddress.platform !== channelUser.channel : !sessionId.startsWith(`${channelUser.channel}:`)))) {
       throw new YieldError('invalid_request', 'The answering user must belong to this session channel.')
     }
     const now = Date.now()

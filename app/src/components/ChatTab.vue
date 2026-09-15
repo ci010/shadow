@@ -2,16 +2,17 @@
   <div
     ref="paneRoot"
     class="chat-workspace"
-    :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId, 'is-embedded': embedded }"
+    :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId, 'is-embedded': embedded, 'is-managed': managed }"
   >
-    <button v-if="!embedded" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Projects</button>
-    <button v-if="!embedded && mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close projects" @click="mobileSidebarOpen = false" />
+    <button v-if="!embedded && !managed" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Projects</button>
+    <button v-if="!embedded && !managed && mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close projects" @click="mobileSidebarOpen = false" />
     <ProjectsSidebar
-      v-if="!embedded"
+      v-if="!embedded && !managed"
       :api-base="apiBase"
       :sessions="allSessions"
       :active-session-id="childSessionId || activeSessionId"
       :draft-project-id="draft.project?.id"
+      :remote-folders="installation.mode === 'main'"
       :collapsed="collapsedSessions"
       :stages="displayedSessionStages"
       :sessions-loading="sessionsLoading"
@@ -21,11 +22,12 @@
       @toggle="toggleCollapse"
       @reload="loadSessionList"
       @scratch="createNewWebChat"
+      @remote="createNewWebChat(undefined, true, true)"
       @draft="createNewWebChat"
     />
 
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSession?.sessionId ?? ''" :project-id="!activeSessionId ? draft.project?.id : undefined"
-      :context-key="fileContextKey" :explorer-enabled="!embedded"
+      :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir)" :remote="remoteConversation"
       :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
@@ -38,14 +40,16 @@
           <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M24 5 40 14v20L24 43 8 34V14L24 5Z" /><path d="m24 14 9 5v10l-9 5-9-5V19l9-5Z" /></svg>
         </div>
         <h1>What would you like to work on?</h1>
+        <p v-if="organizationName" class="draft-scratch">{{ organizationName }}</p>
         <div v-if="draft.project" class="draft-project" :aria-label="`Working folder: ${draft.project.name}`">
           <svg class="draft-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 6h6l3 3h9v11H3V6Z" /><path d="M3 6V4h6l3 3h9v2" /></svg>
           <div class="draft-project-copy">
-            <span class="draft-project-label">New conversation in project folder</span>
+            <span class="draft-project-label">{{ draft.project.kind === 'remote' ? `Remote project on ${draftRemote?.nodeName}` : 'New conversation in project folder' }}</span>
             <strong>{{ draft.project.name }}</strong>
             <span class="draft-project-path" :title="draft.project.path">{{ draft.project.path }}</span>
           </div>
         </div>
+        <p v-else-if="draftRemote" class="draft-scratch">{{ draftRemote.nodeName }} &middot; {{ draftRemote.displayPath || draftRemote.displayName }}</p>
         <p v-else class="draft-scratch">From scratch &middot; No project folder</p>
       </div>
       <template v-else>
@@ -54,15 +58,15 @@
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <SessionHeading :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
-            :name="activeSessionName" :physical-id="viewingPhysicalId" :revision="detailsRevision"
-            :active="visible && route.name === 'chat' && !!activeSession" />
+            :name="activeSessionName" :organization-name="organizationName" :physical-id="viewingPhysicalId" :revision="detailsRevision"
+            :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <button :id="domId('diagnosis-toggle')" class="diagnosis-toggle" :aria-controls="domId('diagnosis-panel')"
             :aria-pressed="activePanel === 'diagnosis'" :title="activePanel === 'diagnosis' ? 'Back to conversation' : 'Open diagnosis'"
             @click="switchPanel(activePanel === 'diagnosis' ? 'conversation' : 'diagnosis')">
             <span class="i-lucide-activity" aria-hidden="true" />Diagnosis
           </button>
         </div>
-        <SessionDiagnosis v-if="diagnosisOpened" v-show="activePanel === 'diagnosis'" :id="domId('diagnosis-panel')" role="region" aria-label="Session diagnosis" :id-prefix="embedded ? paneId : undefined"
+        <SessionDiagnosis v-if="diagnosisOpened" v-show="activePanel === 'diagnosis'" :id="domId('diagnosis-panel')" role="region" aria-label="Session diagnosis" :id-prefix="embedded || managed ? paneId : undefined"
           :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
           :active="visible && conversationDocumentVisible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
           :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
@@ -218,7 +222,7 @@
             <textarea
               ref="chatInput"
               v-model="inputText"
-              placeholder="Ask anything, or add files and folders for context..."
+              :placeholder="remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
               aria-label="Message"
               rows="3"
               :disabled="streaming || preparingSend || awaitingCall"
@@ -247,6 +251,9 @@
                 </template>
               </ComposerPopover>
               <ModelSelector :settings="reasoningSettings" :settings-disabled="streaming || preparingSend || pickingContext || awaitingCall" :busy="savingSettings" @change-settings="changeReasoningSettings" />
+              <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
+                :api-base="apiBase" :selected="draftRemote" :local-label="draftProject?.name"
+                :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
             <span class="composer-hint" role="status">{{ imageEditsBusy.size ? 'Preparing marked image...' : imageDropTarget ? 'Drop image to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : preparingSend ? 'Starting conversation...' : 'Enter to send · Shift+Enter for a new line' }}</span>
@@ -264,6 +271,7 @@
           </div>
           <p v-if="composerError" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
+          <p v-if="remoteConversation" class="remote-execution-note" role="status">Files and commands run on the selected device. Local file attachments are not transferred to that device.</p>
         </div>
       </div>
     </template>
@@ -298,9 +306,14 @@ import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
 import { executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
 import ProjectsSidebar from './ProjectsSidebar.vue'
+import { apiUrl } from '../api-url.ts'
+import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { parseSessionGraph, type SidebarSession } from '../projects-sidebar.ts'
 import { createProjectsClient, type ProjectRecord } from '../projects-client.ts'
-import { addChatContext, chatContextName, composeChatMessage, createChatDraft, type ChatContextItem } from '../chat-draft.ts'
+import { addChatContext, chatContextName, composeChatMessage, type ChatContextItem } from '../chat-draft.ts'
+import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
+import { createProjectChatDraft, createRemoteChatDraft, type RemoteConversationTarget } from '../remote-conversations.ts'
+import type { SessionDetails } from '../session-details.ts'
 import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
@@ -338,6 +351,11 @@ const KATEX_ATTRS = ['mathvariant', 'encoding', 'xmlns', 'display', 'stretchy', 
 
 const props = withDefaults(defineProps<{
   apiBase: string
+  organizationId?: string
+  organizationName?: string
+  managed?: boolean
+  initialProject?: ProjectRecord
+  openRemote?: boolean
   embedded?: boolean
   sessionId?: string
   childSessionId?: string
@@ -350,9 +368,11 @@ const emit = defineEmits<{
   'primary-change': [id: string]
   'child-navigation': [id: string]
   deleted: [id: string]
+  navigate: [id: string]
+  prepared: [id: string]
 }>()
 const paneId = useId()
-const domId = (id: string) => props.embedded ? `${paneId}-${id}` : id
+const domId = (id: string) => props.embedded || props.managed ? `${paneId}-${id}` : id
 const paneRoot = ref<HTMLElement>()
 const composerDock = ref<HTMLElement>()
 const dockHeight = ref(0)
@@ -361,8 +381,22 @@ let mounted = false
 let disposed = false
 
 const installation = useInstallationContext()
+const modelSelection = useModelSelection()
+const modelOverride = ref('')
+const conversationModel = computed(() => modelOverride.value || activeSession.value?.config?.model || modelSelection?.current.value || '')
+if (modelSelection) provideModelSelection({
+  ...modelSelection, current: conversationModel,
+  async select(model) {
+    if (!model.trim()) return
+    modelOverride.value = model
+  },
+})
 const projectsClient = createProjectsClient(props.apiBase)
-const draft = shallowRef(createChatDraft(projectsClient))
+const draftProject = shallowRef<ProjectRecord | undefined>(props.initialProject)
+const draft = shallowRef<ReturnType<typeof createProjectChatDraft> | ReturnType<typeof createRemoteChatDraft>>(createProjectChatDraft(projectsClient, props.initialProject))
+const draftRemote = computed(() => 'remote' in draft.value ? draft.value.remote : undefined)
+const currentWorkdir = ref<SessionDetails['workdir']>()
+const remoteConversation = computed(() => !activeSessionId.value ? !!draftRemote.value : currentWorkdir.value?.kind === 'remote')
 const contextItems = ref<ChatContextItem[]>([])
 const pendingAttachments = ref<PendingChatAttachment[]>([])
 const imageEditsBusy = ref(new Set<string>())
@@ -372,24 +406,25 @@ const readonlyContextError = ref('')
 const preparingSend = ref(false)
 const pickingContext = ref(false)
 const attachmentInput = ref<HTMLInputElement>()
-const canAttachFiles = computed(() => typeof File === 'function' && typeof FormData === 'function')
-const canPickContext = computed(() => installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
+const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
+const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
 const composerPopoverTitle = computed(() =>
-  canAttachFiles.value && canPickContext.value
+  remoteConversation.value ? 'Local attachments are not transferred to remote workspaces'
+    : canAttachFiles.value && canPickContext.value
     ? 'Add files or folders'
     : canAttachFiles.value
     ? 'Add files, or use the local Main desktop app to attach folders'
     : 'Folder context requires the local Main desktop app')
-const canSend = computed(() => !isExecution.value && !awaitingCall.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
+const canSend = computed(() => !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && !awaitingCall.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
   contextItems.value.length,
   pendingAttachments.value.length,
 ) && !streaming.value && !preparingSend.value && !pickingContext.value && !savingSettings.value && imageEditsBusy.value.size === 0)
 let sendRequest: AbortController | undefined
 let historyRequest: AbortController | undefined
-const activeSessionId = ref(props.embedded ? props.sessionId ?? '' : '')
-const fileContextKey = computed(() => activeSessionId.value || `project:${draft.value.project?.id ?? 'scratch'}`)
+const activeSessionId = ref(props.embedded || props.managed ? props.sessionId ?? '' : '')
+const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessionId.value || (draftRemote.value ? `remote:${draftRemote.value.nodeId}:${draftRemote.value.capabilityId}` : `project:${draft.value.project?.id ?? 'scratch'}`)]))
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
   const id = activeSessionId.value
@@ -650,7 +685,7 @@ const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
 
 function buildUrl(path: string, params?: Record<string, string>): string {
-  const url = new URL(path, props.apiBase)
+  const url = apiUrl(props.apiBase, path)
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value)
@@ -877,7 +912,7 @@ async function loadSessionList(): Promise<void> {
     if (!res.ok) throw new Error('Cannot load conversations. Check Main and retry.')
     const data = await res.json()
     if (!controller.signal.aborted) {
-      const sessions = parseSessionGraph(data)
+      const sessions = parseSessionGraph(data, props.organizationId)
       const selected = sessions.find(session => session.sessionId === activeSessionId.value)
       if (activeSession.value && !selected) composerError.value = 'This conversation or execution is no longer available. Close it and refresh the conversation list.'
       if (selected) selectedMode.value = selected.mode
@@ -902,21 +937,39 @@ function toggleCollapse(sessionId: string): void {
   }
 }
 
-function createNewWebChat(project?: ProjectRecord, syncRoute = true): void {
+const executionLocationSelector = ref<InstanceType<typeof ExecutionLocationSelector>>()
+
+function createNewWebChat(project?: ProjectRecord, syncRoute = true, openRemotePicker = false): void {
   resetConversation()
-  draft.value = createChatDraft(projectsClient, project)
+  draftProject.value = project
+  draft.value = createProjectChatDraft(projectsClient, project)
   activeSessionId.value = ''
   mobileSidebarOpen.value = false
   if (!props.embedded && syncRoute) {
     emit('primary-change', '')
-    void router.replace({ name: 'chat' })
+    if (props.managed) emit('navigate', '')
+    else void router.replace({ name: 'chat', params: { organizationId: props.organizationId } })
   }
   void nextTick(async () => {
     workbench.value?.showConversation()
     await nextTick()
     autoResize()
-    if (props.visible && props.keyboardActive) chatInput.value?.focus({ preventScroll: true })
+    if (props.visible && props.keyboardActive) {
+      if (openRemotePicker) await executionLocationSelector.value?.openRemote()
+      else chatInput.value?.focus({ preventScroll: true })
+    }
   })
+}
+
+function selectExecutionLocation(target: RemoteConversationTarget | undefined): void {
+  if (preparingSend.value || activeSessionId.value) return
+  if (target && (contextItems.value.length || pendingAttachments.value.length)) {
+    composerError.value = 'Remove local attachments before selecting a remote workspace. Files are not transferred between devices.'
+    return
+  }
+  composerError.value = ''
+  if (!target && draftProject.value?.kind === 'remote') draftProject.value = undefined
+  draft.value = target ? createRemoteChatDraft(props.apiBase, target) : createProjectChatDraft(projectsClient, draftProject.value)
 }
 
 function clearPendingAttachments(): void {
@@ -1010,13 +1063,25 @@ function handleAttachmentInput(event: Event): void {
   if (!(input instanceof HTMLInputElement)) return
   const files = Array.from(input.files ?? [])
   if (files.length === 0) return
+  if (!canAttachFiles.value) {
+    input.value = ''
+    composerError.value = composerPopoverTitle.value
+    return
+  }
   pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
   input.value = ''
   chatInput.value?.focus({ preventScroll: true })
 }
 
 function handleComposerPaste(event: ClipboardEvent): void {
-  if (!canQuoteSelection.value || !canAttachFiles.value) { event.preventDefault(); return }
+  if (!canQuoteSelection.value) { event.preventDefault(); return }
+  if (!canAttachFiles.value) {
+    if (clipboardImageFiles(event.clipboardData).length) {
+      if (!event.clipboardData?.getData('text/plain')) event.preventDefault()
+      composerError.value = 'Local image attachments are not transferred to the selected remote workspace.'
+    }
+    return
+  }
   try {
     const images = clipboardImageFiles(event.clipboardData)
     if (!images.length) return
@@ -1079,6 +1144,8 @@ async function deleteSession(sessionId: string): Promise<void> {
 }
 
 function resetConversation(): void {
+  modelOverride.value = ''
+  currentWorkdir.value = undefined
   sessionSelectionGeneration++
   settingsRequest?.abort()
   settingsRequest = undefined
@@ -1121,17 +1188,19 @@ function requestSession(sessionId: string): void {
   if (props.enableChildPane) {
     const target = childConversationTarget(allSessions.value, sessionId, activeSessionId.value)
     if (target) {
-      if (target.primaryId !== activeSessionId.value) selectSession(target.primaryId, false)
+      if (!props.managed && target.primaryId !== activeSessionId.value) selectSession(target.primaryId, false)
       emit('open-child', target)
       return
     }
     if (props.childSessionId && sessionId === activeSessionId.value) {
       emit('primary-change', sessionId)
-      void router.replace({ name: 'chat', params: { sessionId } })
+      if (props.managed) emit('navigate', sessionId)
+      else void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId } })
       return
     }
   }
-  selectSession(sessionId)
+  if (props.managed) emit('navigate', sessionId)
+  else selectSession(sessionId)
 }
 
 function inspectExecution(sessionId: string): void {
@@ -1145,7 +1214,8 @@ function selectSession(sessionId: string, syncRoute = true): void {
   selectedMode.value = allSessions.value.find(session => session.sessionId === sessionId)?.mode
   if (!props.embedded && syncRoute) {
     emit('primary-change', sessionId)
-    void router.replace({ name: 'chat', params: { sessionId } })
+    if (props.managed) emit('navigate', sessionId)
+    else void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId } })
   }
   void loadSessionList()
   void loadCurrentSession()
@@ -1161,7 +1231,7 @@ function focusConversation(): void {
   const target = chatInput.value?.getClientRects().length ? chatInput.value : paneRoot.value?.querySelector<HTMLElement>('.document-tabs [aria-selected="true"]')
   target?.focus({ preventScroll: true })
 }
-defineExpose({ restoreSession, focusConversation, activeSessionId, allSessions })
+defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions })
 
 // ── History ───────────────────────────────────────────────────────────────────
 
@@ -1417,6 +1487,10 @@ async function sendMessage(overrideContent?: string, opts?: {
   retryContent?: string
   retryMedia?: string[]
 }): Promise<void> {
+  if (modelSelection?.loading.value || modelSelection?.error.value) {
+    composerError.value = 'Organization models are unavailable. Retry models or update this organization’s model settings.'
+    return
+  }
   if (isExecution.value) {
     composerError.value = 'Tasks and calls are read-only. Send a message in the owning conversation instead.'
     return
@@ -1429,6 +1503,11 @@ async function sendMessage(overrideContent?: string, opts?: {
   const retry = opts?.retry === true
   const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
   const attachments = retry ? [] : [...pendingAttachments.value]
+  const model = conversationModel.value
+  if (remoteConversation.value && (attachments.length || contextItems.value.length)) {
+    composerError.value = 'Remove local attachments before sending to a remote workspace.'
+    return
+  }
   if ((!content && !retry && attachments.length === 0) || streaming.value || preparingSend.value || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
   const generation = sessionSelectionGeneration
   const controller = new AbortController()
@@ -1446,8 +1525,10 @@ async function sendMessage(overrideContent?: string, opts?: {
     historyRequest?.abort()
     historyRequest = undefined
     loadingHistory.value = false
+    if (startingDraft && draftRemote.value) currentWorkdir.value = { kind: 'remote', displayPath: draftRemote.value.displayPath ?? null }
     activeSessionId.value = sessionId
-    if (!props.embedded) void router.replace({ name: 'chat', params: { sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })
+    if (props.managed) emit('prepared', sessionId)
+    else if (!props.embedded) void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })
     preparingSend.value = false
     workbench.value?.showConversation()
     activePanel.value = 'conversation'
@@ -1486,7 +1567,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       if (chatInput.value) chatInput.value.style.height = 'auto'
     }
     if (opts?.parentSessionId) payload.parentSessionId = opts.parentSessionId
-    if (pendingDraftSettings.value) payload.config = pendingDraftSettings.value
+    if (pendingDraftSettings.value || model) payload.config = { ...pendingDraftSettings.value, ...(model ? { model } : {}) }
 
     const res = await fetch(buildUrl('/api/chat/send'), {
       method: 'POST',
@@ -1774,7 +1855,10 @@ function handleTypingFocus(e: KeyboardEvent): void {
 }
 
 document.addEventListener('keydown', handleTypingFocus)
-const onGlobalConfigChanged = () => { detailsRevision.value++ }
+const onGlobalConfigChanged = (event: Event) => {
+  const organizationId = (event as CustomEvent<{ organizationId?: string }>).detail?.organizationId
+  if (!organizationId || organizationId === props.organizationId) detailsRevision.value++
+}
 window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
   disposed = true
@@ -1798,6 +1882,15 @@ onMounted(async () => {
   if (props.visible) startStagePolling()
   if (props.embedded) {
     await loadEmbeddedSession(props.sessionId ?? '')
+    return
+  }
+  if (props.managed) {
+    if (props.sessionId) {
+      selectSession(props.sessionId, false)
+    } else if (props.openRemote) {
+      await nextTick()
+      if (props.visible) await executionLocationSelector.value?.openRemote()
+    }
     return
   }
   // Restore session from route param
@@ -1851,6 +1944,7 @@ function resendLastMessage() {
 </script>
 
 <style scoped>
+.remote-execution-note { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
 .chat-workspace {
   position: relative;
   display: grid;
@@ -1874,6 +1968,7 @@ function resendLastMessage() {
 .conversation-dock > .chat-working:last-child { margin-bottom: 16px; }
 .conversation-dock.in-flow { position: static; flex: 0 0 auto; }
 .chat-workspace.is-embedded { display: flex; width: 100%; }
+.chat-workspace.is-managed { grid-template-columns: minmax(0, 1fr); }
 .is-embedded :deep(.session-heading) { padding: 4px 8px; }
 .chat-panel.is-draft { flex: 0 0 auto; }
 .draft-heading { flex-shrink: 0; box-sizing: border-box; width: min(100%, 720px); padding: 0 24px; margin: 0 auto 30px; text-align: center; color: var(--c-text); }
@@ -1940,7 +2035,7 @@ function resendLastMessage() {
 .mobile-sidebar-backdrop { display: none; }
 @media (max-width: 700px) {
   .chat-workspace { grid-template-columns: minmax(0, 1fr); }
-  .chat-workspace:not(.is-embedded) > :deep(.file-workbench) { --workbench-top-offset: 36px; padding-top: var(--workbench-top-offset); box-sizing: border-box; }
+  .chat-workspace:not(.is-embedded):not(.is-managed) > :deep(.file-workbench) { --workbench-top-offset: 36px; padding-top: var(--workbench-top-offset); box-sizing: border-box; }
   .sessions-sidebar { display: none; position: absolute; inset: 36px auto 0 0; width: min(280px, 82%); z-index: 12; box-shadow: 8px 0 24px var(--c-shadow-soft); }
   .mobile-sessions-open .sessions-sidebar { display: flex; }
   .mobile-sidebar-backdrop { display: block; position: absolute; inset: 36px 0 0; z-index: 11; border: 0; background: rgb(0 0 0 / 25%); }

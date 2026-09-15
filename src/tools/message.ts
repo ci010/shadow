@@ -112,6 +112,7 @@ export class MessageTool implements Tool {
       event: 'response',
       channel: reply.channel,
       chatId: reply.chatId,
+      ...(reply.channelAddress ? { channelAddress: reply.channelAddress } : {}),
       done: false,
       content: text,
       media,

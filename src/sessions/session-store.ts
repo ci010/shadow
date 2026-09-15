@@ -37,6 +37,7 @@ export interface SessionParent {
 }
 
 export interface SessionState {
+  organizationId?: string
   /** Frozen execution lifetime; absent only in legacy records. */
   mode?: ExecutionMode
   executionStatus?: ExecutionStatus

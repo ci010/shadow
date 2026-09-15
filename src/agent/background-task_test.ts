@@ -4,6 +4,8 @@ import { Bus } from '../bus/bus.ts'
 import { EventService } from '../events/service.ts'
 import type { SessionTurnFact, SessionInput } from '../sessions/input.ts'
 import { BackgroundTaskManager } from './background-task.ts'
+import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
+import { createOrganizationScope, getOrganizationScope } from '../otel/scope.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 const fact: SessionTurnFact = {
@@ -11,6 +13,47 @@ const fact: SessionTurnFact = {
   source: { kind: 'session', sessionId: 'web:parent' },
   status: 'completed', content: 'Actual final answer',
 }
+
+test('background display callbacks retain exact source bot from explicit replies and encoded session IDs', async (t) => {
+  const scope = createOrganizationScope('org')
+  const bus = new Bus()
+  const displays: OutboundMessage[] = []
+  const events = new EventService('.', bus, async (sessionId, input) => ({
+    status: 'accepted', sessionId, inputId: input.id,
+  }), scope)
+  const tasks = new BackgroundTaskManager(bus, events, scope)
+  bus.on('message.outbound', (message) => {
+    assert.equal(getOrganizationScope(), scope)
+    displays.push(message)
+  })
+  const addresses = ['first-bot', 'second-bot'].map((botInstanceId) => ({
+    organizationId: 'org', botInstanceId, platform: 'qq', conversationId: 'same-chat',
+  }))
+  try {
+    for (const explicit of [true, false]) {
+      const before = displays.length
+      for (const address of addresses) {
+        tasks.createDeferredTask({
+          kind: 'process', title: 'same-task',
+          callback: explicit
+            ? { sessionId: 'same-session', replyTo: { channel: 'qq', chatId: 'same-chat', channelAddress: address } }
+            : { sessionId: channelSessionId(address) },
+        }).complete('result')
+      }
+      await t.waitFor(() => assert.equal(displays.length, before + addresses.length))
+      assert.deepEqual(displays.slice(before).map((message) => message.channelAddress), addresses)
+      for (const message of displays.slice(before)) {
+        assert.equal(message.channel, 'qq')
+        assert.equal(message.chatId, 'same-chat')
+      }
+    }
+  } finally {
+    await tasks.stop()
+    await events.stop()
+    bus.stopAll()
+    scope.close()
+  }
+})
 
 test('background session tasks finish once from domain lifecycle, not display done', async () => {
   const bus = new Bus()

@@ -11,16 +11,22 @@ export function createChatDraft(
   project?: ProjectRecord,
   createId: () => string = () => `chat-${crypto.randomUUID()}`,
 ) {
+  return {
+    project,
+    ...deferChatSession(async signal => project
+      ? (await client.createSession(project.id, signal)).sessionId
+      : `web:${createId()}`),
+  }
+}
+
+export function deferChatSession(create: (signal?: AbortSignal) => Promise<string>) {
   let sessionId = ''
   let pending: Promise<string> | undefined
   return {
-    project,
     prepare(signal?: AbortSignal): Promise<string> {
       if (sessionId) return Promise.resolve(sessionId)
       pending ??= (async () => {
-        sessionId = project
-          ? (await client.createSession(project.id, signal)).sessionId
-          : `web:${createId()}`
+        sessionId = await create(signal)
         return sessionId
       })().finally(() => { pending = undefined })
       return pending

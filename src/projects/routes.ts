@@ -1,17 +1,22 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
 import { serveLocalGit } from '../gateway/local-git.ts'
 import type { CloneOperation, ProjectRecord } from './contracts.ts'
 import { CloneTerminationError, runGitClone, validateCloneUrl, validateDirectoryName, type GitCloneRunner } from './git.ts'
 import { absoluteDirectoryPath, existingDirectory, ProjectError, ProjectRegistry, UUID_PATTERN } from './registry.ts'
+import type { Executor } from '../execution/executor.ts'
+import { serveRemoteGit } from '../execution/remote-git-client.ts'
+import { serveRemoteProjectFiles } from './remote-files.ts'
 
 export interface ProjectServiceOptions {
   registry: ProjectRegistry
-  createSession: (project: ProjectRecord) => Promise<{ sessionId: string; chatId: string }>
+  createSession: (project: ProjectRecord, requestId?: string) => Promise<{ sessionId: string; chatId: string }>
   gitRunner?: GitCloneRunner
+  remoteExecutor?: Executor
 }
 
 interface CloneJob {
@@ -67,6 +72,7 @@ function errorResponse(c: Context, error: unknown): Response {
 export class ProjectService {
   readonly #options: ProjectServiceOptions
   readonly #jobs = new Map<string, CloneJob>()
+  readonly #sessionRequests = new Map<string, { projectId: string; result: Promise<{ sessionId: string; chatId: string }> }>()
   #disposed = false
   #disposal?: Promise<void>
 
@@ -75,12 +81,36 @@ export class ProjectService {
   }
 
   readonly plugin: GatewayPlugin = (app) => {
+    app.delete('/api/projects/:id', async c => {
+      try {
+        this.#assertOpen()
+        this.assertIdle()
+        const projectId = c.req.param('id')
+        await this.#options.registry.changeOrganization(projectId, undefined, c.req.raw.signal)
+        return c.json({ removed: true, projectId })
+      } catch (error) { return errorResponse(c, error) }
+    })
+    app.post('/api/projects/:id/move', bodyLimit({ maxSize: 4096, onError: c => c.json({ error: 'body_too_large' }, 413) }), async c => {
+      try {
+        this.#assertOpen()
+        this.assertIdle()
+        const body = await objectBody(c)
+        if (Object.keys(body).some(key => key !== 'targetOrganizationId') ||
+          typeof body.targetOrganizationId !== 'string' || !body.targetOrganizationId ||
+          body.targetOrganizationId.length > 128) {
+          throw new ProjectError('invalid_request', 'Provide only a targetOrganizationId.')
+        }
+        const project = await this.#options.registry.changeOrganization(c.req.param('id'), body.targetOrganizationId, c.req.raw.signal)
+        return c.json({ project, organizationId: body.targetOrganizationId })
+      } catch (error) { return errorResponse(c, error) }
+    })
     app.get('/api/projects', (c) => c.json({ projects: this.#options.registry.list() }))
     for (const operation of ['status', 'diff'] as const) {
       app.get(`/api/projects/:id/git/${operation}`, async c => {
         try {
           this.#assertOpen()
-          const project = await this.#options.registry.requireAvailable(c.req.param('id'))
+          const project = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
+          if (project.kind === 'remote') return serveRemoteGit(c, this.#remoteTarget(c, project), operation)
           return await serveLocalGit(c, project.path, operation)
         } catch (error) {
           return errorResponse(c, error)
@@ -93,9 +123,11 @@ export class ProjectService {
       app.get(`/api/projects/:id/${operation}${operation === 'static' ? '/*' : ''}`, async (c) => {
         try {
           this.#assertOpen()
-          const project = await this.#options.registry.requireAvailable(c.req.param('id'))
+          const project = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
           const path = operation === 'static' ? staticFilePath(c) : c.req.query('path') ?? ''
           if (path === null) return c.json({ error: 'invalid_path' }, 400)
+          if (project.kind === 'remote') return serveRemoteProjectFiles(c, this.#remoteTarget(c, project), project,
+            operation === 'static' ? 'raw' : operation, path)
           return await serveLocalFiles(c, project.path, { projectId: project.id },
             operation === 'static' ? 'raw' : operation, path)
         } catch (error) {
@@ -107,6 +139,9 @@ export class ProjectService {
       try {
         this.#assertOpen()
         const body = await objectBody(c)
+        if (Object.keys(body).some(key => key !== 'path')) {
+          throw new ProjectError('invalid_request', 'Local folder registration accepts only path. Select a remote folder capability to open a remote project.')
+        }
         const project = await this.#options.registry.register(
           absoluteDirectoryPath(body.path),
           c.req.raw.signal,
@@ -116,11 +151,31 @@ export class ProjectService {
         return errorResponse(c, error)
       }
     })
-    app.post('/api/projects/:id/sessions', async (c) => {
+    app.post('/api/projects/:id/sessions', bodyLimit({ maxSize: 4096, onError: c => c.json({ error: 'body_too_large' }, 413) }), async (c) => {
       try {
         this.#assertOpen()
-        const project = await this.#options.registry.requireAvailable(c.req.param('id'))
-        return c.json(await this.#options.createSession(project))
+        const text = await c.req.text()
+        let body: unknown = {}
+        try { if (text) body = JSON.parse(text) } catch {
+          throw new ProjectError('invalid_json', 'Provide an empty body or a JSON request ID.')
+        }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          throw new ProjectError('invalid_request', 'Provide a JSON object.')
+        }
+        const value = 'requestId' in body ? body.requestId : undefined
+        if (value !== undefined && (typeof value !== 'string' || !UUID_PATTERN.test(value))) {
+          throw new ProjectError('invalid_request_id', 'Provide a UUID request ID.')
+        }
+        const requestId = typeof value === 'string' ? value.toLowerCase() : undefined
+        const project = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
+        if (!requestId) return c.json(await this.#options.createSession(project))
+        const active = this.#sessionRequests.get(requestId)
+        if (active && active.projectId !== project.id) throw new ProjectError('project_request_conflict', 'This request ID belongs to another project.', 409)
+        const result = active?.result ?? this.#options.createSession(project, requestId)
+        if (!active) this.#sessionRequests.set(requestId, { projectId: project.id, result })
+        try { return c.json(await result) } finally {
+          if (this.#sessionRequests.get(requestId)?.result === result) this.#sessionRequests.delete(requestId)
+        }
       } catch (error) {
         return errorResponse(c, error)
       }
@@ -175,6 +230,21 @@ export class ProjectService {
     if (this.#disposed) {
       throw new ProjectError('projects_stopping', 'Project services are shutting down.', 503)
     }
+
+  }
+
+  assertIdle(): void {
+    if ([...this.#jobs.values()].some(job => job.operation.state === 'running') || this.#sessionRequests.size) {
+      throw new ProjectError('project_busy', 'Wait for project creation and clones to finish or cancel them before changing folder ownership.', 409)
+    }
+  }
+
+  #remoteTarget(c: Context, project: import('./contracts.ts').RemoteProjectRecord) {
+    if (!this.#options.remoteExecutor) throw new ProjectError('remote_executor_unavailable', 'Reconnect the owning device; no local folder was used.', 503)
+    return {
+      executor: this.#options.remoteExecutor, nodeId: project.workdir.nodeId, capabilityId: project.workdir.capabilityId,
+      sessionId: `project:${project.id}`, turnId: crypto.randomUUID(), signal: c.req.raw.signal,
+    }
   }
 
   #startClone(body: Record<string, unknown>, requestSignal: AbortSignal): CloneOperation {
@@ -212,12 +282,14 @@ export class ProjectService {
   async #clone(job: CloneJob, url: string, parentPath: string, directoryName: string): Promise<void> {
     const signal = job.controller.signal
     let cloned = false
+    let release: (() => void) | undefined
     try {
       signal.throwIfAborted()
       const parent = await existingDirectory(parentPath)
       signal.throwIfAborted()
       const destination = join(parent, directoryName)
       job.operation.destination = destination
+      release = await this.#options.registry.reserveDestination(destination)
       try {
         // Exclusive directory creation reserves only our destination; never remove it.
         await mkdir(destination)
@@ -247,7 +319,7 @@ export class ProjectService {
         : error instanceof ProjectError
         ? error.message
         : FAILED
-    }
+    } finally { release?.() }
   }
 
   #prune(): void {

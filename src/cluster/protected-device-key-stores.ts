@@ -1,5 +1,6 @@
 import { dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { getOs, isNotFoundError, type RuntimeOs } from '../utils/runtime.ts'
 import type { ProtectedDeviceKeyStore } from './device-credentials.ts'
@@ -25,6 +26,7 @@ export class ProtectedKeyStoreError extends Error {
 interface CommandResult {
   readonly success: boolean
   readonly stdout: Uint8Array
+  readonly exitCode?: number | null
 }
 
 export interface ProtectedKeyCommandRunner {
@@ -63,7 +65,11 @@ export class NodeProtectedKeyCommandRunner
       ))
       child.once('close', (code) => {
         if (signal.aborted) reject(signal.reason)
-        else resolve({ success: code === 0, stdout: Buffer.concat(chunks) })
+        else resolve({
+          success: code === 0,
+          stdout: Buffer.concat(chunks),
+          exitCode: code,
+        })
       })
       child.stdin.end(input)
     })
@@ -201,6 +207,112 @@ export class LinuxSecretServiceDeviceKeyStore
   }
 }
 
+/**
+ * Uses the current user's default Keychain; it must already be unlocked and
+ * accessible to /usr/bin/security. Never unlocks it or weakens item access.
+ */
+export class MacOsKeychainDeviceKeyStore implements ProtectedDeviceKeyStore {
+  readonly providerId = 'macos-keychain'
+
+  constructor(
+    readonly service = 'shadow.device-credentials',
+    readonly runner: ProtectedKeyCommandRunner =
+      new NodeProtectedKeyCommandRunner(),
+  ) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(service)) {
+      throw new TypeError('Keychain service must be a safe application identifier')
+    }
+  }
+
+  async load(keyId: string, signal: AbortSignal): Promise<Uint8Array | null> {
+    signal.throwIfAborted()
+    const result = await this.runner.run(
+      '/usr/bin/security',
+      ['find-generic-password', '-s', this.service, '-a', this.#account(keyId), '-w'],
+      new Uint8Array(),
+      signal,
+    )
+    signal.throwIfAborted()
+    // security returns OSStatus modulo 256: errSecItemNotFound (-25300).
+    // Denied, locked, unavailable, and unknown failures are not missing keys.
+    if (!result.success && result.exitCode === 44) return null
+    if (!result.success) {
+      throw new ProtectedKeyStoreError(
+        'lookup-failed',
+        'macOS Keychain could not read the device credential; ensure the user Keychain is unlocked and accessible',
+      )
+    }
+    try {
+      const encoded = trimTrailingNewline(result.stdout)
+      const decoded = decodeBase64(encoded)
+      if (!Buffer.from(encoded).equals(Buffer.from(encodeBase64(decoded)))) {
+        throw new Error('Noncanonical encoding')
+      }
+      return decoded
+    } catch {
+      throw new ProtectedKeyStoreError(
+        'unprotect-failed',
+        'macOS Keychain returned invalid device credential material',
+      )
+    }
+  }
+
+  async save(
+    keyId: string,
+    value: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted()
+    // Keep the interactive command below security's fixed-size input buffer.
+    if (value.length > 2048) {
+      throw new ProtectedKeyStoreError(
+        'store-failed',
+        'macOS Keychain device credential exceeds the supported size',
+      )
+    }
+    const expected = new Uint8Array(value)
+    // Only fixed tokens, a validated service, a digest, and base64 enter this
+    // parser. No key material enters process arguments or a shell command.
+    const input = Buffer.from(
+      `add-generic-password -U -s ${this.service} -a ${this.#account(keyId)} -w "${encodeBase64(expected)}"\n`,
+    )
+    try {
+      const result = await this.runner.run(
+        '/usr/bin/security',
+        ['-i'],
+        input,
+        signal,
+      )
+      signal.throwIfAborted()
+      if (!result.success) {
+        throw new ProtectedKeyStoreError(
+          'store-failed',
+          'macOS Keychain could not store the device credential; ensure the user Keychain is unlocked and accessible',
+        )
+      }
+      // Interactive security versions may return success for failed commands.
+      // A fresh lookup is mandatory before publishing a credential reference.
+      const stored = await this.load(keyId, signal)
+      if (
+        stored === null || stored.length !== expected.length ||
+        !timingSafeEqual(stored, expected)
+      ) {
+        throw new ProtectedKeyStoreError(
+          'store-failed',
+          'macOS Keychain did not persist the device credential',
+        )
+      }
+    } finally {
+      input.fill(0)
+      expected.fill(0)
+    }
+  }
+
+  #account(keyId: string): string {
+    return createHash('sha256').update(keyId, 'utf8').digest('hex')
+  }
+}
+
 export function createPlatformDeviceKeyStore(
   dataDirectory: string,
   os: RuntimeOs = getOs(),
@@ -219,6 +331,7 @@ export function createPlatformDeviceKeyStore(
     )
   }
   if (os === 'linux') return new LinuxSecretServiceDeviceKeyStore()
+  if (os === 'darwin') return new MacOsKeychainDeviceKeyStore()
   throw new ProtectedKeyStoreError(
     'provider-unavailable',
     `Protected device credentials are not supported on ${os}`,

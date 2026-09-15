@@ -17,6 +17,7 @@ current references from historical proposals.
 
 - [Product and implementation status](#product-and-implementation-status)
 - [Process architecture and startup](#process-architecture-and-startup)
+- [Organizations: ownership, storage, and routing](#organizations-ownership-storage-and-routing)
 - [A message from input to response](#a-message-from-input-to-response)
 - [Sessions and continuity](#sessions-and-continuity)
 - [Context and memory](#context-and-memory)
@@ -35,12 +36,13 @@ current references from historical proposals.
 | Area | Implemented behavior and boundary |
 | --- | --- |
 | Personal agent | Persistent conversations, configurable models, tool-use loops, steering, subagents, and slash commands in the local backend |
+| Organizations | Concurrent organization runtimes with separate Homes, sessions, context, bots, learning, and diagnostics; shared provider credentials/devices, not separate OS sandboxes |
 | Context and memory | Agent prompts, identity, project context, scoped conventions, file-backed memory, daily event summaries, compaction, and learning-agent pipelines |
 | Tools | Files, text editing, search, shell processes, background continuations, messaging, plans, conventions, dynamic script tools, and MCP adapters |
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
-| Channels | Web plus optional Discord, Feishu, QQ, and WeChat/iLink implementations; credentials and platform setup remain external requirements |
+| Channels | Web plus organization-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by organization runtimes |
 | Browser automation | Lazy Chrome DevTools MCP with per-session browser allocation; requires a usable browser/MCP process |
-| Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory from the backend; Approvals remains fixture-backed |
+| Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory from the backend; paired nodes execute without operation approvals |
 | Electron | Main bootstrap, persisted launch profile, backend supervision, narrow preload API, renderer setup/recovery; Child/product integration remains incomplete |
 | Device execution | Pairing/challenge/WebSocket code and bounded remote UTF-8 workdir operations exist; full remote tools, artifacts, UI administration, and release hardening remain WIP |
 
@@ -56,7 +58,13 @@ clean machine or that every historical acceptance criterion has been met.
 Browser / Electron renderer              External messaging platforms
           | HTTP + SSE                              |
           v                                         v
-                 One Node backend (Main)
+                 One Node backend (Main host)
+  Shared gateway / organization catalog / provider credentials / devices
+              |
+              +--> Organization runtime A (flow below)
+              +--> Organization runtime B (same flow, separate state)
+
+  Within each organization:
   Hono gateway + channels --> AgentApp --> SessionManager.deliver
   Event routing / other sessions ------->      |
                                                |
@@ -69,7 +77,7 @@ Browser / Electron renderer              External messaging platforms
 
   Session facts/output --> Bus notifications + outbound queue --> UI/channels
 
-        File/SQLite state beneath the configured agent Home
+        File/SQLite state beneath that organization's Home
 
 Electron main, when used:
   setup + preload IPC + authorization + backend process supervision
@@ -97,21 +105,24 @@ another long-lived agent authority.
 
 ### Composition root
 
-[`src/index.ts`](../src/index.ts) wires the local application:
+[`src/index.ts`](../src/index.ts) delegates Main startup to
+[`startOrganizationHost`](../src/organizations/host.ts) and provides
+`createOrganizationRuntime` as its composition factory:
 
-1. Load and validate configuration; derive Home and provider defaults.
-2. Create the typed Bus, `EventService`, provider aggregator, background-task
-   manager, and SQLite telemetry store.
-3. Register base tools, execution hooks, VFS, search fallbacks, and lazy tool/MCP
-   sources. Create the Hono application and cluster composition.
-4. Initialize the selected session store, `HandoffManager`, `ContextBuilder`,
-   `SessionManager`, skill and agent-type managers.
-5. Mount VFS providers, register slash commands, messaging/subagent tools,
-   schedules, and learning polls.
-6. Register gateway plugins and channels, then the frontend fallback last so it
-   cannot shadow API routes.
-7. Start the agent/watchers and cron; attempt interrupted-session recovery;
-   report local readiness.
+1. Load configuration; initialize the host catalog and migrate the stopped
+   legacy Home to Default before starting organization writers.
+2. Create the shared gateway, provider setup/authentication, device cluster,
+   host diagnostics, and browser-port allocator.
+3. For each catalog entry, create its immutable Home/configuration/scope and
+   compose a separate Bus, `EventService`, provider aggregator, background-task
+   manager, telemetry store, tools, VFS, identity, and eval bridge.
+4. Initialize that organization's project view and selected session store,
+   `HandoffManager`, `ContextBuilder`, `SessionManager`, skills and agent types.
+5. Mount its VFS and routes, register commands, messaging/subagent tools,
+   schedules, and `LearningService`; start channels, watchers, and recovery.
+6. Mount scoped organization dispatch alongside shared host routes, then the
+   frontend fallback. Start all catalogued organizations, independently tracking
+   their ready/failed state rather than selecting one global runtime.
 
 Shutdown is coordinated through a runtime handle: stop accepting work, stop
 polls/sessions/channels/schedules/watchers, release browsers, drain node
@@ -123,13 +134,231 @@ coordination, not a promise that all in-flight work is durably replayable.
 from the ordinary agent configuration. The simple local `pnpm start` path
 remains the primary way to run the agent without Electron.
 
+## Organizations: ownership, storage, and routing
+
+### Ownership is not presentation
+
+[`OrganizationCatalog`](../src/organizations/catalog.ts) persists stable IDs and
+renameable names. [`OrganizationsWorkspace.vue`](../app/src/components/OrganizationsWorkspace.vue)
+renders all organization groups together and retains conversation resources keyed
+by organization and session; there is no global organization switcher. Changing
+the visible conversation does not move a runtime, draft, bot, or learning job.
+Organization settings expose General, Models, Bots, and Learning; Providers and
+Nodes remain App-level views.
+
+An organization owns Home, session history and continuity, project membership,
+context/memory/identity, learned skills and agent overrides, MCP/browser state,
+events/cron, background work, bots, learning, and scoped diagnostics. These are
+separate service instances, not just `organizationId` labels on a shared mutable
+session manager. Built-in instruction assets can be reused read-only.
+**Self reflection**, Chats, and project rows are UI groupings inside an
+organization, not independent ownership or authorization boundaries.
+
+Each session persists `organizationId` and at most one `projectId`.
+[`SessionManager`](../src/sessions/session-manager.ts) validates organization
+membership for project/workdir references, parent/child/report links, messages,
+fork/call context, and yield handling. An agent cannot address another
+organization's history, fork, or message target through these APIs. Scoped VFS
+views do not expose the host catalog as cross-organization conversation data.
+Local project ownership is checked centrally after directory canonicalization:
+another organization's identical or parent/child-overlapping folder is rejected,
+including clone destination reservations. Same-organization directory rules
+remain unchanged. Files stay in their registered project folders.
+
+Folder membership can be removed or moved through the owning organization's
+project API and folder-row menu. A move creates a new project identity in the
+destination; neither operation transfers files, conversation history, or
+learned knowledge. Retained source conversations cannot keep using the former
+project workdir, including after moving the folder back. Busy checks conservatively
+cover the source organization, not only the selected folder. Overlapping folder
+registrations can prevent a safe transfer. Unconfirmed remote termination remains
+durably blocked across restart, without automatic recovery. Retired project
+identities also prevent legacy imports from restoring removed membership.
+This is not an organization migration or a filesystem move.
+
+Shared provider connections/credentials are merged into organization configs,
+but model defaults, quick-model choice, temperature/reasoning settings, and
+session overrides are organization-owned.
+[`OrganizationConfigStore`](../src/organizations/config-store.ts) excludes
+provider credentials from its persisted file and rejects attempts to change
+shared connections or relocate Home through the organization config endpoint.
+Devices and pairing are shared; visibility of a device alone does not assign
+its folders to every organization.
+
+Identity observations also retain the source bot address.
+[`userlink verify <channel> <senderId> [targetBotInstanceId]`](../src/tools/commands/userlink.ts)
+selects an observed target in the same organization; ambiguous targets require
+the bot selector. Confirmation checks the pinned organization, bot, platform,
+conversation, and sender instead of guessing a same-platform bot. Default's
+legacy account links remain compatible; unknown or ambiguous targets fail
+explicitly before sending a challenge.
+
+This is enforced application ownership, not team/RBAC isolation or host
+confinement. Local exec, script imports, MCP, and external processes still run
+with host-user permissions. No whole-organization move/merge/delete, cross-org
+knowledge sharing, cross-project coordination, or separate process sandbox is
+provided by this catalog.
+
+### Actual storage and migration
+
+[`host.ts`](../src/organizations/host.ts) resolves the configured legacy
+`agent.workspace` and appends `.organizations` to obtain the host root.
+[`organizationPaths`](../src/organizations/contracts.ts) defines this layout:
+
+```text
+<legacyHome>\                         retained original Home / migration backup
+  .cluster\registry.v1.json            shared registry unless overridden
+<legacyHome>.organizations\            sibling, not a child of legacy Home
+  organizations.v1.json                catalog and project ownership index
+  .host.otel.db                        host-only diagnostics
+  organizations\
+    default\                          stable ID; display name may change
+      config\
+        organization.json             organization settings, no shared providers
+        bots.v1.json                  private bot-instance configuration
+      workspace\                      Default's active Home
+        .sessions\                    JSONL and/or SQLite history
+        memory\                       includes learning watermark
+        skills\ / agents\ / SOUL.md    migrated learned content
+        .events\ / .cron\ / .otel.db    organization-owned state
+    <organization-id>\
+      config\...
+      workspace\...
+```
+
+Shared provider configuration and Copilot credentials stay in their existing
+host/profile locations; the device registry remains shared rather than copied
+as an active registry in each Home. The original Home is **not deleted**, but its
+shared registry can still change: it is not a frozen backup of all host state.
+
+[`migrateLegacyHome`](../src/organizations/home-migration.ts) inventories and
+hash-verifies the stopped source, copies to a journalled staging directory,
+prepares the copy, and publishes it by rename. The host removes the staged
+`.cluster` copy, migrates **both** JSONL and SQLite organization metadata using
+[`session-migration.ts`](../src/organizations/session-migration.ts), and imports
+legacy projects into Default's catalog view. Session logical/physical IDs and
+history are preserved; this does not convert one storage backend into the other.
+Legacy QQ/Feishu/Discord bots are imported once into Default, including
+compatibility with their old session addresses; original environment credentials are overlaid in memory
+rather than written into new bot records. Memory, Soul, skills, learning
+watermarks, uploads, and other legacy Home files remain with Default. Fresh
+organizations do not inherit them or legacy bot/environment configuration:
+their instruction baseline is the shipped built-ins.
+
+Migration requires stopped legacy writers and is not a multi-process migration
+lock or general backup service. Verified completed migrations are reused.
+An external symlink/junction inside Home is explicitly unsupported and stops
+automatic migration for **manual review**; internal links are relocated as
+needed. Non-file entries, conflicting destinations, unverifiable journals, or
+a source changed during preparation also fail instead of publishing an
+incomplete Home. Preserve the original and recovery metadata, stop competing
+writers, and resolve the reported condition before retrying. Do not treat
+deleting metadata or restarting an old writer as a supported recovery recipe.
+
+### Routes, failures, and scoped services
+
+[`gateway.ts`](../src/organizations/gateway.ts) exposes:
+
+| Surface | Scope |
+| --- | --- |
+| `/api/organizations`, `/api/organizations/:id` | App catalog list/create and rename |
+| `/api/organizations/:id/status`, `/retry` | Organization startup state and explicit retry |
+| `/organizations/<id>/api/...` | Organization sessions, projects, bots, config, learning and content |
+| `/organizations/<id>/v1/...` | Existing organization telemetry/compatible API suffixes |
+| Root provider setup/discovery and device routes | Shared App services |
+| `/host/v1/...` | Separate host diagnostics |
+
+The base is `/organizations/<id>/`, **not** `/api/organizations/<id>/api/`.
+Frontend content clients preserve the existing `api/...` and `v1/...` suffixes;
+HTTP/SSE/file URLs and conversation cache identity include the owning
+organization. Legacy unscoped content routes dispatch to `default`, not to the
+current UI selection. Old chat/agent/log routes similarly redirect to Default.
+Existing gateway authorization still applies; a route prefix is not a new
+multi-tenant login system.
+
+The host tracks each runtime as starting, ready, or failed. A failed runtime
+returns `503 organization_unavailable` for scoped content; catalog status/retry
+remain available, and [`OrganizationGroup.vue`](../app/src/components/OrganizationGroup.vue)
+shows its startup error/retry without disabling healthy groups. Failed partial
+startup cleans up owned resources. Migration/host initialization failures occur
+earlier and can still prevent host startup. Shutdown stops organization
+producers/sessions and flushes/closes owned services before releasing shared
+gateway/device/telemetry infrastructure; in-memory work is not crash-durable.
+
+[`LearningService`](../src/agent/learning.ts) owns per-org activity buffers,
+intervals, subscriptions, dispatch cancellation, and status at
+`/organizations/<id>/api/learning`. Enabled/interval settings apply live.
+`lastDispatchedAt` means dispatch acceptance, not that a learning agent completed
+or successfully wrote knowledge. [`otel/runtime.ts`](../src/otel/runtime.ts)
+routes spans/logs to an explicitly bound organization scope; unscoped host
+diagnostics use a separate store rather than broadcasting into every org.
+[`EvalBridgeRuntime`](../src/eval/bridge.ts) and remote job IDs are also
+organization-bound; this does not sandbox the code they execute.
+
+### Remote folder ownership and upgrade boundary
+
+Organization composition wires
+[`RemoteProjectOwnership`](../src/projects/remote-ownership.ts) into the project
+registry and [`remote-session-routes.ts`](../src/sessions/remote-session-routes.ts).
+New remote-session creation registers or reuses an organization-owned remote
+project, then persists its `projectId` and opaque node/capability workdir
+reference. `POST /organizations/<id>/api/sessions/remote` accepts `nodeId`,
+`capabilityId`, and an optional UUID `requestId` for retry-stable session
+creation; it does not accept an execution path. A reused request ID targeting a
+different capability is a conflict.
+
+For a reopened registered-project draft,
+`POST /organizations/<id>/api/projects/<project-id>/sessions` accepts an optional
+`{requestId: UUID}` object; an empty body remains compatible. It verifies the
+saved remote project identity before creating a session, rather than reselecting
+its node/capability. Concurrent requests and retries after a lost response reuse
+the same persisted conversation; a request ID already bound to another project
+returns `409 project_request_conflict`.
+
+[`CapabilityWorkdirIdentity`](../src/execution/capability-workdir-identity.ts)
+implements the advertised Child operation `workdir.identity`. It resolves the
+configured root on Child using `realpath`, then hashes filesystem device/inode
+identities for the root and its ancestors. Main validates the bounded
+[`WorkdirIdentityV1`](../src/execution/workdir-identity.ts) response and checks
+same-node root/ancestor overlap in the host catalog, rejecting cross-org
+identical, aliased, or nested folders. Remote display paths remain display-only,
+never inputs to Main's local filesystem. A filesystem without stable directory
+identity fails explicitly rather than guessing ownership from its path.
+
+Startup reserves legacy remote workdirs from **both JSONL and SQLite** for
+Default. Both direct registration and registered-project `requireAvailable`
+revalidate every saved claim and project on that device. An unavailable or
+retargeted **other** saved capability can block not only new registration but
+also opening a new session in an existing project or accessing its project
+resources. These ownership checks intentionally fail closed until the affected
+capability is restored and revalidated; they never fall back to Main.
+Existing session records remain preserved.
+Migrated existing sessions retain their references and supported execution
+paths. An older Child without `workdir.identity` returns
+`409 remote_workdir_identity_unsupported` / `upgrade_node` for new project
+actions, not a blanket prohibition on existing remote sessions. Deploy updated
+Main and Child and reconnect; Mac/WSL SSH test fixtures need this rollout too,
+and are not a portable/autostart release. An unavailable device/workdir returns
+`503 remote_workdir_unavailable`. Native test execution is not an upgrade or
+restart of already-running Child processes.
+
+[`ProjectService`](../src/projects/routes.ts) routes registered remote project
+file listings, UTF-8 text previews, and Git status/diffs through Child, including
+project browsing before a conversation exists. Remote raw/static media remains
+`501 remote_raw_unavailable` in
+[`remote-files.ts`](../src/projects/remote-files.ts); alternate text encodings
+and remote cloning remain unsupported. Errors never select a Main-local folder.
+These changes do not alter pairing or add per-operation approvals, OS isolation,
+cross-node filesystem identity guarantees, or distributed release readiness.
+
 ## A message from input to response
 
 1. **Normalize input at the boundary.** A channel validates its configured sender
    policy and calls its explicit receiver. `AgentApp.receiveChannelMessage`
    translates the existing channel wire shape into `SessionInput`. Only this
-   adapter derives the legacy logical ID from `channel:chatId`; directed callers
-   supply a session ID without disguising their input as a channel message.
+   adapter preserves legacy `channel:chatId` addresses for migrated bots while
+   new bot instances carry organization/instance-qualified addresses. Directed
+   callers supply a session ID without disguising input as a channel message.
 2. **Handle channel commands.** `AgentApp` tries the slash-command dispatcher for
    ordinary channel text, retaining its existing admin checks.
    Commands such as `/help`, `/config`, `/status`, `/sessions`, `/compact`,
@@ -244,7 +473,8 @@ forks can inherit a parent segment up to a record index. History assembly
 sanitizes/truncates tool-call/result pairs rather than treating every stored
 message as independent.
 
-Local folder projects have a separate persistent registry under Main's workspace.
+Local folder projects have an organization-filtered registry backed by the host
+catalog's ownership index.
 Their stable `projectId` is not the existing `projectName` used for agent planning
 and shared context. Creating a project conversation stores both the project ID
 and a local workdir capability reference. The locality resolver obtains its
@@ -257,8 +487,9 @@ even when filesystem tools execute in an external project folder.
 Git clone operations; `src/index.ts` composes these with session creation and the
 existing capability lookup. Electron only exposes a Main-window-validated native
 directory picker. Project HTTP routes use the existing gateway authorization
-boundary. This local workflow does not implement remote workdir parity or Git
-worktree/branch management.
+boundary. The Main sidebar also offers Open remote folder, which opens the
+existing remote-capability draft picker rather than registering a Main-local
+path. Git worktree/branch management is not implemented.
 
 `subagent` accepts the initial `task` directly. It is optional for reusable
 sessions and required for task/call execution. Session mode still supports
@@ -374,7 +605,7 @@ to create agents or an alignment document.
 
 ### File-backed memory layers
 
-Paths below are relative to configured Home; they describe schemas, not data
+Paths below are relative to the owning organization's Home; they describe schemas, not data
 that should be checked into the repository.
 
 | Layer | Storage and use |
@@ -387,24 +618,26 @@ that should be checked into the repository.
 | Daily knowledge events | `memory/events/YYYY-MM-DD.jsonl`; structured `when/who/what/why/challenge/refs/origin` material |
 | Keyword/wiki index | Markdown names in `memory/topics`, `identities`, `concepts`, and `tools`; bodies read on demand |
 | Learning watermark | `memory/.reflect-watermark.json`; identifies transcript increments already scheduled for reflection |
-| Personality/identity | Shared `SOUL.md` and identity-manager files; distinct from user authentication |
+| Personality/identity | Organization-shared `SOUL.md` and identity-manager files; distinct from user authentication |
 
 Conventions are merged agent → project → session, with labels. Today's own
 events are included eagerly; other sessions' events are relevance-gated by
 project/shared modified paths when such signals exist, and capped. With no
 project/file signals, related events can still be included up to the cap.
-This is **relevance selection, not a privacy boundary**.
+This is **relevance selection within an organization, not a privacy boundary
+between its sessions**. Other organizations have separate memory stores.
 
 The keyword index is included for the main `general` and `general-legacy` roles,
 independently of their execution mode; it is not a parent/child authorization
 check. The index reads the
-global category directories, not the proposed per-project keyword hierarchy
+organization-wide category directories, not the proposed per-project keyword hierarchy
 everywhere. Working-set tracking captures the `write` tool path, not all edits
 made by shell commands, MCP tools, other applications, or all descendants.
 
 ### Learning pipelines
 
-Composition registers in-process bus polls:
+Each organization's `LearningService` registers in-process activity aggregation
+and periodic dispatch:
 
 - **Reflector**, default 30 minutes after activity aggregation: compare session
   history with a watermark and ask a specialized agent to process increments.
@@ -627,16 +860,24 @@ jobs, learning polls, and the WIP device-transport heartbeat.
 
 ### Channels and media
 
-`ChannelManager` instantiates Discord, Feishu, QQ, and WeChat when enabled.
+`ChannelManager` instantiates enabled organization bot instances for Discord,
+Feishu, and QQ.
 The **web adapter is created unconditionally**, even though a web `enabled`
-field exists in the schema. WeChat uses the iLink implementation; a
-`wechatDesktop` schema entry is not a separately wired desktop channel.
+field exists in the schema. Legacy WeChat/iLink code remains, but organization
+runtimes explicitly warn and do not start it; a `wechatDesktop` schema entry is
+not a separately wired desktop channel. Migrated configuration is not evidence
+of a running adapter.
 Likewise, a comment mentioning Telegram is not a shipped Telegram adapter.
 
-Settings combines the existing provider UI with QQ, Feishu, and Discord setup.
-`GET /api/channels` returns public configuration, credential-presence flags, and
-runtime state; `PATCH /api/channels/:id` validates and persists partial settings
-through the configuration store, then applies the selected channel's lifecycle.
+App settings retain shared Providers; each organization's Bots section owns
+QQ, Feishu, and Discord setup.
+Within `/organizations/<id>/`, `GET /api/channels` returns public bot-instance
+configuration, credential-presence flags, and actual runtime state.
+[`bot-setup.ts`](../src/channels/bot-setup.ts) provides POST creation and
+PATCH/DELETE at `/api/channels/:instanceId`; names, credentials, and lifecycle
+are independent even for multiple bots on the same platform.
+[`BotInstanceStore`](../src/channels/bot-store.ts) persists the private
+organization-owned records. Deleting a bot retains existing conversation history.
 These are Main-administration endpoints, not unauthenticated platform callbacks.
 Enabling connects or reconnects; disabling stops the adapter without erasing its
 credentials. Omitted secrets remain unchanged and are never returned to the UI.
@@ -769,11 +1010,10 @@ reachable local runtime, not connectivity to Main. Local workdir availability
 reflects the current directory state. These endpoints are read-only and do not
 expose device credentials, public keys, permission lists, or approval policies.
 
-`app/src/main.ts` still installs `createProductFixturesProvider()` for the
-separate Child Approvals screen. Its decision buttons remain disabled until a
-local service is connected. The shell no longer presents fixture-derived node
-names, latency, or pending-approval counts. A live inventory does not imply
-working pairing/revocation UI or complete multi-device support.
+The application no longer installs approval fixtures or displays an Approvals
+tab. The legacy `/approvals` route redirects to Nodes. Paired nodes are trusted
+to run supported operations without extra prompts or grants. A live inventory
+does not imply working pairing/revocation UI or complete multi-device support.
 
 ## Electron lifecycle
 
@@ -819,15 +1059,24 @@ session's execution locality are distinct concepts.
   and configured workdir capabilities.
 - Versioned jobs with acceptance/status/events, cancellation/deadline handling,
   and capability/permission checks.
-- Child-authoritative local approvals and in-memory grants exposed through an
-  authenticated loopback control API.
+- Production Child capabilities use `approvalPolicy: 'none'`: supported
+  operations execute without prompts or grants after authenticated pairing.
+  Legacy approval policies and their authenticated loopback API remain for
+  protocol/library compatibility, but are not used by production node setup.
 - Workdir capability operations for bounded UTF-8 file reads/writes; higher
   layers provide listing, edit, and text-preview paths without giving Main the
   Child's physical root.
 
-The credential-store adapters include Windows/WSL DPAPI and Linux Secret Service
-paths. That implementation scope is not a portability or secret-protection
-guarantee on every supported desktop OS.
+The credential-store adapters include Windows/WSL DPAPI, Linux Secret Service,
+and macOS Keychain. macOS uses the user's default Keychain through
+`/usr/bin/security`, supplies secret values through stdin, and verifies writes.
+Pairing and startup require an unlocked, accessible Keychain; over SSH, run
+`security unlock-keychain`, pairing, and Child startup in the same login session.
+Unlocking a separate SSH connection does not guarantee access from another
+security session. Keep that session alive while running the Child. Locked, denied, or
+unavailable stores fail explicitly rather than falling back to plaintext.
+This implementation scope is not a portability or secret-protection guarantee
+on every deployment.
 
 ### Locality contract
 
@@ -846,7 +1095,7 @@ Tools reject remote contexts unless they explicitly opt in.
 `read`/`write` have remote filesystem implementations. Session/task `exec` supports
 bounded foreground OS-shell commands through the separate
 `workdir.process.execute` operation on a configured workdir capability. The Child
-resolves cwd, enforces the operation permission and local approval, and owns
+resolves cwd, validates the supported operation, and owns
 deadline/cancellation cleanup. Main's platform and detected shells are not
 advertised as the remote target's capabilities. A generic `process.execute`
 advertisement alone does not authorize capability-bound workdir execution.
@@ -854,27 +1103,55 @@ Remote inline Node/TypeScript, background processes, call-mode exec, search,
 dynamic/MCP imports and browser operations remain unsupported; a shell workdir is
 not an OS sandbox.
 
-The Main-admin-only `POST /api/sessions/remote` route creates a fresh web root from
-an online node/workdir capability reference. It uses ordinary session construction
+The Main-admin-only `POST /organizations/<id>/api/sessions/remote` route creates
+a fresh web root from an online node/workdir capability reference after
+[verified organization folder registration](#remote-folder-ownership-and-upgrade-boundary).
+Older Children must be updated for new project actions; existing remote sessions
+retain their supported paths. The route uses ordinary session construction
 and JSONL/SQLite persistence, without accepting paths or rebinding an active
 conversation. Subsequent messages still go through the web channel and
 `SessionManager`. No raw job-submission endpoint or second agent loop is added.
+The Main renderer offers this selection in the new-conversation composer and
+defers the creation request until send. It reads the same live node inventory,
+disables unavailable Child workdirs, and never supplies a physical execution path.
+Remote attachment staging is not implemented, so the UI does not pass local file
+references off as usable remote attachments. Remote file browsing is explicit,
+with bounded loading and no extra operation approval.
+Git status and diff endpoints dispatch `workdir.git.status` / `workdir.git.diff`
+to the owning Child. `CapabilityGit` resolves its configured workdir root and
+reuses the local read-only Git implementation, including HEAD/index/workdir
+semantics, path scoping, disabled hooks/filters, cancellation and size limits.
+Main and the renderer share validated Git response contracts. JSON results are
+bounded to 4 MiB; job output is chunked and the Child waits for transport capacity
+rather than overflowing its outbound queue. Errors, missing Git and non-repository
+folders remain distinct; none triggers Main-local Git fallback. These UI routes
+do not clone, stage, commit or switch branches.
+Authenticated Child advertisements can include bounded display-only workspace
+paths, negotiated with `workdir-display-v1`; older peers omit this optional
+metadata. The header uses current registry metadata rather than trusting a
+renderer-supplied or persisted display path. Direct admin web root conversations
+also receive a bounded live device/workdir inventory in their runtime context.
+This disclosure grants no execution authority and is not exposed as fleet
+inventory to public channel conversations.
 
 ### Not complete
 
 Binary artifact transfer/staging, full remote tool parity, general remote UI
-proxy/admin flows, live node/workdir/approval UI, recovery/retention semantics,
+proxy/admin flows, pairing/revocation UI, recovery/retention semantics,
 version-skew deployment policy, and release hardening remain incomplete.
 `production-child.ts` still composes passive services for some planned roles.
-Job/approval/process state includes in-memory components; a persisted node
+Job/process state includes in-memory components; a persisted node
 registry is not durable replay for the entire execution system.
 
 ## Persistence, configuration, and trust
 
 ### Home, session data, and effective workdir
 
-`agent.workspace` (default `./workspace`) is shared **Home**. Ordinary local
-sessions use a managed subdirectory derived from a safe logical session ID.
+The initial `agent.workspace` (default `./workspace`) identifies legacy Home;
+the host derives each active organization's **Home** as described
+[above](#actual-storage-and-migration). Inside that runtime, `agent.workspace`
+is fixed to its own Home. Ordinary local sessions use a managed subdirectory
+derived from a safe logical session ID.
 `workspaceRoot`, when present, is the owner session ID inherited by subagents.
 The locality resolver separates Home, session-data storage, and effective
 workdir, even when the latter two coincide in the local managed case.
@@ -892,16 +1169,17 @@ from the host or other sessions**.
 | Session state and logs | `.sessions`: JSONL files/state or SQLite `sessions.db` |
 | Memory and learning | Markdown/JSONL under `memory`, plus watermark and Soul/identity files |
 | Agent types and skills | Workspace `agents` and `skills`; shipped definitions are application assets |
-| Plans/projects | Home-local files maintained by their tools |
+| Plans/project context | Home-local files maintained by their tools; folder ownership lives in the host catalog |
+| Organization catalog/config | Sibling host `organizations.v1.json`; per-org `config/organization.json` and `config/bots.v1.json` |
 | Event subscriptions/sources | `.events/subscriptions.json`, `.events/sources.json` |
 | Cron definitions | `.cron/jobs.json` |
-| Telemetry | `.otel.db` by default; `OTEL_DB_PATH` can select another location |
-| WIP device registry | `.cluster/registry.v1.json` in ordinary Main composition |
+| Telemetry | Each org Home's `.otel.db`; separate host `.host.otel.db`; organization composition does not use a shared `OTEL_DB_PATH` override |
+| WIP device registry | Shared legacy Home `.cluster/registry.v1.json`, unless an explicit host snapshot path is supplied |
 | Electron installation | Bootstrap/runtime configuration and launch profile under Electron user data, separate from agent Home |
-| Active work | Bus buffers, debounce timers, session loops, task/process registries, executor job records, and Child grants have in-memory lifetimes |
+| Active work | Bus buffers, debounce timers, session loops, task/process registries and executor job records have in-memory lifetimes |
 
 Both `JsonlSessionStore` and `SqliteSessionStore` implement the same interface.
-SQLite persists versioned session metadata including lineage, project/workdir,
+SQLite persists versioned session metadata including organization, lineage, project/workdir,
 and preload tools, not just token counters. JSONL-to-SQLite migration is an
 explicit script with legacy handling; changing the backend setting is not a
 promise that existing history was migrated automatically.
@@ -923,10 +1201,11 @@ and `restrictToWorkspace: true`. These are example choices, not all schema
 defaults: the schema still defaults session storage to JSONL, and the web channel
 is instantiated regardless of that example's enabled flag.
 
-Provider keys, channel credentials, tool/search settings, voice, learning
-intervals, workspace/storage, and model settings belong to the agent config.
-Gateway options and runtime/bootstrap configuration are separate concerns.
-Environment credential overlays can auto-enable some channels.
+Initial configuration seeds Default's tool/search, voice, storage, model, and
+learning settings. Shared provider keys remain host-owned; organization settings
+and bot credentials are persisted separately thereafter. Gateway options and
+runtime/bootstrap configuration are separate concerns. Environment credential
+overlays can auto-enable legacy Default bots, not create bots in fresh orgs.
 
 Configuration HTTP updates rebuild selected provider/default settings; separate
 watchers handle skills, agent types, and MCP. This is not a full live reload of
@@ -945,16 +1224,19 @@ configuration need not replace every active connection immediately.
 - **Untrusted content:** user text, attachments, web pages, tool output, and
   learned files can influence the model. Prompt guidelines are not enforced
   access-control rules.
-- **Shared knowledge:** session/project scopes improve relevance, not
-  multi-tenant privacy. Local web access can expose agent-owned state.
+- **Organization knowledge:** separate stores/context and scoped APIs enforce
+  application ownership. Session/project relevance scopes within an org are not
+  privacy controls, and organization separation is not multi-tenant OS/RBAC
+  isolation. Authorized local web access can expose agent-owned state.
 - **External services:** providers receive assembled context; MCP, STT, search,
   and messaging services have their own credentials and data boundaries.
 - **Gateway:** keep loopback defaults. Explicit non-loopback hosting needs
   deployment authentication, transport protection, and exposure review.
 - **Electron:** renderer restrictions and credential ownership reduce the IPC
   surface, but do not sandbox the trusted backend's tools.
-- **WIP Child:** approval/capability/device protocol checks are separate from
-  local tool policy; their presence is not a completed security assessment.
+- **WIP Child:** pairing trusts the node for supported operations without
+  per-operation approval. Connection authentication, revocation and workdir
+  routing validation remain; these do not sandbox the Child user's shell.
 
 The development Docker stack deliberately exposes additional services, including
 inspector/Xpra paths. It is a development environment, not a safe public default.
@@ -967,6 +1249,7 @@ baked into the image.
 | Module | Responsibility |
 | --- | --- |
 | `src/index.ts` | Application service graph, registration, startup/shutdown |
+| `src/organizations` | Main host/catalog, organization runtime contracts, scoped gateway/configuration, Home/session migration, job namespacing |
 | `src/runtime` | CLI/process roles, bootstrap schemas, readiness/control, Child composition |
 | `src/agent` | Message router, identity, memory, prompts, process/background managers |
 | `src/sessions` | Session/task/call execution, state/history stores, locality, session APIs |
@@ -1005,8 +1288,8 @@ To extend the system:
    state out of authority decisions and mount before the SPA fallback.
 7. **Persistence/locality:** update both stores and migration fixtures; keep
    node/capability references opaque and unavailable states explicit.
-8. **Device capability:** extend validated contracts, Child handling and
-   approval policy, Main routing, tool locality, and UI only as each slice is
+8. **Device capability:** extend validated contracts, Child handling,
+   Main routing, tool locality, and UI only as each slice is
    genuinely integrated. Do not relabel an incomplete protocol as released.
 
 ## Limitations and documentation corrections
@@ -1019,11 +1302,12 @@ Important differences from older plans:
   checkpoint reports, not current validation or distributed release readiness.
 - The older SQLite “only counters/config persist” diagnosis no longer describes
   the versioned metadata store.
-- Memory scopes and prompt permissions are not tenant isolation. Keyword paths
+- Organizations now separate application state/context, but memory relevance
+  scopes and prompt permissions still are not tenant isolation. Keyword paths
   and working-set coverage are narrower than some proposed memory invariants.
 - Registry watchers do not mean every active prompt is refreshed immediately.
 - A selectable WIP remote reference does not provide remote `exec`/search/MCP/
-  browser parity, binary artifacts, or a fully wired approval UI.
+  browser parity or binary artifacts.
 - Config fields are not sufficient evidence of integration: web is always
   instantiated, and `wechatDesktop`/native Windows settings are not a second
   wired channel/tool merely by existing in the schema.

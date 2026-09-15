@@ -3,6 +3,7 @@ import { delegationOwner } from './execution-scope.ts'
 import type { SessionManager } from './session-manager.ts'
 import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
+import { ProjectError } from '../projects/registry.ts'
 import { isSelfReflectionId } from './session-purpose.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
@@ -17,6 +18,7 @@ import { extname, resolve } from 'node:path'
 import { filePreviewLimit, serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
 import { isTextEncoding } from '../gateway/text-encoding.ts'
 import { serveLocalGit } from '../gateway/local-git.ts'
+import { serveRemoteGit } from '../execution/remote-git-client.ts'
 export { resolveInWorkspace } from '../gateway/local-files.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import {
@@ -155,6 +157,22 @@ export function sessionsApiPlugin(
   sessions: SessionManager | undefined,
 ): GatewayPlugin {
   return (app: Hono) => {
+    app.use('/api/sessions/:key/*', async (c, next) => {
+      if (!c.req.path.slice('/api/sessions/'.length).includes('/')) return next()
+      if (sessions?.organizationId && !sessions.getSessionState(c.req.param('key') ?? '')) {
+        return c.json({ error: 'session_not_found' }, 404)
+      }
+      const suffix = c.req.path.slice('/api/sessions/'.length)
+      if (sessions && (/\/(?:files|raw|preview|static|git)(?:\/|$)/.test(suffix) ||
+        c.req.method !== 'GET' || suffix.endsWith('/context'))) {
+        try { sessions.assertProjectAccess?.(c.req.param('key') ?? '') }
+        catch (error) {
+          if (error instanceof ProjectError) return c.json({ error: error.code, message: error.message }, error.status)
+          throw error
+        }
+      }
+      return next()
+    })
     for (const operation of ['status', 'diff'] as const) {
       app.get(`/api/sessions/:key/git/${operation}`, async c => {
         if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
@@ -162,9 +180,13 @@ export function sessionsApiPlugin(
         const base = sessionFileBase(sessions, key)
         if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
         if (base.locality === 'remote') {
-          return operation === 'status'
+          if (!sessions.remoteExecutor) return operation === 'status'
             ? c.json({ available: false, reason: 'remote_unsupported', entries: [] })
-            : c.json({ error: 'remote_unsupported', message: 'Remote Git inspection is not supported. No local folder was used.' }, 501)
+            : c.json({ error: 'remote_unsupported', message: 'Remote Git requires a connected executor. No local folder was used.' }, 501)
+          return serveRemoteGit(c, {
+            executor: sessions.remoteExecutor, nodeId: base.workdir.nodeId, capabilityId: base.workdir.capabilityId,
+            sessionId: key, turnId: `session-git:${crypto.randomUUID()}`, signal: c.req.raw.signal,
+          }, operation)
         }
         return serveLocalGit(c, base.path, operation, base.scope)
       })
@@ -184,6 +206,7 @@ export function sessionsApiPlugin(
       const list = await sessions.listSessions()
 
       const nodes: Array<{
+        organizationId?: string
         mode: string
         agentType: string
         parentSessionId: string | null
@@ -227,6 +250,7 @@ export function sessionsApiPlugin(
             null
           nodes.push({
             ...execution,
+            ...(state?.organizationId ? { organizationId: state.organizationId } : {}),
             physicalId,
             logicalId: session.sessionId,
             projectId: state?.projectId,
@@ -243,7 +267,7 @@ export function sessionsApiPlugin(
 
     app.get('/api/sessions/:key/details', async (c) => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const details = await sessions.getSessionDetails(key, c.req.query('physicalId'))
       return details
         ? c.json(details)
@@ -289,7 +313,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const state = await sessions.getSessionState(key)
       if (!state) {
         return c.json({ error: 'session_not_found', key }, 404)
@@ -318,7 +342,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       try {
         const result = await sessions.getContext({ sessionId: key })
         if (!result) {
@@ -343,7 +367,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const relPath = c.req.query('path') ?? ''
       const base = sessionFileBase(sessions, key)
       if (!base.available) {
@@ -389,7 +413,9 @@ export function sessionsApiPlugin(
           return c.json({
             key,
             path: path === '.' ? '' : path,
-            workdir: { kind: 'remote', displayPath: base.workdir.displayPathSnapshot ?? null },
+            workdir: { kind: 'remote', displayPath: sessions.getNodeInventory?.()?.nodes
+              .find(node => node.nodeId === base.workdir.nodeId)?.capabilities
+              .find(capability => capability.capabilityId === base.workdir.capabilityId && capability.kind === 'workdir')?.displayPath ?? null },
             entries,
           })
         } catch (error) {
@@ -411,7 +437,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const relPath = c.req.query('path') ?? ''
       const base = sessionFileBase(sessions, key)
       if (!base.available) {
@@ -430,7 +456,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const relPath = staticFilePath(c)
       if (relPath === null) return c.json({ error: 'invalid_path' }, 400)
       const base = sessionFileBase(sessions, key)
@@ -450,7 +476,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const relPath = c.req.query('path') ?? ''
       const maxBytes = filePreviewLimit(c.req.query('maxBytes'))
       const base = sessionFileBase(sessions, key)
@@ -522,7 +548,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       if (sessions.isWaitingForCall?.(key)) return c.json({ stage: 'waiting', waitingForCall: true })
       if (sessions.yields.get(key)) return c.json({ stage: 'waiting' })
       const active = sessions.getActiveSession(key)
@@ -541,7 +567,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const state = sessions.getSessionState(key)
       if (!state) {
         return c.json({ error: 'session_not_found', key }, 404)
@@ -554,7 +580,7 @@ export function sessionsApiPlugin(
       if (!sessions) {
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
-      const key = decodeURIComponent(c.req.param('key'))
+      const key = c.req.param('key')
       const url = new URL(c.req.url, 'http://localhost')
       const rawOffset = url.searchParams.get('offset')
       const rawPageSize = url.searchParams.get('pageSize')

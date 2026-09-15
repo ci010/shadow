@@ -1,6 +1,7 @@
 import { Cron } from 'croner'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
+import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
 import {
   isCronEventPayload,
   isCronEventTarget,
@@ -31,7 +32,7 @@ export interface CronJob extends CronJobDef {
 }
 
 export interface CronJobHandler {
-  (job: CronJob): Promise<void>
+  (job: CronJob, signal: AbortSignal): Promise<void>
 }
 
 function isCronJob(value: unknown): value is CronJob {
@@ -69,8 +70,16 @@ export class CronService {
   private handler: CronJobHandler | null = null
   private onJobRemovedCb: ((jobId: string) => void) | null = null
   private timezone: string
+  private stopped = false
+  private running = new Map<Promise<void>, AbortController>()
+  private persistenceTail: Promise<void> = Promise.resolve()
+  private persistenceError: unknown
 
-  constructor(private workspace: string, timezone = 'UTC') {
+  constructor(
+    private workspace: string,
+    timezone = 'UTC',
+    private scope: OrganizationScope | undefined = getOrganizationScope(),
+  ) {
     this.jobsPath = workspacePath(workspace, JOBS_FILE)
     this.timezone = timezone
   }
@@ -89,22 +98,29 @@ export class CronService {
   }
 
   async start(): Promise<void> {
+    await this.flush()
     await this.loadJobs()
+    this.stopped = false
     for (const job of this.jobs.values()) {
       this.scheduleCron(job)
     }
     console.info(`[cron] Cron service started (${this.jobs.size} jobs)`)
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this.stopped = true
     for (const scheduled of this.scheduledJobs.values()) {
       scheduled.stop()
     }
     this.scheduledJobs.clear()
+    for (const controller of this.running.values()) controller.abort(new Error('Cron service stopped'))
+    await Promise.allSettled(this.running.keys())
+    await this.flush()
     console.info('[cron] Cron service stopped')
   }
 
   addJob(def: CronJobDef): string {
+    if (this.stopped) throw new Error('CronService is stopped')
     const id = globalThis.crypto.randomUUID().slice(0, 8)
     const job: CronJob = {
       ...def,
@@ -121,6 +137,7 @@ export class CronService {
   }
 
   removeJob(id: string): boolean {
+    if (this.stopped) throw new Error('CronService is stopped')
     const scheduled = this.scheduledJobs.get(id)
     if (scheduled) {
       scheduled.stop()
@@ -150,9 +167,7 @@ export class CronService {
           timezone: /^every\s+/i.test(job.schedule) ? 'UTC' : this.timezone,
           protect: true,
         },
-        async () => {
-          await this.executeJob(job)
-        },
+        () => this.scope ? this.scope.run(() => this.runJob(job)) : this.runJob(job),
       )
       this.scheduledJobs.set(job.id, scheduled)
     } catch (err) {
@@ -163,7 +178,19 @@ export class CronService {
     }
   }
 
-  private async executeJob(job: CronJob): Promise<void> {
+  private async runJob(job: CronJob): Promise<void> {
+    if (this.stopped) return
+    const controller = new AbortController()
+    const pending = this.executeJob(job, controller.signal)
+    this.running.set(pending, controller)
+    try {
+      await pending
+    } finally {
+      this.running.delete(pending)
+    }
+  }
+
+  private async executeJob(job: CronJob, signal: AbortSignal): Promise<void> {
     if (!this.handler) {
       console.warn(`[cron] No handler configured, skipping job: ${job.id}`)
       return
@@ -173,12 +200,12 @@ export class CronService {
       `[cron] Executing cron job: id=${job.id}, schedule=${job.schedule}`,
     )
     try {
-      await this.handler(job)
+      await this.handler(job, signal)
     } catch (err) {
       console.error(`[cron] Cron job execution failed: ${job.id}`, err)
     }
 
-    if (job.deleteAfterRun) {
+    if (job.deleteAfterRun && !this.stopped) {
       this.removeJob(job.id)
     }
   }
@@ -235,9 +262,25 @@ export class CronService {
     this.jobs = jobs
   }
 
-  private async saveJobs(): Promise<void> {
-    await mkdir(workspacePath(this.workspace, '.cron'), { recursive: true })
-    const store = { version: 1, jobs: Array.from(this.jobs.values()) }
-    await writeFile(this.jobsPath, JSON.stringify(store, null, 2))
+  async flush(): Promise<void> {
+    let pending: Promise<void>
+    do {
+      pending = this.persistenceTail
+      await pending
+    } while (pending !== this.persistenceTail)
+    if (this.persistenceError !== undefined) throw this.persistenceError
+  }
+
+  private saveJobs(): Promise<void> {
+    const contents = JSON.stringify({ version: 1, jobs: Array.from(this.jobs.values()) }, null, 2)
+    const pending = this.persistenceTail.then(async () => {
+      await mkdir(workspacePath(this.workspace, '.cron'), { recursive: true })
+      await writeFile(this.jobsPath, contents)
+    })
+    this.persistenceTail = pending.then(
+      () => { this.persistenceError = undefined },
+      (error) => { this.persistenceError = error },
+    )
+    return pending
   }
 }

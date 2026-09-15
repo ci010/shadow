@@ -1,5 +1,6 @@
 // Shared helpers for browsing session workdirs or registered Main-local projects.
 import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/gateway/text-encoding.ts'
+import { apiUrl } from '../api-url.ts'
 
 export interface FileEntry {
   name: string
@@ -84,20 +85,31 @@ export function breadcrumbs(path: string): Array<{ name: string; path: string }>
 }
 
 function buildUrl(apiBase: string, path: string, params: Record<string, string>): string {
-  const url = new URL(path, apiBase)
+  const url = apiUrl(apiBase, path)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
   return url.toString()
 }
 
 /** A project ID selects registry-backed routes, never a renderer-supplied path. */
 export function useSessionFiles(apiBase: string, projectId?: string) {
+  async function requestFile(url: string, signal?: AbortSignal): Promise<Response> {
+    const deadline = AbortSignal.timeout(30_000)
+    try {
+      return await fetch(url, { signal: signal ? AbortSignal.any([signal, deadline]) : deadline })
+    } catch (error) {
+      if (deadline.aborted && !signal?.aborted) {
+        throw new Error('File request timed out. Check the device connection and retry.')
+      }
+      throw error
+    }
+  }
   const root = (sessionId: string) => projectId
     ? `/api/projects/${encodeURIComponent(projectId)}`
     : `/api/sessions/${encodeURIComponent(sessionId)}`
 
   async function listDir(sessionId: string, path = '', signal?: AbortSignal): Promise<DirListing> {
     const url = buildUrl(apiBase, `${root(sessionId)}/files`, { path })
-    const res = await fetch(url, { signal })
+    const res = await requestFile(url, signal)
     if (!res.ok) throw await fileRequestError(res)
     const data: unknown = await res.json()
     if (!isRecord(data) || typeof data.path !== 'string' || !Array.isArray(data.entries) || !data.entries.every(isFileEntry)) {
@@ -131,7 +143,7 @@ export function useSessionFiles(apiBase: string, projectId?: string) {
       .split('/')
       .map((s) => encodeURIComponent(s))
       .join('/')
-    return new URL(`${root(sessionId)}/static/${segments}`, apiBase).toString()
+    return apiUrl(apiBase, `${root(sessionId)}/static/${segments}`).toString()
   }
 
   async function preview(sessionId: string, path: string, maxBytes = 4096, signal?: AbortSignal, encoding: TextEncoding = 'auto'): Promise<FilePreview> {
@@ -140,7 +152,7 @@ export function useSessionFiles(apiBase: string, projectId?: string) {
       maxBytes: String(maxBytes),
       ...(encoding !== 'auto' ? { encoding } : {}),
     })
-    const res = await fetch(url, { signal })
+    const res = await requestFile(url, signal)
     if (!res.ok) throw await fileRequestError(res)
     const data: unknown = await res.json()
     if (!isRecord(data) || typeof data.binary !== 'boolean' || typeof data.size !== 'number' || !Number.isFinite(data.size) || data.size < 0

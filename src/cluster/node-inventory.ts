@@ -27,7 +27,7 @@ export interface NodeInventoryCapability {
 }
 
 export function inventoryCapability(
-  capability: Pick<CapabilityDescriptorV1, 'capabilityId' | 'kind' | 'displayName' | 'online'>,
+  capability: Pick<CapabilityDescriptorV1, 'capabilityId' | 'kind' | 'displayName' | 'online' | 'displayPath'>,
   connected: boolean,
 ): NodeInventoryCapability {
   return {
@@ -35,18 +35,20 @@ export function inventoryCapability(
     kind: capability.kind,
     displayName: capability.displayName,
     online: connected && capability.online,
+    ...(capability.kind === 'workdir' && capability.displayPath !== undefined
+      ? { displayPath: capability.displayPath } : {}),
   }
 }
 
 export function mainNodeInventory(
-  localNode: NodeInventoryEntry,
+  localNode: NodeInventoryEntry | undefined,
   registry: InMemoryPairingNodeRegistry,
   connections: Pick<NodeWebSocketApi, 'isNodeConnected' | 'hasAdvertisedCapability'>,
 ): NodeInventoryResponse {
   return {
     version: 1,
     nodes: [
-      localNode,
+      ...(localNode ? [localNode] : []),
       ...registry.listNodes().map((node): NodeInventoryEntry => {
         const connection = node.state === 'revoked'
           ? 'revoked'

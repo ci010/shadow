@@ -1,6 +1,8 @@
 import type { InboundMessage, MessageContext } from '../bus/events.ts'
+import { channelAddressFromSessionId, type ChannelAddress } from '../bus/events.ts'
 
 export interface ReplyAddress {
+  channelAddress?: ChannelAddress
   channel: string
   chatId: string
   platformMessageId?: string
@@ -95,6 +97,7 @@ export function channelMessageInput(message: InboundMessage): SessionInput {
     throw new TypeError('An input cannot be both retry and silent')
   }
   const sender: MessageContext = {
+    ...(message.channelAddress ? { channelAddress: message.channelAddress } : {}),
     channel: message.channel,
     chatId: message.chatId,
     messageId: message.messageId,
@@ -110,6 +113,7 @@ export function channelMessageInput(message: InboundMessage): SessionInput {
     timestamp: message.timestamp,
     source: { kind: 'user', sender },
     replyTo: {
+      ...(message.channelAddress ? { channelAddress: message.channelAddress } : {}),
       channel: message.channel,
       chatId: message.chatId,
       platformMessageId: message.platformMessageId,
@@ -132,6 +136,8 @@ export function channelMessageInput(message: InboundMessage): SessionInput {
 
 /** Legacy channel IDs are interpreted only for reply projection. */
 export function sessionReplyAddress(sessionId: string): ReplyAddress | undefined {
+  const channelAddress = channelAddressFromSessionId(sessionId)
+  if (channelAddress) return { channel: channelAddress.platform, chatId: channelAddress.conversationId, channelAddress }
   const colon = sessionId.indexOf(':')
   return colon > 0 && colon < sessionId.length - 1
     ? { channel: sessionId.slice(0, colon), chatId: sessionId.slice(colon + 1) }
@@ -158,6 +164,7 @@ export function inputContext(sessionId: string, input: SessionInput): MessageCon
   const sender = inputSender(input)
   const user = input.source.kind === 'user' ? input.source.sender : undefined
   return {
+    ...((reply?.channelAddress ?? user?.channelAddress) ? { channelAddress: reply?.channelAddress ?? user?.channelAddress } : {}),
     channel: reply?.channel ?? 'system',
     chatId: reply?.chatId ?? sessionId,
     messageId: input.id,

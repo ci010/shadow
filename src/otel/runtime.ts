@@ -6,13 +6,17 @@ import {
 } from '@opentelemetry/sdk-trace-node'
 import { format } from 'node:util'
 import type { OtelStore, OtlpSpan } from './store.ts'
+import { createOrganizationScope, getOrganizationScope, type OrganizationScope } from './scope.ts'
 
 export interface NodeTelemetryHandle {
+  readonly scope?: OrganizationScope
   shutdown(): Promise<void>
 }
 
 export interface NodeTelemetryOptions {
   serviceName?: string
+  organizationId?: string
+  scope?: OrganizationScope
 }
 
 type OtlpValue =
@@ -68,8 +72,16 @@ function spanSnapshot(span: ReadableSpan, ended: boolean): OtlpSpan {
 
 interface TelemetryState {
   provider: NodeTracerProvider
-  stores: Map<OtelStore, number>
+  targets: Map<OrganizationScope | undefined, TelemetryTarget>
   restoreConsole(): void
+}
+
+interface TelemetryTarget {
+  store: OtelStore
+  serviceName: string
+  references: number
+  active: boolean
+  scope?: OrganizationScope
 }
 
 let current: TelemetryState | undefined
@@ -82,49 +94,70 @@ export function initializeNodeTelemetry(
   store: OtelStore,
   options: NodeTelemetryOptions = {},
 ): NodeTelemetryHandle {
+  const orgScope = options.scope ?? (options.organizationId === undefined
+    ? undefined : createOrganizationScope(options.organizationId))
+  if (!orgScope && getOrganizationScope()) {
+    throw new Error('Organization telemetry requires explicit scope binding')
+  }
+  if (orgScope?.closed || (options.organizationId !== undefined && orgScope?.organizationId !== options.organizationId)) {
+    throw new Error('Telemetry scope does not match the organization runtime')
+  }
+  const serviceName = options.serviceName ?? process.env.OTEL_SERVICE_NAME ?? 'shadow'
   if (!current) {
-    const stores = new Map<OtelStore, number>()
-    const serviceName = options.serviceName ?? process.env.OTEL_SERVICE_NAME ?? 'shadow'
-    const resource = { attributes: attributes({ 'service.name': serviceName }) }
+    const targets = new Map<OrganizationScope | undefined, TelemetryTarget>()
+    const owners = new WeakMap<object, TelemetryTarget>()
+    const unbound = new WeakSet<OrganizationScope>()
+    const findTarget = (scope = getOrganizationScope()) => {
+      if (scope?.closed) return undefined
+      const target = targets.get(scope)
+      if (scope && !target && !unbound.has(scope)) {
+        unbound.add(scope)
+        process.stderr.write(`[otel] Organization runtime has no bound telemetry store: ${JSON.stringify(scope.organizationId)}\n`)
+      }
+      return target
+    }
     const scope = { name: 'shadow-console', version: '0.1.0' }
     const processor: SpanProcessor = {
-      onStart(span) {
+      onStart(span, parentContext) {
+        const target = findTarget(getOrganizationScope(parentContext))
+        if (!target) return
+        owners.set(span, target)
         const { traceId, spanId } = span.spanContext()
-        for (const target of stores.keys()) {
-          target.registerLiveSpan(traceId, spanId, () => spanSnapshot(span, false))
-        }
+        target.store.registerLiveSpan(traceId, spanId, () => spanSnapshot(span, false))
       },
       onEnd(span: ReadableSpan) {
+        const target = owners.get(span)
+        owners.delete(span)
+        if (!target?.active || target.scope?.closed) return
         const spanContext = span.spanContext()
-        for (const target of stores.keys()) {
-          try {
-            target.ingestTraces({
-              resourceSpans: [{
-                resource: {
-                  attributes: attributes({
-                    ...span.resource.attributes,
-                    'service.name': serviceName,
-                  }),
+        try {
+          target.store.ingestTraces({
+            resourceSpans: [{
+              resource: {
+                attributes: attributes({
+                  ...span.resource.attributes,
+                  'service.name': target.serviceName,
+                  ...(target.scope ? { 'organization.id': target.scope.organizationId } : {}),
+                }),
+              },
+              scopeSpans: [{
+                scope: {
+                  name: span.instrumentationScope.name,
+                  version: span.instrumentationScope.version,
                 },
-                scopeSpans: [{
-                  scope: {
-                    name: span.instrumentationScope.name,
-                    version: span.instrumentationScope.version,
-                  },
-                  spans: [spanSnapshot(span, true)],
-                }],
+                spans: [spanSnapshot(span, true)],
               }],
-            })
-          } catch (error) {
-            process.stderr.write(`[otel] Failed to persist span: ${String(error)}\n`)
-          } finally {
-            target.endLiveSpan(spanContext.traceId, spanContext.spanId)
-          }
+            }],
+          })
+        } catch (error) {
+          process.stderr.write(`[otel] Failed to persist span: ${String(error)}\n`)
+        } finally {
+          target.store.endLiveSpan(spanContext.traceId, spanContext.spanId)
         }
       },
       forceFlush: () => Promise.resolve(),
       shutdown: () => {
-        for (const target of stores.keys()) target.clearLiveSpans()
+        for (const target of targets.values()) target.store.clearLiveSpans()
         return Promise.resolve()
       },
     }
@@ -143,33 +176,36 @@ export function initializeNodeTelemetry(
       const original = console[level]
       const wrapped = (...values: unknown[]) => {
         original.apply(console, values)
+        const target = findTarget()
+        if (!target) return
         const spanContext = trace.getActiveSpan()?.spanContext()
-        for (const target of stores.keys()) {
-          try {
-            const timestamp = String(BigInt(Date.now()) * 1_000_000n)
-            target.ingestLogs({
-              resourceLogs: [{
-                resource,
-                scopeLogs: [{
-                  scope,
-                  logRecords: [{
-                    timeUnixNano: timestamp,
-                    observedTimeUnixNano: timestamp,
-                    severityNumber: levels[level],
-                    severityText: level.toUpperCase(),
-                    body: { stringValue: format(...values) },
-                    traceId: spanContext?.traceId,
-                    spanId: spanContext?.spanId,
-                    attributes: spanContext
-                      ? attributes({ 'span.id': spanContext.spanId })
-                      : [],
-                  }],
+        try {
+          const timestamp = String(BigInt(Date.now()) * 1_000_000n)
+          target.store.ingestLogs({
+            resourceLogs: [{
+              resource: { attributes: attributes({
+                'service.name': target.serviceName,
+                ...(target.scope ? { 'organization.id': target.scope.organizationId } : {}),
+              }) },
+              scopeLogs: [{
+                scope,
+                logRecords: [{
+                  timeUnixNano: timestamp,
+                  observedTimeUnixNano: timestamp,
+                  severityNumber: levels[level],
+                  severityText: level.toUpperCase(),
+                  body: { stringValue: format(...values) },
+                  traceId: spanContext?.traceId,
+                  spanId: spanContext?.spanId,
+                  attributes: spanContext
+                    ? attributes({ 'span.id': spanContext.spanId })
+                    : [],
                 }],
               }],
-            })
-          } catch (error) {
-            process.stderr.write(`[otel] Failed to persist log: ${String(error)}\n`)
-          }
+            }],
+          })
+        } catch (error) {
+          process.stderr.write(`[otel] Failed to persist log: ${String(error)}\n`)
         }
       }
       console[level] = wrapped
@@ -179,24 +215,38 @@ export function initializeNodeTelemetry(
     }
     current = {
       provider,
-      stores,
+      targets,
       restoreConsole: () => { for (const restore of restorers) restore() },
     }
   }
 
   const state = current
-  state.stores.set(store, (state.stores.get(store) ?? 0) + 1)
+  const existing = state.targets.get(orgScope)
+  if (existing && existing.store !== store) {
+    throw new Error('A telemetry scope may have only one store; bind each organization explicitly')
+  }
+  for (const target of state.targets.values()) {
+    if (target.store === store && target.scope !== orgScope) {
+      throw new Error('A telemetry store cannot be shared between scopes')
+    }
+    if (orgScope && target.scope?.organizationId === orgScope.organizationId && target.scope !== orgScope) {
+      throw new Error('Organization telemetry is already registered with another runtime scope')
+    }
+  }
+  const target = existing ?? { store, serviceName, references: 0, active: true, scope: orgScope }
+  target.references++
+  state.targets.set(orgScope, target)
   let shutdownPromise: Promise<void> | undefined
   return {
+    scope: orgScope,
     shutdown() {
       shutdownPromise ??= (async () => {
-        const remaining = (state.stores.get(store) ?? 1) - 1
-        if (remaining > 0) state.stores.set(store, remaining)
-        else {
-          state.stores.delete(store)
+        if (--target.references === 0) {
+          target.active = false
+          state.targets.delete(orgScope)
           store.clearLiveSpans()
         }
-        if (state.stores.size > 0) return
+        if (state.targets.size > 0) return
         state.restoreConsole()
         if (current === state) {
           current = undefined

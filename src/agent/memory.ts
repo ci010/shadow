@@ -268,6 +268,9 @@ export class MemoryStore {
   ): string {
     if (scope === 'agent') return join(this.memoryDir, 'agent.conventions.md')
     if (scope === 'project') {
+      if (key && (key === '.' || key === '..' || /[/\\:\0]/.test(key))) {
+        throw new TypeError('Project memory key must be a single directory name')
+      }
       return join(this.memoryDir, 'projects', key ?? '_', 'conventions.md')
     }
     return join(

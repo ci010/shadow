@@ -1,4 +1,5 @@
 import type { Executor } from '../execution/executor.ts'
+import type { ToolBridgeFactory } from '../eval/bridge.ts'
 import { cleanupTempFiles, newPhysicalSessionId } from '../utils/paths.ts'
 import { inputContent, type SessionInput, type SessionMessageInput } from './input.ts'
 import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
@@ -12,7 +13,6 @@ import { buildUserChatMessage } from '../agent/message-builder.ts'
 import type { SessionStore } from './session-store.ts'
 import type { SessionStartEvent, SessionState } from './session-store.ts'
 import type { SessionTools } from '../tools/registry.ts'
-import { ReadTool } from '../tools/read.ts'
 import { BaseSession } from './base-session.ts'
 import {
   resolveSessionLocations,
@@ -45,6 +45,7 @@ export class Session extends BaseSession {
 
   get completion(): Promise<void> { return this.stopped }
   get accepting(): boolean { return !this.stopController.signal.aborted }
+  get quiescent(): boolean { return this.inboxWaiter !== null && this.inbox.length === 0 && this.turn === null }
 
   // ── Active turn state ─────────────────────────────────────────────────
   private turn: SessionTurn | null = null
@@ -68,6 +69,7 @@ export class Session extends BaseSession {
     private readonly sleepInactivityMs?: number,
     workdirCapabilityLookup?: WorkdirCapabilityLookup,
     remoteExecutor?: Executor,
+    evalBridge?: ToolBridgeFactory,
   ) {
     super(
       workspace,
@@ -80,6 +82,7 @@ export class Session extends BaseSession {
       store,
       workdirCapabilityLookup,
       remoteExecutor,
+      evalBridge,
     )
     this.stopped = this.run()
     this.stopped.catch((err) =>
@@ -297,7 +300,7 @@ export class Session extends BaseSession {
     }
 
     console.debug(`[session-loop] Stopped: ${this.id}`)
-    ReadTool.clearSession(this.physicalSessionId)
+    this.clearReadCache()
     this.tools.resetDynamic()
     this.onStopped(this.id)
   }
@@ -460,7 +463,7 @@ export class Session extends BaseSession {
       // files and always persist.
 
       this.tools.resetDynamic()
-      ReadTool.clearSession(this.physicalSessionId)
+      this.clearReadCache()
       await cleanupTempFiles(this.workspace, 15 * 60_000)
     } catch (err) {
       console.error(

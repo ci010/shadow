@@ -17,6 +17,7 @@ import {
   mainNodeInventory,
   nodeInventoryApiPlugin,
   type NodeInventoryEntry,
+  type NodeInventoryResponse,
 } from './node-inventory.ts'
 import {
   type RegistrySnapshotAdapter,
@@ -58,6 +59,7 @@ export interface MainCluster {
   readonly activeSessionCount: number
   readonly remoteExecutor: RemoteExecutor
   readonly workdirCapabilityLookup: WorkdirCapabilityLookup
+  getNodeInventory(): NodeInventoryResponse
   approve(approval: ApprovalV1, now?: Date): Promise<DeviceAuthenticationV1>
   closeNodeConnections(reason?: string): Promise<void>
   save(now?: Date): Promise<void>
@@ -95,6 +97,8 @@ export async function createMainCluster(
     },
   })
   const remoteExecutor = new RemoteExecutor(nodeApi)
+  const getNodeInventory = (): NodeInventoryResponse =>
+    mainNodeInventory(options.localNodeInventory?.(), registry, nodeApi)
   const workdirCapabilityLookup: WorkdirCapabilityLookup = (workdir) => {
     const nodeState = registry.getNodeState(workdir.nodeId)
     if (nodeState === 'missing') return { node: 'missing' }
@@ -106,7 +110,11 @@ export async function createMainCluster(
     return {
       node: 'online',
       ...(capability
-        ? { capability: { kind: capability.kind, online: capability.online } }
+        ? { capability: {
+          kind: capability.kind,
+          online: capability.online &&
+            nodeApi.hasAdvertisedCapability(workdir.nodeId, workdir.capabilityId),
+        } }
         : {}),
     }
   }
@@ -179,7 +187,7 @@ export async function createMainCluster(
       ...(options.localNodeInventory ? [nodeInventoryApiPlugin({
         path: '/nodes/v1',
         authorize: options.authorizeInventory ?? options.authorizeOfferCreation,
-        inventory: () => mainNodeInventory(options.localNodeInventory!(), registry, nodeApi),
+        inventory: getNodeInventory,
       })] : []),
       nodeApi.plugin,
     ],
@@ -188,6 +196,7 @@ export async function createMainCluster(
     },
     remoteExecutor,
     workdirCapabilityLookup,
+    getNodeInventory,
     approve,
     closeNodeConnections: (reason) => {
       stopping = true

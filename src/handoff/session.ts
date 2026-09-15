@@ -13,7 +13,6 @@ import { BaseSession } from '../sessions/base-session.ts'
 export class HandoffSession extends BaseSession {
   /** Run the LLM ↔ tool loop with the given execution context. */
   async run(ctx: ExecutionContext, llm: LlmRuntimeConfig): Promise<void> {
-    const abortController = new AbortController()
-    await this.runLlmLoop(ctx, llm, abortController.signal)
+    await this.runLlmLoop(ctx, llm, ctx.signal)
   }
 }

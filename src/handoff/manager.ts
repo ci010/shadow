@@ -16,6 +16,7 @@ import { HandoffSession } from './session.ts'
 import { type HandoffCapture, HandoffSummaryTool } from './tools.ts'
 import type { ExecutionContext } from '../agent/agent.ts'
 import type { SessionStore } from '../sessions/session-store.ts'
+import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
 const handoffPromptTemplate = readFileSync(new URL('./HANDOFF.md', import.meta.url), 'utf8')
 
 const MAX_HANDOFF_SUMMARY_LENGTH = 10_000
@@ -61,6 +62,8 @@ export interface HandoffConfig {
 }
 
 export class HandoffManager {
+  private stopped = false
+  private running = new Map<Promise<CompactResult>, AbortController>()
   handoffMinThreshold: number
   handoffMaxThreshold: number
   autoHandoff: boolean
@@ -71,6 +74,7 @@ export class HandoffManager {
     config: HandoffConfig,
     private workspace: string,
     private store: SessionStore,
+    private scope: OrganizationScope | undefined = getOrganizationScope(),
   ) {
     this.autoHandoff = config.autoHandoff ?? true
     this.handoffMinThreshold = config.handoffMinThreshold ?? 0.75
@@ -84,11 +88,38 @@ export class HandoffManager {
     messages: ChatMessage[],
     model: string,
   ): Promise<CompactResult> {
+    if (this.stopped) throw new Error('HandoffManager is stopped')
+    const controller = new AbortController()
+    const create = () => this.createWithinScope(sessionId, sourceSessionId, targetSessionId, messages, model, controller.signal)
+    const pending = this.scope ? this.scope.run(create) : create()
+    this.running.set(pending, controller)
+    try {
+      return await pending
+    } finally {
+      this.running.delete(pending)
+    }
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true
+    for (const controller of this.running.values()) controller.abort(new Error('Handoff runtime stopped'))
+    await Promise.allSettled(this.running.keys())
+  }
+
+  private async createWithinScope(
+    sessionId: string,
+    sourceSessionId: string,
+    targetSessionId: string,
+    messages: ChatMessage[],
+    model: string,
+    signal: AbortSignal,
+  ): Promise<CompactResult> {
     // Run the combined handoff+reflect loop
     const context = await this.runHandoffLoop(
       sessionId,
       messages,
       model,
+      signal,
     )
 
     const snapshot: HandoffOptions = {
@@ -137,6 +168,7 @@ export class HandoffManager {
     sessionId: string,
     messages: ChatMessage[],
     model: string,
+    signal: AbortSignal,
   ): Promise<HandoffContext> {
     const fallback = this.synthesizeContext(messages)
     const transcript = this.buildTranscript(messages)
@@ -171,6 +203,7 @@ export class HandoffManager {
 
     const physicalId = sessionId + '-handoff'
     const executionContext: ExecutionContext = {
+      ...(this.scope ? { organizationId: this.scope.organizationId } : {}),
       channel: 'handoff',
       senderId: 'handoff',
       chatId: sessionId,
@@ -179,7 +212,7 @@ export class HandoffManager {
       physicalSessionId: physicalId,
       admin: true,
       tools: sessionTools,
-      signal: new AbortController().signal,
+      signal,
     }
 
     console.info(
@@ -189,7 +222,7 @@ export class HandoffManager {
     await new HandoffSession(
       workspace,
       sessionId,
-      { sessionId: sessionId, segmentIndex: 0 },
+      { sessionId: sessionId, segmentIndex: 0, ...(this.scope ? { organizationId: this.scope.organizationId } : {}) },
       loopMessages,
       this.provider,
       sessionTools,
@@ -201,6 +234,7 @@ export class HandoffManager {
       contextWindow: this.contextWindow,
       maxTokens: HANDOFF_LOOP_MAX_TOKENS,
     })
+    signal.throwIfAborted()
 
     if (!capture.context) {
       console.warn(

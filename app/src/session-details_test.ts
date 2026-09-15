@@ -31,6 +31,17 @@ test('unreported usage and remote paths remain unknown rather than fabricated', 
   assert.equal(contextPercent({ usedTokens: 120_000, windowTokens: 100_000 }), 120)
 })
 
+test('remote details retain display-only device identity and current availability', () => {
+  const workdir = {
+    kind: 'remote', nodeId: 'wsl', nodeName: 'WSL Ubuntu',
+    displayName: 'Test workspace', displayPath: '/home/user/workdir', available: false,
+  }
+  assert.deepEqual(parseSessionDetails({ ...details, workdir }, details.sessionId).workdir, workdir)
+  for (const invalid of [{ nodeId: 1 }, { nodeName: {} }, { displayName: null }, { available: 'online' }]) {
+    assert.throws(() => parseSessionDetails({ ...details, workdir: { ...workdir, ...invalid } }, details.sessionId), /session details/)
+  }
+})
+
 test('session details reject cross-session, malformed and nonfinite measurements', () => {
   for (const value of [
     null, [], {}, '<html>old backend</html>', { ...details, sessionId: 'another-session' },

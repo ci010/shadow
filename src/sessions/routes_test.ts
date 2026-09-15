@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { projectFixture } from '../projects/test-fixtures.ts'
 import type { SessionState } from './session-store.ts'
 import { Hono } from 'hono'
+import { channelSessionId } from '../bus/events.ts'
 import type {
   CancelReceiptV1,
   JobEventV1,
@@ -27,7 +28,11 @@ class RouteFilesystemExecutor implements Executor {
   async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
     this.requests.push(request)
     const path = (request.args as { path: string }).path
-    const chunk = path === '.' ? 'z.txt\nfolder/\na.md' : 'hello remote'
+    const chunk = request.operation === 'workdir.git.status'
+      ? JSON.stringify({ status: 200, body: { available: true, entries: [{ path: 'a.md', status: 'modified' }] } })
+      : request.operation === 'workdir.git.diff'
+      ? JSON.stringify({ status: 200, body: { path, status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [] } })
+      : path === '.' ? 'z.txt\nfolder/\na.md' : 'hello remote'
     const timestamp = new Date().toISOString()
     yield {
       version: 1,
@@ -62,6 +67,37 @@ class RouteFilesystemExecutor implements Executor {
     throw new Error('not used')
   }
 }
+
+test('session route parameters retain encoded bot components without a second decoding pass', async t => {
+  const { workspace } = await projectFixture(t)
+  const id = channelSessionId({
+    organizationId: 'org', botInstanceId: 'bot', platform: 'qq', conversationId: 'room:part%/child',
+  })
+  const state: SessionState = { sessionId: id, segmentIndex: 0, organizationId: 'org' }
+  const seen: string[] = []
+  const manager = {
+    workspace,
+    getSessionState: (key: string) => { seen.push(key); return key === id ? state : null },
+    getSessionDetails: async (key: string) => { seen.push(key); return key === id ? { sessionId: id } : null },
+    getContext: async ({ sessionId }: { sessionId: string }) => {
+      seen.push(sessionId)
+      return sessionId === id ? { systemPrompt: 'owned context', tools: [] } : null
+    },
+    applySessionConfigPatch: async (key: string) => { seen.push(key) },
+    getSessionConfig: (key: string) => { seen.push(key); return { model: 'fixture' } },
+  }
+  const app = new Hono()
+  sessionsApiPlugin(manager as unknown as SessionManager)(app)
+  const base = `/api/sessions/${encodeURIComponent(id)}`
+  for (const suffix of ['/details', '/context']) {
+    assert.equal((await app.request(base + suffix)).status, 200)
+  }
+  assert.equal((await app.request(base + '/config', {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: '{"model":"fixture"}',
+  })).status, 200)
+  assert(seen.length > 0)
+  assert(seen.every(key => key === id))
+})
 
 test('reflection browsing uses configured Home across file and Git routes without changing execution cwd', async t => {
   const { workspace, root } = await projectFixture(t)
@@ -182,6 +218,9 @@ test('session file routes dispatch remote listings and previews but not raw byte
   const sessions = {
     workspace: resolve('workspace'),
     remoteExecutor: executor,
+    getNodeInventory: () => ({
+      nodes: [{ nodeId: 'child-1', capabilities: [{ capabilityId: 'workdir-1', kind: 'workdir', displayPath: '/srv/project' }] }],
+    }),
     workdirCapabilityLookup: () => ({
       node: 'online' as const,
       capability: { kind: 'workdir', online: true },
@@ -192,6 +231,7 @@ test('session file routes dispatch remote listings and previews but not raw byte
         version: 1 as const,
         nodeId: 'child-1',
         capabilityId: 'workdir-1',
+        displayPathSnapshot: '/untrusted-old-snapshot',
       },
     }),
   } as unknown as SessionManager
@@ -203,7 +243,7 @@ test('session file routes dispatch remote listings and previews but not raw byte
   assertEquals(await listingResponse.json(), {
     key: 'remote',
     path: '',
-    workdir: { kind: 'remote', displayPath: null },
+    workdir: { kind: 'remote', displayPath: '/srv/project' },
     entries: [
       { name: 'folder', type: 'dir', ext: '', size: 0, mtime: null },
       { name: 'a.md', type: 'file', ext: '.md', size: 0, mtime: null },
@@ -234,4 +274,17 @@ test('session file routes dispatch remote listings and previews but not raw byte
   assertEquals(await encoded.json(), { error: 'remote_encoding_unavailable' })
   assertEquals((await app.request('/api/sessions/remote/preview?path=notes.txt&encoding=invalid')).status, 400)
   assertEquals(executor.requests.length, 2)
+  const gitStatus = await remoteGitRequest('status')
+  assertEquals(gitStatus, { available: true, entries: [{ path: 'a.md', status: 'modified' }] })
+  assertEquals((await remoteGitRequest('diff?path=a.md')).path, 'a.md')
+  assertEquals(executor.requests.slice(-2).map(request => [request.nodeId, request.capabilityId, request.operation]),
+    [['child-1', 'workdir-1', 'workdir.git.status'], ['child-1', 'workdir-1', 'workdir.git.diff']])
+  async function remoteGitRequest(operation: string) {
+    const response = await app.request(`/api/sessions/remote/git/${operation}`)
+    assertEquals(response.status, 200)
+    return response.json()
+  }
+  sessions.getNodeInventory = () => undefined
+  const withoutMetadata = await (await app.request('/api/sessions/remote/files')).json()
+  assertEquals(withoutMetadata.workdir.displayPath, null)
 })

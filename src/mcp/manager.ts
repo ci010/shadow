@@ -10,9 +10,9 @@ export class McpManager {
   private servers: McpServerConfig[]
   private initPromise: Promise<void> | null = null
 
-  constructor(registry: Tools, servers: McpServerConfig[] = [], workspace = '.') {
+  constructor(registry: Tools, servers: McpServerConfig[] = [], workspace = '.', configPath?: string) {
     this.servers = servers
-    this.watcher = new McpWatcher(this, registry, workspace)
+    this.watcher = new McpWatcher(this, registry, workspace, configPath)
   }
 
   async ensureLoaded(): Promise<void> {

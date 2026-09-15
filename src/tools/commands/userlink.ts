@@ -15,6 +15,7 @@ export function createUserLinkCommandHandler(
     if (!ctx.channel || !ctx.senderId) {
       return 'Error: userlink requires active inbound user context (channel + sender).'
     }
+    if (ctx.inputSource && ctx.inputSource !== 'user') return 'Error: userlink requires a user-originated input.'
 
     const args = splitArgs(ctx.args)
     const subcommand = args[0]?.toLowerCase()
@@ -23,7 +24,7 @@ export function createUserLinkCommandHandler(
       const targetChannel = args[1]
       const targetSenderId = args[2]
       if (!targetChannel || !targetSenderId) {
-        return 'Error: usage is userlink verify <targetChannel> <targetSenderId>'
+        return 'Error: usage is userlink verify <targetChannel> <targetSenderId> [targetBotInstanceId]'
       }
 
       try {
@@ -32,6 +33,7 @@ export function createUserLinkCommandHandler(
           ctx.senderId,
           targetChannel,
           targetSenderId,
+          { organizationId: ctx.organizationId, requesterAddress: ctx.channelAddress, targetBotInstanceId: args[3] },
         )
 
         if (!challenge.targetChatId) {
@@ -49,6 +51,7 @@ export function createUserLinkCommandHandler(
         bus.emit('message.outbound', {
           channel: challenge.targetChannel,
           chatId: challenge.targetChatId,
+          ...(challenge.targetAddress ? { channelAddress: challenge.targetAddress } : {}),
           done: true,
           content,
           event: 'response',
@@ -74,6 +77,8 @@ export function createUserLinkCommandHandler(
           ctx.channel,
           ctx.senderId,
           code,
+          ctx.channelAddress,
+          ctx.organizationId,
         )
         await ensureProfileFile(workspace, linked.profileName)
         return [
@@ -90,7 +95,7 @@ export function createUserLinkCommandHandler(
     if (!rawName) {
       return [
         'Error: usage is userlink <Name>',
-        'Or: userlink verify <targetChannel> <targetSenderId>',
+        'Or: userlink verify <targetChannel> <targetSenderId> [targetBotInstanceId]',
         'Or: userlink confirm <code>',
       ].join('\n')
     }
@@ -99,6 +104,8 @@ export function createUserLinkCommandHandler(
       ctx.channel,
       ctx.senderId,
       rawName,
+      ctx.channelAddress?.conversationId,
+      ctx.channelAddress,
     )
     await ensureProfileFile(workspace, assigned.profileName)
 

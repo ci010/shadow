@@ -50,14 +50,6 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
     modes: ['main'],
   },
   {
-    name: 'approvals',
-    label: 'Approvals',
-    group: 'primary',
-    scopes: [],
-    modes: ['child'],
-    childLocal: true,
-  },
-  {
     name: 'agents',
     label: 'Agents',
     group: 'diagnostics',

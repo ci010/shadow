@@ -10,7 +10,7 @@ test('media URL maps and encodes the direct web chat identity and path', () => {
       'web:chat-a/b ?',
       'outputs/image one&two.png',
     ),
-    'http://localhost:5173/api/media?chatId=chat-a%2Fb+%3F&path=outputs%2Fimage+one%26two.png',
+    'http://localhost:5173/nested/api/media?chatId=chat-a%2Fb+%3F&path=outputs%2Fimage+one%26two.png',
   )
 })
 

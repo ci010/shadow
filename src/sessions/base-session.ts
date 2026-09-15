@@ -29,6 +29,8 @@ import {
 } from './locality.ts'
 import type { SessionState, StoredMessage } from './session-store.ts'
 import type { Executor } from '../execution/executor.ts'
+import type { ToolBridgeFactory } from '../eval/bridge.ts'
+import { ReadTool } from '../tools/read.ts'
 
 /**
  * Shared base for all session types.
@@ -51,6 +53,7 @@ export abstract class BaseSession {
     protected readonly store: SessionStore,
     protected readonly workdirCapabilityLookup?: WorkdirCapabilityLookup,
     protected readonly remoteExecutor?: Executor,
+    protected readonly evalBridge?: ToolBridgeFactory,
   ) {
   }
 
@@ -73,6 +76,11 @@ export abstract class BaseSession {
 
   getTools(): ToolDefinition[] {
     return this.tools.getDefinitions()
+  }
+
+  protected clearReadCache(): void {
+    const read = this.tools.get('read')
+    if (read instanceof ReadTool) read.clearSession(this.physicalSessionId)
   }
 
   // ── Protected persistence ───────────────────────────────────────────────
@@ -240,6 +248,7 @@ export abstract class BaseSession {
           event: 'response',
           channel: executionContext.channel,
           chatId: executionContext.chatId,
+          channelAddress: executionContext.channelAddress,
           replyTo: executionContext.platformMessageId,
           content: text,
           media,
@@ -267,6 +276,7 @@ export abstract class BaseSession {
               event: 'tool_call',
               channel: executionContext.channel,
               chatId: executionContext.chatId,
+              channelAddress: executionContext.channelAddress,
               replyTo: executionContext.platformMessageId,
               content: display || tc.name,
               toolCall: { name: tc.name, arguments: tc.arguments },
@@ -311,6 +321,7 @@ export abstract class BaseSession {
               event: 'tool_result',
               channel: executionContext.channel,
               chatId: executionContext.chatId,
+              channelAddress: executionContext.channelAddress,
               replyTo: executionContext.platformMessageId,
               content: results[idx],
               toolCallId: group.calls[idx].id,
@@ -438,6 +449,9 @@ export abstract class BaseSession {
 
       console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
       const executionContext: ExecutionContext = {
+        organizationId: this.state.organizationId,
+        evalBridge: this.evalBridge,
+        channelAddress: msg.channelAddress,
         ...attributes,
         inputSource: input.source.kind,
         cwd,
@@ -461,6 +475,7 @@ export abstract class BaseSession {
           this.bus.emit('message.outbound', {
             channel: msg.channel,
             chatId: msg.chatId,
+            channelAddress: msg.channelAddress,
             content: '',
             replyTo: msg.platformMessageId,
             done: true,
@@ -475,6 +490,7 @@ export abstract class BaseSession {
       this.bus.emit('message.outbound', {
         channel: msg.channel,
         chatId: msg.chatId,
+        channelAddress: msg.channelAddress,
         content: `⚠️ Request failed: ${errMsg(err)}`,
         replyTo: msg.platformMessageId,
         done: true,

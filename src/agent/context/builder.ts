@@ -5,6 +5,7 @@ import type { AgentTypeDefinition } from '../agent-types/types.ts'
 import type { ExecShell } from '../../tools/shell.ts'
 import { resolve } from 'node:path'
 import type { ExecutionMode } from '../../sessions/execution-mode.ts'
+import type { ChannelAddress } from '../../bus/events.ts'
 
 // ── Session-scoped context for system prompt building ──────────────────
 
@@ -13,6 +14,8 @@ import type { ExecutionMode } from '../../sessions/execution-mode.ts'
  * fields, not per-message execution state.
  */
 export interface SessionPromptContext {
+  organizationId?: string
+  channelAddress?: ChannelAddress
   mode?: ExecutionMode
   /** Structural delegation owner, not a context-only fork source. */
   parentSessionId?: string

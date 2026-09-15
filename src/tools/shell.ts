@@ -455,8 +455,7 @@ export class ExecTool implements Tool {
     const intercepted = await this.intercept(
       script,
       cwd,
-      context.channel,
-      context.senderId,
+      context,
     )
     if (intercepted !== null) return intercepted
 
@@ -846,14 +845,16 @@ export class ExecTool implements Tool {
   private async intercept(
     command: string,
     cwd: string,
-    channel: string,
-    senderId: string,
+    context: ExecutionContext,
   ): Promise<string | null> {
     return await this.commandHandler.handle(command, {
       workspace: this.workspace,
       cwd,
-      channel,
-      senderId,
+      channel: context.channel,
+      senderId: context.senderId,
+      ...(context.organizationId ? { organizationId: context.organizationId } : {}),
+      ...(context.channelAddress ? { channelAddress: context.channelAddress } : {}),
+      ...(context.inputSource ? { inputSource: context.inputSource } : {}),
     })
   }
 }

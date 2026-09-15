@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 import { getBuiltinSkills } from './builtins.ts'
@@ -235,7 +235,11 @@ export class SkillsManager {
   ): Promise<string | undefined> {
     const skill = this.resolveSkill(skillName)
     if (!skill) return undefined
-    const fullPath = join(skill.dirPath, resourcePath)
+    const fullPath = resolve(skill.dirPath, resourcePath)
+    const within = relative(skill.dirPath, fullPath)
+    if (isAbsolute(within) || within === '..' || within.startsWith('../') || within.startsWith('..\\')) {
+      throw new TypeError('Skill resource must remain inside its skill directory')
+    }
     return await readFileIfExists(fullPath)
   }
 
@@ -282,7 +286,7 @@ export class SkillsManager {
    * Returns undefined if no original skill exists.
    */
   async getOriginalSkillBody(skillName: string): Promise<string | undefined> {
-    const skillPath = join(this.workspaceDir, skillName, 'SKILL.md')
+    const skillPath = join(this.getLearnedSkillPath(skillName), 'SKILL.md')
     const workspaceBody = await readFileIfExists(skillPath)
     if (workspaceBody !== undefined) return workspaceBody
     return this.builtins.get(skillName)?.body
@@ -299,6 +303,9 @@ export class SkillsManager {
    * Get the skill directory path for a skill name.
    */
   getLearnedSkillPath(skillName: string): string {
+    if (!skillName.trim() || skillName === '.' || skillName === '..' || /[/\\:\0]/.test(skillName)) {
+      throw new TypeError('Skill name must be a single directory name')
+    }
     return join(this.workspaceDir, skillName)
   }
 
@@ -310,7 +317,7 @@ export class SkillsManager {
    * @param content - The full SKILL.md content including frontmatter
    */
   async saveLearnedSkill(skillName: string, content: string): Promise<void> {
-    const skillDir = join(this.workspaceDir, skillName)
+    const skillDir = this.getLearnedSkillPath(skillName)
     await mkdir(skillDir, { recursive: true })
     const skillFile = join(skillDir, 'SKILL.md')
     await writeFile(skillFile, content)

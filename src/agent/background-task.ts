@@ -5,6 +5,7 @@ import type { Tools } from '../tools/registry.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import type { EventService } from '../events/service.ts'
 import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
+import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
 
 export type BackgroundTaskStatus = 'running' | 'completed' | 'failed'
 export type BackgroundTaskKind = 'tool' | 'subagent' | 'process'
@@ -48,11 +49,21 @@ interface BackgroundTaskRecord extends BackgroundTaskSummary {
 }
 
 export class BackgroundTaskManager {
+  get hasRunningTasks(): boolean {
+    return [...this.tasks.values()].some(task => task.status === 'running') || this.callbacks.size > 0
+  }
   private tasks = new Map<string, BackgroundTaskRecord>()
+  private subscriptionId: string
+  private stopped = false
+  private callbacks = new Set<Promise<void>>()
 
-  constructor(private bus: Bus, private events: EventService) {
+  constructor(
+    private bus: Bus,
+    private events: EventService,
+    private scope: OrganizationScope | undefined = getOrganizationScope(),
+  ) {
     // Auto-complete session-bound tasks when the session finishes.
-    this.bus.on('session.turn.finished', (fact) => {
+    this.subscriptionId = this.bus.on('session.turn.finished', (fact) => this.runOwned(() => {
       const task = this.findByTag('sessionId', fact.sessionId)
       if (!task) return
       const record = this.tasks.get(task.id)!
@@ -67,7 +78,21 @@ export class BackgroundTaskManager {
       }
       const parsed = parseMediaFromContent(fact.content)
       this.complete(task.id, parsed.text.trim() || '(session completed with no output)')
-    })
+    }))
+  }
+
+  /** Detach only this runtime's observer, cancel its work and drain accepted callbacks. */
+  async stop(): Promise<void> {
+    this.stopped = true
+    this.bus.off(this.subscriptionId)
+    for (const task of this.tasks.values()) {
+      this.failTask(task.id, 'Organization runtime stopped', true, true)
+    }
+    await Promise.allSettled(this.callbacks)
+  }
+
+  private runOwned<T>(callback: () => T): T {
+    return this.scope ? this.scope.run(callback) : callback()
   }
 
   /**
@@ -91,9 +116,14 @@ export class BackgroundTaskManager {
       callback?: BackgroundTaskCallback
     },
   ): string {
+    if (this.stopped) throw new Error('BackgroundTaskManager is stopped')
+    if (context.organizationId !== this.scope?.organizationId || tools !== context.tools) {
+      throw new Error('Background tool task organization/context binding mismatch')
+    }
+    const controller = new AbortController()
     const executionContext: ExecutionContext = {
       ...context,
-      signal: new AbortController().signal,
+      signal: controller.signal,
     }
     return this.runPromiseTask(
       {
@@ -102,8 +132,9 @@ export class BackgroundTaskManager {
         sessionId: context.sessionId,
         inputId: context.messageId,
         callback: options?.callback,
+        onCancel: () => controller.abort(new Error('Background task cancelled')),
       },
-      tools.execute(name, args, executionContext),
+      this.runOwned(() => tools.execute(name, args, executionContext)),
     )
   }
 
@@ -138,6 +169,7 @@ export class BackgroundTaskManager {
     complete: (value: string) => void
     fail: (reason?: unknown) => void
   } {
+    if (this.stopped) throw new Error('BackgroundTaskManager is stopped')
     const taskId = crypto.randomUUID().replace(/-/g, '').slice(0, 16)
     const resolvers = Promise.withResolvers<string>()
     const record: BackgroundTaskRecord = {
@@ -167,8 +199,8 @@ export class BackgroundTaskManager {
 
     return {
       taskId,
-      complete: (value: string) => this.completeTask(taskId, value),
-      fail: (reason?: unknown) => this.failTask(taskId, reason),
+      complete: (value: string) => { if (!this.stopped) this.runOwned(() => this.completeTask(taskId, value)) },
+      fail: (reason?: unknown) => { if (!this.stopped) this.runOwned(() => this.failTask(taskId, reason)) },
     }
   }
 
@@ -198,16 +230,15 @@ export class BackgroundTaskManager {
     }
 
     const timeoutSymbol = Symbol('timeout')
+    let timer: ReturnType<typeof setTimeout> | undefined
     const result = await Promise.race([
       task.promise,
-      ...(timeoutMs !== undefined
-        ? [
-          new Promise<typeof timeoutSymbol>((resolve) =>
-            setTimeout(() => resolve(timeoutSymbol), timeoutMs)
-          ),
-        ]
-        : []),
-    ])
+      ...(timeoutMs !== undefined ? [
+        new Promise<typeof timeoutSymbol>((resolve) => {
+          timer = setTimeout(() => resolve(timeoutSymbol), timeoutMs)
+        }),
+      ] : []),
+    ]).finally(() => { if (timer) clearTimeout(timer) })
 
     if (result === timeoutSymbol) {
       return [
@@ -236,6 +267,7 @@ export class BackgroundTaskManager {
    * If the task already completed, re-fires the callback with the continuation.
    */
   setContinuation(taskId: string, continuation: string): string {
+    if (this.stopped) throw new Error('BackgroundTaskManager is stopped')
     const task = this.tasks.get(taskId)
     if (!task) return `Error: no background task with id=${taskId}`
 
@@ -325,7 +357,9 @@ export class BackgroundTaskManager {
     if (cancel && task.onCancel) {
       try {
         task.onCancel()
-      } catch { /* ignore */ }
+      } catch (error) {
+        console.error(`[background-task] Cancellation failed (${task.id}):`, error)
+      }
     }
 
     const message = errMsg(reason)
@@ -337,10 +371,13 @@ export class BackgroundTaskManager {
   }
 
   private notifyCallback(task: BackgroundTaskRecord): void {
-    void this.publishCallback(task).catch((error) => {
+    if (this.stopped) return
+    const pending = this.runOwned(() => this.publishCallback(task)).catch((error) => {
       task.callbackError = errMsg(error)
       console.error(`[background-task] Callback delivery failed (${task.id}, ${task.callback?.sessionId}):`, error)
     })
+    this.callbacks.add(pending)
+    void pending.then(() => this.callbacks.delete(pending))
   }
 
   private async publishCallback(task: BackgroundTaskRecord): Promise<void> {
@@ -373,6 +410,7 @@ export class BackgroundTaskManager {
       },
     })
     task.callbackError = undefined
+    if (this.stopped) return
 
     const reply = task.callback.replyTo ?? sessionReplyAddress(task.callback.sessionId)
     if (!reply) return
@@ -383,6 +421,7 @@ export class BackgroundTaskManager {
       event: 'response',
       channel: reply.channel,
       chatId: reply.chatId,
+      ...(reply.channelAddress ? { channelAddress: reply.channelAddress } : {}),
       done: false,
       content: displayContent,
     })

@@ -7,6 +7,14 @@ import { DiscordChannel } from './discord.ts'
 import { FeishuChannel } from './feishu.ts'
 import type { FeishuTransport } from './feishu-transport.ts'
 import type { ChannelState } from './setup-contract.ts'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { ConfigSchema } from '../config/schema.ts'
+import type { SessionManager } from '../sessions/session-manager.ts'
+import { BotInstanceStore } from './bot-store.ts'
+import { ChannelManager } from './manager.ts'
+import { deriveSessionId } from '../bus/events.ts'
+import { createOrganizationScope, getOrganizationScope } from '../otel/scope.ts'
 
 class FakeSocket {
   readyState = 0
@@ -45,6 +53,40 @@ for (const id of ['qq', 'discord'] as const) {
   const create = () => id === 'qq'
     ? new QQChannel(new Bus(), { appId: 'synthetic-app', secret: 'synthetic-secret' })
     : new DiscordChannel(new Bus(), { token: 'synthetic-secret' })
+
+  test(`${id} transport callbacks retain their organization scope when invoked by another runtime`, async t => {
+    const created = sockets(t)
+    const scope = createOrganizationScope('A')
+    const foreign = createOrganizationScope('B')
+    const channel = scope.run(create)
+    const observed: Array<string | undefined> = []
+    channel.setReceiver(async message => {
+      observed.push(getOrganizationScope()?.organizationId)
+      return { status: 'accepted', sessionId: `${id}:${message.chatId}`, inputId: message.messageId }
+    })
+    const statusScopes: Array<string | undefined> = []
+    channel.setStatusListener(() => statusScopes.push(getOrganizationScope()?.organizationId))
+    t.after(async () => { await channel.stop(); scope.close(); foreign.close() })
+    await scope.run(() => channel.start(new Hono()))
+    const stale = created[0].onmessage
+    foreign.run(() => {
+      created[0].message({ op: 0, t: 'READY', d: { session_id: 'session', user: { id: 'bot' } } })
+      created[0].message(id === 'qq'
+        ? { op: 0, t: 'C2C_MESSAGE_CREATE', d: { id: 'message', author: { user_openid: 'sender' }, content: 'Hello' } }
+        : { op: 0, t: 'MESSAGE_CREATE', d: { id: 'message', channel_id: 'chat', author: { id: 'sender' }, content: 'Hello' } })
+      assert.equal(getOrganizationScope(), foreign)
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(observed, ['A'])
+    assert.ok(statusScopes.length > 0)
+    assert.ok(statusScopes.every(id => id === 'A'))
+    await channel.stop()
+    scope.close()
+    assert.doesNotThrow(() => foreign.run(() => stale?.({
+      data: JSON.stringify({ op: 0, t: 'READY', d: {} }),
+    } as MessageEvent)))
+    assert.deepEqual(observed, ['A'])
+  })
 
   test(`${id} readiness follows READY/disconnect/error, not start or WebSocket open`, async (t) => {
     const created = sockets(t)
@@ -111,6 +153,33 @@ for (const id of ['qq', 'discord'] as const) {
     assert.equal(created.length, 0)
   })
 
+  test(`${id} reconnect renews request admission without reviving old socket callbacks`, async (t) => {
+    const created = sockets(t)
+    t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+    const channel = create()
+    const received: string[] = []
+    channel.setReceiver(async message => {
+      received.push(message.messageId)
+      return { status: 'accepted', sessionId: `${id}:${message.chatId}`, inputId: message.messageId }
+    })
+    t.after(() => channel.stop())
+    await channel.start(new Hono())
+    const stale = created[0].onmessage
+    created[0].disconnected()
+    t.mock.timers.tick(5_000)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(created.length, 2)
+    const data = id === 'qq'
+      ? { op: 0, t: 'C2C_MESSAGE_CREATE', d: { id: 'after', author: { user_openid: 'sender' }, content: 'Hello' } }
+      : { op: 0, t: 'MESSAGE_CREATE', d: { id: 'after', channel_id: 'chat', author: { id: 'sender' }, content: 'Hello' } }
+    stale?.({ data: JSON.stringify(data) } as MessageEvent)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(received, [])
+    created[1].message(data)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(received, ['after'])
+  })
+
   test(`${id} fatal authentication closes report error without an automatic retry`, async (t) => {
     const created = sockets(t)
     t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
@@ -147,6 +216,44 @@ for (const id of ['qq', 'discord'] as const) {
     await channel.stop()
   })
 }
+
+test('Discord READY uses the actual bot user identity to refuse cross-org duplicate tokens before admitting messages', async t => {
+  const created = sockets(t)
+  mkdirSync(join(process.cwd(), '.test-data'), { recursive: true })
+  const root = mkdtempSync(join(process.cwd(), '.test-data', 'discord-bot-identity-'))
+  const managers: ChannelManager[] = []
+  const received: string[] = []
+  t.after(async () => {
+    await Promise.all(managers.map(manager => manager.stopAll()))
+    rmSync(root, { recursive: true, force: true })
+  })
+  for (const organizationId of ['A', 'B']) {
+    const store = new BotInstanceStore({ organizationId, path: join(root, organizationId, 'bots.json') })
+    store.create('discord', 'Discord', { token: `synthetic-rotated-token-${organizationId}`, enabled: true })
+    const sessions: Pick<SessionManager, 'getSessionState'> = { getSessionState: () => null }
+    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: join(root, organizationId) } }),
+      new Bus(), sessions as SessionManager, async message => {
+        received.push(message.channelAddress!.organizationId)
+        return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
+      }, { organizationId, instanceStore: store })
+    managers.push(manager)
+    await manager.init()
+    await manager.startAll(new Hono())
+  }
+  for (const socket of created) socket.message({
+    op: 0, t: 'READY', d: { session_id: 'same-session', user: { id: 'same-actual-bot', bot: true } },
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(managers[0].botStatuses()[0].state, 'connected')
+  assert.equal(managers[1].botStatuses()[0].state, 'error')
+  assert.equal(managers[1].botStatuses()[0].message, 'bot_identity_already_bound')
+  assert.equal(created[1].closed, true)
+  for (const socket of created) socket.message({
+    op: 0, t: 'MESSAGE_CREATE', d: { id: 'same-message', channel_id: 'same-chat', author: { id: 'alice' }, content: 'Hello' },
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(received, ['A'])
+})
 
 test('QQ replacement connection retains receiver routing and rejects old subscriptions without adding routes', async (t) => {
   const created = sockets(t)

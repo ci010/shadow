@@ -1,9 +1,34 @@
-/**
- * Shared context fields present on both inbound message metadata and
- * the agent execution context.  Keeping them in one place ensures
- * property names stay aligned across the pipeline.
- */
+/** Stable routing identity; platform/chat alone is only a legacy default-org address. */
+export interface ChannelAddress {
+  organizationId: string
+  botInstanceId: string
+  platform: string
+  conversationId: string
+  /** Only the default organization's migrated platform instance retains old IDs. */
+  legacySessionId?: boolean
+}
+
+export function channelSessionId(address: ChannelAddress): string {
+  if ([address.organizationId, address.botInstanceId, address.platform, address.conversationId]
+    .some(value => typeof value !== 'string' || !value)
+    || (address.legacySessionId !== undefined && typeof address.legacySessionId !== 'boolean')) {
+    throw new TypeError('Incomplete channel address')
+  }
+  return address.legacySessionId ? `${address.platform}:${address.conversationId}`
+    : `bot:${[address.organizationId, address.botInstanceId, address.platform, address.conversationId].map(encodeURIComponent).join(':')}`
+}
+
+export function channelAddressFromSessionId(sessionId: string): ChannelAddress | undefined {
+  if (!sessionId.startsWith('bot:')) return undefined
+  const parts = sessionId.slice(4).split(':')
+  if (parts.length !== 4 || parts.some(part => !part)) throw new TypeError('Invalid bot session ID')
+  const [organizationId, botInstanceId, platform, conversationId] = parts.map(decodeURIComponent)
+  return { organizationId, botInstanceId, platform, conversationId }
+}
+
+/** Shared inbound metadata and agent execution context. */
 export interface MessageContext {
+  channelAddress?: ChannelAddress
   /** Channel identifier (e.g. "discord", "telegram", "system") */
   channel: string
   /** Internal correlation/tracking ID. May be a UUID for synthetic messages (subagent, system, etc.). */
@@ -58,6 +83,7 @@ export interface InboundMessage extends MessageContext {
  * Message flowing from the agent out to a channel.
  */
 export interface OutboundMessage {
+  channelAddress?: ChannelAddress
   /** Target channel identifier */
   channel: string
   /** Target chat / conversation id */
@@ -91,5 +117,11 @@ export interface OutboundMessage {
  * Derive a logical session ID from a message.
  */
 export function deriveSessionId(msg: InboundMessage): string {
+  if (msg.channelAddress) {
+    if (msg.channelAddress.platform !== msg.channel || msg.channelAddress.conversationId !== msg.chatId) {
+      throw new TypeError('Channel address does not match message destination')
+    }
+    return channelSessionId(msg.channelAddress)
+  }
   return `${msg.channel}:${msg.chatId}`
 }

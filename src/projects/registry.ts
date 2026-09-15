@@ -4,6 +4,9 @@ import { open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises
 import { basename, isAbsolute, join, normalize, parse } from 'node:path'
 import type { WorkdirCapabilityState, WorkdirRefV1 } from '../sessions/locality.ts'
 import type { ProjectRecord } from './contracts.ts'
+import type { OrganizationCatalog } from '../organizations/catalog.ts'
+import type { RemoteProjectOwnership } from './remote-ownership.ts'
+import type { RemoteProjectRecord } from './contracts.ts'
 
 const PROJECT_PREFIX = 'local-project-v1:'
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -93,8 +96,9 @@ export class ProjectRegistry {
   #initialization?: Promise<void>
   #ready = false
   #writes: Promise<unknown> = Promise.resolve()
+  #remoteOwnership?: RemoteProjectOwnership
 
-  constructor(workspace: string) {
+  constructor(workspace: string, private readonly scope?: { organizationId: string; catalog: OrganizationCatalog }) {
     this.filePath = join(absoluteDirectoryPath(workspace), 'projects.v1.json')
   }
 
@@ -127,17 +131,20 @@ export class ProjectRegistry {
 
   list(): ProjectRecord[] {
     this.#assertReady()
+    if (this.scope) return this.scope.catalog.projects(this.scope.organizationId)
     return this.#records.map((record) => ({ ...record }))
   }
 
   get(id: string): ProjectRecord | undefined {
     this.#assertReady()
+    if (this.scope) return this.list().find(record => record.id === id)
     const record = this.#records.find((record) => record.id === id)
     return record ? { ...record } : undefined
   }
 
   async register(path: string, signal?: AbortSignal): Promise<ProjectRecord> {
     this.#assertReady()
+    if (this.scope) return this.scope.catalog.registerProject(this.scope.organizationId, path, signal)
     const pending = this.#writes.then(async () => {
       signal?.throwIfAborted()
       const canonical = await existingDirectory(path)
@@ -150,6 +157,7 @@ export class ProjectRegistry {
         path: canonical,
         createdAt: new Date().toISOString(),
       }
+
       const next = [...this.#records, project]
       await this.#persist(next, signal)
       this.#records = next
@@ -157,6 +165,51 @@ export class ProjectRegistry {
     })
     this.#writes = pending.catch(() => {})
     return pending
+  }
+
+  reserveDestination(path: string): Promise<() => void> {
+    return this.scope ? this.scope.catalog.reserveDestination(this.scope.organizationId, path) : Promise.resolve(() => {})
+  }
+
+  configureRemote(ownership: RemoteProjectOwnership): void {
+    this.#remoteOwnership = ownership
+  }
+
+  acquireAccess(): () => void {
+    return this.scope?.catalog.acquireProjectAccess(this.scope.organizationId) ?? (() => {})
+  }
+
+  async changeOrganization(id: string, targetOrganizationId?: string, signal = new AbortController().signal): Promise<ProjectRecord | undefined> {
+    this.#assertReady()
+    if (!this.scope) throw new ProjectError('organizations_unavailable', 'Organization project ownership is not configured.', 503)
+    const project = this.get(id)
+    if (!project) throw new ProjectError('project_not_found', 'Project not found.', 404)
+    if (project.kind === 'remote' || targetOrganizationId !== undefined) await this.requireAvailable(id, signal)
+    return this.scope.catalog.changeProjectOrganization(this.scope.organizationId, id, targetOrganizationId, signal)
+  }
+
+  assertSessionProject(state: { sessionId?: string; projectId?: string; workdir?: WorkdirRefV1 }): void {
+    if (!this.scope) return
+    if (state.sessionId && this.scope.catalog.isRetiredSession(this.scope.organizationId, state.sessionId) ||
+      (state.projectId ? !this.get(state.projectId) : state.workdir &&
+        this.scope.catalog.isRetiredWorkdir(this.scope.organizationId, state.workdir))) {
+      throw new ProjectError('project_access_revoked', 'This conversation’s folder was removed or moved to another organization. Its history is preserved; open a new conversation from the current folder owner.', 409)
+    }
+  }
+
+  isRetiredWorkdir(ref: WorkdirRefV1): boolean {
+    return this.scope?.catalog.isRetiredWorkdir(this.scope.organizationId, ref) ?? false
+  }
+
+  registerRemote(ref: WorkdirRefV1, signal: AbortSignal): Promise<RemoteProjectRecord> {
+    this.#assertReady()
+    if (!this.#remoteOwnership) throw new ProjectError('remote_projects_unavailable', 'Remote project ownership is not configured.', 503)
+    return this.#remoteOwnership.register(ref, signal)
+  }
+
+  ownsRemoteWorkdir(ref: WorkdirRefV1): boolean {
+    return this.list().some(project => project.kind === 'remote' && project.workdir.nodeId === ref.nodeId &&
+      project.workdir.capabilityId === ref.capabilityId)
   }
 
   async #persist(records: ProjectRecord[], signal?: AbortSignal): Promise<void> {
@@ -184,9 +237,13 @@ export class ProjectRegistry {
     }
   }
 
-  async requireAvailable(id: string): Promise<ProjectRecord> {
+  async requireAvailable(id: string, signal: AbortSignal = new AbortController().signal): Promise<ProjectRecord> {
     const project = this.get(id)
     if (!project) throw new ProjectError('project_not_found', 'Project not found.', 404)
+    if (project.kind === 'remote') {
+      if (!this.#remoteOwnership) throw new ProjectError('remote_projects_unavailable', 'Remote project ownership is not configured.', 503)
+      return this.#remoteOwnership.requireAvailable(project, signal)
+    }
     const canonical = await existingDirectory(project.path)
     if (pathKey(canonical) !== pathKey(project.path)) {
       throw new ProjectError('folder_unavailable', 'The project folder changed. Open the folder again.', 409)
@@ -199,7 +256,7 @@ export class ProjectRegistry {
       return undefined
     }
     const project = this.get(ref.capabilityId.slice(PROJECT_PREFIX.length))
-    if (!project) return { node: 'online' }
+    if (!project || project.kind === 'remote') return { node: 'online' }
     let online = false
     try {
       online = statSync(project.path).isDirectory() &&

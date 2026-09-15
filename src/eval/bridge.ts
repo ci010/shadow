@@ -3,6 +3,7 @@ import type { Hono } from 'hono'
 import type { Context as HonoContext } from 'hono'
 import { env } from 'node:process'
 import type { Tools } from '../tools/registry.ts'
+import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
 
 interface CallToolRequest {
   name: string
@@ -20,18 +21,119 @@ interface CallToolResponse {
 interface BridgeHandler {
   tools: Tools
   context: ExecutionContext
+  controller?: AbortController
 }
 
-const bridgeHandlers = new Map<string, BridgeHandler>()
+export interface EvalBridgeOptions {
+  organizationId: string
+  scope: OrganizationScope
+  /** Full gateway route base, including the organization route prefix. */
+  gatewayBaseUrl: string
+}
+
+export interface ToolBridgeFactory {
+  startToolBridge(tools: Tools, context: ExecutionContext): { url: string; cleanup: () => void }
+}
+
+/** The registry and tool closures belong to one runtime, never to the host router. */
+export class EvalBridgeRuntime implements ToolBridgeFactory {
+  private handlers = new Map<string, BridgeHandler>()
+  private closed = false
+  private baseUrl = ''
+  private calls = new Set<Promise<unknown>>()
+
+  constructor(readonly options: EvalBridgeOptions) {
+    if (!options.organizationId || options.scope.organizationId !== options.organizationId || options.scope.closed) {
+      throw new Error('Eval bridge requires a matching live organization scope')
+    }
+    this.options = Object.freeze({ ...options })
+    this.setGatewayBaseUrl(options.gatewayBaseUrl)
+  }
+
+  setGatewayBaseUrl(gatewayBaseUrl: string): void {
+    if (this.closed || this.options.scope.closed) throw new Error('Eval bridge runtime is closed')
+    if (this.handlers.size) throw new Error('Cannot change gateway base while eval bridges are active')
+    const url = new URL(gatewayBaseUrl)
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new TypeError('Eval bridge requires an HTTP gateway base URL without credentials, query or fragment')
+    }
+    this.baseUrl = url.href.replace(/\/$/, '')
+  }
+
+  startToolBridge(tools: Tools, context: ExecutionContext): { url: string; cleanup: () => void } {
+    this.assertContext(context)
+    if (tools !== context.tools) throw new Error('Eval bridge tools must belong to the bound execution context')
+    const key = crypto.randomUUID()
+    const controller = new AbortController()
+    this.handlers.set(key, {
+      tools, controller,
+      context: { ...context, signal: AbortSignal.any([context.signal, controller.signal]) },
+    })
+    return {
+      url: `${this.baseUrl}/eval/${key}`,
+      cleanup: () => {
+        this.handlers.delete(key)
+        controller.abort(new Error('Eval bridge closed'))
+      },
+    }
+  }
+
+  private assertContext(context: ExecutionContext): void {
+    const ambient = getOrganizationScope()
+    if (this.closed || this.options.scope.closed) throw new Error('Eval bridge runtime is closed')
+    if (context.organizationId !== this.options.organizationId || context.evalBridge !== this ||
+      (ambient !== undefined && ambient !== this.options.scope)) {
+      throw new Error('Eval bridge organization/runtime binding mismatch')
+    }
+    if (!context.sessionId?.trim()) throw new Error('Eval bridge requires a session identity')
+  }
+
+  registerRoutes(app: Hono): void {
+    registerBridgeRoutes(app, (key) => {
+      if (this.closed || this.options.scope.closed) return undefined
+      return this.handlers.get(key)
+    }, (handler, callback) => {
+      this.assertContext(handler.context)
+      handler.context.signal.throwIfAborted()
+      const result = this.options.scope.run(callback)
+      const pending = Promise.resolve(result)
+      this.calls.add(pending)
+      void pending.then(() => this.calls.delete(pending), () => this.calls.delete(pending))
+      return result
+    })
+  }
+
+  async shutdown(): Promise<void> {
+    this.closed = true
+    for (const handler of this.handlers.values()) handler.controller?.abort(new Error('Eval runtime stopped'))
+    this.handlers.clear()
+    await Promise.allSettled(this.calls)
+  }
+}
+
+// Compatibility for unowned pre-organization callers and existing standalone tests.
+const legacyBridgeHandlers = new Map<string, BridgeHandler>()
 
 /**
  * Register the `/eval/*` catch-all route on the Hono app.
  * Must be called **before** `serveGateway()` so the route is part of the
- * compiled router. Individual sessions are dispatched via `bridgeHandlers`.
+ * compiled router. Organization routes receive their own runtime registry.
  */
-export function registerEvalBridgeRoute(app: Hono): void {
+export function registerEvalBridgeRoute(app: Hono, runtime?: EvalBridgeRuntime): void {
+  if (runtime) return runtime.registerRoutes(app)
+  registerBridgeRoutes(app, (key) => legacyBridgeHandlers.get(key), (_handler, callback) => {
+    if (getOrganizationScope()) throw new Error('Legacy eval bridge cannot run in an organization runtime')
+    return callback()
+  })
+}
+
+function registerBridgeRoutes(
+  app: Hono,
+  lookup: (key: string) => BridgeHandler | undefined,
+  run: <T>(handler: BridgeHandler, callback: () => T) => T,
+): void {
   app.post('/eval/:sessionKey/call', async (c: HonoContext) => {
-    const handler = bridgeHandlers.get(c.req.param('sessionKey') ?? '')
+    const handler = lookup(c.req.param('sessionKey') ?? '')
     if (!handler) return c.json({ ok: false, error: 'No active bridge for this session' } satisfies CallToolResponse, 404)
 
     let body: CallToolRequest
@@ -41,12 +143,15 @@ export function registerEvalBridgeRoute(app: Hono): void {
       return c.json({ ok: false, error: 'Invalid JSON body' } satisfies CallToolResponse, 400)
     }
 
-    if (!body.name || typeof body.name !== 'string') {
+    if (!body || typeof body !== 'object' || !body.name || typeof body.name !== 'string') {
       return c.json({ ok: false, error: 'Missing or invalid "name" field' } satisfies CallToolResponse, 400)
+    }
+    if (body.args !== undefined && (!body.args || typeof body.args !== 'object' || Array.isArray(body.args))) {
+      return c.json({ ok: false, error: 'Invalid "args" field' } satisfies CallToolResponse, 400)
     }
 
     try {
-      const result = await handler.tools.execute(body.name, body.args ?? {}, handler.context)
+      const result = await run(handler, () => handler.tools.execute(body.name, body.args ?? {}, handler.context))
       return c.json({ ok: true, result } satisfies CallToolResponse)
     } catch (err) {
       return c.json({
@@ -57,9 +162,13 @@ export function registerEvalBridgeRoute(app: Hono): void {
   })
 
   app.get('/eval/:sessionKey/tools', (c: HonoContext) => {
-    const handler = bridgeHandlers.get(c.req.param('sessionKey') ?? '')
+    const handler = lookup(c.req.param('sessionKey') ?? '')
     if (!handler) return c.json([], 404)
-    return c.json(handler.tools.names())
+    try {
+      return c.json(run(handler, () => handler.tools.names()))
+    } catch (error) {
+      return c.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 403)
+    }
   })
 }
 
@@ -68,8 +177,8 @@ export function registerEvalBridgeRoute(app: Hono): void {
 /**
  * Start a tool bridge for eval child processes.
  *
- * Registers a handler in the shared dispatch map (the `/eval/*` route
- * is pre-registered on the Hono app via `registerEvalBridgeRoute`).
+ * Organization execution uses the injected runtime registry. The module-level
+ * compatibility registry accepts only contexts without organization ownership.
  *
  * Returns the base URL for the child process to use when calling tools.
  * The caller should pass this to the child via `SHADOW_TOOLS_URL` env var.
@@ -78,12 +187,16 @@ export function startToolBridge(
   tools: Tools,
   context: ExecutionContext,
 ): { url: string; cleanup: () => void } {
+  if (context.evalBridge) return context.evalBridge.startToolBridge(tools, context)
+  if (context.organizationId !== undefined || getOrganizationScope()) {
+    throw new Error('Organization execution requires an injected eval bridge runtime')
+  }
   const sessionKey = context.sessionId.replace(/[^a-z0-9_-]/gi, '_')
   // Unique per-bridge key so concurrent bridges for the same session (e.g. a
   // long-lived background daemon plus a foreground exec) never clobber each
   // other's handler registration or cleanup.
-  const bridgeKey = `${sessionKey}-${crypto.randomUUID().slice(0, 8)}`
-  bridgeHandlers.set(bridgeKey, { tools, context })
+  const bridgeKey = `${sessionKey}-${crypto.randomUUID()}`
+  legacyBridgeHandlers.set(bridgeKey, { tools, context: { ...context } })
 
   const port = env.GATEWAY_PORT ??
     env.REST_API_PORT ?? '3123'
@@ -93,7 +206,7 @@ export function startToolBridge(
 
   return {
     url: baseUrl,
-    cleanup: () => { bridgeHandlers.delete(bridgeKey) },
+    cleanup: () => { legacyBridgeHandlers.delete(bridgeKey) },
   }
 }
 

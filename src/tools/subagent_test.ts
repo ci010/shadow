@@ -8,6 +8,9 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import { SubagentTool } from './subagent.ts'
 import type { ExecutionMode } from '../sessions/execution-mode.ts'
+import { channelSessionId, type ChannelAddress } from '../bus/events.ts'
+import { SessionTools, Tools } from './registry.ts'
+import { rejects } from 'node:assert/strict'
 
 test('nested subagent inherits explicit workdir and legacy workspace root', async () => {
   const parentWorkdir = {
@@ -75,6 +78,51 @@ test('nested subagent inherits explicit workdir and legacy workspace root', asyn
   assertEquals(childFields?.workspaceRoot, 'discord:root')
   assertStrictEquals(childFields?.workdir, parentWorkdir)
   assertEquals(childFields?.projectId, 'folder-project-a')
+})
+
+test('native child threads preserve source bot identity and reject unavailable source instead of fallback', async () => {
+  const created: string[] = []
+  const addresses: Array<ChannelAddress | undefined> = []
+  let unavailable = false
+  let parentId = ''
+  const sessions: Pick<SessionManager, 'assertCanCreateChild' | 'getAllowedSubagentModes' | 'getSessionState' | 'executeOnce' | 'buildSession' | 'addChild'> = {
+    assertCanCreateChild: () => {},
+    getAllowedSubagentModes: () => ['session'],
+    getSessionState: () => ({ sessionId: parentId, segmentIndex: 0, organizationId: 'org' }),
+    executeOnce: (_key, run) => run(),
+    buildSession: async id => { created.push(id) },
+    addChild: async () => {},
+  }
+  const agentTypes: Pick<AgentTypesManager, 'resolve' | 'allNames'> = {
+    resolve: () => ({ name: 'sub', description: '', prompt: '', defaultMode: 'session', source: 'builtin' }),
+    allNames: () => ['sub'],
+  }
+  const channels: Pick<ChannelManager, 'createThread'> = {
+    createThread: async (_channel, _chat, _name, address) => {
+      addresses.push(address)
+      if (unavailable) throw new Error('Source bot unavailable')
+      return 'same-thread'
+    },
+  }
+  const tool = new SubagentTool({} as Bus, sessions as SessionManager, agentTypes as AgentTypesManager, channels as ChannelManager)
+  for (const botInstanceId of ['bot-a', 'bot-b']) {
+    const address = { organizationId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-parent' }
+    parentId = channelSessionId(address)
+    const ctx: ExecutionContext = {
+      organizationId: 'org', channelAddress: address, sessionId: parentId, physicalSessionId: 'physical',
+      channel: 'discord', chatId: 'same-parent', senderId: 'alice', messageId: 'input',
+      signal: new AbortController().signal, tools: new SessionTools(new Tools('.'), '.'),
+    }
+    await tool.execute({ description: 'Child' }, ctx)
+    assertEquals(addresses.at(-1), address)
+    assertEquals(created.at(-1), channelSessionId({ ...address, conversationId: 'same-thread' }))
+    unavailable = true
+    const count = created.length
+    await rejects(tool.execute({ description: 'Unavailable' }, { ...ctx, channelAddress: undefined }), /Source bot unavailable/)
+    assertEquals(created.length, count)
+    unavailable = false
+  }
+  assertStrictEquals(new Set(created).size, 2)
 })
 
 test('only reusable sessions create native threads; no-thread external children are virtual', async () => {

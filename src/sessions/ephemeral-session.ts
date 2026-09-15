@@ -1,6 +1,5 @@
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { SessionInput, SessionTurnFact } from './input.ts'
-import { ReadTool } from '../tools/read.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { BaseSession } from './base-session.ts'
 
@@ -75,7 +74,7 @@ export class EphemeralSession extends BaseSession {
     this.ended = true
     this.closed = true
     this.running = false
-    ReadTool.clearSession(this.physicalSessionId)
+    this.clearReadCache()
     this.tools.resetDynamic()
     try { this.onStopped?.(this.id) } finally { this.stopped.resolve() }
   }

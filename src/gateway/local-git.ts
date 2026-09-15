@@ -5,30 +5,17 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import { structuredPatch } from 'diff'
 import type { Context } from 'hono'
 import { resolveInWorkspace } from './local-files.ts'
+import { isGitFilePath } from './git-contracts.ts'
+import type { GitChangeKind as GitFileStatus, GitChange as GitStatusEntry, GitStatus as GitStatusResult, GitDiff as GitDiffResult } from './git-contracts.ts'
+export type { GitChangeKind as GitFileStatus, GitChange as GitStatusEntry, GitStatus as GitStatusResult, GitDiff as GitDiffResult } from './git-contracts.ts'
 
-export type GitFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted' | 'typechanged'
-export interface GitStatusEntry { path: string; originalPath?: string; status: GitFileStatus }
-export interface GitStatusResult {
-  available: boolean
-  reason?: 'not_repository' | 'remote_unsupported' | 'git_unavailable'
-  entries: GitStatusEntry[]
-}
-export interface GitDiffResult extends GitStatusEntry {
-  base: 'HEAD' | 'empty'
-  binary: boolean
-  truncated: boolean
-  hunks: { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }[]
-  oldContent?: string
-  newContent?: string
-  notice?: string
-}
 
 const MAX_OUTPUT = 2 * 1024 * 1024
 export const MAX_GIT_FILE_BYTES = 256 * 1024
 const MAX_FILES = 5000
 const MAX_PROCESSES = 4
 let processes = 0
-class GitReadError extends Error {
+export class GitReadError extends Error {
   constructor(readonly code: string, message: string, readonly status: 400 | 404 | 409 | 413 | 500 | 503 | 504 = 500) {
     super(message)
   }
@@ -111,7 +98,7 @@ async function git(cwd: string, args: string[], signal: AbortSignal, config: str
       }
       child.once('error', cause => {
         error = (cause as NodeJS.ErrnoException).code === 'ENOENT'
-          ? new GitReadError('git_unavailable', 'Git is not installed or is unavailable on Main.', 503)
+          ? new GitReadError('git_unavailable', 'Git is not installed or is unavailable on the owning device.', 503)
           : new GitReadError('git_failed', 'Git inspection could not start.', 503)
       })
       signal.addEventListener('abort', stop, { once: true })
@@ -144,8 +131,7 @@ function within(base: string, path: string): boolean {
   return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\')
 }
 function relativeFile(path: string): boolean {
-  return !!path && !isAbsolute(path) && !/[\0\\:]/.test(path)
-    && path.split('/').every(part => part !== '' && part !== '.' && part !== '..' && part.toLowerCase() !== '.git')
+  return isGitFilePath(path)
 }
 async function context(base: string, inputSignal?: AbortSignal): Promise<GitReadContext | undefined> {
   const signal = AbortSignal.any([...(inputSignal ? [inputSignal] : []), AbortSignal.timeout(15_000)])

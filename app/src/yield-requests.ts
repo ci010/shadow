@@ -1,4 +1,5 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
+import { apiUrl } from './api-url.ts'
 import { parseYieldRequest, type YieldRequest } from '../../src/sessions/yield-contract.ts'
 
 export function parseYieldResponse(value: unknown, sessionId: string): YieldRequest | null {
@@ -58,7 +59,7 @@ export function useYieldRequest(source: () => YieldSource) {
 
   function endpoint(): string {
     const { apiBase, sessionId } = source()
-    return `${apiBase.replace(/\/$/, '')}/api/sessions/${encodeURIComponent(sessionId)}/yield`
+    return apiUrl(apiBase, `/api/sessions/${encodeURIComponent(sessionId)}/yield`).toString()
   }
   function stopRequests() {
     generation++

@@ -109,6 +109,22 @@ test('Main cluster pairs, approves, persists, and restores challenge credentials
   assertEquals(approvalResponse.status, 200)
   assertEquals(challengeResponse.status, 201)
 
+  cluster.registry.advertiseCapability(authentication, {
+    version: 1, nodeId: authentication.nodeId, capabilityId: 'project',
+    kind: 'workdir', displayName: 'Project', displayPath: '/child/project',
+    permissions: [], approvalPolicy: 'session', online: true,
+  })
+  const inventory = cluster.getNodeInventory()
+  assertEquals(inventory.nodes[0].connection, 'offline')
+  assertEquals(inventory.nodes[0].capabilities[0], {
+    capabilityId: 'project', kind: 'workdir', displayName: 'Project',
+    displayPath: '/child/project', online: false,
+  })
+  assertEquals(cluster.workdirCapabilityLookup({
+    version: 1, nodeId: authentication.nodeId, capabilityId: 'project',
+  }), { node: 'offline' })
+  await cluster.save()
+
   await cluster.closeNodeConnections()
   const stoppingResponse = await app.request('/cluster/v1/challenges', {
     method: 'POST',
@@ -122,6 +138,7 @@ test('Main cluster pairs, approves, persists, and restores challenge credentials
   assertEquals(stoppingAdminResponse.status, 503)
 
   const restored = await createCluster(adapter)
+  assertEquals(restored.getNodeInventory(), inventory)
   assertEquals(
     restored.registry.authenticate(authentication).devicePublicKey,
     encodeBase64Url(publicKey),

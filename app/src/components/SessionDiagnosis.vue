@@ -125,6 +125,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiUrl } from '../api-url.ts'
 import { computed, nextTick, onUnmounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import SystemPromptCard from './SystemPromptCard.vue'
 import ToolsCard, { type ToolDef } from './ToolsCard.vue'
@@ -332,7 +333,7 @@ function navigateViews(event: KeyboardEvent, view: typeof views[number]['id']): 
   document.getElementById(domId(`diagnosis-${section.value}-tab`))?.focus()
 }
 function url(path: string, params: Record<string, string> = {}): URL {
-  const target = new URL(path, props.apiBase)
+  const target = apiUrl(props.apiBase, path)
   for (const [key, value] of Object.entries(params)) target.searchParams.set(key, value)
   return target
 }
