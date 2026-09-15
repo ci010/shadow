@@ -18,6 +18,7 @@ import {
   resolveSessionLocations,
   type WorkdirCapabilityLookup,
 } from './locality.ts'
+import { SessionResumeError } from './recovery.ts'
 
 /** Tracks whether the LLM loop is calling the provider or executing tools. */
 export type TurnPhase = 'llm' | 'tool'
@@ -98,9 +99,17 @@ export class Session extends BaseSession {
     return this.turn.toolStartedAt ? 'tool' : 'llm'
   }
 
+  /** Channel correlation or event input ID, never inferred from a session ID. */
+  get activeRequestId(): string | undefined {
+    return this.turn?.message.replyTo?.platformMessageId ?? this.turn?.message.id
+  }
+
   /** Push a message into this session's inbox or handle it mid-turn. */
   dispatch(msg: SessionInput, llm: LlmRuntimeConfig): void {
     if (!this.accepting) throw new Error(`Session ${this.id} is stopped`)
+    if (msg.kind === 'control' && msg.command.type === 'resume' && !this.quiescent) {
+      throw new SessionResumeError('The conversation has active or queued work. Wait before continuing.')
+    }
     // Cancel sleep timer — we have work.
     if (this.sleepTimer) {
       clearTimeout(this.sleepTimer)
@@ -438,6 +447,7 @@ export class Session extends BaseSession {
   @Span('session.sleep')
   private async sleep(llm: LlmRuntimeConfig): Promise<void> {
     try {
+      if (this.state.recovery) return
       const messages = this.messages
       console.info(
         `[sleep] Putting session to sleep: ${this.id} (${messages.length} messages)`,

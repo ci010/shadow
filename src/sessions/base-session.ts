@@ -152,6 +152,10 @@ export abstract class BaseSession {
   protected async drainPendingMessages(_llm: LlmRuntimeConfig): Promise<void> {}
   protected async finishTurn(fact: SessionTurnFact): Promise<void> {
     this.state.executionStatus = fact.status
+    if (this.state.mode === 'session' && fact.status !== 'completed'
+      && this.messages.some(message => message.role !== 'system')) {
+      this.state.recovery = { id: fact.turnId, reason: fact.status === 'cancelled' ? 'stopped' : 'failed' }
+    } else delete this.state.recovery
     await this.store.saveState(this.id, this.state)
     if (this.state.mode && this.state.mode !== 'session') {
       await this.store.appendRawEvents(this.physicalSessionId, [{ execution_receipt: fact }])
@@ -360,7 +364,7 @@ export abstract class BaseSession {
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
   ): Promise<SessionTurnFact | undefined> {
-    if (input.kind === 'control' && input.command.type !== 'retry') return
+    if (input.kind === 'control' && input.command.type !== 'retry' && input.command.type !== 'resume') return
     const silent = input.kind === 'message' && input.policy === 'silent'
     const msg = inputContext(this.id, input)
     const senderName = msg.senderName ?? msg.senderId
@@ -392,9 +396,9 @@ export abstract class BaseSession {
     const attempted = !silent
     try {
       spanAttributes(attributes)
-      signal.throwIfAborted()
       if (attempted) {
         this.state.executionStatus = 'running'
+        delete this.state.recovery
         await this.store.saveState(this.id, this.state)
       }
 
@@ -423,16 +427,24 @@ export abstract class BaseSession {
       await mkdir(locations.sessionDataDir, { recursive: true })
 
       if (input.kind === 'control') {
-        // Retry the existing history without storing the original prompt twice.
-        const hasReplayable = this.messages.some((m) => m.role !== 'system')
-        if (hasReplayable) {
-          console.info(`[${this.id}] Retrying last request on existing history`)
-        } else if (input.command.type === 'retry' && input.command.fallbackContent?.trim()) {
-          await this.appendMessages(llm, await buildUserChatMessage(
-            retryMessage(input), this.workspace, messageWorkdir,
-          ))
+        if (input.command.type === 'resume') {
+          if (!this.messages.some(message => message.role !== 'system')) throw new Error('No saved history to continue.')
+          await this.persistMessages(llm, {
+            role: 'user',
+            content: '<event type="session-resume" source="user" />\nContinue the interrupted request from this saved history. Do not repeat completed operations. Missing tool results have unknown outcomes: inspect actual state and ask before repeating irreversible actions. This is continuation, not a replay of the last user input.',
+          })
         } else {
-          throw new Error('Nothing to retry: no previous request or fallback content')
+          // Retry alone supports fallback content when the original send was lost.
+          const hasReplayable = this.messages.some((m) => m.role !== 'system')
+          if (hasReplayable) {
+            console.info(`[${this.id}] Retrying last request on existing history`)
+          } else if (input.command.type === 'retry' && input.command.fallbackContent?.trim()) {
+            await this.appendMessages(llm, await buildUserChatMessage(
+              retryMessage(input), this.workspace, messageWorkdir,
+            ))
+          } else {
+            throw new Error('Nothing to retry: no previous request or fallback content')
+          }
         }
       } else {
         const message = await buildUserChatMessage(
@@ -444,7 +456,8 @@ export abstract class BaseSession {
           console.info(`[${this.id}] Recorded silent message`)
           return
         }
-        await this.appendMessages(llm, message)
+        if (signal.aborted) await this.persistMessages(llm, message)
+        else await this.appendMessages(llm, message)
       }
 
       console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)

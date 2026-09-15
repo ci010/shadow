@@ -36,6 +36,7 @@ import type {
   SessionParent,
   SessionStartEvent,
   SessionState,
+  SessionRecovery,
   SessionStore,
 } from './session-store.ts'
 import { Session } from './session.ts'
@@ -44,11 +45,13 @@ import { parseYieldPolicy, type YieldPolicy, type YieldRequest } from './yield-c
 import { allowedSubagentModes, isExecutionMode, type ExecutionMode } from './execution-mode.ts'
 import { delegationOwner, MAX_CALL_TIMEOUT_MS } from './execution-scope.ts'
 import { CallTools } from './call-tools.ts'
+import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
 import type { ExecutionContext } from '../agent/agent.ts'
 import type { ToolBridgeFactory } from '../eval/bridge.ts'
 import {
   channelMessageInput,
   inputContext,
+  sessionReplyAddress,
   type DeliveryReceipt,
   type SessionInput,
   type SessionTurnFact,
@@ -632,6 +635,7 @@ export class SessionManager {
       }
       if (fact) await this.reportCompletion(fact)
     }
+    await this.recoverIncompleteSessions()
   }
 
   private reportCompletion(fact: SessionTurnFact): Promise<void> {
@@ -724,6 +728,10 @@ export class SessionManager {
       if (this.stopped) throw new Error('Session manager stopped')
       this.assertProjectAccess(sessionId)
       const state = this.sessionStates[sessionId]
+      const resume = input.kind === 'control' && input.command.type === 'resume' ? input.command : undefined
+      if (resume && (state?.mode !== 'session' || state.recovery?.id !== resume.recoveryId)) {
+        throw new SessionResumeError('This recovery is no longer current. Refresh the conversation.')
+      }
       const ownerId = delegationOwner(state)
       const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId
         : input.source.kind === 'event' ? input.source.origin?.sessionId : undefined
@@ -756,6 +764,9 @@ export class SessionManager {
       if (!config) throw new Error('Session delivery requires LLM runtime configuration')
       const deliveryInput = input
       let session: Session | EphemeralSession | undefined = this.sessions[sessionId]
+      if (resume && session && (!('quiescent' in session) || !session.quiescent)) {
+        throw new SessionResumeError('The conversation has active or queued work. Wait before continuing.')
+      }
       if (session && !session.accepting) {
         await session.completion
         session = undefined
@@ -775,9 +786,28 @@ export class SessionManager {
         session.stop()
         throw new DOMException('Call cancelled before admission.', 'AbortError')
       }
+      const recovery = resume ? state!.recovery : undefined
+      const previousStatus = state?.executionStatus
+      if (resume) {
+        if (state!.recovery?.id !== resume.recoveryId) throw new SessionResumeError('This recovery is no longer current.')
+        delete state!.recovery
+        state!.executionStatus = 'running'
+        try { await this.store.saveState(sessionId, state!) }
+        catch (error) {
+          state!.recovery = recovery
+          state!.executionStatus = previousStatus
+          if (created) session.stop()
+          throw error
+        }
+      }
       try {
         session.dispatch(deliveryInput, config)
       } catch (error) {
+        if (resume) {
+          state!.recovery = recovery
+          state!.executionStatus = previousStatus
+          await this.store.saveState(sessionId, state!)
+        }
         if (created) session.stop()
         throw error
       }
@@ -846,97 +876,27 @@ export class SessionManager {
     }
   }
 
-  /**
-   * Recover sessions that were interrupted by a process restart.
-   *
-   * Scans all persisted sessions. For each whose last stored record
-   * indicates an incomplete turn (user message without response, or
-   * mid-tool-cycle), delivers a recovery event so the session resumes processing.
-   *
-   * Subagent sessions (those with `report_to` in their start event) are
-   * reported through the domain turn-finished listener registered by start().
-   *
-   * @param maxAgeMs  Only recover sessions active within this window
-   *                  (default: 30 minutes). Older sessions are considered
-   *                  stale and skipped.
-   */
-  async recoverIncompleteSessions(maxAgeMs = 30 * 60_000): Promise<void> {
-    const cutoff = new Date(Date.now() - maxAgeMs).toISOString()
-
-    const allStates = Object.values(this.sessionStates)
-
-    let recovered = 0
-    for (const state of allStates) {
-      if (state.mode !== 'session') continue
-      if (state.executionStatus && ['completed', 'failed', 'cancelled'].includes(state.executionStatus)) continue
-      // Skip stale sessions
-      if (!state.lastActivityAt || state.lastActivityAt < cutoff) continue
-
-      try {
-        // Iterate the log to find the last record's role and detect prior recovery
-        let lastRole: string | undefined
-        let lastHasToolCalls = false
-        let alreadyRecovered = false
-        for await (
-          const record of this.store.readSessionLog(
-            SessionManager.currentPhysicalId(state),
-          )
-        ) {
-          if (record.session_recovered) {
-            alreadyRecovered = true
-            break
-          }
-          if (typeof record.role === 'string') {
-            lastRole = record.role as string
-            lastHasToolCalls = Array.isArray(record.tool_calls) &&
-              (record.tool_calls as unknown[]).length > 0
-          }
-        }
-
-        if (alreadyRecovered) continue
-
-        // A session is "complete" if its last record is an assistant message
-        // with no tool calls (i.e. a final response).
-        const isComplete = lastRole === 'assistant' && !lastHasToolCalls
-        if (isComplete) continue
-
-        // Session was interrupted — resume it.
-        // report_to routing is handled persistently by the bus listener
-        // in start(), so no re-registration needed on recovery.
-
-        console.info(
-          `[recovery] Resuming interrupted session ${state.sessionId}`,
-        )
-        // Legacy records do not retain input IDs; do not invent an origin for
-        // the interrupted turn. The new recovery event receives its own ID.
-        await this.deps.events.emit({
-          type: 'session-recovery',
-          source: 'system',
-          targetSessionId: state.sessionId,
-          senderName: 'System',
-          content:
-            'The previous request was interrupted by a system restart. Continue from where you left off.',
-          meta: { reason: 'process-restart' },
-        })
-        await this.store.appendRawEvents(
-          SessionManager.currentPhysicalId(state),
-          [{
-            session_recovered: true,
-            timestamp: new Date().toISOString(),
-          }],
-        )
-        recovered++
-      } catch (err) {
-        console.warn(
-          `[recovery] Error recovering session ${state.sessionId}:`,
-          errMsg(err),
-        )
-      }
+  /** Mark interrupted histories for explicit continuation; startup never resumes them. */
+  async recoverIncompleteSessions(): Promise<void> {
+    for (const state of Object.values(this.sessionStates)) {
+      if (this.sessions[state.sessionId] || this.preparations.has(state.sessionId)) continue
+      await prepareSessionRecovery(this.store, state)
     }
+  }
 
-    if (recovered > 0) {
-      console.info(`[recovery] Resumed ${recovered} interrupted session(s)`)
-    }
+  getSessionRecovery(sessionId: string): SessionRecovery | undefined {
+    const session = this.sessions[sessionId]
+    if (this.preparations.has(sessionId) || (session && (!('quiescent' in session) || !session.quiescent))) return
+    return this.sessionStates[sessionId]?.mode === 'session' ? this.sessionStates[sessionId]?.recovery : undefined
+  }
+
+  resumeSession(sessionId: string, recoveryId: string): Promise<DeliveryReceipt> {
+    const id = crypto.randomUUID()
+    return this.deliver(sessionId, {
+      id, kind: 'control', command: { type: 'resume', recoveryId }, timestamp: new Date().toISOString(),
+      source: { kind: 'event', eventId: id, type: 'session-resume', source: 'user' },
+      replyTo: sessionReplyAddress(sessionId),
+    })
   }
 
   // ── Session creation ───────────────────────────────────────────────

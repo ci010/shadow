@@ -177,6 +177,8 @@ test('SSE registers before admission, captures fast replies, and waits for accep
   gate.resolve(accepted(message))
   const response = await request
   assert.equal(response.headers.get('Content-Type'), 'text/event-stream')
+  assert.equal(response.headers.get('X-Shadow-Request-Id'), message.platformMessageId)
+  assert.equal(response.headers.get('Access-Control-Expose-Headers'), 'X-Shadow-Request-Id')
   assert.equal(await response.text(),
     'data: {"event":"response","content":"fast response","done":true}\n\n')
   assert.equal(webInternals(channel).pending.size, 0)

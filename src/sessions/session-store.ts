@@ -7,6 +7,20 @@ import type { ExecutionMode } from './execution-mode.ts'
 
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
+export interface SessionRecovery {
+  id: string
+  reason: 'stopped' | 'interrupted' | 'failed'
+}
+
+export function parseSessionRecovery(value: unknown): SessionRecovery | undefined {
+  if (value === undefined) return undefined
+  if (!value || typeof value !== 'object' || !('id' in value) || typeof value.id !== 'string' || !value.id
+    || !('reason' in value) || (value.reason !== 'stopped' && value.reason !== 'interrupted' && value.reason !== 'failed')) {
+    throw new TypeError('Invalid session recovery metadata')
+  }
+  return { id: value.id, reason: value.reason }
+}
+
 // ── Shared types ────────────────────────────────────────────────────────────
 
 /**
@@ -41,6 +55,8 @@ export interface SessionState {
   /** Frozen execution lifetime; absent only in legacy records. */
   mode?: ExecutionMode
   executionStatus?: ExecutionStatus
+  /** Explicit user continuation is required; never replay this automatically. */
+  recovery?: SessionRecovery
   executionId?: string
   /** Structural owner, independent of the historical fork snapshot. */
   parentSessionId?: string | null

@@ -283,6 +283,23 @@ images directly; **Add file / Add folder** keep their existing path-context
 behavior. The browser's **Add file** uploads attachments. Files stay in the
 draft until Send, image-only messages are supported, and uploaded images remain
 visible when history is reopened.
+
+The composer exposes **Stop request** while a request is being prepared or is
+running. Stop cancels the targeted request through the session's provider/tool
+abort path, rather than merely hiding streamed output. A late cancellation
+cannot stop a newer request; other queued messages are preserved. Pending
+cancellation and failures remain visible. Cancellation is cooperative: it does
+not undo completed side effects, and non-cooperative tools can delay cleanup.
+
+Stopped, failed, or restart-interrupted conversations show a **Continue** banner
+above the composer. It continues from saved history instead of resending the
+original message. Restart recovery marks interrupted work but does not start a
+model request until you choose Continue. Saved tool results remain intact;
+missing results are marked as unknown outcomes, not replayed automatically.
+External effects whose results were not saved cannot be guaranteed exactly-once.
+In-memory queued messages are not reconstructed after a crash. Successfully
+completed conversations and unsent cancelled drafts do not show this banner.
+
 Pasting an image into the composer (**Ctrl+V**) adds a removable pending thumbnail
 through the same attachment flow; it does not upload or create a session until
 Send. Ordinary text paste stays native, including when the clipboard contains

@@ -3,6 +3,8 @@ import { delegationOwner } from './execution-scope.ts'
 import type { SessionManager } from './session-manager.ts'
 import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
+import { SessionResumeError } from './recovery.ts'
+import type { SessionRecovery } from './session-store.ts'
 import { ProjectError } from '../projects/registry.ts'
 import { isSelfReflectionId } from './session-purpose.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
@@ -145,6 +147,8 @@ function sessionFileBase(
  * - `GET  /api/sessions`       — list all logical sessions
  * - `GET  /api/sessions/graph` — session graph with parent-child edges
  * - `GET  /api/sessions/:key/details` — read-only identity, workdir, and usage
+ * - `POST /api/sessions/:key/cancel` — request abort of the current turn (not queued inputs)
+ * - `POST /api/sessions/:key/resume` — explicitly continue a matching recovery from saved history
  * - `GET  /api/sessions/:key/files`   — list a directory in the session workspace
  * - `GET  /api/sessions/:key/raw`     — raw file bytes (image/video/audio previews)
  * - `GET  /api/sessions/:key/static/*`— static file serving (HTML pages + relative assets)
@@ -272,6 +276,46 @@ export function sessionsApiPlugin(
       return details
         ? c.json(details)
         : c.json({ error: 'session_not_found', key }, 404)
+    })
+
+    app.post('/api/sessions/:key/cancel', async (c) => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = c.req.param('key')
+      if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+      let body: unknown = {}
+      if (c.req.raw.body) {
+        try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
+      }
+      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'requestId')
+        || ('requestId' in body && (typeof body.requestId !== 'string' || !body.requestId))) {
+        return c.json({ error: 'invalid_request' }, 400)
+      }
+      const active = sessions.getActiveSession(key)
+      if (!active || active.phase === 'idle') return c.json({ sessionId: key, status: 'idle' })
+      if (body.requestId && (!('activeRequestId' in active) || active.activeRequestId !== body.requestId)) {
+        return c.json({ error: 'request_not_active', sessionId: key }, 409)
+      }
+      active.cancel()
+      return c.json({ sessionId: key, status: 'requested' })
+    })
+
+    app.post('/api/sessions/:key/resume', async (c) => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = c.req.param('key')
+      if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+      let body: unknown
+      try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
+      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'recoveryId')
+        || typeof body.recoveryId !== 'string' || !body.recoveryId) return c.json({ error: 'invalid_request' }, 400)
+      try {
+        const receipt = await sessions.resumeSession(key, body.recoveryId)
+        return c.json({ sessionId: key, recoveryId: body.recoveryId, requestId: receipt.inputId, status: 'accepted' }, 202)
+      } catch (error) {
+        return c.json({
+          error: error instanceof SessionResumeError ? 'recovery_conflict' : 'resume_failed',
+          message: error instanceof Error ? error.message : 'Could not continue this conversation.',
+        }, error instanceof SessionResumeError ? 409 : 500)
+      }
     })
 
     app.get('/api/sessions/:key/yield', (c) => {
@@ -536,12 +580,19 @@ export function sessionsApiPlugin(
       const list = await sessions.listSessions()
       const stages: Record<string, 'idle' | 'llm' | 'tool' | 'inactive' | 'waiting'> = {}
       const waitingForCalls: Record<string, boolean> = {}
+      const activeRequestIds: Record<string, string> = {}
+      const recoveries: Record<string, SessionRecovery> = {}
       for (const s of list) {
         const active = sessions.getActiveSession(s.sessionId)
         waitingForCalls[s.sessionId] = !!sessions.isWaitingForCall?.(s.sessionId)
         stages[s.sessionId] = waitingForCalls[s.sessionId] || sessions.yields.get(s.sessionId) ? 'waiting' : active ? active.phase : 'inactive'
+        if (active && active.phase !== 'idle' && 'activeRequestId' in active && typeof active.activeRequestId === 'string') {
+          activeRequestIds[s.sessionId] = active.activeRequestId
+        }
+        const recovery = sessions.getSessionRecovery?.(s.sessionId)
+        if (recovery) recoveries[s.sessionId] = recovery
       }
-      return c.json({ stages, waitingForCalls })
+      return c.json({ stages, waitingForCalls, activeRequestIds, recoveries })
     })
 
     app.get('/api/sessions/:key/stage', async (c) => {

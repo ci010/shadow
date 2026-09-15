@@ -11,6 +11,7 @@ import type {
 } from './session-store.ts'
 import { parseWorkdirRefV1 } from './locality.ts'
 import { isExecutionMode } from './execution-mode.ts'
+import { parseSessionRecovery } from './session-store.ts'
 
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 50
@@ -42,6 +43,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'preloadTools',
   'mode',
   'executionStatus',
+  'recovery',
   'executionId',
   'parentSessionId',
   'executionKey',
@@ -72,6 +74,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (!isRecord(value)) return null
 
   const metadata: SessionMetadata = {}
+  if (value.recovery !== undefined) metadata.recovery = parseSessionRecovery(value.recovery)
   if (typeof value.completionReported === 'boolean') metadata.completionReported = value.completionReported
   if (isExecutionMode(value.mode)) metadata.mode = value.mode
   if (['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'].includes(String(value.executionStatus))) {
@@ -340,6 +343,7 @@ export class SqliteSessionStore implements SessionStore {
         preloadTools: state.preloadTools,
         mode: state.mode,
         executionStatus: state.executionStatus,
+        recovery: state.recovery,
         executionId: state.executionId,
         parentSessionId: state.parentSessionId,
         executionKey: state.executionKey,

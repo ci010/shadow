@@ -1,3 +1,5 @@
+import { parseSessionRecovery, type SessionRecovery } from '../../src/sessions/session-store.ts'
+
 export type SessionStage = 'idle' | 'llm' | 'tool' | 'waiting' | 'waiting-for-call' | 'inactive' | 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type WorkingStage = 'llm' | 'tool' | 'waiting' | 'waiting-for-call' | 'running'
 
@@ -49,6 +51,35 @@ export function parseSessionStages(value: unknown): Record<string, SessionStage>
     if (!isWorkingStage(stage) && stage !== 'idle' && stage !== 'inactive' && stage !== 'pending'
       && stage !== 'completed' && stage !== 'failed' && stage !== 'cancelled') throw new Error('Session activity is unavailable.')
     result[id] = stage
+  }
+  return result
+}
+
+/** Older servers can render activity, but cannot safely cancel restored turns. */
+export function parseActiveRequestIds(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || !('activeRequestIds' in value)) return {}
+  const identities = value.activeRequestIds
+  if (!identities || typeof identities !== 'object' || Array.isArray(identities)) {
+    throw new Error('Current request identity is unavailable.')
+  }
+  const result: Record<string, string> = {}
+  for (const [sessionId, requestId] of Object.entries(identities)) {
+    if (typeof requestId !== 'string' || !requestId) throw new Error('Current request identity is unavailable.')
+    result[sessionId] = requestId
+  }
+  return result
+}
+
+export function parseSessionRecoveries(value: unknown): Record<string, SessionRecovery> {
+  if (!value || typeof value !== 'object' || !('recoveries' in value)) return {}
+  if (!value.recoveries || typeof value.recoveries !== 'object' || Array.isArray(value.recoveries)) {
+    throw new Error('Conversation recovery status is unavailable.')
+  }
+  const result: Record<string, SessionRecovery> = {}
+  for (const [sessionId, raw] of Object.entries(value.recoveries)) {
+    const recovery = parseSessionRecovery(raw)
+    if (!recovery) throw new Error('Conversation recovery status is unavailable.')
+    result[sessionId] = recovery
   }
   return result
 }

@@ -420,6 +420,36 @@ This is an iterative conversation loop, not a durable workflow DAG. A frontend
 SSE activity stream does not mean every provider is token-streaming to the UI:
 the common loop works with completed `chat` responses and tool events.
 
+`app/src/chat-request-control.ts` manages composer Stop state across preparation,
+admission, streaming and cancellation. `/api/chat/send` exposes its correlation
+ID in `X-Shadow-Request-Id`; restored activity gets the same identity from
+`/api/sessions/stages`'s `activeRequestIds`. The UI always captures and submits
+that ID, failing closed if it is unavailable. `POST /api/sessions/:key/cancel` uses a URL-encoded
+logical session ID and an optional `{requestId}` body. A supplied ID must match
+the active input's reply-address message ID (or its input/event ID); a mismatch returns
+`409 request_not_active`. Omitting it explicitly targets the current turn.
+The `requested` response acknowledges `Session.cancel()`, not completed cleanup;
+the UI retains activity until a terminal event or confirmed inactivity, and
+shows cancellation errors without pretending work stopped. Provider/tool abort
+is cooperative, preserves queued inputs and does not kill unrelated background
+tasks or roll back completed side effects.
+
+The composer also exposes an explicit Continue action from
+`/api/sessions/stages`'s `recoveries`. `SessionState.recovery` stores a recovery ID
+and stopped/interrupted/failed reason through JSONL and SQLite, including their
+migration path. `POST /api/sessions/:key/resume` accepts only `{recoveryId}` and
+returns a 202 admission receipt with a new request ID. Serialized admission
+rejects stale, duplicate, wrong-session or busy/queued resumes with 409. The
+normal session loop handles a distinct resume control, continuing saved history
+rather than retrying the original content or attachments.
+
+Startup recovery marks interrupted reusable sessions without invoking a model.
+It persists unknown-outcome placeholders for missing tool results while retaining
+completed results and their pairing. Successful completion clears recovery;
+unsent preparation cancellation creates none. Recovery does not automatically
+replay tool calls, cannot guarantee exactly-once external effects after a crash,
+and does not restore in-memory queues. Unrelated scheduled activity is unchanged.
+
 ## Sessions and continuity
 
 ### Roles and execution modes

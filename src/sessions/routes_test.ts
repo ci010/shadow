@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { projectFixture } from '../projects/test-fixtures.ts'
+import { ProjectError } from '../projects/registry.ts'
 import type { SessionState } from './session-store.ts'
 import { Hono } from 'hono'
 import { channelSessionId } from '../bus/events.ts'
@@ -67,6 +68,51 @@ class RouteFilesystemExecutor implements Executor {
     throw new Error('not used')
   }
 }
+
+test('cancel route requires an existing authorized logical session and distinguishes idle from requested', async () => {
+  let cancellations = 0
+  let phase = 'idle'
+  const key = 'web:chat-cancel'
+  const app = new Hono()
+  sessionsApiPlugin({
+    organizationId: 'owned-org',
+    getSessionState: (id: string) => id === key ? { sessionId: key } : undefined,
+    getActiveSession: () => ({ get phase() { return phase }, activeRequestId: 'current-request', cancel: () => { cancellations++ } }),
+  } as unknown as SessionManager)(app)
+  const endpoint = `/api/sessions/${encodeURIComponent(key)}/cancel`
+  assert.deepEqual(await (await app.request(endpoint, { method: 'POST' })).json(), { sessionId: key, status: 'idle' })
+  assert.equal(cancellations, 0)
+  phase = 'tool'
+  assert.deepEqual(await (await app.request(endpoint, { method: 'POST' })).json(), { sessionId: key, status: 'requested' })
+  assert.equal(cancellations, 1)
+  const stale = await app.request(endpoint, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: 'previous-request' }),
+  })
+  assert.equal(stale.status, 409)
+  assert.equal(cancellations, 1)
+  const targeted = await app.request(endpoint, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: 'current-request' }),
+  })
+  assert.equal(targeted.status, 200)
+  assert.equal(cancellations, 2)
+  for (const invalid of ['{', 'null', '{"requestId":""}', '{"sessionId":"other"}']) {
+    assert.equal((await app.request(endpoint, { method: 'POST', body: invalid })).status, 400)
+  }
+  for (const unknown of ['web:other-org', key + '__0']) {
+    assert.equal((await app.request(`/api/sessions/${encodeURIComponent(unknown)}/cancel`, { method: 'POST' })).status, 404)
+  }
+  assert.equal(cancellations, 2)
+  const missing = new Hono()
+  sessionsApiPlugin(undefined)(missing)
+  assert.equal((await missing.request(endpoint, { method: 'POST' })).status, 501)
+  const denied = new Hono()
+  sessionsApiPlugin({
+    getSessionState: () => ({ sessionId: key }),
+    assertProjectAccess: () => { throw new ProjectError('project_unavailable', 'Project unavailable', 409) },
+    getActiveSession: () => { throw new Error('Must not reach active session after access denial') },
+  } as unknown as SessionManager)(denied)
+  assert.equal((await denied.request(endpoint, { method: 'POST' })).status, 409)
+})
 
 test('session route parameters retain encoded bot components without a second decoding pass', async t => {
   const { workspace } = await projectFixture(t)

@@ -488,6 +488,8 @@ export class WebChannel extends AbstractChannel {
       return new Response(sseStream, {
         headers: {
           'Content-Type': 'text/event-stream',
+          'X-Shadow-Request-Id': requestId,
+          'Access-Control-Expose-Headers': 'X-Shadow-Request-Id',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
           'Access-Control-Allow-Origin': '*',

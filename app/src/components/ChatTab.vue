@@ -136,7 +136,7 @@
               </div>
               <div class="chat-content prose" v-html="renderMarkdown(msg.content)" />
               <div
-                v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !streaming && !awaitingCall"
+                v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
               >
                 <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Retry</button>
@@ -197,6 +197,17 @@
 
         <!-- Input (direct-chat only) -->
         <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" class="chat-composer">
+          <div v-if="currentRecovery && !requestBusy" class="resume-bar" role="status">
+            <div>
+              <strong>{{ currentRecovery.reason === 'stopped' ? 'Request stopped' : currentRecovery.reason === 'failed' ? 'Request failed' : 'Request interrupted' }}</strong>
+              <p>Continue from saved history, without resending your message. Completed operations are retained; uncertain tool outcomes must be checked before repeating them.</p>
+            </div>
+            <button class="resume-button" aria-label="Resume interrupted request"
+              :disabled="!installation.uiScopes.includes('chat:write') || savingSettings || pickingContext"
+              @click="resumeCurrentRequest()">
+              <span class="i-lucide-play w-4 h-4" aria-hidden="true" /> Continue
+            </button>
+          </div>
           <div v-if="canResend" class="resend-bar">
             <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Resend last message</button>
           </div>
@@ -225,7 +236,7 @@
               :placeholder="remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
               aria-label="Message"
               rows="3"
-              :disabled="streaming || preparingSend || awaitingCall"
+              :disabled="requestBusy"
               @keydown="handleKeyDown"
               @input="autoResize"
               @paste="handleComposerPaste"
@@ -250,14 +261,27 @@
                   </button>
                 </template>
               </ComposerPopover>
-              <ModelSelector :settings="reasoningSettings" :settings-disabled="streaming || preparingSend || pickingContext || awaitingCall" :busy="savingSettings" @change-settings="changeReasoningSettings" />
+              <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
               <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
                 :api-base="apiBase" :selected="draftRemote" :local-label="draftProject?.name"
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
-            <span class="composer-hint" role="status">{{ imageEditsBusy.size ? 'Preparing marked image...' : imageDropTarget ? 'Drop image to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : preparingSend ? 'Starting conversation...' : 'Enter to send · Shift+Enter for a new line' }}</span>
+            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : requestBusy ? 'The current request is running' : imageEditsBusy.size ? 'Preparing marked image...' : imageDropTarget ? 'Drop image to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : 'Enter to send · Shift+Enter for a new line' }}</span>
             <button
+              v-if="requestBusy"
+              class="composer-stop"
+              :disabled="currentRequest?.state.stopping || !installation.uiScopes.includes('chat:write')"
+              :aria-busy="currentRequest?.state.stopping || undefined"
+              aria-label="Stop current request"
+              title="Stop current request; queued messages are kept"
+              @click="stopCurrentRequest()"
+            >
+              <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
+              {{ currentRequest?.state.stopping ? 'Stopping...' : 'Stop request' }}
+            </button>
+            <button
+              v-else
               class="composer-send"
               :disabled="!canSend"
               aria-label="Send message"
@@ -270,6 +294,8 @@
           </div>
           </div>
           <p v-if="composerError" class="composer-error" role="alert">{{ composerError }}</p>
+          <p v-if="currentRequest?.state.error" class="composer-error" role="alert">{{ currentRequest.state.error }}</p>
+          <p v-if="stageError && requestBusy" class="composer-error" role="status">{{ stageError }}</p>
           <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
           <p v-if="remoteConversation" class="remote-execution-note" role="status">Files and commands run on the selected device. Local file attachments are not transferred to that device.</p>
         </div>
@@ -283,7 +309,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef, reactive, computed, nextTick, onMounted, onUnmounted, useId, watch } from 'vue'
+import { ref, shallowRef, shallowReactive, reactive, computed, nextTick, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
@@ -318,7 +344,8 @@ import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, compose
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { userMessageMarkers } from '../message-history.ts'
-import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, parseSessionStages, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
 import { groupSenderNames } from '../message-author.ts'
 import SessionHeading from './SessionHeading.vue'
@@ -326,6 +353,7 @@ import { updateSessionSettings, type ReasoningSettings } from '../session-settin
 import { childConversationTarget } from '../conversation-split.ts'
 import ToolActivityGroup from './ToolActivityGroup.vue'
 import { groupToolActivity } from '../tool-activity.ts'
+import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -420,10 +448,13 @@ const canSend = computed(() => !modelSelection?.loading.value && !modelSelection
   inputText.value,
   contextItems.value.length,
   pendingAttachments.value.length,
-) && !streaming.value && !preparingSend.value && !pickingContext.value && !savingSettings.value && imageEditsBusy.value.size === 0)
+) && !requestBusy.value && !pickingContext.value && !savingSettings.value && imageEditsBusy.value.size === 0)
 let sendRequest: AbortController | undefined
 let historyRequest: AbortController | undefined
 const activeSessionId = ref(props.embedded || props.managed ? props.sessionId ?? '' : '')
+const requestControls = shallowReactive(new Map<string, ChatRequestControl>())
+const draftRequest = shallowRef<ChatRequestControl>()
+const currentRequest = computed(() => activeSessionId.value ? requestControls.get(activeSessionId.value) : draftRequest.value)
 const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessionId.value || (draftRemote.value ? `remote:${draftRemote.value.nodeId}:${draftRemote.value.capabilityId}` : `project:${draft.value.project?.id ?? 'scratch'}`)]))
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
@@ -443,6 +474,9 @@ const mobileSidebarOpen = ref(false)
 
 // ── Session stage polling (batch) ────────────────────────────────────────────
 const sessionStages = ref<Record<string, SessionStage>>({})
+const activeRequestIds = ref<Record<string, string>>({})
+const sessionRecoveries = ref<Record<string, SessionRecovery>>({})
+const currentRecovery = computed(() => activeSessionId.value ? sessionRecoveries.value[activeSessionId.value] : undefined)
 const stageError = ref('')
 const displayedSessionStages = computed(() => executionStages(allSessions.value, resolveDisplayedStages(
   sessionStages.value, activeSessionId.value, streaming.value, streamPhase.value,
@@ -452,12 +486,47 @@ const sessionStage = computed<SessionStage | null>(() =>
 )
 const sessionWorking = computed(() => isWorkingStage(sessionStage.value))
 const awaitingCall = computed(() => sessionStage.value === 'waiting-for-call')
+const requestBusy = computed(() => preparingSend.value || streaming.value || sessionWorking.value || sessionStage.value === 'pending'
+  || !!currentRequest.value && currentRequest.value.state.phase !== 'finished')
+async function stopCurrentRequest(): Promise<void> {
+  if (!installation.value.uiScopes.includes('chat:write') || !requestBusy.value) return
+  let control = currentRequest.value
+  if ((!control || control.state.phase === 'finished') && activeSessionId.value) {
+    control = createChatRequestControl(props.apiBase, () => {}, fetch, activeSessionId.value, activeRequestIds.value[activeSessionId.value])
+    requestControls.set(activeSessionId.value, control)
+  }
+  await control?.stop()
+  void pollSessionStages()
+}
+async function resumeCurrentRequest(): Promise<void> {
+  const sessionId = activeSessionId.value
+  const recovery = currentRecovery.value
+  if (!sessionId || !recovery || requestBusy.value || !isDirectChat.value
+    || !installation.value.uiScopes.includes('chat:write') || savingSettings.value || pickingContext.value) return
+  const generation = sessionSelectionGeneration
+  const control = createChatRequestControl(props.apiBase, () => {})
+  requestControls.set(sessionId, control)
+  composerError.value = ''
+  if (!eventStream) connectEventStream(sessionId.replace('web:', ''))
+  try {
+    await resumeChatRequest(props.apiBase, sessionId, recovery.id, control)
+    if (sessionRecoveries.value[sessionId]?.id === recovery.id) delete sessionRecoveries.value[sessionId]
+    if (generation === sessionSelectionGeneration) {
+      void loadSessionList()
+      void loadCurrentSession()
+    }
+  } catch (error) {
+    if (generation === sessionSelectionGeneration) {
+      composerError.value = error instanceof Error ? error.message : 'Could not continue this conversation. Refresh and retry.'
+    }
+  } finally {
+    if (generation === sessionSelectionGeneration) void pollSessionStages()
+  }
+}
 function handleYieldCancelled(sessionId: string): void {
   if (activeSessionId.value !== sessionId) return
-  sendRequest?.abort()
-  flushStreamingTool()
-  streaming.value = false
-  streamPhase.value = undefined
+  // The yield endpoint has requested a real abort. Keep the reader and busy
+  // state until the terminal event or a fresh server activity read confirms it.
   void pollSessionStages()
 }
 const activeSession = computed(() => allSessions.value.find(session => session.sessionId === activeSessionId.value))
@@ -481,7 +550,7 @@ let settingsRequest: AbortController | undefined
 
 async function changeReasoningSettings(patch: ReasoningSettings): Promise<void> {
   if (isExecution.value || awaitingCall.value) return
-  if (savingSettings.value || streaming.value || preparingSend.value || pickingContext.value) return
+  if (savingSettings.value || requestBusy.value || pickingContext.value) return
   if ((!('thinking' in patch) || (patch.thinking?.type ?? null) === (reasoningSettings.value.thinking?.type ?? null))
     && (!('reasoningEffort' in patch) || (patch.reasoningEffort ?? null) === (reasoningSettings.value.reasoningEffort ?? null))) return
   settingsError.value = ''
@@ -515,15 +584,44 @@ async function pollSessionStages(): Promise<void> {
   if (stageRequest || !props.visible) return
   if (!sessionListRequest && Date.now() - lastGraphRefresh >= 3000) void loadSessionList()
   const controller = new AbortController()
+  const observedRequest = currentRequest.value
+  const observedActive = observedRequest?.state.phase === 'active'
+  const observedSessionId = activeSessionId.value
   stageRequest = controller
   try {
     const res = await fetch(buildUrl('/api/sessions/stages'), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]) })
     if (!res.ok) throw new Error('Session activity is unavailable.')
-    const stages = parseSessionStages(await res.json())
+    const snapshot: unknown = await res.json()
+    const stages = parseSessionStages(snapshot)
+    const identities = parseActiveRequestIds(snapshot)
+    const recoveries = parseSessionRecoveries(snapshot)
     if (!controller.signal.aborted) {
       const previous = sessionStages.value[activeSessionId.value]
       sessionStages.value = stages
+      activeRequestIds.value = identities
+      sessionRecoveries.value = recoveries
       stageError.value = ''
+      if (observedActive && observedRequest === currentRequest.value && observedSessionId === activeSessionId.value
+        && (stages[observedSessionId] === 'idle' || stages[observedSessionId] === 'inactive')
+        && !sendRequest) {
+        observedRequest?.finish()
+        streaming.value = false
+        streamPhase.value = undefined
+        if (isDirectChat.value && !historyRequest) void loadCurrentSession()
+      }
+      const identity = identities[activeSessionId.value]
+      const current = currentRequest.value
+      if (!sendRequest && identity && isWorkingStage(stages[activeSessionId.value])
+        && (!current || current.state.phase === 'finished'
+          || current.state.phase === 'active' && current.state.requestId !== identity)) {
+        // A different active input confirms the old one ended, even if its
+        // terminal SSE was missed. Never forward its pending Stop to this input.
+        const error = current?.state.error
+        current?.finish()
+        const restored = createChatRequestControl(props.apiBase, () => {}, fetch, activeSessionId.value, identity)
+        if (error) restored.state.error = error
+        requestControls.set(activeSessionId.value, restored)
+      }
       if (conversationDocumentVisible.value && activeSessionId.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && activePanel.value === 'conversation' && !historyRequest
         && shouldRefreshReadonlyHistory(stages[activeSessionId.value], previous, Date.now() - lastReadonlyRefresh)) {
         void loadReadonlySession(true)
@@ -531,7 +629,6 @@ async function pollSessionStages(): Promise<void> {
     }
   } catch {
     if (!controller.signal.aborted) {
-      sessionStages.value = {}
       stageError.value = 'Session activity is unavailable. Retrying...'
     }
   } finally {
@@ -550,6 +647,8 @@ function stopStagePolling(): void {
   stageRequest?.abort()
   stageRequest = undefined
   sessionStages.value = {}
+  activeRequestIds.value = {}
+  sessionRecoveries.value = {}
 }
 
 // ── Background event stream (live push for cron ticks / self-awake / subagents) ──
@@ -575,6 +674,7 @@ function connectEventStream(chatId: string): void {
       if (payload.event !== 'session_message') streaming.value = true
       if (applyStreamPayload(payload, payload.event === 'session_message' ? requestStreamState ?? bgStreamState : bgStreamState)) {
         streaming.value = false
+        if (!sendRequest) currentRequest.value?.finish()
         void loadSessionList()
       }
     } catch {
@@ -1155,8 +1255,9 @@ function resetConversation(): void {
   pendingDraftSettings.value = undefined
   activePanel.value = 'conversation'
   diagnosisOpened.value = false
-  sendRequest?.abort()
+  if (!(currentRequest.value?.state.phase === 'submitting' && currentRequest.value.state.stopping)) sendRequest?.abort()
   sendRequest = undefined
+  draftRequest.value = undefined
   historyRequest?.abort()
   historyRequest = undefined
   loadingHistory.value = false
@@ -1508,19 +1609,28 @@ async function sendMessage(overrideContent?: string, opts?: {
     composerError.value = 'Remove local attachments before sending to a remote workspace.'
     return
   }
-  if ((!content && !retry && attachments.length === 0) || streaming.value || preparingSend.value || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
+  if ((!content && !retry && attachments.length === 0) || requestBusy.value || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
   const generation = sessionSelectionGeneration
   const controller = new AbortController()
   sendRequest = controller
+  const priorRecoveryId = currentRecovery.value?.id
+  const control = createChatRequestControl(props.apiBase, () => controller.abort())
+  if (activeSessionId.value) requestControls.set(activeSessionId.value, control)
+  else draftRequest.value = control
   const startingDraft = !activeSessionId.value
   preparingSend.value = startingDraft
   composerError.value = ''
   let accepted = false
+  let submitted = false
+  let rejected = false
+  let completed = false
   let messageAdded = retry
 
   try {
     const sessionId = activeSessionId.value || await draft.value.prepare(controller.signal)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    requestControls.set(sessionId, control)
+    draftRequest.value = undefined
     // Never load context/history for a draft: that endpoint materializes a session.
     historyRequest?.abort()
     historyRequest = undefined
@@ -1569,6 +1679,8 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (opts?.parentSessionId) payload.parentSessionId = opts.parentSessionId
     if (pendingDraftSettings.value || model) payload.config = { ...pendingDraftSettings.value, ...(model ? { model } : {}) }
 
+    control.submitting(sessionId)
+    submitted = true
     const res = await fetch(buildUrl('/api/chat/send'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1577,10 +1689,16 @@ async function sendMessage(overrideContent?: string, opts?: {
     })
 
     if (!res.ok || !res.body) {
+      rejected = true
       throw new Error(`Could not send message (${res.status} ${res.statusText}). Retry when Main is available.`)
     }
-    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     accepted = true
+    if (sessionRecoveries.value[sessionId]?.id === priorRecoveryId) delete sessionRecoveries.value[sessionId]
+    control.admitted(res.headers.get('x-shadow-request-id') ?? undefined)
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) {
+      controller.abort()
+      return
+    }
     pendingDraftSettings.value = undefined
     if (!eventStream) connectEventStream(chatId)
     void loadSessionList()
@@ -1607,6 +1725,8 @@ async function sendMessage(overrideContent?: string, opts?: {
         try {
           const payload = JSON.parse(line.slice(6))
           if (applyStreamPayload(payload, streamState)) {
+            completed = true
+            control.finish()
             streaming.value = false
             void loadSessionList()
             return
@@ -1631,6 +1751,8 @@ async function sendMessage(overrideContent?: string, opts?: {
       messages.value.push({ role: 'assistant', content: `Error: ${err}`, isError: true, timestamp: new Date().toISOString() })
     }
   } finally {
+    if (!submitted || rejected || completed) control.finish()
+    else if (control.state.phase === 'submitting') control.admitted()
     if (generation === sessionSelectionGeneration) {
       if (sendRequest === controller) {
         sendRequest = undefined
@@ -1660,7 +1782,7 @@ function isErrorMessage(msg: ChatMsg): boolean {
  * view and re-run the request on the existing history (no duplicate prompt).
  */
 function retryLastRequest(): void {
-  if (streaming.value) return
+  if (requestBusy.value) return
   while (messages.value.length && isErrorMessage(messages.value[messages.value.length - 1])) {
     messages.value.pop()
   }
@@ -1865,7 +1987,7 @@ onUnmounted(() => {
   dockObserver?.disconnect()
   settingsRequest?.abort()
   sessionSelectionGeneration++
-  sendRequest?.abort()
+  if (!(currentRequest.value?.state.phase === 'submitting' && currentRequest.value.state.stopping)) sendRequest?.abort()
   historyRequest?.abort()
   sessionListRequest?.abort()
   document.removeEventListener('keydown', handleTypingFocus)
@@ -1930,7 +2052,7 @@ watch(composerDock, element => {
   dockObserver.observe(element)
 }, { flush: 'post' })
 const canResend = computed(() => {
-  if (streaming.value || awaitingCall.value) return false
+  if (requestBusy.value || currentRecovery.value) return false
   if (messages.value.length === 0) return false
   const lastMsg = messages.value[messages.value.length - 1]
   return lastMsg.role === 'user'
@@ -2010,6 +2132,15 @@ function resendLastMessage() {
 .composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .composer-send:disabled { opacity: .35; cursor: not-allowed; }
 .composer-send:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
+.composer-stop { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 10px; border: 1px solid var(--c-border); border-radius: 16px; color: var(--c-text); background: var(--c-bg); cursor: pointer; flex-shrink: 0; white-space: nowrap; }
+.composer-stop:disabled { opacity: .65; cursor: not-allowed; }
+.composer-stop:hover:not(:disabled) { border-color: var(--c-border-hover); }
+.composer-stop:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.resume-bar { display: flex; align-items: center; gap: 16px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--c-border-hover); border-radius: 12px; background: var(--c-bg); color: var(--c-text); }
+.resume-bar p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; }
+.resume-button { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; min-height: 36px; padding: 8px 12px; border: 0; border-radius: 8px; background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
+.resume-button:disabled { opacity: .5; cursor: not-allowed; }
+.resume-button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .composer-send:focus-visible, .context-action:focus-visible, .context-chip button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .composer-context { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 10px; }
 .context-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 5px 4px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text-secondary); font-size: 12px; }

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { describe, test } from 'node:test'
+import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import type { LLMProvider, LLMResponse, ChatMessage } from '../providers/provider.ts'
@@ -14,6 +15,7 @@ import type { SessionState } from './session-store.ts'
 import type { SessionInput, SessionMessageInput, SessionTurnFact } from './input.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { Session } from './session.ts'
+import { sessionsApiPlugin } from './routes.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (content = 'Finished'): LLMResponse => ({ content, toolCalls: [] })
@@ -349,6 +351,85 @@ test('cancel aborts only the active turn and queued input survives', async () =>
     assert.equal(f.facts[1].inputId, 'queued')
   } finally { await f.close() }
 })
+
+test('stopped history sleeps without model-driven compaction or losing explicit recovery', async () => {
+  let compactions = 0
+  const f = await fixture({
+    sleepInactivityMs: 5,
+    handoff: {
+      shouldHandoff: () => true,
+      create: async () => { compactions++; return { timestamp: new Date().toISOString(), prompt: 'Unexpected compaction' } },
+    } as unknown as HandoffManager,
+  })
+  try {
+    f.session.dispatch(input('first'), llm)
+    await waitFor(() => f.calls.length === 1)
+    f.session.cancel()
+    await waitFor(() => !f.session.accepting)
+    await f.session.completion
+    assert.equal(compactions, 0)
+    assert.equal(f.calls.length, 1)
+    assert.equal((await f.store.getState(f.state.sessionId))?.recovery?.reason, 'stopped')
+  } finally { await f.close() }
+})
+
+for (const phase of ['provider', 'tool'] as const) {
+  test(`HTTP cancellation aborts the current ${phase} signal, retaining queued inputs and unrelated sessions`, async () => {
+    const f = await fixture()
+    const tool = Promise.withResolvers<string>()
+    let toolSignal: AbortSignal | undefined
+    let unrelatedCancellations = 0
+    f.tools.register({
+      name: 'fixture_cancel', description: '', parameters: { type: 'object', properties: {} },
+      execute: async (_args, ctx) => { toolSignal = ctx.signal; return tool.promise },
+    })
+    const app = new Hono()
+    sessionsApiPlugin({
+      getSessionState: (id: string) => id === f.state.sessionId ? f.state : undefined,
+      listSessions: async () => [f.state],
+      yields: { get: () => null },
+      getActiveSession: (id: string) => id === f.state.sessionId ? f.session : { cancel: () => { unrelatedCancellations++ } },
+    } as unknown as SessionManager)(app)
+    try {
+      f.session.dispatch({ ...input('first'), replyTo: { channel: 'web', chatId: 'fixture', platformMessageId: 'request-first' } }, llm)
+      await waitFor(() => f.calls.length === 1)
+      if (phase === 'tool') {
+        f.calls[0].resolve({ content: null, toolCalls: [{ id: 'cancel-tool', name: 'fixture_cancel', arguments: {} }] })
+        await waitFor(() => !!toolSignal)
+      }
+      f.session.dispatch(input('queued'), llm)
+      const activity = await (await app.request('/api/sessions/stages')).json()
+      const restoredRequestId = activity.activeRequestIds[f.state.sessionId]
+      assert.equal(restoredRequestId, 'request-first')
+      const response = await app.request(`/api/sessions/${encodeURIComponent(f.state.sessionId)}/cancel`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: restoredRequestId }),
+      })
+      assert.equal(response.status, 200)
+      assert.deepEqual(await response.json(), { sessionId: f.state.sessionId, status: 'requested' })
+      assert.equal((phase === 'tool' ? toolSignal! : f.calls[0].signal).aborted, true)
+      if (phase === 'tool') {
+        // Acknowledgement does not pretend that a non-cooperative tool stopped.
+        assert.equal(f.session.phase, 'tool')
+        assert.equal(f.calls.length, 1)
+        tool.resolve('Tool cleanup complete')
+      }
+      await waitFor(() => f.calls.length === 2)
+      assert.equal(f.facts[0].status, 'cancelled')
+      assert.equal(f.calls[1].signal.aborted, false)
+      const stale = await app.request(`/api/sessions/${encodeURIComponent(f.state.sessionId)}/cancel`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: restoredRequestId }),
+      })
+      assert.equal(stale.status, 409)
+      assert.equal(f.calls[1].signal.aborted, false)
+      const successor = await (await app.request('/api/sessions/stages')).json()
+      assert.equal(successor.activeRequestIds[f.state.sessionId], 'queued')
+      f.calls[1].resolve(done())
+      await waitFor(() => f.facts.length === 2)
+      assert.equal(f.facts[1].inputId, 'queued')
+      assert.equal(unrelatedCancellations, 0)
+    } finally { tool.resolve('cleanup'); await f.close() }
+  })
+}
 
 test('stop aborts active provider and classifier; inbox listeners are released', async () => {
   const f = await fixture({ quickModel: 'quick' })
@@ -779,7 +860,7 @@ describe('session lifecycle edge cases', () => {
     } finally { await f.close() }
   })
 
-  test('standalone start delivers a queue event and recovery awaits event admission', async () => {
+  test('standalone start delivers a queue event but recovery only marks history for explicit continuation', async () => {
     const f = await fixture({ manager: true })
     let inbound = 0
     f.bus.on('message.inbound', () => { inbound++ })
@@ -805,12 +886,11 @@ describe('session lifecycle edge cases', () => {
         role: 'user', content: 'Interrupted request', timestamp: new Date().toISOString(),
       }])
       await f.manager.recoverIncompleteSessions()
-      assert.equal(f.reports.length, 1)
-      assert.equal(f.reports[0].type, 'session-recovery')
-      assert.equal(f.reports[0].targetSessionId, f.state.sessionId)
-      assert.equal(f.reports[0].origin, undefined, 'legacy recovery must not fabricate the interrupted input ID')
+      assert.equal(f.reports.length, 0)
+      assert.equal(f.calls.length, 1)
+      assert.equal(f.manager.getSessionRecovery(f.state.sessionId)?.reason, 'interrupted')
       const records = await Array.fromAsync(f.store.readSessionLog('test_queue-0'))
-      assert.equal(records.at(-1)?.session_recovered, true)
+      assert.equal(records.at(-1)?.role, 'user')
       assert.equal(inbound, 0)
       const active = f.manager.getActiveSession(sessionId!)!
       active.stop()

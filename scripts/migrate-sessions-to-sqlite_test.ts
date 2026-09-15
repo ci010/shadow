@@ -16,6 +16,7 @@ test('migration preserves modern SessionState metadata and JSONL logs', async ()
     segmentIndex: 3,
     lastActivityAt: '2026-08-26T12:34:56.000Z',
     lastKnownTokens: 4321,
+    recovery: { id: 'recovery-fixture', reason: 'interrupted' },
     config: { model: 'test-model', temperature: 0.4 },
     parent: { id: 'discord:parent', physicalId: 'parent-2', index: 17 },
     workspaceRoot: 'discord:root',
