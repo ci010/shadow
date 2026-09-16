@@ -1,7 +1,7 @@
 import type { FileEntry } from './composables/useSessionFiles.ts'
 import { apiUrl } from './api-url.ts'
-import { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk } from '../../src/gateway/git-contracts.ts'
-export { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk, type GitDiff } from '../../src/gateway/git-contracts.ts'
+import { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk } from '../../src/execution/git/contracts.ts'
+export { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk, type GitDiff } from '../../src/execution/git/contracts.ts'
 
 const kinds: readonly GitChangeKind[] = ['conflicted', 'modified', 'typechanged', 'deleted', 'renamed', 'added', 'untracked']
 const badges: Record<GitChangeKind, string> = {

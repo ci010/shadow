@@ -1,7 +1,7 @@
 import { Cron } from 'croner'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
-import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
+import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
 import {
   isCronEventPayload,
   isCronEventTarget,

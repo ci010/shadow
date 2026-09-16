@@ -88,7 +88,7 @@ try {
   `)
   const payload = Buffer.from(JSON.stringify({ module: script, cwd: scratch, args: [] })).toString('base64')
   const evaluated = spawnSync(executable, [
-    join(backend, 'dist/src/eval/child.js'), '--eval-runner', payload,
+    join(backend, 'dist/src/script-runtime/child.js'), '--eval-runner', payload,
   ], { cwd: scratch, env, encoding: 'utf8', timeout: 15_000 })
   assert.equal(evaluated.status, 0, evaluated.stderr + evaluated.stdout)
   assert.ok(evaluated.stdout.includes('"result":42'), evaluated.stdout)

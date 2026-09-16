@@ -6,7 +6,7 @@ import {
 } from '@opentelemetry/sdk-trace-node'
 import { format } from 'node:util'
 import type { OtelStore, OtlpSpan } from './store.ts'
-import { createOrganizationScope, getOrganizationScope, type OrganizationScope } from './scope.ts'
+import { createOrganizationScope, getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
 
 export interface NodeTelemetryHandle {
   readonly scope?: OrganizationScope

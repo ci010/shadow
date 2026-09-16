@@ -1,4 +1,4 @@
-import type { LearningPipelineStatus, LearningStatus } from '../../src/agent/learning.ts'
+import type { LearningPipelineStatus, LearningStatus } from '../../src/agent/learning/service.ts'
 import { organizationJson } from './organizations.ts'
 import { isRecord } from './projects-sidebar.ts'
 

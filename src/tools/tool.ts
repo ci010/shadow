@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 
 /**
  * JSON-Schema-style parameter definition for a tool, compatible with

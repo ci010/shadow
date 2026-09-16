@@ -1,6 +1,6 @@
 import { deepEqual as assertEquals, match, rejects, doesNotMatch } from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type {
   CancelReceiptV1,
   JobEventV1,

@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type { SessionTools } from './registry.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 

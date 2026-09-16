@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import { SessionTools } from '../tools/registry.ts'
 
 /** Independent snapshot borrowing resources only while the caller awaits this leaf. */

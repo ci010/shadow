@@ -1,6 +1,6 @@
 import type { ReasoningEffort, ThinkingConfig } from '../agent/llm-config.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
-import { spanAttributes } from '../utils/otel.ts'
+import { spanAttributes } from '../otel/tracing.ts'
 import {
   ProviderHttpError,
   TokenLimitExceededError,

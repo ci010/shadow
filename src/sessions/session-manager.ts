@@ -1,7 +1,7 @@
 import { trace } from '@opentelemetry/api'
 import type { Hono } from 'hono'
-import type { AgentTypesManager } from '../agent/agent-types/manager.ts'
-import type { AgentTypeDefinition } from '../agent/agent-types/types.ts'
+import type { AgentTypesManager } from '../agent/types/manager.ts'
+import type { AgentTypeDefinition } from '../agent/types/types.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type {
   ContextBuilder,
@@ -11,9 +11,9 @@ import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from '../agent/identity.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
-import type { OrganizationScope } from '../otel/scope.ts'
+import type { OrganizationScope } from '../organizations/scope.ts'
 import { channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
-import type { HandoffManager } from '../handoff/manager.ts'
+import type { HandoffManager } from './handoff/manager.ts'
 import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import { ImportTool } from '../tools/load-tool.ts'
 import { SessionTools, type Tools } from '../tools/registry.ts'
@@ -22,7 +22,7 @@ import {
   sanitizeToolPairs,
   truncatePreservingToolPairs,
 } from '../utils/messages.ts'
-import { Span } from '../utils/otel.ts'
+import { Span } from '../otel/tracing.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
@@ -46,8 +46,8 @@ import { allowedSubagentModes, isExecutionMode, type ExecutionMode } from './exe
 import { delegationOwner, MAX_CALL_TIMEOUT_MS } from './execution-scope.ts'
 import { CallTools } from './call-tools.ts'
 import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
-import type { ToolBridgeFactory } from '../eval/bridge.ts'
+import type { ExecutionContext } from '../tools/context.ts'
+import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import {
   channelMessageInput,
   inputContext,

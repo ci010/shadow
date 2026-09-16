@@ -64,7 +64,7 @@ proposal: that would invent a historical implementation that did not exist.
 | [PROBLEMS.md](../PROBLEMS.md) | Historical observations and open questions, not a maintained bug-status dashboard |
 | [ui-refactor.md](../ui-refactor.md) | UI refactoring design material, not the live route/API contract |
 
-Runtime prompt documents are another category: `src/agent/agent-types/agents/*/AGENT.md`,
-`src/agent/context/*.md`, `src/handoff/HANDOFF.md`, and
+Runtime prompt documents are another category: `src/agent/types/builtin/*/AGENT.md`,
+`src/agent/context/*.md`, `src/sessions/handoff/HANDOFF.md`, and
 `src/skills/builtin/*/SKILL.md` are **inputs to the agent**, not contributor
 instructions or architecture authority. Changing them changes agent behavior.

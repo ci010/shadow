@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads'
-import { EventDispatcher, LoggerLevel, WSClient } from '../utils/feishu_sdk.ts'
+import { EventDispatcher, LoggerLevel, WSClient } from './feishu/sdk.ts'
 import type { FeishuCardResponse, FeishuTransportOptions } from './feishu-transport.ts'
 
 const options: FeishuTransportOptions = workerData

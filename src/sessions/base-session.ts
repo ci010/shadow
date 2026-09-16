@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
@@ -18,7 +18,7 @@ import {
 import type { SessionTools } from '../tools/registry.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
-import { activeSpan, Span, spanAttributes, uspan } from '../utils/otel.ts'
+import { activeSpan, Span, spanAttributes, uspan } from '../otel/tracing.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
 import { groupTools } from '../utils/tools-group.ts'
 import { errDetail, errMsg } from '../utils/truncate.ts'
@@ -29,7 +29,7 @@ import {
 } from './locality.ts'
 import type { SessionState, StoredMessage } from './session-store.ts'
 import type { Executor } from '../execution/executor.ts'
-import type { ToolBridgeFactory } from '../eval/bridge.ts'
+import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { ReadTool } from '../tools/read.ts'
 
 /**

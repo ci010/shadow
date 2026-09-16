@@ -3,7 +3,7 @@
 This file is for contributors and coding agents working on the **Shadow
 repository**. It is not a system prompt for a running Shadow agent. Runtime agent
 definitions are the singular `AGENT.md` files under
-`src/agent/agent-types/agents/<type>/`, with user overrides under the configured
+`src/agent/types/builtin/<type>/`, with user overrides under the configured
 workspace's `agents/<type>/`.
 
 ## Start here
@@ -64,15 +64,17 @@ particular command covers all packages.
 
 | Area | Main entry points |
 | --- | --- |
-| Composition and CLI | `src/index.ts`, `src/runtime/` |
-| Message routing and session loop | `src/agent/agent.ts`, `src/sessions/` |
-| Context, identity, memory | `src/agent/context/`, `src/agent/memory.ts`, `src/handoff/` |
+| Composition and CLI | `src/index.ts`, `src/runtime/`, `src/runtime/main/` |
+| Message routing and session loop | `src/agent/app.ts`, `src/sessions/` |
+| Context, identity, memory | `src/agent/context/`, `src/agent/memory.ts`, `src/sessions/handoff/`, `src/agent/learning/` |
 | Provider implementations | `src/providers/` |
-| Tool contracts and implementations | `src/tools/`, `src/eval/`, `src/hooks/` |
-| Skills and runtime agent definitions | `src/skills/`, `src/agent/agent-types/` |
+| Tool contracts and implementations | `src/tools/context.ts`, `src/tools/`, `src/script-runtime/`, `src/tools/hooks/` |
+| Skills and runtime agent definitions | `src/skills/`, `src/agent/types/` |
 | MCP | `src/mcp/`, `src/tools/load-tool.ts`, `src/tools/invoke-tool.ts` |
 | Events, background work, schedules | `src/bus/`, `src/events/`, `src/cron/`, `src/agent/background-task.ts` |
 | Gateway, channels, telemetry | `src/gateway/`, `src/channels/`, `src/otel/`, `src/voice/` |
+| Slash commands and shell commands | `src/slash-commands/`, `src/tools/shell-commands/` |
+| Local capabilities and browser lifecycle | `src/execution/git/`, `src/execution/filesystem/`, `src/execution/processes/`, `src/browser/` |
 | WIP device execution | `src/cluster/`, `src/execution/`, `src/sessions/locality.ts` |
 | Browser application | `app/src/` |
 | Electron host and preload | `desktop/src/` |
@@ -88,6 +90,12 @@ current task's explicit ownership.
 
 - Keep backend code independent of Electron and Vue. Share small, validated
   contracts instead of importing backend services into the renderer.
+- Keep Main composition under `src/runtime/main/`; `src/index.ts` is the stable
+  process entrypoint. Execution capabilities must not import HTTP gateway code.
+  Organization scopes belong to `src/organizations/`, with telemetry context
+  integration under `src/otel/`. Slash-command handlers adapt learning services,
+  rather than owning pipelines or persistence. Keep platform SDKs with channels,
+  not in general-purpose `utils`.
 - Route agent turns through `SessionManager` and the session classes. Do not
   create an unrelated provider/tool loop in a channel or UI handler.
 - Preserve logical session IDs, physical segments, parent/child lineage,

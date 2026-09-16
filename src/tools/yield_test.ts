@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type { SessionState } from '../sessions/session-store.ts'
 import { YieldError, YieldManager } from '../sessions/yield.ts'
 import { Tools } from './registry.ts'

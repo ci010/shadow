@@ -2,7 +2,7 @@ import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { MemoryStore } from '../agent/memory.ts'
 import { ConventionTool } from './convention.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 
 function ectx(sessionId: string): ExecutionContext {

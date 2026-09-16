@@ -11,7 +11,7 @@ import type {
   SystemEvent,
 } from './types.ts'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
-import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
+import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
 
 const SUBSCRIPTIONS_FILE = '.events/subscriptions.json'
 const SOURCES_FILE = '.events/sources.json'

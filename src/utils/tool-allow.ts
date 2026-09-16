@@ -1,4 +1,4 @@
-import type { AgentTypeDefinition } from '../agent/agent-types/types.ts'
+import type { AgentTypeDefinition } from '../agent/types/types.ts'
 
 export function isToolAllowed(agentType: Pick<AgentTypeDefinition, 'allowedTools' | 'blockedTools'>,
   toolName: string, optIn = false

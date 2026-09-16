@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool, ToolParameters } from '../tools/tool.ts'
 import type { McpConnection, McpToolInfo } from './client.ts'
 

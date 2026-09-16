@@ -2,7 +2,7 @@ import { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { LogTool } from './log.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 
 function ectx(sessionId: string): ExecutionContext {

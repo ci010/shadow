@@ -2,7 +2,7 @@ import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 import {
   availableExecShells,
   defaultManagedShell,
-} from '../../utils/exec-shell.ts'
+} from '../../execution/processes/shells.ts'
 import { IdentityManager } from '../identity.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { getArch, getOs } from '../../utils/runtime.ts'

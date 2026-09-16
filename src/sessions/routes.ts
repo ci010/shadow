@@ -17,11 +17,11 @@ import {
   type WorkdirUnavailableReason,
 } from './locality.ts'
 import { extname, resolve } from 'node:path'
-import { filePreviewLimit, serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
-import { isTextEncoding } from '../gateway/text-encoding.ts'
+import { serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
+import { filePreviewLimit } from '../execution/filesystem/contracts.ts'
+import { isTextEncoding } from '../execution/filesystem/text-encoding.ts'
 import { serveLocalGit } from '../gateway/local-git.ts'
-import { serveRemoteGit } from '../execution/remote-git-client.ts'
-export { resolveInWorkspace } from '../gateway/local-files.ts'
+import { serveRemoteGit } from '../gateway/remote-git.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import {
   executeRemoteFilesystemText,

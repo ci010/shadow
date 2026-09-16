@@ -5,7 +5,7 @@ import { EventService } from '../events/service.ts'
 import type { SessionTurnFact, SessionInput } from '../sessions/input.ts'
 import { BackgroundTaskManager } from './background-task.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
-import { createOrganizationScope, getOrganizationScope } from '../otel/scope.ts'
+import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 const fact: SessionTurnFact = {

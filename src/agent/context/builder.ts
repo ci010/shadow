@@ -1,7 +1,7 @@
 import type { SessionConfig } from '../../sessions/session-store.ts'
 import type { SessionInput } from '../../sessions/input.ts'
 import type { WorkdirRefV1 } from '../../sessions/locality.ts'
-import type { AgentTypeDefinition } from '../agent-types/types.ts'
+import type { AgentTypeDefinition } from '../types/types.ts'
 import type { ExecShell } from '../../tools/shell.ts'
 import { resolve } from 'node:path'
 import type { ExecutionMode } from '../../sessions/execution-mode.ts'

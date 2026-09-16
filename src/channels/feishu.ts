@@ -19,12 +19,12 @@ import type {
   InteractiveCard,
   InteractiveCardDivElement,
   InteractiveCardMarkdownElement,
-} from '../utils/feishu_sdk.ts'
+} from './feishu/sdk.ts'
 import {
   Client,
   FeishuApiError,
-} from '../utils/feishu_sdk.ts'
-import { Span } from '../utils/otel.ts'
+} from './feishu/sdk.ts'
+import { Span } from '../otel/tracing.ts'
 import { readMediaFile, saveToUploads } from '../utils/paths.ts'
 import { RingSet } from '../utils/ring-set.ts'
 import { AbstractChannel } from './base.ts'

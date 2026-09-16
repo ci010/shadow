@@ -1,5 +1,5 @@
 import type { Tool, ToolParameters } from './tool.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type { MemoryStore } from '../agent/memory.ts'
 
 type Scope = 'session' | 'project' | 'agent'

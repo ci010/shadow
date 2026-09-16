@@ -1,4 +1,4 @@
-import { ProcessManager } from '../agent/process-manager.ts'
+import { ProcessManager } from '../execution/processes/manager.ts'
 import { requestDeviceChallengeProtocol } from '../cluster/device-challenge-client.ts'
 import { AtomicDeviceCredentialReferenceStore } from '../cluster/device-credential-reference-store.ts'
 import {

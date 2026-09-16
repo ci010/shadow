@@ -7,7 +7,7 @@ import { CallToolResultSchema, ToolListChangedNotificationSchema, type ContentBl
 import { env as sysEnv } from 'node:process'
 import { Readable } from 'node:stream'
 import type { McpServerConfig } from '../config/schema.ts'
-import { Span } from '../utils/otel.ts'
+import { Span } from '../otel/tracing.ts'
 import { loadDotEnv } from '../utils/env.ts'
 import { parseMcpServerConfig } from './config.ts'
 import { mcpCleanupFailure, mcpFailure, mcpSecrets, type McpPhase } from './errors.ts'

@@ -75,7 +75,7 @@ import FileHighlightText from './FileHighlightText.vue'
 import MemoryEventRecord from './MemoryEventRecord.vue'
 import ImageAnnotationPreview from './ImageAnnotationPreview.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
-import { textEncodings, type TextEncoding } from '../../../../src/gateway/text-encoding.ts'
+import { textEncodings, type TextEncoding } from '../../../../src/execution/filesystem/text-encoding.ts'
 import { isMemoryEventFile, parseMemoryEvents } from '../../memory-events.ts'
 import { fileMarkdownUrl, formatFileQuote, markdownSelectionLines, markdownSourceBlocks, plainSelectionLines, renderedSelectionLines } from '../../file-selection.ts'
 import {

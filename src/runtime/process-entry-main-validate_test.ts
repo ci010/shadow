@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { rm, writeFile } from 'node:fs/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import { join } from 'node:path'
-import { runRootProcessEntry } from '../index.ts'
+import { runRootProcessEntry } from './main/cli.ts'
 
 test('root process entry validates a real Main bootstrap config path', async () => {
   const directory = await createTempWorkspace()

@@ -16,7 +16,7 @@ import { SttClient, VoicePipeline } from '../voice/mod.ts'
 import { CHANNEL_IDS, type BotInstanceStatus, type ChannelId, type ChannelSetupStatus, type ChannelState } from './setup-contract.ts'
 import { channelConfigured, channelSetupStatus, ChannelSetupError, isChannelId } from './setup.ts'
 import type { BotInstance, BotInstanceStore } from './bot-store.ts'
-import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
+import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
 
 type ChannelFactory = (id: ChannelId, config: Config, instance?: BotInstance) => BaseChannel
 export interface ChannelManagerOptions {

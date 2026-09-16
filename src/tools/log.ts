@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { appendFile, mkdir } from 'node:fs/promises'
 import type { Tool, ToolParameters } from './tool.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 
 /**
  * Tool that appends structured log entries to a JSONL file.

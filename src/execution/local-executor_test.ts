@@ -8,7 +8,7 @@ import type {
   ManagedProcess,
   ManagedProcessStatus,
   ProcessManager,
-} from '../agent/process-manager.ts'
+} from './processes/manager.ts'
 import type { JobEventV1, JobRequestV1 } from './contracts.ts'
 import {
   validateCancelReceiptV1,

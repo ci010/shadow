@@ -5,7 +5,7 @@ import test from 'node:test'
 import { Cron } from 'croner'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { CronService } from './service.ts'
-import { createOrganizationScope, getOrganizationScope } from '../otel/scope.ts'
+import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
 
 const mondayJob = {
   id: 'monday',

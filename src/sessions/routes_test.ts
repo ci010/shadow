@@ -16,8 +16,8 @@ import type {
 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
 import type { SessionManager } from './session-manager.ts'
+import { resolveInWorkspace } from '../execution/filesystem/local-files.ts'
 import {
-  resolveInWorkspace,
   resolveSessionFileBase,
   sessionsApiPlugin,
   workdirUnavailableApiResult,

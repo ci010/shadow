@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ReadTool } from './read.ts'
 import { SessionTools, Tools } from './registry.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 
 test('read deduplication and cleanup are instance-owned despite identical physical session and file names', async () => {

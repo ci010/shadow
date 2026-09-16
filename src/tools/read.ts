@@ -7,7 +7,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'

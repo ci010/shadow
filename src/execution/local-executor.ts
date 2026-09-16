@@ -2,8 +2,8 @@ import type {
   ManagedProcess,
   ManagedProcessStatus,
   ProcessManager,
-} from '../agent/process-manager.ts'
-import { terminateProcessTree } from '../agent/process-manager.ts'
+} from './processes/manager.ts'
+import { terminateProcessTree } from './processes/manager.ts'
 import { decodeChunks } from '../utils/decode-chunks.ts'
 import {
   type CancelReceiptV1,

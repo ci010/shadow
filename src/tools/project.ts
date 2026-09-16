@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import type { Tool, ToolParameters } from './tool.ts'

@@ -1,7 +1,7 @@
 import type { Tool, ToolParameters } from './tool.ts'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type { SessionParent } from '../sessions/session-store.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { sessionReplyAddress, type DeliverInput } from '../sessions/input.ts'

@@ -11,27 +11,27 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import type { ChildProcess } from 'node:child_process'
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type {
   ManagedProcess,
   ManagedProcessStatus,
   ProcessManager,
-} from '../agent/process-manager.ts'
+} from '../execution/processes/manager.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type {
   LocalProcessExecutor,
   ProcessExecuteArgsV1,
 } from '../execution/executor.ts'
-import { defaultManagedShell } from '../utils/exec-shell.ts'
+import { defaultManagedShell } from '../execution/processes/shells.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
-import { CommandHandlerManager, type CommandContext } from './commands/command-handler.ts'
+import { CommandHandlerManager, type CommandContext } from './shell-commands/command-handler.ts'
 import { ExecTool } from './shell.ts'
-import { ProcessManager as RealProcessManager } from '../agent/process-manager.ts'
+import { ProcessManager as RealProcessManager } from '../execution/processes/manager.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
-import { registerEvalBridgeRoute } from '../eval/bridge.ts'
+import { registerEvalBridgeRoute } from '../script-runtime/bridge.ts'
 
 const sandbox = await createTempWorkspace()
 const cwd = () => sandbox

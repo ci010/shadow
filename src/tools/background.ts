@@ -1,5 +1,5 @@
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 
 export class BackgroundTaskTool implements Tool {

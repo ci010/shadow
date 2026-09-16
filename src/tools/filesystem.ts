@@ -1,6 +1,6 @@
 import { dirname, relative, resolve } from 'node:path'
 import { appendFile, mkdir, open, readFile, writeFile } from 'node:fs/promises'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { isNotFoundError, isWindows } from '../utils/runtime.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import type { Tool, ToolParameters } from './tool.ts'

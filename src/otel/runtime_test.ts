@@ -4,10 +4,10 @@ import { join } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
 import { SpanKind, SpanStatusCode, trace } from '@opentelemetry/api'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { activeSpan } from '../utils/otel.ts'
+import { activeSpan } from './tracing.ts'
 import { initializeNodeTelemetry } from './runtime.ts'
 import { OtelStore } from './store.ts'
-import { createOrganizationScope, getOrganizationScope } from './scope.ts'
+import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
 
 test('Node telemetry persists asynchronous spans and correlated console logs', async () => {
   const store = new OtelStore(':memory:')

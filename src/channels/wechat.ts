@@ -30,7 +30,7 @@ import {
   WeixinMessageState,
   WeixinMessageType,
   WeixinRepository,
-} from '../utils/weixin_sdk.ts'
+} from './wechat/sdk.ts'
 import type {
   InboundMediaResult,
   WeixinAccountRecord,
@@ -39,7 +39,7 @@ import type {
   WeixinLoginWaitResult,
   WeixinMessage,
   WeixinMessageItem,
-} from '../utils/weixin_sdk.ts'
+} from './wechat/sdk.ts'
 import { AbstractChannel } from './base.ts'
 
 // ---------------------------------------------------------------------------

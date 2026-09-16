@@ -15,7 +15,7 @@ import type {
   LLMResponse,
   ModelInfo,
 } from './provider.ts'
-import { Span } from '../utils/otel.ts'
+import { Span } from '../otel/tracing.ts'
 
 // ---------------------------------------------------------------------------
 //  Constants (matches litellm / VS Code Copilot extension)

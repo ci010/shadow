@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { readFile, rm } from 'node:fs/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import { ConfigSchema } from '../config/schema.ts'
-import { startMainRuntime } from '../index.ts'
+import { startMainRuntime } from './main/start.ts'
 import { EventService } from '../events/service.ts'
 import { SessionManager } from '../sessions/session-manager.ts'
 

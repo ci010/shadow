@@ -4,8 +4,8 @@ import type {
   JobRequestV1,
   JobStatusV1,
 } from './contracts.ts'
-import type { ManagedProcess } from '../agent/process-manager.ts'
-import type { ManagedShell } from '../utils/exec-shell.ts'
+import type { ManagedProcess } from './processes/manager.ts'
+import type { ManagedShell } from './processes/shells.ts'
 
 export interface ProcessExecuteArgsV1 {
   script: string

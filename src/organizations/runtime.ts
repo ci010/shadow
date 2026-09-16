@@ -1,13 +1,13 @@
 import type { Hono } from 'hono'
 import type { MainCluster } from '../cluster/main-cluster.ts'
 import type { Config } from '../config/schema.ts'
-import type { OrganizationScope } from '../otel/scope.ts'
+import type { OrganizationScope } from './scope.ts'
 import type { CopilotAuthenticator } from '../providers/copilot.ts'
 import type { ProjectRegistry } from '../projects/registry.ts'
 import type { OrganizationCatalog } from './catalog.ts'
 import type { OrganizationConfigStore } from './config-store.ts'
 import type { OrganizationRecord } from './contracts.ts'
-import type { ChromePortAllocator } from '../utils/chrome-manager.ts'
+import type { ChromePortAllocator } from '../browser/chrome-manager.ts'
 
 export interface OrganizationRuntimeDependencies {
   organization: OrganizationRecord

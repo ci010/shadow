@@ -1,7 +1,7 @@
 import type { Tool, ToolParameters } from './tool.ts'
 import type { CronService } from '../cron/service.ts'
 import type { EventDelivery, EventUrgency } from '../events/types.ts'
-import { ExecutionContext } from '../agent/agent.ts'
+import { ExecutionContext } from './context.ts'
 
 const URGENCIES: EventUrgency[] = ['steering', 'queue', 'debounce', 'silent']
 

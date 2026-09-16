@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { YieldError, type YieldManager } from '../sessions/yield.ts'
 import { parseYieldQuestion } from '../sessions/yield-contract.ts'
 import type { Tool, ToolParameters } from './tool.ts'

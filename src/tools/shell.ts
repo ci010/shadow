@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { type ChildProcess, spawn as childSpawn } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -10,16 +10,16 @@ import {
   type ManagedProcess,
   type ProcessManager,
   terminateProcessTree,
-} from '../agent/process-manager.ts'
+} from '../execution/processes/manager.ts'
 import {
   defaultManagedShell,
   type ManagedShell,
   resolveExecShell,
-} from '../utils/exec-shell.ts'
-import type { CommandHandlerManager } from './commands/command-handler.ts'
-import { generatePreamble, startToolBridge } from '../eval/bridge.ts'
-import type { EvalRunnerRequest, EvalRunnerResponse } from '../eval/types.ts'
-import { RUNNER_RESPONSE_PREFIX } from '../eval/types.ts'
+} from '../execution/processes/shells.ts'
+import type { CommandHandlerManager } from './shell-commands/command-handler.ts'
+import { generatePreamble, startToolBridge } from '../script-runtime/bridge.ts'
+import type { EvalRunnerRequest, EvalRunnerResponse } from '../script-runtime/types.ts'
+import { RUNNER_RESPONSE_PREFIX } from '../script-runtime/types.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { errMsg } from '../utils/truncate.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
@@ -69,7 +69,7 @@ export type ExecShell = ManagedShell | 'node'
 
 function getChildScriptUrl(): string {
   const extension = import.meta.url.endsWith('.ts') ? 'ts' : 'js'
-  return fileURLToPath(new URL(`../eval/child.${extension}`, import.meta.url))
+  return fileURLToPath(new URL(`../script-runtime/child.${extension}`, import.meta.url))
 }
 
 function parseStringArray(value: unknown): string[] {

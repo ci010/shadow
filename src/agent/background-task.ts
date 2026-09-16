@@ -1,11 +1,11 @@
 import type { Bus } from '../bus/bus.ts'
 import { errMsg } from '../utils/truncate.ts'
-import type { ExecutionContext } from './agent.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import type { Tools } from '../tools/registry.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import type { EventService } from '../events/service.ts'
 import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
-import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
+import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
 
 export type BackgroundTaskStatus = 'running' | 'completed' | 'failed'
 export type BackgroundTaskKind = 'tool' | 'subagent' | 'process'

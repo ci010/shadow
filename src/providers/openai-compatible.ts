@@ -1,6 +1,6 @@
 import type { ToolDefinition } from '../tools/tool.ts'
 import { isGptModel, type ReasoningEffort, type ThinkingConfig } from '../agent/llm-config.ts'
-import { spanAttributes } from '../utils/otel.ts'
+import { spanAttributes } from '../otel/tracing.ts'
 import type {
   ChatMessage,
   LLMProvider,

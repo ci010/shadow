@@ -1,5 +1,5 @@
 // Shared helpers for browsing session workdirs or registered Main-local projects.
-import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/gateway/text-encoding.ts'
+import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/execution/filesystem/text-encoding.ts'
 import { apiUrl } from '../api-url.ts'
 
 export interface FileEntry {

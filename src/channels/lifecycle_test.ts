@@ -14,7 +14,7 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import { BotInstanceStore } from './bot-store.ts'
 import { ChannelManager } from './manager.ts'
 import { deriveSessionId } from '../bus/events.ts'
-import { createOrganizationScope, getOrganizationScope } from '../otel/scope.ts'
+import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
 
 class FakeSocket {
   readyState = 0

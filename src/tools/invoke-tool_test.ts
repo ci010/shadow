@@ -1,6 +1,6 @@
 import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { InvokeTool } from './invoke-tool.ts'
 import { ImportTool } from './load-tool.ts'
 import { SessionTools, Tools } from './registry.ts'

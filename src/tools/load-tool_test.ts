@@ -5,10 +5,10 @@ import { writeFile } from 'node:fs/promises'
 import { ImportTool, type LoadableEntry, type McpLoadable } from './load-tool.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { McpConnection } from '../mcp/client.ts'
-import { ChromeManager, ChromePortAllocator, type ChromeRuntimeOperations } from '../utils/chrome-manager.ts'
-import { createOrganizationScope } from '../otel/scope.ts'
+import { ChromeManager, ChromePortAllocator, type ChromeRuntimeOperations } from '../browser/chrome-manager.ts'
+import { createOrganizationScope } from '../organizations/scope.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 
 function entry(chromeManager?: ChromeManager): McpLoadable {
   return {

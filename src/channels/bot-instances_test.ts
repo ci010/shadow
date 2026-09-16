@@ -21,7 +21,7 @@ import type { ChannelId, ChannelState } from './setup-contract.ts'
 import { FeishuChannel } from './feishu.ts'
 import type { FeishuTransport } from './feishu-transport.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
-import { createOrganizationScope, getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
+import { createOrganizationScope, getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
 import { WebChannel } from './web.ts'
 
 function directory(t: TestContext): string {

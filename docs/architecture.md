@@ -96,7 +96,7 @@ current packaging from the older compiled-sidecar proposals.
 
 The backend build emits ESM modules and supporting assets under `dist/src`,
 preserving relative paths. Its entry is `dist/src/index.js`; the separate eval
-runner is `dist/src/eval/child.js`. Electron packaging uses
+runner is `dist/src/script-runtime/child.js`. Electron packaging uses
 `pnpm deploy --prod --node-linker hoisted` to include the built backend and its
 runtime dependencies without relying on development-tree symlinks. The renderer
 build emits `app/dist`.
@@ -105,9 +105,9 @@ another long-lived agent authority.
 
 ### Composition root
 
-[`src/index.ts`](../src/index.ts) delegates Main startup to
-[`startOrganizationHost`](../src/organizations/host.ts) and provides
-`createOrganizationRuntime` as its composition factory:
+[`src/index.ts`](../src/index.ts) is the stable, thin process entrypoint.
+[`src/runtime/main/`](../src/runtime/main/) owns `startOrganizationHost` and
+the `createOrganizationRuntime` composition factory:
 
 1. Load configuration; initialize the host catalog and migrate the stopped
    legacy Home to Default before starting organization writers.
@@ -186,7 +186,7 @@ Devices and pairing are shared; visibility of a device alone does not assign
 its folders to every organization.
 
 Identity observations also retain the source bot address.
-[`userlink verify <channel> <senderId> [targetBotInstanceId]`](../src/tools/commands/userlink.ts)
+[`userlink verify <channel> <senderId> [targetBotInstanceId]`](../src/tools/shell-commands/userlink.ts)
 selects an observed target in the same organization; ambiguous targets require
 the bot selector. Confirmation checks the pinned organization, bot, platform,
 conversation, and sender instead of guessing a same-platform bot. Default's
@@ -201,7 +201,7 @@ provided by this catalog.
 
 ### Actual storage and migration
 
-[`host.ts`](../src/organizations/host.ts) resolves the configured legacy
+[`host.ts`](../src/runtime/main/host.ts) resolves the configured legacy
 `agent.workspace` and appends `.organizations` to obtain the host root.
 [`organizationPaths`](../src/organizations/contracts.ts) defines this layout:
 
@@ -285,14 +285,14 @@ earlier and can still prevent host startup. Shutdown stops organization
 producers/sessions and flushes/closes owned services before releasing shared
 gateway/device/telemetry infrastructure; in-memory work is not crash-durable.
 
-[`LearningService`](../src/agent/learning.ts) owns per-org activity buffers,
+[`LearningService`](../src/agent/learning/service.ts) owns per-org activity buffers,
 intervals, subscriptions, dispatch cancellation, and status at
 `/organizations/<id>/api/learning`. Enabled/interval settings apply live.
 `lastDispatchedAt` means dispatch acceptance, not that a learning agent completed
 or successfully wrote knowledge. [`otel/runtime.ts`](../src/otel/runtime.ts)
 routes spans/logs to an explicitly bound organization scope; unscoped host
 diagnostics use a separate store rather than broadcasting into every org.
-[`EvalBridgeRuntime`](../src/eval/bridge.ts) and remote job IDs are also
+[`EvalBridgeRuntime`](../src/script-runtime/bridge.ts) and remote job IDs are also
 organization-bound; this does not sandbox the code they execute.
 
 ### Remote folder ownership and upgrade boundary
@@ -514,7 +514,7 @@ behavior. Session data and uploads remain under their owning session directory
 even when filesystem tools execute in an external project folder.
 
 `src/projects/` owns registration, canonical-path deduplication, and cancellable
-Git clone operations; `src/index.ts` composes these with session creation and the
+Git clone operations; `src/runtime/main/` composes these with session creation and the
 existing capability lookup. Electron only exposes a Main-window-validated native
 directory picker. Project HTTP routes use the existing gateway authorization
 boundary. The Main sidebar also offers Open remote folder, which opens the
@@ -618,7 +618,7 @@ including compaction. Watchers updating the skill/type registry do not by
 themselves rewrite the prompt of an already-running turn.
 
 Runtime types are parsed from
-`src/agent/agent-types/agents/<name>/AGENT.md` and workspace `agents/<name>/AGENT.md`.
+`src/agent/types/builtin/<name>/AGENT.md` and workspace `agents/<name>/AGENT.md`.
 Frontmatter controls tool allow/block lists, default execution mode, skills/Soul
 inclusion, model settings, and visibility. Existing built-ins include `general`,
 `sub`, `explore`, `plan`, `verify`, `reflector`, `encapsulator`, and
@@ -797,7 +797,7 @@ mode rather than rewriting the previously read contents.
 
 ### Virtual filesystem
 
-`VirtualFs` exposes logical read/search surfaces mounted in `src/index.ts`:
+`VirtualFs` exposes logical read/search surfaces mounted in `src/runtime/main/`:
 
 - `v:sessions`: conversation history;
 - `v:bg`: background status/output;
@@ -1363,28 +1363,43 @@ baked into the image.
 
 | Module | Responsibility |
 | --- | --- |
-| `src/index.ts` | Application service graph, registration, startup/shutdown |
-| `src/organizations` | Main host/catalog, organization runtime contracts, scoped gateway/configuration, Home/session migration, job namespacing |
-| `src/runtime` | CLI/process roles, bootstrap schemas, readiness/control, Child composition |
-| `src/agent` | Message router, identity, memory, prompts, process/background managers |
+| `src/index.ts` | Stable process entrypoint and public runtime exports |
+| `src/organizations` | Catalog, organization scopes/runtime contracts, scoped gateway/configuration, Home/session migration, job namespacing |
+| `src/runtime` | CLI/process roles, bootstrap schemas, readiness/control, Main/Child composition |
+| `src/runtime/main` | Main host service graph, organization runtime factories, registration and lifecycle |
+| `src/agent` | Message router, identity, memory, prompts, background-task management |
+| `src/agent/learning` | Learning service, reflection watermark and pipeline dispatch |
 | `src/sessions` | Session/task/call execution, state/history stores, locality, session APIs |
-| `src/handoff` | Context-threshold decisions and continuation synthesis |
+| `src/sessions/handoff` | Context-threshold decisions and continuation synthesis |
 | `src/providers` | Provider contracts, adapters, aggregation, model registry/auth APIs |
-| `src/tools`, `src/eval` | Tool implementations, dynamic invocation, local script bridge |
-| `src/hooks` | Post-tool memory-link and working-set processing |
-| `src/skills`, `src/agent/agent-types` | Built-ins, parsing, registries, workspace watchers |
+| `src/tools`, `src/script-runtime` | Execution context/tool contracts, tool implementations, dynamic invocation, local script bridge |
+| `src/tools/hooks` | Post-tool memory-link and working-set processing |
+| `src/skills`, `src/agent/types` | Built-ins, parsing, registries, workspace watchers |
 | `src/mcp` | MCP client/transports/adapters and config watcher |
 | `src/bus`, `src/events`, `src/cron` | In-process messaging, subscriptions, scheduling |
-| `src/commands` | Slash-command handlers |
+| `src/slash-commands`, `src/tools/shell-commands` | User slash-command adapters and separate tool-side shell-command handlers |
 | `src/channels`, `src/voice` | Platform adapters, web chat/media, optional STT |
 | `src/gateway` | Hono policy/serving, plugin contract, UI proxy/static serving |
-| `src/otel` | Telemetry storage/query/streaming and distributed-job audit helpers |
+| `src/otel` | Tracing, organization telemetry-context integration, storage/query/streaming and distributed-job audit helpers |
+| `src/browser` | Browser discovery, port allocation and process/profile lifecycle |
 | `src/vfs` | Logical resource mounts |
-| `src/cluster`, `src/execution` | WIP device plane, capability/job contracts and executors |
-| `src/utils`, `src/testing` | Paths/platform/media/watch/process helpers and test utilities |
+| `src/cluster`, `src/execution` | WIP device plane, capability/job contracts and executors; local filesystem/Git/process capabilities |
+| `src/utils`, `src/testing` | Shared paths/platform/media/watch helpers and test utilities |
 | `app/src` | Browser renderer, HTTP/SSE clients, desktop bootstrap UI, product fixtures |
 | `desktop/src` | Electron main/preload, setup state, authorization, process supervisor |
 | `scripts`, `build.ts` | Local development, compilation/packaging, pairing, migration |
+
+Directory siblings are modules, not a claim that they occupy the same dependency
+layer. Main composition depends on domain services and execution adapters.
+Execution capabilities do not depend on gateway HTTP handlers; gateway wrappers
+call their filesystem/Git implementations. Platform SDKs live with their channel
+adapters. Organization lifecycle scopes are domain-owned, while their OTel
+context bridge remains instrumentation. `bus` and `events` retain different
+roles: in-process notifications and session event subscriptions.
+
+Source relocation does not change user `agents/` overrides, `.eval` working
+directories, eval bridge URLs, CLI flags, or persisted session schemas.
+Historical workstream ownership tables retain their original source paths.
 
 To extend the system:
 

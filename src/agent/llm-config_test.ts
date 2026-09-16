@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { REASONING_EFFORTS, isReasoningEffort } from './llm-config.ts'
 import { ConfigSchema } from '../config/schema.ts'
-import { parseAgentFile } from './agent-types/parse.ts'
+import { parseAgentFile } from './types/parse.ts'
 import { parseSessionConfigPatch } from '../sessions/config-patch.ts'
 
 test('all explicit effort levels survive global, role and session configuration', () => {

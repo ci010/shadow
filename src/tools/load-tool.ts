@@ -1,7 +1,7 @@
 import { basename, isAbsolute, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readFile, stat as nodeStat } from 'node:fs/promises'
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import { McpToolAdapter } from '../mcp/adapter.ts'
 import { McpConnection } from '../mcp/client.ts'
 import { parseMcpServerConfig } from '../mcp/config.ts'
@@ -10,9 +10,9 @@ import { toolSearchScore } from './search-tools.ts'
 import type { McpServerConfig } from '../config/schema.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { toolInvocationContract, type SessionTools } from './registry.ts'
-import type { ChromeManager } from '../utils/chrome-manager.ts'
+import type { ChromeManager } from '../browser/chrome-manager.ts'
 import { registerTypeScriptLoader } from '../utils/typescript.ts'
-import { getOrganizationScope } from '../otel/scope.ts'
+import { getOrganizationScope } from '../organizations/scope.ts'
 
 /**
  * Describes an MCP server that can be connected on-demand and whose tools

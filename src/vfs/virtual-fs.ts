@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 
 /** A single entry in a virtual directory. */
 export interface VirtualEntry {

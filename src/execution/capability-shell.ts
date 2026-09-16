@@ -7,7 +7,7 @@ import {
   resolveExistingTarget,
   type WorkdirCapabilityBinding,
 } from './capability-filesystem.ts'
-import type { ManagedShell } from '../utils/exec-shell.ts'
+import type { ManagedShell } from './processes/shells.ts'
 
 export const WORKDIR_PROCESS_EXECUTE_OPERATION = 'workdir.process.execute'
 export const MAX_REMOTE_SHELL_TIMEOUT_MS = 120_000

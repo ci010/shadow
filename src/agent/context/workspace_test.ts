@@ -1,7 +1,7 @@
 import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { resolve } from 'node:path'
-import type { AgentTypeDefinition } from '../agent-types/types.ts'
+import type { AgentTypeDefinition } from '../types/types.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { localProjectWorkdirRef, resolveSessionLocations } from '../../sessions/locality.ts'
 import type { SessionPromptContext } from './builder.ts'

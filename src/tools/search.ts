@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'
 import type { ImportTool } from './load-tool.ts'

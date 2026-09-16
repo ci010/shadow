@@ -7,7 +7,7 @@ import type { ChannelState } from './setup-contract.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { getOrganizationScope, type OrganizationScope } from '../otel/scope.ts'
+import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
 
 export interface ChannelDecision {
   channelAddress?: ChannelAddress

@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path'
-import { GitReadError, localGitDiff, localGitStatus } from '../gateway/local-git.ts'
-import { isGitFilePath, type GitDiff, type GitStatus } from '../gateway/git-contracts.ts'
+import { GitReadError, localGitDiff, localGitStatus } from './git/local-git.ts'
+import { isGitFilePath, type GitReadResponse } from './git/contracts.ts'
 import { resolveExistingTarget, type WorkdirCapabilityBinding } from './capability-filesystem.ts'
 import type { JobRequestV1 } from './contracts.ts'
 import type { LocalJobOperationHandler } from './local-executor.ts'
@@ -8,10 +8,6 @@ import type { LocalJobOperationHandler } from './local-executor.ts'
 export const GIT_STATUS_OPERATION = 'workdir.git.status'
 export const GIT_DIFF_OPERATION = 'workdir.git.diff'
 export const MAX_GIT_RESULT_BYTES = 4 * 1024 * 1024
-export type GitErrorStatus = 400 | 404 | 409 | 413 | 500 | 503 | 504
-export type GitReadResponse =
-  | { status: 200; body: GitStatus | GitDiff }
-  | { status: GitErrorStatus; body: { error: string; message: string } }
 
 export class CapabilityGit implements LocalJobOperationHandler {
   readonly #roots = new Map<string, string>()

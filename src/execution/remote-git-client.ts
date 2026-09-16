@@ -1,8 +1,7 @@
-import type { Context } from 'hono'
-import { isGitFilePath, parseGitDiff, parseGitStatus } from '../gateway/git-contracts.ts'
+import { isGitFilePath, parseGitDiff, parseGitStatus, type GitErrorStatus, type GitReadResponse } from './git/contracts.ts'
 import type { ExecutionReceiptV1 } from './contracts.ts'
 import type { RemoteFilesystemTarget } from './remote-filesystem-client.ts'
-import { GIT_DIFF_OPERATION, GIT_STATUS_OPERATION, MAX_GIT_RESULT_BYTES, type GitErrorStatus, type GitReadResponse } from './capability-git.ts'
+import { GIT_DIFF_OPERATION, GIT_STATUS_OPERATION, MAX_GIT_RESULT_BYTES } from './capability-git.ts'
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -57,13 +56,4 @@ export async function executeRemoteGit(target: RemoteFilesystemTarget, operation
     return { status: value.status, body: { error: value.body.error, message: value.body.message } }
   }
   throw invalidResult()
-}
-
-export async function serveRemoteGit(c: Context, target: RemoteFilesystemTarget, operation: 'status' | 'diff'): Promise<Response> {
-  try {
-    const result = await executeRemoteGit(target, operation, c.req.query('path'))
-    return c.json(result.body, result.status)
-  } catch (error) {
-    return c.json({ error: 'remote_git_failed', message: error instanceof Error ? error.message : 'Remote Git inspection failed. Retry.' }, 503)
-  }
 }

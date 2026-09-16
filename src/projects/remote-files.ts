@@ -2,8 +2,8 @@ import { extname } from 'node:path'
 import type { Context } from 'hono'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { executeRemoteFilesystemText, RemoteFilesystemError, type RemoteFilesystemTarget } from '../execution/remote-filesystem-client.ts'
-import { filePreviewLimit } from '../gateway/local-files.ts'
-import { isTextEncoding } from '../gateway/text-encoding.ts'
+import { filePreviewLimit } from '../execution/filesystem/contracts.ts'
+import { isTextEncoding } from '../execution/filesystem/text-encoding.ts'
 import type { RemoteProjectRecord } from './contracts.ts'
 
 export async function serveRemoteProjectFiles(

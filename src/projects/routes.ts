@@ -9,7 +9,7 @@ import type { CloneOperation, ProjectRecord } from './contracts.ts'
 import { CloneTerminationError, runGitClone, validateCloneUrl, validateDirectoryName, type GitCloneRunner } from './git.ts'
 import { absoluteDirectoryPath, existingDirectory, ProjectError, ProjectRegistry, UUID_PATTERN } from './registry.ts'
 import type { Executor } from '../execution/executor.ts'
-import { serveRemoteGit } from '../execution/remote-git-client.ts'
+import { serveRemoteGit } from '../gateway/remote-git.ts'
 import { serveRemoteProjectFiles } from './remote-files.ts'
 
 export interface ProjectServiceOptions {

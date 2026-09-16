@@ -1,4 +1,4 @@
-import type { ExecutionContext } from '../agent/agent.ts'
+import type { ExecutionContext } from './context.ts'
 import type { EventService } from '../events/service.ts'
 import type { EventDelivery, EventSourceDescriptor, EventUrgency } from '../events/types.ts'
 import type { Tool, ToolParameters } from './tool.ts'

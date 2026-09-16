@@ -6,7 +6,7 @@ import {
   serveGateway,
   validateLaunchCredential,
 } from '../gateway/server.ts'
-import { localApprovalApiPlugin } from '../execution/local-approval-api.ts'
+import { localApprovalApiPlugin } from '../gateway/local-approval-api.ts'
 import type { LocalApprovalService } from '../execution/local-approval.ts'
 import { LocalRuntimeControl } from './local-control.ts'
 import type { ChildRuntimeService } from './child-runtime.ts'
