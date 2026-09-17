@@ -6,7 +6,7 @@ import type { SessionTools } from './registry.ts'
 import type { ExecShell } from './shell.ts'
 
 export interface ExecutionContext extends MessageContext {
-  organizationId?: string
+  projectId?: string
   evalBridge?: ToolBridgeFactory
   inputSource?: 'user' | 'session' | 'event'
   /** Logical session ID (e.g. "discord:1234567890") */
@@ -14,7 +14,7 @@ export interface ExecutionContext extends MessageContext {
   /** Physical session ID - the actual persisted session log identifier */
   physicalSessionId: string
   /**
-   * Resolved working directory: a managed session folder or registered project.
+   * Resolved working directory: a managed session folder or registered folder.
    * Filesystem/shell tools resolve relative paths here. Shared resources such as
    * memory/ and SOUL.md stay under Main; private uploads use explicit file references.
    * Falls back to the workspace root when unset.

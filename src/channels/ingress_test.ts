@@ -11,6 +11,7 @@ import { AbstractChannel, type BaseChannel } from './base.ts'
 import { ChannelManager } from './manager.ts'
 import { WebChannel } from './web.ts'
 import { QQChannel } from './qq.ts'
+import { RealtimeHub } from '../realtime/hub.ts'
 
 function accepted(message: InboundMessage): DeliveryReceipt {
   return { status: 'accepted', sessionId: `${message.channel}:${message.chatId}`, inputId: message.messageId }
@@ -47,7 +48,6 @@ class TestChannel extends AbstractChannel {
 
 function webInternals(channel: WebChannel) {
   return channel as unknown as {
-    pending: Map<string, ReadableStreamDefaultController>
     syncPending: Map<string, { timer: ReturnType<typeof setTimeout> }>
   }
 }
@@ -107,7 +107,6 @@ test('nonstreaming web send waits only for admission and preserves its response 
   const message = await entered.promise
   await setImmediate()
   assert.equal(settled, false)
-  assert.equal(webInternals(channel).pending.size, 0)
   assert.equal(message.retry, true)
   assert.deepEqual(message.media, ['uploads/test.png'])
   gate.resolve(accepted(message))
@@ -130,12 +129,11 @@ test('web admission rejection is an HTTP error for both send modes and sync requ
     const response = await post(app, path, { chatId: 'chat', content: 'hello', ...extra })
     assert.equal(response.status, 503)
     assert.deepEqual(await response.json(), { error: 'Mailbox unavailable' })
-    assert.equal(webInternals(channel).pending.size, 0)
     assert.equal(webInternals(channel).syncPending.size, 0)
   }
 })
 
-test('web missing receiver and unauthorized sender never return accepted streams', async (t) => {
+test('web missing receiver and unauthorized sender never return accepted responses', async (t) => {
   const channel = new WebChannel(new Bus(), { allowFrom: ['allowed'] })
   const app = new Hono()
   await channel.start(app)
@@ -150,18 +148,19 @@ test('web missing receiver and unauthorized sender never return accepted streams
     assert.equal(unconfigured.status, 503)
     assert.match((await unconfigured.json()).error, /not configured/)
   }
-  assert.equal(webInternals(channel).pending.size, 0)
   assert.equal(webInternals(channel).syncPending.size, 0)
 })
 
-test('SSE registers before admission, captures fast replies, and waits for acceptance', async (t) => {
+test('send waits for admission and fast replies remain replayable on shared realtime', async (t) => {
   const bus = new Bus()
-  const channel = new WebChannel(bus, {})
+  const hub = new RealtimeHub()
+  const channel = new WebChannel(bus, { realtime: hub.registerProject('one') })
+  t.after(() => hub.close())
+  const cursor = hub.cursor
   const app = new Hono()
   const gate = Promise.withResolvers<DeliveryReceipt>()
   const entered = Promise.withResolvers<InboundMessage>()
   channel.setReceiver((message) => {
-    assert.equal(webInternals(channel).pending.has(message.messageId), true)
     bus.emit('message.outbound', outbound('fast response', message.messageId))
     entered.resolve(message)
     return gate.promise
@@ -176,31 +175,34 @@ test('SSE registers before admission, captures fast replies, and waits for accep
   assert.equal(settled, false)
   gate.resolve(accepted(message))
   const response = await request
-  assert.equal(response.headers.get('Content-Type'), 'text/event-stream')
-  assert.equal(response.headers.get('X-Shadow-Request-Id'), message.platformMessageId)
-  assert.equal(response.headers.get('Access-Control-Expose-Headers'), 'X-Shadow-Request-Id')
-  assert.equal(await response.text(),
-    'data: {"event":"response","content":"fast response","done":true}\n\n')
-  assert.equal(webInternals(channel).pending.size, 0)
+  assert.match(response.headers.get('Content-Type')!, /application\/json/)
+  assert.deepEqual(await response.json(), { requestId: message.messageId, chatId: 'chat' })
+  const reader = hub.connect([{ kind: 'chat', projectId: 'one', sessionId: 'web:chat' }],
+    new AbortController().signal, cursor).body!.getReader()
+  const replay = new TextDecoder().decode((await reader.read()).value)
+  const event = JSON.parse(replay.match(/^data: (.+)$/m)![1])
+  assert.equal(event.requestId, message.messageId)
+  assert.deepEqual(event.payload, { event: 'response', content: 'fast response', done: true })
+  await reader.cancel()
 })
 
-test('SSE admission rejection cancels even a stream with an already buffered response', async (t) => {
-  const bus = new Bus()
-  const channel = new WebChannel(bus, {})
-  const app = new Hono()
-  let controller: ReadableStreamDefaultController | undefined
-  channel.setReceiver(async (message) => {
-    controller = webInternals(channel).pending.get(message.messageId)
-    bus.emit('message.outbound', { ...outbound('early', message.messageId), done: false })
-    throw new Error('Admission rejected')
+test('retired per-send streaming fails before session creation, configuration or admission', async (t) => {
+  const unexpected = () => { assert.fail('Retired stream must not create or submit work') }
+  const channel = new WebChannel(new Bus(), {
+    sessionManager: {
+      getSessionState: unexpected, buildSession: unexpected, applySessionConfigPatch: unexpected,
+    } as unknown as SessionManager,
   })
+  const app = new Hono()
+  channel.setReceiver(unexpected)
   await channel.start(app)
   t.after(() => channel.stop())
-  const response = await post(app, '/api/chat/send', { chatId: 'chat', content: 'hello' })
-  assert.equal(response.status, 503)
-  assert.deepEqual(await response.json(), { error: 'Admission rejected' })
-  assert.equal(webInternals(channel).pending.size, 0)
-  assert.throws(() => controller!.enqueue(new Uint8Array()), /closed/)
+  const response = await post(app, '/api/chat/send', {
+    chatId: 'chat', content: 'hello', stream: true, parentChatId: 'parent',
+  })
+  assert.equal(response.status, 410)
+  assert.equal((await response.json()).error, 'stream_retired')
+  assert.equal(webInternals(channel).syncPending.size, 0)
 })
 
 test('sync web requests await admission plus full response and clean timers on rejection', async (t) => {
@@ -261,7 +263,7 @@ test('sync web timeout keeps 504 and stop rejects pending work instead of return
   assert.equal(webInternals(channel).syncPending.size, 0)
 })
 
-test('web parent linkage precedes admission and background SSE still receives unsolicited replies', async (t) => {
+test('web parent linkage precedes admission', async (t) => {
   const bus = new Bus()
   const order: string[] = []
   const parents: unknown[] = []
@@ -288,12 +290,6 @@ test('web parent linkage precedes admission and background SSE still receives un
     ['web:chat', { id: 'web:parent', index: 3 }],
     ['web:chat', { id: 'discord:parent' }],
   ])
-  const events = await app.request('/api/chat/events?chatId=chat')
-  const reader = events.body!.getReader()
-  await reader.read()
-  bus.emit('message.outbound', outbound('background'))
-  assert.match(new TextDecoder().decode((await reader.read()).value), /"content":"background"/)
-  await reader.cancel()
 })
 
 function managerWithChannel(bus: Bus, channel: BaseChannel) {
@@ -325,9 +321,9 @@ test('ChannelManager configures receivers during init and web outbound is projec
   const app = new Hono()
   await manager.startAll(app)
   t.after(() => manager.stopAll())
-  const response = await post(app, '/api/chat/send', { chatId: 'chat', content: 'hello' })
+  const response = await post(app, '/api/chat/message', { chatId: 'chat', content: 'hello' })
   assert.equal(received.length, 1)
-  assert.equal((await response.text()).match(/data:/g)?.length, 1)
+  assert.equal((await response.json()).content, 'reply')
 })
 
 test('ChannelManager preserves outbound FIFO published before dispatch', async () => {

@@ -42,7 +42,9 @@ async function waitFor(check: () => boolean) {
   while (!check()) { assert.ok(Date.now() < end, 'Execution fixture timed out'); await delay(2) }
 }
 
-function fixture(workspace: string, store: SessionStore, settings: { callTimeoutMs?: number; ignoreAbort?: boolean } = {}) {
+function fixture(workspace: string, store: SessionStore, settings: {
+  callTimeoutMs?: number; ignoreAbort?: boolean; hasInitiative?: (id: string) => boolean
+} = {}) {
   const requests: Array<{
     sessionId: string; messages: ChatMessage[]; names: string[]; signal: AbortSignal; model?: string; settled: boolean
     resolve: (response: LLMResponse) => void; reject: (error: Error) => void
@@ -88,6 +90,7 @@ function fixture(workspace: string, store: SessionStore, settings: { callTimeout
     handoffManager: { shouldHandoff: () => false },
     context: { buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }) },
     getLlmRuntimeConfig: () => llm, callTimeoutMs: settings.callTimeoutMs,
+    hasInitiative: settings.hasInitiative,
   } as unknown as SessionManagerDeps)
   const subagent = new SubagentTool(bus, sessions, agentTypes, { createThread: async () => null } as unknown as ChannelManager)
   tools.register(subagent)
@@ -126,6 +129,40 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: Initiative delegation inherits context, validates explicit scope and survives restart`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store, { hasInitiative: id => ['cleanup', 'second'].includes(id) })
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root', undefined, { initiativeId: 'cleanup' })
+        const context = sourceContext(workspace, f)
+        const inherited = JSON.parse(await f.subagent.execute({ description: 'Inherited', mode: 'session' }, context))
+        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'cleanup')
+        const ids: string[] = []
+        for (const field of ['initiative_id', 'initiative_name', 'project_name']) {
+          const child = JSON.parse(await f.subagent.execute({
+            description: 'Explicit', mode: 'session', [field]: 'second',
+          }, context))
+          ids.push(child.sessionId)
+          assert.equal(f.sessions.getSessionState(child.sessionId)?.initiativeId, 'second')
+          assert.equal(f.sessions.getSessionState(child.sessionId)?.folderId, undefined)
+        }
+        await assert.rejects(f.subagent.execute({
+          description: 'Wrong Project', mode: 'session', initiative_id: 'missing',
+        }, context), /does not belong/)
+        await assert.rejects(f.subagent.execute({
+          description: 'Conflict', mode: 'session', initiative_id: 'cleanup', project_name: 'second',
+        }, context), /Conflicting/)
+        await f.sessions.stop()
+        await f.sessions.start()
+        assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'cleanup')
+        for (const id of ids) assert.equal(f.sessions.getSessionState(id)?.initiativeId, 'second')
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: two-mode schema, role independence, optional initial session task and frozen legacy modes`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

@@ -12,8 +12,8 @@ test('read deduplication and cleanup are instance-owned despite identical physic
     const file = join(root, 'shared-readonly.txt')
     await writeFile(file, 'shared read-only fixture')
     const readers = [new ReadTool(join(root, 'a')), new ReadTool(join(root, 'b'))]
-    const contexts: ExecutionContext[] = ['a', 'b'].map((organizationId) => ({
-      organizationId, sessionId: 'same-session', physicalSessionId: 'same-physical',
+    const contexts: ExecutionContext[] = ['a', 'b'].map((projectId) => ({
+      projectId, sessionId: 'same-session', physicalSessionId: 'same-physical',
       channel: 'test', chatId: 'same-chat', senderId: 'same-user', messageId: 'same-input',
       tools: new SessionTools(new Tools(root), root), signal: new AbortController().signal,
     }))

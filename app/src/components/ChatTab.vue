@@ -4,14 +4,14 @@
     class="chat-workspace"
     :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId, 'is-embedded': embedded, 'is-managed': managed }"
   >
-    <button v-if="!embedded && !managed" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Projects</button>
-    <button v-if="!embedded && !managed && mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close projects" @click="mobileSidebarOpen = false" />
-    <ProjectsSidebar
+    <button v-if="!embedded && !managed" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Folders</button>
+    <button v-if="!embedded && !managed && mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close folders" @click="mobileSidebarOpen = false" />
+    <FoldersSidebar
       v-if="!embedded && !managed"
       :api-base="apiBase"
       :sessions="allSessions"
       :active-session-id="childSessionId || activeSessionId"
-      :draft-project-id="draft.project?.id"
+      :draft-folder-id="draft.folder?.id"
       :remote-folders="installation.mode === 'main'"
       :collapsed="collapsedSessions"
       :stages="displayedSessionStages"
@@ -21,13 +21,14 @@
       @delete="deleteSession"
       @toggle="toggleCollapse"
       @reload="loadSessionList"
+      @automation="router.push(automationChatLocation(projectId || liveProjectId(apiBase), $event))"
       @scratch="createNewWebChat"
       @remote="createNewWebChat(undefined, true, true)"
       @draft="createNewWebChat"
     />
 
-    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSession?.sessionId ?? ''" :project-id="!activeSessionId ? draft.project?.id : undefined"
-      :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir)" :remote="remoteConversation"
+    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
+      :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
@@ -36,21 +37,21 @@
     <!-- Chat area -->
     <div class="chat-panel" :class="{ 'is-draft': !activeSessionId }">
       <div v-if="!activeSessionId" class="draft-heading">
-        <div v-if="!draft.project" class="draft-mark" aria-hidden="true">
+        <div v-if="!draft.folder" class="draft-mark" aria-hidden="true">
           <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M24 5 40 14v20L24 43 8 34V14L24 5Z" /><path d="m24 14 9 5v10l-9 5-9-5V19l9-5Z" /></svg>
         </div>
         <h1>What would you like to work on?</h1>
-        <p v-if="organizationName" class="draft-scratch">{{ organizationName }}</p>
-        <div v-if="draft.project" class="draft-project" :aria-label="`Working folder: ${draft.project.name}`">
+        <p v-if="projectName" class="draft-scratch">{{ projectName }}</p>
+        <div v-if="draft.folder" class="draft-folder" :aria-label="`Working folder: ${draft.folder.name}`">
           <svg class="draft-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 6h6l3 3h9v11H3V6Z" /><path d="M3 6V4h6l3 3h9v2" /></svg>
-          <div class="draft-project-copy">
-            <span class="draft-project-label">{{ draft.project.kind === 'remote' ? `Remote project on ${draftRemote?.nodeName}` : 'New conversation in project folder' }}</span>
-            <strong>{{ draft.project.name }}</strong>
-            <span class="draft-project-path" :title="draft.project.path">{{ draft.project.path }}</span>
+          <div class="draft-folder-copy">
+            <span class="draft-folder-label">{{ draft.folder.kind === 'remote' ? `Remote folder on ${draftRemote?.nodeName}` : 'New conversation in folder' }}</span>
+            <strong>{{ draft.folder.name }}</strong>
+            <span class="draft-folder-path" :title="draft.folder.path">{{ draft.folder.path }}</span>
           </div>
         </div>
         <p v-else-if="draftRemote" class="draft-scratch">{{ draftRemote.nodeName }} &middot; {{ draftRemote.displayPath || draftRemote.displayName }}</p>
-        <p v-else class="draft-scratch">From scratch &middot; No project folder</p>
+        <p v-else class="draft-scratch">From scratch &middot; No folder selected</p>
       </div>
       <template v-else>
         <div class="conversation-heading-row">
@@ -58,7 +59,7 @@
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <SessionHeading :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
-            :name="activeSessionName" :organization-name="organizationName" :physical-id="viewingPhysicalId" :revision="detailsRevision"
+            :name="activeSessionName" :project-name="projectName" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <button :id="domId('diagnosis-toggle')" class="diagnosis-toggle" :aria-controls="domId('diagnosis-panel')"
             :aria-pressed="activePanel === 'diagnosis'" :title="activePanel === 'diagnosis' ? 'Back to conversation' : 'Open diagnosis'"
@@ -161,7 +162,14 @@
               <MessageTimestamp :timestamp="msg.timestamp" />
               </div>
             </div>
+            <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </template>
+          <IoRequestCard v-for="run in ioAfter.get(-1)" :key="run.id" :run="run" :base="apiBase" />
+          <details v-if="ioEarlier.length" class="unlinked-executions">
+            <summary>Earlier captures · {{ ioEarlier.length }}</summary>
+            <IoRequestCard v-for="run in ioEarlier" :key="run.id" :run="run" :base="apiBase" />
+          </details>
+          <p v-if="ioError" class="composer-error" role="alert">Capture requests: {{ ioError }}</p>
           <!-- Streaming response -->
           <div v-if="streaming && streamContent" class="chat-bubble chat-assistant" role="article" aria-label="Assistant message">
             <div class="chat-content">
@@ -200,7 +208,7 @@
           <div v-if="currentRecovery && !requestBusy" class="resume-bar" role="status">
             <div>
               <strong>{{ currentRecovery.reason === 'stopped' ? 'Request stopped' : currentRecovery.reason === 'failed' ? 'Request failed' : 'Request interrupted' }}</strong>
-              <p>Continue from saved history, without resending your message. Completed operations are retained; uncertain tool outcomes must be checked before repeating them.</p>
+              <p>Resume unfinished tool calls or send their saved results, without adding a message. After a restart, calls without saved results may run again.</p>
             </div>
             <button class="resume-button" aria-label="Resume interrupted request"
               :disabled="!installation.uiScopes.includes('chat:write') || savingSettings || pickingContext"
@@ -211,6 +219,7 @@
           <div v-if="canResend" class="resend-bar">
             <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Resend last message</button>
           </div>
+          <BackgroundTasks :api-base="apiBase" :session-id="activeSessionId" :active="paneActive && !!activeSession" />
           <div class="composer-box" :class="{ 'image-drop-target': imageDropTarget }"
             @dragover="handleImageDragOver" @dragleave="handleImageDragLeave" @drop="handleImageDrop">
           <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
@@ -219,14 +228,14 @@
               <img v-if="attachment.previewUrl" :src="attachment.previewUrl" class="attachment-thumb" :alt="attachment.file.name">
               <span v-else class="context-icon i-lucide-paperclip" aria-hidden="true" />
               <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">Image reference</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
-              <button :disabled="streaming || preparingSend" :aria-label="`Remove ${attachment.file.name}`" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              <button :disabled="submissionBusy" :aria-label="`Remove ${attachment.file.name}`" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
             </span>
           </div>
           <div v-if="contextItems.length" class="composer-context" aria-label="Attached context">
             <span v-for="(item, index) in contextItems" :key="`${item.kind}:${item.path}`" class="context-chip" :title="item.path">
               <span class="context-icon" :class="item.kind === 'folder' ? 'i-lucide-folder' : 'i-lucide-file'" aria-hidden="true" />
               <span>{{ chatContextName(item.path) }}</span>
-              <button :disabled="streaming || preparingSend" :aria-label="`Remove ${chatContextName(item.path)}`" @click="contextItems.splice(index, 1)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              <button :disabled="submissionBusy" :aria-label="`Remove ${chatContextName(item.path)}`" @click="contextItems.splice(index, 1)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
             </span>
           </div>
           <div class="composer-input">
@@ -236,7 +245,7 @@
               :placeholder="remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
               aria-label="Message"
               rows="3"
-              :disabled="requestBusy"
+              :disabled="submissionBusy"
               @keydown="handleKeyDown"
               @input="autoResize"
               @paste="handleComposerPaste"
@@ -244,7 +253,7 @@
           </div>
           <div class="composer-toolbar">
             <div class="composer-controls">
-              <ComposerPopover label="Add attachments or context" :title="composerPopoverTitle" :disabled="!canOpenComposerPopover || pickingContext || streaming || preparingSend || awaitingCall" :width="220">
+              <ComposerPopover label="Add attachments or context" :title="composerPopoverTitle" :disabled="!canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
                   <button class="context-action" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
@@ -263,11 +272,11 @@
               </ComposerPopover>
               <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
               <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
-                :api-base="apiBase" :selected="draftRemote" :local-label="draftProject?.name"
+                :api-base="apiBase" :selected="draftRemote" :local-label="draftFolder?.name"
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
-            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : requestBusy ? 'The current request is running' : imageEditsBusy.size ? 'Preparing marked image...' : imageDropTarget ? 'Drop image to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : 'Enter to send · Shift+Enter for a new line' }}</span>
+            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending message...' : awaitingCall ? 'Call running · Enter to send guidance' : requestBusy ? 'Enter to send guidance · Shift+Enter for a new line' : imageEditsBusy.size ? 'Preparing marked image...' : imageDropTarget ? 'Drop image to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : 'Enter to send · Shift+Enter for a new line' }}</span>
             <button
               v-if="requestBusy"
               class="composer-stop"
@@ -281,11 +290,10 @@
               {{ currentRequest?.state.stopping ? 'Stopping...' : 'Stop request' }}
             </button>
             <button
-              v-else
               class="composer-send"
               :disabled="!canSend"
               aria-label="Send message"
-              :title="preparingSend ? 'Starting conversation...' : 'Send message'"
+              :title="submissionBusy ? 'Sending message...' : requestBusy ? 'Send guidance to the running agent' : 'Send message'"
               @click="sendMessage()"
             >
               <span class="i-lucide-arrow-up w-5 h-5" aria-hidden="true" />
@@ -305,22 +313,27 @@
     <SelectionMenu ref="selectionMenu" :container="messagesContainer"
       :active="visible && keyboardActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
       :can-quote="canQuoteSelection" @quote="quoteSelection" />
+    <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, shallowRef, shallowReactive, reactive, computed, nextTick, onMounted, onUnmounted, useId, watch } from 'vue'
+import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import katex from 'katex'
 import { buildMediaUrl } from '../media-url.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
+import SessionDeleteDialog from './SessionDeleteDialog.vue'
+import type { SessionDeletionTarget } from '../session-deletion.ts'
+import BackgroundTasks from './BackgroundTasks.vue'
 import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
 import ComposerPopover from './ComposerPopover.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
 import FileWorkbench from './files/FileWorkbench.vue'
+import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import SelectionMenu from './SelectionMenu.vue'
 import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
@@ -331,26 +344,33 @@ import ConversationEvent from './ConversationEvent.vue'
 import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
 import { executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
-import ProjectsSidebar from './ProjectsSidebar.vue'
+import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl } from '../api-url.ts'
+import { automationChatLocation } from '../automations.ts'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
-import { parseSessionGraph, type SidebarSession } from '../projects-sidebar.ts'
-import { createProjectsClient, type ProjectRecord } from '../projects-client.ts'
+import { isRecord, parseSessionGraph, type SidebarSession } from '../folders-sidebar.ts'
+import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
+import type { LiveSubscription } from '../live-client.ts'
+import { createLiveRefresh } from '../live-refresh.ts'
+import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
 import { addChatContext, chatContextName, composeChatMessage, type ChatContextItem } from '../chat-draft.ts'
 import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
-import { createProjectChatDraft, createRemoteChatDraft, type RemoteConversationTarget } from '../remote-conversations.ts'
+import { createFolderChatDraft, createRemoteChatDraft, type RemoteConversationTarget } from '../remote-conversations.ts'
 import type { SessionDetails } from '../session-details.ts'
 import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import { userMessageMarkers } from '../message-history.ts'
+import { resendableUserMessage, userMessageMarkers } from '../message-history.ts'
 import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
 import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
 import { groupSenderNames } from '../message-author.ts'
 import SessionHeading from './SessionHeading.vue'
-import { updateSessionSettings, type ReasoningSettings } from '../session-settings.ts'
-import { childConversationTarget } from '../conversation-split.ts'
+import IoRequestCard from './io/IoRequestCard.vue'
+import { useIoConversation } from '../io/conversation.ts'
+import { updateSessionSettings, type ReasoningSettings, type ConversationSettings } from '../session-settings.ts'
+import { draftSettingsKey as createDraftSettingsKey, loadDraftSettings, saveDraftSettings } from '../draft-settings.ts'
+import { useConversationNavigation } from '../composables/useConversationNavigation.ts'
 import ToolActivityGroup from './ToolActivityGroup.vue'
 import { groupToolActivity } from '../tool-activity.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
@@ -379,10 +399,10 @@ const KATEX_ATTRS = ['mathvariant', 'encoding', 'xmlns', 'display', 'stretchy', 
 
 const props = withDefaults(defineProps<{
   apiBase: string
-  organizationId?: string
-  organizationName?: string
+  projectId?: string
+  projectName?: string
   managed?: boolean
-  initialProject?: ProjectRecord
+  initialFolder?: FolderRecord
   openRemote?: boolean
   embedded?: boolean
   sessionId?: string
@@ -391,6 +411,11 @@ const props = withDefaults(defineProps<{
   keyboardActive?: boolean
   visible?: boolean
 }>(), { embedded: false, enableChildPane: false, keyboardActive: true, visible: true })
+const activated = ref(true)
+const paneActive = computed(() => props.visible && activated.value)
+const livePool = useLiveClientPool()
+onActivated(() => { activated.value = true })
+onDeactivated(() => { activated.value = false })
 const emit = defineEmits<{
   'open-child': [target: { primaryId: string; childId: string }]
   'primary-change': [id: string]
@@ -410,18 +435,19 @@ let disposed = false
 
 const installation = useInstallationContext()
 const modelSelection = useModelSelection()
-const modelOverride = ref('')
-const conversationModel = computed(() => modelOverride.value || activeSession.value?.config?.model || modelSelection?.current.value || '')
+const modelOverride = ref<string>()
+const explicitModel = computed(() => modelOverride.value ?? activeSession.value?.config?.model ?? '')
+const conversationModel = computed(() => explicitModel.value || modelSelection?.current.value || '')
 if (modelSelection) provideModelSelection({
   ...modelSelection, current: conversationModel,
-  async select(model) {
-    if (!model.trim()) return
-    modelOverride.value = model
-  },
+  inherited: modelSelection.current,
+  inheriting: computed(() => !explicitModel.value),
+  disabled: computed(() => modelSelection.disabled.value || pickingContext.value || isExecution.value || awaitingCall.value),
+  select: model => changeConversationSettings({ model: model.trim() || null }),
 })
-const projectsClient = createProjectsClient(props.apiBase)
-const draftProject = shallowRef<ProjectRecord | undefined>(props.initialProject)
-const draft = shallowRef<ReturnType<typeof createProjectChatDraft> | ReturnType<typeof createRemoteChatDraft>>(createProjectChatDraft(projectsClient, props.initialProject))
+const foldersClient = createFoldersClient(props.apiBase)
+const draftFolder = shallowRef<FolderRecord | undefined>(props.initialFolder)
+const draft = shallowRef<ReturnType<typeof createFolderChatDraft> | ReturnType<typeof createRemoteChatDraft>>(createFolderChatDraft(foldersClient, props.initialFolder))
 const draftRemote = computed(() => 'remote' in draft.value ? draft.value.remote : undefined)
 const currentWorkdir = ref<SessionDetails['workdir']>()
 const remoteConversation = computed(() => !activeSessionId.value ? !!draftRemote.value : currentWorkdir.value?.kind === 'remote')
@@ -430,8 +456,10 @@ const pendingAttachments = ref<PendingChatAttachment[]>([])
 const imageEditsBusy = ref(new Set<string>())
 const imageDropTarget = ref(false)
 const composerError = ref('')
+const deletion = ref<SessionDeletionTarget>()
 const readonlyContextError = ref('')
 const preparingSend = ref(false)
+const submittingMessage = ref(false)
 const pickingContext = ref(false)
 const attachmentInput = ref<HTMLInputElement>()
 const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && typeof File === 'function' && typeof FormData === 'function')
@@ -444,18 +472,30 @@ const composerPopoverTitle = computed(() =>
     : canAttachFiles.value
     ? 'Add files, or use the local Main desktop app to attach folders'
     : 'Folder context requires the local Main desktop app')
-const canSend = computed(() => !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && !awaitingCall.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
+const canSend = computed(() => !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
   contextItems.value.length,
   pendingAttachments.value.length,
-) && !requestBusy.value && !pickingContext.value && !savingSettings.value && imageEditsBusy.value.size === 0)
+) && !submissionBusy.value && !currentRequest.value?.state.stopping && installation.value.uiScopes.includes('chat:write')
+  && !pickingContext.value && !savingSettings.value && imageEditsBusy.value.size === 0)
 let sendRequest: AbortController | undefined
 let historyRequest: AbortController | undefined
-const activeSessionId = ref(props.embedded || props.managed ? props.sessionId ?? '' : '')
+const { activeSessionId, selectedMode, requestSession, selectSession, inspectExecution, restoreSession } = useConversationNavigation({
+  props, router, emit, sessions: () => allSessions.value,
+  reset: resetConversation,
+  refresh: () => { void loadSessionList(); void loadCurrentSession() },
+  mounted: () => mounted,
+  newDraft: () => createNewWebChat(undefined, false),
+})
+const homeCache = inject(HomeTreeCacheKey, createHomeTreeCache, true)
+provide(HomeTreeCacheKey, homeCache)
+const expectedHome = computed(() => homeCache.expectsHome({ apiBase: props.apiBase, sessionId: activeSessionId.value }))
 const requestControls = shallowReactive(new Map<string, ChatRequestControl>())
 const draftRequest = shallowRef<ChatRequestControl>()
 const currentRequest = computed(() => activeSessionId.value ? requestControls.get(activeSessionId.value) : draftRequest.value)
-const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessionId.value || (draftRemote.value ? `remote:${draftRemote.value.nodeId}:${draftRemote.value.capabilityId}` : `project:${draft.value.project?.id ?? 'scratch'}`)]))
+const submissionBusy = computed(() => preparingSend.value || submittingMessage.value
+  || currentRequest.value?.state.phase === 'preparing' || currentRequest.value?.state.phase === 'submitting')
+const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessionId.value || (draftRemote.value ? `remote:${draftRemote.value.nodeId}:${draftRemote.value.capabilityId}` : `folder:${draft.value.folder?.id ?? 'scratch'}`)]))
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
   const id = activeSessionId.value
@@ -463,7 +503,7 @@ const isDirectChat = computed(() => {
 })
 const chatInput = ref<HTMLTextAreaElement>()
 const messagesContainer = ref<HTMLElement>()
-const loadingHistory = ref(false)
+const loadingHistory = ref(!!activeSessionId.value)
 const streaming = ref(false)
 const streamPhase = ref<WorkingStage>()
 const streamContent = ref('')
@@ -509,13 +549,17 @@ async function resumeCurrentRequest(): Promise<void> {
   composerError.value = ''
   if (!eventStream) connectEventStream(sessionId.replace('web:', ''))
   try {
+    if (!eventStream) throw new Error('Live updates are unavailable. Retry before continuing the request.')
+    await eventStream.ready()
     await resumeChatRequest(props.apiBase, sessionId, recovery.id, control)
+    if (control.state.requestId && finishedRequests.has(control.state.requestId)) control.finish()
     if (sessionRecoveries.value[sessionId]?.id === recovery.id) delete sessionRecoveries.value[sessionId]
     if (generation === sessionSelectionGeneration) {
       void loadSessionList()
       void loadCurrentSession()
     }
   } catch (error) {
+    if (control.state.phase === 'preparing') control.finish()
     if (generation === sessionSelectionGeneration) {
       composerError.value = error instanceof Error ? error.message : 'Could not continue this conversation. Refresh and retry.'
     }
@@ -530,7 +574,6 @@ function handleYieldCancelled(sessionId: string): void {
   void pollSessionStages()
 }
 const activeSession = computed(() => allSessions.value.find(session => session.sessionId === activeSessionId.value))
-const selectedMode = ref<SidebarSession['mode']>()
 const isExecution = computed(() => !!activeSessionId.value && isOneShot({ mode: activeSession.value?.mode ?? selectedMode.value }))
 const isCall = computed(() => !!activeSessionId.value && (activeSession.value?.mode ?? selectedMode.value) === 'call')
 const executionParent = computed(() => allSessions.value.find(session =>
@@ -541,22 +584,48 @@ const activeSessionName = computed(() => {
   return messages.value.find(message => message.role === 'user' && !message.isSystemEvent && !message.isSummary)?.content.trim().split('\n')[0] || 'Conversation'
 })
 const detailsRevision = ref(0)
-const settingsOverride = ref<ReasoningSettings>()
-const pendingDraftSettings = ref<ReasoningSettings>()
+const settingsOverride = ref<ConversationSettings>()
+const pendingDraftSettings = ref<ConversationSettings>()
 const reasoningSettings = computed<ReasoningSettings>(() => settingsOverride.value ?? activeSession.value?.config ?? {})
 const savingSettings = ref(false)
 const settingsError = ref('')
 let settingsRequest: AbortController | undefined
+const draftSettingsKey = computed(() => createDraftSettingsKey(props.apiBase, props.projectId ?? '',
+  props.managed ? props.initialFolder?.id : draftFolder.value?.id, !!props.openRemote))
+
+function restoreDraftSettings(): void {
+  if (activeSessionId.value) return
+  try {
+    const settings = loadDraftSettings(window.localStorage, draftSettingsKey.value)
+    settingsOverride.value = pendingDraftSettings.value = settings
+    modelOverride.value = settings?.model ?? ''
+  } catch (cause) {
+    settingsError.value = `Could not restore draft settings: ${cause instanceof Error ? cause.message : String(cause)}`
+  }
+}
+onMounted(restoreDraftSettings)
 
 async function changeReasoningSettings(patch: ReasoningSettings): Promise<void> {
+  await changeConversationSettings(patch)
+}
+
+async function changeConversationSettings(patch: ConversationSettings): Promise<void> {
   if (isExecution.value || awaitingCall.value) return
-  if (savingSettings.value || requestBusy.value || pickingContext.value) return
-  if ((!('thinking' in patch) || (patch.thinking?.type ?? null) === (reasoningSettings.value.thinking?.type ?? null))
+  const modelOnly = Object.keys(patch).length === 1 && 'model' in patch
+  if (savingSettings.value || (!modelOnly && requestBusy.value) || pickingContext.value) return
+  if ((!('model' in patch) || (patch.model ?? null) === (explicitModel.value || null))
+    && (!('thinking' in patch) || (patch.thinking?.type ?? null) === (reasoningSettings.value.thinking?.type ?? null))
     && (!('reasoningEffort' in patch) || (patch.reasoningEffort ?? null) === (reasoningSettings.value.reasoningEffort ?? null))) return
   settingsError.value = ''
-  if (!activeSession.value) {
-    settingsOverride.value = { ...reasoningSettings.value, ...patch }
-    pendingDraftSettings.value = settingsOverride.value
+  if (!activeSessionId.value) {
+    const settings = { ...pendingDraftSettings.value, ...patch }
+    try {
+      saveDraftSettings(window.localStorage, draftSettingsKey.value, settings)
+      settingsOverride.value = pendingDraftSettings.value = settings
+      modelOverride.value = settings.model ?? ''
+    } catch (cause) {
+      settingsError.value = `Could not save draft settings: ${cause instanceof Error ? cause.message : String(cause)}`
+    }
     return
   }
   const sessionId = activeSessionId.value
@@ -567,8 +636,9 @@ async function changeReasoningSettings(patch: ReasoningSettings): Promise<void> 
     const settings = await updateSessionSettings(props.apiBase, sessionId, patch, controller.signal)
     if (controller.signal.aborted) return
     settingsOverride.value = settings
+    modelOverride.value = settings.model ?? ''
     allSessions.value = allSessions.value.map(session => session.sessionId === sessionId ? {
-      ...session, config: { ...session.config, thinking: settings.thinking ?? undefined, reasoningEffort: settings.reasoningEffort ?? undefined },
+      ...session, config: { ...session.config, model: settings.model ?? undefined, thinking: settings.thinking ?? undefined, reasoningEffort: settings.reasoningEffort ?? undefined },
     } : session)
   } catch (cause) {
     if (!controller.signal.aborted) settingsError.value = cause instanceof Error ? cause.message : 'Could not save conversation settings. Please try again.'
@@ -581,8 +651,8 @@ let stageRequest: AbortController | undefined
 let lastReadonlyRefresh = 0
 
 async function pollSessionStages(): Promise<void> {
-  if (stageRequest || !props.visible) return
-  if (!sessionListRequest && Date.now() - lastGraphRefresh >= 3000) void loadSessionList()
+  if (stageRequest || !paneActive.value && currentRequest.value?.state.phase !== 'active') return
+  if (!sessionListRequest && Date.now() - lastGraphRefresh >= 30_000) void loadSessionList()
   const controller = new AbortController()
   const observedRequest = currentRequest.value
   const observedActive = observedRequest?.state.phase === 'active'
@@ -598,16 +668,26 @@ async function pollSessionStages(): Promise<void> {
     if (!controller.signal.aborted) {
       const previous = sessionStages.value[activeSessionId.value]
       sessionStages.value = stages
+      const callWaits = isRecord(snapshot) && isRecord(snapshot.waitingForCalls) ? snapshot.waitingForCalls : undefined
+      if (callWaits) for (const session of allSessions.value) {
+        const waiting = callWaits[session.sessionId]
+        if (typeof waiting === 'boolean') session.waitingForCall = waiting
+      }
       activeRequestIds.value = identities
       sessionRecoveries.value = recoveries
       stageError.value = ''
+      if (deferActiveHistory && !sendRequest
+        && (stages[activeSessionId.value] === 'idle' || stages[activeSessionId.value] === 'inactive')) {
+        deferActiveHistory = false
+        refreshDirectHistory()
+      }
       if (observedActive && observedRequest === currentRequest.value && observedSessionId === activeSessionId.value
         && (stages[observedSessionId] === 'idle' || stages[observedSessionId] === 'inactive')
         && !sendRequest) {
         observedRequest?.finish()
         streaming.value = false
         streamPhase.value = undefined
-        if (isDirectChat.value && !historyRequest) void loadCurrentSession()
+        if (isDirectChat.value) refreshDirectHistory()
       }
       const identity = identities[activeSessionId.value]
       const current = currentRequest.value
@@ -651,49 +731,127 @@ function stopStagePolling(): void {
   sessionRecoveries.value = {}
 }
 
-// ── Background event stream (live push for cron ticks / self-awake / subagents) ──
-// A persistent SSE connection kept open for the active direct chat so messages
-// triggered outside a user request (scheduled events, subagent replies) render
-// live without a manual page refresh.
-let eventStream: EventSource | null = null
+// Commands and cached panes share the application's one realtime connection.
+let eventStream: LiveSubscription | null = null
+let eventStreamKey = ''
 let bgStreamState: StreamState = { accumulated: '' }
-let requestStreamState: StreamState | undefined
+let streamRequestId: string | undefined
+const finishedRequests = new Set<string>()
+let directRefreshPending = false
+let deferActiveHistory = false
+let directRefreshTimer: ReturnType<typeof setTimeout> | undefined
 
-function connectEventStream(chatId: string): void {
-  disconnectEventStream()
-  bgStreamState = { accumulated: '' }
-  const es = new EventSource(buildUrl('/api/chat/events', { chatId }))
-  eventStream = es
-  es.onmessage = (ev) => {
-    if (eventStream !== es || activeSessionId.value !== `web:${chatId}`) return
-    if (!ev.data) return
-    // Never render live pushes into a historical-segment view.
-    if (viewingPhysicalId.value) return
-    try {
-      const payload = JSON.parse(ev.data)
-      if (payload.event !== 'session_message') streaming.value = true
-      if (applyStreamPayload(payload, payload.event === 'session_message' ? requestStreamState ?? bgStreamState : bgStreamState)) {
-        streaming.value = false
-        if (!sendRequest) currentRequest.value?.finish()
-        void loadSessionList()
-      }
-    } catch {
-      composerError.value = 'Could not read a live conversation update. Reopen the conversation to reload its history.'
-    }
-  }
-  es.onerror = () => {
-    // EventSource reconnects automatically; nothing to do.
-  }
+function wantsLiveChat(): boolean {
+  return paneActive.value || !!currentRequest.value && currentRequest.value.state.phase !== 'finished'
 }
 
-function disconnectEventStream(): void {
+function refreshDirectHistory(): void {
+  directRefreshPending = true
+  if (disposed || !paneActive.value || !activeSessionId.value || viewingPhysicalId.value
+    || sendRequest || historyRequest || directRefreshTimer !== undefined || deferActiveHistory && requestBusy.value) return
+  directRefreshTimer = setTimeout(() => {
+    directRefreshTimer = undefined
+    if (disposed || !paneActive.value || sendRequest || historyRequest || !directRefreshPending || deferActiveHistory && requestBusy.value) return
+    directRefreshPending = false
+    void loadDirectChat(true)
+  }, 50)
+}
+
+function connectEventStream(chatId: string): void {
+  const projectId = props.projectId ?? liveProjectId(props.apiBase)
+  const key = JSON.stringify([props.apiBase, projectId, chatId])
+  if (eventStream && eventStreamKey === key) return
+  closeEventStream()
+  if (!wantsLiveChat() || disposed || viewingPhysicalId.value) return
+  bgStreamState = { accumulated: '' }
+  streamRequestId = undefined
+  const subscription = livePool.client(props.apiBase).subscribe({ kind: 'chat', projectId, sessionId: `web:${chatId}` }, {
+    reset() {
+      if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}`) return
+      bgStreamState = { accumulated: '' }
+      streamRequestId = undefined
+      streamContent.value = ''
+      refreshDirectHistory()
+      void pollSessionStages()
+    },
+    event(envelope) {
+      if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}` || viewingPhysicalId.value) return
+      const payload = envelope.payload
+      if (!isStreamPayload(payload)) throw new Error('Invalid live conversation payload')
+      if (envelope.requestId && payload.event !== 'session_message' && finishedRequests.has(envelope.requestId)) return
+      if (envelope.requestId && payload.event !== 'turn_finished' && payload.event !== 'session_message') {
+        if (streamRequestId && streamRequestId !== envelope.requestId) {
+          bgStreamState = { accumulated: '' }
+          streamContent.value = ''
+          streamTimestamp.value = undefined
+        }
+        streamRequestId = envelope.requestId
+        const current = currentRequest.value
+        if (!current || current.state.phase === 'finished'
+          || current.state.phase === 'active' && current.state.requestId !== envelope.requestId) {
+          current?.finish()
+          requestControls.set(activeSessionId.value, createChatRequestControl(
+            props.apiBase, () => {}, fetch, activeSessionId.value, envelope.requestId,
+          ))
+        }
+      }
+      if (payload.event === 'turn_finished' && envelope.requestId) {
+        finishedRequests.add(envelope.requestId)
+        if (finishedRequests.size > 64) finishedRequests.delete(finishedRequests.values().next().value!)
+        const control = currentRequest.value
+        if (control?.state.requestId === envelope.requestId) control.finish()
+      }
+      if (payload.event === 'turn_finished') {
+        if (streamRequestId === envelope.requestId
+          || !streamRequestId && (!currentRequest.value?.state.requestId || currentRequest.value.state.requestId === envelope.requestId)) {
+          streaming.value = false
+          bgStreamState = { accumulated: '' }
+          streamRequestId = undefined
+          streamContent.value = ''
+          streamPhase.value = undefined
+          streamTimestamp.value = undefined
+          streamingToolCallData.value = null
+        }
+        refreshDirectHistory()
+        void pollSessionStages()
+        return
+      }
+      if (!paneActive.value || historyRequest || directRefreshPending && !deferActiveHistory) {
+        if (paneActive.value && (payload.event === 'response' || payload.event === undefined)) {
+          streaming.value = true
+          if (applyStreamPayload(payload, bgStreamState)) streaming.value = false
+        }
+        if (payload.done || payload.event === 'session_message') refreshDirectHistory()
+        return
+      }
+      if (payload.event !== 'session_message') streaming.value = true
+      if (applyStreamPayload(payload, bgStreamState)) {
+        streaming.value = false
+        refreshDirectHistory()
+        void loadSessionList()
+      }
+    },
+  })
+  eventStream = subscription
+  eventStreamKey = key
+}
+
+function closeEventStream(): void {
   if (eventStream) {
     eventStream.close()
     eventStream = null
   }
+  eventStreamKey = ''
+}
+
+function disconnectEventStream(): void {
+  closeEventStream()
+  finishedRequests.clear()
+  clearTimeout(directRefreshTimer)
+  directRefreshTimer = undefined
+  directRefreshPending = false
   bgStreamState.accumulated = ''
   bgStreamState.timestamp = undefined
-  requestStreamState = undefined
   streamTimestamp.value = undefined
 }
 
@@ -726,7 +884,7 @@ const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
 const composerVisible = computed(() => !conversationDocumentVisible.value || activePanel.value === 'conversation')
-const canQuoteSelection = computed(() => (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value && !streaming.value && !preparingSend.value && !awaitingCall.value)
+const canQuoteSelection = computed(() => (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value && !submissionBusy.value)
 function switchPanel(panel: ConversationPanel): void {
   activePanel.value = panel
   if (panel === 'diagnosis') diagnosisOpened.value = true
@@ -779,6 +937,13 @@ const expandedThinking = reactive(new Set<number>())
 const previousPhysicalId = ref<string | null>(null)
 const viewingPhysicalId = ref<string | null>(null)
 const physicalIdStack = ref<string[]>([])
+const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation(
+  () => paneActive.value && conversationDocumentVisible.value && activePanel.value === 'conversation' &&
+    route.name === 'chat' && activeSessionId.value && !viewingPhysicalId.value
+    ? { apiBase: props.apiBase, sessionId: activeSessionId.value, projectId: props.projectId, remote: remoteConversation.value }
+    : undefined,
+  () => displayMessages.value,
+)
 
 // ── Text selection state ──────────────────────────────────────────────────────
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
@@ -998,28 +1163,30 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
 
 // ── Session list ──────────────────────────────────────────────────────────────
 
-async function loadSessionList(): Promise<void> {
+async function loadSessionList(signal?: AbortSignal): Promise<void> {
   sessionListRequest?.abort()
   const controller = new AbortController()
   sessionListRequest = controller
   lastGraphRefresh = Date.now()
   sessionsLoading.value = true
   sessionsError.value = ''
+  const requestSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(15_000)])
   try {
     const res = await fetch(buildUrl('/api/sessions/graph'), {
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+      signal: requestSignal,
     })
     if (!res.ok) throw new Error('Cannot load conversations. Check Main and retry.')
     const data = await res.json()
-    if (!controller.signal.aborted) {
-      const sessions = parseSessionGraph(data, props.organizationId)
+    if (!requestSignal.aborted) {
+      const sessions = parseSessionGraph(data, props.projectId)
+      if (!props.managed) homeCache.setSessions(props.apiBase, sessions)
       const selected = sessions.find(session => session.sessionId === activeSessionId.value)
       if (activeSession.value && !selected) composerError.value = 'This conversation or execution is no longer available. Close it and refresh the conversation list.'
       if (selected) selectedMode.value = selected.mode
       allSessions.value = sessions
     }
   } catch (cause) {
-    if (!controller.signal.aborted) sessionsError.value = cause instanceof Error && cause.message.startsWith('Cannot ')
+    if (!controller.signal.aborted && !signal?.aborted) sessionsError.value = cause instanceof Error && cause.message.startsWith('Cannot ')
       ? cause.message : 'Cannot load conversations. Check Main and retry.'
   } finally {
     if (sessionListRequest === controller) {
@@ -1028,6 +1195,24 @@ async function loadSessionList(): Promise<void> {
     }
   }
 }
+
+watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base, projectId, active], _previous, onCleanup) => {
+  if (!active) return
+  const refresh = createLiveRefresh({
+    load: loadSessionList,
+    apply: () => { void pollSessionStages() },
+    onError: () => { sessionsError.value = 'Cannot load conversations. Check Main and retry.' },
+  })
+  const subscription = livePool.client(base).subscribe({
+    kind: 'sessions', projectId: projectId ?? liveProjectId(base),
+  }, { event: () => refresh.refresh(), reset: () => refresh.refresh() })
+  onCleanup(() => {
+    subscription.close()
+    refresh.dispose()
+    stageRequest?.abort()
+    stageRequest = undefined
+  })
+}, { immediate: true })
 
 function toggleCollapse(sessionId: string): void {
   if (collapsedSessions.has(sessionId)) {
@@ -1039,16 +1224,17 @@ function toggleCollapse(sessionId: string): void {
 
 const executionLocationSelector = ref<InstanceType<typeof ExecutionLocationSelector>>()
 
-function createNewWebChat(project?: ProjectRecord, syncRoute = true, openRemotePicker = false): void {
+function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePicker = false): void {
   resetConversation()
-  draftProject.value = project
-  draft.value = createProjectChatDraft(projectsClient, project)
+  draftFolder.value = folder
+  draft.value = createFolderChatDraft(foldersClient, folder)
   activeSessionId.value = ''
+  restoreDraftSettings()
   mobileSidebarOpen.value = false
   if (!props.embedded && syncRoute) {
     emit('primary-change', '')
     if (props.managed) emit('navigate', '')
-    else void router.replace({ name: 'chat', params: { organizationId: props.organizationId } })
+    else void router.replace({ name: 'chat', params: { projectId: props.projectId } })
   }
   void nextTick(async () => {
     workbench.value?.showConversation()
@@ -1068,8 +1254,8 @@ function selectExecutionLocation(target: RemoteConversationTarget | undefined): 
     return
   }
   composerError.value = ''
-  if (!target && draftProject.value?.kind === 'remote') draftProject.value = undefined
-  draft.value = target ? createRemoteChatDraft(props.apiBase, target) : createProjectChatDraft(projectsClient, draftProject.value)
+  if (!target && draftFolder.value?.kind === 'remote') draftFolder.value = undefined
+  draft.value = target ? createRemoteChatDraft(props.apiBase, target) : createFolderChatDraft(foldersClient, draftFolder.value)
 }
 
 function clearPendingAttachments(): void {
@@ -1219,32 +1405,22 @@ async function pickContext(kind: ChatContextItem['kind']): Promise<void> {
   }
 }
 
-async function deleteSession(sessionId: string): Promise<void> {
-  const children = allSessions.value.filter(s => s.parentSessionId === sessionId)
-  const msg = children.length > 0
-    ? `Delete "${sessionId}" and its ${children.length} child session(s)?`
-    : `Delete "${sessionId}"?`
-  if (!confirm(msg)) return
-
-  try {
-    const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}`), { method: 'DELETE' })
-    if (!res.ok) {
-      sessionsError.value = 'Could not delete this conversation. Check Main and retry.'
-      return
-    }
-    // Clear active view if deleted session was selected
-    emit('deleted', sessionId)
-    if (activeSessionId.value === sessionId) {
-      createNewWebChat()
-    }
-    await loadSessionList()
-  } catch {
-    sessionsError.value = 'Could not delete this conversation. Check Main and retry.'
-  }
+function deleteSession(sessionId: string): void {
+  if (deletion.value) return
+  deletion.value = { apiBase: props.apiBase, sessionId, name: allSessions.value.find(session => session.sessionId === sessionId)?.label || sessionId }
+}
+async function sessionsDeleted(ids: string[]): Promise<void> {
+  deletion.value = undefined
+  const activeDeleted = ids.includes(activeSessionId.value)
+  for (const id of ids) emit('deleted', id)
+  if (activeDeleted) createNewWebChat()
+  await loadSessionList()
 }
 
 function resetConversation(): void {
-  modelOverride.value = ''
+  deletion.value = undefined
+  deferActiveHistory = false
+  modelOverride.value = undefined
   currentWorkdir.value = undefined
   sessionSelectionGeneration++
   settingsRequest?.abort()
@@ -1262,6 +1438,7 @@ function resetConversation(): void {
   historyRequest = undefined
   loadingHistory.value = false
   preparingSend.value = false
+  submittingMessage.value = false
   pickingContext.value = false
   streaming.value = false
   streamPhase.value = undefined
@@ -1284,50 +1461,6 @@ function resetConversation(): void {
   expandedThinking.clear()
 }
 
-function requestSession(sessionId: string): void {
-  if (sessionId === activeSessionId.value && !props.childSessionId) return
-  if (props.enableChildPane) {
-    const target = childConversationTarget(allSessions.value, sessionId, activeSessionId.value)
-    if (target) {
-      if (!props.managed && target.primaryId !== activeSessionId.value) selectSession(target.primaryId, false)
-      emit('open-child', target)
-      return
-    }
-    if (props.childSessionId && sessionId === activeSessionId.value) {
-      emit('primary-change', sessionId)
-      if (props.managed) emit('navigate', sessionId)
-      else void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId } })
-      return
-    }
-  }
-  if (props.managed) emit('navigate', sessionId)
-  else selectSession(sessionId)
-}
-
-function inspectExecution(sessionId: string): void {
-  if (props.embedded) emit('child-navigation', sessionId)
-  else requestSession(sessionId)
-}
-
-function selectSession(sessionId: string, syncRoute = true): void {
-  resetConversation()
-  activeSessionId.value = sessionId
-  selectedMode.value = allSessions.value.find(session => session.sessionId === sessionId)?.mode
-  if (!props.embedded && syncRoute) {
-    emit('primary-change', sessionId)
-    if (props.managed) emit('navigate', sessionId)
-    else void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId } })
-  }
-  void loadSessionList()
-  void loadCurrentSession()
-}
-
-function restoreSession(sessionId: string): void {
-  if (!mounted || props.embedded || activeSessionId.value === sessionId) return
-  if (!sessionId) createNewWebChat(undefined, false)
-  else if (allSessions.value.some(session => session.sessionId === sessionId)) selectSession(sessionId, false)
-}
-
 function focusConversation(): void {
   const target = chatInput.value?.getClientRects().length ? chatInput.value : paneRoot.value?.querySelector<HTMLElement>('.document-tabs [aria-selected="true"]')
   target?.focus({ preventScroll: true })
@@ -1345,19 +1478,31 @@ async function loadCurrentSession(): Promise<void> {
   }
 }
 
-async function loadDirectChat(): Promise<void> {
+async function loadDirectChat(background = false): Promise<void> {
+  if (deferActiveHistory && requestBusy.value && messages.value.length) return
   historyRequest?.abort()
   const controller = new AbortController()
   historyRequest = controller
   const chatId = activeSessionId.value.replace('web:', '')
   const sessionId = activeSessionId.value
-  loadingHistory.value = true
+  directRefreshPending = false
+  let followBottom = false
+  if (!background) loadingHistory.value = true
   try {
     const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal })
     if (!res.ok) throw new Error('Could not load conversation. Refresh to retry.')
     const data = await res.json()
     if (controller.signal.aborted) return
+    const container = messagesContainer.value
+    followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     messages.value = collapseHistory(data.history ?? [])
+    if (!sendRequest && !streaming.value) {
+      streaming.value = false
+      streamContent.value = ''
+      streamPhase.value = undefined
+      streamTimestamp.value = undefined
+      streamingToolCallData.value = null
+    }
     systemPrompt.value = data.systemPrompt ?? ''
     tools.value = data.tools ?? []
     // Also fetch segment info for navigation
@@ -1376,7 +1521,8 @@ async function loadDirectChat(): Promise<void> {
     if (historyRequest === controller) {
       historyRequest = undefined
       loadingHistory.value = false
-      scrollToBottom()
+      if (!background || followBottom) scrollToBottom()
+      if (directRefreshPending) refreshDirectHistory()
     }
   }
   // Keep a live event stream open so background pushes (cron/self-awake/subagent)
@@ -1482,13 +1628,12 @@ function handleKeyDown(e: KeyboardEvent): void {
   }
 }
 
-/** Streaming accumulator state shared between the active request reader and the
- * persistent background event stream. */
+/** Transient output; persisted history is authoritative after resets and completion. */
 interface StreamState { accumulated: string; timestamp?: string }
 
 /** A decoded SSE payload emitted by the web channel. */
 interface StreamPayload {
-  event?: 'response' | 'tool_call' | 'tool_result' | 'session_message'
+  event?: 'response' | 'tool_call' | 'tool_result' | 'session_message' | 'turn_finished'
   content?: string
   done?: boolean
   media?: string[]
@@ -1496,19 +1641,34 @@ interface StreamPayload {
   toolCall?: { name: string; arguments: Record<string, unknown> }
   toolCallId?: string
   toolName?: string
-  message?: RawMessage
+  message?: unknown
+}
+
+function isStreamPayload(value: unknown): value is StreamPayload {
+  if (!isRecord(value)
+    || (value.event !== undefined && !['response', 'tool_call', 'tool_result', 'session_message', 'turn_finished'].includes(String(value.event)))
+    || (value.content !== undefined && typeof value.content !== 'string')
+    || (value.done !== undefined && typeof value.done !== 'boolean')
+    || (value.media !== undefined && (!Array.isArray(value.media) || !value.media.every(item => typeof item === 'string')))
+    || (value.toolCallId !== undefined && typeof value.toolCallId !== 'string')
+    || (value.toolName !== undefined && typeof value.toolName !== 'string')
+    || (value.toolCall !== undefined && (!isRecord(value.toolCall) || typeof value.toolCall.name !== 'string' || !isRecord(value.toolCall.arguments)))
+    || (value.usage !== undefined && (!isRecord(value.usage) || !['promptTokens', 'completionTokens', 'totalTokens'].every(key => {
+      const count = isRecord(value.usage) ? value.usage[key] : undefined
+      return typeof count === 'number' && Number.isFinite(count) && count >= 0
+    })))) return false
+  if (value.event === 'session_message') return !!parseChatEvent(value.message)
+  if (value.event === 'turn_finished') return value.done === true && ['completed', 'failed', 'cancelled'].includes(String(value.status)) && typeof value.turnId === 'string'
+  return true
 }
 
 /**
- * Apply a single decoded SSE payload to the reactive chat state. Shared by the
- * active `/api/chat/send` reader loop and the persistent `/api/chat/events`
- * background stream so both render identically. Returns true when the payload
- * marks the end of a turn (`done`).
+ * Apply a validated shared-feed payload. Returns true at the end of a turn.
  */
 function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean {
   const event = payload.event ?? 'response'
   if (event === 'session_message') {
-    const parsed = payload.message && parseChatEvent(payload.message)
+    const parsed = parseChatEvent(payload.message)
     if (!parsed) throw new Error('Invalid live event message')
     const eventId = parsed.eventMeta.attrs['event-id']
     if (eventId && messages.value.some(message => message.eventMeta?.attrs['event-id'] === eventId)) return false
@@ -1589,14 +1749,13 @@ async function sendMessage(overrideContent?: string, opts?: {
   retryMedia?: string[]
 }): Promise<void> {
   if (modelSelection?.loading.value || modelSelection?.error.value) {
-    composerError.value = 'Organization models are unavailable. Retry models or update this organization’s model settings.'
+    composerError.value = 'Project models are unavailable. Retry models or update this project’s model settings.'
     return
   }
   if (isExecution.value) {
     composerError.value = 'Tasks and calls are read-only. Send a message in the owning conversation instead.'
     return
   }
-  if (awaitingCall.value) return
   if (props.embedded && !activeSession.value && !opts?.parentSessionId) {
     composerError.value = 'This child conversation is unavailable. Close it and refresh the conversation list.'
     return
@@ -1604,32 +1763,38 @@ async function sendMessage(overrideContent?: string, opts?: {
   const retry = opts?.retry === true
   const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
   const attachments = retry ? [] : [...pendingAttachments.value]
-  const model = conversationModel.value
+  const model = explicitModel.value
+  const savedDraftKey = pendingDraftSettings.value ? draftSettingsKey.value : undefined
   if (remoteConversation.value && (attachments.length || contextItems.value.length)) {
     composerError.value = 'Remove local attachments before sending to a remote workspace.'
     return
   }
-  if ((!content && !retry && attachments.length === 0) || requestBusy.value || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
+  if ((!content && !retry && attachments.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping
+    || !installation.value.uiScopes.includes('chat:write') || retry && requestBusy.value
+    || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
+  const followUp = requestBusy.value
+  submittingMessage.value = true
   const generation = sessionSelectionGeneration
   const controller = new AbortController()
   sendRequest = controller
   const priorRecoveryId = currentRecovery.value?.id
   const control = createChatRequestControl(props.apiBase, () => controller.abort())
-  if (activeSessionId.value) requestControls.set(activeSessionId.value, control)
-  else draftRequest.value = control
+  if (activeSessionId.value) {
+    if (!followUp) requestControls.set(activeSessionId.value, control)
+  } else draftRequest.value = control
   const startingDraft = !activeSessionId.value
   preparingSend.value = startingDraft
   composerError.value = ''
   let accepted = false
   let submitted = false
   let rejected = false
-  let completed = false
   let messageAdded = retry
+  let optimisticMessage: ChatMsg | undefined
 
   try {
     const sessionId = activeSessionId.value || await draft.value.prepare(controller.signal)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
-    requestControls.set(sessionId, control)
+    if (!followUp) requestControls.set(sessionId, control)
     draftRequest.value = undefined
     // Never load context/history for a draft: that endpoint materializes a session.
     historyRequest?.abort()
@@ -1638,16 +1803,18 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (startingDraft && draftRemote.value) currentWorkdir.value = { kind: 'remote', displayPath: draftRemote.value.displayPath ?? null }
     activeSessionId.value = sessionId
     if (props.managed) emit('prepared', sessionId)
-    else if (!props.embedded) void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })
+    else if (!props.embedded) void router.replace({ name: 'chat', params: { projectId: props.projectId, sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })
     preparingSend.value = false
     workbench.value?.showConversation()
     activePanel.value = 'conversation'
     clearSelection()
-    streaming.value = true
-    streamPhase.value = 'llm'
-    streamContent.value = ''
-    streamTimestamp.value = undefined
-    streamingToolCallData.value = null
+    if (!followUp) {
+      streaming.value = true
+      streamPhase.value = 'llm'
+      streamContent.value = ''
+      streamTimestamp.value = undefined
+      streamingToolCallData.value = null
+    }
     scrollToBottom()
 
     const chatId = sessionId.replace('web:', '')
@@ -1655,9 +1822,14 @@ async function sendMessage(overrideContent?: string, opts?: {
     const uploadedMedia = retry ? [...(opts?.retryMedia ?? [])] : uploadedAttachments.map(attachment => attachment.path)
     const messageContent = composeImageReferenceMessage(content, uploadedAttachments)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    connectEventStream(chatId)
+    if (!eventStream) throw new Error('Live updates are unavailable. Retry before sending.')
+    await eventStream.ready(controller.signal)
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     const payload: Record<string, unknown> = {
       chatId,
       senderId: 'admin',
+      stream: false,
     }
     if (retry) {
       payload.retry = true
@@ -1669,12 +1841,9 @@ async function sendMessage(overrideContent?: string, opts?: {
       if (uploadedMedia.length > 0) payload.media = uploadedMedia
       const msg: ChatMsg = { role: 'user', content: messageContent, timestamp: new Date().toISOString() }
       if (uploadedMedia.length > 0) msg.media = uploadedMedia
+      optimisticMessage = msg
       messages.value.push(msg)
       messageAdded = true
-      inputText.value = ''
-      clearPendingAttachments()
-      contextItems.value = []
-      if (chatInput.value) chatInput.value.style.height = 'auto'
     }
     if (opts?.parentSessionId) payload.parentSessionId = opts.parentSessionId
     if (pendingDraftSettings.value || model) payload.config = { ...pendingDraftSettings.value, ...(model ? { model } : {}) }
@@ -1685,87 +1854,69 @@ async function sendMessage(overrideContent?: string, opts?: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: controller.signal,
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
     })
 
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
       rejected = true
       throw new Error(`Could not send message (${res.status} ${res.statusText}). Retry when Main is available.`)
     }
+    const admission: unknown = await res.json()
+    if (!isRecord(admission) || admission.chatId !== chatId || typeof admission.requestId !== 'string' || !admission.requestId) {
+      throw new Error('Main did not confirm the request identity. Refresh activity before retrying; the request may be running.')
+    }
     accepted = true
+    // Steered inputs are admitted before the tool boundary writes them to history.
+    if (followUp && generation === sessionSelectionGeneration) deferActiveHistory = true
+    if (!retry && generation === sessionSelectionGeneration) {
+      inputText.value = ''
+      clearPendingAttachments()
+      contextItems.value = []
+      if (chatInput.value) chatInput.value.style.height = 'auto'
+    }
     if (sessionRecoveries.value[sessionId]?.id === priorRecoveryId) delete sessionRecoveries.value[sessionId]
-    control.admitted(res.headers.get('x-shadow-request-id') ?? undefined)
+    control.admitted(admission.requestId)
+    if (finishedRequests.has(admission.requestId)) control.finish()
+    if (savedDraftKey) {
+      try { window.localStorage.removeItem(savedDraftKey) }
+      catch (cause) { settingsError.value = `Conversation saved, but draft settings could not be cleared: ${cause instanceof Error ? cause.message : String(cause)}` }
+    }
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) {
       controller.abort()
       return
     }
     pendingDraftSettings.value = undefined
-    if (!eventStream) connectEventStream(chatId)
     void loadSessionList()
-
-    // Read SSE stream
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    const streamState: StreamState = { accumulated: '' }
-    requestStreamState = streamState
-
-    while (true) {
-      const { value, done } = await reader.read()
-      if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      // Parse SSE lines
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        try {
-          const payload = JSON.parse(line.slice(6))
-          if (applyStreamPayload(payload, streamState)) {
-            completed = true
-            control.finish()
-            streaming.value = false
-            void loadSessionList()
-            return
-          }
-        } catch {
-          composerError.value = 'Could not read a live conversation update. Reopen the conversation to reload its history.'
-        }
-      }
-    }
-
-    // Stream ended without explicit done
-    flushStreamingTool()
-    if (streamState.accumulated) {
-      messages.value.push({ role: 'assistant', content: streamState.accumulated, timestamp: streamState.timestamp })
-    }
-    detailsRevision.value++
   } catch (err) {
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
-    if (!activeSessionId.value || !messageAdded) {
+    if (rejected && optimisticMessage) {
+      const index = messages.value.indexOf(optimisticMessage)
+      if (index >= 0) messages.value.splice(index, 1)
+    }
+    if (followUp || !activeSessionId.value || !messageAdded || rejected) {
       composerError.value = err instanceof Error ? err.message : 'Could not start the conversation. Retry.'
     } else {
       messages.value.push({ role: 'assistant', content: `Error: ${err}`, isError: true, timestamp: new Date().toISOString() })
     }
   } finally {
-    if (!submitted || rejected || completed) control.finish()
+    if (!submitted || rejected) control.finish()
     else if (control.state.phase === 'submitting') control.admitted()
     if (generation === sessionSelectionGeneration) {
       if (sendRequest === controller) {
         sendRequest = undefined
-        requestStreamState = undefined
+        submittingMessage.value = false
       }
       preparingSend.value = false
-      streaming.value = false
-      streamPhase.value = undefined
-      streamContent.value = ''
-      streamTimestamp.value = undefined
-      streamingToolCallData.value = null
+      if (!followUp && (!accepted || control.state.phase === 'finished')) {
+        streaming.value = false
+        streamPhase.value = undefined
+        streamContent.value = ''
+        streamTimestamp.value = undefined
+        streamingToolCallData.value = null
+      }
       scrollToBottom()
-      if (accepted && !systemPrompt.value) void loadCurrentSession()
+      if (directRefreshPending || accepted && !systemPrompt.value) refreshDirectHistory()
+      if (followUp) void pollSessionStages()
     }
   }
 }
@@ -1788,11 +1939,9 @@ function retryLastRequest(): void {
   }
   // The message being retried (last user bubble) is sent as a fallback so the
   // request still works if the original send never reached the backend.
-  const last = messages.value[messages.value.length - 1]
-  const retryContent = last && last.role === 'user' && typeof last.content === 'string'
-    ? last.content
-    : undefined
-  const retryMedia = last && last.role === 'user' ? last.media : undefined
+  const last = resendableUserMessage(messages.value)
+  const retryContent = last?.content
+  const retryMedia = last?.media
   void sendMessage(undefined, { retry: true, retryContent, retryMedia })
 }
 
@@ -1962,7 +2111,7 @@ function handleTypingFocus(e: KeyboardEvent): void {
   if (!input) return
   const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"], [role="slider"], [role="listbox"], .workbench-explorer'
   const editing = [e.target, document.activeElement].some(target => target instanceof Element && !!target.closest(editable))
-  const overlayOpen = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="menu"], .project-dialog-backdrop, .project-menu-backdrop, .composer-popover-backdrop, .workbench-explorer.drawer'))
+  const overlayOpen = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="menu"], .folder-dialog-backdrop, .folder-menu-backdrop, .composer-popover-backdrop, .workbench-explorer.drawer'))
     .some(element => element.getClientRects().length > 0
       && (!element.classList.contains('hover-info-popup') || element.contains(document.activeElement)))
   if (!canRedirectComposerKey(e, {
@@ -1978,8 +2127,8 @@ function handleTypingFocus(e: KeyboardEvent): void {
 
 document.addEventListener('keydown', handleTypingFocus)
 const onGlobalConfigChanged = (event: Event) => {
-  const organizationId = (event as CustomEvent<{ organizationId?: string }>).detail?.organizationId
-  if (!organizationId || organizationId === props.organizationId) detailsRevision.value++
+  const projectId = (event as CustomEvent<{ projectId?: string }>).detail?.projectId
+  if (!projectId || projectId === props.projectId) detailsRevision.value++
 }
 window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
@@ -2001,7 +2150,7 @@ onMounted(async () => {
   await loadSessionList()
   if (disposed) return
   mounted = true
-  if (props.visible) startStagePolling()
+  if (paneActive.value) startStagePolling()
   if (props.embedded) {
     await loadEmbeddedSession(props.sessionId ?? '')
     return
@@ -2034,11 +2183,29 @@ async function loadEmbeddedSession(id: string): Promise<void> {
 watch(() => props.sessionId, id => {
   if (mounted && props.embedded && id && id !== activeSessionId.value) void loadEmbeddedSession(id)
 })
-watch(() => props.visible, visible => {
+watch(paneActive, visible => {
   if (!mounted) return
-  if (visible) startStagePolling()
-  else stopStagePolling()
-})
+  if (visible) {
+    startStagePolling()
+    if (isDirectChat.value && !viewingPhysicalId.value) {
+      connectEventStream(activeSessionId.value.replace('web:', ''))
+      if (!sendRequest) refreshDirectHistory()
+    }
+  } else {
+    stopStagePolling()
+    if (!wantsLiveChat()) closeEventStream()
+    if (isDirectChat.value && !viewingPhysicalId.value) {
+      historyRequest?.abort()
+      historyRequest = undefined
+      loadingHistory.value = false
+    }
+  }
+}, { flush: 'sync' })
+watch(() => [wantsLiveChat(), activeSessionId.value, viewingPhysicalId.value, props.apiBase], () => {
+  if (!mounted || disposed) return
+  if (wantsLiveChat() && isDirectChat.value && !viewingPhysicalId.value) connectEventStream(activeSessionId.value.replace('web:', ''))
+  else closeEventStream()
+}, { flush: 'sync' })
 watch(composerDock, element => {
   dockObserver?.disconnect()
   if (!element) return
@@ -2051,17 +2218,14 @@ watch(composerDock, element => {
   })
   dockObserver.observe(element)
 }, { flush: 'post' })
-const canResend = computed(() => {
-  if (requestBusy.value || currentRecovery.value) return false
-  if (messages.value.length === 0) return false
-  const lastMsg = messages.value[messages.value.length - 1]
-  return lastMsg.role === 'user'
-})
+const resendCandidate = computed(() => resendableUserMessage(messages.value))
+const canResend = computed(() => !requestBusy.value && !currentRecovery.value && !!resendCandidate.value)
 const historyMarkers = computed(() => userMessageMarkers(messages.value))
 
 function resendLastMessage() {
-  const lastUserMsg = [...messages.value].reverse().find(m => m.role === 'user')
-  void sendMessage(undefined, { retry: true, retryContent: lastUserMsg?.content, retryMedia: lastUserMsg?.media })
+  const message = resendCandidate.value
+  if (!canResend.value || !message) return
+  void sendMessage(undefined, { retry: true, retryContent: message.content, retryMedia: message.media })
 }
 </script>
 
@@ -2098,13 +2262,14 @@ function resendLastMessage() {
 .draft-mark svg { width: 100%; height: 100%; }
 .draft-heading h1 { margin: 0 0 10px; font-size: clamp(19px, 2vw, 26px); font-weight: 500; letter-spacing: -.025em; }
 .draft-heading p { margin: 0; color: var(--c-text-secondary); font-size: 13px; line-height: 1.6; }
-.draft-project { display: inline-flex; align-items: center; gap: 16px; box-sizing: border-box; max-width: 100%; margin-top: 20px; padding: 16px 22px; border: 1px solid color-mix(in srgb, var(--c-blue) 40%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 8%, var(--c-bg-card)); text-align: left; }
+.draft-folder { display: inline-flex; align-items: center; gap: 16px; box-sizing: border-box; max-width: 100%; margin-top: 20px; padding: 16px 22px; border: 1px solid color-mix(in srgb, var(--c-blue) 40%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 8%, var(--c-bg-card)); text-align: left; }
 .draft-folder-icon { flex: 0 0 34px; width: 34px; height: 34px; color: var(--c-blue); }
-.draft-project-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.draft-project-label { color: var(--c-blue); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.draft-project strong { color: var(--c-text); font-size: 24px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
-.draft-project-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
+.draft-folder-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.draft-folder-label { color: var(--c-blue); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.draft-folder strong { color: var(--c-text); font-size: 24px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+.draft-folder-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
 .draft-heading .draft-scratch { margin-top: 14px; }
+.draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
 .chat-messages { min-height: 0; min-width: 0; padding-right: 56px; padding-bottom: calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
 .chat-working { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--c-blue) 22%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 5%, var(--c-bg-card)); color: var(--c-blue); }
@@ -2173,12 +2338,15 @@ function resendLastMessage() {
   .mobile-sessions-toggle { display: block; position: absolute; top: 6px; left: 8px; z-index: 13; }
   .draft-heading { margin-bottom: 18px; }
   .draft-mark { width: 48px; height: 48px; margin-bottom: 16px; }
-  .draft-project { padding: 14px; gap: 12px; }
-  .draft-project strong { font-size: 21px; }
+  .draft-folder { padding: 14px; gap: 12px; }
+  .draft-folder strong { font-size: 21px; }
   .chat-working { width: calc(100% - 24px); gap: 8px; }
   .chat-working-detail { display: none; }
   .chat-composer { width: calc(100% - 24px); margin-bottom: 12px; }
   .composer-controls { gap: 0; }
+  .composer-submit:has(.composer-stop) { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+  .composer-submit:has(.composer-stop) .composer-hint { flex-basis: 100%; }
+  .composer-submit:has(.composer-stop) .composer-send { margin-left: 0; }
 }
 .retry-row {
   margin-top: 0.5rem;

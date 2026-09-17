@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { currentEffort, effortOptions, effortOptionsForModel, reasoningSettingsForEffort, updateSessionSettings } from './session-settings.ts'
-import { parseSessionGraph } from './projects-sidebar.ts'
+import { parseSessionGraph } from './folders-sidebar.ts'
 import { readFile } from 'node:fs/promises'
 import { compileScript, compileStyle, compileTemplate, parse } from 'vue/compiler-sfc'
 
@@ -62,7 +62,7 @@ test('reasoning changes update only the selected session and null resets inherit
     return Response.json({ key: 'web:chat-one', config: { model: 'kept', reasoningEffort: 'high' } })
   }
   assert.deepEqual(await updateSessionSettings('http://main', 'web:chat-one', { thinking: null }, signal, request), {
-    thinking: null, reasoningEffort: 'high',
+    model: 'kept', thinking: null, reasoningEffort: 'high',
   })
 })
 

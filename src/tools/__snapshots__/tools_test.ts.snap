@@ -67,7 +67,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "plan_write",
-      "description": "Write or edit a plan file. Files are scoped to .plans/ directory.",
+      "description": "Write or edit a planning document in .plans/. Shared task status belongs in Initiative items, not a second checklist.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -497,6 +497,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "Short description of the sub-agent session's purpose."
           },
+          "initiative_id": {
+            "type": "string",
+            "description": "Existing Initiative ID in this Project. The child receives its shared SQL work context; omission inherits the parent association."
+          },
           "agent_type": {
             "type": "string",
             "description": "Agent role. Defaults to \\"sub\\"; explicit call mode inherits the caller role when omitted. Available types are listed in the Runtime section of the system prompt."
@@ -520,7 +524,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "update_convention",
-      "description": "Add or remove a durable convention (always-on constraint / rule). Conventions are injected full-text every turn — keep them short and remove them when no longer in effect. scope: session (this conversation), project (shared across a project), or agent (about the agent itself).",
+      "description": "Add or remove a durable convention (always-on constraint / rule). Conventions are injected full-text every turn — keep them short and remove them when no longer in effect. scope: session (this conversation), initiative (shared work within this Project), or agent (this Project agent). Legacy project scope means initiative, never another Project.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -536,8 +540,9 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "enum": [
               "session",
-              "project",
-              "agent"
+              "initiative",
+              "agent",
+              "project"
             ],
             "description": "The scope the convention applies to."
           },
@@ -545,9 +550,9 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "string",
             "description": "The convention text. For remove, a case-insensitive substring match."
           },
-          "project": {
+          "initiative_id": {
             "type": "string",
-            "description": "Project name — required when scope is \\"project\\"."
+            "description": "Initiative ID for initiative scope; defaults to this session association."
           }
         },
         "required": [

@@ -1,8 +1,8 @@
 # Chrome DevTools MCP — CLI Arguments
 
-## Organization-managed imports
+## Project-managed imports
 
-Organization runtimes, including the default organization, always connect to
+Project runtimes, including Default, always connect to
 their own managed browser. Import arguments and `.chrome-devtools.json` accept
 only `--remote-debugging-port` (1-65535, consumed by the allocator), and these
 boolean switches: `--usage-statistics`, `--performance-crux`,
@@ -12,13 +12,13 @@ use `=true` or `=false`. Omit the port for automatic allocation.
 
 All other flags are rejected, including external endpoints, auto-connect,
 custom profiles, executable/launch flags, and unknown future options. Configure
-the browser executable through the organization's `tools.chrome.executablePath`.
+the browser executable through the Project's `tools.chrome.executablePath`.
 This controls the built-in adapter, not arbitrary host commands or custom MCPs.
 
-## Upstream CLI / legacy non-organization reference
+## Upstream CLI reference
 
 The following `npx chrome-devtools-mcp@latest` options describe the upstream CLI,
-not the organization import allowlist.
+not the Project import allowlist.
 
 ## Connection
 

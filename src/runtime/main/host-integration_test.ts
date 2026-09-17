@@ -9,11 +9,12 @@ import { ConfigSchema } from '../../config/schema.ts'
 import { startMainRuntime } from './start.ts'
 import type { MainRuntimeHandle } from './contracts.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
-import type { OrganizationRecord } from '../../organizations/contracts.ts'
-import type { ProjectRecord } from '../../projects/contracts.ts'
+import { projectPaths, type ProjectRecord } from '../../projects/contracts.ts'
+import type { FolderRecord } from '../../folders/contracts.ts'
 import type { BotInstanceStatus } from '../../channels/setup-contract.ts'
+import type { AutomationSummary } from '../../cron/contracts.ts'
 
-test('real Main concurrently isolates org projects, Home prompts, defaults, bots and restart state', { timeout: 90_000 }, async () => {
+test('real Main concurrently isolates Project folders, Home prompts, defaults, bots and restart state', { timeout: 90_000 }, async () => {
   await withTempWorkspace(async root => {
     const previousCwd = process.cwd()
     const environmentKeys = ['GITHUB_COPILOT_TOKEN_DIR', 'GITHUB_COPILOT_ACCESS_TOKEN_FILE',
@@ -24,27 +25,31 @@ test('real Main concurrently isolates org projects, Home prompts, defaults, bots
       for (const key of environmentKeys) delete process.env[key]
       process.env.GITHUB_COPILOT_TOKEN_DIR = join(root, 'empty-auth')
       process.chdir(root)
-      const home = join(root, 'legacy-home')
-      const folderA = join(root, 'A-private-project')
-      const folderB = join(root, 'B-private-project')
-      for (const directory of [home, folderA, folderB]) await mkdir(directory)
-      await writeFile(join(home, 'SOUL.md'), 'ORG_A_PRIVATE_IDENTITY_7f01\n')
+      const home = join(root, 'configured-home')
+      const pathA = join(root, 'A-private-folder')
+      const pathB = join(root, 'B-private-folder')
+      for (const directory of [home, pathA, pathB]) await mkdir(directory)
+      await writeFile(join(home, 'SOUL.md'), 'BASE_HOME_NOT_IMPORTED\n')
+      const projectHome = projectPaths(`${home}.projects`, 'default').home
+      await mkdir(projectHome, { recursive: true })
+      await writeFile(join(projectHome, 'SOUL.md'), 'ORG_A_PRIVATE_IDENTITY_7f01\n')
       await writeFile(join(home, 'unknown-user-file.bin'), Buffer.from([0, 41, 255]))
-      await writeFile(join(folderA, 'sentinel.txt'), 'A file only')
-      await writeFile(join(folderB, 'sentinel.txt'), 'B file only')
+      await writeFile(join(pathA, 'sentinel.txt'), 'A file only')
+      await writeFile(join(pathB, 'sentinel.txt'), 'B file only')
       const reservation = createServer().listen(0, '127.0.0.1')
       await once(reservation, 'listening')
       const address = reservation.address()
       assert(address && typeof address !== 'string')
       const port = address.port
       await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
-      const config = ConfigSchema.parse({
+      const rawConfig = {
         agent: { workspace: home, model: 'fixture@openai', sessionStorage: 'sqlite' },
         providers: { openai: { apiKey: 'synthetic-unused-key', baseUrl: 'http://127.0.0.1:1/v1' } },
         channels: {}, mcp: {},
-      })
+      }
+      const config = ConfigSchema.parse(rawConfig)
       const configPath = join(root, 'fixture.config.json')
-      await writeFile(configPath, JSON.stringify(config))
+      await writeFile(configPath, JSON.stringify(rawConfig))
       const credential = randomUUID()
       const options = { configPath, localNodeId: 'fixture-main', gateway: { host: '127.0.0.1', port, launchCredential: credential } }
       const base = `http://127.0.0.1:${port}`
@@ -62,36 +67,46 @@ test('real Main concurrently isolates org projects, Home prompts, defaults, bots
       }
       runtime = await startMainRuntime(config, options)
       await runtime.ready
-      assert.equal((await fetch(base + '/api/organizations')).status, 401)
-      const initial = await json<{ organizations: OrganizationRecord[] }>('/api/organizations')
-      assert.deepEqual(initial.organizations.map(org => org.id), ['default'])
-      const created = await json<{ organization: OrganizationRecord; runtime: { state: string } }>(
-        '/api/organizations', 'POST', { name: 'Second organization' }, 201)
+      assert.equal((await fetch(base + '/api/projects')).status, 401)
+      assert.equal((await fetch(base + '/api/live?topics=[]')).status, 401)
+      const initial = await json<{ projects: ProjectRecord[] }>('/api/projects')
+      assert.deepEqual(initial.projects.map(org => org.id), ['default'])
+      const created = await json<{ project: ProjectRecord; runtime: { state: string } }>(
+        '/api/projects', 'POST', { name: 'Second project' }, 201)
       assert.equal(created.runtime.state, 'ready')
-      const a = '/organizations/default'
-      const b = `/organizations/${created.organization.id}`
+      const a = '/projects/default'
+      const b = `/projects/${created.project.id}`
+      assert.equal((await fetch(base + '/api/app/model-defaults')).status, 401)
+      await json('/api/app/model-defaults', 'PATCH', { model: 'app-choice@openai', reasoningEffort: 'medium' })
       const before = await json<{ model: string }>(b + '/api/config/model-defaults')
+      assert.equal(before.model, 'app-choice@openai')
       await json(a + '/api/config/model-defaults', 'PATCH', { model: 'org-a@openai', temperature: 0.2 })
       assert.deepEqual(await json(b + '/api/config/model-defaults'), before)
-      const projectA = (await json<{ project: ProjectRecord }>(a + '/api/projects/register', 'POST', { path: folderA })).project
-      const projectB = (await json<{ project: ProjectRecord }>(b + '/api/projects/register', 'POST', { path: folderB })).project
-      assert.equal((await request(b + '/api/projects/register', 'POST', { path: folderA })).status, 409)
-      assert.equal((await request(b + `/api/projects/${projectA.id}/files`)).status, 404)
-      assert.deepEqual((await json<{ projects: ProjectRecord[] }>(a + '/api/projects')).projects.map(project => project.id), [projectA.id])
-      assert.deepEqual((await json<{ projects: ProjectRecord[] }>(b + '/api/projects')).projects.map(project => project.id), [projectB.id])
-      const sessionA = await json<{ sessionId: string }>(a + `/api/projects/${projectA.id}/sessions`, 'POST', {})
-      const sessionB = await json<{ sessionId: string }>(b + `/api/projects/${projectB.id}/sessions`, 'POST', {})
+      const folderA = (await json<{ folder: FolderRecord }>(a + '/api/folders/register', 'POST', { path: pathA })).folder
+      const folderB = (await json<{ folder: FolderRecord }>(b + '/api/folders/register', 'POST', { path: pathB })).folder
+      assert.equal((await request(b + '/api/folders/register', 'POST', { path: pathA })).status, 409)
+      assert.equal((await request(b + `/api/folders/${folderA.id}/files`)).status, 404)
+      assert.deepEqual((await json<{ folders: FolderRecord[] }>(a + '/api/folders')).folders.map(folder => folder.id), [folderA.id])
+      assert.deepEqual((await json<{ folders: FolderRecord[] }>(b + '/api/folders')).folders.map(folder => folder.id), [folderB.id])
+      const sessionA = await json<{ sessionId: string }>(a + `/api/folders/${folderA.id}/sessions`, 'POST', {})
+      const sessionB = await json<{ sessionId: string }>(b + `/api/folders/${folderB.id}/sessions`, 'POST', {})
       const aSession = a + `/api/sessions/${encodeURIComponent(sessionA.sessionId)}`
       const bSession = b + `/api/sessions/${encodeURIComponent(sessionB.sessionId)}`
+      assert.equal((await fetch(base + aSession + '/background-tasks')).status, 401)
+      assert.deepEqual(await json(aSession + '/background-tasks'), { sessionId: sessionA.sessionId, total: 0, tasks: [] })
+      assert.deepEqual(await json(bSession + '/background-tasks'), { sessionId: sessionB.sessionId, total: 0, tasks: [] })
+      assert.equal((await request(a + '/api/sessions/web%3Aunadmitted/background-tasks')).status, 404)
+      assert.equal((await request(a + '/api/sessions/web%3Aunadmitted/details')).status, 404)
       const [contextA, contextB] = await Promise.all([
         json<{ systemPrompt: string }>(aSession + '/context'),
         json<{ systemPrompt: string }>(bSession + '/context'),
       ])
       assert(contextA.systemPrompt.includes('ORG_A_PRIVATE_IDENTITY_7f01'))
+      assert(!contextA.systemPrompt.includes('BASE_HOME_NOT_IMPORTED'))
       assert(!contextB.systemPrompt.includes('ORG_A_PRIVATE_IDENTITY_7f01'))
-      assert(!contextA.systemPrompt.includes('B-private-project'))
-      assert(!contextB.systemPrompt.includes('A-private-project'))
-      for (const suffix of ['/context', '/files', '/preview?path=sentinel.txt', '/yield']) {
+      assert(!contextA.systemPrompt.includes('B-private-folder'))
+      assert(!contextB.systemPrompt.includes('A-private-folder'))
+      for (const suffix of ['/context', '/files', '/preview?path=sentinel.txt', '/yield', '/background-tasks']) {
         assert.equal((await request(b + `/api/sessions/${encodeURIComponent(sessionA.sessionId)}${suffix}`)).status, 404)
       }
       assert((await (await request(aSession + '/preview?path=sentinel.txt')).text()).includes('A file only'))
@@ -102,14 +117,24 @@ test('real Main concurrently isolates org projects, Home prompts, defaults, bots
       await json(a + '/api/config', 'PATCH', { ...orgConfigA, learning: { ...learning, enabled: false } })
       assert.equal((await json<{ enabled: boolean }>(a + '/api/learning')).enabled, false)
       assert.equal((await json<{ enabled: boolean }>(b + '/api/learning')).enabled, true)
+      const automationsA = await json<{ automations: AutomationSummary[] }>(a + '/api/automations')
+      const automationsB = await json<{ automations: AutomationSummary[] }>(b + '/api/automations')
+      assert.equal(automationsA.automations.length, 3)
+      assert.equal(automationsB.automations.length, 3)
+      assert(automationsA.automations.every(job => job.session === 'fresh' && !job.enabled))
+      assert(automationsB.automations.every(job => job.session === 'fresh' && job.enabled))
+      assert.equal((await fetch(base + a + '/api/automations')).status, 401)
+      assert.deepEqual(await json(a + '/api/automations/learning%3Areflector/runs'), { runs: [], total: 0, offset: 0 })
+      assert.equal((await request(b + '/api/automations/unknown-job/runs')).status, 404)
+      assert.equal((await request(a + '/api/automations', 'POST', {})).status, 404)
       const addBot = async (scope: string, name: string) =>
         (await json<{ channel: BotInstanceStatus }>(scope + '/api/channels', 'POST',
           { platform: 'qq', displayName: name, config: { enabled: false } }, 201)).channel
       const botsA = await Promise.all([addBot(a, 'Bot one'), addBot(a, 'Bot two')])
       const botB = await addBot(b, 'Bot one')
       assert.notEqual(botsA[0].id, botsA[1].id)
-      assert.equal(botsA[0].organizationId, 'default')
-      assert.equal(botB.organizationId, created.organization.id)
+      assert.equal(botsA[0].projectId, 'default')
+      assert.equal(botB.projectId, created.project.id)
       assert.equal((await request(b + `/api/channels/${botsA[0].id}`, 'PATCH', { displayName: 'wrong owner' })).status, 404)
       assert.equal((await json<{ channels: BotInstanceStatus[] }>(a + '/api/channels')).channels.length, 2)
       assert.equal((await json<{ channels: BotInstanceStatus[] }>(b + '/api/channels')).channels.length, 1)
@@ -121,9 +146,40 @@ test('real Main concurrently isolates org projects, Home prompts, defaults, bots
         assert.equal((await response.json()).error, 'invalid_model')
       }
       assert.equal((await request(b + '/api/sessions/web%3Ainvalid-model/details')).status, 404)
-      await json(b + '/api/chat/send', 'POST', {
-        chatId: 'model-and-identity', content: '/help', config: { model: 'selected@openai' }, stream: false,
-      })
+      const liveTopics = [
+        { kind: 'chat', projectId: created.project.id, sessionId: 'web:model-and-identity' },
+        { kind: 'sessions', projectId: created.project.id },
+      ]
+      const live = await request(`/api/live?topics=${encodeURIComponent(JSON.stringify(liveTopics))}`)
+      assert.equal(live.status, 200)
+      const liveReader = live.body!.getReader()
+      try {
+        const admission = await json<{ requestId: string }>(b + '/api/chat/send', 'POST', {
+          chatId: 'model-and-identity', content: '/help', config: { model: 'selected@openai' }, stream: false,
+        })
+        let pending = ''
+        let delivered = false
+        const decoder = new TextDecoder()
+        while (!delivered) {
+          const chunk = await liveReader.read()
+          assert.equal(chunk.done, false, 'Shared feed must deliver admission-only command output')
+          pending += decoder.decode(chunk.value, { stream: true })
+          let boundary: number
+          while ((boundary = pending.indexOf('\n\n')) !== -1) {
+            const frame = pending.slice(0, boundary)
+            pending = pending.slice(boundary + 2)
+            const data = frame.match(/^data: (.+)$/m)
+            if (!data) continue
+            const envelope = JSON.parse(data[1])
+            if (envelope.type !== 'event') continue
+            assert.equal(envelope.topic.projectId, created.project.id)
+            if (envelope.topic.kind === 'chat' && envelope.payload.done) {
+              assert.equal(envelope.requestId, admission.requestId)
+              delivered = true
+            }
+          }
+        }
+      } finally { await liveReader.cancel() }
       const selected = await json<{ sessions: Array<{ sessionId: string; config?: { model?: string } }> }>(b + '/api/sessions/graph')
       assert.equal(selected.sessions.find(session => session.sessionId === 'web:model-and-identity')?.config?.model, 'selected@openai')
       assert.deepEqual(await json(b + '/api/config/model-defaults'), before)
@@ -131,17 +187,38 @@ test('real Main concurrently isolates org projects, Home prompts, defaults, bots
       const observedIdentity = JSON.parse(await readFile(join(bConfig.agent.workspace, 'memory', 'identities', 'index.json'), 'utf8'))
       assert.equal(observedIdentity.accountChats['web:web-user'], 'model-and-identity')
       assert.deepEqual(await readFile(join(home, 'unknown-user-file.bin')), Buffer.from([0, 41, 255]))
+      const ioRun = await json<{ id: string; status: string }>(a + '/api/io/runs', 'POST', {
+        sessionId: sessionA.sessionId,
+        definition: {
+          version: 1, title: 'Fixture I/O', purpose: 'Verify project ownership without accessing devices',
+          endpoint: 'ws://127.0.0.1:1',
+          sources: [{ id: 'form', kind: 'form' }],
+          limits: { durationMs: 1000, maxBytes: 1024 }, ui: [],
+        },
+      }, 201)
+      assert.equal(ioRun.status, 'awaiting_consent')
+      assert.equal((await fetch(base + a + '/api/io/runs')).status, 401)
+      assert.equal((await request(b + `/api/io/runs/${ioRun.id}`)).status, 404)
+      assert.equal((await json<{ total: number }>(aSession + '/background-tasks')).total, 1)
       await runtime.shutdown()
       await runtime.finished
-      runtime = await startMainRuntime(config, options)
+      runtime = await startMainRuntime(ConfigSchema.parse(JSON.parse(await readFile(configPath, 'utf8'))), options)
       await runtime.ready
-      assert.equal((await json<{ organizations: OrganizationRecord[] }>('/api/organizations')).organizations.length, 2)
+      assert.equal((await json<{ projects: ProjectRecord[] }>('/api/projects')).projects.length, 2)
+      assert.equal((await json<{ model: string }>(a + '/api/config/model-defaults')).model, 'org-a@openai')
+      assert.equal((await json<{ model: string }>(b + '/api/config/model-defaults')).model, 'app-choice@openai')
+      await json('/api/app/model-defaults', 'PATCH', { model: null, reasoningEffort: null })
+      assert.equal((await json<{ model: string }>(b + '/api/config/model-defaults')).model, 'gpt-6-astra@copilot')
       assert.equal((await json<{ model: string }>(a + '/api/config/model-defaults')).model, 'org-a@openai')
       assert.equal((await json<{ enabled: boolean }>(a + '/api/learning')).enabled, false)
       assert.equal((await json<{ channels: BotInstanceStatus[] }>(a + '/api/channels')).channels.length, 2)
       assert.equal((await json<{ channels: BotInstanceStatus[] }>(b + '/api/channels')).channels.length, 1)
       assert.equal((await request(aSession + '/details')).status, 200)
       assert.equal((await request(bSession + '/details')).status, 200)
+      const restoredIo = await json<{ status: string; backendStatus?: string }>(a + `/api/io/runs/${ioRun.id}`)
+      assert.equal(restoredIo.status, 'awaiting_consent')
+      assert.notEqual(restoredIo.backendStatus, 'ready', 'Restart must not reconnect or grant pending I/O requests')
+      assert.deepEqual((await json<{ clients: unknown[] }>(a + '/api/io/capabilities')).clients, [])
     } finally {
       if (runtime) { await runtime.shutdown(); await runtime.finished }
       process.chdir(previousCwd)

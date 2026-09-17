@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
+import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
 
 const file = (path: string) => ({ path, entry: { name: path.split('/').at(-1)!, ext: '.md', type: 'file' as const, size: 12, mtime: null } })
 test('opening files retains existing tabs, deduplicates by full path and selects without replacing state', () => {
@@ -52,6 +52,34 @@ const available = {
   active: true, keyboardActive: true, visible: true, explorerEnabled: true,
   overlayOpen: false, composing: false,
 }
+
+test('bulk close preserves Conversation and isolates source/diff keys and original state', () => {
+  const source = file('a.md')
+  const diff = { ...source, view: 'diff' as const }
+  const state: FileTabs = { files: [source, diff, file('b.md')], selected: 'b.md' }
+  assert.deepEqual(closeAllFileTabs(state), { files: [], selected: '' })
+  assert.deepEqual(closeOtherFileTabs(state, fileTabKey(diff)), { files: [diff], selected: fileTabKey(diff) })
+  assert.deepEqual(closeOtherFileTabs({ ...state, selected: '' }, source.path), { files: [source], selected: source.path })
+  assert.equal(closeOtherFileTabs(state, 'missing'), state)
+  assert.equal(closeOtherFileTabs(state, ''), state)
+  assert.equal(state.files.length, 3)
+  assert.equal(state.selected, 'b.md')
+})
+
+test('Ctrl+Shift+W is available from Conversation but ignores inactive panes, overlays and IME', () => {
+  assert.equal(isCloseAllDocumentsKey({ ...tabKey, key: 'W', shiftKey: true }), true)
+  for (const patch of [{ shiftKey: false }, { ctrlKey: false }, { altKey: true }, { metaKey: true },
+    { isComposing: true }, { keyCode: 229 }, { defaultPrevented: true }, { repeat: true }]) {
+    assert.equal(isCloseAllDocumentsKey({ ...tabKey, key: 'w', shiftKey: true, ...patch }), false)
+  }
+  const state: FileTabs = { files: [file('a.md')], selected: '' }
+  assert.equal(canCloseAllDocuments(state, available), true)
+  assert.equal(canCloseAllDocuments({ files: [], selected: '' }, available), false)
+  for (const patch of [{ active: false }, { keyboardActive: false }, { visible: false },
+    { explorerEnabled: false }, { overlayOpen: true }, { composing: true }]) {
+    assert.equal(canCloseAllDocuments(state, { ...available, ...patch }), false)
+  }
+})
 
 test('Ctrl+W closes only the active source or diff document, never Conversation or an inactive pane', () => {
   assert.equal(isCloseDocumentKey({ ...tabKey, key: 'w' }), true)

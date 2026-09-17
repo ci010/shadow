@@ -53,8 +53,8 @@ test('message projection carries the target bot address rather than the source o
   const tool = new MessageTool(bus, () => true, () => undefined, () => [], async (sessionId, input) =>
     ({ status: 'accepted', sessionId, inputId: input.id }))
   for (const botInstanceId of ['bot-a', 'bot-b']) {
-    const address = { organizationId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-chat' }
-    await tool.execute({ sessionId: channelSessionId(address), content: 'Hello' }, { ...context(), organizationId: 'org' })
+    const address = { projectId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-chat' }
+    await tool.execute({ sessionId: channelSessionId(address), content: 'Hello' }, { ...context(), projectId: 'org' })
     assert.deepEqual(displayed.at(-1)?.channelAddress, address)
     assert.equal(displayed.at(-1)?.channel, 'discord')
     assert.equal(displayed.at(-1)?.chatId, 'same-chat')

@@ -6,21 +6,24 @@ import { Bus } from '../bus/bus.ts'
 import { EphemeralSession } from '../sessions/ephemeral-session.ts'
 import { channelMessageInput } from '../sessions/input.ts'
 import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
+import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
+import type { SessionStore } from '../sessions/session-store.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { initializeNodeTelemetry } from './runtime.ts'
 import { OtelStore } from './store.ts'
 
-test('session loop annotates live chat/tool spans without changing tool execution or pairing', async () => {
+async function verifyModelResponses(Store: typeof JsonlSessionStore | typeof SqliteSessionStore) {
   await withTempWorkspace(async (workspace) => {
     const telemetryStore = new OtelStore(':memory:')
     const telemetry = initializeNodeTelemetry(telemetryStore)
-    const historyStore = new JsonlSessionStore(join(workspace, 'sessions'))
+    const historyStore: SessionStore = new Store(join(workspace, 'sessions'))
     await historyStore.init()
     try {
       const sessionId = 'test:trace'
       const state = { sessionId, segmentIndex: 2, lastKnownTokens: 0 }
       const model = 'fixture-model'
+      const finalContent = `Finished ${'synthetic long response '.repeat(1000)}`
       const tools = new Tools(workspace)
       let toolExecutions = 0
       tools.register({
@@ -36,10 +39,10 @@ test('session loop annotates live chat/tool spans without changing tool executio
           assert(tool?.live)
           assert.deepEqual(tool.attributes, {
             sessionId, physicalSessionId: session.physicalSessionId,
-            iteration: '0', 'tool.call_id': 'fixture-call', 'tool.name': 'fixture_echo',
+            'tool.call_id': 'fixture-call', 'tool.name': 'fixture_echo',
             tool_name: 'fixture_echo', args: '{"text":"synthetic tool input"}',
           })
-          assert.equal(tool.parentSpanId, spans.find((entry) => entry.name === 'agent.loop')?.spanId)
+          assert.equal(tool.parentSpanId, spans.find((entry) => entry.name === 'agent.tools')?.spanId)
           return 'synthetic tool output'
         },
       })
@@ -74,7 +77,11 @@ test('session loop annotates live chat/tool spans without changing tool executio
             tool_call_id: 'fixture-call', name: 'fixture_echo',
             timestamp: toolMessage.timestamp,
           })
-          return { content: 'Finished', toolCalls: [] }
+          return {
+            content: finalContent, toolCalls: [], reasoningText: 'Synthetic visible reasoning',
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+            providerState: { provider: 'copilot', model, reasoning: [{ type: 'reasoning', encrypted_content: 'synthetic-private-continuity', summary: [] }] },
+          }
         },
       }
       const session = new EphemeralSession(
@@ -94,11 +101,32 @@ test('session loop annotates live chat/tool spans without changing tool executio
       assert.equal(completed.filter((entry) => entry.name === 'agent.chat').length, 2)
       assert.equal(completed.filter((entry) => entry.name === 'agent.loop').length, 2)
       assert.equal(completed.filter((entry) => entry.name === 'agent.tool').length, 1)
-      assert.equal(session.history.at(-1)?.content, 'Finished')
+      assert.equal(session.history.at(-1)?.content, finalContent)
+      const chats = completed.filter(entry => entry.name === 'agent.chat').sort((a, b) => a.startTime - b.startTime)
+      const toolResponse = JSON.parse(chats[0].events.find(event => event.name === 'model.response')!.attributes.message)
+      assert.equal(toolResponse.content, null)
+      assert.deepEqual(toolResponse.tool_calls, [{
+        id: 'fixture-call', type: 'function', function: { name: 'fixture_echo', arguments: '{"text":"synthetic tool input"}' },
+      }])
+      const finalResponseJson = chats[1].events.find(event => event.name === 'model.response')!.attributes.message
+      const finalResponse = JSON.parse(finalResponseJson)
+      assert.equal(finalResponse.content, finalContent, 'Response snapshots are not truncated')
+      assert.equal(finalResponse.reasoning_text, 'Synthetic visible reasoning')
+      assert.deepEqual(finalResponse.usage, { promptTokens: 10, completionTokens: 20, totalTokens: 30 })
+      assert.equal(finalResponseJson.includes('synthetic-private-continuity'), false)
+      assert.equal(finalResponse.provider_state, undefined)
+      const records: Record<string, unknown>[] = []
+      for await (const message of historyStore.readSessionLog(session.physicalSessionId)) records.push(message)
+      assert.equal(records.at(-1)?.content, finalResponse.content, 'Trace and persisted message have the same returned text')
       assert.equal(telemetryStore.querySessionSpans({ sessionId: 'foreign' }).entries.length, 0)
     } finally {
       await telemetry.shutdown()
       telemetryStore.close()
+      historyStore.close?.()
     }
   })
-})
+}
+
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: session loop records model responses without changing tool execution or pairing`, () => verifyModelResponses(Store))
+}

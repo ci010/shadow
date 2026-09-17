@@ -4,6 +4,7 @@ import type { ExecShell } from '../tools/shell.ts'
 import type { WorkdirRefV1 } from './locality.ts'
 import type { YieldPolicy } from './yield-contract.ts'
 import type { ExecutionMode } from './execution-mode.ts'
+import type { AutomationSessionRef } from '../cron/contracts.ts'
 
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
@@ -51,7 +52,12 @@ export interface SessionParent {
 }
 
 export interface SessionState {
-  organizationId?: string
+  /** Persisted v2: projectId is the runtime owner, folderId the directory resource. */
+  ownershipVersion?: 2
+  automation?: AutomationSessionRef
+  /** Stops legacy address classification from being applied to newly created records. */
+  automationVersion?: 1
+  projectId?: string
   /** Frozen execution lifetime; absent only in legacy records. */
   mode?: ExecutionMode
   executionStatus?: ExecutionStatus
@@ -90,10 +96,10 @@ export interface SessionState {
   workdir?: WorkdirRefV1
   /** Agent type name (e.g. 'general', 'reflector'). Set once at creation. */
   agentType?: string
-  /** Project name for shared context. Set once at creation. */
-  projectName?: string
-  /** Folder-project identity, independent of projectName planning notes. */
-  projectId?: string
+  /** Stable Initiative ID for shared work context; legacy projectName is migrated. */
+  initiativeId?: string
+  /** Registered directory identity, independent of Initiative work context. */
+  folderId?: string
   /** Subagent callback target session key (e.g. "discord:123"). Set once at creation. */
   reportTo?: string
   /** Display name of the user who triggered this session. Set once at creation. */
@@ -154,7 +160,7 @@ export interface SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
-        projectId?: string
+        folderId?: string
       }
     >
   >

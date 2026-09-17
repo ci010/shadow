@@ -7,9 +7,10 @@ import {
 } from './ipc-contract.js'
 import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import { createWindowControlsApi } from './window-controls-preload.js'
-import { createProjectDirectoriesApi } from './project-directories.js'
+import { createFolderDirectoriesApi } from './folder-directories.js'
 import { createChatContextApi } from './chat-context.js'
 import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from './document-tabs.js'
+import { createMediaCaptureApi } from './media-capture-preload.js'
 
 const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction) => {
   window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
@@ -17,8 +18,9 @@ const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction)
 window.addEventListener('unload', disposeDocumentTabs, { once: true })
 
 const api: ShadowDesktopApi = Object.freeze({
+  mediaCapture: createMediaCaptureApi(ipcRenderer, () => navigator.userActivation.isActive),
   windowControls: createWindowControlsApi(ipcRenderer),
-  projects: createProjectDirectoriesApi(ipcRenderer),
+  folders: createFolderDirectoriesApi(ipcRenderer),
   chatContext: createChatContextApi(ipcRenderer),
   bootstrap: Object.freeze({
     load: () =>

@@ -5,10 +5,14 @@
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-600">Trace Stream</h2>
         <div class="flex items-center gap-2 text-xs text-ink/60">
-          <span class="tag" :class="{ active: connected }">{{ connected ? 'Live' : 'Connecting...' }}</span>
+          <span class="tag" :class="{ active: connected && !error }">{{ error ? 'Needs retry' : connected ? 'Live' : 'Connecting...' }}</span>
         </div>
       </div>
       <p class="mt-2 text-sm text-ink/60">Spans grouped by trace. Pick a trace to render the full timeline.</p>
+      <div v-if="error" role="alert" class="mt-3 text-sm">
+        {{ error }} <button class="btn ghost" @click="refreshSpans">Retry spans</button>
+      </div>
+      <p v-if="windowFull" role="status" class="mt-3 text-sm text-ink/60">Showing the latest {{ LIVE_LIMIT }} spans. The selected trace is retained separately.</p>
 
       <div class="mt-4 grid gap-2">
         <input v-model="filters.traceId" class="input" placeholder="filter by trace id" />
@@ -16,7 +20,8 @@
       </div>
 
       <div class="mt-4 trace-list">
-        <div v-if="traceSummaries.length === 0" class="text-ink/40">No spans yet.</div>
+        <div v-if="loading" role="status" class="text-sm text-ink/60">Loading spans…</div>
+        <div v-if="traceSummaries.length === 0 && !loading && !error" class="text-ink/40">No spans yet.</div>
         <button
           v-for="trace in traceSummaries"
           :key="trace.traceId"
@@ -54,6 +59,11 @@
           </div>
         </div>
 
+        <div v-if="detailError" role="alert" class="mt-3 text-sm">
+          {{ detailError }} <button class="btn ghost" @click="refreshDetails">Retry trace</button>
+        </div>
+        <p v-if="detailsLoading" role="status" class="mt-3 text-sm text-ink/60">Loading trace details…</p>
+        <p v-if="traceLimited" role="status" class="mt-3 text-sm text-ink/60">This trace exceeds the {{ LIVE_LIMIT }} span display limit; the timeline is partial.</p>
         <div v-if="!selectedTraceId" class="mt-4 text-sm text-ink/50">Select a trace to see its timeline.</div>
         <div v-else class="timeline">
           <div class="timeline-header">
@@ -178,7 +188,7 @@
           </div>
           <div v-else class="detail-section">
             <div class="detail-section-title">Logs</div>
-            <div class="text-xs text-ink/50">No logs for this span.</div>
+            <div class="text-xs text-ink/50">{{ detailsLoading ? 'Loading trace logs…' : detailError ? 'Trace logs unavailable. Retry trace above.' : 'No logs for this span.' }}</div>
           </div>
         </div>
       </div>
@@ -188,7 +198,9 @@
 
 <script setup lang="ts">
 import { apiUrl } from '../api-url.ts'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
+import { createLiveRefresh } from '../live-refresh.ts'
 
 const props = defineProps<{ apiBase: string }>()
 
@@ -246,9 +258,18 @@ const loading = ref(false)
 
 const filters = reactive({ traceId: '', name: '' })
 
-let eventSource: EventSource | null = null
-let reconnectTimer: number | null = null
-let spanSeq = 0
+const pool = useLiveClientPool()
+const error = ref('')
+const detailError = ref('')
+const detailsLoading = ref(false)
+const windowFull = ref(false)
+const traceLimited = ref(false)
+const LIVE_LIMIT = 1000
+const retainedTrace = ref<SpanEntry[]>([])
+const traceLogs = ref<SpanLog[]>([])
+let refreshSpans = () => {}
+let refreshDetails = () => {}
+let receiveTraceSpan = (_span: SpanEntry) => {}
 
 const traceSummaries = computed<TraceSummary[]>(() => {
   const byTrace = new Map<string, TraceSummary>()
@@ -287,7 +308,7 @@ const traceSummaries = computed<TraceSummary[]>(() => {
 
 const selectedTraceSpans = computed(() => {
   if (!selectedTraceId.value) return []
-  return spans.value.filter((span) => span.traceId === selectedTraceId.value)
+  return retainedTrace.value
 })
 
 const orderedSpans = computed(() => buildOrderedSpans(selectedTraceSpans.value))
@@ -297,87 +318,206 @@ const selectedSpan = computed(() => {
   return selectedTraceSpans.value.find((span) => span.spanId === selectedSpanId.value) ?? null
 })
 
-const spanLogs = ref<SpanLog[]>([])
-const logsByTrace = new Map<string, SpanLog[]>()
+const spanLogs = computed(() => traceLogs.value.filter(log => log.spanId === selectedSpanId.value))
 
-watch(selectedSpan, async (span) => {
-  if (!span) {
-    spanLogs.value = []
-    return
-  }
-  if (!span.traceId) return
-  if (logsByTrace.has(span.traceId)) {
-    spanLogs.value = (logsByTrace.get(span.traceId) ?? []).filter((l) => l.spanId === span.spanId)
-    return
-  }
-  const logs = await loadLogsForTrace(span.traceId)
-  logsByTrace.set(span.traceId, logs)
-  spanLogs.value = logs.filter((l) => l.spanId === span.spanId)
-})
-
-function buildUrl(path: string, params?: Record<string, string>): string {
-  const url = apiUrl(props.apiBase, path)
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, value)
-    }
-  }
-  return url.toString()
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-async function loadInitialSpans(): Promise<void> {
-  if (loading.value) return
+function validateFields(entry: Record<string, unknown>, fields: string[]) {
+  for (const key of fields) {
+    const raw = entry[key]
+    const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (parsed == null) continue
+    if (key === 'attributes' || key === 'events') {
+      if (!Array.isArray(parsed) || !parsed.every(item => record(item)
+        && (key !== 'attributes' || typeof item.key === 'string'))) throw new Error(`Invalid ${key}.`)
+      if (key === 'events') for (const event of parsed) validateFields(event, ['attributes'])
+    } else if (!record(parsed)) throw new Error(`Invalid ${key}.`)
+  }
+}
+
+function validatedSpan(value: unknown): SpanEntry {
+  if (!record(value) || typeof value.trace_id !== 'string' || !value.trace_id
+    || typeof value.span_id !== 'string' || !value.span_id || typeof value.name !== 'string'
+    || typeof value.start_time !== 'number' || !Number.isFinite(value.start_time)
+    || (value.end_time != null && (typeof value.end_time !== 'number' || !Number.isFinite(value.end_time)))) {
+    throw new Error('Invalid span record received.')
+  }
+  validateFields(value, ['attributes', 'events', 'resource', 'scope'])
+  return apiSpanToEntry(value)
+}
+
+function mergeSpans(entries: SpanEntry[]): SpanEntry[] {
+  return [...new Map(entries.map(entry => [entry.id, entry])).values()]
+    .sort((a, b) => b.startTime - a.startTime)
+}
+
+async function query(base: string, path: string, params: Record<string, string>, signal: AbortSignal) {
+  const url = apiUrl(base, path)
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
+  const response = await fetch(url, { signal })
+  if (!response.ok) throw new Error(`Telemetry query failed (${response.status}).`)
+  const data: unknown = await response.json()
+  if (!record(data) || !Array.isArray(data.entries)) throw new Error('Invalid telemetry query response.')
+  return data.entries as unknown[]
+}
+
+watch(() => props.apiBase, (base, _previous, onCleanup) => {
+  let buffering = true
+  const pending = new Map<string, SpanEntry>()
+  spans.value = []
+  selectedTraceId.value = null
+  selectedSpanId.value = null
+  retainedTrace.value = []
+  traceLogs.value = []
+  error.value = ''
+  windowFull.value = false
   loading.value = true
-  try {
-    const res = await fetch(buildUrl('/v1/query/spans', { limit: '300' }))
-    const data = await res.json()
-    const entries: Record<string, unknown>[] = data.entries ?? []
-    spans.value = entries.map((entry) => apiSpanToEntry(entry))
-  } catch {
-    // ignore
-  } finally {
-    loading.value = false
-  }
-}
-
-function startSse(): void {
-  eventSource = new EventSource(buildUrl('/v1/stream/spans'))
-  eventSource.addEventListener('hello', () => {
-    connected.value = true
-  })
-  eventSource.addEventListener('span', (event) => {
-    const data = (event as MessageEvent).data
-    if (data) {
-      try {
-        const entry = JSON.parse(String(data)) as Record<string, unknown>
-        spans.value = [apiSpanToEntry(entry), ...spans.value]
-      } catch {
-        // ignore
-      }
-    }
-  })
-  eventSource.addEventListener('error', () => {
-    stopStreaming()
-    reconnectTimer = window.setTimeout(() => {
-      startSse()
-    }, 1500)
-  })
-}
-
-function stopStreaming(): void {
   connected.value = false
-  if (reconnectTimer) {
-    window.clearTimeout(reconnectTimer)
-    reconnectTimer = null
+  const snapshot = createLiveRefresh({
+    load: async signal => {
+      buffering = true
+      loading.value = true
+      return (await query(base, '/v1/query/spans', { limit: '300' }, signal)).map(validatedSpan)
+    },
+    apply: entries => {
+      const merged = mergeSpans([...entries, ...pending.values()])
+      spans.value = merged.slice(0, LIVE_LIMIT)
+      windowFull.value = merged.length >= LIVE_LIMIT
+      pending.clear()
+      buffering = false
+      loading.value = false
+      error.value = ''
+    },
+    onError: () => {
+      loading.value = false
+      error.value = 'Could not load saved spans. Check Main and retry.'
+    },
+  })
+  refreshSpans = () => {
+    pending.clear()
+    buffering = true
+    loading.value = true
+    snapshot.refresh()
   }
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+  const subscription = pool.client(base).subscribe({
+    kind: 'spans', projectId: liveProjectId(base),
+  }, {
+    event: envelope => {
+      try {
+        const entry = validatedSpan(envelope.payload)
+        if (buffering) {
+          pending.set(entry.id, entry)
+          if (pending.size > LIVE_LIMIT) pending.delete(pending.keys().next().value!)
+        } else {
+          const merged = mergeSpans([...spans.value, entry])
+          windowFull.value = merged.length >= LIVE_LIMIT
+          spans.value = merged.slice(0, LIVE_LIMIT)
+        }
+        if (entry.traceId === selectedTraceId.value) receiveTraceSpan(entry)
+      } catch {
+        error.value = 'Could not read a live span. Retry spans to reload saved state.'
+      }
+    },
+    reset: () => { refreshSpans(); refreshDetails() },
+  })
+  const observe = pool.observe(statuses => {
+    connected.value = statuses.length > 0 && statuses.every(status => status.phase === 'live')
+  })
+  snapshot.refresh()
+  onCleanup(() => {
+    subscription.close()
+    snapshot.dispose()
+    observe()
+    pending.clear()
+  })
+}, { immediate: true })
+
+watch([() => props.apiBase, selectedTraceId], ([base, traceId], _previous, onCleanup) => {
+  detailError.value = ''
+  detailsLoading.value = false
+  traceLimited.value = false
+  traceLogs.value = []
+  retainedTrace.value = spans.value.filter(span => span.traceId === traceId)
+  refreshDetails = () => {}
+  receiveTraceSpan = () => {}
+  if (!traceId) return
+  let buffering = true
+  const pending = new Map<string, SpanEntry>()
+  const details = createLiveRefresh({
+    load: async signal => {
+      buffering = true
+      detailsLoading.value = true
+      const controller = new AbortController()
+      const requestSignal = AbortSignal.any([signal, controller.signal])
+      try {
+        const [entries, logs] = await Promise.all([
+          query(base, '/v1/query/spans', { traceId, limit: String(LIVE_LIMIT) }, requestSignal),
+          query(base, '/v1/query/logs', { traceId, limit: '300' }, requestSignal),
+        ])
+        return {
+          entries: entries.map(value => {
+            const entry = validatedSpan(value)
+            if (entry.traceId !== traceId) throw new Error('Unexpected trace in query response.')
+            return entry
+          }),
+          logs: logs.map(value => {
+            if (!record(value) || typeof value.span_id !== 'string' || typeof value.time !== 'number'
+              || !Number.isFinite(value.time) || !('body' in value)) throw new Error('Invalid trace log.')
+            validateFields(value, ['attributes'])
+            return apiLogToSpanLog(value)
+          }).filter((log): log is SpanLog => log !== null),
+        }
+      } catch (error) {
+        controller.abort()
+        throw error
+      }
+    },
+    apply: data => {
+      const merged = mergeSpans([...data.entries, ...pending.values()])
+      retainedTrace.value = merged.slice(0, LIVE_LIMIT)
+      traceLimited.value = merged.length >= LIVE_LIMIT
+      traceLogs.value = data.logs
+      pending.clear()
+      buffering = false
+      detailsLoading.value = false
+      detailError.value = ''
+      if (!retainedTrace.value.some(span => span.spanId === selectedSpanId.value)) {
+        selectedSpanId.value = orderedSpans.value[0]?.spanId ?? null
+      }
+    },
+    onError: () => {
+      detailsLoading.value = false
+      detailError.value = 'Could not load this trace and its logs. Check Main and retry.'
+    },
+  })
+  refreshDetails = () => {
+    pending.clear()
+    buffering = true
+    detailsLoading.value = true
+    details.refresh()
   }
-}
+  receiveTraceSpan = span => {
+    if (buffering) {
+      pending.set(span.id, span)
+      if (pending.size > LIVE_LIMIT) pending.delete(pending.keys().next().value!)
+    }
+    const merged = mergeSpans([...retainedTrace.value, span])
+    retainedTrace.value = merged.slice(0, LIVE_LIMIT)
+    const selected = merged.find(entry => entry.spanId === selectedSpanId.value)
+    if (selected && !retainedTrace.value.some(entry => entry.id === selected.id)) {
+      retainedTrace.value[LIVE_LIMIT - 1] = selected
+    }
+    traceLimited.value = merged.length >= LIVE_LIMIT
+  }
+  refreshDetails()
+  onCleanup(() => { details.dispose(); pending.clear() })
+}, { immediate: true })
 
 function selectTrace(traceId: string): void {
   selectedTraceId.value = traceId
+  retainedTrace.value = spans.value.filter(span => span.traceId === traceId)
   const firstSpan = orderedSpans.value[0]
   selectedSpanId.value = firstSpan?.spanId ?? null
 }
@@ -400,16 +540,21 @@ function buildOrderedSpans(spansForTrace: SpanEntry[]): Array<SpanEntry & { dept
     list.sort((a, b) => a.startTime - b.startTime)
   }
 
-  const roots = (children.get('root') ?? []).sort((a, b) => a.startTime - b.startTime)
+  const roots = spansForTrace.filter(span => !span.parentSpanId || !byId.has(span.parentSpanId))
+    .sort((a, b) => a.startTime - b.startTime)
   const ordered: Array<SpanEntry & { depth: number; durationMs: number } > = []
+  const visited = new Set<string>()
 
   const walk = (node: SpanEntry, depth: number) => {
+    if (visited.has(node.spanId)) return
+    visited.add(node.spanId)
     const durationMs = Math.max(1, (node.endTime ?? node.startTime) - node.startTime)
     ordered.push({ ...node, depth, durationMs })
     const kids = children.get(node.spanId) ?? []
     for (const child of kids) walk(child, depth + 1)
   }
   for (const root of roots) walk(root, 0)
+  for (const span of spansForTrace) if (!visited.has(span.spanId)) walk(span, 0)
   return ordered
 }
 
@@ -478,17 +623,6 @@ function spanDurationMs(span: SpanEntry): number {
   return Math.max(1, (span.endTime ?? span.startTime) - span.startTime)
 }
 
-async function loadLogsForTrace(traceId: string): Promise<SpanLog[]> {
-  try {
-    const res = await fetch(buildUrl('/v1/query/logs', { traceId, limit: '300' }))
-    const data = await res.json()
-    const entries: Record<string, unknown>[] = data.entries ?? []
-    return entries.map((entry) => apiLogToSpanLog(entry)).filter(Boolean) as SpanLog[]
-  } catch {
-    return []
-  }
-}
-
 function apiLogToSpanLog(entry: Record<string, unknown>): SpanLog | null {
   const spanId = typeof entry.span_id === 'string' ? entry.span_id : ''
   if (!spanId) return null
@@ -506,8 +640,7 @@ function apiLogToSpanLog(entry: Record<string, unknown>): SpanLog | null {
 }
 
 function apiSpanToEntry(entry: Record<string, unknown>): SpanEntry {
-  spanSeq += 1
-  const id = `span-${spanSeq}`
+  const id = `${entry.trace_id}:${entry.span_id}`
   const dbId = typeof entry.id === 'number' ? entry.id : undefined
   const traceId = String(entry.trace_id ?? '')
   const spanId = String(entry.span_id ?? '')
@@ -660,14 +793,6 @@ function nanoToMs(v?: string | number): number {
   }
 }
 
-onMounted(async () => {
-  await loadInitialSpans()
-  startSse()
-})
-
-onBeforeUnmount(() => {
-  stopStreaming()
-})
 </script>
 
 <style scoped>

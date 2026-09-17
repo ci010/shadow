@@ -1,7 +1,7 @@
 <template>
   <ComposerPopover v-if="selection" label="Choose model" :title="triggerTitle" :disabled="unavailable" :busy="pending" @opened="resetMenu">
     <template #trigger>
-      <span class="model-label">{{ modelDisplayName(selection.current.value) || (selection.loading.value ? 'Loading models...' : 'Choose model') }}</span>
+      <span class="model-label">{{ selection.inheriting?.value ? 'Project · ' : '' }}{{ modelDisplayName(selection.current.value) || (selection.loading.value ? 'Loading models...' : 'Choose model') }}</span>
       <span v-if="settings" class="model-effort"><span aria-hidden="true">·</span> {{ effortLabel }}</span>
       <span class="model-chevron i-lucide-chevron-down" aria-hidden="true" />
     </template>
@@ -25,14 +25,17 @@
       <template v-if="page === 'model'">
       <input ref="search" v-model="query" class="model-search" type="search" placeholder="Search models..." aria-label="Search models" />
       <div class="model-options" role="group" aria-label="Available models">
-        <button v-for="model in options" :key="model" class="model-option" :aria-pressed="model === selection.current.value" :title="model" @click="choose(model, close)">
+        <button v-if="selection.inherited && !query.trim()" class="model-option" :aria-pressed="selection.inheriting?.value" @click="choose('', close)">
+          <span class="model-option-copy"><span>Follow project default</span><small>{{ modelDisplayName(selection.inherited.value) }}</small></span>
+        </button>
+        <button v-for="model in options" :key="model" class="model-option" :aria-pressed="!selection.inheriting?.value && model === selection.current.value" :title="model" @click="choose(model, close)">
           <span class="model-option-copy"><span>{{ modelDisplayName(model) }}</span><small v-if="modelProvider(model)">{{ modelProvider(model) }}</small></span>
-          <span v-if="model === selection.current.value" class="model-check i-lucide-check" aria-hidden="true" />
+          <span v-if="!selection.inheriting?.value && model === selection.current.value" class="model-check i-lucide-check" aria-hidden="true" />
         </button>
         <p v-if="!options.length" class="model-empty">No matching models.</p>
       </div>
       </template>
-      <ReasoningControls v-else-if="settings" :settings="settings" :model="selection.current.value" :disabled="unavailable || !!settingsDisabled" :busy="pending" @change="chooseEffort($event, close)" />
+      <ReasoningControls v-else-if="settings" :settings="settings" :inherited-settings="selection.defaultReasoning?.value" :model="selection.current.value" :disabled="unavailable || !!settingsDisabled" :busy="pending" @change="chooseEffort($event, close)" />
       </template>
       <p v-if="selection.error.value" class="model-error" role="alert">{{ selection.error.value }}</p>
       </div>
@@ -58,7 +61,13 @@ const modelRow = ref<HTMLButtonElement>()
 const effortRow = ref<HTMLButtonElement>()
 const unavailable = computed(() => !!selection?.disabled.value)
 const pending = computed(() => !!props.busy || !!selection?.loading.value)
-const effortLabel = computed(() => effortOptions.find(option => option.value === currentEffort(props.settings ?? {}))!.label)
+const effortLabel = computed(() => {
+  const choice = currentEffort(props.settings ?? {})
+  const inherited = currentEffort(selection?.defaultReasoning?.value ?? {})
+  return choice === 'default' && inherited !== 'default'
+    ? `Default · ${effortOptions.find(option => option.value === inherited)!.label}`
+    : effortOptions.find(option => option.value === choice)!.label
+})
 const triggerTitle = computed(() => `${selection?.current.value || 'Choose model'}${props.settings ? ` · ${effortLabel.value}` : ''}`)
 const options = computed(() => filterModelOptions(selection?.options.value ?? [], selection?.current.value ?? '', query.value))
 function resetMenu() {

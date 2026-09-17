@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { ConfigStore, REDACTED_SECRET } from '../config/store.ts'
 import { ConfigSchema, type Config } from '../config/schema.ts'
+import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import { parseModelSpec } from './aggregated.ts'
 import { detectProvider, knownProviderNames, resolveProviderSettings } from './factory.ts'
 import {
@@ -248,7 +249,7 @@ export class ProviderSetup {
     if (requested?.provider && requested.provider !== 'copilot') return Promise.reject(new Error('Select a Copilot model.'))
     const flow: Flow = {
       status: { loginId: attemptId, state: 'pending' },
-      model: `${requested?.model ?? ((current.provider ?? detectProvider(current.model)) === 'copilot' ? current.model : 'claude-sonnet-4.6')}@copilot`,
+      model: `${requested?.model ?? ((current.provider ?? detectProvider(current.model)) === 'copilot' ? current.model : DEFAULT_COPILOT_MODEL)}@copilot`,
       controller: new AbortController(),
       config: this.options.getConfig(),
       createdAt: this.now(),

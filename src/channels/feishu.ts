@@ -578,7 +578,7 @@ export class FeishuChannel extends AbstractChannel {
     if (parent !== undefined) {
       const address = channelAddressFromSessionId(parent)
       const own = this.address(rootId)
-      if (address) return own && address.organizationId === own.organizationId && address.botInstanceId === own.botInstanceId
+      if (address) return own && address.projectId === own.projectId && address.botInstanceId === own.botInstanceId
         && address.platform === this.name && address.conversationId.startsWith('oc_') ? address.conversationId : undefined
       return (!own || own.legacySessionId) && parent.startsWith('feishu:oc_') ? parent.slice('feishu:'.length) : undefined
     }

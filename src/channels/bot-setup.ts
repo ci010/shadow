@@ -15,7 +15,7 @@ const patchSchema = z.object({
 }).strict()
 
 /**
- * Mount on an organization-local Hono app, never select organization from request bodies.
+ * Mount on an project-local Hono app, never select project from request bodies.
  * GET /api/channels -> { channels: BotInstanceStatus[] }
  * POST /api/channels { platform, displayName, config } -> 201 { channel }
  * PATCH /api/channels/:instanceId { displayName?, config? } -> { channel }
@@ -28,7 +28,7 @@ export function botSetupPlugin(options: {
   authorize: (request: Request) => boolean | Promise<boolean>
 }): GatewayPlugin {
   return app => {
-    if (options.store.organizationId !== options.runtime.organizationId) throw new TypeError('Bot runtime ownership mismatch')
+    if (options.store.projectId !== options.runtime.projectId) throw new TypeError('Bot runtime ownership mismatch')
     app.use('/api/channels/*', async (c, next) => {
       c.header('Cache-Control', 'no-store')
       if (!await options.authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)

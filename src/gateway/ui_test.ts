@@ -4,30 +4,30 @@ import { Hono } from 'hono'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { OrganizationCatalog } from '../organizations/catalog.ts'
-import { registerOrganizationGateway } from '../organizations/gateway.ts'
+import { ProjectCatalog } from '../projects/catalog.ts'
+import { registerProjectGateway } from '../projects/gateway.ts'
 import { GatewayClientAddressRegistry } from './server.ts'
 import { uiPlugin } from './ui.ts'
-import { isBackendPath, isOrganizationPagePath, SCOPED_BACKEND_PATTERN } from './route-kind.ts'
+import { isBackendPath, isProjectPagePath, SCOPED_BACKEND_PATTERN } from './route-kind.ts'
 
-test('gateway and Vite distinguish scoped backend calls from organization browser pages', () => {
+test('gateway and Vite distinguish scoped backend calls from project browser pages', () => {
   const proxy = new RegExp(SCOPED_BACKEND_PATTERN)
   for (const path of [
-    '/organizations/default/api/sessions', '/organizations/org-a/v1/query/logs',
-    '/organizations/org-a/eval/bridge/call', '/organizations/org-a/feishu/bots/one/file',
+    '/projects/default/api/sessions', '/projects/org-a/v1/query/logs',
+    '/projects/org-a/eval/bridge/call', '/projects/org-a/feishu/bots/one/file',
   ]) {
     assert(isBackendPath(path))
     assert(proxy.test(path))
-    assert(!isOrganizationPagePath(path))
+    assert(!isProjectPagePath(path))
   }
   for (const path of [
-    '/organizations/default/chat/web%3Aone', '/organizations/org-a/settings/bots',
-    '/organizations/org-a/agents/general', '/organizations/org-a/spans',
-    '/organizations/org-a/logs',
+    '/projects/default/chat/web%3Aone', '/projects/org-a/settings/bots',
+    '/projects/org-a/agents/general', '/projects/org-a/spans',
+    '/projects/org-a/logs',
   ]) {
     assert(!isBackendPath(path))
     assert(!proxy.test(path))
-    assert(isOrganizationPagePath(path))
+    assert(isProjectPagePath(path))
   }
   for (const path of ['/api', '/v1/query', '/nodes/v1', '/pair/v1/present', '/local/v1/shutdown', '/host/v1/query/logs']) {
     assert(isBackendPath(path))
@@ -41,12 +41,12 @@ test('production org deep links serve the SPA with root assets without swallowin
     await writeFile(join(dist, 'index.html'), '<html><script type="module" src="./assets/main.js"></script><link href="./assets/main.css" rel="stylesheet"></html>')
     await writeFile(join(dist, 'assets', 'main.js'), 'export const application = true')
     await writeFile(join(dist, 'assets', 'main.css'), 'body { color: black }')
-    const catalog = new OrganizationCatalog(join(root, 'host'))
+    const catalog = new ProjectCatalog(join(root, 'host'))
     await catalog.init()
     const orgApp = new Hono()
-    orgApp.get('/api/sessions', c => c.json({ organizationId: 'default' }))
+    orgApp.get('/api/sessions', c => c.json({ projectId: 'default' }))
     const app = new Hono()
-    registerOrganizationGateway(app, {
+    registerProjectGateway(app, {
       catalog,
       lookup: id => id === 'default' ? { app: orgApp, run: callback => callback() } : undefined,
       start: async () => {},
@@ -55,9 +55,9 @@ test('production org deep links serve the SPA with root assets without swallowin
     })
     uiPlugin(dist)(app)
     for (const path of [
-      '/organizations', '/organizations/default/chat/web%3Asession.with.dots',
-      '/organizations/default/settings/bots', '/organizations/default/agents/general',
-      '/organizations/default/logs', '/organizations/missing/settings/general',
+      '/projects', '/projects/default/chat/web%3Asession.with.dots',
+      '/projects/default/settings/bots', '/projects/default/agents/general',
+      '/projects/default/logs', '/projects/missing/settings/general',
     ]) {
       const response = await app.request(path)
       assert.equal(response.status, 200, path)
@@ -66,10 +66,10 @@ test('production org deep links serve the SPA with root assets without swallowin
       assert.match(html, /href="\/assets\/main\.css"/)
       assert(!html.includes('src="./'))
     }
-    assert.deepEqual(await (await app.request('/organizations/default/api/sessions')).json(), { organizationId: 'default' })
+    assert.deepEqual(await (await app.request('/projects/default/api/sessions')).json(), { projectId: 'default' })
     for (const path of [
-      '/organizations/default/api/missing', '/organizations/default/v1/query/missing',
-      '/organizations/missing/api/sessions', '/api/missing', '/nodes/v1/missing',
+      '/projects/default/api/missing', '/projects/default/v1/query/missing',
+      '/projects/missing/api/sessions', '/api/missing', '/nodes/v1/missing',
       '/pair/v1/missing', '/assets/missing.js',
     ]) {
       const response = await app.request(path)

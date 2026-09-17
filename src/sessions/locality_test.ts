@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { resolve } from 'node:path'
 import {
   managedSessionWorkdirRef,
-  localProjectWorkdirRef,
+  localFolderWorkdirRef,
   normalizeSessionLocality,
   parseWorkdirRefV1,
   resolveSessionLocations,
@@ -20,16 +20,16 @@ test('managed compatibility capabilities are deterministic and collision-safe', 
   )
 })
 
-test('local projects resolve only trusted absolute capability paths, retaining private session data', () => {
-  const workdir = { ...localProjectWorkdirRef('project-a'), displayPathSnapshot: resolve('untrusted') }
+test('local folders resolve only trusted absolute capability paths, retaining private session data', () => {
+  const workdir = { ...localFolderWorkdirRef('folder-a'), displayPathSnapshot: resolve('untrusted') }
   const state = { sessionId: 'web:child', workspaceRoot: 'web:owner', workdir }
   const workspace = resolve('main')
-  const path = resolve('project-a')
+  const path = resolve('folder-a')
   const result = resolveSessionLocations(workspace, state, undefined, () => ({
     node: 'online',
     capability: { kind: 'workdir', online: true, path },
   }))
-  assertEquals(workdir.capabilityId, 'local-project-v1:project-a')
+  assertEquals(workdir.capabilityId, 'local-project-v1:folder-a')
   assertEquals(result.sessionDataDir, resolve(workspace, 'web_owner'))
   assertEquals(result.workdir, { available: true, locality: 'local', workdir, path })
   for (const capability of [
@@ -47,11 +47,11 @@ test('local projects resolve only trusted absolute capability paths, retaining p
   assertEquals(resolveSessionLocations(workspace, state).workdir.available, false)
 })
 
-test('remote project capabilities never expose a trusted lookup path locally', () => {
-  const workdir = { ...localProjectWorkdirRef('project-a'), nodeId: 'remote', displayPathSnapshot: resolve('untrusted') }
+test('remote folder capabilities never expose a trusted lookup path locally', () => {
+  const workdir = { ...localFolderWorkdirRef('folder-a'), nodeId: 'remote', displayPathSnapshot: resolve('untrusted') }
   const result = resolveSessionLocations(resolve('main'), { sessionId: 'web:chat', workdir }, undefined, () => ({
     node: 'online',
-    capability: { kind: 'workdir', online: true, path: resolve('project-a') },
+    capability: { kind: 'workdir', online: true, path: resolve('folder-a') },
   }))
   assertEquals(result.workdir, { available: true, locality: 'remote', workdir })
   assertEquals('path' in result.workdir, false)
@@ -63,14 +63,14 @@ test('WorkdirRefV1 parser validates persisted data and ignores unknown fields', 
       version: 1,
       nodeId: 'node-a',
       capabilityId: 'cap-a',
-      displayName: 'Project A',
+      displayName: 'Folder A',
       futureField: true,
     }),
     {
       version: 1,
       nodeId: 'node-a',
       capabilityId: 'cap-a',
-      displayName: 'Project A',
+      displayName: 'Folder A',
     },
   )
   assertEquals(

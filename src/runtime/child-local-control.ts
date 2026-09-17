@@ -6,8 +6,6 @@ import {
   serveGateway,
   validateLaunchCredential,
 } from '../gateway/server.ts'
-import { localApprovalApiPlugin } from '../gateway/local-approval-api.ts'
-import type { LocalApprovalService } from '../execution/local-approval.ts'
 import { LocalRuntimeControl } from './local-control.ts'
 import type { ChildRuntimeService } from './child-runtime.ts'
 import { nodeInventoryApiPlugin, type NodeInventoryEntry } from '../cluster/node-inventory.ts'
@@ -15,7 +13,6 @@ import { nodeInventoryApiPlugin, type NodeInventoryEntry } from '../cluster/node
 export interface ChildLocalControlOptions {
   readonly port: number
   readonly launchCredential: string
-  readonly approvalService: LocalApprovalService
   readonly requestShutdown: () => void | Promise<void>
   readonly nodeInventory?: () => NodeInventoryEntry | Promise<NodeInventoryEntry>
 }
@@ -49,7 +46,6 @@ export class ChildLocalControlService implements ChildRuntimeService {
     const app = new Hono()
     registerGatewayRoutes(app, [
       this.#control.plugin(),
-      localApprovalApiPlugin({ service: this.options.approvalService }),
       ...(this.options.nodeInventory ? [nodeInventoryApiPlugin({
         path: '/local/v1/nodes',
         authorize: (request) => validateLaunchCredential(

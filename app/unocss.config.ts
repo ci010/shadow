@@ -1,6 +1,22 @@
 import { defineConfig, presetWind3, presetIcons, presetTypography } from 'unocss'
+import { fileURLToPath } from 'node:url'
+import { globSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 export default defineConfig({
+  content: {
+    // Seed icons before lazy modules load, without creating a second filesystem watcher.
+    inline: [() => {
+      const root = fileURLToPath(new URL('./src', import.meta.url))
+      const icons = new Set<string>()
+      for (const path of globSync('**/*.{vue,ts}', { cwd: root, exclude: ['**/*_test.ts'] })) {
+        const source = readFileSync(join(root, path), 'utf8')
+        for (const match of source.matchAll(/\bi-(?:lucide|simple-icons)-[a-z0-9]+(?:-[a-z0-9]+)*/g)) icons.add(match[0])
+      }
+      return [...icons].join(' ')
+    }],
+    pipeline: { include: [/\.(?:vue|[jt]sx?|html)(?:$|\?)/] },
+  },
   presets: [
     presetWind3({ dark: 'class' }),
     presetIcons({

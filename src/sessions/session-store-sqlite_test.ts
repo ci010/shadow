@@ -1,4 +1,4 @@
-import { deepEqual as assertEquals } from 'node:assert/strict'
+import { deepEqual as assertEquals, rejects } from 'node:assert/strict'
 import { test } from 'node:test'
 import { DatabaseSync as Database } from 'node:sqlite'
 import { join } from 'node:path'
@@ -6,29 +6,30 @@ import { rm } from 'node:fs/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionState } from './session-store.ts'
-import { localProjectWorkdirRef } from './locality.ts'
+import { localFolderWorkdirRef } from './locality.ts'
 
-test('SqliteSessionStore preserves project identity alongside unknown prototype metadata', async () => {
+test('SqliteSessionStore preserves folder identity alongside unknown prototype metadata', async () => {
   const sessionsDir = await createTempWorkspace()
   const dbPath = join(sessionsDir, 'sessions.db')
   try {
     const writer = new SqliteSessionStore(sessionsDir)
-    await writer.saveState('web:project', { sessionId: 'web:project', segmentIndex: 2 })
+    await writer.saveState('web:folder', { sessionId: 'web:folder', segmentIndex: 2 })
     writer.close()
     const metadata = {
-      projectId: 'folder-project',
-      projectName: 'planning-notes',
-      workdir: localProjectWorkdirRef('folder-project'),
+      ownershipVersion: 2,
+      folderId: 'folder-folder',
+      initiativeId: 'planning-notes',
+      workdir: localFolderWorkdirRef('folder-folder'),
       futureMetadata: { preserved: true },
     }
     const db = new Database(dbPath)
     db.prepare('UPDATE session_states SET prototype = ? WHERE key = ?')
-      .run(JSON.stringify({ version: 1, metadata }), 'web:project')
+      .run(JSON.stringify({ version: 1, metadata }), 'web:folder')
     db.close()
     const reader = new SqliteSessionStore(sessionsDir)
     try {
-      const state = (await reader.getState('web:project'))!
-      assertEquals(state.projectId, 'folder-project')
+      const state = (await reader.getState('web:folder'))!
+      assertEquals(state.folderId, 'folder-folder')
       assertEquals(state.workdir, metadata.workdir)
       state.description = 'Updated session'
       await reader.saveState(state.sessionId, state)
@@ -38,7 +39,7 @@ test('SqliteSessionStore preserves project identity alongside unknown prototype 
     const verify = new Database(dbPath)
     try {
       const row = verify.prepare('SELECT prototype FROM session_states WHERE key = ?')
-        .get('web:project') as { prototype: string }
+        .get('web:folder') as { prototype: string }
       assertEquals(JSON.parse(row.prototype).metadata, {
         ...metadata,
         description: 'Updated session',
@@ -54,6 +55,7 @@ test('SqliteSessionStore preserves project identity alongside unknown prototype 
 test('SqliteSessionStore round-trips complete SessionState metadata', async () => {
   const sessionsDir = await createTempWorkspace()
   const state: SessionState = {
+    ownershipVersion: 2,
     sessionId: 'discord:complete',
     mode: 'task',
     executionId: 'discord:complete',
@@ -81,8 +83,8 @@ test('SqliteSessionStore round-trips complete SessionState metadata', async () =
       displayName: 'Managed session folder',
     },
     agentType: 'researcher',
-    projectName: 'shadow',
-    projectId: 'folder-project-a',
+    initiativeId: 'shadow',
+    folderId: 'folder-folder-a',
     reportTo: 'discord:parent',
     originUser: 'Ada',
     description: 'Check SQLite parity',
@@ -114,7 +116,7 @@ test('SqliteSessionStore round-trips complete SessionState metadata', async () =
   }
 })
 
-test('SqliteSessionStore loads legacy config-only prototype rows', async () => {
+test('SqliteSessionStore rejects config-only prototypes instead of adopting unowned sessions', async () => {
   const sessionsDir = await createTempWorkspace()
   const dbPath = join(sessionsDir, 'sessions.db')
 
@@ -137,28 +139,10 @@ test('SqliteSessionStore loads legacy config-only prototype rows', async () => {
     db.close()
 
     const reader = new SqliteSessionStore(sessionsDir)
-    const legacyState = await reader.getState('legacy:session')
-    assertEquals(legacyState, {
-      sessionId: 'legacy:session',
-      segmentIndex: 2,
-      lastActivityAt: '2026-08-25T01:02:03.000Z',
-      lastKnownTokens: 900,
-      config: { model: 'legacy-model', temperature: 0.2 },
-    })
-    await reader.saveState('legacy:session', legacyState!)
-    reader.close()
-
-    const migratedDb = new Database(dbPath)
-    const migratedRow = migratedDb.prepare(
-      'SELECT prototype FROM session_states WHERE key = ?',
-    ).get('legacy:session') as { prototype: string }
-    assertEquals(JSON.parse(migratedRow.prototype), {
-      version: 1,
-      metadata: {
-        config: { model: 'legacy-model', temperature: 0.2 },
-      },
-    })
-    migratedDb.close()
+    try {
+      await rejects(reader.getState('legacy:session'), /Unsupported session prototype/)
+      await rejects(reader.listAllStates(), /Unsupported session prototype/)
+    } finally { reader.close() }
   } finally {
     await rm(sessionsDir, { recursive: true })
   }

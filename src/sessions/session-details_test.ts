@@ -12,7 +12,7 @@ import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionStore } from './session-store.ts'
 import { sessionsApiPlugin } from './routes.ts'
-import { localProjectWorkdirRef } from './locality.ts'
+import { localFolderWorkdirRef } from './locality.ts'
 import { Tools } from '../tools/registry.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
@@ -26,7 +26,7 @@ function makeManager(workspace: string, store: SessionStore, overrides: Partial<
     getKnownContextWindow: (model: string) => model === 'fixture' ? 8000 : null,
     workdirCapabilityLookup: (ref: { capabilityId: string }) => ref.capabilityId === 'offline'
       ? { node: 'offline' }
-      : { node: 'online', capability: { kind: 'workdir', online: true, path: join(workspace, 'project') } },
+      : { node: 'online', capability: { kind: 'workdir', online: true, path: join(workspace, 'folder') } },
     ...overrides,
   } as unknown as SessionManagerDeps)
 }
@@ -51,7 +51,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       let inventory: NodeInventoryResponse = { version: 1, nodes: [{
         nodeId: 'child', displayName: 'Registered Child', role: 'child', connection: 'connected',
         capabilities: [{
-          capabilityId: 'project', kind: 'workdir', displayName: 'Registered Project',
+          capabilityId: 'folder', kind: 'workdir', displayName: 'Registered Folder',
           displayPath: '/child/not-a-main-path', online: true,
         }],
       }] }
@@ -62,11 +62,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         })
         await sessions.start()
         await sessions.buildSession('web:remote', undefined, { workdir: {
-          version: 1, nodeId: 'child', capabilityId: 'project',
+          version: 1, nodeId: 'child', capabilityId: 'folder',
           displayName: 'Untrusted renderer label', displayPathSnapshot: 'Z:\\untrusted',
         } })
         deepEqual((await sessions.getSessionDetails('web:remote'))?.workdir, {
-          kind: 'remote', nodeId: 'child', nodeName: 'Registered Child', displayName: 'Registered Project',
+          kind: 'remote', nodeId: 'child', nodeName: 'Registered Child', displayName: 'Registered Folder',
           displayPath: '/child/not-a-main-path', available: true, availability: 'available',
         })
         inventory = { version: 1, nodes: [{
@@ -80,7 +80,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         })
         await restarted.start()
         deepEqual((await restarted.getSessionDetails('web:remote'))?.workdir, {
-          kind: 'remote', nodeId: 'child', nodeName: 'Renamed Child', displayName: 'Registered Project',
+          kind: 'remote', nodeId: 'child', nodeName: 'Renamed Child', displayName: 'Registered Folder',
           displayPath: '/child/moved', available: false, availability: 'node-offline',
         })
         inventory = { version: 1, nodes: [{ ...inventory.nodes[0], connection: 'revoked', capabilities: [] }] }
@@ -148,7 +148,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(segment?.usage, earlier)
         equal(segment?.context.usedTokens, 40)
         for (const [id, workdir, expected] of [
-          ['project', localProjectWorkdirRef('p'), { kind: 'local', displayPath: join(workspace, 'project'), nodeId: 'local', available: true, availability: 'available' }],
+          ['folder', localFolderWorkdirRef('p'), { kind: 'local', displayPath: join(workspace, 'folder'), nodeId: 'local', available: true, availability: 'available' }],
           ['remote', { version: 1 as const, nodeId: 'child', capabilityId: 'p', displayPathSnapshot: '/opaque/child/path' },
             { kind: 'remote', displayPath: null, nodeId: 'child', available: true, availability: 'available' }],
           ['unknown-remote', { version: 1 as const, nodeId: 'child', capabilityId: 'p' },
@@ -206,6 +206,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           equal(sessions.getSessionState('web:invalid-envelope'), null)
         }
         equal((await app.request('/api/chat/send', { method: 'POST', body: '{' })).status, 400)
+        equal((await send({
+          chatId: 'retired-stream', content: 'must not admit', stream: true,
+          parentChatId: 'parent', config: { reasoningEffort: 'high' },
+        })).status, 410)
+        equal(sessions.getSessionState('web:retired-stream'), null)
         equal(admitted.length, 0)
         const config = { model: 'other', thinking: { type: 'disabled' }, reasoningEffort: 'max' }
         equal((await send({ chatId: 'draft', content: 'hi', stream: false, config })).status, 200)
@@ -229,12 +234,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal((await patch({ model: 'fixture', thinking: { type: 'enabled' }, reasoningEffort: 'high' })).status, 200)
         equal((await patch({ model: null, thinking: null, reasoningEffort: null })).status, 200)
         deepEqual((await store.getState('web:draft'))?.config ?? {}, {})
-        await sessions.buildSession('web:parent', undefined, { projectId: 'p', workdir: localProjectWorkdirRef('p') })
+        await sessions.buildSession('web:parent', undefined, { folderId: 'p', workdir: localFolderWorkdirRef('p') })
         equal((await send({ chatId: 'child', content: 'fork', parentChatId: 'parent', forkAt: 2, stream: false, config })).status, 200)
         const child = sessions.getSessionState('web:child')
-        equal(child?.projectId, 'p')
+        equal(child?.folderId, 'p')
         deepEqual(child?.parent, { id: 'web:parent', index: 2 })
-        deepEqual(child?.workdir, localProjectWorkdirRef('p'))
+        deepEqual(child?.workdir, localFolderWorkdirRef('p'))
         equal((await send({ chatId: 'legacy', content: 'unchanged', stream: false })).status, 200)
         equal(sessions.getSessionState('web:legacy'), null)
         const count = admitted.length
@@ -244,10 +249,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal(admitted.length, count)
         deepEqual(sessions.getSessionConfig('web:draft'), {})
         store.saveState = saveState
-        const response = await send({ chatId: 'draft', content: 'SSE', config })
+        const response = await send({ chatId: 'draft', content: 'Default JSON admission', config })
         equal(response.status, 200)
-        assert(response.headers.get('Content-Type')?.includes('text/event-stream'))
-        await response.body?.cancel()
+        assert(response.headers.get('Content-Type')?.includes('application/json'))
+        const receipt = await response.json()
+        equal(receipt.chatId, 'draft')
+        equal(typeof receipt.requestId, 'string')
       } finally {
         await channel.stop()
         store.close?.()
@@ -314,6 +321,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal(calls[3]?.reasoningEffort, 'high')
         equal(calls[4]?.reasoningEffort, 'medium')
         equal(calls[5]?.reasoningEffort, 'xhigh')
+        await sessions.stop()
         const restarted = makeManager(workspace, store)
         await restarted.start()
         equal(restarted.getSessionConfig('web:low-effort')?.reasoningEffort, 'low')

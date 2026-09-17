@@ -3,7 +3,7 @@ import type { Hono } from 'hono'
 import type { Context as HonoContext } from 'hono'
 import { env } from 'node:process'
 import type { Tools } from '../tools/registry.ts'
-import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 
 interface CallToolRequest {
   name: string
@@ -25,9 +25,9 @@ interface BridgeHandler {
 }
 
 export interface EvalBridgeOptions {
-  organizationId: string
-  scope: OrganizationScope
-  /** Full gateway route base, including the organization route prefix. */
+  projectId: string
+  scope: ProjectScope
+  /** Full gateway route base, including the project route prefix. */
   gatewayBaseUrl: string
 }
 
@@ -43,8 +43,8 @@ export class EvalBridgeRuntime implements ToolBridgeFactory {
   private calls = new Set<Promise<unknown>>()
 
   constructor(readonly options: EvalBridgeOptions) {
-    if (!options.organizationId || options.scope.organizationId !== options.organizationId || options.scope.closed) {
-      throw new Error('Eval bridge requires a matching live organization scope')
+    if (!options.projectId || options.scope.projectId !== options.projectId || options.scope.closed) {
+      throw new Error('Eval bridge requires a matching live project scope')
     }
     this.options = Object.freeze({ ...options })
     this.setGatewayBaseUrl(options.gatewayBaseUrl)
@@ -79,11 +79,11 @@ export class EvalBridgeRuntime implements ToolBridgeFactory {
   }
 
   private assertContext(context: ExecutionContext): void {
-    const ambient = getOrganizationScope()
+    const ambient = getProjectScope()
     if (this.closed || this.options.scope.closed) throw new Error('Eval bridge runtime is closed')
-    if (context.organizationId !== this.options.organizationId || context.evalBridge !== this ||
+    if (context.projectId !== this.options.projectId || context.evalBridge !== this ||
       (ambient !== undefined && ambient !== this.options.scope)) {
-      throw new Error('Eval bridge organization/runtime binding mismatch')
+      throw new Error('Eval bridge project/runtime binding mismatch')
     }
     if (!context.sessionId?.trim()) throw new Error('Eval bridge requires a session identity')
   }
@@ -111,18 +111,18 @@ export class EvalBridgeRuntime implements ToolBridgeFactory {
   }
 }
 
-// Compatibility for unowned pre-organization callers and existing standalone tests.
+// Compatibility for unowned pre-project callers and existing standalone tests.
 const legacyBridgeHandlers = new Map<string, BridgeHandler>()
 
 /**
  * Register the `/eval/*` catch-all route on the Hono app.
  * Must be called **before** `serveGateway()` so the route is part of the
- * compiled router. Organization routes receive their own runtime registry.
+ * compiled router. Project routes receive their own runtime registry.
  */
 export function registerEvalBridgeRoute(app: Hono, runtime?: EvalBridgeRuntime): void {
   if (runtime) return runtime.registerRoutes(app)
   registerBridgeRoutes(app, (key) => legacyBridgeHandlers.get(key), (_handler, callback) => {
-    if (getOrganizationScope()) throw new Error('Legacy eval bridge cannot run in an organization runtime')
+    if (getProjectScope()) throw new Error('Legacy eval bridge cannot run in an project runtime')
     return callback()
   })
 }
@@ -177,8 +177,8 @@ function registerBridgeRoutes(
 /**
  * Start a tool bridge for eval child processes.
  *
- * Organization execution uses the injected runtime registry. The module-level
- * compatibility registry accepts only contexts without organization ownership.
+ * Project execution uses the injected runtime registry. The module-level
+ * compatibility registry accepts only contexts without project ownership.
  *
  * Returns the base URL for the child process to use when calling tools.
  * The caller should pass this to the child via `SHADOW_TOOLS_URL` env var.
@@ -188,8 +188,8 @@ export function startToolBridge(
   context: ExecutionContext,
 ): { url: string; cleanup: () => void } {
   if (context.evalBridge) return context.evalBridge.startToolBridge(tools, context)
-  if (context.organizationId !== undefined || getOrganizationScope()) {
-    throw new Error('Organization execution requires an injected eval bridge runtime')
+  if (context.projectId !== undefined || getProjectScope()) {
+    throw new Error('Project execution requires an injected eval bridge runtime')
   }
   const sessionKey = context.sessionId.replace(/[^a-z0-9_-]/gi, '_')
   // Unique per-bridge key so concurrent bridges for the same session (e.g. a

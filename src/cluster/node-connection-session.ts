@@ -210,7 +210,7 @@ export class NodeConnectionSession {
 
   dispatchJob(value: unknown): JobRequestV1 {
     const auth = this.#requireAuthenticated()
-    this.#registry.requireNodePrivilege(auth, 'jobs:execute')
+    this.#registry.authenticate(auth)
     const validation = validateJobRequestV1(value)
     if (!validation.success) {
       throw new NodeSessionError('invalid-frame', validation.errors.join('; '))
@@ -368,7 +368,7 @@ export class NodeConnectionSession {
         this.#advertisedCapabilities.delete(frame.capabilityId)
         await this.#options.onRegistryMutation?.(this.#now())
       } else if (frame.type === 'job-event') {
-        this.#registry.requireNodePrivilege(auth, 'jobs:execute')
+        this.#registry.authenticate(auth)
         await this.#acceptJobEvent(frame.event, auth)
       } else if (frame.type === 'heartbeat') {
         return

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Bus } from '../../bus/bus.ts'
-import { createOrganizationScope, getOrganizationScope } from '../../organizations/scope.ts'
+import { createProjectScope, getProjectScope } from '../../projects/scope.ts'
 import { LearningService } from './service.ts'
 import type { SessionInput } from '../../sessions/input.ts'
+import { CronService } from '../../cron/service.ts'
 
 const config = { reflectIntervalMs: 10, encapsulateIntervalMs: 20, soulIntervalMs: 30 }
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -15,13 +16,13 @@ const input: SessionInput = {
 test('learning buffers and timers are org-local, preserve pending work across interval updates and report dispatch truthfully', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
   const buses = [new Bus(), new Bus()]
-  const scopes = [createOrganizationScope('a'), createOrganizationScope('b')]
+  const scopes = [createProjectScope('a'), createProjectScope('b')]
   const calls: string[][] = [[], []]
   const services = scopes.map((scope, i) => new LearningService(buses[i], scope, {
-    async reflector() { assert.equal(getOrganizationScope(), scope); calls[i].push('reflector'); return true },
-    async encapsulator() { assert.equal(getOrganizationScope(), scope); calls[i].push('encapsulator'); return 'accepted-session' },
-    async soulReflector() { assert.equal(getOrganizationScope(), scope); calls[i].push('soulReflector'); return 'accepted-session' },
-  }, config))
+    async reflector() { assert.equal(getProjectScope(), scope); calls[i].push('reflector'); return true },
+    async encapsulator() { assert.equal(getProjectScope(), scope); calls[i].push('encapsulator'); return 'accepted-session' },
+    async soulReflector() { assert.equal(getProjectScope(), scope); calls[i].push('soulReflector'); return 'accepted-session' },
+  }, config, new CronService('.', 'UTC', scope)))
   try {
     buses[0].emit('session.input.accepted', { sessionId: 'same-session', input })
     services[0].update({ ...config, reflectIntervalMs: 15 })
@@ -57,14 +58,14 @@ test('learning buffers and timers are org-local, preserve pending work across in
 
 test('learning disable and stop abort and drain dispatch without claiming agent completion', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
-  const scope = createOrganizationScope('a')
+  const scope = createProjectScope('a')
   const bus = new Bus()
   const entered = Promise.withResolvers<AbortSignal>()
   const release = Promise.withResolvers<void>()
   const service = new LearningService(bus, scope, {
     async reflector(signal) { entered.resolve(signal); await release.promise },
     async encapsulator() {}, async soulReflector() {},
-  }, config)
+  }, config, new CronService('.', 'UTC', scope))
   bus.emit('session.input.accepted', { sessionId: 'same-session', input })
   t.mock.timers.tick(10)
   const signal = await entered.promise
@@ -86,12 +87,12 @@ test('learning disable and stop abort and drain dispatch without claiming agent 
 test('learning failed dispatch records an error and retains only its own retry buffer', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
   t.mock.method(console, 'error', () => {})
-  const scope = createOrganizationScope('a')
+  const scope = createProjectScope('a')
   const bus = new Bus()
   const service = new LearningService(bus, scope, {
     async reflector() { throw new Error('fixture dispatch failure') },
     async encapsulator() {}, async soulReflector() {},
-  }, config)
+  }, config, new CronService('.', 'UTC', scope))
   try {
     bus.emit('session.input.accepted', { sessionId: 'same-session', input })
     t.mock.timers.tick(10)
@@ -109,13 +110,13 @@ test('learning failed dispatch records an error and retains only its own retry b
 
 test('learning ignores internal activity and does not report a no-op watermark check as a dispatch', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
-  const scope = createOrganizationScope('a')
+  const scope = createProjectScope('a')
   const bus = new Bus()
   let checks = 0
   const service = new LearningService(bus, scope, {
     async reflector() { checks++; return false },
     async encapsulator() {}, async soulReflector() {},
-  }, config)
+  }, config, new CronService('.', 'UTC', scope))
   try {
     for (const sessionId of ['sleep:same', 'heartbeat:same']) bus.emit('session.input.accepted', { sessionId, input })
     t.mock.timers.tick(10)

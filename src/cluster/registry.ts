@@ -4,13 +4,11 @@ import type {
   DeviceCredentialId,
   DeviceId,
   NodeId,
-  NodePrivilege,
   PairingOfferV1,
   PendingPairingId,
   PendingPairingV1,
   RegistrySnapshotV1,
   RevokedNodeV1,
-  UiScope,
   VersionHelloV1,
 } from './contracts.ts'
 import {
@@ -34,8 +32,6 @@ export type RegistryErrorCode =
   | 'credential-mismatch'
   | 'node-revoked'
   | 'protocol-major-mismatch'
-  | 'scope-denied'
-  | 'privilege-denied'
   | 'capability-denied'
 
 export class RegistryError extends Error {
@@ -60,8 +56,6 @@ export interface ApprovalV1 {
   pendingId: PendingPairingId
   expectedDeviceIdentityFingerprint: string
   credentialId: DeviceCredentialId
-  uiScopes: UiScope[]
-  nodePrivileges: NodePrivilege[]
 }
 
 export interface DeviceAuthenticationV1 {
@@ -242,8 +236,6 @@ export class InMemoryPairingNodeRegistry {
         : {}),
       credentialId: approval.credentialId,
       displayName: pending.displayName,
-      uiScopes: [...approval.uiScopes],
-      nodePrivileges: [...approval.nodePrivileges],
       approvedAt: timestamp(now),
     }
     const validation = validatePairingNodeStateV1(approved)
@@ -305,31 +297,11 @@ export class InMemoryPairingNodeRegistry {
     return negotiateVersion(localHello, remoteHello)
   }
 
-  requireUiScope(auth: DeviceAuthenticationV1, scope: UiScope): void {
-    const node = this.authenticate(auth)
-    if (!node.uiScopes.includes(scope)) {
-      throw new RegistryError('scope-denied', `UI scope denied: ${scope}`)
-    }
-  }
-
-  requireNodePrivilege(
-    auth: DeviceAuthenticationV1,
-    privilege: NodePrivilege,
-  ): void {
-    const node = this.authenticate(auth)
-    if (!node.nodePrivileges.includes(privilege)) {
-      throw new RegistryError(
-        'privilege-denied',
-        `node privilege denied: ${privilege}`,
-      )
-    }
-  }
-
   advertiseCapability(
     auth: DeviceAuthenticationV1,
     value: unknown,
   ): CapabilityDescriptorV1 {
-    this.requireNodePrivilege(auth, 'capabilities:advertise')
+    this.authenticate(auth)
     const validation = validateCapabilityDescriptorV1(value)
     if (!validation.success) {
       throw new RegistryError('invalid-contract', validation.errors.join('; '))
@@ -354,7 +326,7 @@ export class InMemoryPairingNodeRegistry {
     nodeId: NodeId,
     capabilityId: string,
   ): boolean {
-    this.requireNodePrivilege(auth, 'capabilities:advertise')
+    this.authenticate(auth)
     if (nodeId !== auth.nodeId) {
       throw new RegistryError(
         'capability-denied',

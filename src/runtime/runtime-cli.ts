@@ -5,6 +5,7 @@ import {
   type RuntimeStartupPlan,
 } from './startup-plan.ts'
 import type { BackendSignal } from './backend-cli.ts'
+import { assertHeadlessServiceMode } from './service-mode.ts'
 
 export type RuntimePathPlatform = 'windows' | 'posix'
 
@@ -167,6 +168,13 @@ export async function dispatchRuntimeCli(
   if (plan.command === 'validate') return { plan, paths, started: false }
 
   const context = readLaunchContext(dependencies.env ?? {})
+  if (plan.serviceMode) {
+    try {
+      assertHeadlessServiceMode(dependencies.env ?? {})
+    } catch (cause) {
+      throw new RuntimeCliError('environment_invalid', errorMessage(cause), { cause })
+    }
+  }
   const factory = plan.config.mode === 'main'
     ? dependencies.mainFactory
     : dependencies.childFactory

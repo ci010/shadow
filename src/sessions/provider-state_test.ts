@@ -149,6 +149,7 @@ for (const [name, createStore, providerName] of stores.flatMap(([name, createSto
     try {
       await store.init()
       const state: SessionState = {
+        ownershipVersion: 2,
         sessionId: 'test:continuity',
         mode: 'session',
         segmentIndex: 3,
@@ -283,7 +284,7 @@ for (const [name, createStore, providerName] of stores.flatMap(([name, createSto
     let manager: SessionManager | undefined
     try {
       await store.init()
-      const state: SessionState = { sessionId: 'test:parent', segmentIndex: 2 }
+      const state: SessionState = { ownershipVersion: 2, sessionId: 'test:parent', segmentIndex: 2 }
       const physicalId = SessionManager.currentPhysicalId(state)
       const continuation = providerState('inherited', providerName)
       await store.createSessionLog(physicalId, [
@@ -335,6 +336,7 @@ for (const [name, createStore, providerName] of stores.flatMap(([name, createSto
         },
       ])
       const childState: SessionState = {
+        ownershipVersion: 2,
         sessionId: 'test:child',
         mode: 'session',
         segmentIndex: 0,

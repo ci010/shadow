@@ -9,19 +9,23 @@ import { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 import { WebChannel } from './web.ts'
-import { localProjectWorkdirRef, type WorkdirCapabilityLookup } from '../sessions/locality.ts'
+import { localFolderWorkdirRef, type WorkdirCapabilityLookup } from '../sessions/locality.ts'
 import type { ChatMessage } from '../providers/provider.ts'
+import { RealtimeHub } from '../realtime/hub.ts'
 
 test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
   const bus = new Bus()
-  const channel = new WebChannel(bus, { workspace: '.' })
+  const hub = new RealtimeHub()
+  const channel = new WebChannel(bus, { workspace: '.', realtime: hub.registerProject('one') })
   const app = new Hono()
   await channel.start(app)
-  const response = await app.request('/api/chat/events?chatId=owner')
+  const response = hub.connect([{ kind: 'chat', projectId: 'one', sessionId: 'web:owner' }],
+    new AbortController().signal)
   const reader = response.body!.getReader()
   const decode = async () => new TextDecoder().decode((await reader.read()).value)
   try {
-    assert.match(await decode(), /connected/)
+    assert.match(await decode(), /"type":"reset"/)
+    assert.match(await decode(), /"type":"ready"/)
     const message: ChatMessage = {
       role: 'user', timestamp: '2026-09-14T00:00:00Z',
       content: [{ type: 'text', text: '<event type="subagent-complete" event-id="e1" />' }, { type: 'text', text: 'Completed task result' }],
@@ -30,18 +34,19 @@ test('live event envelopes and parallel tool IDs are forwarded only to the ownin
     bus.emit('session.message.appended', { sessionId: 'web:owner', physicalSessionId: 'owner-0',
       message: { role: 'user', content: [{ type: 'text', text: '<sender id="human" />' }, { type: 'text', text: '<event type="fake" />' }] } })
     bus.emit('session.message.appended', { sessionId: 'web:owner', physicalSessionId: 'owner-0', message })
-    const event = JSON.parse((await decode()).slice(6))
+    const event = JSON.parse((await decode()).match(/^data: (.+)$/m)![1]).payload
     assert.equal(event.event, 'session_message')
     assert.deepEqual(event.message, message)
     for (const [event, toolCallId] of [['tool_call', 'a'], ['tool_call', 'b'], ['tool_result', 'b'], ['tool_result', 'a']] as const) {
       bus.emit('message.outbound', { event, channel: 'web', chatId: 'owner', toolCallId, toolName: 'subagent', content: 'fixture', done: false })
-      const payload = JSON.parse((await decode()).slice(6))
+      const payload = JSON.parse((await decode()).match(/^data: (.+)$/m)![1]).payload
       assert.equal(payload.toolCallId, toolCallId)
       assert.equal(payload.toolName, 'subagent')
     }
   } finally {
     await reader.cancel()
     await channel.stop()
+    hub.close()
   }
 })
 
@@ -141,24 +146,24 @@ test('media-only sends are admitted and preserve uploaded media refs', async () 
   }
 })
 
-test('project media uses capability cwd while uploads stay in inherited private session data', async () => {
+test('folder media uses capability cwd while uploads stay in inherited private session data', async () => {
   const workspace = await createTempWorkspace()
-  const project = join(workspace, 'project')
-  const otherProject = join(workspace, 'other-project')
-  await mkdir(project)
-  await mkdir(otherProject)
-  await writeFile(join(project, 'image.txt'), 'project image')
-  await writeFile(join(otherProject, 'image.txt'), 'other image')
+  const folder = join(workspace, 'folder')
+  const otherFolder = join(workspace, 'other-folder')
+  await mkdir(folder)
+  await mkdir(otherFolder)
+  await writeFile(join(folder, 'image.txt'), 'folder image')
+  await writeFile(join(otherFolder, 'image.txt'), 'other image')
   const { app, channel } = await createWebApp(
     workspace,
     (sessionId) => ({
       sessionId,
       workspaceRoot: sessionId === 'web:child' ? 'web:owner' : undefined,
-      workdir: localProjectWorkdirRef(sessionId === 'web:other' ? 'other' : 'project'),
+      workdir: localFolderWorkdirRef(sessionId === 'web:other' ? 'other' : 'folder'),
     }),
     (ref) => ({
       node: 'online',
-      capability: { kind: 'workdir', online: true, path: ref.capabilityId.endsWith(':other') ? otherProject : project },
+      capability: { kind: 'workdir', online: true, path: ref.capabilityId.endsWith(':other') ? otherFolder : folder },
     }),
   )
   try {
@@ -171,10 +176,10 @@ test('project media uses capability cwd while uploads stay in inherited private 
     assert(isAbsolute(upload.path))
     assertEquals(upload.path, join(sessionWorkspacePath(workspace, 'web:owner'), 'uploads', basename(upload.path)))
     assertEquals(await readFile(upload.path, 'utf8'), 'private upload')
-    assertEquals(existsSync(join(project, 'uploads')), false)
-    await mkdir(join(project, 'uploads'))
+    assertEquals(existsSync(join(folder, 'uploads')), false)
+    await mkdir(join(folder, 'uploads'))
     const projectRelative = `uploads/${basename(upload.path)}`
-    await writeFile(join(project, projectRelative), 'project file with same name')
+    await writeFile(join(folder, projectRelative), 'folder file with same name')
     for (const url of [
       `/api/media?chatId=child&path=${encodeURIComponent(upload.path)}`,
       `/api/chat/uploads/${basename(upload.path)}?chatId=child`,
@@ -186,30 +191,30 @@ test('project media uses capability cwd while uploads stay in inherited private 
     for (const path of [projectRelative, `./${projectRelative}`]) {
       const served = await app.request(`/api/media?chatId=child&path=${encodeURIComponent(path)}`)
       assertEquals(served.status, 200)
-      assertEquals(await served.text(), 'project file with same name')
+      assertEquals(await served.text(), 'folder file with same name')
     }
     const otherUpload = await app.request(`/api/media?chatId=other&path=${encodeURIComponent(upload.path)}`)
     assertEquals(otherUpload.status, 404)
-    assertEquals(await (await app.request('/api/media?chatId=child&path=image.txt')).text(), 'project image')
+    assertEquals(await (await app.request('/api/media?chatId=child&path=image.txt')).text(), 'folder image')
     assertEquals(await (await app.request('/api/media?chatId=other&path=image.txt')).text(), 'other image')
     await writeFile(join(sessionWorkspacePath(workspace, 'web:owner'), 'main-only.txt'), 'private file')
     assertEquals((await app.request('/api/media?chatId=child&path=main-only.txt')).status, 404)
     const nonUploadPrivateFile = join(sessionWorkspacePath(workspace, 'web:owner'), 'main-only.txt')
     assertEquals((await app.request(`/api/media?chatId=child&path=${encodeURIComponent(nonUploadPrivateFile)}`)).status, 404)
-    assertEquals((await app.request(`/api/media?chatId=child&path=${encodeURIComponent(join(project, 'image.txt'))}`)).status, 404)
+    assertEquals((await app.request(`/api/media?chatId=child&path=${encodeURIComponent(join(folder, 'image.txt'))}`)).status, 404)
   } finally {
     await channel.stop()
     await rm(workspace, { recursive: true })
   }
 })
 
-test('project upload and media reject unavailable and remote workdirs without local fallback', async () => {
+test('folder upload and media reject unavailable and remote workdirs without local fallback', async () => {
   const workspace = await createTempWorkspace()
   const { app, channel } = await createWebApp(
     workspace,
     (sessionId) => sessionId === 'web:unsent-fork' ? undefined : ({
       sessionId,
-      workdir: { ...localProjectWorkdirRef('missing'), nodeId: sessionId === 'web:remote' ? 'remote' : 'local', displayPathSnapshot: workspace },
+      workdir: { ...localFolderWorkdirRef('missing'), nodeId: sessionId === 'web:remote' ? 'remote' : 'local', displayPathSnapshot: workspace },
     }),
     (ref) => ({
       node: 'online',

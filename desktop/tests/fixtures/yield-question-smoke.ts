@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
+import { LiveFixture } from './live-fixture.ts'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -38,7 +39,7 @@ const question = (sessionId: string, id: string, parent = false) => ({
   createdAt: '2026-09-13T12:00:00.000Z', deadline: null as string | null,
 })
 const pending = new Map<string, ReturnType<typeof question>>()
-const streams = new Map<string, ServerResponse>()
+const live = new LiveFixture()
 const failures: string[] = []
 const answers: { requestId: string; option: string }[] = []
 const cancellations: { requestId: string }[] = []
@@ -48,34 +49,31 @@ let reads = 0
 
 const server = createServer(async (request, response) => {
   try {
+    if (live.handle(request, response)) return
     const url = new URL(request.url!, 'http://127.0.0.1')
-    const path = decodeURIComponent(url.pathname)
+    const path = decodeURIComponent(url.pathname).replace(/^\/projects\/default(?=\/)/, '')
     const json = (value: unknown, status = 200) => {
       response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
       response.end(JSON.stringify(value))
     }
     const status = { provider: 'copilot', model: 'gpt-5-mini@copilot', authMode: 'copilot', ready: true, hasApiKey: false }
+    if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
+    if (path === '/api/automations') return json({ automations: [] })
     if (path === '/api/provider/setup') return json(status)
     if (path === '/api/provider/configured') return json({ providers: [{ ...status, selected: true }] })
     if (path === '/debug/models') return json({ models: ['gpt-5-mini@copilot'] })
-    if (path === '/api/config') return json({ agent: status })
-    if (path === '/api/projects') return json({ projects: [] })
+    if (path === '/api/config') return json({ agent: { ...status, workspace: directory, temperature: 0.7 } })
+    if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/sessions/graph') return json({
       sessions, nodes: sessions.map(item => ({ physicalId: item.current, logicalId: item.sessionId, parentPhysicalId: null, isCurrent: true })),
     })
     if (path === '/api/sessions/stages') return json({ stages: Object.fromEntries(sessions.map(item => [item.sessionId, pending.has(item.sessionId) ? 'waiting' : 'idle'])) })
-    if (path === '/api/chat/session') return json({ history: [{ role: 'user', content: 'Synthetic question test' }], tools: [], systemPrompt: '' })
-    if (path === '/api/chat/events') {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' })
-      response.write(': connected\n\n')
-      streams.set(`web:${url.searchParams.get('chatId')}`, response)
-      response.on('close', () => { for (const [key, stream] of streams) if (stream === response) streams.delete(key) })
-      return
-    }
+    if (path === '/api/chat/session') return json({ history: [{ role: 'user', content: 'Synthetic question test' }, ...live.history(`web:${url.searchParams.get('chatId')}`)], tools: [], systemPrompt: '' })
     if (path === '/api/chat/send') { sends++; return json({ error: 'forbidden' }, 403) }
     const match = path.match(/^\/api\/sessions\/([^/]+)(?:\/(.*))?$/)
     if (match) {
       const id = match[1]!
+      if (match[2] === 'background-tasks') return json({ sessionId: id, total: 0, tasks: [] })
       if (match[2] === 'yield') {
         if (request.method === 'GET') { reads++; return json({ request: pending.get(id) ?? null }) }
         let body = ''
@@ -87,6 +85,7 @@ const server = createServer(async (request, response) => {
           assert.equal(pending.get(id)?.recipient.kind, 'user')
           cancellations.push(input)
           pending.delete(id)
+          live.finish(id, 'cancelled')
           return json({ cancelled: true })
         }
         assert.equal(request.method, 'POST')
@@ -97,7 +96,8 @@ const server = createServer(async (request, response) => {
         assert.equal(current.recipient.kind, 'user')
         pending.delete(id)
         json({ answer: { ...input, answeredBy: 'user', answeredAt: new Date().toISOString() } })
-        streams.get(id)?.write(`data: ${JSON.stringify({ event: 'response', content: 'Answer received.', done: true })}\n\n`)
+        live.chat(id, { event: 'response', content: 'Answer received.', done: true })
+        live.finish(id)
         return
       }
       if (match[2] === 'details') return json({ sessionId: id, name: null, workdir: { kind: 'local', displayPath: directory }, usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
@@ -158,6 +158,7 @@ async function inspect(window: BrowserWindow, label: string) {
 
 async function runViewport(origin: string, width: number, height: number) {
   pending.clear()
+  live.histories.clear()
   const isolated = session.fromPartition(`yield-${width}`, { cache: false })
   isolated.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith(`${origin}/`) }))
   isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
@@ -175,9 +176,10 @@ async function runViewport(origin: string, width: number, height: number) {
     assert.equal(reads, beforeReads, 'Ordinary idle chats must not query a potentially unsupported yield endpoint')
     await evaluate(window, `(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Keep my unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
     pending.set(root, question(root, `root-${width}`))
+    live.publisher.invalidateSessions(root)
     await waitFor(window, `!!document.querySelector('.yield-question input')`)
-    streams.get(root)?.write(`data: ${JSON.stringify({ event: 'tool_call', content: 'Waiting', toolCall: { name: 'yield', arguments: {} } })}\n\n`)
-    await waitFor(window, `document.querySelector('.composer-input textarea')?.disabled === true`)
+    live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'yield', arguments: {} } })
+    await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
     assert.match(await evaluate<string>(window, `document.querySelector('.chat-working').textContent`), /Waiting for a response/)
     await inspect(window, width > 600 ? 'yield-question-desktop' : 'yield-question-mobile')
     assert.equal(await evaluate(window, `document.querySelector('.yield-question input:checked').value`), 'Make the smallest safe change')
@@ -198,12 +200,13 @@ async function runViewport(origin: string, width: number, height: number) {
     const expiring = question(root, `expired-${width}`)
     expiring.deadline = new Date(Date.now() - 1000).toISOString()
     pending.set(root, expiring)
+    live.publisher.invalidateSessions(root)
     await waitFor(window, `document.querySelector('.yield-question')?.textContent.includes('Time limit reached')`)
     const expiredAnswers = answers.length
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(answers.length, expiredAnswers, 'Client expiry must never resolve the question')
-    streams.get(root)?.write(`data: ${JSON.stringify({ event: 'tool_call', content: 'Waiting', toolCall: { name: 'yield', arguments: {} } })}\n\n`)
-    await waitFor(window, `document.querySelector('.composer-input textarea')?.disabled === true`)
+    live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'yield', arguments: {} } })
+    await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
     assert.equal(await evaluate(window, `!!document.querySelector('[aria-label="Stop waiting"]')`), false, 'Do not add an unrelated composer Stop control')
     await evaluate(window, `document.querySelector('.yield-cancel').click()`)
     await waitFor(window, `!document.querySelector('.yield-question') && !document.querySelector('.composer-input textarea').disabled`)
@@ -211,6 +214,7 @@ async function runViewport(origin: string, width: number, height: number) {
     assert.equal(answers.length, expiredAnswers, 'Cancel task must cancel without adopting the default')
     assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
     pending.set(root, question(root, `cancel-card-${width}`))
+    live.publisher.invalidateSessions(root)
     await waitFor(window, `!!document.querySelector('.yield-cancel')`)
     await evaluate(window, `document.querySelector('.yield-cancel').click()`)
     await waitFor(window, `!document.querySelector('.yield-question')`)
@@ -253,7 +257,7 @@ async function main() {
     console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: false, error: String(cause), failures })}`)
     process.exitCode = 1
   } finally {
-    for (const stream of streams.values()) stream.end()
+    live.close()
     server.closeAllConnections()
     server.close()
     app.exit(Number(process.exitCode ?? 0))

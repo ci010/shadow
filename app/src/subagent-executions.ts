@@ -1,4 +1,4 @@
-import { sessionNavigationParent, type SidebarSession } from './projects-sidebar.ts'
+import { sessionNavigationParent, type SidebarSession } from './folders-sidebar.ts'
 import type { SessionStage } from './session-activity.ts'
 
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
@@ -17,7 +17,7 @@ export function executionStatus(session: SidebarSession, stage?: string): Execut
 }
 export function executionDisplayStage(session: SidebarSession, stage?: string): SessionStage | undefined {
   const status = executionStatus(session, stage)
-  return status === 'waiting' && session.mode !== 'call' && session.waitingForCall ? 'waiting-for-call' : status
+  return status === 'waiting' && session.mode !== 'call' && (session.waitingForCall || stage === 'waiting-for-call') ? 'waiting-for-call' : status
 }
 export function executionStages(sessions: readonly SidebarSession[], stages: Record<string, SessionStage>): Record<string, SessionStage> {
   const result = { ...stages }

@@ -3,7 +3,7 @@
     <button v-for="option in options" :key="option.value" type="button" class="setting-option effort-option"
       :disabled="disabled || busy" :aria-pressed="selected === option.value"
       @click="emit('change', reasoningSettingsForEffort(option.value))">
-      <span class="setting-option-copy"><span>{{ option.label }}</span><small v-if="option.description">{{ option.description }}</small></span>
+      <span class="setting-option-copy"><span>{{ option.label }}</span><small v-if="option.value === 'default' && inheritedSettings">Follow project · {{ currentEffort(inheritedSettings) }}</small><small v-else-if="option.description">{{ option.description }}</small></span>
       <span v-if="selected === option.value" class="setting-icon i-lucide-check" aria-hidden="true" />
     </button>
     <p v-if="!options.some(option => option.value === selected)" class="settings-note" role="status">The saved effort is not offered for this model. Select an available level or Default.</p>
@@ -14,7 +14,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { currentEffort, effortOptionsForModel, reasoningSettingsForEffort, type ReasoningSettings } from '../session-settings.ts'
-const props = defineProps<{ settings: ReasoningSettings; model: string; disabled: boolean; busy?: boolean }>()
+const props = defineProps<{ settings: ReasoningSettings; inheritedSettings?: ReasoningSettings; model: string; disabled: boolean; busy?: boolean }>()
 const emit = defineEmits<{ change: [patch: ReasoningSettings] }>()
 const selected = computed(() => currentEffort(props.settings))
 const options = computed(() => effortOptionsForModel(props.model))

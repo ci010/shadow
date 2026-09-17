@@ -1,5 +1,5 @@
 <template>
-  <span ref="root" class="file-highlight-content" @pointerdown="dragging = true"><span v-for="(token, index) in tokens" :key="index" class="file-syntax-token" :style="{ '--file-token-light': token.light, '--file-token-dark': token.dark }">{{ token.text }}</span></span>
+  <span ref="root" class="file-highlight-content" @pointerdown="startDrag"><span v-for="(token, index) in tokens" :key="index" class="file-syntax-token" :style="{ '--file-token-light': token.light, '--file-token-dark': token.dark }">{{ token.text }}</span></span>
 </template>
 
 <script setup lang="ts">
@@ -13,6 +13,10 @@ const tokens = shallowRef<FileHighlightToken[]>([{ text: props.source }])
 let pending: FileHighlightToken[] | undefined
 let generation = 0
 let dragging = false
+
+function startDrag(): void {
+  dragging = true
+}
 
 function selectionLocked(): boolean {
   if (dragging) return true

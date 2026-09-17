@@ -46,6 +46,22 @@ async function query(app: Hono, params = 'sessionId=parent'): Promise<SessionTra
   return await response.json() as SessionTraceResponse
 }
 
+test('retired telemetry streams return finite errors without starting store polling', async (t) => {
+  const store = new OtelStore(':memory:')
+  t.after(() => store.close())
+  for (const method of ['getLatestSpanId', 'getLatestLogId', 'querySpans', 'queryLogs'] as const) {
+    t.mock.method(store, method, () => assert.fail('Retired streams must not query the store'))
+  }
+  const app = appFor(store)
+  for (const kind of ['spans', 'logs']) {
+    const response = await app.request(`/v1/stream/${kind}`)
+    assert.equal(response.status, 410)
+    assert.deepEqual(await response.json(), {
+      error: 'stream_retired', message: `Subscribe to ${kind} topics through /api/live.`,
+    })
+  }
+})
+
 test('session trace route follows ownership, not shared traces or span IDs', async () => {
   const store = new OtelStore(':memory:')
   try {

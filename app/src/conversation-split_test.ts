@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_MIN_WIDTH } from './conversation-split.ts'
-import { groupProjectSessions, parseSessionGraph, sessionNavigationParent, visibleSessions, type SidebarSession } from './projects-sidebar.ts'
+import { groupFolderSessions, parseSessionGraph, sessionNavigationParent, visibleSessions, type SidebarSession } from './folders-sidebar.ts'
 import { ownedExecutions } from './subagent-executions.ts'
 
 const session = (sessionId: string, parentSessionId: string | null = null): SidebarSession => ({
@@ -54,7 +54,7 @@ test('actual null-owner reusable fork wire retains side-pane and nested tree anc
   assert.deepEqual(ownedExecutions(sessions, 'web:chat-root'), [])
   assert.deepEqual(ownedExecutions(sessions, 'web:chat-fork').map(item => item.sessionId), ['task'])
   assert.deepEqual(ownedExecutions(sessions, 'task').map(item => item.sessionId), ['call'])
-  const rows = groupProjectSessions([], sessions).chats
+  const rows = groupFolderSessions([], sessions).chats
   assert.deepEqual(rows.slice(0, 3).map(item => [item.sessionId, item.depth, item.parentSessionId]), [
     ['web:chat-root', 0, null], ['web:chat-fork', 1, null], ['web:chat-nested-fork', 2, null],
   ])

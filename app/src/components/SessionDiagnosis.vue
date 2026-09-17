@@ -37,38 +37,71 @@
 
         <div class="trace-timeline" aria-label="Execution timeline">
           <div class="timeline-controls">
-            <span>Execution overview</span>
+            <span>Execution overview <small>{{ zoomWindow ? 'Custom window' : 'Latest 5 min' }}</small></span>
             <button class="diagnosis-button" aria-label="Zoom into trace" :disabled="timelineRange.end - timelineRange.start <= 1" @click="zoomTimeline(.5)">+</button>
-            <button class="diagnosis-button" aria-label="Zoom out of trace" :disabled="!zoomWindow" @click="zoomTimeline(2)">&minus;</button>
-            <button class="diagnosis-button" :disabled="!zoomWindow" @click="zoomWindow = undefined">Reset</button>
+            <button class="diagnosis-button" aria-label="Zoom out of trace" :disabled="!canPanTimeline" @click="zoomTimeline(2)">&minus;</button>
+            <button class="diagnosis-button" :disabled="!zoomWindow" @click="zoomWindow = undefined">Latest 5 min</button>
           </div>
           <div class="timeline-scale"><span>Elapsed</span><div><span>{{ formatTraceDuration(timelineRange.start - fullTimelineRange.start) }}</span><span>{{ formatTraceDuration(timelineRange.end - fullTimelineRange.start) }}</span></div></div>
-          <div v-for="lane in lanes" :key="lane.name" class="timeline-lane">
+          <div v-for="lane in visibleLanes" :key="lane.name" class="timeline-lane">
             <span>{{ lane.name }}</span>
-            <div class="lane-track" :style="{ height: `${laneHeight(lane.items)}px` }">
-              <button v-for="item in visibleTimelineItems(lane.items)" :key="item.id" class="lane-bar"
-                :class="[lane.name.toLowerCase(), { running: item.live, failed: item.failed, dimmed: !item.matches, picked: selectedId === item.id }]"
-                :style="timelineStyle(item)" :title="item.label" :aria-label="item.label" @click="selectTimelineItem(item)" />
+            <div class="lane-track" :style="{ height: `${lane.height}px` }">
+              <HoverInfo v-for="item in lane.items" :key="item.id">
+                <template #default="{ triggerProps, close }">
+                  <button v-bind="triggerProps" class="lane-bar"
+                    :class="[lane.name.toLowerCase(), { running: item.live, failed: item.failed, dimmed: !item.matches, picked: selectedId === item.id }]"
+                    :style="timelineStyle(item)" :aria-label="item.label" :aria-pressed="selectedId === item.id"
+                    :aria-controls="selectedId === item.id ? domId('trace-inspector') : undefined"
+                    @click="close(); selectedId = item.id" />
+                </template>
+                <template #content>
+                  <strong class="timeline-hover-title">{{ item.title }}</strong>
+                  <dl class="timeline-hover-meta">
+                    <dt>Started</dt><dd>{{ formatTime(item.start) }}</dd>
+                    <template v-if="item.span">
+                      <dt>Duration</dt><dd>{{ formatTraceDuration(spanDuration(item.span, now)) }}{{ item.live ? ' elapsed' : '' }}</dd>
+                      <dt>Status</dt><dd>{{ item.live ? 'Running' : item.failed ? 'Error' : 'Completed' }} {{ item.span.statusMessage }}</dd>
+                      <dt>Trace</dt><dd>{{ item.span.traceId }}</dd><dt>Span</dt><dd>{{ item.span.spanId }}</dd>
+                      <template v-for="(value, key) in item.span.attributes" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template>
+                    </template>
+                    <template v-else-if="item.event"><dt>Kind</dt><dd>{{ item.event.kind }}</dd><dt>Turn</dt><dd>{{ item.event.turn }}</dd></template>
+                  </dl>
+                </template>
+              </HoverInfo>
             </div>
           </div>
-          <label v-if="zoomWindow" class="timeline-pan">Pan timeline<input type="range" min="0" max="100" step="0.1" aria-label="Pan trace timeline" :value="panPosition" @input="panTimeline" /></label>
+          <div v-if="canPanTimeline" class="timeline-pan">
+            <button class="diagnosis-button" aria-label="Previous time window" :disabled="panPosition <= 0" @click="moveTimeline(-1)">&larr;</button>
+            <label>Move window<input type="range" min="0" max="100" step="0.1" aria-label="Pan trace timeline"
+              :aria-valuetext="`${formatTime(timelineRange.start)} to ${formatTime(timelineRange.end)}`" :value="panPosition" @input="panTimeline" /></label>
+            <button class="diagnosis-button" aria-label="Next time window" :disabled="panPosition >= 100" @click="moveTimeline(1)">&rarr;</button>
+          </div>
+          <p v-if="hasTimelineItems && !visibleLanes.some(lane => lane.items.length)" class="timeline-note" role="status">No recorded activity in this window. Move the window to inspect another time.</p>
           <p class="timeline-note">{{ spans.length ? 'Actual recorded timings; hover for duration, select for details. Gaps include time between requests.' : 'No execution timing is recorded for this segment. Message timestamps are not model or tool durations.' }}</p>
         </div>
 
-        <div v-if="selectedSpan" class="span-inspector">
+        <div v-if="selectedSpan || selectedEvent" :id="domId('trace-inspector')" class="span-inspector" role="region" aria-label="Selected trace item details">
           <div class="inspector-heading">
-            <span class="event-kind" :class="selectedSpan.name === 'agent.tool' ? 'TOOL' : 'ASSISTANT'">{{ selectedSpan.name === 'agent.tool' ? 'TOOL' : 'SPAN' }}</span>
-            <strong>{{ selectedSpan.attributes['tool.name'] || selectedSpan.name }}</strong>
-            <span>{{ formatTraceDuration(spanDuration(selectedSpan, now)) }}{{ selectedSpan.live ? ' elapsed' : '' }}</span>
-            <button class="diagnosis-button" aria-label="Close span details" @click="selectedId = ''">&times;</button>
+            <span class="event-kind" :class="selectedEvent?.kind || (selectedSpan?.name === 'agent.tool' ? 'TOOL' : 'ASSISTANT')">{{ selectedEvent?.kind || (selectedSpan?.name === 'agent.tool' ? 'TOOL' : 'SPAN') }}</span>
+            <strong>{{ selectedEvent?.title || selectedSpan?.attributes['tool.name'] || selectedSpan?.name }}</strong>
+            <span v-if="selectedSpan">{{ formatTraceDuration(spanDuration(selectedSpan, now)) }}{{ selectedSpan.live ? ' elapsed' : '' }}</span>
+            <button class="diagnosis-button" aria-label="Close trace item details" @click="selectedId = ''">&times;</button>
           </div>
-          <dl class="span-identity"><dt>Trace</dt><dd>{{ selectedSpan.traceId }}</dd><dt>Span</dt><dd>{{ selectedSpan.spanId }}</dd><dt>Started</dt><dd>{{ formatTime(selectedSpan.startTime) }}</dd><dt>Status</dt><dd>{{ selectedSpan.live ? 'Running' : selectedSpan.statusCode === 2 ? 'Error' : 'Completed' }} {{ selectedSpan.statusMessage }}</dd></dl>
-          <template v-if="selectedCall">
-            <h4>Arguments</h4><pre>{{ prettyArguments(selectedCall.arguments ?? '') }}</pre>
-            <h4>Result</h4><pre v-if="selectedCall.result !== undefined">{{ selectedCall.result }}</pre><p v-else class="missing-detail">No result recorded yet.</p>
+          <dl v-if="selectedSpan" class="span-identity"><dt>Trace</dt><dd>{{ selectedSpan.traceId }}</dd><dt>Span</dt><dd>{{ selectedSpan.spanId }}</dd><dt>Started</dt><dd>{{ formatTime(selectedSpan.startTime) }}</dd><dt>Status</dt><dd>{{ selectedSpan.live ? 'Running' : selectedSpan.statusCode === 2 ? 'Error' : 'Completed' }} {{ selectedSpan.statusMessage }}</dd></dl>
+          <dl v-else-if="selectedEvent" class="span-identity"><dt>Started</dt><dd>{{ formatTime(selectedEvent.timestamp) }}</dd><dt>Turn</dt><dd>{{ selectedEvent.turn }}</dd></dl>
+          <TraceEventDetails v-if="selectedEvent" :event="selectedEvent" />
+          <template v-else-if="selectedModelResponse.detail">
+            <h4>Model response</h4>
+            <p v-if="selectedModelResponse.detail.source === 'history'" class="missing-detail">Historical response matched by recorded input message count and completion interval.</p>
+            <TraceEventDetails :event="selectedModelResponse.detail.event" />
           </template>
-          <details open><summary>Attributes</summary><pre>{{ detailText(selectedSpan.attributes) }}</pre></details>
-          <details v-if="selectedSpan.events.length" open><summary>Events &amp; exceptions ({{ selectedSpan.events.length }})</summary><pre>{{ detailText(selectedSpan.events) }}</pre></details>
+          <p v-else-if="selectedModelResponse.error" class="diagnosis-error" role="alert">{{ selectedModelResponse.error }}</p>
+          <p v-else-if="selectedSpan?.name === 'agent.tool'" class="missing-detail">No unique matching tool call in this segment's history. Arguments and results are unavailable.</p>
+          <p v-else-if="selectedSpan?.name === 'agent.chat'" class="missing-detail">{{ selectedSpan.live ? 'Waiting for this model call to return its message.' : selectedSpan.statusCode === 2 ? 'This model call failed before returning a message.' : 'No response was captured for this historical call, and its history cannot be uniquely matched.' }}</p>
+          <template v-if="selectedSpan">
+            <details open><summary>Attributes</summary><pre>{{ detailText(selectedSpan.attributes) }}</pre></details>
+            <details v-if="selectedSpan.events.length" :open="!selectedModelResponse.detail"><summary>Events &amp; exceptions ({{ selectedSpan.events.length }})</summary><pre>{{ detailText(selectedSpan.events) }}</pre></details>
+          </template>
         </div>
 
         <div class="events-heading"><h3>Recorded events</h3><div class="event-fold-controls"><button class="diagnosis-button" @click="toggleAllTurns">{{ allTurnsCollapsed ? 'Expand turns' : 'Collapse turns' }}</button><button class="diagnosis-button" @click="toggleAllCalls">{{ allCallsExpanded ? 'Collapse calls' : 'Expand calls' }}</button></div><span>{{ events.length }} events</span></div>
@@ -80,7 +113,7 @@
         <div v-for="group in eventGroups" :key="group.turn" class="trace-turn">
           <button class="turn-heading" :aria-expanded="!collapsedTurns.has(group.turn) || !!query || filter !== 'ALL'" @click="toggleTurn(group.turn)"><span>{{ collapsedTurns.has(group.turn) && !query && filter === 'ALL' ? '&#9656;' : '&#9662;' }} {{ group.turn ? `Turn ${group.turn}` : 'Session context' }}</span><span>{{ group.events.length }} events</span></button>
           <div v-show="!collapsedTurns.has(group.turn) || query || filter !== 'ALL'">
-          <div v-for="event in group.events" :key="event.id" :ref="element => registerEvent(event.id, element)" class="trace-event" :class="{ expanded: expanded.has(event.id), highlighted: selectedId === event.id }">
+          <div v-for="event in group.events" :key="event.id" class="trace-event" :class="{ expanded: expanded.has(event.id), highlighted: selectedEvent?.id === event.id }">
             <button class="trace-event-header" :aria-expanded="expanded.has(event.id)" @click="toggleEvent(event.id)">
               <span class="event-chevron" aria-hidden="true">{{ expanded.has(event.id) ? '&#9662;' : '&#9656;' }}</span>
               <span class="event-kind" :class="event.kind">{{ event.kind }}</span>
@@ -91,10 +124,7 @@
             </button>
             <div v-if="expanded.has(event.id)" class="trace-event-detail">
               <div v-if="event.callId" class="event-call-id">Call ID: {{ event.callId }}<button v-if="toolSpan(event.id)" class="diagnosis-button" @click="selectSpan(toolSpan(event.id)!)">Inspect timing</button></div>
-              <template v-if="event.arguments !== undefined"><h4>Arguments</h4><pre>{{ prettyArguments(event.arguments) }}</pre><h4>Result</h4><pre v-if="event.result !== undefined">{{ event.result }}</pre><p v-else class="missing-detail">No result recorded yet.</p></template>
-              <pre v-else>{{ event.content }}</pre>
-              <details v-if="event.reasoning"><summary>Reasoning</summary><pre>{{ event.reasoning }}</pre></details>
-              <details v-if="event.usage"><summary>Token usage</summary><pre>{{ event.usage }}</pre></details>
+              <TraceEventDetails :event="event" />
             </div>
             </div>
           </div>
@@ -126,13 +156,15 @@
 
 <script setup lang="ts">
 import { apiUrl } from '../api-url.ts'
-import { computed, nextTick, onUnmounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
+import HoverInfo from './HoverInfo.vue'
+import TraceEventDetails from './TraceEventDetails.vue'
 import SystemPromptCard from './SystemPromptCard.vue'
 import ToolsCard, { type ToolDef } from './ToolsCard.vue'
 import {
-  correlateToolSpans, detailText, eventMatches, fetchDiagnosisJson, fitTraceWindow, formatTraceDuration, mergeTraceSpans, parseDiagnosisHistory,
+  correlateModelSpans, correlateToolSpans, detailText, eventMatches, fetchDiagnosisJson, fitTraceWindow, formatTraceDuration, latestTraceWindow, mergeTraceSpans, parseDiagnosisHistory, recordedModelResponse,
   parseTracePage, spanDuration, spanMatches, stackTimelineItems, traceDuration, traceKey,
-  type DiagnosisEvent, type SessionTraceSpan, type TracePage, type TraceWindow,
+  type DiagnosisEvent, type ModelResponseDetail, type SessionTraceSpan, type TracePage, type TraceWindow,
 } from '../session-diagnosis.ts'
 
 const props = defineProps<{
@@ -154,6 +186,7 @@ const query = ref('')
 const kinds = ['ALL', 'USER', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
 const filter = ref('ALL')
 const events = ref<DiagnosisEvent[]>([])
+const modelResponses = ref<DiagnosisEvent[]>([])
 const spans = ref<SessionTraceSpan[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -162,7 +195,6 @@ const selectedId = ref('')
 const expanded = reactive(new Set<string>())
 const collapsedTurns = reactive(new Set<number>())
 const zoomWindow = ref<TraceWindow>()
-const eventElements = new Map<string, Element>()
 let currentPhysicalId: string | undefined
 let beforeId: number | undefined
 const hasMore = ref(false)
@@ -225,28 +257,38 @@ function toggleAllCalls(): void {
   }
 }
 const selectedSpan = computed(() => spans.value.find(span => traceKey(span) === selectedId.value))
-const selectedCall = computed(() => {
-  return selectedSpan.value ? events.value.find(event => {
+const historicalModelResponses = computed(() => correlateModelSpans(modelResponses.value, modelSpans.value))
+const selectedModelResponse = computed<{ detail?: ModelResponseDetail; error?: string }>(() => {
+  if (selectedSpan.value?.name !== 'agent.chat') return {}
+  try {
+    return { detail: recordedModelResponse(selectedSpan.value) ?? historicalModelResponses.value.get(selectedId.value) }
+  } catch (cause) {
+    return { error: cause instanceof Error ? cause.message : String(cause) }
+  }
+})
+const selectedEvent = computed(() => {
+  return events.value.find(event => event.id === selectedId.value) ?? (selectedSpan.value ? events.value.find(event => {
     const span = toolSpan(event.id)
     return span && traceKey(span) === selectedId.value
-  }) : undefined
+  }) : undefined)
 })
 const toolSpanById = computed(() => correlateToolSpans(events.value, toolSpans.value))
 function toolSpan(eventId: string): SessionTraceSpan | undefined {
   return toolSpanById.value.get(eventId)
 }
 
-interface TimelineItem { id: string; start: number; end: number; label: string; live: boolean; failed: boolean; matches: boolean }
-const lanes = computed(() => {
+interface TimelineItem { id: string; start: number; end: number; title: string; label: string; live: boolean; failed: boolean; matches: boolean; span?: SessionTraceSpan; event?: DiagnosisEvent }
+const lanes = computed<Array<{ name: string; items: TimelineItem[] }>>(() => {
   const spanItems = (items: SessionTraceSpan[]): TimelineItem[] => items.map(span => ({
     id: traceKey(span), start: span.startTime,
     end: span.live ? Math.max(now.value, span.startTime) : span.endTime ?? span.startTime,
+    title: span.attributes['tool.name'] || span.name, span,
     label: `${span.attributes['tool.name'] || span.name} | ${formatTime(span.startTime)} | ${formatTraceDuration(spanDuration(span, now.value))}${span.live ? ' elapsed (running)' : ''}`,
     live: span.live, failed: span.statusCode === 2, matches: spanMatches(span, query.value),
   }))
   return [
     { name: 'Input', items: events.value.flatMap(event => event.timestamp !== undefined && ['USER', 'CONTEXT', 'SYSTEM'].includes(event.kind)
-      ? [{ id: event.id, start: event.timestamp, end: event.timestamp, label: `${event.kind} | ${formatTime(event.timestamp)} | ${preview(event)}`, live: false, failed: false, matches: eventMatches(event, query.value) }] : []) },
+      ? [{ id: event.id, start: event.timestamp, end: event.timestamp, title: event.title, event, label: `${event.kind} | ${formatTime(event.timestamp)} | ${preview(event)}`, live: false, failed: false, matches: eventMatches(event, query.value) }] : []) },
     { name: 'Model', items: spanItems(modelSpans.value) },
     { name: 'Tools', items: spanItems(toolSpans.value) },
   ]
@@ -256,13 +298,13 @@ const fullTimelineRange = computed(() => {
   if (!items.length) return { start: 0, end: 0 }
   return { start: Math.min(...items.map(item => item.start)), end: Math.max(...items.map(item => item.end)) }
 })
-const timelineRange = computed(() => zoomWindow.value ? fitTraceWindow(zoomWindow.value, fullTimelineRange.value) : fullTimelineRange.value)
-function visibleTimelineItems(items: TimelineItem[]) {
-  return stackTimelineItems(items.filter(item => item.end >= timelineRange.value.start && item.start <= timelineRange.value.end))
-}
-function laneHeight(items: TimelineItem[]): number {
-  return Math.max(1, ...visibleTimelineItems(items).map(item => item.track + 1)) * 22
-}
+const hasTimelineItems = computed(() => lanes.value.some(lane => lane.items.length))
+const timelineRange = computed(() => zoomWindow.value ? fitTraceWindow(zoomWindow.value, fullTimelineRange.value) : latestTraceWindow(fullTimelineRange.value))
+const canPanTimeline = computed(() => timelineRange.value.end - timelineRange.value.start < fullTimelineRange.value.end - fullTimelineRange.value.start)
+const visibleLanes = computed(() => lanes.value.map(lane => {
+  const items = stackTimelineItems(lane.items.filter(item => item.end >= timelineRange.value.start && item.start <= timelineRange.value.end))
+  return { name: lane.name, items, height: Math.max(1, ...items.map(item => item.track + 1)) * 22 }
+}))
 function timelineStyle(item: TimelineItem & { track: number }): Record<string, string> {
   const range = Math.max(1, timelineRange.value.end - timelineRange.value.start)
   const left = Math.min(99.5, Math.max(0, (item.start - timelineRange.value.start) / range * 100))
@@ -274,7 +316,7 @@ function zoomTimeline(factor: number): void {
   const center = (start + end) / 2
   const half = Math.max(1, (end - start) * factor) / 2
   const next = fitTraceWindow({ start: center - half, end: center + half }, fullTimelineRange.value)
-  zoomWindow.value = next.end - next.start >= fullTimelineRange.value.end - fullTimelineRange.value.start ? undefined : next
+  zoomWindow.value = next
 }
 const panPosition = computed(() => {
   const room = fullTimelineRange.value.end - fullTimelineRange.value.start - (timelineRange.value.end - timelineRange.value.start)
@@ -287,6 +329,11 @@ function panTimeline(event: Event): void {
   const start = fullTimelineRange.value.start + room * event.target.valueAsNumber / 100
   zoomWindow.value = fitTraceWindow({ start, end: start + duration }, fullTimelineRange.value)
 }
+function moveTimeline(direction: number): void {
+  const { start, end } = timelineRange.value
+  const offset = (end - start) * direction
+  zoomWindow.value = fitTraceWindow({ start: start + offset, end: end + offset }, fullTimelineRange.value)
+}
 function formatTime(value?: number): string {
   return value === undefined ? 'Time unavailable' : new Date(value).toLocaleString([], { hour12: false })
 }
@@ -296,27 +343,9 @@ function shortTime(value?: number): string {
 function preview(event: DiagnosisEvent): string {
   return (event.content || event.reasoning || 'Empty message').replace(/\s+/g, ' ').slice(0, 180)
 }
-function prettyArguments(value: string): string {
-  try { return detailText(JSON.parse(value)) } catch { return value }
-}
-function registerEvent(id: string, element: Element | ComponentPublicInstance | null): void {
-  if (element instanceof Element) eventElements.set(id, element)
-  else eventElements.delete(id)
-}
 function toggleEvent(id: string): void {
   if (expanded.has(id)) expanded.delete(id)
   else expanded.add(id)
-}
-async function selectTimelineItem(item: TimelineItem): Promise<void> {
-  selectedId.value = item.id
-  if (!events.value.some(event => event.id === item.id)) return
-  query.value = ''
-  filter.value = 'ALL'
-  expanded.add(item.id)
-  const event = events.value.find(event => event.id === item.id)
-  if (event) collapsedTurns.delete(event.turn)
-  await nextTick()
-  eventElements.get(item.id)?.scrollIntoView({ block: 'center', behavior: 'instant' })
 }
 async function selectSpan(span: SessionTraceSpan): Promise<void> {
   selectedId.value = traceKey(span)
@@ -364,6 +393,7 @@ async function refresh(): Promise<void> {
       expanded.clear()
     }
     events.value = history.events
+    modelResponses.value = history.modelResponses
     let page = await tracePage(signal)
     const incoming = [...page.entries]
     const known = new Set(spans.value.filter(span => !span.live).map(traceKey))
@@ -419,6 +449,7 @@ function stop(): void {
 watch(() => [props.sessionId, props.physicalId, props.apiBase], () => {
   stop()
   events.value = []
+  modelResponses.value = []
   spans.value = []
   currentPhysicalId = undefined
   beforeId = undefined
@@ -472,11 +503,18 @@ h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; }
 .trace-search input { min-width: 0; flex: 1; background: transparent; border: 0; outline: 0; color: var(--c-text); font: inherit; font-size: 12px; }
 .trace-search > span { font-size: 10px; color: var(--c-text-secondary); white-space: nowrap; }
 .trace-timeline { margin: 20px 0 26px; padding: 14px 16px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--radius-surface); }
-.timeline-controls { display: flex; align-items: center; gap: 5px; margin-bottom: 14px; }
+.timeline-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-bottom: 14px; }
 .timeline-controls > span { margin-right: auto; color: var(--c-text-secondary); font-size: 11px; }
+.timeline-controls small { display: block; margin-top: 4px; font-size: 10px; }
 .timeline-controls button { padding: 3px 8px; }
+.timeline-controls button:disabled, .timeline-pan button:disabled { cursor: default; }
 .timeline-pan { display: flex; align-items: center; gap: 12px; margin-top: 12px; color: var(--c-text-secondary); font-size: 10px; }
+.timeline-pan label { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
 .timeline-pan input { flex: 1; min-width: 0; accent-color: var(--c-blue); }
+.timeline-hover-title { display: block; font-size: 12px; font-weight: 600; }
+.timeline-hover-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 6px 12px; margin: 10px 0 0; font-size: 11px; }
+.timeline-hover-meta dt { color: var(--c-text-secondary); }
+.timeline-hover-meta dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .timeline-scale, .timeline-lane { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 14px; align-items: center; font-size: 11px; color: var(--c-text-secondary); }
 .timeline-scale { margin-bottom: 10px; font-size: 10px; font-variant-numeric: tabular-nums; }
 .timeline-scale > div { display: flex; justify-content: space-between; }

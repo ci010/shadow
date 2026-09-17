@@ -6,7 +6,7 @@ import { formatFileQuote, renderedSelectionLines } from './file-selection.ts'
 const event = {
   when: '2026-09-10T16:45:44.093Z', who: 'Coding Assistant', what: 'Updated documentation.',
   why: 'Keep instructions current.', challenge: 'The original path differed.',
-  refs: ['memory/topics/project.md'], origin: 'web:chat-fixture',
+  refs: ['memory/topics/folder.md'], origin: 'web:chat-fixture',
 }
 
 test('only memory event JSONL files use the record view', () => {

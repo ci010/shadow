@@ -5,7 +5,7 @@ import test from 'node:test'
 import { Cron } from 'croner'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { CronService } from './service.ts'
-import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
 const mondayJob = {
   id: 'monday',
@@ -41,7 +41,7 @@ test('legacy cron jobs are rejected without scheduling or rewriting them', async
 
 test('versioned jobs use standard weekdays in the configured timezone', async (t) => {
   await withTempWorkspace(async (workspace) => {
-    await writeStore(workspace, JSON.stringify({ version: 1, jobs: [mondayJob] }))
+    await writeStore(workspace, JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [mondayJob] }))
     const nextRun = t.mock.method(Cron.prototype, 'nextRun')
     const service = new CronService(workspace, 'Asia/Shanghai')
     try {
@@ -64,8 +64,9 @@ test('invalid cron stores fail without discarding the original data', async (t) 
     '',
     '{broken',
     JSON.stringify({ version: 2, jobs: [mondayJob] }),
-    JSON.stringify({ version: 1, jobs: [{ ...mondayJob, schedule: 1 }] }),
-    JSON.stringify({ version: 1, jobs: [mondayJob, mondayJob] }),
+    JSON.stringify({ version: 1, jobs: [mondayJob] }),
+    JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [{ ...mondayJob, schedule: 1 }] }),
+    JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [mondayJob, mondayJob] }),
   ]
   for (const raw of stores) {
     await t.test(raw || 'empty file', async () => {
@@ -93,7 +94,7 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
       const id = service.addJob({ schedule: '0 9 * * SUN', task: 'Sunday task' })
       await t.waitFor(async () => {
         const raw = await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')
-        assert.deepEqual(JSON.parse(raw), { version: 1, jobs: service.listJobs() })
+        assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: service.listJobs() })
         return true
       })
 
@@ -104,7 +105,7 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
       assert.equal(reloaded.removeJob(id), true)
       await t.waitFor(async () => {
         const raw = await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')
-        assert.deepEqual(JSON.parse(raw), { version: 1, jobs: [] })
+        assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: [] })
         return true
       })
     } finally {
@@ -117,7 +118,7 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
 test('same-name cron jobs bind runtime scope and stopping one drains only its own execution and writes', async (t) => {
   await withTempWorkspace(async (root) => {
     const homes = [join(root, 'a'), join(root, 'b')]
-    const scopes = [createOrganizationScope('a'), createOrganizationScope('b')]
+    const scopes = [createProjectScope('a'), createProjectScope('b')]
     const services = homes.map((home, i) => new CronService(home, 'UTC', scopes[i]))
     const scheduled: Cron[] = []
     const nextRun = t.mock.method(Cron.prototype, 'nextRun')
@@ -127,9 +128,9 @@ test('same-name cron jobs bind runtime scope and stopping one drains only its ow
     let signal: AbortSignal | undefined
     try {
       for (let i = 0; i < services.length; i++) {
-        await writeStore(homes[i], JSON.stringify({ version: 1, jobs: [mondayJob] }))
+        await writeStore(homes[i], JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [mondayJob] }))
         services[i].setHandler(async (_job, abort) => {
-          assert.equal(getOrganizationScope(), scopes[i])
+          assert.equal(getProjectScope(), scopes[i])
           calls[i]++
           if (i === 0) {
             signal = abort

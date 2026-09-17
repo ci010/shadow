@@ -1,5 +1,6 @@
 import {
   inject,
+  type DeepReadonly,
   type InjectionKey,
   type Plugin,
   readonly,
@@ -11,7 +12,7 @@ import {
   type InstallationContextV1,
 } from '../installation-context.ts'
 
-type InstallationContextRef = Readonly<Ref<InstallationContextV1>>
+type InstallationContextRef = DeepReadonly<Ref<InstallationContextV1>>
 
 const installationContextKey: InjectionKey<InstallationContextRef> = Symbol(
   'installation-context',

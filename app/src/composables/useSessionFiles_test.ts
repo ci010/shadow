@@ -55,10 +55,10 @@ test('file listings preserve authoritative local and remote workspace identities
   assert.deepEqual((await files.listDir('web:chat-free')).workdir,
     { kind: 'local', displayPath: 'C:\\workspace\\web_chat-free' })
   mock.mock.mockImplementation(async () => Response.json({
-    path: 'src', entries: [], workdir: { kind: 'remote', displayPath: '/opaque/remote/project' },
+    path: 'src', entries: [], workdir: { kind: 'remote', displayPath: '/opaque/remote/folder' },
   }))
   assert.deepEqual((await files.listDir('remote', 'src')).workdir,
-    { kind: 'remote', displayPath: '/opaque/remote/project' })
+    { kind: 'remote', displayPath: '/opaque/remote/folder' })
   mock.mock.mockImplementation(async () => Response.json({
     path: '', entries: [], workdir: { kind: 'local', displayPath: 'C:\\home', scope: 'home' },
   }))
@@ -91,9 +91,9 @@ test('unknown and extensionless files try text while specialized renderers remai
   ]) assert.equal(fileKind(ext!), kind)
 })
 
-test('project client scopes every operation to its registry ID without a session or renderer path', async t => {
-  const projectId = 'cdbf51ac-8714-4a82-8412-e11a5dd61c20'
-  const files = useSessionFiles('http://localhost:3123', projectId)
+test('folder client scopes every operation to its registry ID without a session or renderer path', async t => {
+  const folderId = 'cdbf51ac-8714-4a82-8412-e11a5dd61c20'
+  const files = useSessionFiles('http://localhost:3123', folderId)
   const controller = new AbortController()
   const requests: URL[] = []
   const signals: AbortSignal[] = []
@@ -111,15 +111,15 @@ test('project client scopes every operation to its registry ID without a session
     return Response.json({ binary: false, size: 8, content: '24.15.0\n', truncated: false })
   })
   assert.equal((await files.preview('', '.node-version', 65536, controller.signal)).content, '24.15.0\n')
-  assert.equal(requests[0]?.pathname, `/api/projects/${projectId}/files`)
-  assert.equal(requests[1]?.pathname, `/api/projects/${projectId}/preview`)
+  assert.equal(requests[0]?.pathname, `/api/folders/${folderId}/files`)
+  assert.equal(requests[1]?.pathname, `/api/folders/${folderId}/preview`)
   assert.equal(requests[1]?.searchParams.get('maxBytes'), '65536')
   const raw = new URL(files.rawUrl('ignored-session', 'docs/a #.pdf'))
-  assert.equal(raw.pathname, `/api/projects/${projectId}/raw`)
+  assert.equal(raw.pathname, `/api/folders/${folderId}/raw`)
   assert.equal(raw.searchParams.get('path'), 'docs/a #.pdf')
   const html = files.staticUrl('', 'docs/a #.html')
-  assert.equal(html, `http://localhost:3123/api/projects/${projectId}/static/docs/a%20%23.html`)
-  assert.equal(new URL('style.css', html).pathname, `/api/projects/${projectId}/static/docs/style.css`)
+  assert.equal(html, `http://localhost:3123/api/folders/${folderId}/static/docs/a%20%23.html`)
+  assert.equal(new URL('style.css', html).pathname, `/api/folders/${folderId}/static/docs/style.css`)
   assert.equal(mock.mock.callCount(), 2)
   controller.abort()
   assert(signals.every(signal => signal.aborted))
@@ -138,10 +138,10 @@ test('file request deadlines stop loading without retrying locally', async t => 
   await assert.rejects(listing, /Check the device connection and retry/)
   assert.equal(request.mock.callCount(), 1)
 })
-test('unavailable projects and invalid project wire data do not fall back to session requests', async t => {
+test('unavailable folders and invalid folder wire data do not fall back to session requests', async t => {
   const files = useSessionFiles('http://localhost', 'registered-id')
   const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({ error: 'folder_unavailable' }, { status: 409 }))
-  await assert.rejects(files.listDir('existing-session'), /project folder is unavailable/)
+  await assert.rejects(files.listDir('existing-session'), /folder is unavailable/)
   assert.equal(mock.mock.callCount(), 1)
   mock.mock.mockImplementation(async () => Response.json({ binary: false, size: 12, content: 12 }))
   await assert.rejects(files.preview('', 'custom'), /Invalid file preview/)
@@ -149,14 +149,14 @@ test('unavailable projects and invalid project wire data do not fall back to ses
   assert.equal((await files.preview('', 'custom')).binary, true)
 })
 
-test('project fetch cancellation is passed through without retrying another source', async t => {
+test('folder fetch cancellation is passed through without retrying another source', async t => {
   const controller = new AbortController()
   controller.abort()
   const mock = t.mock.method(globalThis, 'fetch', async (_: string, init: RequestInit) => {
     init.signal?.throwIfAborted()
     throw new Error('expected cancellation')
   })
-  await assert.rejects(useSessionFiles('http://localhost', 'project').preview('', 'file', 4096, controller.signal),
+  await assert.rejects(useSessionFiles('http://localhost', 'folder').preview('', 'file', 4096, controller.signal),
     { name: 'AbortError' })
   assert.equal(mock.mock.callCount(), 1)
 })

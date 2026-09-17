@@ -51,8 +51,6 @@ async function setup() {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: fingerprint,
     credentialId: auth.credentialId,
-    uiScopes: [],
-    nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
   }, baseTime)
   const authority = new DeviceChallengeAuthority(registry, {
     ttlMs: 1_000,

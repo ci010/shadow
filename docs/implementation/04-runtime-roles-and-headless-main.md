@@ -6,6 +6,12 @@
 
 # S4: Runtime Roles and Headless Main
 
+> **Implementation update:** descriptive service catalogs and empty Child
+> capability-registry/artifact-staging lifecycle slots have been removed.
+> The real loopback control service is optional; it is not a remote API proxy.
+> Execution approvals below are also retired. The role list remains design
+> history, not evidence that all those services are implemented.
+
 > Owner: runtime platform
 >
 > Depends on: S0, S1

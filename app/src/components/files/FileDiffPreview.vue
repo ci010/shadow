@@ -8,9 +8,10 @@
       </div>
     </header>
     <div ref="scroller" class="file-diff-scroll">
-      <p v-if="loading" class="diff-notice" role="status">Loading changes...</p>
-      <div v-if="error" class="diff-notice error" role="alert">{{ error }} <span v-if="diff">Showing the last loaded diff.</span> <button @click="loadDiff">Retry</button></div>
-      <template v-if="diff && !loading">
+      <NodeOfflineState v-if="offline" :checking="loading" description="This diff will be available when the owning node reconnects." @retry="loadDiff" />
+      <p v-else-if="loading" class="diff-notice" role="status">Loading changes...</p>
+      <div v-if="!offline && error" class="diff-notice error" role="alert">{{ error }} <span v-if="diff">Showing the last loaded diff.</span> <button @click="loadDiff">Retry</button></div>
+      <template v-if="diff && !loading && !offline">
         <p v-if="diff.originalPath" class="diff-notice">Renamed from {{ diff.originalPath }}</p>
         <p v-if="diff.binary || diff.truncated || !diff.hunks.length" class="diff-notice">{{ diff.notice || (diff.binary ? 'Binary files differ. A text diff is not available.' : diff.truncated ? 'This change exceeds the diff preview limit. Use Git locally to inspect the complete change.' : 'No content differences from HEAD. Git metadata or the staging area may still differ.') }}</p>
         <template v-else>
@@ -39,17 +40,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import SelectionMenu from '../SelectionMenu.vue'
+import NodeOfflineState from './NodeOfflineState.vue'
+import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import { createGitFilesClient, diffLines, type GitDiff } from '../../git-files.ts'
 import { highlightFile, type FileHighlightToken } from '../../file-highlighting.ts'
 import { quoteDiffSelection, splitHighlightLines } from '../../git-diff-selection.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; projectId?: string; path: string; active: boolean; selectionActive: boolean; canQuote: boolean; revision: number }>()
+const props = defineProps<{ apiBase: string; sessionId: string; folderId?: string; path: string; active: boolean; selectionActive: boolean; canQuote: boolean; revision: number }>()
 const emit = defineEmits<{ quote: [text: string]; 'open-source': [] }>()
 const diff = shallowRef<GitDiff>()
 const hunks = computed(() => diff.value?.hunks.map(hunk => ({ ...hunk, rows: diffLines(hunk) })) ?? [])
 const highlighted = shallowRef<FileHighlightToken[][][]>([])
 const loading = ref(false)
 const error = ref('')
+const offline = ref(false)
 const highlightError = ref('')
 const quoteError = ref('')
 const selectionRoot = ref<HTMLElement>()
@@ -98,15 +102,19 @@ async function loadDiff() {
   if (!props.active) return
   const request = new AbortController()
   controller = request
-  loading.value = !diff.value
+  loading.value = !diff.value || offline.value
   try {
-    const next = await createGitFilesClient(props.apiBase, props.sessionId, props.projectId).diff(props.path, request.signal)
+    const next = await createGitFilesClient(props.apiBase, props.sessionId, props.folderId).diff(props.path, request.signal)
     if (request.signal.aborted) return
     error.value = ''
+    offline.value = false
     pendingDiff = next
     applyPending()
   } catch (cause) {
-    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load the diff. Retry.'
+    if (!request.signal.aborted) {
+      offline.value = isNodeOfflineError(cause)
+      error.value = offline.value ? '' : cause instanceof Error ? cause.message : 'Could not load the diff. Retry.'
+    }
   } finally {
     if (controller === request) { controller = undefined; loading.value = false }
   }
@@ -120,7 +128,7 @@ function quote(text: string, range: Range) {
 }
 function beginSelection(event: PointerEvent) { if (event.target instanceof Node && selectionRoot.value?.contains(event.target)) pointerDown = true }
 function finishSelection() { pointerDown = false; applyPending() }
-watch(() => [props.apiBase, props.sessionId, props.projectId, props.path], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.path], () => {
   controller?.abort()
   generation++
   diff.value = undefined
@@ -129,6 +137,7 @@ watch(() => [props.apiBase, props.sessionId, props.projectId, props.path], () =>
   pendingTokens = undefined
   quoteError.value = ''
   error.value = ''
+  offline.value = false
   void loadDiff()
 }, { immediate: true })
 watch(() => [props.active, props.revision], () => {

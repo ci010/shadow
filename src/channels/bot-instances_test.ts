@@ -21,7 +21,7 @@ import type { ChannelId, ChannelState } from './setup-contract.ts'
 import { FeishuChannel } from './feishu.ts'
 import type { FeishuTransport } from './feishu-transport.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
-import { createOrganizationScope, getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope, getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import { WebChannel } from './web.ts'
 
 function directory(t: TestContext): string {
@@ -59,13 +59,13 @@ class BotChannel extends AbstractChannel {
   sessionId(chatId: string) { return this.logicalSessionId(chatId) }
 }
 
-async function runtime(t: TestContext, root: string, organizationId: string, bots: number, platform: ChannelId = 'discord', actualIdentity?: string, scope?: OrganizationScope) {
+async function runtime(t: TestContext, root: string, projectId: string, bots: number, platform: ChannelId = 'discord', actualIdentity?: string, scope?: ProjectScope) {
   const bus = new Bus()
-  const store = new BotInstanceStore({ organizationId, path: join(root, organizationId, 'bots.json') })
+  const store = new BotInstanceStore({ projectId, path: join(root, projectId, 'bots.json') })
   const instances = Array.from({ length: bots }, (_, index) => store.create(platform, `Bot ${index}`, platform === 'discord'
     ? { token: 'synthetic-token', enabled: true }
-    : platform === 'qq' ? { appId: `${organizationId}-${index}`, secret: 'synthetic-secret', enabled: true }
-      : { appId: `${organizationId}-${index}`, appSecret: 'synthetic-secret', enabled: true }))
+    : platform === 'qq' ? { appId: `${projectId}-${index}`, secret: 'synthetic-secret', enabled: true }
+      : { appId: `${projectId}-${index}`, appSecret: 'synthetic-secret', enabled: true }))
   const received: InboundMessage[] = []
   const receivedScopes: Array<string | undefined> = []
   const created: BotChannel[] = []
@@ -73,14 +73,16 @@ async function runtime(t: TestContext, root: string, organizationId: string, bot
     getState: sessionId => ({ sessionId, segmentIndex: 0 }),
     getPolicy: () => ({ timeoutMs: null }), notifyUser: async () => {}, notifyParent: async () => {},
   })
-  const sessions: Pick<SessionManager, 'yields' | 'getActiveSession'> = {
+  let promptInvalidations = 0
+  const sessions: Pick<SessionManager, 'yields' | 'getActiveSession' | 'invalidateSystemPrompts'> = {
     yields, getActiveSession: () => undefined,
+    invalidateSystemPrompts: () => { promptInvalidations++ },
   }
-  const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: join(root, organizationId) } }), bus, sessions as SessionManager, async message => {
+  const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: join(root, projectId) } }), bus, sessions as SessionManager, async message => {
     received.push(message)
-    receivedScopes.push(getOrganizationScope()?.organizationId)
+    receivedScopes.push(getProjectScope()?.projectId)
     return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
-  }, { organizationId, instanceStore: store, scope, factory: (id, _config, bot) => {
+  }, { projectId, instanceStore: store, scope, factory: (id, _config, bot) => {
     assert.ok(bot)
     const channel = new BotChannel(id, bus, bot, actualIdentity)
     created.push(channel)
@@ -96,14 +98,46 @@ async function runtime(t: TestContext, root: string, organizationId: string, bot
     await manager.stopAll()
   })
   const address = (bot: BotInstance, chat = 'same-chat-id'): ChannelAddress => ({
-    organizationId, botInstanceId: bot.id, platform: bot.platform, conversationId: chat,
+    projectId, botInstanceId: bot.id, platform: bot.platform, conversationId: chat,
   })
   const outbound = (bot: BotInstance): OutboundMessage => ({
     channel: platform, chatId: 'same-chat-id', channelAddress: address(bot),
     event: 'response', content: bot.displayName, media: ['uploads/same-file.png'], done: true,
   })
-  return { bus, store, instances, received, receivedScopes, created, manager, app, address, outbound, yields }
+  return { bus, store, instances, received, receivedScopes, created, manager, app, address, outbound, yields,
+    promptInvalidations: () => promptInvalidations }
 }
+
+test('trusted audiences are scoped to exact project, bot and conversation, never sender or admin status', async t => {
+  const root = directory(t)
+  const a = await runtime(t, root, 'A', 2)
+  const b = await runtime(t, root, 'B', 1)
+  const bot = a.instances[0]
+  await a.manager.updateBot(bot.id, { config: { adminChats: ['same-chat-id'], allowFrom: ['alice'] } })
+  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), false)
+  assert.equal(a.promptInvalidations(), 0)
+  const saved = await a.manager.updateBot(bot.id, { config: { trustedChats: ['same-chat-id'] } })
+  assert.deepEqual(saved.config.trustedChats, ['same-chat-id'])
+  assert.equal(a.promptInvalidations(), 1)
+  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), true)
+  for (const address of [
+    a.address(a.instances[1]), b.address(b.instances[0]),
+    { ...a.address(bot), conversationId: 'different' },
+    { ...a.address(bot), platform: 'qq' },
+    { ...a.address(bot), legacySessionId: true },
+  ]) assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', address), false)
+  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id'), false)
+  assert.equal(a.manager.isTrustedConversation('discord', 'same-thread-id', a.address(bot, 'same-thread-id')), false)
+  const loaded = new BotInstanceStore({ projectId: 'A', path: join(root, 'A', 'bots.json') })
+  assert.deepEqual(loaded.get(bot.id).config.trustedChats, ['same-chat-id'])
+  await a.manager.updateBot(bot.id, { config: { trustedChats: [] } })
+  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), false)
+  assert.equal(a.promptInvalidations(), 2)
+  await a.manager.updateBot(bot.id, { config: { trustedChats: ['same-chat-id'] } })
+  await a.manager.deleteBot(bot.id)
+  assert.equal(a.manager.isTrustedConversation('discord', 'same-chat-id', a.address(bot)), false)
+  assert.equal(a.promptInvalidations(), 4)
+})
 
 for (const platform of ['discord', 'qq', 'feishu'] as const) {
   test(`${platform}: two bots in A and one in B preserve identical conversation/message/media IDs without collisions`, async t => {
@@ -113,7 +147,7 @@ for (const platform of ['discord', 'qq', 'feishu'] as const) {
     const receipts = await Promise.all([...a.created, ...b.created].map(channel => channel.incoming()))
     assert.equal(new Set(receipts.map(receipt => receipt.sessionId)).size, 3)
     assert.deepEqual(a.received.map(message => message.channelAddress?.botInstanceId), a.instances.map(bot => bot.id))
-    assert.equal(b.received[0]?.channelAddress?.organizationId, 'B')
+    assert.equal(b.received[0]?.channelAddress?.projectId, 'B')
     assert.equal(a.received[0]?.admin, false)
     for (const f of [a, b]) for (const [index, bot] of f.instances.entries()) {
       const message = f.outbound(bot)
@@ -136,12 +170,12 @@ for (const platform of ['discord', 'qq', 'feishu'] as const) {
 }
 
 test('bot manager scope injection owns callbacks and reconfiguration regardless of caller scope', async t => {
-  const scope = createOrganizationScope('A')
-  const foreign = createOrganizationScope('B')
+  const scope = createProjectScope('A')
+  const foreign = createProjectScope('B')
   const f = await runtime(t, directory(t), 'A', 2, 'discord', undefined, scope)
   assert.throws(() => new ChannelManager(ConfigSchema.parse({}), new Bus(), {} as SessionManager,
     async () => ({ status: 'accepted', sessionId: 'unused', inputId: 'unused' }),
-    { organizationId: 'A', instanceStore: f.store, scope: foreign }), /scope mismatch/)
+    { projectId: 'A', instanceStore: f.store, scope: foreign }), /scope mismatch/)
   await foreign.run(() => f.created[0].incoming())
   await foreign.run(() => f.manager.updateBot(f.instances[0].id, { config: { enabled: true } }))
   await foreign.run(() => f.created[2].incoming())
@@ -152,8 +186,8 @@ test('bot manager scope injection owns callbacks and reconfiguration regardless 
 })
 
 test('Web bus callbacks retain org scope and stopping unsubscribes only their own handlers', async () => {
-  const scope = createOrganizationScope('A')
-  const foreign = createOrganizationScope('B')
+  const scope = createProjectScope('A')
+  const foreign = createProjectScope('B')
   const bus = new Bus()
   const channel = scope.run(() => new WebChannel(bus, {}))
   const observed: Array<string | undefined> = []
@@ -161,7 +195,7 @@ test('Web bus callbacks retain org scope and stopping unsubscribes only their ow
   const subscription = bus.on('message.outbound', () => { otherCalls++ })
   const message: OutboundMessage = {
     channel: 'web', chatId: 'chat', event: 'response', done: true,
-    get content() { observed.push(getOrganizationScope()?.organizationId); return 'Hello' },
+    get content() { observed.push(getProjectScope()?.projectId); return 'Hello' },
   }
   foreign.run(() => bus.emit('message.outbound', message))
   assert.deepEqual(observed, ['A'])
@@ -200,7 +234,7 @@ test('reconnect fences late callbacks and source-bot disable never falls back to
   f.bus.emit('message.outbound', f.outbound(f.instances[0]))
   const event = await failure.promise
   assert.deepEqual(event, {
-    organizationId: 'A', channelAddress: f.address(f.instances[0]), channel: 'discord',
+    projectId: 'A', channelAddress: f.address(f.instances[0]), channel: 'discord',
     chatId: 'same-chat-id', error: 'source_bot_unavailable',
   })
 })
@@ -233,7 +267,7 @@ test('a reconnected bot rejects an in-flight media send and thread result from i
   assert.equal(f.created[1].threads.length, 0)
 })
 
-test('organization shutdown drains queued bot replies before disconnecting their exact source', async t => {
+test('project shutdown drains queued bot replies before disconnecting their exact source', async t => {
   const f = await runtime(t, directory(t), 'A', 2)
   f.bus.emit('message.outbound', { ...f.outbound(f.instances[0]), content: 'First' })
   f.bus.emit('message.outbound', { ...f.outbound(f.instances[1]), content: 'Second' })
@@ -243,7 +277,7 @@ test('organization shutdown drains queued bot replies before disconnecting their
   await assert.rejects(f.created[0].incoming(), /disconnected/)
 })
 
-test('yield answers stay with their source bot, user, organization and generation', async t => {
+test('yield answers stay with their source bot, user, project and generation', async t => {
   const root = directory(t)
   const a = await runtime(t, root, 'A', 2)
   const b = await runtime(t, root, 'B', 1)
@@ -275,7 +309,7 @@ test('yield answers stay with their source bot, user, organization and generatio
   assert.equal((await third.waiting).option, 'Change')
 })
 
-test('actual platform identity cannot be bound concurrently, including in another organization', async t => {
+test('actual platform identity cannot be bound concurrently, including in another project', async t => {
   const root = directory(t)
   const a = await runtime(t, root, 'A', 2, 'discord', 'actual-bot')
   const b = await runtime(t, root, 'B', 1, 'discord', 'actual-bot')
@@ -309,7 +343,7 @@ test('default-org legacy migration preserves old logical IDs and disk secrets wi
     discord: { token: 'synthetic-environment-token', enabled: true },
   } })
   const options = {
-    organizationId: 'default', path, legacyConfig: config,
+    projectId: 'default', path, legacyConfig: config,
     legacyRawChannels: { qq: config.channels.qq },
   }
   const store = new BotInstanceStore(options)
@@ -324,24 +358,24 @@ test('default-org legacy migration preserves old logical IDs and disk secrets wi
   assert.equal(new BotInstanceStore(options).get('legacy-discord').enabled, true)
   const bot = store.get('legacy-qq')
   assert.equal(channelSessionId({
-    organizationId: bot.organizationId, botInstanceId: bot.id, platform: bot.platform,
+    projectId: bot.projectId, botInstanceId: bot.id, platform: bot.platform,
     conversationId: 'group:historical-chat', legacySessionId: bot.legacySessionId,
   }), 'qq:group:historical-chat')
-  const newOrg = new BotInstanceStore({ organizationId: 'new', path: join(root, 'new', 'bots.json') })
+  const newOrg = new BotInstanceStore({ projectId: 'new', path: join(root, 'new', 'bots.json') })
   assert.deepEqual(newOrg.list(), [])
-  assert.throws(() => new BotInstanceStore({ organizationId: 'wrong', path }), /ownership/)
+  assert.throws(() => new BotInstanceStore({ projectId: 'wrong', path }), /ownership/)
 })
 
-test('pristine default organization has no legacy placeholders while explicit disabled settings are retained', t => {
+test('pristine default project has no legacy placeholders while explicit disabled settings are retained', t => {
   const root = directory(t)
   const freshOptions = {
-    organizationId: 'default', path: join(root, 'fresh', 'bots.json'),
+    projectId: 'default', path: join(root, 'fresh', 'bots.json'),
     legacyConfig: ConfigSchema.parse({}), legacyRawChannels: {},
   }
   assert.deepEqual(new BotInstanceStore(freshOptions).list(), [])
   assert.deepEqual(new BotInstanceStore(freshOptions).list(), [])
   const configuredOptions = {
-    organizationId: 'default', path: join(root, 'configured', 'bots.json'),
+    projectId: 'default', path: join(root, 'configured', 'bots.json'),
     legacyConfig: ConfigSchema.parse({ channels: { feishu: { enabled: false, allowFrom: ['alice'] } } }),
     legacyRawChannels: { feishu: { enabled: false, allowFrom: ['alice'] } },
   }
@@ -359,7 +393,7 @@ test('org settings API validates ownership, redacts secrets, retains blanks and 
   const headers = { 'content-type': 'application/json', 'x-fixture-authorized': 'yes' }
   assert.equal((await f.app.request('/api/channels')).status, 401)
   const post = (body: unknown) => f.app.request('/api/channels', { method: 'POST', headers, body: JSON.stringify(body) })
-  assert.equal((await post({ organizationId: 'B', platform: 'qq', displayName: 'Bad', config: {} })).status, 400)
+  assert.equal((await post({ projectId: 'B', platform: 'qq', displayName: 'Bad', config: {} })).status, 400)
   assert.equal((await post({ platform: 'qq', displayName: 'Bad', config: { enabled: true } })).status, 400)
   const responses = await Promise.all(['One', 'Two'].map((displayName, index) => post({
     platform: 'qq', displayName, config: { appId: `app-${index}`, secret: 'synthetic-secret', enabled: true },
@@ -367,7 +401,7 @@ test('org settings API validates ownership, redacts secrets, retains blanks and 
   assert.deepEqual(responses.map(response => response.status), [201, 201])
   const bodies = await Promise.all(responses.map(response => response.json()))
   assert.notEqual(bodies[0].channel.id, bodies[1].channel.id)
-  assert.equal(bodies[0].channel.organizationId, 'A')
+  assert.equal(bodies[0].channel.projectId, 'A')
   assert.equal(bodies[0].channel.secrets.secret, true)
   assert.doesNotMatch(JSON.stringify(bodies), /synthetic-secret/)
   for (const secret of ['', '  ', REDACTED_SECRET]) {
@@ -380,7 +414,7 @@ test('org settings API validates ownership, redacts secrets, retains blanks and 
   const response = await f.app.request('/api/channels', { headers })
   assert.equal(response.headers.get('Cache-Control'), 'no-store')
   assert.equal((await response.json()).channels.length, 2)
-  const reloaded = new BotInstanceStore({ organizationId: 'A', path: join(root, 'A', 'bots.json') })
+  const reloaded = new BotInstanceStore({ projectId: 'A', path: join(root, 'A', 'bots.json') })
   assert.equal(reloaded.list()[0].displayName, 'Renamed')
   assert.equal((await f.app.request(`/api/channels/${bodies[0].channel.id}`, { method: 'DELETE', headers })).status, 200)
   assert.equal((await f.app.request(`/api/channels/${bodies[0].channel.id}`, {
@@ -392,7 +426,7 @@ test('org settings API validates ownership, redacts secrets, retains blanks and 
 test('real Feishu adapters isolate proxy credentials, identical inbound files, and late worker callbacks across three bots', async t => {
   const root = directory(t)
   const apps = { A: new Hono(), B: new Hono() }
-  const scopes = { A: createOrganizationScope('A'), B: createOrganizationScope('B') }
+  const scopes = { A: createProjectScope('A'), B: createProjectScope('B') }
   for (const app of Object.values(apps)) FeishuChannel.registerRoutes(app, true)
   const sent: Array<{ authorization: string | null; path: string; body: Record<string, unknown> }> = []
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
@@ -415,13 +449,13 @@ test('real Feishu adapters isolate proxy credentials, identical inbound files, a
     if (path.endsWith('/files')) return Response.json({ code: 0, data: { file_key: 'uploaded-file' } })
     return Response.json({ code: 0, data: { message_id: 'om_same_outbound' } })
   })
-  const specs = [{ organizationId: 'A', botInstanceId: 'bot-one' }, { organizationId: 'A', botInstanceId: 'bot-two' }, { organizationId: 'B', botInstanceId: 'bot-three' }] as const
+  const specs = [{ projectId: 'A', botInstanceId: 'bot-one' }, { projectId: 'A', botInstanceId: 'bot-two' }, { projectId: 'B', botInstanceId: 'bot-three' }] as const
   const channels: FeishuChannel[] = []
   const events: Array<(event: Record<string, unknown>) => void> = []
   const received: InboundMessage[] = []
   for (const spec of specs) {
-    const channel = scopes[spec.organizationId].run(() => new FeishuChannel(new Bus(), {
-      appId: spec.botInstanceId, appSecret: 'synthetic-secret', workspace: join(root, spec.organizationId),
+    const channel = scopes[spec.projectId].run(() => new FeishuChannel(new Bus(), {
+      appId: spec.botInstanceId, appSecret: 'synthetic-secret', workspace: join(root, spec.projectId),
       transportFactory: (_options, onEvent, state): FeishuTransport => {
         events.push(onEvent)
         return { start: () => state('running'), stop: async () => {} }
@@ -429,12 +463,12 @@ test('real Feishu adapters isolate proxy credentials, identical inbound files, a
     }))
     channel.setBotScope({ ...spec, platform: 'feishu' })
     channel.setReceiver(async message => {
-      assert.equal(getOrganizationScope(), scopes[spec.organizationId])
+      assert.equal(getProjectScope(), scopes[spec.projectId])
       received.push(message)
       return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
     })
     channels.push(channel)
-    await scopes[spec.organizationId].run(() => channel.start(apps[spec.organizationId]))
+    await scopes[spec.projectId].run(() => channel.start(apps[spec.projectId]))
   }
   t.after(async () => {
     await Promise.all(channels.map(channel => channel.stop()))
@@ -444,11 +478,11 @@ test('real Feishu adapters isolate proxy credentials, identical inbound files, a
   assert.equal((await apps.A.request('/feishu/open-apis/example')).status, 503)
   assert.equal((await apps.A.request('/feishu/bots/bot-three/open-apis/example')).status, 503)
   for (const [index, spec] of specs.entries()) {
-    const response = await apps[spec.organizationId].request(`/feishu/bots/${spec.botInstanceId}/open-apis/example`)
+    const response = await apps[spec.projectId].request(`/feishu/bots/${spec.botInstanceId}/open-apis/example`)
     assert.equal(response.status, 200)
     assert.equal(sent.at(-1)?.authorization, `Bearer synthetic-${spec.botInstanceId}`)
     assert.equal(sent.at(-1)?.path, '/open-apis/example')
-    scopes[spec.organizationId === 'A' ? 'B' : 'A'].run(() => events[index]({
+    scopes[spec.projectId === 'A' ? 'B' : 'A'].run(() => events[index]({
       sender: { sender_id: { open_id: 'alice' } },
       message: {
         message_id: 'om_same_inbound', chat_id: 'oc_same_chat', chat_type: 'p2p',
@@ -462,7 +496,7 @@ test('real Feishu adapters isolate proxy credentials, identical inbound files, a
   assert.equal(received.length, 3)
   for (const [index, spec] of specs.entries()) {
     const address = { ...spec, platform: 'feishu', conversationId: 'oc_same_chat' }
-    const path = join(sessionWorkspacePath(join(root, spec.organizationId), channelSessionId(address)), 'uploads', 'same.txt')
+    const path = join(sessionWorkspacePath(join(root, spec.projectId), channelSessionId(address)), 'uploads', 'same.txt')
     assert.equal(readFileSync(path, 'utf8'), `Bearer synthetic-${spec.botInstanceId}`)
     const message = received.find(message => message.channelAddress?.botInstanceId === spec.botInstanceId)!
     assert.deepEqual(message.channelAddress, address)

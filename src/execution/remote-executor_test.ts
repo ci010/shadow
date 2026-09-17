@@ -20,7 +20,6 @@ function request(jobId = 'remote-job'): JobRequestV1 {
     args: { path: 'README.md' },
     createdAt: createdAt.toISOString(),
     deadlineAt: new Date(createdAt.getTime() + 10_000).toISOString(),
-    approval: 'none',
   }
 }
 
@@ -84,6 +83,18 @@ test('RemoteExecutor dispatches once and replays one ordered event stream', asyn
     },
     { name: 'TypeError', message: /different request/ },
   )
+})
+
+test('RemoteExecutor never dispatches a pre-cancelled job and replays its terminal receipt', async () => {
+  const dispatcher = new FakeDispatcher()
+  const executor = new RemoteExecutor(dispatcher)
+  const job = request()
+  const events = await collect(executor.execute(job, AbortSignal.abort()))
+  assertEquals(events.map(event => event.type), ['cancel-acknowledged'])
+  assertEquals(dispatcher.dispatches, 0)
+  assertEquals(dispatcher.cancellations, [])
+  assertEquals((await executor.getStatus(job.jobId))?.state, 'cancelled')
+  assertEquals(await collect(executor.execute(job, new AbortController().signal)), events)
 })
 
 test('RemoteExecutor forwards cancellation and terminates disconnected jobs', async () => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -9,6 +9,8 @@ import { uiPlugin } from '../../../src/gateway/ui.ts'
 import type { ConfiguredProvider, ProviderSetupStatus } from '../../../app/src/provider-setup.ts'
 import type { GitDiff, GitStatus } from '../../../app/src/git-files.ts'
 import { installDocumentTabShortcuts } from '../../src/document-tabs.js'
+import { LiveFixture } from './live-fixture.ts'
+import { activeWorkspaceScript } from './active-workspace.ts'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -84,20 +86,20 @@ const editHistory = [
 ]
 const messagesA = [
   { role: 'user', name: '__compaction_summary__', content: 'Earlier synthetic context.' },
-  { role: 'user', name: 'Direct user', content: '<sender id="direct" name="Direct user" chat="direct" />Inspect the project and explain the result.', timestamp: timestamp(100) },
-  { role: 'assistant', content: 'I will inspect the project files.', timestamp: timestamp(1800) },
+  { role: 'user', name: 'Direct user', content: '<sender id="direct" name="Direct user" chat="direct" />Inspect the folder and explain the result.', timestamp: timestamp(100) },
+  { role: 'assistant', content: 'I will inspect the folder files.', timestamp: timestamp(1800) },
   { role: 'assistant', content: '', tool_calls: [{ id: 'call-a', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }], timestamp: timestamp(2000) },
-  { role: 'tool', name: 'read_file', tool_call_id: 'call-a', content: 'Synthetic README result: the project uses Vue.', timestamp: timestamp(3000) },
+  { role: 'tool', name: 'read_file', tool_call_id: 'call-a', content: 'Synthetic README result: the folder uses Vue.', timestamp: timestamp(3000) },
   ...editHistory,
   { role: 'user', name: 'scheduler', content: '<event type="completed" title="Background task completed" status="completed" />Synthetic event details.' },
-  { role: 'assistant', content: 'The project is a Vue application.\n\n' + 'A synthetic response, not provider output. '.repeat(60), reasoning_text: 'Synthetic reasoning', timestamp: timestamp(7000) },
+  { role: 'assistant', content: 'The folder is a Vue application.\n\n' + 'A synthetic response, not provider output. '.repeat(60), reasoning_text: 'Synthetic reasoning', timestamp: timestamp(7000) },
   { role: 'user', content: 'Now check its architecture.', timestamp: timestamp(9000) },
   { role: 'assistant', content: 'The backend owns agent execution.\n\n' + 'More synthetic explanation. '.repeat(50) +
-    '\n\n## Rendering compatibility\n\n**Strong text** and `inline code`.\n\n[Project docs](https://example.invalid/docs)\n\n| Name | Value |\n| --- | --- |\n| Fixture | 42 |\n\n- First item\n- Second item\n\n```ts\nconst answer = 42\n```\n\nInline $x^2$.\n\n$$\\frac{1}{2}$$\n\n<span onclick="window.unsafeMarkup = true">Safe span</span><script>window.unsafeMarkup = true</script>',
+    '\n\n## Rendering compatibility\n\n**Strong text** and `inline code`.\n\n[Folder docs](https://example.invalid/docs)\n\n| Name | Value |\n| --- | --- |\n| Fixture | 42 |\n\n- First item\n- Second item\n\n```ts\nconst answer = 42\n```\n\nInline $x^2$.\n\n$$\\frac{1}{2}$$\n\n<span onclick="window.unsafeMarkup = true">Safe span</span><script>window.unsafeMarkup = true</script>',
     timestamp: timestamp(10000) },
 ]
 const groupMessages = [
-  { role: 'user', name: 'Alice', content: '<sender id="alice" name="Alice" chat="group" />Please check the project structure.', timestamp: timestamp(100) },
+  { role: 'user', name: 'Alice', content: '<sender id="alice" name="Alice" chat="group" />Please check the folder structure.', timestamp: timestamp(100) },
   { role: 'assistant', name: 'Shadow', content: 'I will inspect the files and summarize the result.', timestamp: timestamp(1800) },
   messagesA[3], messagesA[4], messagesA[5 + editHistory.length],
   { role: 'user', content: '<sender id="bob" name="Bob &amp; the &lt;frontend&gt; team" chat="group" />Include the UI components, too.', timestamp: timestamp(8000) },
@@ -115,13 +117,13 @@ let agentHistoryRequests = 0
 const chatHistoryRequests: string[] = []
 const fileRequests: Array<{ sessionId: string; path: string }> = []
 const previewRequests: Array<{ sessionId: string; path: string; aborted: boolean }> = []
-const projectFileRequests: Array<{ projectId: string; kind: string; path: string; aborted: boolean }> = []
-const projectSessionRequests: string[] = []
-let failProjectSessionCreate = false
-let projectPreviewGate: Promise<void> | undefined
-let releaseProjectPreview: (() => void) | undefined
-let projectListGate: Promise<void> | undefined
-let releaseProjectList: (() => void) | undefined
+const folderFileRequests: Array<{ folderId: string; kind: string; path: string; aborted: boolean }> = []
+const folderSessionRequests: string[] = []
+let failFolderSessionCreate = false
+let folderPreviewGate: Promise<void> | undefined
+let releaseFolderPreview: (() => void) | undefined
+let folderListGate: Promise<void> | undefined
+let releaseFolderList: (() => void) | undefined
 const gitStates = new Map<string, GitStatus | 'error'>()
 const gitDiffs = new Map<string, GitDiff>()
 const gitFixtureScopes = new Set<string>()
@@ -166,14 +168,14 @@ const inventory = () => ({
     {
       nodeId: 'synthetic-child', displayName: 'Synthetic Child with a deliberately long device name', role: 'child',
       connection: inventoryState === 'changed' ? 'connected' : 'offline',
-      capabilities: [{ capabilityId: 'fixture-archive', kind: 'workdir', displayName: 'Project archive', online: inventoryState === 'changed' }],
+      capabilities: [{ capabilityId: 'fixture-archive', kind: 'workdir', displayName: 'Folder archive', online: inventoryState === 'changed' }],
     },
     {
       nodeId: 'synthetic-revoked', displayName: 'Revoked Child', role: 'child', connection: 'revoked', capabilities: [],
     },
   ],
 })
-const eventStreams = new Map<string, ServerResponse>()
+const realtime = new LiveFixture()
 const traceQueries: URL[] = []
 const unexpected: string[] = []
 const tools = [{ name: 'read_file', description: 'Read a file in the effective workdir.', parameters: { properties: { path: { type: 'string', description: 'File path' } }, required: ['path'] } }]
@@ -189,10 +191,15 @@ const trace = () => [
 ]
 const server = createServer(async (request, response) => {
   try {
+    if (realtime.handle(request, response)) return
     const url = new URL(request.url!, 'http://127.0.0.1')
-    const path = url.pathname
+    const path = url.pathname.replace(/^\/projects\/default(?=\/)/, '')
     const json = (data: unknown, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)) }
-    const gitRoute = path.match(/^\/api\/(sessions|projects)\/([^/]+)\/git\/(status|diff)$/)
+    if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
+    if (path === '/api/automations') return json({ automations: [] })
+    const background = path.match(/^\/api\/sessions\/([^/]+)\/background-tasks$/)
+    if (background) return json({ sessionId: decodeURIComponent(background[1]), total: 0, tasks: [] })
+    const gitRoute = path.match(/^\/api\/(sessions|folders)\/([^/]+)\/git\/(status|diff)$/)
     if (gitRoute) {
       const scope = `${gitRoute[1]}:${decodeURIComponent(gitRoute[2])}`
       const operation = gitRoute[3]
@@ -258,51 +265,51 @@ const server = createServer(async (request, response) => {
       if (request.method === 'DELETE') cancelledProviderLogins.add(loginId)
       return json({ loginId, state: 'cancelled' })
     }
-    if (path === '/api/projects') return json({ projects: [
-      { id: 'synthetic-project', name: 'Synthetic project', path: 'C:\\synthetic\\project', createdAt: timestamp(0) },
-      { id: 'synthetic-project-two', name: 'Second project', path: 'C:\\synthetic\\second', createdAt: timestamp(0) },
+    if (path === '/api/folders') return json({ folders: [
+      { id: 'synthetic-folder', name: 'Synthetic folder', path: 'C:\\synthetic\\folder', createdAt: timestamp(0) },
+      { id: 'synthetic-folder-two', name: 'Second folder', path: 'C:\\synthetic\\second', createdAt: timestamp(0) },
     ] })
-    const projectFileRoute = path.match(/^\/api\/projects\/([^/]+)\/(files|preview|raw|static\/.*|sessions)$/)
-    if (projectFileRoute) {
-      const projectId = decodeURIComponent(projectFileRoute[1])
-      const kind = projectFileRoute[2]
+    const folderFileRoute = path.match(/^\/api\/folders\/([^/]+)\/(files|preview|raw|static\/.*|sessions)$/)
+    if (folderFileRoute) {
+      const folderId = decodeURIComponent(folderFileRoute[1])
+      const kind = folderFileRoute[2]
       if (kind === 'sessions' && request.method === 'POST') {
-        if (failProjectSessionCreate) return json({ error: 'Synthetic project session unavailable' }, 503)
-        projectSessionRequests.push(projectId)
-        const chatId = `chat-project-created-${projectSessionRequests.length}`
-        extraSessions.push({ sessionId: `web:${chatId}`, title: 'Project conversation' })
+        if (failFolderSessionCreate) return json({ error: 'Synthetic folder session unavailable' }, 503)
+        folderSessionRequests.push(folderId)
+        const chatId = `chat-folder-created-${folderSessionRequests.length}`
+        extraSessions.push({ sessionId: `web:${chatId}`, title: 'Folder conversation' })
         return json({ chatId, sessionId: `web:${chatId}` })
       }
-      const entry = { projectId, kind, path: url.searchParams.get('path') || '', aborted: false }
-      projectFileRequests.push(entry)
+      const entry = { folderId, kind, path: url.searchParams.get('path') || '', aborted: false }
+      folderFileRequests.push(entry)
       response.on('close', () => { if (!response.writableEnded) entry.aborted = true })
       if (kind === 'files') {
-        const waiting = projectListGate
-        projectListGate = undefined
+        const waiting = folderListGate
+        folderListGate = undefined
         if (waiting) await waiting
-        return json({ path: entry.path, workdir: { kind: 'local', displayPath: projectId === 'synthetic-project' ? 'C:\\synthetic\\project' : 'C:\\synthetic\\second' }, entries: [
+        return json({ path: entry.path, workdir: { kind: 'local', displayPath: folderId === 'synthetic-folder' ? 'C:\\synthetic\\folder' : 'C:\\synthetic\\second' }, entries: [
           { name: 'README.md', type: 'file', ext: '.md', size: 42, mtime: timestamp(0) },
-          { name: `${projectId}.txt`, type: 'file', ext: '.txt', size: 42, mtime: timestamp(0) },
+          { name: `${folderId}.txt`, type: 'file', ext: '.txt', size: 42, mtime: timestamp(0) },
         ] })
       }
       if (kind === 'preview') {
-        const waiting = projectPreviewGate
-        projectPreviewGate = undefined
+        const waiting = folderPreviewGate
+        folderPreviewGate = undefined
         if (waiting) await waiting
-        const content = `# ${projectId}\n\nUnsent project preview: ${entry.path}\n\n[Relative file](${projectId}.txt)`
+        const content = `# ${folderId}\n\nUnsent folder preview: ${entry.path}\n\n[Relative file](${folderId}.txt)`
         return json({ binary: false, size: Buffer.byteLength(content), content, truncated: false })
       }
       response.writeHead(200, { 'Content-Type': 'text/plain' })
-      response.end(`Raw file from ${projectId}`)
+      response.end(`Raw file from ${folderId}`)
       return
     }
-    if (path === '/api/config') return json({ agent: { model: 'synthetic-model' } })
+    if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: directory, temperature: 0.7 } })
     if (path === '/debug/models') return json({ models: ['synthetic-model', 'synthetic-other'] })
     if (path === '/api/sessions/graph') return json({
       sessions: [{ sessionId: idA, title: 'Trace preview', current: 'physical-a' }, { sessionId: idB, title: 'Second conversation', current: 'physical-b' }, { sessionId: idGroup, title: 'Group conversation', current: 'physical-group' },
         { sessionId: idChild, title: 'Child conversation', current: 'physical-child' }, { sessionId: idAgent, title: 'Analysis agent', current: 'physical-agent' }, ...extraSessions, ...(sidebarEdgeCases ? sidebarSessions : [])].map(item => ({
           ...item, config: settings.get(item.sessionId),
-          projectId: (groupTreeSessions && [idA, idChild, idAgent].includes(item.sessionId)) || (sidebarEdgeCases && item.sessionId === 'heartbeat:reflector-fixture') ? 'synthetic-project' : undefined,
+          folderId: (groupTreeSessions && [idA, idChild, idAgent].includes(item.sessionId)) || (sidebarEdgeCases && item.sessionId === 'heartbeat:reflector-fixture') ? 'synthetic-folder' : undefined,
         })),
       nodes: [{ physicalId: 'physical-a', logicalId: idA }, { physicalId: 'physical-child', logicalId: idChild, parentPhysicalId: 'physical-a' }, { physicalId: 'physical-agent', logicalId: idAgent, parentPhysicalId: 'physical-a' },
         ...(sidebarEdgeCases ? [
@@ -316,15 +323,11 @@ const server = createServer(async (request, response) => {
     })
     if (path === '/api/sessions/stages') {
       sessionStageRequests++
-      return json({ stages: { [idA]: live ? 'llm' : 'idle', [idB]: 'idle', [idChild]: 'idle', [idAgent]: agentWorking ? 'llm' : 'idle' } })
-    }
-    if (path === '/api/chat/events') {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      response.write(': fixture\n\n')
-      const chatId = url.searchParams.get('chatId') || ''
-      eventStreams.set(chatId, response)
-      response.on('close', () => { if (eventStreams.get(chatId) === response) eventStreams.delete(chatId) })
-      return
+      return json({
+        stages: { [idA]: live ? 'llm' : 'idle', [idB]: 'idle', [idChild]: 'idle', [idAgent]: agentWorking ? 'llm' : 'idle',
+          ...Object.fromEntries([...realtime.activeRequests.keys()].map(id => [id, 'llm'])) },
+        activeRequestIds: Object.fromEntries(realtime.activeRequests),
+      })
     }
     if (path === '/api/chat/upload') {
       uploadAttempts++
@@ -355,40 +358,50 @@ const server = createServer(async (request, response) => {
       let body = ''
       for await (const chunk of request) body += chunk
       const input = JSON.parse(body) as typeof sentMessages[number]
+      if ('stream' in input && input.stream === true) return json({ error: 'stream_removed' }, 410)
+      assert.ok(realtime.hub.stats.clients > 0, 'Subscribe before admission')
       sentMessages.push(input)
       if (input.content === 'Failed timestamp') return json({ error: 'Synthetic send failure' }, 503)
       if (input.config) settings.set(`web:${input.chatId}`, input.config)
       if (![idA, idB].includes(`web:${input.chatId}`) && !extraSessions.some(item => item.sessionId === `web:${input.chatId}`)) extraSessions.push({ sessionId: `web:${input.chatId}`, title: input.content })
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      response.write(`data: ${JSON.stringify({ event: 'response', content: 'A streamed response.', done: false })}\n\n`)
-      if (input.content === 'Early EOF timestamp') { response.end(); return }
-      emitStreamEdit = done => response.write(`data: ${JSON.stringify(done
+      const acknowledgement = realtime.admit(input.chatId)
+      const sessionId = `web:${input.chatId}`
+      realtime.history(sessionId).push({
+        role: 'user', timestamp: new Date().toISOString(),
+        content: input.media?.length ? [
+          { type: 'text', text: input.content },
+          ...input.media.map(path => {
+            const image = uploadedImages.get(path)
+            assert.ok(image)
+            return { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from(image).toString('base64')}` } }
+          }),
+        ] : input.content,
+      })
+      realtime.chat(sessionId, { event: 'response', content: 'A streamed response.', done: false })
+      if (input.content === 'Interrupted timestamp') {
+        realtime.finish(sessionId, 'failed')
+        return json(acknowledgement)
+      }
+      emitStreamEdit = done => realtime.chat(sessionId, done
         ? { event: 'tool_result', content: 'Success: edit streamed.ts\nUTF-8 bytes written: 12; result lines: 2.\nLine changes: +2 -1.\nL1: new' }
-        : { event: 'tool_call', content: 'write', toolCall: { name: 'write', arguments: { path: 'streamed.ts', match: 'old', content: 'new\nline' } } })}\n\n`)
+        : { event: 'tool_call', content: 'write', toolCall: { name: 'write', arguments: { path: 'streamed.ts', match: 'old', content: 'new\nline' } } })
       completeSend = () => {
         for (const payload of [
           { event: 'tool_call', content: 'read_file', toolCall: { name: 'read_file', arguments: { path: 'fixture.txt' } } },
           { event: 'tool_result', content: 'Synthetic tool result' },
           { event: 'response', content: 'Final timestamped response.', done: true },
-        ]) response.write(`data: ${JSON.stringify(payload)}\n\n`)
-        response.end()
+        ] as const) realtime.chat(sessionId, payload)
+        realtime.finish(sessionId)
       }
-      return
+      return json(acknowledgement)
     }
     const historyFor = (id: string) => {
-      const sent = sentMessages.findLast(message => message.chatId === id.replace(/^web:/, ''))
-      if (sent?.media?.length) {
-        return [{ role: 'user', content: sent.media.map(path => {
-          const image = uploadedImages.get(path)
-          assert.ok(image)
-          return { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from(image).toString('base64')}` } }
-        }) }]
-      }
-      return id === idAgent ? agentMessages : id.includes('split-child') ? childMessages : id === idGroup ? groupMessages : id.includes('diagnosis-b') ? [{ role: 'user', content: 'Only the second session.' }] : id === 'physical-older' ? [{ role: 'user', content: 'Historical segment only.' }] : messagesA
+      const history = id === idAgent ? agentMessages : id.includes('split-child') ? childMessages : id === idGroup ? groupMessages : id.includes('diagnosis-b') ? [{ role: 'user', content: 'Only the second session.' }] : id === 'physical-older' ? [{ role: 'user', content: 'Historical segment only.' }] : messagesA
+      return [...history, ...realtime.history(id.startsWith('chat-') ? `web:${id}` : id)]
     }
     if (path === '/api/chat/session') {
       chatHistoryRequests.push(url.searchParams.get('chatId') || '')
-      return json({ history: historyFor(url.searchParams.get('chatId') || ''), systemPrompt: '# Synthetic system prompt\n\nUse the project workdir. Inline $x^2$.\n\n$$\\frac{1}{2}$$', tools, previousPhysicalId: 'physical-older' })
+      return json({ history: historyFor(url.searchParams.get('chatId') || ''), systemPrompt: '# Synthetic system prompt\n\nUse the folder workdir. Inline $x^2$.\n\n$$\\frac{1}{2}$$', tools, previousPhysicalId: 'physical-older' })
     }
     if (path.startsWith('/api/sessions/')) {
       const key = decodeURIComponent(path.slice('/api/sessions/'.length))
@@ -489,7 +502,7 @@ const server = createServer(async (request, response) => {
 let window: BrowserWindow | undefined
 let disposeDocumentShortcuts: (() => void) | undefined
 let focusEmulated = false
-const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(source)
+const evaluate = <T = unknown>(source: string): Promise<T> => window!.webContents.executeJavaScript(activeWorkspaceScript(source))
 async function waitFor(source: string): Promise<void> {
   const end = Date.now() + 12000
   while (Date.now() < end) {
@@ -538,11 +551,13 @@ async function assertSquareUi(): Promise<void> {
     [null, '::before', '::after'].flatMap(pseudo => {
       const style = getComputedStyle(node, pseudo);
       if (pseudo && (style.content === 'none' || style.content === 'normal')) return [];
-      const expected = !pseudo && node.matches('.mouse-glow, .composer-send') ? '50%' : '0px';
+      const circular = !pseudo && node.matches('.mouse-glow, .composer-send, .activity-spinner')
+        || pseudo === '::after' && node.matches('.working:not(.waiting):not(.waiting-for-call) .activity-symbol');
+      const expected = circular ? '50%' : '0px';
       return ['borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius'].some(corner => style[corner] !== expected)
         ? [{ tag: node.tagName, classes: node.getAttribute('class'), pseudo, radius: style.borderRadius }] : [];
     })).slice(0, 12)`)
-  assert.deepEqual(rounded, [], 'Visible app corners stay square except for the circular mouse highlight')
+  assert.deepEqual(rounded, [], 'Visible app corners stay square except for the mouse highlight, send button and loading indicator')
 }
 async function assertConversationCaps(checkNaturalWidth = false): Promise<void> {
   const caps = await evaluate<Record<string, string>>(`Object.fromEntries(['.chat-assistant', '.system-event', '.compaction-summary', '.tool-activity'].map(selector => [selector, getComputedStyle(document.querySelector(selector)).maxWidth]))`)
@@ -737,11 +752,11 @@ async function main(): Promise<void> {
   await waitFor(`document.querySelector('.file-workbench.explorer-docked .tree-row[data-path="README.md"]')`)
   assert.equal(await evaluate(`!document.querySelector('.conversation-tabs') && document.querySelector('.diagnosis-toggle').getAttribute('aria-pressed') === 'false' && document.querySelector('.chat-history').getAttribute('role') === 'region'`), true, 'Conversation history uses a region with a separate Diagnosis toggle')
   assert.equal(await evaluate(`(() => {
-    const projects = document.querySelector('#sessions-sidebar').getBoundingClientRect();
+    const folders = document.querySelector('.folders-sidebar').getBoundingClientRect();
     const explorer = document.querySelector('.workbench-explorer').getBoundingClientRect();
     const editor = document.querySelector('.workbench-editor').getBoundingClientRect();
-    return explorer.width >= 180 && explorer.left >= projects.right - 1 && explorer.right <= editor.left + 1;
-  })()`), true, 'Persistent explorer must sit between Projects and the document editor')
+    return explorer.width >= 180 && explorer.left >= folders.right - 1 && explorer.right <= editor.left + 1;
+  })()`), true, 'Persistent explorer must sit between Folders and the document editor')
   await waitFor(`Boolean(document.querySelector('.chat-user .message-time'))`)
   assert.equal(await evaluate(`document.querySelector('.chat-user .message-time').dateTime`), timestamp(100))
   assert.equal(await evaluate(`document.querySelector('.chat-assistant .message-time').dateTime`), timestamp(1800))
@@ -765,7 +780,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelectorAll('.chat-content .katex math').length`), 2)
   assert.equal(await evaluate(`Boolean(document.querySelector('.chat-content .katex-display'))`), true)
   assert.equal(await evaluate(`Boolean(window.unsafeMarkup || document.querySelector('.chat-content [onclick], .chat-content script'))`), false)
-  for (const selector of ['.theme-toggle span', '.model-chevron', '.composer-send span', '#diagnosis-toggle span']) {
+  for (const selector of ['.theme-toggle span', '.model-chevron', '.composer-send span', '.diagnosis-toggle span']) {
     assert.equal(await evaluate(`(() => { const icon = document.querySelector(${JSON.stringify(selector)}); const css = getComputedStyle(icon); return icon.getAttribute('aria-hidden') === 'true' && css.maskImage.includes('data:image/svg+xml') && icon.getBoundingClientRect().width >= 12; })()`), true, `Missing generated icon: ${selector}`)
   }
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.chat-content > :first-child')).marginTop`), '0px')
@@ -778,16 +793,16 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`(() => { const style = getComputedStyle(document.documentElement); const tokens = Array.from(style).filter(name => name.startsWith('--radius-')); return tokens.length >= 6 && tokens.every(name => style.getPropertyValue(name).trim() === '0px'); })()`), true, 'All shared radius tokens default to zero')
   await evaluate(`document.documentElement.style.setProperty('--radius-surface', '22px')`)
   for (const selector of ['.chat-bubble', '.tool-group', '.system-event', '.compaction-summary']) {
-    assert.equal(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).borderRadius`), '22px', 'Changing one token must update all conversation surfaces')
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).borderRadius`), '22px', `${selector}: changing --radius-surface must update the conversation surface`)
   }
   await evaluate(`document.documentElement.style.removeProperty('--radius-surface')`)
   await assertSquareUi()
   assert.equal(traceQueries.length, 0, 'Opening conversation must not eagerly fetch diagnosis')
   await waitFor(`document.querySelector('.heading-folder')?.textContent === 'shadow'`)
   assert.equal(await evaluate(`document.querySelector('.session-heading').textContent.includes(${JSON.stringify(idA)}) || Boolean(document.querySelector('.session-config-badges, .chat-header'))`), false)
-  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-session-row .tree-icon span')).maskImage.includes('data:image/svg+xml')`), true)
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.folder-session-row .tree-icon span')).maskImage.includes('data:image/svg+xml')`), true)
   assert.equal(await evaluate(`(() => {
-    const rows = [document.querySelector('.project-folder-row'), document.querySelector('.project-session-row'), document.querySelector('.file-tree .tree-item')];
+    const rows = [document.querySelector('.folder-folder-row'), document.querySelector('.folder-session-row'), document.querySelector('.file-tree .tree-item')];
     const heights = rows.map(row => row.getBoundingClientRect().height);
     return rows.every(row => row.classList.contains('tree-item') && getComputedStyle(row.querySelector('.tree-label')).textOverflow === 'ellipsis'
       && getComputedStyle(row.querySelector('.tree-label')).whiteSpace === 'nowrap')
@@ -795,12 +810,12 @@ async function main(): Promise<void> {
       && rows.every(row => { const icon = row.querySelector('.tree-icon').getBoundingClientRect(); const label = row.querySelector('.tree-label').getBoundingClientRect();
         return icon.width === 16 && icon.height === 16 && Math.abs(icon.top + icon.height / 2 - label.top - label.height / 2) < 1; })
       && !document.querySelector('.tree-item button button, .session-description');
-  })()`), true, 'Projects, conversations and files share compact single-line rows, icon alignment and truncation without nested buttons')
-  const childTreeSelector = '.projects-sidebar .session-select[aria-label="Child conversation"]'
+  })()`), true, 'Folders, conversations and files share compact single-line rows, icon alignment and truncation without nested buttons')
+  const childTreeSelector = '.folders-sidebar .session-select[aria-label="Child conversation"]'
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(childTreeSelector)}).closest('.tree-item').style.getPropertyValue('--tree-depth')`), '1')
-  await click('.project-session-row.active .lineage-toggle')
+  await click('.folder-session-row.active .lineage-toggle')
   assert.equal(await evaluate(`Boolean(document.querySelector(${JSON.stringify(childTreeSelector)}))`), false, 'Shared disclosure hides descendants without selecting another conversation')
-  await click('.project-session-row.active .lineage-toggle')
+  await click('.folder-session-row.active .lineage-toggle')
   await waitFor(`Boolean(document.querySelector(${JSON.stringify(childTreeSelector)}))`)
   await waitFor(`document.querySelector('.tool-activity-summary .lines-added')?.textContent === '+7'`)
   assert.equal(await evaluate(`document.querySelector('.tool-activity-summary .lines-removed').textContent`), '-3')
@@ -849,15 +864,15 @@ async function main(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 150))
   assert.equal(chatHistoryRequests.length, historyBeforeRepeat, 'Selecting the current conversation must not fetch history again')
   assert.equal(await evaluate(`document.querySelector('.chat-bubble') === window.stableMessage && document.querySelector('.composer-input textarea') === window.stableComposerInput && window.stableComposerInput.value === 'Keep draft and selection' && window.stableComposerInput.selectionStart === 2`), true)
-  await click('.project-folder')
-  await waitFor(`document.querySelector('.project-toggle').getAttribute('aria-expanded') === 'true'`)
-  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-folder-row.selected')).backgroundColor === getComputedStyle(document.querySelector('.project-session-row.active')).backgroundColor`), true, 'Project and conversation selections share the same row treatment')
-  await click('.project-folder')
-  assert.equal(await evaluate(`document.querySelector('.project-toggle').getAttribute('aria-expanded')`), 'true', 'Selecting the current project must not toggle its contents')
+  await click('.folder-folder')
+  await waitFor(`document.querySelector('.folder-toggle').getAttribute('aria-expanded') === 'true'`)
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.folder-folder-row.selected')).backgroundColor === getComputedStyle(document.querySelector('.folder-session-row.active')).backgroundColor`), true, 'Folder and conversation selections share the same row treatment')
+  await click('.folder-folder')
+  assert.equal(await evaluate(`document.querySelector('.folder-toggle').getAttribute('aria-expanded')`), 'true', 'Selecting the current folder must not toggle its contents')
   assert.equal(chatHistoryRequests.length, historyBeforeRepeat)
   assert.equal(await evaluate(`window.stableComposerInput.value`), 'Keep draft and selection')
-  await click('.project-toggle')
-  assert.equal(await evaluate(`document.querySelector('.project-toggle').getAttribute('aria-expanded')`), 'false', 'Project disclosure remains independently operable')
+  await click('.folder-toggle')
+  assert.equal(await evaluate(`document.querySelector('.folder-toggle').getAttribute('aria-expanded')`), 'false', 'Folder disclosure remains independently operable')
 
   const composerBounds = () => evaluate(`(() => { const box = document.querySelector('.composer-box'); const rect = box.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, border: getComputedStyle(box).borderColor }; })()`)
   let releaseSettings!: () => void
@@ -976,7 +991,7 @@ async function main(): Promise<void> {
   const historyBeforeResize = chatHistoryRequests.length
   await evaluate(`window.sidebarStableInput = document.querySelector('.composer-input textarea'); window.sidebarStableMessage = document.querySelector('.chat-bubble')`)
   for (const side of [
-    { selector: '.projects-resizer', root: '#sessions-sidebar', label: 'Resize projects', initial: 260, min: 200, max: 400 },
+    { selector: '.folders-resizer', root: '.folders-sidebar', label: 'Resize folders', initial: 260, min: 200, max: 400 },
     { selector: '.files-resizer', root: '.workbench-explorer', label: 'Resize files', initial: 220, min: 180, max: 360 },
   ]) {
     await waitFor(`document.querySelector(${JSON.stringify(side.selector)})?.getClientRects().length > 0`)
@@ -1003,16 +1018,16 @@ async function main(): Promise<void> {
   await waitFor(`document.querySelector('.files-resizer')`)
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 720, height: 900 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 720, height: 900 }, deviceScaleFactor: 1, scale: 1 })
   await waitFor(`innerWidth === 720 && !document.querySelector('.files-resizer')`)
-  await evaluate(`document.querySelector('.projects-resizer').focus()`)
+  await evaluate(`document.querySelector('.folders-resizer').focus()`)
   await nativeKey('End', 'End', 35)
-  assert.equal(await evaluate(`(() => { const separator = document.querySelector('.projects-resizer'); const workspace = document.querySelector('.chat-workspace').getBoundingClientRect(); return Number(separator.getAttribute('aria-valuenow')) === Number(separator.getAttribute('aria-valuemax')) && Number(separator.getAttribute('aria-valuemax')) <= workspace.width - 360 && document.documentElement.scrollWidth <= innerWidth; })()`), true, 'Projects width respects remaining editor space on smaller desktop viewports')
+  assert.equal(await evaluate(`(() => { const separator = document.querySelector('.folders-resizer'); const workspace = document.querySelector('.chat-workspace').getBoundingClientRect(); return Number(separator.getAttribute('aria-valuenow')) === Number(separator.getAttribute('aria-valuemax')) && Number(separator.getAttribute('aria-valuemax')) <= workspace.width - 360 && document.documentElement.scrollWidth <= innerWidth; })()`), true, 'Folders width respects remaining editor space on smaller desktop viewports')
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
-  await waitFor(`innerWidth === 390 && !document.querySelector('.projects-resizer, .files-resizer')`)
+  await waitFor(`innerWidth === 390 && !document.querySelector('.folders-resizer, .files-resizer')`)
   window.webContents.disableDeviceEmulation()
-  await waitFor(`innerWidth > 1280 && document.querySelector('.projects-resizer')`)
-  await evaluate(`document.querySelector('.projects-resizer').focus()`)
+  await waitFor(`innerWidth > 1280 && document.querySelector('.folders-resizer')`)
+  await evaluate(`document.querySelector('.folders-resizer').focus()`)
   await nativeKey('Home', 'Home', 36)
-  await dragSidebar('.projects-resizer', 60)
+  await dragSidebar('.folders-resizer', 60)
   await waitFor(`document.querySelector('.files-resizer') && Math.abs(document.querySelector('.workbench-explorer').getBoundingClientRect().width - 220) < 2`)
   assert.equal(chatHistoryRequests.length, historyBeforeResize)
   assert.equal(await evaluate(`document.querySelector('.composer-input textarea') === window.sidebarStableInput && document.querySelector('.chat-bubble') === window.sidebarStableMessage`), true, 'Resizing and responsive transitions preserve conversation DOM')
@@ -1249,7 +1264,7 @@ async function main(): Promise<void> {
   await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
   await nativeKey('Tab', 'Tab', 9, undefined, 10)
   await waitFor(`document.querySelector('.document-tablist [aria-label="src/main.ts"]').getAttribute('aria-selected') === 'true'`)
-  await evaluate(`document.querySelector('.project-folder').focus()`)
+  await evaluate(`document.querySelector('.folder-folder').focus()`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
   await nativeKey('Tab', 'Tab', 9)
@@ -1462,7 +1477,7 @@ async function main(): Promise<void> {
     const toolbar = document.querySelector('.document-toolbar').getBoundingClientRect();
     const backdrop = document.querySelector('.explorer-backdrop').getBoundingClientRect();
     return drawer.top >= toolbar.bottom - 1 && backdrop.top >= toolbar.bottom - 1;
-  })()`), true, 'Mobile explorer and backdrop must start below the document toolbar, including the Projects offset')
+  })()`), true, 'Mobile explorer and backdrop must start below the document toolbar, including the Folders offset')
   const mobileTogglePoint = await evaluate<{ x: number; y: number }>(`(() => {
     const toggle = document.querySelector('.explorer-toggle');
     const rect = toggle.getBoundingClientRect();
@@ -1608,13 +1623,13 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelector('.tool-activity-summary .lines-added').textContent`), '+2', 'Committing streaming tools must not duplicate counts')
   assert.equal(await evaluate(`Array.from(document.querySelectorAll('.chat-assistant')).find(bubble => bubble.textContent.includes('A streamed response')).querySelector('.message-time').dateTime`), partialTime)
   assert.ok(await evaluate(`Array.from(document.querySelectorAll('.chat-assistant .message-time')).every(time => Number.isFinite(Date.parse(time.dateTime)))`))
-  await send('Early EOF timestamp')
+  await send('Interrupted timestamp')
   await waitFor(`Array.from(document.querySelectorAll('.chat-assistant')).filter(bubble => bubble.textContent.includes('A streamed response')).length === 2 && !document.querySelector('.composer-input textarea').disabled`)
   await send('Failed timestamp')
   await waitFor(`document.querySelector('.chat-messages').textContent.includes('Error:') && !document.querySelector('.composer-input textarea').disabled`)
-  const background = eventStreams.get('chat-diagnosis-b')
-  assert.ok(background)
-  background.write(`data: ${JSON.stringify({ event: 'response', content: 'Background timestamped reply.', done: true })}\n\n`)
+  assert.ok(realtime.hub.stats.clients > 0)
+  realtime.chat(idB, { event: 'response', content: 'Background timestamped reply.', done: true })
+  realtime.finish(idB)
   await waitFor(`document.querySelector('.chat-messages').textContent.includes('Background timestamped reply')`)
   assert.ok(await evaluate(`Array.from(document.querySelectorAll('.chat-assistant .message-time')).every(time => Number.isFinite(Date.parse(time.dateTime)))`))
   await new Promise(resolve => setTimeout(resolve, 150))
@@ -1675,7 +1690,7 @@ async function main(): Promise<void> {
   await waitFor(`document.querySelector('.child-conversation .chat-messages')?.textContent.includes('This response belongs only to the child')`)
   assert.equal(await evaluate(`document.querySelector('.primary-conversation textarea') === window.splitParentInput && window.splitParentInput.value === 'Keep main draft'`), true)
   assert.equal(await evaluate(`document.querySelector('.primary-conversation .chat-messages').scrollTop < 500`), true, 'Opening a child must not scroll the parent to the bottom')
-  assert.equal(await evaluate(`document.querySelector('.conversation-workspace').classList.contains('is-split') && document.querySelectorAll('#sessions-sidebar').length === 1`), true)
+  assert.equal(await evaluate(`document.querySelector('.conversation-workspace').classList.contains('is-split') && document.querySelectorAll('.folders-sidebar').length === 1`), true)
   assert.equal(await evaluate(`new URLSearchParams(location.search).get('child')`), idChild)
   keyboard.attach('1.3')
   await evaluate(`document.querySelector('.child-conversation textarea').focus()`)
@@ -1743,17 +1758,17 @@ async function main(): Promise<void> {
   })()`), true, 'Main and child document tabs have unique, correctly associated panel IDs')
   await click('.child-conversation .document-tablist [role="tab"]:first-child')
   await showSessionView(false, '.child-conversation')
-  const mainEvents = eventStreams.get('chat-diagnosis-a')
-  const childEvents = eventStreams.get('chat-split-child')
-  assert.ok(mainEvents && childEvents)
-  mainEvents.write(`data: ${JSON.stringify({ content: 'Parent live response', done: false })}\n\n`)
-  childEvents.write(`data: ${JSON.stringify({ content: 'Child live response', done: false })}\n\n`)
+  assert.equal(realtime.hub.stats.clients, 1, 'Main and child share one realtime transport')
+  realtime.chat(idA, { content: 'Parent live response', done: false })
+  realtime.chat(idChild, { content: 'Child live response', done: false })
   await waitFor(`document.querySelector('.primary-conversation .chat-working') && document.querySelector('.child-conversation .chat-working')`)
   assert.equal(await evaluate(`document.querySelector('.primary-conversation .chat-messages').textContent.includes('Child live response') || document.querySelector('.child-conversation .chat-messages').textContent.includes('Parent live response')`), false)
   await new Promise(resolve => setTimeout(resolve, 150))
   await writeFile(join(directory, 'parallel-conversations-desktop.png'), (await window.webContents.capturePage()).toPNG())
-  mainEvents.write(`data: ${JSON.stringify({ content: ' completed.', done: true })}\n\n`)
-  childEvents.write(`data: ${JSON.stringify({ content: ' completed.', done: true })}\n\n`)
+  realtime.chat(idA, { content: ' completed.', done: true })
+  realtime.chat(idChild, { content: ' completed.', done: true })
+  realtime.finish(idA)
+  realtime.finish(idChild)
   await waitFor(`!document.querySelector('.primary-conversation textarea').disabled && !document.querySelector('.child-conversation textarea').disabled`)
   const savedWidth = await evaluate<string>(`document.querySelector('.conversation-resizer').getAttribute('aria-valuenow')`)
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
@@ -1817,9 +1832,9 @@ async function main(): Promise<void> {
   assert.equal(chatHistoryRequests.includes('chat-missing'), false, 'An unknown child URL must not materialize a session')
   await click('[aria-label="Close child conversation"]')
   await waitFor(`!document.querySelector('.child-conversation')`)
-  await click('[aria-label="Add project"]')
-  await waitFor(`document.querySelectorAll('#project-actions [role="menuitem"]').length === 3`)
-  await evaluate(`Array.from(document.querySelectorAll('#project-actions [role="menuitem"]')).find(node => node.textContent.includes('Start from scratch')).click()`)
+  await click('[aria-label="Add folder"]')
+  await waitFor(`document.querySelectorAll('#folder-actions [role="menuitem"]').length === 3`)
+  await evaluate(`Array.from(document.querySelectorAll('#folder-actions [role="menuitem"]')).find(node => node.textContent.includes('Start from scratch')).click()`)
   await waitFor(`Boolean(document.querySelector('.draft-heading'))`)
   const sessionsBeforeDraftExplorer = extraSessions.length
   const requestsBeforeDraftExplorer = fileRequests.length
@@ -2015,9 +2030,10 @@ async function main(): Promise<void> {
   await click('.providers-view .inventory-error button')
   await waitFor(`document.querySelectorAll('.provider-card').length === 4`)
   groupTreeSessions = true
+  realtime.publisher.invalidateSessions()
   await window.loadURL(`${origin}/chat/${encodeURIComponent(idA)}`)
-  await waitFor(`document.querySelectorAll('.project-conversations .tree-item').length === 3 && document.querySelector('.file-tree .tree-row[data-path="README.md"]')`)
-  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.project-conversations .tree-item'), row => row.style.getPropertyValue('--tree-depth'))`), ['1', '2', '2'], 'Project sessions and their children preserve lineage using shared depth')
+  await waitFor(`document.querySelectorAll('.folder-conversations .tree-item').length === 3 && document.querySelector('.file-tree .tree-row[data-path="README.md"]')`)
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.folder-conversations .tree-item'), row => row.style.getPropertyValue('--tree-depth'))`), ['1', '2', '2'], 'Folder sessions and their children preserve lineage using shared depth')
   await click('.tree-row[data-path="src"]')
   await waitFor(`document.querySelector('.tree-row[data-path="src/main.ts"]')`)
   await new Promise(resolve => setTimeout(resolve, 150))
@@ -2026,22 +2042,22 @@ async function main(): Promise<void> {
   await waitFor(`innerWidth === 390`)
   await click('.mobile-sessions-toggle')
   await waitFor(`document.querySelector('.mobile-sessions-open')`)
-  assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth && Array.from(document.querySelectorAll('.project-conversations .tree-item')).every(row => row.getBoundingClientRect().right <= innerWidth)`), true)
-  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-conversations .session-delete')).opacity`), '1', 'Tree actions remain discoverable without hover on mobile')
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth && Array.from(document.querySelectorAll('.folder-conversations .tree-item')).every(row => row.getBoundingClientRect().right <= innerWidth)`), true)
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.folder-conversations .session-delete')).opacity`), '1', 'Tree actions remain discoverable without hover on mobile')
   await new Promise(resolve => setTimeout(resolve, 150))
   await writeFile(join(directory, 'shared-trees-mobile.png'), (await window.webContents.capturePage({ x: 0, y: 0, width: 390, height: 844 })).toPNG())
   window.webContents.disableDeviceEmulation()
   await waitFor(`innerWidth > 1280`)
   if (await evaluate(`Boolean(document.querySelector('.mobile-sessions-open'))`)) await click('.mobile-sessions-toggle')
-  const sessionsBeforeProjectDraft = extraSessions.length
-  const historyBeforeProjectDraft = chatHistoryRequests.length
-  const sendsBeforeProjectDraft = sentMessages.length
-  const filesBeforeProjectDraft = fileRequests.length
-  await click('[aria-label="New conversation in Synthetic project"]')
-  await waitFor(`document.querySelector('.draft-project strong')?.textContent === 'Synthetic project'`)
+  const sessionsBeforeFolderDraft = extraSessions.length
+  const historyBeforeFolderDraft = chatHistoryRequests.length
+  const sendsBeforeFolderDraft = sentMessages.length
+  const filesBeforeFolderDraft = fileRequests.length
+  await click('[aria-label="New conversation in Synthetic folder"]')
+  await waitFor(`document.querySelector('.draft-folder strong')?.textContent === 'Synthetic folder'`)
   if (!await evaluate(`document.querySelector('.workbench-explorer').getClientRects().length > 0`)) await click('.explorer-toggle')
-  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-project.txt"]')`)
-  assert.equal(await evaluate(`document.querySelector('[aria-label="Refresh files"]').disabled`), false, 'Unsent project drafts have a usable explorer')
+  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-folder.txt"]')`)
+  assert.equal(await evaluate(`document.querySelector('[aria-label="Refresh files"]').disabled`), false, 'Unsent folder drafts have a usable explorer')
   assert.equal(await evaluate(`(() => {
     const content = document.querySelector('.workbench-content').getBoundingClientRect();
     const heading = document.querySelector('.draft-heading').getBoundingClientRect();
@@ -2050,100 +2066,100 @@ async function main(): Promise<void> {
       && heading.top >= content.top && heading.bottom <= composer.top && composer.bottom <= innerHeight
       && composer.left >= content.left && composer.right <= content.right;
   })()`), true, 'Draft heading and shared composer remain centered, ordered and bounded')
-  projectPreviewGate = new Promise(resolve => { releaseProjectPreview = resolve })
-  const projectPreviewStart = projectFileRequests.length
+  folderPreviewGate = new Promise(resolve => { releaseFolderPreview = resolve })
+  const folderPreviewStart = folderFileRequests.length
   await click('.tree-row[data-path="README.md"]')
   await waitFor(`document.querySelector('.file-modal-text-wrap')?.textContent.includes('Loading')`)
-  for (let attempt = 0; attempt < 100 && !projectFileRequests.slice(projectPreviewStart).some(request => request.kind === 'preview'); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
-  const pendingProjectPreview = projectFileRequests.slice(projectPreviewStart).find(request => request.kind === 'preview')
-  assert.ok(pendingProjectPreview, 'The pending preview must reach the synthetic project endpoint before switching scope')
-  await click('[aria-label="New conversation in Second project"]')
-  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-project-two.txt"]')`)
-  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 1, 'A second project starts with an independent document set')
-  assert.equal(await evaluate(`Boolean(document.querySelector('.tree-row[data-path="synthetic-project.txt"]'))`), false)
-  for (let attempt = 0; attempt < 100 && !pendingProjectPreview.aborted; attempt++) await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(pendingProjectPreview.aborted, true, 'Switching project scope aborts pending previews')
-  releaseProjectPreview!()
+  for (let attempt = 0; attempt < 100 && !folderFileRequests.slice(folderPreviewStart).some(request => request.kind === 'preview'); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
+  const pendingFolderPreview = folderFileRequests.slice(folderPreviewStart).find(request => request.kind === 'preview')
+  assert.ok(pendingFolderPreview, 'The pending preview must reach the synthetic folder endpoint before switching scope')
+  await click('[aria-label="New conversation in Second folder"]')
+  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-folder-two.txt"]')`)
+  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 1, 'A second folder starts with an independent document set')
+  assert.equal(await evaluate(`Boolean(document.querySelector('.tree-row[data-path="synthetic-folder.txt"]'))`), false)
+  for (let attempt = 0; attempt < 100 && !pendingFolderPreview.aborted; attempt++) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(pendingFolderPreview.aborted, true, 'Switching folder scope aborts pending previews')
+  releaseFolderPreview!()
   await click('.tree-row[data-path="README.md"]')
-  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-project-two'`)
-  assert.equal(await evaluate(`document.querySelector('.file-markdown a').href`), `${origin}/api/projects/synthetic-project-two/static/synthetic-project-two.txt`)
-  assert.equal(await evaluate(`new URL(document.querySelector('.file-modal-actions a').href).pathname`), '/api/projects/synthetic-project-two/raw')
-  await click('[aria-label="New conversation in Synthetic project"]')
-  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-project.txt"]') && document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
+  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-folder-two'`)
+  assert.equal(await evaluate(`document.querySelector('.file-markdown a').href`), `${origin}/api/folders/synthetic-folder-two/static/synthetic-folder-two.txt`)
+  assert.equal(await evaluate(`new URL(document.querySelector('.file-modal-actions a').href).pathname`), '/api/folders/synthetic-folder-two/raw')
+  await click('[aria-label="New conversation in Synthetic folder"]')
+  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-folder.txt"]') && document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
   await click('.document-tablist [aria-label="README.md"]')
-  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-project'`)
-  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'Returning to a project restores only its own documents')
-  assert.equal(extraSessions.length, sessionsBeforeProjectDraft)
-  assert.equal(projectSessionRequests.length, 0, 'Project tree and preview must not create a session before Send')
-  assert.equal(chatHistoryRequests.length, historyBeforeProjectDraft)
-  assert.equal(sentMessages.length, sendsBeforeProjectDraft)
-  assert.equal(fileRequests.length, filesBeforeProjectDraft, 'Project drafts never address session filesystem routes')
-  await click('[aria-label="New conversation in Second project"]')
-  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-project-two.txt"]')`)
+  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-folder'`)
+  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'Returning to a folder restores only its own documents')
+  assert.equal(extraSessions.length, sessionsBeforeFolderDraft)
+  assert.equal(folderSessionRequests.length, 0, 'Folder tree and preview must not create a session before Send')
+  assert.equal(chatHistoryRequests.length, historyBeforeFolderDraft)
+  assert.equal(sentMessages.length, sendsBeforeFolderDraft)
+  assert.equal(fileRequests.length, filesBeforeFolderDraft, 'Folder drafts never address session filesystem routes')
+  await click('[aria-label="New conversation in Second folder"]')
+  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-folder-two.txt"]')`)
   await click('.document-tablist [aria-label="README.md"]')
-  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-project-two'`)
-  await click('[aria-label="New conversation in Second project"]')
+  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-folder-two'`)
+  await click('[aria-label="New conversation in Second folder"]')
   await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.activeElement === document.querySelector('textarea')`)
-  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'The same project + action returns to Conversation without discarding its open file tabs')
-  assert.equal(projectSessionRequests.length, 0)
-  const uploadsBeforeProjectPaste = uploadAttempts
+  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'The same folder + action returns to Conversation without discarding its open file tabs')
+  assert.equal(folderSessionRequests.length, 0)
+  const uploadsBeforeFolderPaste = uploadAttempts
   await prepareComposer('')
   assert.equal(await pasteFixture({ images: ['red.png'] }), true)
   await waitFor(`document.querySelector('.attachment-thumb')?.naturalWidth === 1 && !document.querySelector('.composer-send').disabled`)
-  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '', 'An image-only project draft is sendable without inserting text')
-  assert.equal(projectSessionRequests.length, 0)
-  assert.equal(extraSessions.length, sessionsBeforeProjectDraft)
-  assert.equal(uploadAttempts, uploadsBeforeProjectPaste, 'Project draft paste does not upload or materialize a session')
-  await prepareComposer('Create project conversation after browsing')
-  await evaluate(`window.projectFileComposer = document.querySelector('.composer-input textarea')`)
+  assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '', 'An image-only folder draft is sendable without inserting text')
+  assert.equal(folderSessionRequests.length, 0)
+  assert.equal(extraSessions.length, sessionsBeforeFolderDraft)
+  assert.equal(uploadAttempts, uploadsBeforeFolderPaste, 'Folder draft paste does not upload or materialize a session')
+  await prepareComposer('Create folder conversation after browsing')
+  await evaluate(`window.folderFileComposer = document.querySelector('.composer-input textarea')`)
   await click('.document-tablist [aria-label="README.md"]')
-  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-project-two'`)
-  const draftFileRequestsBeforeQuote = projectFileRequests.length
-  const projectQuoteText = await selectFileText('.file-markdown h1')
+  await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'synthetic-folder-two'`)
+  const draftFileRequestsBeforeQuote = folderFileRequests.length
+  const folderQuoteText = await selectFileText('.file-markdown h1')
   await click('.selection-menu button:first-of-type')
-  await waitFor(`!document.querySelector('.selection-menu') && document.activeElement === window.projectFileComposer`)
-  const projectFilePayload = `Create project conversation after browsing\n\n> File: README.md\n> Lines: 1 (source block)\n> \n> ${projectQuoteText}\n\n`
-  assert.equal(await evaluate(`window.projectFileComposer.value`), projectFilePayload)
+  await waitFor(`!document.querySelector('.selection-menu') && document.activeElement === window.folderFileComposer`)
+  const folderFilePayload = `Create folder conversation after browsing\n\n> File: README.md\n> Lines: 1 (source block)\n> \n> ${folderQuoteText}\n\n`
+  assert.equal(await evaluate(`window.folderFileComposer.value`), folderFilePayload)
   assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').getAttribute('aria-label')`), 'README.md')
-  assert.equal(projectFileRequests.length, draftFileRequestsBeforeQuote)
-  assert.equal(projectSessionRequests.length, 0, 'Quoting project files keeps an unsent draft sessionless')
-  assert.equal(extraSessions.length, sessionsBeforeProjectDraft)
+  assert.equal(folderFileRequests.length, draftFileRequestsBeforeQuote)
+  assert.equal(folderSessionRequests.length, 0, 'Quoting folder files keeps an unsent draft sessionless')
+  assert.equal(extraSessions.length, sessionsBeforeFolderDraft)
   await assertFileComposer()
-  failProjectSessionCreate = true
+  failFolderSessionCreate = true
   await click('.composer-send')
   await waitFor(`document.querySelector('.composer-error')?.textContent.includes('Main could not complete') && !document.querySelector('.composer-send').disabled`)
-  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').getAttribute('aria-label') === 'README.md' && document.querySelector('.composer-input textarea') === window.projectFileComposer && window.projectFileComposer.value === ${JSON.stringify(projectFilePayload)}`), true, 'Failure before session preparation keeps the file and shared draft composer intact')
-  assert.equal(projectSessionRequests.length, 0)
-  assert.equal(uploadAttempts, uploadsBeforeProjectPaste, 'Failure before project creation leaves pasted images pending and unuploaded')
+  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').getAttribute('aria-label') === 'README.md' && document.querySelector('.composer-input textarea') === window.folderFileComposer && window.folderFileComposer.value === ${JSON.stringify(folderFilePayload)}`), true, 'Failure before session preparation keeps the file and shared draft composer intact')
+  assert.equal(folderSessionRequests.length, 0)
+  assert.equal(uploadAttempts, uploadsBeforeFolderPaste, 'Failure before folder creation leaves pasted images pending and unuploaded')
   assert.equal(await evaluate(`document.querySelector('.attachment-thumb')?.naturalWidth`), 1)
-  failProjectSessionCreate = false
+  failFolderSessionCreate = false
   await click('.composer-send')
   await waitFor(`document.querySelector('.chat-messages')?.textContent.includes('A streamed response')`)
-  assert.deepEqual(projectSessionRequests, ['synthetic-project-two'])
-  assert.equal(extraSessions.length, sessionsBeforeProjectDraft + 1)
-  assert.equal(sentMessages.at(-1)?.chatId, 'chat-project-created-1')
-  assert.equal(sentMessages.at(-1)?.content, projectFilePayload.trim())
-  assert.deepEqual(sentMessages.at(-1)?.media, ['C:\\synthetic\\uploads\\chat-project-created-1\\red.png'])
-  assert.equal(uploadAttempts, uploadsBeforeProjectPaste + 1)
-  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.querySelector('.composer-input textarea') === window.projectFileComposer`), true, 'Sending from a file returns to Conversation without replacing the composer')
+  assert.deepEqual(folderSessionRequests, ['synthetic-folder-two'])
+  assert.equal(extraSessions.length, sessionsBeforeFolderDraft + 1)
+  assert.equal(sentMessages.at(-1)?.chatId, 'chat-folder-created-1')
+  assert.equal(sentMessages.at(-1)?.content, folderFilePayload.trim())
+  assert.deepEqual(sentMessages.at(-1)?.media, ['C:\\synthetic\\uploads\\chat-folder-created-1\\red.png'])
+  assert.equal(uploadAttempts, uploadsBeforeFolderPaste + 1)
+  assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.querySelector('.composer-input textarea') === window.folderFileComposer`), true, 'Sending from a file returns to Conversation without replacing the composer')
   completeSend!()
   await waitFor(`!document.querySelector('textarea').disabled && document.querySelector('.tree-row[data-path="src"]')`)
   assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 1, 'Created sessions start with session-scoped documents')
-  assert.equal(fileRequests.at(-1)?.sessionId, 'web:chat-project-created-1')
+  assert.equal(fileRequests.at(-1)?.sessionId, 'web:chat-folder-created-1')
   await click('.tree-row[data-path="README.md"]')
   await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'README.md'`)
-  assert.equal(previewRequests.at(-1)?.sessionId, 'web:chat-project-created-1')
+  assert.equal(previewRequests.at(-1)?.sessionId, 'web:chat-folder-created-1')
   const sessionFilesBeforeScratch = fileRequests.length
-  const projectFilesBeforeScratch = projectFileRequests.length
-  await click('[aria-label="Add project"]')
-  await waitFor(`document.querySelectorAll('#project-actions [role="menuitem"]').length === 3`)
-  await evaluate(`Array.from(document.querySelectorAll('#project-actions [role="menuitem"]')).find(node => node.textContent.includes('Start from scratch')).click()`)
+  const folderFilesBeforeScratch = folderFileRequests.length
+  await click('[aria-label="Add folder"]')
+  await waitFor(`document.querySelectorAll('#folder-actions [role="menuitem"]').length === 3`)
+  await evaluate(`Array.from(document.querySelectorAll('#folder-actions [role="menuitem"]')).find(node => node.textContent.includes('Start from scratch')).click()`)
   await waitFor(`document.querySelector('.draft-scratch') && document.querySelector('.file-tree-note')?.textContent.includes('select a conversation')`)
   assert.equal(await evaluate(`document.querySelector('[aria-label="Refresh files"]').disabled && !document.querySelector('.file-document')`), true)
   await new Promise(resolve => setTimeout(resolve, 150))
   assert.equal(fileRequests.length, sessionFilesBeforeScratch, 'Scratch must not retain the previous session file scope')
-  assert.equal(projectFileRequests.length, projectFilesBeforeScratch, 'Scratch must not retain the previous project file scope')
-  assert.equal(extraSessions.length, sessionsBeforeProjectDraft + 1)
+  assert.equal(folderFileRequests.length, folderFilesBeforeScratch, 'Scratch must not retain the previous folder file scope')
+  assert.equal(extraSessions.length, sessionsBeforeFolderDraft + 1)
   const gitScope = `sessions:${idA}`
   const dirtyGit: GitStatus = { available: true, entries: [
     { path: 'src/main.ts', status: 'modified' },
@@ -2181,33 +2197,33 @@ async function main(): Promise<void> {
   await evaluate(`Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async text => { window.gitCopied = text } } }); window.gitComposer = document.querySelector('textarea')`)
   await click('.tree-row[data-path="README.md"]')
   await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'README.md'`)
-  const expandedProjectsWidth = await evaluate(`document.querySelector('.projects-sidebar').getBoundingClientRect().width`)
-  await click('[aria-label="Collapse projects"]')
-  await waitFor(`document.querySelector('.projects-sidebar.is-rail')`)
-  assert.equal(await evaluate(`document.querySelector('.projects-sidebar').getBoundingClientRect().width`), 64)
-  assert.equal(await evaluate(`!document.querySelector('.projects-resizer') && !document.querySelector('.project-conversations') && document.querySelector('textarea') === window.gitComposer`), true, 'Rail hides inline families and resizing without remounting the conversation')
-  assert.equal(await evaluate(`document.querySelectorAll('.projects-sidebar [title], .tree-row[title], .document-tab[title]').length`), 0, 'Component hover information replaces native titles')
+  const expandedFoldersWidth = await evaluate(`document.querySelector('.folders-sidebar').getBoundingClientRect().width`)
+  await click('[aria-label="Collapse folders"]')
+  await waitFor(`document.querySelector('.folders-sidebar.is-rail')`)
+  assert.equal(await evaluate(`document.querySelector('.folders-sidebar').getBoundingClientRect().width`), 64)
+  assert.equal(await evaluate(`!document.querySelector('.folders-resizer') && !document.querySelector('.folder-conversations') && document.querySelector('textarea') === window.gitComposer`), true, 'Rail hides inline families and resizing without remounting the conversation')
+  assert.equal(await evaluate(`document.querySelectorAll('.folders-sidebar [title], .tree-row[title], .document-tab[title]').length`), 0, 'Component hover information replaces native titles')
   const focusBeforeRailHover = await evaluate(`document.activeElement.getAttribute('aria-label')`)
-  const railProject = await evaluate(`(() => { const rect = document.querySelector('.project-folder[aria-label="Synthetic project"]').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()`) as { x: number; y: number }
-  await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', ...railProject })
-  await waitFor(`document.querySelector('.hover-info-popup[role="dialog"] .project-info-path')`)
-  assert.equal(await evaluate(`document.querySelector('.project-info-path').textContent`), 'C:\\synthetic\\project')
-  assert.equal(await evaluate(`document.querySelectorAll('.project-info-conversations .session-select').length`), 3)
+  const railFolder = await evaluate(`(() => { const rect = document.querySelector('.folder-folder[aria-label="Synthetic folder"]').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()`) as { x: number; y: number }
+  await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', ...railFolder })
+  await waitFor(`document.querySelector('.hover-info-popup[role="dialog"] .folder-info-path')`)
+  assert.equal(await evaluate(`document.querySelector('.folder-info-path').textContent`), 'C:\\synthetic\\folder')
+  assert.equal(await evaluate(`document.querySelectorAll('.folder-info-conversations .session-select').length`), 3)
   assert.equal(await evaluate(`(() => { const card = document.querySelector('.hover-info-popup').getBoundingClientRect(); return card.left >= 0 && card.top >= 0 && card.right <= innerWidth && card.bottom <= innerHeight })()`), true)
-  const cardSession = await evaluate(`(() => { const rect = document.querySelector('.project-info-conversations .session-select').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()`) as { x: number; y: number }
+  const cardSession = await evaluate(`(() => { const rect = document.querySelector('.folder-info-conversations .session-select').getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()`) as { x: number; y: number }
   await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', ...cardSession })
   await new Promise(resolve => setTimeout(resolve, 220))
-  assert.equal(await evaluate(`document.querySelectorAll('.hover-info-popup').length === 1 && !!document.querySelector('.project-info')`), true, 'Pointer crossing the trigger/card gap keeps rich navigation open without spawning nested cards')
+  assert.equal(await evaluate(`document.querySelectorAll('.hover-info-popup').length === 1 && !!document.querySelector('.folder-info')`), true, 'Pointer crossing the trigger/card gap keeps rich navigation open without spawning nested cards')
   await new Promise(resolve => setTimeout(resolve, 250))
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.hover-info-popup')).visibility`), 'visible')
-  await writeFile(join(directory, 'projects-rail-hovercard.png'), (await window.webContents.capturePage()).toPNG())
+  await writeFile(join(directory, 'folders-rail-hovercard.png'), (await window.webContents.capturePage()).toPNG())
   await nativeKey('Escape', 'Escape', 27)
   await waitFor(`!document.querySelector('.hover-info-popup')`)
   assert.equal(await evaluate(`document.activeElement.getAttribute('aria-label')`), focusBeforeRailHover, 'Dismissing a passive hover card does not steal document focus')
-  await evaluate(`document.querySelector('.project-folder[aria-label="Synthetic project"]').focus()`)
+  await evaluate(`document.querySelector('.folder-folder[aria-label="Synthetic folder"]').focus()`)
   await nativeKey('ArrowRight', 'ArrowRight', 39)
   await waitFor(`document.querySelector('.hover-info-popup')?.contains(document.activeElement)`)
-  assert.equal(await evaluate(`document.activeElement.classList.contains('project-info-new')`), true, 'Keyboard enters the rich project card actions')
+  assert.equal(await evaluate(`document.activeElement.classList.contains('folder-info-new')`), true, 'Keyboard enters the rich folder card actions')
   const documentBeforeCardShortcut = await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent`), documentBeforeCardShortcut, 'Ctrl+Tab remains blocked when focus is inside interactive hover-card navigation')
@@ -2220,20 +2236,20 @@ async function main(): Promise<void> {
   await nativeKey('Escape', 'Escape', 27)
   assert.equal(await evaluate(`document.activeElement.getAttribute('aria-label')`), 'Second conversation')
   await waitFor(`!document.querySelector('.hover-info-popup')`)
-  await click('[aria-label="Expand projects"]')
-  await waitFor(`document.querySelector('.projects-resizer') && document.querySelector('.project-conversations')`)
-  assert.equal(await evaluate(`document.querySelector('.projects-sidebar').getBoundingClientRect().width`), expandedProjectsWidth)
-  await click('[aria-label="Collapse projects"]')
+  await click('[aria-label="Expand folders"]')
+  await waitFor(`document.querySelector('.folders-resizer') && document.querySelector('.folder-conversations')`)
+  assert.equal(await evaluate(`document.querySelector('.folders-sidebar').getBoundingClientRect().width`), expandedFoldersWidth)
+  await click('[aria-label="Collapse folders"]')
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
   await waitFor(`innerWidth === 390`)
   await click('.mobile-sessions-toggle')
-  await waitFor(`document.querySelector('.mobile-sessions-open') && !document.querySelector('.projects-sidebar.is-rail') && !document.querySelector('.projects-rail-toggle') && document.querySelector('.project-conversations')`)
-  assert.equal(await evaluate(`document.querySelector('.projects-sidebar').getBoundingClientRect().width > 64 && document.querySelector('.projects-sidebar').getBoundingClientRect().right <= innerWidth`), true, 'Mobile Projects stays a full usable drawer, not an icon rail')
+  await waitFor(`document.querySelector('.mobile-sessions-open') && !document.querySelector('.folders-sidebar.is-rail') && !document.querySelector('.folders-rail-toggle') && document.querySelector('.folder-conversations')`)
+  assert.equal(await evaluate(`document.querySelector('.folders-sidebar').getBoundingClientRect().width > 64 && document.querySelector('.folders-sidebar').getBoundingClientRect().right <= innerWidth`), true, 'Mobile Folders stays a full usable drawer, not an icon rail')
   await click('.mobile-sessions-toggle')
   window.webContents.disableDeviceEmulation()
-  await waitFor(`innerWidth > 1280 && document.querySelector('.projects-sidebar.is-rail')`)
-  await click('[aria-label="Expand projects"]')
-  await waitFor(`document.querySelector('.projects-resizer')`)
+  await waitFor(`innerWidth > 1280 && document.querySelector('.folders-sidebar.is-rail')`)
+  await click('[aria-label="Expand folders"]')
+  await waitFor(`document.querySelector('.folders-resizer')`)
   await window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1200, y: 25 })
   await click('[aria-label="Close README.md"]')
   await click('.tree-row[data-path="src"]')
@@ -2362,14 +2378,14 @@ async function main(): Promise<void> {
     if (reason !== 'not_repository') await waitFor(`document.querySelector('.file-tree [role="status"]')`)
   }
   const sessionsBeforeCardDraft = extraSessions.length
-  const createsBeforeCardDraft = projectSessionRequests.length
-  await evaluate(`document.querySelector('.project-folder').focus()`)
+  const createsBeforeCardDraft = folderSessionRequests.length
+  await evaluate(`document.querySelector('.folder-folder').focus()`)
   await nativeKey('ArrowRight', 'ArrowRight', 39)
-  await waitFor(`document.activeElement.classList.contains('project-info-new')`)
+  await waitFor(`document.activeElement.classList.contains('folder-info-new')`)
   await nativeKey('Enter', 'Enter', 13, '\r')
-  await waitFor(`document.querySelector('.draft-project strong')?.textContent === 'Synthetic project' && !document.querySelector('.hover-info-popup')`).catch(async error => {
+  await waitFor(`document.querySelector('.draft-folder strong')?.textContent === 'Synthetic folder' && !document.querySelector('.hover-info-popup')`).catch(async error => {
     throw new Error(`${error.message}; card navigation state: ${JSON.stringify(await evaluate(`({
-      draft: document.querySelector('.draft-project')?.textContent,
+      draft: document.querySelector('.draft-folder')?.textContent,
       focus: document.activeElement.outerHTML.slice(0, 500),
       popup: document.querySelector('.hover-info-popup')?.textContent,
       selected: document.querySelector('.document-tablist [aria-selected="true"]')?.textContent,
@@ -2377,47 +2393,48 @@ async function main(): Promise<void> {
     })`))}`)
   })
   assert.equal(extraSessions.length, sessionsBeforeCardDraft)
-  assert.equal(projectSessionRequests.length, createsBeforeCardDraft, 'Starting a draft through rich-card navigation is lazy until Send')
-  await click('[aria-label="New conversation in Second project"]')
-  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-project-two.txt"]')`)
-  gitStates.set('projects:synthetic-project', dirtyGit)
-  gitGate = { scope: 'projects:synthetic-project', operation: 'status', promise: new Promise(resolve => { releaseGit = resolve }) }
+  assert.equal(folderSessionRequests.length, createsBeforeCardDraft, 'Starting a draft through rich-card navigation is lazy until Send')
+  await click('[aria-label="New conversation in Second folder"]')
+  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-folder-two.txt"]')`)
+  gitStates.set('folders:synthetic-folder', dirtyGit)
+  gitGate = { scope: 'folders:synthetic-folder', operation: 'status', promise: new Promise(resolve => { releaseGit = resolve }) }
   const gitCancellationStart = gitRequests.length
-  await click('[aria-label="New conversation in Synthetic project"]')
-  for (let attempt = 0; attempt < 100 && !gitRequests.slice(gitCancellationStart).some(request => request.scope === 'projects:synthetic-project'); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
-  const pendingGit = gitRequests.slice(gitCancellationStart).find(request => request.scope === 'projects:synthetic-project')
-  assert.ok(pendingGit, 'Project status request reached the gated synthetic endpoint')
-  await click('[aria-label="New conversation in Second project"]')
-  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-project-two.txt"]')`)
+  await click('[aria-label="New conversation in Synthetic folder"]')
+  for (let attempt = 0; attempt < 100 && !gitRequests.slice(gitCancellationStart).some(request => request.scope === 'folders:synthetic-folder'); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
+  const pendingGit = gitRequests.slice(gitCancellationStart).find(request => request.scope === 'folders:synthetic-folder')
+  assert.ok(pendingGit, 'Folder status request reached the gated synthetic endpoint')
+  await click('[aria-label="New conversation in Second folder"]')
+  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-folder-two.txt"]')`)
   for (let attempt = 0; attempt < 100 && !pendingGit.aborted; attempt++) await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(pendingGit.aborted, true, 'Changing project identity aborts stale Git status requests')
+  assert.equal(pendingGit.aborted, true, 'Changing folder identity aborts stale Git status requests')
   releaseGit!()
   await new Promise(resolve => setTimeout(resolve, 100))
-  assert.equal(await evaluate(`document.querySelectorAll('.git-status').length === 0 && document.querySelector('.file-tree-modes [role="tab"]:last-child').disabled`), true, 'Late dirty status cannot leak into another project')
-  gitDiffs.set('projects:synthetic-project\0src/main.ts', combinedDiff)
-  await click('[aria-label="New conversation in Synthetic project"]')
+  assert.equal(await evaluate(`document.querySelectorAll('.git-status').length === 0 && document.querySelector('.file-tree-modes [role="tab"]:last-child').disabled`), true, 'Late dirty status cannot leak into another folder')
+  gitDiffs.set('folders:synthetic-folder\0src/main.ts', combinedDiff)
+  await click('[aria-label="New conversation in Synthetic folder"]')
   await waitFor(`!document.querySelector('.file-tree-modes [role="tab"]:last-child').disabled`)
   await click('.file-tree-modes [role="tab"]:last-child')
   await waitFor(`document.querySelector('.tree-row[data-path="src/main.ts"]')`)
-  gitGate = { scope: 'projects:synthetic-project', operation: 'diff', promise: new Promise(resolve => { releaseGit = resolve }) }
+  gitGate = { scope: 'folders:synthetic-folder', operation: 'diff', promise: new Promise(resolve => { releaseGit = resolve }) }
   const diffCancellationStart = gitRequests.length
   await click('.tree-row[data-path="src/main.ts"]')
   for (let attempt = 0; attempt < 100 && !gitRequests.slice(diffCancellationStart).some(request => request.operation === 'diff'); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
   const pendingDiff = gitRequests.slice(diffCancellationStart).find(request => request.operation === 'diff')
-  assert.ok(pendingDiff, 'Project diff reached the gated synthetic endpoint')
-  await click('[aria-label="New conversation in Second project"]')
-  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-project-two.txt"]')`)
+  assert.ok(pendingDiff, 'Folder diff reached the gated synthetic endpoint')
+  await click('[aria-label="New conversation in Second folder"]')
+  await waitFor(`document.querySelector('.tree-row[data-path="synthetic-folder-two.txt"]')`)
   for (let attempt = 0; attempt < 100 && !pendingDiff.aborted; attempt++) await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(pendingDiff.aborted, true, 'Changing project identity also aborts pending diffs')
+  assert.equal(pendingDiff.aborted, true, 'Changing folder identity also aborts pending diffs')
   releaseGit!()
   await new Promise(resolve => setTimeout(resolve, 100))
-  assert.equal(await evaluate(`!document.querySelector('.file-diff') && document.querySelectorAll('.document-tablist [role="tab"]').length === 1`), true, 'Stale diffs cannot materialize a document in another project')
+  assert.equal(await evaluate(`!document.querySelector('.file-diff') && document.querySelectorAll('.document-tablist [role="tab"]').length === 1`), true, 'Stale diffs cannot materialize a document in another folder')
   sidebarEdgeCases = true
+  realtime.publisher.invalidateSessions()
   await window.loadURL(`${origin}/chat/${encodeURIComponent(idEmpty)}`)
   await waitFor(`document.querySelector('.file-tree-root-label')?.textContent === 'empty-free-workdir' && !document.querySelector('.file-tree .tree-node') && !document.querySelector('.file-tree-note')`)
   await waitFor(`document.querySelector('.self-reflection-toggle')?.getAttribute('aria-expanded') === 'false'`)
   assert.equal(await evaluate(`!document.querySelector('#self-reflection-conversations') && !!document.querySelector('.legacy-chats .session-select[aria-label="Reflect: normal conversation"]')`), true, 'Stable reflection IDs, not ordinary Reflect: titles, determine the collapsed section')
-  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.projects-sidebar .session-select')).some(node => /^Reflection fixture|^Soul reflection fixture|^Reflection child fixture/.test(node.getAttribute('aria-label')))`), false, 'Collapsed reflections and descendants are absent from ordinary project/chat groups')
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.folders-sidebar .session-select')).some(node => /^Reflection fixture|^Soul reflection fixture|^Reflection child fixture/.test(node.getAttribute('aria-label')))`), false, 'Collapsed reflections and descendants are absent from ordinary folder/chat groups')
   assert.equal(await evaluate(`document.querySelectorAll('.file-tree .tree-row').length`), 0, 'An empty managed free-chat directory still has a visible authoritative root identity')
   const focusWorkspaceRoot = async (expectedPath = emptyWorkdir) => {
     await waitFor(`(document.querySelector('.chat-messages .chat-content') || document.querySelector('.file-modal-body')) && document.querySelector('.file-tree-root')?.getClientRects().length > 0`)
@@ -2471,21 +2488,21 @@ async function main(): Promise<void> {
   await nativeKey('Escape', 'Escape', 27)
   await setExplorerVisible(true)
   const sessionsBeforeRootSwitch = extraSessions.length
-  const createsBeforeRootSwitch = projectSessionRequests.length
-  projectListGate = new Promise(resolve => { releaseProjectList = resolve })
-  const rootRequestStart = projectFileRequests.length
-  await click('[aria-label="New conversation in Synthetic project"]')
-  for (let attempt = 0; attempt < 100 && !projectFileRequests.slice(rootRequestStart).some(request => request.kind === 'files'); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
-  assert.ok(projectFileRequests.slice(rootRequestStart).some(request => request.kind === 'files'))
+  const createsBeforeRootSwitch = folderSessionRequests.length
+  folderListGate = new Promise(resolve => { releaseFolderList = resolve })
+  const rootRequestStart = folderFileRequests.length
+  await click('[aria-label="New conversation in Synthetic folder"]')
+  for (let attempt = 0; attempt < 100 && !folderFileRequests.slice(rootRequestStart).some(request => request.kind === 'files'); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.ok(folderFileRequests.slice(rootRequestStart).some(request => request.kind === 'files'))
   assert.equal(await evaluate(`!document.querySelector('.file-tree-root') && !document.querySelector('.file-tree').textContent.includes('empty-free-workdir')`), true, 'Switching scope removes old workdir metadata while the new directory request is pending')
-  releaseProjectList!()
-  await waitFor(`document.querySelector('.file-tree-root-label')?.textContent === 'project'`)
-  await click('[aria-label="New conversation in Second project"]')
+  releaseFolderList!()
+  await waitFor(`document.querySelector('.file-tree-root-label')?.textContent === 'folder'`)
+  await click('[aria-label="New conversation in Second folder"]')
   await waitFor(`document.querySelector('.file-tree-root-label')?.textContent === 'second'`)
-  await clickSidebar('.projects-sidebar .session-select[aria-label="Empty free conversation"]')
+  await clickSidebar('.folders-sidebar .session-select[aria-label="Empty free conversation"]')
   await waitFor(`document.querySelector('.file-tree-root-label')?.textContent === 'empty-free-workdir'`)
   assert.equal(extraSessions.length, sessionsBeforeRootSwitch)
-  assert.equal(projectSessionRequests.length, createsBeforeRootSwitch, 'Root identity browsing never creates project conversations')
+  assert.equal(folderSessionRequests.length, createsBeforeRootSwitch, 'Root identity browsing never creates folder conversations')
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
   await waitFor(`innerWidth === 390 && document.querySelector('.workbench-explorer.drawer')`)
   await setExplorerVisible(false)
@@ -2496,10 +2513,10 @@ async function main(): Promise<void> {
   await nativeKey('Escape', 'Escape', 27)
   await waitFor(`!document.querySelector('.workbench-explorer').getClientRects().length`)
   window.webContents.disableDeviceEmulation()
-  await waitFor(`innerWidth > 1280 && document.querySelector('.projects-rail-toggle') && document.querySelector('.workbench-explorer:not(.drawer)')`)
+  await waitFor(`innerWidth > 1280 && document.querySelector('.folders-rail-toggle') && document.querySelector('.workbench-explorer:not(.drawer)')`)
   await clickSidebar('.self-reflection-toggle')
   await waitFor(`document.querySelectorAll('#self-reflection-conversations .session-select').length === 3`)
-  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.project-conversations .session-select, .legacy-chats .session-select')).some(node => /^Reflection fixture|^Soul reflection fixture|^Reflection child fixture/.test(node.getAttribute('aria-label')))`), false, 'Project-associated reflection roots and descendants appear only in Self reflection')
+  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.folder-conversations .session-select, .legacy-chats .session-select')).some(node => /^Reflection fixture|^Soul reflection fixture|^Reflection child fixture/.test(node.getAttribute('aria-label')))`), false, 'Folder-associated reflection roots and descendants appear only in Self reflection')
   await clickSidebar('#self-reflection-conversations .session-select[aria-label="Reflection fixture (read-only)"]')
   await waitFor(`document.querySelector('#self-reflection-conversations .session-select[aria-label="Reflection fixture (read-only)"]')?.getAttribute('aria-current') === 'page'`)
   await setExplorerVisible(true)
@@ -2534,20 +2551,20 @@ async function main(): Promise<void> {
   for (let attempt = 0; attempt < 100 && sessionStageRequests === stagesBeforeReflectionPoll; attempt++) await new Promise(resolve => setTimeout(resolve, 25))
   assert.ok(sessionStageRequests > stagesBeforeReflectionPoll, 'Session activity refresh reached the fixture')
   assert.equal(await evaluate(`document.querySelector('.self-reflection-toggle').getAttribute('aria-expanded') === 'false' && !document.querySelector('#self-reflection-conversations')`), true, 'Polling and an active reflection do not force the section open')
-  await click('[aria-label="Collapse projects"]')
-  await waitFor(`document.querySelector('.projects-sidebar.is-rail')`)
+  await click('[aria-label="Collapse folders"]')
+  await waitFor(`document.querySelector('.folders-sidebar.is-rail')`)
   assert.equal(await evaluate(`document.querySelectorAll('.self-reflection-toggle').length === 1 && !document.querySelector('#self-reflection-conversations')`), true, 'Rail retains one collapsed Self reflection section')
   await clickSidebar('.self-reflection-toggle')
-  await waitFor(`document.querySelectorAll('#self-reflection-conversations .project-session-row.icon-only').length === 2`)
+  await waitFor(`document.querySelectorAll('#self-reflection-conversations .folder-session-row.icon-only').length === 2`)
   assert.equal(await evaluate(`document.querySelectorAll('#self-reflection-conversations .session-select').length`), 2, 'Expanded rail shows reflection root icons, not duplicate descendant icons')
-  await click('[aria-label="Expand projects"]')
-  await waitFor(`!document.querySelector('.projects-sidebar.is-rail') && document.querySelectorAll('#self-reflection-conversations .session-select').length === 3`)
-  await clickSidebar('.projects-sidebar .session-select[aria-label="Empty free conversation"]')
+  await click('[aria-label="Expand folders"]')
+  await waitFor(`!document.querySelector('.folders-sidebar.is-rail') && document.querySelectorAll('#self-reflection-conversations .session-select').length === 3`)
+  await clickSidebar('.folders-sidebar .session-select[aria-label="Empty free conversation"]')
   await waitFor(`document.querySelector('.file-tree-root-label')?.textContent === 'empty-free-workdir'`)
   const focusLongSession = async () => {
-    await evaluate(`Array.from(document.querySelectorAll('.projects-sidebar .session-select')).find(node => node.getAttribute('aria-label') === ${JSON.stringify(longSessionTitle)}).scrollIntoView({ block: 'center' })`)
+    await evaluate(`Array.from(document.querySelectorAll('.folders-sidebar .session-select')).find(node => node.getAttribute('aria-label') === ${JSON.stringify(longSessionTitle)}).scrollIntoView({ block: 'center' })`)
     await new Promise(resolve => setTimeout(resolve, 150))
-    await evaluate(`(() => { const button = Array.from(document.querySelectorAll('.projects-sidebar .session-select')).find(node => node.getAttribute('aria-label') === ${JSON.stringify(longSessionTitle)}); button.blur(); button.focus(); })()`)
+    await evaluate(`(() => { const button = Array.from(document.querySelectorAll('.folders-sidebar .session-select')).find(node => node.getAttribute('aria-label') === ${JSON.stringify(longSessionTitle)}); button.blur(); button.focus(); })()`)
     await waitFor(`document.querySelector('.session-info-title')?.textContent === ${JSON.stringify(longSessionTitle)}`)
   }
   const assertLongSessionInfo = async () => {
@@ -2575,7 +2592,7 @@ async function main(): Promise<void> {
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
   await waitFor(`innerWidth === 390`)
   await click('.mobile-sessions-toggle')
-  await waitFor(`document.querySelector('.mobile-sessions-open') && !document.querySelector('.projects-sidebar.is-rail')`)
+  await waitFor(`document.querySelector('.mobile-sessions-open') && !document.querySelector('.folders-sidebar.is-rail')`)
   await focusLongSession()
   await assertLongSessionInfo()
   await captureVisibleInfo('sidebar-long-info-mobile.png', true)
@@ -2593,15 +2610,15 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`Boolean(document.querySelector('.provider-form .method-tabs [aria-pressed="true"]'))`), true)
   assert.deepEqual(unexpected, [])
   assert.equal(window.isVisible(), false)
-  console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, diagnosis: true, documentTabs: true, selectionMenu: true, projectDraftFiles: true, reflectionHome: true, workspaceRoots: true, boundedSidebarInfo: true, messageTimestamps: true, squareSurfaces: true, conversationWidthCaps: true, groupAuthors: true, traceRequests: traceQueries.length, screenshotDirectory: directory })}`)
+  console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, diagnosis: true, documentTabs: true, selectionMenu: true, folderDraftFiles: true, reflectionHome: true, workspaceRoots: true, boundedSidebarInfo: true, messageTimestamps: true, squareSurfaces: true, conversationWidthCaps: true, groupAuthors: true, traceRequests: traceQueries.length, screenshotDirectory: directory })}`)
 }
 async function cleanup(): Promise<void> {
   release?.()
   releaseInventory?.()
   releaseFilePreview?.()
   releaseAgentHistory?.()
-  releaseProjectPreview?.()
-  releaseProjectList?.()
+  releaseFolderPreview?.()
+  releaseFolderList?.()
   releaseGit?.()
   disposeDocumentShortcuts?.()
   if (window && !window.isDestroyed()) {
@@ -2614,8 +2631,7 @@ async function cleanup(): Promise<void> {
     window.webContents.disableDeviceEmulation()
     window.destroy()
   }
-  for (const stream of eventStreams.values()) stream.destroy()
-  eventStreams.clear()
+  realtime.close()
   server.closeAllConnections()
   if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
 }

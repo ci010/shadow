@@ -99,7 +99,6 @@ test('web admission, channel fanout, commands and retry follow one directed inpu
     async execute() { commandsRun++; return 'Command handled' },
   })
   const mcpManager = new McpManager(async () => {})
-  t.mock.method(mcpManager, 'startWatching', () => {})
   const agent = new AgentApp({
     identity,
     bus, sessions, events, agentTypes, commandDispatcher: commands,
@@ -254,9 +253,9 @@ test('web admission, channel fanout, commands and retry follow one directed inpu
 
   const commandReplies: OutboundMessage[] = []
   bus.on('message.outbound', message => { if (message.metadata?.command) commandReplies.push(message) })
-  t.mock.getter(sessions, 'organizationId', () => 'org')
+  t.mock.getter(sessions, 'projectId', () => 'org')
   for (const botInstanceId of ['bot-a', 'bot-b']) {
-    const channelAddress = { organizationId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-chat' }
+    const channelAddress = { projectId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-chat' }
     const receipt = await agent.receiveChannelMessage({
       channel: 'discord', chatId: 'same-chat', channelAddress, senderId: 'alice', messageId: 'same-message',
       content: '/probe', admin: true, timestamp: new Date().toISOString(),
@@ -269,9 +268,9 @@ test('web admission, channel fanout, commands and retry follow one directed inpu
   const beforeAccepted = accepted.length
   await assert.rejects(agent.receiveChannelMessage({
     channel: 'discord', chatId: 'same-chat',
-    channelAddress: { organizationId: 'foreign', botInstanceId: 'bot-a', platform: 'discord', conversationId: 'same-chat' },
+    channelAddress: { projectId: 'foreign', botInstanceId: 'bot-a', platform: 'discord', conversationId: 'same-chat' },
     senderId: 'alice', messageId: 'foreign-command', content: '/probe', admin: true, timestamp: new Date().toISOString(),
-  }), /another organization/)
+  }), /another project/)
   assert.equal(commandsRun, beforeCommands)
   assert.equal(accepted.length, beforeAccepted)
   assert.equal(commandReplies.length, 2)

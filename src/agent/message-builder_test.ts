@@ -31,7 +31,7 @@ test('channel adapter normalizes retry/silent and never trusts event-shaped send
   assert.throws(() => channelMessageInput({ ...message, retry: true, silent: true }), /both retry and silent/)
 })
 
-test('event prompt projects explicit provenance, excludes scheduling, and stays a user role', async () => {
+test('event prompt folders explicit provenance, excludes scheduling, and stays a user role', async () => {
   const input: SessionMessageInput = {
     kind: 'message', id: 'delivery-id', timestamp: '2026-09-11T00:00:00.000Z',
     policy: 'queue', content: '/compact',
@@ -112,7 +112,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     let store: SessionStore = new Store(directory)
     t.after(async () => { store.close?.(); await rm(directory, { recursive: true, force: true }) })
     const uploadedPath = join(directory, 'uploaded-marked.png')
-    const originalPath = join(directory, 'project', 'original.png')
+    const originalPath = join(directory, 'folder', 'original.png')
     const bytes = Buffer.from('synthetic marked image')
     await writeFile(uploadedPath, bytes)
     const content = 'Image references (source metadata):\n'

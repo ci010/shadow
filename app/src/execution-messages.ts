@@ -1,4 +1,4 @@
-import { isRecord, type SidebarSession } from './projects-sidebar.ts'
+import { isRecord, type SidebarSession } from './folders-sidebar.ts'
 import { executionDisplayStage, isExecutionStatus } from './subagent-executions.ts'
 import { pairToolResults, parseToolCall, type ToolActivityMessage } from './tool-activity.ts'
 import type { SessionStage } from './session-activity.ts'

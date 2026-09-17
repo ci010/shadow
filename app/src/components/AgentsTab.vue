@@ -15,11 +15,18 @@
       </div>
 
       <div class="mt-4 agent-list">
-        <div v-if="agentTypes.length === 0" class="text-sm text-ink/40">Loading…</div>
+        <div v-if="listError" role="alert" class="text-sm text-ink/60">
+          {{ listError }}
+          <button type="button" class="underline" @click="loadAgentTypes">Retry</button>
+        </div>
+        <div v-else-if="loadingList" class="text-sm text-ink/40">Loading…</div>
+        <div v-else-if="agentTypes.length === 0" class="text-sm text-ink/40">No agent types available.</div>
         <button
           v-for="a in agentTypes" :key="a.name"
+          type="button"
           class="agent-item"
-          :class="{ active: selected?.name === a.name }"
+          :class="{ active: requestedAgent?.name === a.name }"
+          :aria-pressed="requestedAgent?.name === a.name"
           @click="selectAgent(a)"
         >
           <div class="agent-item-top">
@@ -33,7 +40,16 @@
     </div>
 
     <!-- Main: agent type detail -->
-    <div v-if="selected" class="flex flex-col gap-3 min-w-0">
+    <div class="flex flex-col gap-3 min-w-0" :aria-busy="loadingContext">
+      <p v-if="loadingContext" role="status" class="text-sm text-ink/60">
+        Loading {{ requestedAgent?.name }} context ({{ channel }})…
+      </p>
+      <div v-if="contextError" role="alert" class="text-sm text-ink/60">
+        {{ contextError }}
+        <span v-if="selected">Showing the previous context.</span>
+        <button type="button" class="underline" @click="retryContext">Retry</button>
+      </div>
+      <template v-if="selected">
       <!-- Config card -->
       <div class="rounded-md border border-default bg-surface p-4">
         <h2 class="text-lg font-600">{{ selected.name }}</h2>
@@ -86,17 +102,18 @@
         :empty-message="loadingContext ? 'Loading…' : 'No system prompt.'"
         show-token-estimate
       />
-    </div>
+      </template>
 
-    <div v-else class="rounded-md border border-default bg-surface p-4 flex items-center justify-center text-ink/40">
-      Select an agent type to inspect
+      <div v-else-if="!loadingContext && !contextError" class="rounded-md border border-default bg-surface p-4 flex items-center justify-center text-ink/40">
+        Select an agent type to inspect
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { apiUrl } from '../api-url.ts'
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SystemPromptCard from './SystemPromptCard.vue'
 import ToolsCard from './ToolsCard.vue'
@@ -130,12 +147,24 @@ function buildUrl(path: string, params?: Record<string, string>): string {
 }
 
 const channels = ['heartbeat', 'web', 'discord', 'wechat', 'feishu']
-const channel = ref('heartbeat')
+const channel = computed({
+  get: () => typeof route.query.channel === 'string' && channels.includes(route.query.channel)
+    ? route.query.channel : 'heartbeat',
+  set: value => {
+    void router.replace({ query: { ...route.query, channel: value } })
+  },
+})
 const agentTypes = ref<AgentTypeMeta[]>([])
+const requestedAgent = computed(() => agentTypes.value.find(a => a.name === route.params.agentName) ?? agentTypes.value[0])
 const selected = ref<AgentTypeMeta | null>(null)
 const renderedSystemPrompt = ref('')
 const resolvedTools = ref<ToolDef[]>([])
 const loadingContext = ref(false)
+const loadingList = ref(true)
+const listError = ref('')
+const contextError = ref('')
+let listRequest: AbortController | undefined
+let contextRequest: AbortController | undefined
 
 const includeFlags = computed(() => {
   if (!selected.value) return []
@@ -150,65 +179,69 @@ const includeFlags = computed(() => {
 })
 
 async function loadAgentTypes() {
+  listRequest?.abort()
+  const request = new AbortController()
+  listRequest = request
+  loadingList.value = true
+  listError.value = ''
   try {
-    const res = await fetch(buildUrl('/debug/agent-types'))
-    if (res.ok) {
-      agentTypes.value = await res.json()
-      if (agentTypes.value.length > 0 && !selected.value) {
-        selectAgent(agentTypes.value[0])
-      }
+    const res = await fetch(buildUrl('/debug/agent-types'), { signal: request.signal })
+    if (!res.ok) throw new Error(`Failed to load agent types (${res.status}).`)
+    const data: AgentTypeMeta[] = await res.json()
+    if (request.signal.aborted) return
+    agentTypes.value = data
+    if (requestedAgent.value && route.params.agentName !== requestedAgent.value.name) {
+      selectAgent(requestedAgent.value)
     }
   } catch (e) {
+    if (request.signal.aborted) return
+    listError.value = e instanceof Error ? e.message : 'Failed to load agent types.'
     console.error('Failed to load agent types:', e)
+  } finally {
+    if (!request.signal.aborted) loadingList.value = false
   }
 }
 
-async function loadContext(name: string) {
+async function loadContext(agent: AgentTypeMeta) {
+  contextRequest?.abort()
+  const request = new AbortController()
+  contextRequest = request
   loadingContext.value = true
-  renderedSystemPrompt.value = ''
-  resolvedTools.value = []
+  contextError.value = ''
   try {
-    const res = await fetch(buildUrl(`/debug/agent-types/${encodeURIComponent(name)}/context`, { channel: channel.value }))
-    if (res.ok) {
-      const data = await res.json()
-      renderedSystemPrompt.value = data.systemPrompt ?? ''
-      resolvedTools.value = data.tools ?? []
-    }
+    const res = await fetch(buildUrl(`/debug/agent-types/${encodeURIComponent(agent.name)}/context`, { channel: channel.value }), { signal: request.signal })
+    if (!res.ok) throw new Error(`Failed to load ${agent.name} context (${res.status}).`)
+    const data = await res.json()
+    if (request.signal.aborted) return
+    selected.value = agent
+    renderedSystemPrompt.value = data.systemPrompt ?? ''
+    resolvedTools.value = data.tools ?? []
   } catch (e) {
+    if (request.signal.aborted) return
+    contextError.value = e instanceof Error ? e.message : `Failed to load ${agent.name} context.`
     console.error('Failed to load agent context:', e)
   } finally {
-    loadingContext.value = false
+    if (!request.signal.aborted) loadingContext.value = false
   }
 }
 
 function selectAgent(a: AgentTypeMeta) {
-  selected.value = a
-  router.replace({ name: 'agents', params: { agentName: a.name }, query: { channel: channel.value } })
-  loadContext(a.name)
+  void router.replace({
+    name: 'agents',
+    params: { ...route.params, agentName: a.name },
+    query: { ...route.query, channel: channel.value },
+  })
 }
 
-watch(channel, () => {
-  if (selected.value) {
-    router.replace({ name: 'agents', params: { agentName: selected.value.name }, query: { channel: channel.value } })
-    loadContext(selected.value.name)
-  }
-})
+function retryContext() {
+  if (requestedAgent.value) void loadContext(requestedAgent.value)
+}
 
-onMounted(async () => {
-  // Restore channel from query param
-  const qChannel = route.query.channel as string | undefined
-  if (qChannel && channels.includes(qChannel)) {
-    channel.value = qChannel
-  }
-
-  await loadAgentTypes()
-
-  // Restore agent from route param
-  const routeAgent = route.params.agentName as string | undefined
-  if (routeAgent) {
-    const match = agentTypes.value.find(a => a.name === routeAgent)
-    if (match) selectAgent(match)
-  }
+watch([requestedAgent, channel], () => { retryContext() })
+onMounted(loadAgentTypes)
+onUnmounted(() => {
+  listRequest?.abort()
+  contextRequest?.abort()
 })
 </script>
 

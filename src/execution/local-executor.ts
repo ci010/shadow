@@ -19,7 +19,6 @@ import type {
   LocalProcessExecutor,
   ProcessExecuteArgsV1,
 } from './executor.ts'
-import type { LocalApprovalAuthority } from './local-approval.ts'
 
 export const PROCESS_EXECUTE_OPERATION = 'process.execute'
 
@@ -129,7 +128,6 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     private localNodeId = 'local',
     private operationHandlers: readonly (LocalJobOperationHandler | LocalProcessOperationHandler)[] = [],
     private processCapabilityIds?: readonly string[],
-    private approvalAuthority?: LocalApprovalAuthority,
   ) {}
 
   async startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal }): Promise<ManagedProcess> {
@@ -163,7 +161,14 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       record = createRecord(request)
       this.jobs.set(request.jobId, record)
       this.push(record, { type: 'accepted' })
-      void this.run(record)
+      if (signal.aborted) {
+        record.cancelRequested = true
+        this.finish(record, 'cancelled', 'cancel-acknowledged', {
+          code: 'cancelled', message: 'Job was cancelled before execution', retryable: false,
+        })
+      } else {
+        void this.run(record)
+      }
     }
 
     const abort = () => void this.cancel(request.jobId)
@@ -239,7 +244,6 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       return
     }
     if (operationHandler) {
-      if (!await this.authorize(record)) return
       const controller = new AbortController()
       record.operationController = controller
       const remainingMs = Math.max(
@@ -336,7 +340,6 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       })
       return
     }
-    if (!await this.authorize(record)) return
 
     try {
       const process = await this.startProcess(args)
@@ -375,14 +378,6 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
   }
 
   private async runWorkdirProcess(record: JobRecord, handler: LocalProcessOperationHandler): Promise<void> {
-    // Unlike a raw local job, a capability shell must always have a Child authority.
-    if (!this.approvalAuthority) {
-      this.finish(record, 'rejected', 'rejected', {
-        code: 'approval-required', message: 'Workdir shell requires Child-local approval', retryable: false,
-      })
-      return
-    }
-    if (!await this.authorize(record)) return
     const controller = new AbortController()
     record.operationController = controller
     if (record.cancelRequested) controller.abort()
@@ -487,74 +482,6 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     }
     if (truncated) this.push(record, { type: 'stderr', chunk: '\n[Remote shell output truncated at 128 KiB]\n' })
     return truncated
-  }
-
-  private async authorize(record: JobRecord): Promise<boolean> {
-    const request = record.request
-    if (!this.approvalAuthority) {
-      if (request.approval !== 'local-required') return true
-      this.setState(record, 'awaiting-approval')
-      this.push(record, { type: 'awaiting-approval' })
-      this.finish(record, 'rejected', 'rejected', {
-        code: 'approval-required',
-        message: 'LocalExecutor has no approval grant for this job',
-        retryable: true,
-      })
-      return false
-    }
-
-    const controller = new AbortController()
-    record.operationController = controller
-    if (record.cancelRequested) controller.abort()
-    const remainingMs = Math.max(
-      0,
-      Date.parse(request.deadlineAt) - Date.now(),
-    )
-    const timeout = setTimeout(() => {
-      record.timedOut = true
-      controller.abort()
-    }, remainingMs)
-    try {
-      const approved = await this.approvalAuthority.authorize(
-        request,
-        controller.signal,
-        () => {
-          if (TERMINAL_STATES.has(record.status.state)) return
-          this.setState(record, 'awaiting-approval')
-          this.push(record, { type: 'awaiting-approval' })
-        },
-      )
-      if (record.timedOut) {
-        this.finish(record, 'expired', 'expired', {
-          code: 'deadline-expired',
-          message: 'Job deadline elapsed while awaiting local approval',
-          retryable: true,
-        })
-        return false
-      }
-      if (record.cancelRequested) {
-        this.finish(record, 'cancelled', 'cancel-acknowledged', {
-          code: 'cancelled',
-          message: 'Approval wait cancellation was acknowledged',
-          retryable: false,
-        })
-        return false
-      }
-      if (!approved) {
-        this.finish(record, 'rejected', 'rejected', {
-          code: 'local-approval-denied',
-          message: 'The Child denied local execution approval',
-          retryable: false,
-        })
-        return false
-      }
-      return true
-    } finally {
-      clearTimeout(timeout)
-      if (record.operationController === controller) {
-        record.operationController = undefined
-      }
-    }
   }
 
   private emitOutput(record: JobRecord, process: ManagedProcess): void {

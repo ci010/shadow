@@ -34,8 +34,12 @@ test('model menu combines model and effort without changing conversation drafts'
   await runFixture(t, 'model-menu-smoke')
 })
 
-test('reflection selection preserves sidebar geometry and validated shared Home rows', { timeout: 150_000 }, async (t) => {
+test('reflection selection and folder clicks preserve layout and cached Home rows', { timeout: 150_000 }, async (t) => {
   await runFixture(t, 'reflection-stability-smoke')
+})
+
+test('cached chats release connections so Nodes and Settings remain responsive', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'chat-connections-smoke')
 })
 
 test('yield questions preserve drafts and route human answers and cancellation independently of chat sends', { timeout: 150_000 }, async (t) => {
@@ -103,6 +107,17 @@ async function runFixture(t: TestContext, fixture: string): Promise<void> {
   const [code] = await closed
   const lines = stdout.split(/\r?\n/).filter((line) => line.startsWith('LAYOUT_'))
   for (const line of lines) t.diagnostic(line)
+  if (fixture === 'chat-connections-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    for (const name of ['background-tasks-desktop.png', 'background-tasks-mobile.png',
+      'automations-desktop.png', 'automations-mobile.png', 'automation-run-desktop.png', 'automation-run-mobile.png']) {
+      if (code !== 0) {
+        try { await access(join(directory, name)) } catch { continue }
+      }
+      await copyFile(join(directory, name), join(output, name))
+    }
+  }
   if (fixture === 'diagnosis-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
     const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
     await mkdir(output, { recursive: true })
@@ -112,7 +127,7 @@ async function runFixture(t: TestContext, fixture: string): Promise<void> {
       }
       await copyFile(join(directory, name), join(output, name))
     }
-    for (const name of ['git-changes-desktop.png', 'git-changes-mobile.png', 'projects-rail-hovercard.png']) await copyScreenshot(name)
+    for (const name of ['git-changes-desktop.png', 'git-changes-mobile.png', 'folders-rail-hovercard.png']) await copyScreenshot(name)
     for (const name of ['workspace-root-desktop.png', 'workspace-root-mobile.png']) await copyScreenshot(name)
     for (const name of ['sidebar-long-info-desktop.png', 'sidebar-long-info-mobile.png']) await copyScreenshot(name)
     for (const name of ['reflection-home-desktop.png', 'reflection-home-mobile.png']) await copyScreenshot(name)
@@ -132,7 +147,7 @@ async function runFixture(t: TestContext, fixture: string): Promise<void> {
   if (fixture === 'model-menu-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
     const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
     await mkdir(output, { recursive: true })
-    for (const name of ['model-menu-desktop.png', 'model-menu-mobile.png']) {
+    for (const name of ['model-menu-desktop.png', 'model-menu-mobile.png', 'model-defaults-desktop.png', 'model-defaults-mobile.png']) {
       if (code !== 0) {
         try { await access(join(directory, name)) } catch { continue }
       }

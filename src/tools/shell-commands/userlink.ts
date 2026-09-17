@@ -33,7 +33,7 @@ export function createUserLinkCommandHandler(
           ctx.senderId,
           targetChannel,
           targetSenderId,
-          { organizationId: ctx.organizationId, requesterAddress: ctx.channelAddress, targetBotInstanceId: args[3] },
+          { projectId: ctx.projectId, requesterAddress: ctx.channelAddress, targetBotInstanceId: args[3] },
         )
 
         if (!challenge.targetChatId) {
@@ -78,7 +78,7 @@ export function createUserLinkCommandHandler(
           ctx.senderId,
           code,
           ctx.channelAddress,
-          ctx.organizationId,
+          ctx.projectId,
         )
         await ensureProfileFile(workspace, linked.profileName)
         return [

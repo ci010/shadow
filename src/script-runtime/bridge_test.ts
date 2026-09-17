@@ -3,14 +3,14 @@ import test from 'node:test'
 import { Hono } from 'hono'
 import type { ExecutionContext } from '../tools/context.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
-import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 import { EvalBridgeRuntime, registerEvalBridgeRoute, startToolBridge } from './bridge.ts'
 
 test('eval bridges dispatch identical session/tool names only within the bound runtime and injected gateway', async () => {
-  const scopes = [createOrganizationScope('org-a'), createOrganizationScope('org-b')]
+  const scopes = [createProjectScope('org-a'), createProjectScope('org-b')]
   const runtimes = scopes.map((scope) => new EvalBridgeRuntime({
-    organizationId: scope.organizationId, scope,
-    gatewayBaseUrl: `http://127.0.0.1:4321/api/organizations/${scope.organizationId}`,
+    projectId: scope.projectId, scope,
+    gatewayBaseUrl: `http://127.0.0.1:4321/api/projects/${scope.projectId}`,
   }))
   const apps = runtimes.map((runtime) => {
     const app = new Hono()
@@ -24,27 +24,27 @@ test('eval bridges dispatch identical session/tool names only within the bound r
       name: 'fixture', description: 'fixture', parameters: { type: 'object', properties: {} },
       async execute(_args, ctx) {
         await new Promise<void>((resolve) => setTimeout(resolve, i === 0 ? 10 : 1))
-        assert.equal(getOrganizationScope(), scope)
+        assert.equal(getProjectScope(), scope)
         assert.equal(ctx.sessionId, 'same-session')
-        seen.push(scope.organizationId)
-        return scope.organizationId
+        seen.push(scope.projectId)
+        return scope.projectId
       },
     })
     return {
-      organizationId: scope.organizationId, evalBridge: runtimes[i],
+      projectId: scope.projectId, evalBridge: runtimes[i],
       sessionId: 'same-session', physicalSessionId: 'same-physical', channel: 'test',
       chatId: 'same-chat', senderId: 'same-user', messageId: 'same-input',
       tools: new SessionTools(tools, '.'), signal: new AbortController().signal,
-    } satisfies ExecutionContext & { organizationId: string; evalBridge: EvalBridgeRuntime }
+    } satisfies ExecutionContext & { projectId: string; evalBridge: EvalBridgeRuntime }
   })
   const bridges = contexts.map((ctx) => startToolBridge(ctx.tools, ctx))
-  const paths = bridges.map((bridge, i) => new URL(bridge.url).pathname.replace(`/api/organizations/${scopes[i].organizationId}`, ''))
+  const paths = bridges.map((bridge, i) => new URL(bridge.url).pathname.replace(`/api/projects/${scopes[i].projectId}`, ''))
   const request = (app: Hono, path: string, body: unknown = { name: 'fixture' }) => app.request(`${path}/call`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   })
   try {
     const results = await Promise.all(apps.map(async (app, i) => {
-      assert.match(bridges[i].url, new RegExp(`:4321/api/organizations/${scopes[i].organizationId}/eval/`))
+      assert.match(bridges[i].url, new RegExp(`:4321/api/projects/${scopes[i].projectId}/eval/`))
       assert.equal((await request(app, paths[1 - i])).status, 404)
       assert.equal((await app.request(`${paths[1 - i]}/tools`)).status, 404)
       const response = await request(app, paths[i])
@@ -65,7 +65,7 @@ test('eval bridges dispatch identical session/tool names only within the bound r
     bridges[0].cleanup()
     bridges[0].cleanup()
     assert.equal((await request(apps[0], paths[0])).status, 404)
-    const concurrentPath = new URL(concurrent.url).pathname.replace('/api/organizations/org-a', '')
+    const concurrentPath = new URL(concurrent.url).pathname.replace('/api/projects/org-a', '')
     assert.equal((await request(apps[0], concurrentPath)).status, 200)
     await runtimes[0].shutdown()
     assert.equal((await request(apps[0], concurrentPath)).status, 404)
@@ -79,19 +79,19 @@ test('eval bridges dispatch identical session/tool names only within the bound r
   }
 })
 
-test('organization eval bindings reject invalid gateway bases and legacy dispatch', () => {
-  const scope = createOrganizationScope('org')
+test('project eval bindings reject invalid gateway bases and legacy dispatch', () => {
+  const scope = createProjectScope('org')
   for (const gatewayBaseUrl of ['file:///local', 'http://user:password@localhost', 'http://localhost?x=1']) {
-    assert.throws(() => new EvalBridgeRuntime({ scope, organizationId: 'org', gatewayBaseUrl }))
+    assert.throws(() => new EvalBridgeRuntime({ scope, projectId: 'org', gatewayBaseUrl }))
   }
-  assert.throws(() => new EvalBridgeRuntime({ scope, organizationId: 'other', gatewayBaseUrl: 'http://localhost' }), /matching live/)
+  assert.throws(() => new EvalBridgeRuntime({ scope, projectId: 'other', gatewayBaseUrl: 'http://localhost' }), /matching live/)
   scope.close()
-  assert.throws(() => new EvalBridgeRuntime({ scope, organizationId: 'org', gatewayBaseUrl: 'http://localhost' }), /matching live/)
+  assert.throws(() => new EvalBridgeRuntime({ scope, projectId: 'org', gatewayBaseUrl: 'http://localhost' }), /matching live/)
 })
 
 test('eval runtime teardown aborts and drains accepted tool calls and retires their registrations', async () => {
-  const scope = createOrganizationScope('org')
-  const runtime = new EvalBridgeRuntime({ organizationId: 'org', scope, gatewayBaseUrl: 'http://localhost:4321' })
+  const scope = createProjectScope('org')
+  const runtime = new EvalBridgeRuntime({ projectId: 'org', scope, gatewayBaseUrl: 'http://localhost:4321' })
   const app = new Hono()
   registerEvalBridgeRoute(app, runtime)
   const entered = Promise.withResolvers<AbortSignal>()
@@ -107,10 +107,10 @@ test('eval runtime teardown aborts and drains accepted tool calls and retires th
     },
   })
   const ctx = {
-    organizationId: 'org', evalBridge: runtime, sessionId: 'same', physicalSessionId: 'same-1',
+    projectId: 'org', evalBridge: runtime, sessionId: 'same', physicalSessionId: 'same-1',
     channel: 'test', chatId: 'same', senderId: 'user', messageId: 'input',
     tools: new SessionTools(tools, '.'), signal: new AbortController().signal,
-  } satisfies ExecutionContext & { organizationId: string; evalBridge: EvalBridgeRuntime }
+  } satisfies ExecutionContext & { projectId: string; evalBridge: EvalBridgeRuntime }
   const bridge = startToolBridge(ctx.tools, ctx)
   const path = new URL(bridge.url).pathname
   const pending = app.request(`${path}/call`, {
@@ -138,7 +138,7 @@ test('eval runtime teardown aborts and drains accepted tool calls and retires th
   }
 })
 
-test('legacy bridge compatibility accepts only unowned contexts and cannot dispatch from an organization scope', async () => {
+test('legacy bridge compatibility accepts only unowned contexts and cannot dispatch from an project scope', async () => {
   const app = new Hono()
   registerEvalBridgeRoute(app)
   const ctx: ExecutionContext = {
@@ -148,7 +148,7 @@ test('legacy bridge compatibility accepts only unowned contexts and cannot dispa
   }
   const bridge = startToolBridge(ctx.tools, ctx)
   const path = new URL(bridge.url).pathname
-  const scope = createOrganizationScope('org')
+  const scope = createProjectScope('org')
   try {
     assert.deepEqual(await (await app.request(`${path}/tools`)).json(), [])
     assert.throws(() => scope.run(() => startToolBridge(ctx.tools, ctx)), /injected eval bridge/)

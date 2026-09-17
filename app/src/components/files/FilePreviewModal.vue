@@ -19,13 +19,17 @@
             :aria-label="fullscreen ? 'Exit fullscreen' : 'Fullscreen'"
           ><span class="w-4 h-4" :class="fullscreen ? 'i-lucide-minimize' : 'i-lucide-maximize'" aria-hidden="true" /></button>
           </HoverInfo>
-          <a class="file-modal-btn" :href="raw" target="_blank" rel="noopener noreferrer">Open raw</a>
+          <a v-if="!offline" class="file-modal-btn" :href="raw" target="_blank" rel="noopener noreferrer">Open raw</a>
           <HoverInfo v-if="!inline" text="Close file preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Close file preview" @click="$emit('close')"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button></HoverInfo>
         </div>
       </div>
       <div class="file-modal-body">
-        <ImageAnnotationPreview v-if="kind === 'image'" :key="`image:${raw}`" :src="raw" :name="entry.name"
-          :source-key="JSON.stringify([apiBase, sessionId, projectId, path])" :context-key="contextKey"
+        <NodeOfflineState v-if="offline" :checking="loading" description="This preview will be available when the owning node reconnects." @retry="loadText" />
+        <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
+          {{ error || 'Loading…' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
+        </div>
+        <ImageAnnotationPreview v-else-if="kind === 'image'" :key="`image:${raw}`" :src="raw" :name="entry.name"
+          :source-key="JSON.stringify([apiBase, sessionId, folderId, path])" :context-key="contextKey"
           :active="active" :editable="canQuote" :keyboard-active="selectionActive"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
         <video v-else-if="kind === 'video' && active" :key="`video:${raw}`" :src="raw" class="file-modal-media" controls autoplay />
@@ -74,6 +78,8 @@ import HoverInfo from '../HoverInfo.vue'
 import FileHighlightText from './FileHighlightText.vue'
 import MemoryEventRecord from './MemoryEventRecord.vue'
 import ImageAnnotationPreview from './ImageAnnotationPreview.vue'
+import NodeOfflineState from './NodeOfflineState.vue'
+import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { textEncodings, type TextEncoding } from '../../../../src/execution/filesystem/text-encoding.ts'
 import { isMemoryEventFile, parseMemoryEvents } from '../../memory-events.ts'
@@ -88,7 +94,7 @@ import {
 const props = withDefaults(defineProps<{
   apiBase: string
   sessionId: string
-  projectId?: string
+  folderId?: string
   dir: string
   entry: FileEntry
   inline?: boolean
@@ -96,11 +102,12 @@ const props = withDefaults(defineProps<{
   selectionActive?: boolean
   canQuote?: boolean
   contextKey?: string
+  remote?: boolean
 }>(), { active: true, selectionActive: false, canQuote: false, contextKey: '' })
 
 const emit = defineEmits<{ close: []; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 
-const files = computed(() => useSessionFiles(props.apiBase, props.projectId))
+const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
 
 const path = computed(() => joinPath(props.dir, props.entry.name))
 const kind = computed(() => fileKind(props.entry.ext))
@@ -128,6 +135,7 @@ const truncated = ref(false)
 const memoryRecords = computed(() => isMemoryEvents.value ? parseMemoryEvents(textContent.value, truncated.value) : [])
 const loading = ref(false)
 const error = ref('')
+const offline = ref(false)
 const binary = ref(false)
 const loaded = ref(false)
 const highlight = ref<InstanceType<typeof FileHighlightText>>()
@@ -135,7 +143,7 @@ const highlightError = ref('')
 const selectionRoot = ref<HTMLElement>()
 const selectionEnabled = computed(() => props.active && props.selectionActive && textMode.value
   && loaded.value && !loading.value && !error.value && !binary.value && !!textContent.value.trim())
-const selectionKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.projectId, path.value, sourceView.value, frameNonce.value, encoding.value]))
+const selectionKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId, path.value, sourceView.value, frameNonce.value, encoding.value]))
 function quoteSelection(text: string, range: Range): void {
   if (!selectionEnabled.value || !props.canQuote || !selectionRoot.value || !text.trim()) return
   const lines = isMemoryEvents.value && !sourceView.value
@@ -186,13 +194,23 @@ async function loadText(): Promise<void> {
   binary.value = false
   loaded.value = false
   highlightError.value = ''
-  if (!textMode.value || !props.active || !(props.projectId || props.sessionId)) return
+  if ((!textMode.value && !props.remote) || !props.active || !(props.folderId || props.sessionId)) return
   const controller = new AbortController()
   request = controller
   loading.value = true
   try {
+    // Media elements cannot read structured API errors. Verify the owning
+    // workdir before handing a scoped raw/static URL to the browser.
+    if (!textMode.value) {
+      await files.value.listDir(props.sessionId, props.dir, controller.signal)
+      if (controller.signal.aborted) return
+      offline.value = false
+      loaded.value = true
+      return
+    }
     const p = await files.value.preview(props.sessionId, path.value, 65536, controller.signal, encoding.value)
     if (controller.signal.aborted) return
+    offline.value = false
     binary.value = p.binary
     encodingWarning.value = p.encodingWarning ?? ''
     if (!p.binary && p.content != null) {
@@ -202,14 +220,18 @@ async function loadText(): Promise<void> {
     }
     loaded.value = true
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load preview. Retry.'
+    if (!controller.signal.aborted) {
+      offline.value = isNodeOfflineError(cause)
+      error.value = offline.value ? '' : cause instanceof Error ? cause.message : 'Could not load preview. Retry.'
+    }
   } finally {
     if (request === controller) { request = undefined; loading.value = false }
   }
 }
 
-watch(() => [props.apiBase, props.sessionId, props.projectId, path.value, kind.value], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, path.value, kind.value, props.remote], () => {
   encoding.value = 'auto'
+  offline.value = false
   loaded.value = false
   sourceView.value = false
   frameNonce.value++

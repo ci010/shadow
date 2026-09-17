@@ -1,5 +1,6 @@
 import type { FileEntry } from './composables/useSessionFiles.ts'
 import { apiUrl } from './api-url.ts'
+import { nodeOfflineError, workdirUnavailableMessage } from './workdir-request-error.ts'
 import { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk } from '../../src/execution/git/contracts.ts'
 export { parseGitStatus, parseGitDiff, type GitChangeKind, type GitChange, type GitStatus, type GitHunk, type GitDiff } from '../../src/execution/git/contracts.ts'
 
@@ -68,14 +69,22 @@ export function gitUnavailableLabel(reason: GitStatus['reason']): string {
   return 'Git status is not available for this workdir.'
 }
 
-export function createGitFilesClient(apiBase: string, sessionId: string, projectId?: string) {
-  const root = projectId ? `/api/projects/${encodeURIComponent(projectId)}` : `/api/sessions/${encodeURIComponent(sessionId)}`
+export function createGitFilesClient(apiBase: string, sessionId: string, folderId?: string) {
+  const root = folderId ? `/api/folders/${encodeURIComponent(folderId)}` : `/api/sessions/${encodeURIComponent(sessionId)}`
   async function request(operation: string, signal: AbortSignal, file?: string): Promise<unknown> {
     const url = apiUrl(apiBase, `${root}/git/${operation}`)
     if (file !== undefined) url.searchParams.set('path', file)
     const response = await fetch(url, { signal })
-    const value: unknown = await response.json()
-    if (!response.ok) throw new Error(record(value) && typeof value.message === 'string' ? value.message : `Could not load Git changes (${response.status}). Retry.`)
+    const value: unknown = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null
+    if (!response.ok) {
+      const offline = nodeOfflineError(response.status, value)
+      if (offline) throw offline
+      if (response.status === 401 || response.status === 403) throw new Error('Access to these Git changes was denied.')
+      if (response.status === 404) throw new Error('This file or workdir is no longer available. Refresh files and changes.')
+      const unavailable = workdirUnavailableMessage(value)
+      if (unavailable) throw new Error(unavailable)
+      throw new Error(record(value) && typeof value.message === 'string' ? value.message : `Could not load Git changes (${response.status}). Retry.`)
+    }
     return value
   }
   return {

@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { env } from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { writePrivateFile } from '../config/store.ts'
+import { DEFAULT_COPILOT_MODEL } from '../config/defaults.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { openaiChat } from './openai-compatible.ts'
 import { openaiResponses } from './openai-responses.ts'
@@ -33,9 +34,6 @@ const API_VERSION = '2025-04-01'
 const EDITOR_VERSION = `vscode/${VSCODE_VERSION}`
 const PLUGIN_VERSION = `copilot-chat/${COPILOT_VERSION}`
 const USER_AGENT = `GitHubCopilotChat/${COPILOT_VERSION}`
-
-/** Model used when a request does not specify one. */
-const DEFAULT_COPILOT_MODEL = 'claude-sonnet-4.6'
 
 /** Shape of a single entry in the Copilot `GET /models` response. */
 interface CopilotModelInfo {

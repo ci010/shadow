@@ -58,7 +58,7 @@ export interface DesktopWindowControls {
 
 export interface ShadowDesktopApi {
 	readonly windowControls?: DesktopWindowControls
-	readonly projects?: {
+	readonly folders?: {
 		selectDirectory(): Promise<string | null>
 	}
 	readonly chatContext?: {

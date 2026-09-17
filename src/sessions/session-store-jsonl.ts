@@ -7,6 +7,9 @@ import type {
 } from './session-store.ts'
 import { streamJsonlObjects } from '../utils/jsonl.ts'
 import { readFileIfExists, safeSessionId } from '../utils/paths.ts'
+import { parseAutomationSessionRef } from '../cron/contracts.ts'
+import { validateOwnership, OwnershipValidationError } from '../projects/ownership.ts'
+import { normalizeInitiativeMetadata, InitiativeMetadataError } from './initiative-metadata.ts'
 
 /**
  * JSONL-file-backed session store.
@@ -29,15 +32,19 @@ export class JsonlSessionStore implements SessionStore {
     if (!raw) return null
 
     try {
-      const state = JSON.parse(raw) as SessionState
+      const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
       if (!state.sessionId) return null
+      if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
       return state
-    } catch {
+    } catch (error) {
+      if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError) throw error
       return null
     }
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    state = normalizeInitiativeMetadata(validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })) as unknown as SessionState
+    parseAutomationSessionRef(state.automation)
     await mkdir(this.sessionsDir, { recursive: true })
     await writeFile(
       this.statePath(sessionKey),
@@ -51,7 +58,7 @@ export class JsonlSessionStore implements SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
-        projectId?: string
+        folderId?: string
       }
     >
   > {
@@ -60,7 +67,7 @@ export class JsonlSessionStore implements SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
-        projectId?: string
+        folderId?: string
       }
     > = []
     try {
@@ -69,17 +76,17 @@ export class JsonlSessionStore implements SessionStore {
         const raw = await readFileIfExists(join(this.sessionsDir, entry.name))
         if (!raw) continue
         try {
-          const parsed = JSON.parse(raw) as SessionState
+          const parsed = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
           if (!parsed.sessionId) continue
           results.push({
             sessionId: parsed.sessionId,
             segmentIndex: parsed.segmentIndex ?? 0,
             lastActivityAt: parsed.lastActivityAt,
-            projectId: typeof parsed.projectId === 'string' ? parsed.projectId : undefined,
+            folderId: typeof parsed.folderId === 'string' ? parsed.folderId : undefined,
           })
-        } catch { /* skip malformed */ }
+        } catch (error) { if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError) throw error }
       }
-    } catch { /* dir may not exist yet */ }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     return results
   }
 
@@ -91,12 +98,13 @@ export class JsonlSessionStore implements SessionStore {
         const raw = await readFileIfExists(join(this.sessionsDir, entry.name))
         if (!raw) continue
         try {
-          const state = JSON.parse(raw) as SessionState
+          const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
           if (!state.sessionId) continue
+          if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
           result[state.sessionId] = state
-        } catch { /* skip malformed */ }
+        } catch (error) { if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError) throw error }
       }
-    } catch { /* dir may not exist yet */ }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     return result
   }
 

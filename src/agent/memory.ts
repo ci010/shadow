@@ -107,11 +107,11 @@ export class MemoryStore {
     opts: {
       maxOwn?: number
       maxRelated?: number
-      currentProject?: string
-      projectOf?: (sessionId: string) => string | undefined
+      currentInitiative?: string
+      initiativeOf?: (sessionId: string) => string | undefined
     } = {},
   ): Promise<string> {
-    const { maxOwn = 40, maxRelated = 15, currentProject, projectOf } = opts
+    const { maxOwn = 40, maxRelated = 15, currentInitiative, initiativeOf } = opts
     const date = new Date().toISOString().slice(0, 10)
 
     const own: EventLogEntry[] = []
@@ -125,7 +125,7 @@ export class MemoryStore {
 
     // ─ Relevance gate for related events ─
     const myFiles = await this.workingSetPaths(currentSessionId)
-    const gatingEnabled = !!currentProject || myFiles.size > 0
+    const gatingEnabled = !!currentInitiative || myFiles.size > 0
     const relevanceCache = new Map<string, boolean>()
     const isRelevant = async (origin?: string): Promise<boolean> => {
       if (!gatingEnabled) return true
@@ -133,7 +133,7 @@ export class MemoryStore {
       const cached = relevanceCache.get(origin)
       if (cached !== undefined) return cached
       let relevant = false
-      if (currentProject && projectOf?.(origin) === currentProject) {
+      if (currentInitiative && initiativeOf?.(origin) === currentInitiative) {
         relevant = true
       } else if (myFiles.size) {
         const theirs = await this.workingSetPaths(origin)
@@ -263,11 +263,11 @@ export class MemoryStore {
   // ── Conventions (scoped, always-on constraints) ─────────────────
 
   private conventionsPath(
-    scope: 'session' | 'project' | 'agent',
+    scope: 'session' | 'initiative' | 'project' | 'agent',
     key?: string,
   ): string {
     if (scope === 'agent') return join(this.memoryDir, 'agent.conventions.md')
-    if (scope === 'project') {
+    if (scope === 'initiative' || scope === 'project') {
       if (key && (key === '.' || key === '..' || /[/\\:\0]/.test(key))) {
         throw new TypeError('Project memory key must be a single directory name')
       }
@@ -301,7 +301,7 @@ export class MemoryStore {
 
   /** Add a convention to a scope (no-op if it already exists). */
   async addConvention(
-    scope: 'session' | 'project' | 'agent',
+    scope: 'session' | 'initiative' | 'project' | 'agent',
     key: string | undefined,
     text: string,
   ): Promise<void> {
@@ -318,7 +318,7 @@ export class MemoryStore {
 
   /** Remove conventions from a scope whose text contains `text` (case-insensitive). */
   async removeConvention(
-    scope: 'session' | 'project' | 'agent',
+    scope: 'session' | 'initiative' | 'project' | 'agent',
     key: string | undefined,
     text: string,
   ): Promise<void> {
@@ -333,21 +333,21 @@ export class MemoryStore {
   }
 
   /**
-   * Merge active conventions across scopes (agent-global → project → session)
+   * Merge active conventions across scopes (agent → initiative → session)
    * into one `### Conventions` section, each tagged with its `[scope]`.
    * Injected for main + sub agents (read-only). Returns '' if none.
    */
   async readConventions(
     sessionId: string,
-    projectName?: string,
+    initiativeId?: string,
   ): Promise<string> {
     const groups: { tag: string; path: string }[] = [
       { tag: 'agent', path: this.conventionsPath('agent') },
     ]
-    if (projectName) {
+    if (initiativeId) {
       groups.push({
-        tag: `project:${projectName}`,
-        path: this.conventionsPath('project', projectName),
+        tag: `initiative:${initiativeId}`,
+        path: this.conventionsPath('initiative', initiativeId),
       })
     }
     groups.push({

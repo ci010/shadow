@@ -1,16 +1,32 @@
 import { newPhysicalSessionId } from '../utils/paths.ts'
-import { parseSessionRecovery, type SessionState, type SessionStore, type StoredMessage } from './session-store.ts'
+import type { ChatMessage } from '../providers/provider.ts'
+import { parseSessionRecovery, type SessionState, type SessionStore } from './session-store.ts'
 
 export class SessionResumeError extends Error {
   constructor(message: string) { super(message); this.name = 'SessionResumeError' }
 }
 
-/** Repair missing results as unknown outcomes, without executing any tool or model. */
+/** Only the unfinished trailing batch belongs to the interrupted execution. */
+export function pendingToolCalls(messages: ChatMessage[]): NonNullable<ChatMessage['tool_calls']> {
+  const results = new Set<string>()
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message.role === 'tool') {
+      if (message.tool_call_id) results.add(message.tool_call_id)
+    } else {
+      return message.role === 'assistant'
+        ? (message.tool_calls ?? []).filter(call => !results.has(call.id))
+        : []
+    }
+  }
+  return []
+}
+
+/** Mark interrupted work without changing its transcript or executing anything. */
 export async function prepareSessionRecovery(store: SessionStore, state: SessionState): Promise<void> {
   if (state.mode !== 'session') return
   const prior = parseSessionRecovery(state.recovery)
   const physicalId = newPhysicalSessionId(state.sessionId, state.segmentIndex)
-  const pending = new Map<string, string>()
   let lastRole: string | undefined
   let finalResponse = false
   for await (const record of store.readSessionLog(physicalId)) {
@@ -18,12 +34,6 @@ export async function prepareSessionRecovery(store: SessionStore, state: Session
     lastRole = String(record.role)
     const calls = Array.isArray(record.tool_calls) ? record.tool_calls : []
     finalResponse = lastRole === 'assistant' && calls.length === 0
-    if (lastRole === 'assistant') {
-      for (const call of calls) {
-        if (call && typeof call === 'object' && typeof call.id === 'string'
-          && call.function && typeof call.function.name === 'string') pending.set(call.id, call.function.name)
-      }
-    } else if (lastRole === 'tool' && typeof record.tool_call_id === 'string') pending.delete(record.tool_call_id)
   }
   if (!lastRole || finalResponse || state.executionStatus === 'completed') {
     if (prior || (finalResponse && state.executionStatus !== 'completed')) {
@@ -33,11 +43,6 @@ export async function prepareSessionRecovery(store: SessionStore, state: Session
     }
     return
   }
-  const missing: StoredMessage[] = Array.from(pending, ([id, name]) => ({
-    role: 'tool', tool_call_id: id, name, timestamp: new Date().toISOString(),
-    content: 'Execution was interrupted before its result was saved. Outcome unknown: side effects may already have occurred. Do not replay this operation blindly; inspect its actual state and ask before repeating irreversible actions.',
-  }))
-  if (missing.length) await store.appendMessages(physicalId, missing)
   if (!prior) {
     state.recovery = {
       id: crypto.randomUUID(),

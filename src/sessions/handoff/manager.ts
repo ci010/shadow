@@ -16,7 +16,7 @@ import { HandoffSession } from './session.ts'
 import { type HandoffCapture, HandoffSummaryTool } from './tools.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
 import type { SessionStore } from '../session-store.ts'
-import { getOrganizationScope, type OrganizationScope } from '../../organizations/scope.ts'
+import { getProjectScope, type ProjectScope } from '../../projects/scope.ts'
 const handoffPromptTemplate = readFileSync(new URL('./HANDOFF.md', import.meta.url), 'utf8')
 
 const MAX_HANDOFF_SUMMARY_LENGTH = 10_000
@@ -74,7 +74,7 @@ export class HandoffManager {
     config: HandoffConfig,
     private workspace: string,
     private store: SessionStore,
-    private scope: OrganizationScope | undefined = getOrganizationScope(),
+    private scope: ProjectScope | undefined = getProjectScope(),
   ) {
     this.autoHandoff = config.autoHandoff ?? true
     this.handoffMinThreshold = config.handoffMinThreshold ?? 0.75
@@ -203,7 +203,7 @@ export class HandoffManager {
 
     const physicalId = sessionId + '-handoff'
     const executionContext: ExecutionContext = {
-      ...(this.scope ? { organizationId: this.scope.organizationId } : {}),
+      ...(this.scope ? { projectId: this.scope.projectId } : {}),
       channel: 'handoff',
       senderId: 'handoff',
       chatId: sessionId,
@@ -222,7 +222,7 @@ export class HandoffManager {
     await new HandoffSession(
       workspace,
       sessionId,
-      { sessionId: sessionId, segmentIndex: 0, ...(this.scope ? { organizationId: this.scope.organizationId } : {}) },
+      { sessionId: sessionId, segmentIndex: 0, ...(this.scope ? { projectId: this.scope.projectId } : {}) },
       loopMessages,
       this.provider,
       sessionTools,

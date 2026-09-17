@@ -1,7 +1,11 @@
 import { Cron } from 'croner'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
-import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
+import type { CronContextMode } from './contracts.ts'
+import { parseWorkdirRefV1, type WorkdirRefV1 } from '../sessions/locality.ts'
+import { validateOwnership } from '../projects/ownership.ts'
+import { normalizeInitiativeMetadata, parseInitiativeId } from '../sessions/initiative-metadata.ts'
 import {
   isCronEventPayload,
   isCronEventTarget,
@@ -12,6 +16,16 @@ import {
 const JOBS_FILE = '.cron/jobs.json'
 
 export interface CronJobDef {
+  name?: string
+  session?: CronContextMode
+  agentType?: string
+  source?: 'cron' | 'learning'
+  enabled?: boolean
+  originSessionId?: string
+  folderId?: string
+  initiativeId?: string
+  workspaceRoot?: string
+  workdir?: WorkdirRefV1
   schedule: string
   task?: string
   channel?: string
@@ -47,7 +61,20 @@ function isCronJob(value: unknown): value is CronJob {
   if ('isolated' in value && value.isolated !== undefined && typeof value.isolated !== 'boolean') return false
   if ('target' in value && value.target !== undefined && !isCronEventTarget(value.target)) return false
   if ('event' in value && value.event !== undefined && !isCronEventPayload(value.event)) return false
+  const v = value as Record<string, unknown>
+  parseInitiativeId(v)
+  if (v.session !== undefined && (typeof v.session !== 'string' || !['origin', 'isolated', 'fresh'].includes(v.session))) return false
+  if (v.source !== undefined && v.source !== 'cron' && v.source !== 'learning') return false
+  if (v.enabled !== undefined && typeof v.enabled !== 'boolean') return false
+  for (const field of ['name', 'agentType', 'originSessionId', 'folderId', 'initiativeId', 'workspaceRoot']) {
+    if (v[field] !== undefined && (typeof v[field] !== 'string' || !v[field])) return false
+  }
+  if (v.workdir !== undefined && !parseWorkdirRefV1(v.workdir)) return false
   return true
+}
+
+export function cronContextMode(job: CronJobDef): CronContextMode {
+  return job.session ?? (job.isolated ? 'isolated' : 'origin')
 }
 
 /**
@@ -74,11 +101,15 @@ export class CronService {
   private running = new Map<Promise<void>, AbortController>()
   private persistenceTail: Promise<void> = Promise.resolve()
   private persistenceError: unknown
+  private managed = new Map<string, { job: CronJob; handler: CronJobHandler; intervalMs: number }>()
+  private intervals = new Map<string, ReturnType<typeof setInterval>>()
+  private executing = new Map<string, Promise<void>>()
+  private onChanged?: () => void
 
   constructor(
     private workspace: string,
     timezone = 'UTC',
-    private scope: OrganizationScope | undefined = getOrganizationScope(),
+    private scope: ProjectScope | undefined = getProjectScope(),
   ) {
     this.jobsPath = workspacePath(workspace, JOBS_FILE)
     this.timezone = timezone
@@ -86,6 +117,42 @@ export class CronService {
 
   setHandler(handler: CronJobHandler): void {
     this.handler = handler
+  }
+
+  setOnChanged(callback: () => void): void { this.onChanged = callback }
+
+  /** Config-owned jobs are reconstructed once per runtime, never duplicated in jobs.json. */
+  registerManagedJob(id: string, def: CronJobDef, intervalMs: number, handler: CronJobHandler): void {
+    if (this.stopped) throw new Error('CronService is stopped')
+    if (!Number.isInteger(intervalMs) || intervalMs < 1 || intervalMs > 2_147_483_647) throw new TypeError('Invalid job interval')
+    const job = { ...structuredClone(def), id, createdAt: this.managed.get(id)?.job.createdAt ?? new Date().toISOString() }
+    if (!isCronJob(job) || this.jobs.has(id)) throw new TypeError('Invalid managed cron job')
+    this.managed.set(id, { job, intervalMs, handler })
+    this.scheduleManaged(id)
+    this.onChanged?.()
+  }
+
+  unregisterManagedJob(id: string): void {
+    clearInterval(this.intervals.get(id))
+    this.intervals.delete(id)
+    this.managed.delete(id)
+    this.onChanged?.()
+  }
+
+  private scheduleManaged(id: string): void {
+    clearInterval(this.intervals.get(id))
+    this.intervals.delete(id)
+    const managed = this.managed.get(id)!
+    if (managed.job.enabled === false) return
+    this.intervals.set(id, setInterval(() => { void this.runNow(id).catch(error => console.error('[cron]', error)) }, managed.intervalMs))
+  }
+
+  /** Manual and timer admissions share overlap protection, scope, abort and cleanup. */
+  runNow(id: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    const job = this.managed.get(id)?.job ?? this.jobs.get(id)
+    if (!job) return Promise.reject(new Error(`Unknown cron job: ${id}`))
+    return this.scope ? this.scope.run(() => this.runJob(job, signal)) : this.runJob(job, signal)
   }
 
   /**
@@ -104,6 +171,7 @@ export class CronService {
     for (const job of this.jobs.values()) {
       this.scheduleCron(job)
     }
+    for (const id of this.managed.keys()) this.scheduleManaged(id)
     console.info(`[cron] Cron service started (${this.jobs.size} jobs)`)
   }
 
@@ -113,6 +181,8 @@ export class CronService {
       scheduled.stop()
     }
     this.scheduledJobs.clear()
+    for (const timer of this.intervals.values()) clearInterval(timer)
+    this.intervals.clear()
     for (const controller of this.running.values()) controller.abort(new Error('Cron service stopped'))
     await Promise.allSettled(this.running.keys())
     await this.flush()
@@ -123,13 +193,17 @@ export class CronService {
     if (this.stopped) throw new Error('CronService is stopped')
     const id = globalThis.crypto.randomUUID().slice(0, 8)
     const job: CronJob = {
-      ...def,
+      ...structuredClone(def),
       id,
       createdAt: new Date().toISOString(),
     }
+    if (!isCronJob(job)) throw new TypeError('Invalid cron job')
+    const validation = new Cron(this.normalizeSchedule(job.schedule), { paused: true, timezone: this.timezone })
+    validation.stop()
     this.jobs.set(id, job)
     this.scheduleCron(job)
     this.saveJobs().catch((error) => console.error('[cron] Failed to save jobs', error))
+    this.onChanged?.()
     console.info(
       `[cron] Added cron job: id=${id}, schedule=${def.schedule}, target=${def.target?.sessionId ?? `${def.channel ?? 'cron'}:${def.chatId ?? id}`}`,
     )
@@ -148,17 +222,19 @@ export class CronService {
       this.saveJobs().catch((error) => console.error('[cron] Failed to save jobs', error))
       console.info(`[cron] Removed cron job: ${id}`)
       this.onJobRemovedCb?.(id)
+      this.onChanged?.()
     }
     return removed
   }
 
   listJobs(): CronJob[] {
-    return Array.from(this.jobs.values())
+    return structuredClone([...this.jobs.values(), ...[...this.managed.values()].map(m => m.job)])
   }
 
   // ── Internal ──────────────────────────────────────────────────────────
 
   private scheduleCron(job: CronJob): void {
+    if (job.enabled === false) return
     try {
       this.scheduledJobs.get(job.id)?.stop()
       const scheduled = new Cron(
@@ -178,20 +254,29 @@ export class CronService {
     }
   }
 
-  private async runJob(job: CronJob): Promise<void> {
+  private async runJob(job: CronJob, signal?: AbortSignal): Promise<void> {
     if (this.stopped) return
+    const existing = this.executing.get(job.id)
+    if (existing) return existing
     const controller = new AbortController()
-    const pending = this.executeJob(job, controller.signal)
+    const abort = () => controller.abort(signal?.reason)
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
+    const pending = Promise.resolve().then(() => this.executeJob(structuredClone(job), controller.signal))
     this.running.set(pending, controller)
+    this.executing.set(job.id, pending)
     try {
       await pending
     } finally {
       this.running.delete(pending)
+      this.executing.delete(job.id)
+      signal?.removeEventListener('abort', abort)
     }
   }
 
   private async executeJob(job: CronJob, signal: AbortSignal): Promise<void> {
-    if (!this.handler) {
+    const handler = this.managed.get(job.id)?.handler ?? this.handler
+    if (!handler) {
       console.warn(`[cron] No handler configured, skipping job: ${job.id}`)
       return
     }
@@ -200,7 +285,8 @@ export class CronService {
       `[cron] Executing cron job: id=${job.id}, schedule=${job.schedule}`,
     )
     try {
-      await this.handler(job, signal)
+      signal.throwIfAborted()
+      await handler(job, signal)
     } catch (err) {
       console.error(`[cron] Cron job execution failed: ${job.id}`, err)
     }
@@ -253,7 +339,13 @@ export class CronService {
       throw new TypeError(`[cron] Expected { version: 1, jobs: [...] } in ${this.jobsPath}`)
     }
     const jobs = new Map<string, CronJob>()
-    for (const job of store.jobs) {
+    if (!('ownershipVersion' in store) || store.ownershipVersion !== 2) throw new TypeError('Unsupported cron ownership version')
+    for (const raw of store.jobs) {
+      if (!raw || typeof raw !== 'object') throw new TypeError('Invalid cron job')
+      const { ownershipVersion: _, projectId, ...job } = normalizeInitiativeMetadata(validateOwnership({
+        ...raw, ownershipVersion: store.ownershipVersion,
+      }))
+      if (projectId !== undefined && projectId !== this.scope?.projectId) throw new TypeError('Cron job belongs to another project')
       if (!isCronJob(job) || jobs.has(job.id)) {
         throw new TypeError(`[cron] Invalid or duplicate job in ${this.jobsPath}`)
       }
@@ -272,7 +364,7 @@ export class CronService {
   }
 
   private saveJobs(): Promise<void> {
-    const contents = JSON.stringify({ version: 1, jobs: Array.from(this.jobs.values()) }, null, 2)
+    const contents = JSON.stringify({ version: 1, ownershipVersion: 2, jobs: Array.from(this.jobs.values()) }, null, 2)
     const pending = this.persistenceTail.then(async () => {
       await mkdir(workspacePath(this.workspace, '.cron'), { recursive: true })
       await writeFile(this.jobsPath, contents)

@@ -2,6 +2,7 @@ import type { WizardEvent, WizardState } from './wizard/state-machine.js'
 import type { BootstrapCommandResult } from './bootstrap/coordinator.js'
 import type { EnsureRuntimeResult } from './bootstrap/coordinator.js'
 import { normalizeMainDirectoryPath } from './bootstrap/runtime-config.js'
+import type { DesktopMediaCaptureApi } from './media-capture-contract.js'
 
 export const IPC_CHANNELS = {
   loadWizard: 'shadow:bootstrap:load',
@@ -12,7 +13,7 @@ export const IPC_CHANNELS = {
   launchMain: 'shadow:bootstrap:launch-main',
   ensureRuntime: 'shadow:bootstrap:ensure-runtime',
   selectDirectory: 'shadow:native:select-directory',
-  selectProjectDirectory: 'shadow:projects:select-directory',
+  selectFolderDirectory: 'shadow:folders:select-directory',
   selectChatContextFiles: 'shadow:chat-context:select-files',
   selectChatContextFolders: 'shadow:chat-context:select-folders',
   getMainDirectorySelection: 'shadow:bootstrap:get-main-directory-selection',
@@ -50,8 +51,9 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+  readonly mediaCapture: DesktopMediaCaptureApi
   readonly windowControls: DesktopWindowControls
-  readonly projects: {
+  readonly folders: {
     selectDirectory(): Promise<string | null>
   }
   readonly chatContext: {

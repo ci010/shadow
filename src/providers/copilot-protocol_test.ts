@@ -7,6 +7,7 @@ import { AggregatedProvider } from './aggregated.ts'
 import { ProviderHttpError, type ModelInfo } from './provider.ts'
 import { providerPlugin } from './routes.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
+import { ConfigSchema } from '../config/schema.ts'
 
 const astra = {
   id: 'gpt-6-astra',
@@ -66,6 +67,20 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
     reply: (value: Response) => { postResponse = value },
   }
 }
+
+test('default model and provider fallback both send Astra with configured medium effort', async t => {
+  const f = fixture(t)
+  const config = ConfigSchema.parse({})
+  const provider = new AggregatedProvider(new Map([['copilot', f.provider]]), 'copilot')
+  await provider.chat([{ role: 'user', content: 'hi' }], [], config.agent)
+  await f.provider.chat([{ role: 'user', content: 'hi' }], [], { model: '', reasoningEffort: config.agent.reasoningEffort })
+  assert.equal(f.posts.length, 2)
+  for (const post of f.posts) {
+    assert.equal(post.path, '/responses')
+    assert.equal(post.body.model, 'gpt-6-astra')
+    assert.deepEqual(post.body.reasoning, { effort: 'medium' })
+  }
+})
 
 test('Astra capability metadata routes qualified model to Responses without substituting the model', async (t) => {
   const f = fixture(t)

@@ -1,30 +1,62 @@
 import assert from 'node:assert/strict'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { once } from 'node:events'
-import { cp, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:net'
+import { randomBytes } from 'node:crypto'
+import { cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { verifyReleaseManifest } from './release-manifest.ts'
+import {
+  assertOutsideRepository, backendCommand, backendResourceReport, bounded, descendants, fetchBounded,
+  killWindowsTree, nodeModeProbe, prepareRendererSmoke, remainingBudget, rendererEnvironment, reservePort, runCommand, sanitizeLog, snapshotProcesses,
+  serviceEnvironment, startProcess, terminateProcess, verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
+  type ManagedProcess, type ProcessIdentity,
+} from './packaged-verification.ts'
 
 if (process.platform !== 'win32') throw new Error('The current desktop package target is Windows.')
-const packaged = resolve('desktop/release/win-unpacked')
-// Relocation prevents imports from silently falling back to repository dependencies.
-const scratch = await mkdtemp(join(tmpdir(), 'shadow-package-'))
-const backend = join(scratch, 'backend')
-let child: ChildProcess | undefined
-let output = ''
+const repository = await realpath(resolve('.'))
+const packaged = resolve(process.argv[2] ?? 'desktop/release/win-unpacked')
+const token = randomBytes(32).toString('hex')
+let scratch: string | undefined
+let backendProcess: ManagedProcess | undefined
+let rootIdentity: ProcessIdentity | undefined
+const ownedDescendants = new Map<number, ProcessIdentity>()
+let rendererProcess: ManagedProcess | undefined
+let rendererIdentity: ProcessIdentity | undefined
+const rendererDescendants = new Map<number, ProcessIdentity>()
+let stage = 'source release manifest'
+const failures: string[] = []
+
+async function inspectBackendTree(sample: string): Promise<void> {
+  const snapshot = await snapshotProcesses()
+  if (!rootIdentity) rootIdentity = snapshot.find((value) => value.pid === backendProcess?.child.pid)
+  assert.ok(rootIdentity, 'Backend was not present in process census')
+  const currentRoot = snapshot.find((value) => value.pid === rootIdentity!.pid && value.created === rootIdentity!.created)
+  assert.ok(currentRoot, 'Backend exited before process census')
+  const children = descendants(snapshot, rootIdentity)
+  for (const child of children) ownedDescendants.set(child.pid, child)
+  assert.ok(!rootIdentity.gui && !children.some((child) => child.gui), 'Headless backend launched a Chromium renderer/GPU/utility process')
+  console.log(`Backend resources (${sample}): ${JSON.stringify(backendResourceReport(currentRoot))}`)
+}
+
 try {
-  await cp(join(packaged, 'resources/backend'), backend, { recursive: true, dereference: true })
-  const reserve = createServer()
-  reserve.listen(0, '127.0.0.1')
-  await once(reserve, 'listening')
-  const address = reserve.address()
-  assert.ok(address && typeof address !== 'string')
-  const port = address.port
-  await new Promise<void>((done) => reserve.close(() => done()))
+  // Never execute an unverified package, including the Node-mode runtime probe.
+  await verifyReleaseManifest(packaged, repository)
+  stage = 'complete package relocation'
+  // Deliberately outside the source tree: neither executable nor dependencies may fall back to the checkout.
+  scratch = await mkdtemp(join(tmpdir(), 'shadow-packaged-acceptance-'))
+  assertOutsideRepository(await realpath(scratch), repository)
+  const relocated = join(scratch, 'application')
+  await cp(packaged, relocated, { recursive: true, dereference: true })
+  stage = 'relocated release manifest'
+  await verifyReleaseManifest(relocated, repository)
+  stage = 'renderer artifact references'
+  await verifyRendererArtifacts(relocated)
+  console.log('Artifact checks: release manifest verified ASAR main/preload and backend/renderer/service hashes; referenced renderer assets present (not UI execution).')
+
   const dataDir = join(scratch, 'data')
   const bootstrap = join(scratch, 'bootstrap.json')
   await mkdir(join(dataDir, 'config'), { recursive: true })
+  await mkdir(join(scratch, 'profile', 'roaming'), { recursive: true })
+  await mkdir(join(scratch, 'profile', 'local'), { recursive: true })
   await writeFile(bootstrap, JSON.stringify({
     version: 1, mode: 'main', dataDir, localNodeId: 'packaging-smoke',
   }))
@@ -32,53 +64,37 @@ try {
     agent: { workspace: join(dataDir, 'workspace'), model: 'gpt-4.1', sessionStorage: 'sqlite' },
     channels: {}, mcp: {},
   }))
-  const token = 'packaging-smoke-credential'
-  const env = {
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot,
-    TEMP: scratch,
-    TMP: scratch,
-    USERPROFILE: scratch,
-    APPDATA: scratch,
-    LOCALAPPDATA: scratch,
-    ELECTRON_RUN_AS_NODE: '1',
-    WINDOWS_USE_LAUNCH_TOKEN: token,
-    GATEWAY_PORT: String(port),
-    GATEWAY_HOST: '127.0.0.1',
-    SEARXNG_URL: 'http://127.0.0.1:1',
-  }
-  const executable = join(packaged, 'Shadow.exe')
-  child = spawn(executable, [
-    join(backend, 'dist/src/index.js'),
-    'server', 'start', '--config', bootstrap, '--local-executor',
-  ], { cwd: scratch, env, stdio: ['ignore', 'pipe', 'pipe'] })
-  child.stdout!.on('data', (chunk) => { output += chunk })
-  child.stderr!.on('data', (chunk) => { output += chunk })
-  await once(child, 'spawn')
-  const exited = once(child, 'exit')
+  const port = await reservePort()
+  const credentialFile = join(scratch, 'service-credential')
+  await writeFile(credentialFile, `${token}\n`, { mode: 0o600 })
+  const env = serviceEnvironment(scratch, credentialFile, port)
+  const command = backendCommand(relocated, bootstrap)
+  const options = { cwd: scratch, env }
+
+  stage = 'Electron Node-mode baseline probe'
+  const probe = await runCommand(command.executable, ['-e', nodeModeProbe], options, 10_000, stage, [token])
+  const reportLine = probe.split(/\r?\n/).find((line) => line.startsWith('SHADOW_NODE_PROBE='))
+  assert.ok(reportLine, 'Node runtime probe returned no report')
+  const report = JSON.parse(reportLine.slice('SHADOW_NODE_PROBE='.length))
+  assert.equal(typeof report.electron, 'string')
+  assert.equal(report.processType, null)
+  assert.equal(report.guiApis, false)
+  assert.ok(Number.isFinite(report.memoryUsage?.rss) && report.memoryUsage.rss > 0)
+  console.log(`Node runtime baseline (NOT backend RSS or a memory budget): ${JSON.stringify(report)}`)
+
+  stage = 'relocated backend startup (--service, file credential, Electron Node mode)'
+  backendProcess = startProcess(command.executable, command.args, options, [token])
   const origin = `http://127.0.0.1:${port}`
   const headers = { Authorization: `Bearer ${token}` }
-  let ready = false
-  for (let attempt = 0; attempt < 300; attempt++) {
-    if (child.exitCode !== null) throw new Error(`Packaged backend exited:\n${output}`)
-    try {
-      const response = await fetch(`${origin}/local/v1/readiness`, { headers, signal: AbortSignal.timeout(500) })
-      if (response.ok) {
-        assert.equal((await response.json()).status, 'ready')
-        ready = true
-        break
-      }
-    } catch (error) {
-      if (!(error instanceof TypeError || error instanceof DOMException)) throw error
-    }
-    await new Promise((done) => setTimeout(done, 100))
-  }
-  assert.ok(ready, output)
-  assert.equal((await fetch(`${origin}/local/v1/readiness`)).status, 401)
-  const logs = await fetch(`${origin}/v1/query/logs`, { headers })
+  await waitReady(origin, headers, backendProcess)
+  await inspectBackendTree('ready')
+  stage = 'authentication and telemetry'
+  assert.equal((await fetchBounded(`${origin}/local/v1/readiness`)).status, 401)
+  const logs = await fetchBounded(`${origin}/v1/query/logs`, { headers })
   assert.equal(logs.status, 200)
-  assert.ok(JSON.stringify(await logs.json()).includes('All services started'))
+  assert.ok(JSON.stringify(JSON.parse(logs.body)).includes('All services started'))
 
+  stage = 'packaged native TypeScript eval'
   const script = join(scratch, 'eval-fixture.ts')
   await writeFile(join(scratch, 'value.ts'), 'export enum Value { Answer = 42 }\n')
   await writeFile(script, `
@@ -87,26 +103,96 @@ try {
     export default () => new Result(Value.Answer).value
   `)
   const payload = Buffer.from(JSON.stringify({ module: script, cwd: scratch, args: [] })).toString('base64')
-  const evaluated = spawnSync(executable, [
-    join(backend, 'dist/src/script-runtime/child.js'), '--eval-runner', payload,
-  ], { cwd: scratch, env, encoding: 'utf8', timeout: 15_000 })
-  assert.equal(evaluated.status, 0, evaluated.stderr + evaluated.stdout)
-  assert.ok(evaluated.stdout.includes('"result":42'), evaluated.stdout)
+  const evaluated = await runCommand(command.executable, [
+    join(relocated, 'resources', 'backend', 'dist', 'src', 'script-runtime', 'child.js'), '--eval-runner', payload,
+  ], options, 15_000, stage, [token])
+  assert.ok(evaluated.includes('"result":42'), evaluated)
 
-  assert.equal((await fetch(`${origin}/local/v1/shutdown`, { method: 'POST', headers })).status, 202)
-  const timeout = setTimeout(() => child?.kill('SIGKILL'), 15_000)
-  try {
-    const [code] = await exited
-    assert.equal(code, 0, output)
-  } finally {
-    clearTimeout(timeout)
-  }
-  console.log('Relocated Electron backend: startup, auth, telemetry, native TypeScript, shutdown OK')
+  stage = 'graceful backend shutdown'
+  await inspectBackendTree('before shutdown')
+  assert.equal((await fetchBounded(`${origin}/local/v1/shutdown`, { method: 'POST', headers })).status, 202)
+  await waitSuccessful(backendProcess, 15_000, stage)
+  stage = 'post-shutdown process census'
+  const after = await snapshotProcesses()
+  for (const child of descendants(after, rootIdentity!)) ownedDescendants.set(child.pid, child)
+  const survivors = after.filter((value) => {
+    const owned = value.pid === rootIdentity!.pid ? rootIdentity : ownedDescendants.get(value.pid)
+    return owned?.created === value.created
+  })
+  assert.equal(survivors.length, 0, `Backend left owned processes running: ${survivors.map((value) => value.pid).join(', ')}`)
+  console.log('Relocated packaged backend: headless startup with file credential (no interactive local executor), auth, telemetry, native TypeScript eval, graceful exit and observed descendant cleanup OK.')
+
+  stage = 'synthetic hidden packaged renderer/preload entry'
+  const fixture = await readFile(join(repository, 'scripts', 'fixtures', 'packaged-renderer-smoke.cjs'), 'utf8')
+  const renderer = await prepareRendererSmoke(relocated, scratch, fixture)
+  rendererProcess = startProcess(renderer.executable, renderer.args, { cwd: scratch, env: rendererEnvironment(scratch) })
+  await waitForOutput(rendererProcess, 'SHADOW_RENDERER_WAITING', 12_000)
+  const rendererStart = await snapshotProcesses()
+  rendererIdentity = rendererStart.find((value) => value.pid === rendererProcess!.child.pid)
+  assert.ok(rendererIdentity, 'Renderer fixture was not present in process census')
+  for (const child of descendants(rendererStart, rendererIdentity)) rendererDescendants.set(child.pid, child)
+  await writeFile(`${renderer.control}.start`, '')
+  await waitForOutput(rendererProcess, 'SHADOW_RENDERER_RESULT=', 15_000)
+  const rendererReport = rendererProcess.logs().split(/\r?\n/).find((line) => line.startsWith('SHADOW_RENDERER_RESULT='))
+  assert.ok(rendererReport, 'Renderer fixture returned no report')
+  const rendered = JSON.parse(rendererReport.slice('SHADOW_RENDERER_RESULT='.length))
+  assert.equal(rendered.rendererMounted, true)
+  assert.equal(rendered.preloadIpc, true)
+  assert.equal(rendered.isolatedWorld, true)
+  assert.equal(rendered.visible, false)
+  const rendererBeforeExit = await snapshotProcesses()
+  for (const child of descendants(rendererBeforeExit, rendererIdentity)) rendererDescendants.set(child.pid, child)
+  await writeFile(`${renderer.control}.stop`, '')
+  await waitSuccessful(rendererProcess, 10_000, stage)
+  const rendererAfterExit = await snapshotProcesses()
+  for (const child of descendants(rendererAfterExit, rendererIdentity)) rendererDescendants.set(child.pid, child)
+  assert.ok(!rendererAfterExit.some((value) =>
+    [rendererIdentity!, ...rendererDescendants.values()].some((owned) => value.pid === owned.pid && value.created === owned.created)),
+  'Hidden renderer fixture left owned processes running')
+  console.log(`Packaged renderer/preload smoke: ${JSON.stringify(rendered)}`)
+  console.log('Coverage boundary: process census is sampled, not job-object containment. Hidden renderer/preload used synthetic bootstrap/window IPC and a test-only entry, NOT unmodified production main. Complete UI flows and SCM install/start/stop/recovery/uninstall still require Windows VM acceptance. No service registered or elevated.')
+} catch (error) {
+  failures.push(`Packaged verification FAILED at ${stage}: ${sanitizeLog(error, [token])}\n${backendProcess?.logs() ?? ''}\n${rendererProcess?.logs() ?? ''}`)
 } finally {
-  if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-    const exited = once(child, 'exit')
-    child.kill('SIGKILL')
-    await exited
+  for (const ownedProcess of [
+    { process: rendererProcess, identity: rendererIdentity, descendants: rendererDescendants },
+    { process: backendProcess, identity: rootIdentity, descendants: ownedDescendants },
+  ]) {
+    try {
+      const managed = ownedProcess.process
+      if (managed?.child.pid === undefined) continue
+      const deadline = Date.now() + 45_000
+      const snapshot = await snapshotProcesses(remainingBudget(deadline, 10_000))
+      const identity = ownedProcess.identity ?? snapshot.find((value) => value.pid === managed.child.pid)
+      if (identity) {
+        for (const child of descendants(snapshot, identity)) ownedProcess.descendants.set(child.pid, child)
+        await killWindowsTree(identity, deadline)
+      }
+      for (const child of ownedProcess.descendants.values()) await killWindowsTree(child, deadline)
+      await terminateProcess(managed.child, remainingBudget(deadline, 5_000))
+      const remaining = await snapshotProcesses(remainingBudget(deadline, 10_000))
+      const tracked = [...ownedProcess.descendants.values(), ...(identity ? [identity] : [])]
+      assert.ok(!remaining.some((value) => tracked.some((owned) => owned.pid === value.pid && owned.created === value.created)),
+        'Owned processes survived cleanup')
+    } catch (error) {
+      failures.push(`Process cleanup FAILED: ${sanitizeLog(error, [token])}`)
+      // Census can fail independently; always attempt direct termination of our own child.
+      if (ownedProcess.process) {
+        try { await terminateProcess(ownedProcess.process.child) } catch (error) {
+          failures.push(`Owned process termination FAILED: ${sanitizeLog(error, [token])}`)
+        }
+      }
+    }
   }
-  await rm(scratch, { recursive: true, force: true })
+  if (scratch) {
+    try {
+      await bounded(rm(scratch, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }), 20_000, 'Relocation cleanup')
+    } catch (error) {
+      failures.push(`Relocation cleanup FAILED (${scratch}): ${sanitizeLog(error, [token])}`)
+    }
+  }
+}
+if (failures.length) {
+  console.error(sanitizeLog(failures.join('\n'), [token], 24_000))
+  process.exitCode = 1
 }

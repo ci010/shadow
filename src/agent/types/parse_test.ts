@@ -3,6 +3,12 @@ import { test } from 'node:test'
 import { parseAgentFile } from './parse.ts'
 import { EXECUTION_MODES, isExecutionMode, parseExecutionMode } from '../../sessions/execution-mode.ts'
 
+test('legacy planning tool policies rename to Initiative without widening access', () => {
+  const role = parseAgentFile('---\nallowedTools: [read, project]\nblockedTools: project, exec\n---\nRole', 'legacy', 'fixture')
+  assert.deepEqual(role.allowedTools, ['read', 'initiative'])
+  assert.deepEqual(role.blockedTools, ['initiative', 'exec'])
+})
+
 test('execution modes are a closed runtime-validated contract', () => {
   for (const mode of EXECUTION_MODES) {
     assert.equal(isExecutionMode(mode), true)

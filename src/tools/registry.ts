@@ -10,13 +10,13 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
 import { redactMcpText } from '../mcp/errors.ts'
 
-const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'event_subscribe', 'cron', 'continuation', 'kill'])
+const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'event_subscribe', 'cron', 'continuation', 'kill', 'initiative'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool'])
+const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
@@ -113,8 +113,8 @@ export class Tools {
       context.signal?.throwIfAborted()
 
       await this.onBefore(name, args, context)
-      let result = await tool.execute(args, context)
       context.signal?.throwIfAborted()
+      let result = await tool.execute(args, context)
       // Run post-execution hooks
       result = await this.onAfter(name, args, result, context)
 
@@ -128,6 +128,8 @@ export class Tools {
       }
       return result
     } catch (err) {
+      // An interrupted invocation has no result to persist or send to the model.
+      if (context.signal?.aborted) throw err
       // handle abort
       if (err instanceof Error && err.name === 'AbortError') {
         return `Tool execution aborted: ${name}`

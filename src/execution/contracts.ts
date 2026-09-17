@@ -1,5 +1,3 @@
-export type JobApprovalV1 = 'none' | 'local-required'
-
 export interface JobRequestV1 {
   version: 1
   jobId: string
@@ -12,12 +10,10 @@ export interface JobRequestV1 {
   args: unknown
   createdAt: string
   deadlineAt: string
-  approval: JobApprovalV1
 }
 
 export type JobStateV1 =
   | 'accepted'
-  | 'awaiting-approval'
   | 'running'
   | 'cancelling'
   | 'completed'
@@ -59,7 +55,6 @@ interface JobEventBaseV1 {
 
 export type JobEventV1 =
   | (JobEventBaseV1 & { type: 'accepted' })
-  | (JobEventBaseV1 & { type: 'awaiting-approval' })
   | (JobEventBaseV1 & { type: 'started'; pid: number })
   | (JobEventBaseV1 & { type: 'stdout' | 'stderr'; chunk: string })
   | (JobEventBaseV1 & {
@@ -100,7 +95,6 @@ export type ValidationResult<T> =
 
 const JOB_STATES = new Set<JobStateV1>([
   'accepted',
-  'awaiting-approval',
   'running',
   'cancelling',
   'completed',
@@ -118,7 +112,6 @@ const TERMINAL_STATES = new Set<JobTerminalStateV1>([
 ])
 const EVENT_TYPES = new Set<JobEventV1['type']>([
   'accepted',
-  'awaiting-approval',
   'started',
   'stdout',
   'stderr',
@@ -197,7 +190,6 @@ export function validateJobRequestV1(value: unknown): ValidationResult<JobReques
     'args',
     'createdAt',
     'deadlineAt',
-    'approval',
   ], errors)
   if (value.version !== 1) errors.push('version must be 1')
   for (
@@ -214,9 +206,6 @@ export function validateJobRequestV1(value: unknown): ValidationResult<JobReques
   if (!Object.hasOwn(value, 'args')) errors.push('args is required')
   requireTimestamp(value, 'createdAt', errors)
   requireTimestamp(value, 'deadlineAt', errors)
-  if (value.approval !== 'none' && value.approval !== 'local-required') {
-    errors.push('approval must be none or local-required')
-  }
   if (
     typeof value.createdAt === 'string' && typeof value.deadlineAt === 'string' &&
     Date.parse(value.deadlineAt) < Date.parse(value.createdAt)
@@ -278,7 +267,6 @@ export function validateJobEventV1(value: unknown): ValidationResult<JobEventV1>
   const type = value.type as JobEventV1['type']
   const specificKeys: Record<JobEventV1['type'], string[]> = {
     accepted: [],
-    'awaiting-approval': [],
     started: ['pid'],
     stdout: ['chunk'],
     stderr: ['chunk'],

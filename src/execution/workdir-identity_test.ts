@@ -3,7 +3,7 @@ import { mkdir, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
 import { ProcessManager } from './processes/manager.ts'
-import { projectFixture } from '../projects/test-fixtures.ts'
+import { folderFixture } from '../folders/test-fixtures.ts'
 import { CapabilityWorkdirIdentity } from './capability-workdir-identity.ts'
 import { LocalExecutor } from './local-executor.ts'
 import { executeRemoteWorkdirIdentity } from './remote-workdir-identity-client.ts'
@@ -11,7 +11,7 @@ import { MAX_WORKDIR_IDENTITY_BYTES, parseWorkdirIdentity, workdirIdentitiesOver
 import type { Executor } from './executor.ts'
 
 test('Child identity follows aliases, ancestry and filesystem case semantics across executor restarts', async t => {
-  const { folders } = await projectFixture(t)
+  const { folders } = await folderFixture(t)
   const a = join(folders, 'CaseFolder')
   const child = join(a, 'child')
   const b = join(folders, 'other')

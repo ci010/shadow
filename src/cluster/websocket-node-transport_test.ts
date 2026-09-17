@@ -100,8 +100,6 @@ function approvedRegistry(): InMemoryPairingNodeRegistry {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: 'fingerprint-1',
     credentialId: auth.credentialId,
-    uiScopes: [],
-    nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
   }, new Date(baseTime.getTime() + 2_000))
   return registry
 }

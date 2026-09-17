@@ -28,9 +28,8 @@ const capability: CapabilityDescriptorV1 = {
   capabilityId: 'shell-1',
   nodeId: 'node-1',
   kind: 'shell',
-  displayName: 'Project shell',
+  displayName: 'Folder shell',
   permissions: ['process.execute'],
-  approvalPolicy: 'session',
   online: true,
 }
 const request: JobRequestV1 = {
@@ -45,7 +44,6 @@ const request: JobRequestV1 = {
   args: { command: 'echo hello' },
   createdAt: baseTime.toISOString(),
   deadlineAt: new Date(baseTime.getTime() + 60_000).toISOString(),
-  approval: 'none',
 }
 
 class RecordingDuplex implements NodeMessageDuplex {
@@ -101,8 +99,6 @@ function approvedRegistry(): InMemoryPairingNodeRegistry {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: 'fingerprint-1',
     credentialId: auth.credentialId,
-    uiScopes: [],
-    nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
   }, new Date(baseTime.getTime() + 2_000))
   return registry
 }
@@ -457,4 +453,25 @@ test('node session revocation removes capabilities and cleanly closes the duplex
     () => registry.authenticate(auth),
     (error) => error instanceof RegistryError && error.code === 'node-revoked',
   )
+})
+
+test('retiring node privileges preserves fresh revocation checks for job dispatch and results', async () => {
+  const registry = approvedRegistry()
+  registry.advertiseCapability(auth, capability)
+  const connection = session(registry)
+  try {
+    await authenticate(connection)
+    connection.dispatchJob(request)
+    registry.revoke(auth, 'revoked outside this connection', baseTime)
+    assertThrows(
+      () => connection.dispatchJob({ ...request, jobId: 'another-job' }),
+      (error) => error instanceof RegistryError && error.code === 'node-revoked',
+    )
+    await expectSessionError('authorization-failed', () => connection.handleIncoming({
+      version: 1, sequence: 2, type: 'job-event',
+      event: { version: 1, jobId: request.jobId, sequence: 0, timestamp: baseTime.toISOString(), type: 'accepted' },
+    }))
+  } finally {
+    await connection.close({ code: 'test-complete', reason: 'test complete', clean: true })
+  }
 })

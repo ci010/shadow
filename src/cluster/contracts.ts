@@ -15,20 +15,6 @@ export type PairingOfferId = string
 export type PendingPairingId = string
 export type CapabilityId = string
 
-export type UiScope =
-  | 'chat:read'
-  | 'chat:write'
-  | 'knowledge:read'
-  | 'main:admin'
-  | 'nodes:admin'
-  | 'audit:read'
-
-export type NodePrivilege =
-  | 'capabilities:advertise'
-  | 'jobs:execute'
-  | 'jobs:cancel'
-  | 'artifacts:transfer'
-
 export interface VersionHelloV1 {
   protocolMajor: 1
   protocolMinor: number
@@ -67,8 +53,6 @@ export interface ApprovedNodeV1 {
   devicePublicKey?: string
   credentialId: DeviceCredentialId
   displayName: string
-  uiScopes: UiScope[]
-  nodePrivileges: NodePrivilege[]
   approvedAt: string
 }
 
@@ -81,8 +65,6 @@ export interface RevokedNodeV1 {
   devicePublicKey?: string
   credentialId: DeviceCredentialId
   displayName: string
-  uiScopes: UiScope[]
-  nodePrivileges: NodePrivilege[]
   approvedAt: string
   revokedAt: string
   reason: string
@@ -113,7 +95,6 @@ export interface CapabilityDescriptorV1 {
   /** Child-supplied display metadata only; never an execution path on Main. */
   displayPath?: string
   permissions: string[]
-  approvalPolicy: 'none' | 'always' | 'session' | 'grant'
   online: boolean
 }
 
@@ -219,7 +200,6 @@ function requireUniqueStringArray(
   value: Record<string, unknown>,
   key: string,
   errors: string[],
-  allowed?: ReadonlySet<string>,
 ): void {
   const entries = value[key]
   if (
@@ -229,9 +209,6 @@ function requireUniqueStringArray(
   ) {
     errors.push(`${key} must be an array of unique non-empty strings`)
     return
-  }
-  if (allowed && entries.some((entry) => !allowed.has(entry))) {
-    errors.push(`${key} contains an unsupported value`)
   }
 }
 
@@ -263,21 +240,6 @@ export function validateVersionHelloV1(value: unknown): ValidationResult<Version
   }
   return result(errors, value as unknown as VersionHelloV1)
 }
-
-const UI_SCOPES = new Set<UiScope>([
-  'chat:read',
-  'chat:write',
-  'knowledge:read',
-  'main:admin',
-  'nodes:admin',
-  'audit:read',
-])
-const NODE_PRIVILEGES = new Set<NodePrivilege>([
-  'capabilities:advertise',
-  'jobs:execute',
-  'jobs:cancel',
-  'artifacts:transfer',
-])
 
 export function validatePairingNodeStateV1(
   value: unknown,
@@ -329,8 +291,6 @@ export function validatePairingNodeStateV1(
       'devicePublicKey',
       'credentialId',
       'displayName',
-      'uiScopes',
-      'nodePrivileges',
       'approvedAt',
       ...(value.state === 'revoked' ? ['revokedAt', 'reason'] : []),
     ], errors)
@@ -340,8 +300,6 @@ export function validatePairingNodeStateV1(
     requireString(value, 'deviceIdentityFingerprint', errors)
     requireOptionalEd25519PublicKey(value, errors)
     requireDisplayText(value, 'displayName', 256, errors)
-    requireUniqueStringArray(value, 'uiScopes', errors, UI_SCOPES)
-    requireUniqueStringArray(value, 'nodePrivileges', errors, NODE_PRIVILEGES)
     requireTimestamp(value, 'approvedAt', errors)
     if (value.state === 'revoked') {
       requireTimestamp(value, 'revokedAt', errors)
@@ -382,7 +340,6 @@ export function validateCapabilityDescriptorV1(
     'displayName',
     'displayPath',
     'permissions',
-    'approvalPolicy',
     'online',
   ], errors)
   if (value.version !== 1) errors.push('version must be 1')
@@ -397,17 +354,35 @@ export function validateCapabilityDescriptorV1(
     requireDisplayText(value, 'displayPath', 4096, errors)
   }
   requireUniqueStringArray(value, 'permissions', errors)
-  if (!['none', 'always', 'session', 'grant'].includes(String(value.approvalPolicy))) {
-    errors.push('approvalPolicy is unsupported')
-  }
   if (typeof value.online !== 'boolean') errors.push('online must be boolean')
   return result(errors, value as unknown as CapabilityDescriptorV1)
 }
 
 export function validateRegistrySnapshotV1(
-  value: unknown,
+  input: unknown,
 ): ValidationResult<RegistrySnapshotV1> {
-  if (!isRecord(value)) return { success: false, errors: ['registry snapshot must be an object'] }
+  if (!isRecord(input)) return { success: false, errors: ['registry snapshot must be an object'] }
+  const value = { ...input }
+  if (Array.isArray(value.nodes)) {
+    value.nodes = value.nodes.map((entry) => {
+      if (!isRecord(entry) || (entry.state !== 'approved' && entry.state !== 'revoked')) return entry
+      const node = { ...entry }
+      delete node.uiScopes
+      delete node.nodePrivileges
+      return node
+    })
+  }
+  // Retire saved policy metadata without changing device identity or operation bindings.
+  if (Array.isArray(value.capabilities)) {
+    value.capabilities = value.capabilities.map((entry) => {
+      if (!isRecord(entry) || !Object.hasOwn(entry, 'approvalPolicy')) return entry
+      const { approvalPolicy, ...capability } = entry
+      return typeof approvalPolicy === 'string' &&
+          ['none', 'always', 'session', 'grant'].includes(approvalPolicy)
+        ? capability
+        : entry
+    })
+  }
   const errors: string[] = []
   hasOnlyKeys(value, [
     'version',

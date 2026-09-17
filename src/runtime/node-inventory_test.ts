@@ -4,7 +4,7 @@ import { hostname } from 'node:os'
 import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { ProjectRegistry } from '../projects/registry.ts'
+import { FolderRegistry } from '../folders/registry.ts'
 import { authorizeMainNodeInventory, childLocalNodeInventory, mainLocalNodeInventory } from './node-inventory.ts'
 import { GatewayClientAddressRegistry, registerGatewayRoutes, serveGateway } from '../gateway/server.ts'
 import { Hono } from 'hono'
@@ -82,14 +82,14 @@ test('local Main inventory works without a credential while pairing and admin re
   })).status, 401)
 })
 
-test('Main inventory uses configured identity and live registered project availability', async () => {
+test('Main inventory uses configured identity and live registered folder availability', async () => {
   await withTempWorkspace(async (root) => {
-    const projects = new ProjectRegistry(root)
-    await projects.init()
+    const folders = new FolderRegistry(root)
+    await folders.init()
     const options = {
       localNodeId: 'installation-main',
       implementationVersion: 'test-build',
-      projects,
+      folders,
       shellAvailable: false,
     }
     assert.deepEqual(mainLocalNodeInventory(options), {
@@ -100,23 +100,23 @@ test('Main inventory uses configured identity and live registered project availa
       implementationVersion: 'test-build',
       capabilities: [],
     })
-    const directory = join(root, 'actual-project')
+    const directory = join(root, 'actual-folder')
     await mkdir(directory)
-    const project = await projects.register(directory)
+    const folder = await folders.register(directory)
     const inventory = () => mainLocalNodeInventory({ ...options, shellAvailable: true })
     assert.deepEqual(inventory().capabilities, [
       { capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true },
       {
-        capabilityId: `local-project-v1:${project.id}`,
+        capabilityId: `local-project-v1:${folder.id}`,
         kind: 'workdir',
-        displayName: project.name,
-        displayPath: project.path,
+        displayName: folder.name,
+        displayPath: folder.path,
         online: true,
       },
     ])
     await rm(directory, { recursive: true })
     assert.equal(inventory().capabilities[1].online, false)
-    assert.equal(inventory().capabilities[1].displayPath, project.path)
+    assert.equal(inventory().capabilities[1].displayPath, folder.path)
     assert.ok(!('lastSeen' in inventory()))
   })
 })
@@ -141,7 +141,6 @@ test('Child inventory exposes only executor descriptors and configured local wor
       capabilityId: workdir.capabilityId,
       displayName: workdir.displayName,
       online: true,
-      approvalPolicy: 'grant',
       permissions: ['private-operation'],
     }))
     const inventory = await childLocalNodeInventory(config, capabilities, 'test-build')

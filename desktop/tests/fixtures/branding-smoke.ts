@@ -52,6 +52,34 @@ async function main() {
   })
   try {
     await within(window.loadFile(join(assets, 'index.html'), { hash: '/nodes' }), 'built renderer load')
+    const icons = await within(window.webContents.executeJavaScript(`(async () => {
+      const names = ['folder', 'folder-open', 'message-square', 'chevron-right', 'settings-2', 'repeat-2'];
+      const results = [];
+      for (const name of names) {
+        const element = document.createElement('span');
+        element.className = 'i-lucide-' + name;
+        document.body.append(element);
+        const style = getComputedStyle(element);
+        const mask = style.maskImage;
+        if (!mask.startsWith('url("data:image/svg+xml')) throw new Error(name + ': missing local SVG mask');
+        const image = new Image();
+        image.src = mask.slice(5, -2);
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 24;
+        const context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0, 24, 24);
+        const pixels = context.getImageData(0, 0, 24, 24).data;
+        results.push({
+          name, visible: element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0,
+          painted: pixels.some((value, index) => index % 4 === 3 && value > 0),
+        });
+        element.remove();
+      }
+      return results;
+    })()`), 'offline UI icon decoding')
+    assert.equal(icons.length, 6)
+    for (const icon of icons) assert.ok(icon.visible && icon.painted, `${icon.name} must render without network access`)
     for (const width of [1280, 960]) {
       window.setSize(width, 800)
       const result = await within(window.webContents.executeJavaScript(`(async () => {

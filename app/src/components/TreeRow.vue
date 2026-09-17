@@ -1,5 +1,5 @@
 <template>
-  <component :is="as" class="tree-item" :class="{ selected, 'icon-only': iconOnly }" :style="{ '--tree-depth': depth }">
+  <component :is="as" class="tree-item" :class="{ selected, 'icon-only': iconOnly }" :style="{ '--tree-depth': depth }" @contextmenu="$emit('contextmenu', $event)">
     <template v-if="separateToggle">
       <button v-if="expanded !== undefined" type="button" class="tree-toggle" :class="toggleClass"
         :aria-expanded="expanded" :aria-label="toggleLabel" @click="$emit('toggle')">
@@ -8,10 +8,10 @@
       <span v-else class="tree-toggle-spacer" aria-hidden="true" />
     </template>
     <HoverInfo :text="title ?? label" :label="label" :interactive="!!$slots.info" :disabled="infoDisabled">
-      <template #default="{ triggerProps }">
+      <template #default="{ triggerProps, close }">
     <button type="button" class="tree-select" :class="buttonClass" v-bind="{ ...buttonAttrs, ...triggerProps }"
       :aria-label="ariaLabel ?? (iconOnly ? label : undefined)" :aria-current="current"
-      :aria-expanded="!separateToggle && expanded !== undefined ? expanded : triggerProps['aria-expanded']" @click="$emit('select')">
+      :aria-expanded="!separateToggle && expanded !== undefined ? expanded : triggerProps['aria-expanded']" @click="selectRow($event, close)">
       <span v-if="!separateToggle" class="tree-toggle-spacer" aria-hidden="true">
         <span v-if="expanded !== undefined" class="tree-caret i-lucide-chevron-right" :class="{ open: expanded }" />
       </span>
@@ -29,7 +29,7 @@
 
 <script setup lang="ts">
 import HoverInfo from './HoverInfo.vue'
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   as?: 'div' | 'li'
   label: string
   title?: string
@@ -46,7 +46,14 @@ withDefaults(defineProps<{
   iconOnly?: boolean
   infoDisabled?: boolean
 }>(), { as: 'div', depth: 0, expanded: undefined })
-defineEmits<{ select: []; toggle: [] }>()
+const emit = defineEmits<{ select: []; toggle: []; contextmenu: [event: MouseEvent] }>()
+function selectRow(event: MouseEvent, close: () => void) {
+  if (!props.iconOnly) {
+    event.stopPropagation()
+    close()
+  }
+  emit('select')
+}
 </script>
 
 <style scoped>

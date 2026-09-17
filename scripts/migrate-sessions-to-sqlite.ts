@@ -23,6 +23,8 @@ import { join } from 'node:path'
 import { createReadStream } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import process from 'node:process'
+import { validateOwnership } from '../src/projects/ownership.ts'
+import { normalizeInitiativeMetadata } from '../src/sessions/initiative-metadata.ts'
 
 const PROTOTYPE_VERSION = 1
 
@@ -90,9 +92,9 @@ function metadataPrototype(
 ): string {
   return JSON.stringify({
     version: PROTOTYPE_VERSION,
-    metadata: Object.fromEntries(
+    metadata: normalizeInitiativeMetadata(validateOwnership(Object.fromEntries(
       Object.entries(state).filter(([key]) => !excludedFields.has(key)),
-    ),
+    ))),
   })
 }
 
@@ -205,6 +207,7 @@ export async function migrateSessionsToSqlite(
   console.info(`Opening database: ${dbPath}`)
 
   const db = new Database(dbPath)
+  try {
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA synchronous = NORMAL')
   initSchema(db)
@@ -313,7 +316,6 @@ export async function migrateSessionsToSqlite(
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
-      db.close()
       throw error
     }
 
@@ -327,8 +329,6 @@ export async function migrateSessionsToSqlite(
   }
 
   // ── Cleanup ──────────────────────────────────────────────────────────
-
-  db.close()
 
   console.info('\n── Migration complete ──')
   console.info(`  States migrated:      ${stateCount}`)
@@ -346,6 +346,9 @@ export async function migrateSessionsToSqlite(
     stateCount,
     logFileCount,
     logRecordCount,
+  }
+  } finally {
+    db.close()
   }
 }
 

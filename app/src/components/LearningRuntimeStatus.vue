@@ -28,7 +28,7 @@
 import { onUnmounted, ref, useId, watch } from 'vue'
 import { fetchLearningStatus, learningPipelines, learningPipelineState, type LearningStatus } from '../learning-settings.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; organizationId: string; active: boolean; revision?: number }>(), { revision: 0 })
+const props = withDefaults(defineProps<{ apiBase: string; projectId: string; active: boolean; revision?: number }>(), { revision: 0 })
 const headingId = useId()
 const status = ref<LearningStatus>()
 const loading = ref(false)
@@ -51,7 +51,7 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const next = await fetchLearningStatus(props.apiBase, props.organizationId, controller.signal)
+    const next = await fetchLearningStatus(props.apiBase, props.projectId, controller.signal)
     if (!controller.signal.aborted) status.value = next
   } catch (cause) {
     if (!controller.signal.aborted) {
@@ -66,7 +66,7 @@ async function refresh() {
     }
   }
 }
-watch(() => [props.active, props.apiBase, props.organizationId, props.revision], () => {
+watch(() => [props.active, props.apiBase, props.projectId, props.revision], () => {
   status.value = undefined
   if (props.active) void refresh()
   else stop()

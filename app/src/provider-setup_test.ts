@@ -23,11 +23,31 @@ test('configured inventory validates records, drops extra secrets, and forwards 
   const controller = new AbortController()
   const client = createProviderSetupClient('http://fixture.invalid', async (input, init) => {
     assert.equal(input, 'http://fixture.invalid/api/provider/configured')
-    assert.equal(init?.signal, controller.signal)
+    assert.equal(init?.signal?.aborted, false)
+    controller.abort()
+    assert.equal(init?.signal?.aborted, true)
+    assert.equal(init?.signal?.reason, controller.signal.reason)
     return Response.json({ providers: [provider] })
   })
   assert.deepEqual(await client.configured(controller.signal), [provider])
   assert.deepEqual(parseConfiguredProviders({ providers: [] }), [])
+})
+
+test('provider reads retain their timeout when a view supplies a cancellation signal', async (t) => {
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
+    assert.equal(milliseconds, 30_000)
+    return deadline.signal
+  })
+  const view = new AbortController()
+  const client = createProviderSetupClient('http://fixture.invalid', async (_input, init) => {
+    deadline.abort(new DOMException('Synthetic timeout', 'TimeoutError'))
+    init!.signal!.throwIfAborted()
+    throw new Error('Expected the deadline to cancel the request')
+  })
+  await assert.rejects(client.status(view.signal), /Cannot reach the provider setup service/)
+  await assert.rejects(client.configured(view.signal), /Cannot reach the provider setup service/)
+  assert.equal(view.signal.aborted, false, 'a timeout must not abort the owning view')
 })
 
 function harness(result: DeviceLogin | Error = { loginId: pending.loginId, state: 'succeeded' }) {

@@ -27,7 +27,7 @@ test('headless server arguments plan startup without a display or UI', () => {
   })
 })
 
-test('runtime startup combines validated config with a non-starting composition plan', () => {
+test('runtime startup combines arguments with normalized configuration only', () => {
   const argumentsPlan = planRuntimeArguments([
     'child',
     'start',
@@ -42,10 +42,27 @@ test('runtime startup combines validated config with a non-starting composition 
     mainEndpoint: 'https://main.example.test/',
   })
 
-  assertEquals(plan.requiresDisplay, false)
-  assertEquals(plan.launchUi, false)
-  assertEquals(plan.config.dataDir, './child-data')
-  assertEquals(plan.composition.phase, 'composition-planned')
+  assertEquals(plan, {
+    ...argumentsPlan,
+    config: {
+      version: 1,
+      mode: 'child',
+      dataDir: './child-data',
+      localNodeId: 'child-node',
+      mainEndpoint: 'https://main.example.test',
+    },
+  })
+})
+
+test('Main startup retains the local executor option without a synthetic service catalog', () => {
+  for (const localExecutor of [false, true]) {
+    const argumentsPlan = planRuntimeArguments([
+      'server', 'start', '--config', 'bootstrap.json',
+      ...(localExecutor ? ['--local-executor'] : []),
+    ])
+    const config = { version: 1, mode: 'main', dataDir: './main-data', localNodeId: 'main-node' }
+    assertEquals(planRuntimeStartup(argumentsPlan, config), { ...argumentsPlan, config })
+  }
 })
 
 test('runtime arguments reject role-incompatible and secret-like flags', () => {

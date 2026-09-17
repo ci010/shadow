@@ -10,9 +10,9 @@ import { promisify } from 'node:util'
 import { Hono } from 'hono'
 import { GitReadError, isNonRepositoryResult, localGitDiff, localGitStatus, MAX_GIT_FILE_BYTES } from '../execution/git/local-git.ts'
 import { serveLocalGit } from './local-git.ts'
-import { projectFixture } from '../projects/test-fixtures.ts'
-import { ProjectRegistry } from '../projects/registry.ts'
-import { ProjectService } from '../projects/routes.ts'
+import { folderFixture } from '../folders/test-fixtures.ts'
+import { FolderRegistry } from '../folders/registry.ts'
+import { FolderService } from '../folders/routes.ts'
 import { sessionsApiPlugin } from '../sessions/routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 
@@ -34,7 +34,7 @@ test('Git discovery classifies only absence of a worktree, including warning-pre
 })
 
 test('ordinary folders return normal unavailable Git status without creating a repository', async t => {
-  const { root, folders } = await projectFixture(t)
+  const { root, folders } = await folderFixture(t)
   // Only the test subprocess receives a discovery ceiling: the fixture is
   // inside the developer checkout but must exercise genuine absent-repo Git.
   const spawn = childProcess.spawn
@@ -70,7 +70,7 @@ test('ordinary folders return normal unavailable Git status without creating a r
 })
 
 test('Git failure diagnostics expose only operation, exit code and fixed cause labels', async t => {
-  const { folders } = await projectFixture(t)
+  const { folders } = await folderFixture(t)
   const spawn = childProcess.spawn
   let stderr = ''
   t.mock.method(childProcess, 'spawn', (_command: string, _args: string[], options: SpawnOptions) =>
@@ -101,7 +101,7 @@ test('Git failure diagnostics expose only operation, exit code and fixed cause l
 })
 
 test('Git spawn failures preserve safe OS codes without exposing native error messages', async t => {
-  const { folders } = await projectFixture(t)
+  const { folders } = await folderFixture(t)
   let code = 'EACCES'
   t.mock.method(childProcess, 'spawn', () => { throw Object.assign(new Error('private-fixture-secret'), { code }) })
   syncBuiltinESMExports()
@@ -121,7 +121,7 @@ test('Git spawn failures preserve safe OS codes without exposing native error me
 })
 
 test('a missing Git cwd is not misreported as a missing executable, including a spawn race', async t => {
-  const { root, folders } = await projectFixture(t)
+  const { root, folders } = await folderFixture(t)
   await assert.rejects(localGitStatus(join(root, 'missing')), error => {
     assert(error instanceof GitReadError)
     assert.equal(error.code, 'git_cwd_unavailable')
@@ -145,7 +145,7 @@ test('a missing Git cwd is not misreported as a missing executable, including a 
 })
 
 async function fixture(t: TestContext, initialize = true) {
-  const data = await projectFixture(t)
+  const data = await folderFixture(t)
   // An enclosing synthetic bare repository prevents any upward discovery of
   // the developer's actual checkout in the non-repository tests.
   await exec('git', ['init', '--bare', '--quiet', data.root])
@@ -380,32 +380,32 @@ test('in-flight cancellation stops owned Git work before returning', async t => 
   finally { clearTimeout(timer) }
 })
 
-test('project/session routes share validated read-only Git access and remote routes never fall back', async t => {
+test('folder/session routes share validated read-only Git access and remote routes never fall back', async t => {
   const { folders, workspace, write, commit } = await fixture(t)
   await write('file.txt', 'base\n')
   await commit()
   await write('file.txt', 'edit\n')
-  const registry = new ProjectRegistry(workspace)
+  const registry = new FolderRegistry(workspace)
   await registry.init()
-  const project = await registry.register(folders)
+  const folder = await registry.register(folders)
   let created = 0
-  const service = new ProjectService({ registry, createSession: async () => { created++; return { sessionId: 'unexpected', chatId: 'unexpected' } } })
+  const service = new FolderService({ registry, createSession: async () => { created++; return { sessionId: 'unexpected', chatId: 'unexpected' } } })
   t.after(() => service.dispose())
   const app = new Hono()
   service.plugin(app)
   const guarded = new Hono()
   guarded.use('/api/*', async (c, next) => c.req.header('authorization') === 'fixture' ? next() : c.json({ error: 'unauthorized' }, 401))
   service.plugin(guarded)
-  assert.equal((await guarded.request(`/api/projects/${project.id}/files`)).status, 401)
-  assert.equal((await guarded.request(`/api/projects/${project.id}/git/status`)).status, 401)
-  assert.equal((await guarded.request(`/api/projects/${project.id}/git/diff?path=file.txt`)).status, 401)
+  assert.equal((await guarded.request(`/api/folders/${folder.id}/files`)).status, 401)
+  assert.equal((await guarded.request(`/api/folders/${folder.id}/git/status`)).status, 401)
+  assert.equal((await guarded.request(`/api/folders/${folder.id}/git/diff?path=file.txt`)).status, 401)
   sessionsApiPlugin({
     workspace, getSessionState: (sessionId: string) => ({
       sessionId, workdir: { version: 1, nodeId: sessionId === 'remote' ? 'child' : 'local', capabilityId: 'workdir' },
     }),
     workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true, path: folders } }),
   } as unknown as SessionManager)(app)
-  for (const base of [`/api/projects/${project.id}`, '/api/sessions/local']) {
+  for (const base of [`/api/folders/${folder.id}`, '/api/sessions/local']) {
     assert.equal((await app.request(`${base}/git/status`)).status, 200)
     const diff = await app.request(`${base}/git/diff?path=file.txt&cwd=untrusted`)
     assert.equal(diff.status, 200)
@@ -413,7 +413,7 @@ test('project/session routes share validated read-only Git access and remote rou
     assert.equal((await app.request(`${base}/git/diff?path=..%2Fsecret`)).status, 400)
   }
   assert.equal(created, 0)
-  assert.equal((await app.request('/api/projects/missing/git/status')).status, 404)
+  assert.equal((await app.request('/api/folders/missing/git/status')).status, 404)
   assert.deepEqual(await (await app.request('/api/sessions/remote/git/status')).json(),
     { available: false, reason: 'remote_unsupported', entries: [] })
   assert.equal((await app.request('/api/sessions/remote/git/diff?path=file.txt')).status, 501)
@@ -425,5 +425,5 @@ test('project/session routes share validated read-only Git access and remote rou
   await rename(folders, `${folders}-moved`)
   t.after(() => rm(`${folders}-moved`, { force: true, recursive: true }))
   assert.equal((await unavailable.request('/git/status')).status, 503)
-  assert.equal((await app.request(`/api/projects/${project.id}/git/status`)).status, 409)
+  assert.equal((await app.request(`/api/folders/${folder.id}/git/status`)).status, 409)
 })

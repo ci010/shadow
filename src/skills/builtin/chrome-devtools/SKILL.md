@@ -13,6 +13,11 @@ metadata:
 Chrome DevTools MCP gives you full browser control: navigate, click, fill forms,
 take screenshots, read page content, and run JavaScript in the page.
 
+For audio recording, microphone levels, camera/video/screen capture, or an
+interactive input panel inside Shadow, read `v:skills/io` and use the built-in
+I/O panel instead. Do not launch a separate browser or create a standalone
+recorder unless the user explicitly wants a separate web application.
+
 All Chrome tools are session-scoped. Search the appropriate source for the
 installed MCP version's current contracts, then call tools through
 `invoke_tool({ name: "chrome-devtools__<tool>", args: { ... } })`.
@@ -52,7 +57,7 @@ When Chrome DevTools is imported automatically or explicitly:
 For parallel sessions (subagents), each gets its own port and isolated user
 data directory automatically — no manual allocation needed.
 
-In organization runtimes (including the default organization), profiles are
+In Project runtimes (including Default), profiles are
 fresh and private to the session. Host browser cookies, credentials, and profiles
 are never copied. Sign in separately if needed. Both tool sets reuse the same
 managed browser within a session; sleeping releases only that session's browser.
@@ -101,42 +106,29 @@ For simple tasks (take a screenshot, read a page), loading directly is fine.
 
 ## Parallel browser sessions
 
-For running multiple browser sessions in parallel (different accounts, A/B
-testing, comparing sites), see `references/parallel-sessions.md`.
+For parallel browser work, preload `chrome-devtools` with no extra arguments
+in each subagent. The runtime assigns distinct ports and fresh profiles.
+Do not copy host profiles or attach another session's browser.
 
 ## Troubleshooting (advanced)
 
 If auto-launch fails, read the returned error. Common fixes:
 
 1. **Browser not found**: Set `tools.chrome.executablePath` in
-   the organization's configuration to the correct browser path, or ask the user.
+   the Project's configuration to the correct browser path, or ask the user.
 2. **Port conflict**: The system auto-allocates ports, but if you need a
    specific port, pass it explicitly:
    ```
   import_tool(source="v:tools/chrome-devtools", args=["--remote-debugging-port=9223"])
    ```
-3. **Organization connection/config errors**: Remove external endpoint,
-   auto-connect, profile, and launch flags from the import and the organization's
+3. **Project connection/config errors**: Remove external endpoint,
+   auto-connect, profile, and launch flags from the import and the Project's
    `.chrome-devtools.json`. Only a managed `--remote-debugging-port` and the
    reviewed category/telemetry switches listed in `references/mcp-args.md` are
    accepted. Occupied ports are rejected, never attached.
-
-The following manual options are **legacy non-organization usage only**; they
-are rejected by organization runtimes, including the default organization:
-
-1. **Explicit profile**: To use a specific user data directory:
-   ```
-  import_tool(source="v:tools/chrome-devtools", args=["--user-data-dir=<path>"])
-   ```
-2. **Manual browser launch**: Launch the browser
-   manually with `--remote-debugging-port=9222`, then save config:
-   ```json
-   // workspace/.chrome-devtools.json
-   { "args": ["--browserUrl=http://127.0.0.1:9222"] }
-   ```
 
 ## MCP server options
 
 See `references/mcp-args.md` for the managed allowlist and the separate upstream
 CLI reference. Upstream support does not imply an option is permitted in an
-organization runtime.
+Project runtime.

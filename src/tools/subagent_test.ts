@@ -16,14 +16,14 @@ test('nested subagent inherits explicit workdir and legacy workspace root', asyn
   const parentWorkdir = {
     version: 1 as const,
     nodeId: 'node-a',
-    capabilityId: 'project-a',
+    capabilityId: 'folder-a',
   }
   const parentState: SessionState = {
     sessionId: 'discord:parent',
     segmentIndex: 3,
     workspaceRoot: 'discord:root',
     workdir: parentWorkdir,
-    projectId: 'folder-project-a',
+    folderId: 'folder-folder-a',
   }
   let childFields: Parameters<SessionManager['buildSession']>[2]
 
@@ -77,7 +77,7 @@ test('nested subagent inherits explicit workdir and legacy workspace root', asyn
 
   assertEquals(childFields?.workspaceRoot, 'discord:root')
   assertStrictEquals(childFields?.workdir, parentWorkdir)
-  assertEquals(childFields?.projectId, 'folder-project-a')
+  assertEquals(childFields?.folderId, 'folder-folder-a')
 })
 
 test('native child threads preserve source bot identity and reject unavailable source instead of fallback', async () => {
@@ -88,7 +88,7 @@ test('native child threads preserve source bot identity and reject unavailable s
   const sessions: Pick<SessionManager, 'assertCanCreateChild' | 'getAllowedSubagentModes' | 'getSessionState' | 'executeOnce' | 'buildSession' | 'addChild'> = {
     assertCanCreateChild: () => {},
     getAllowedSubagentModes: () => ['session'],
-    getSessionState: () => ({ sessionId: parentId, segmentIndex: 0, organizationId: 'org' }),
+    getSessionState: () => ({ sessionId: parentId, segmentIndex: 0, projectId: 'org' }),
     executeOnce: (_key, run) => run(),
     buildSession: async id => { created.push(id) },
     addChild: async () => {},
@@ -106,10 +106,10 @@ test('native child threads preserve source bot identity and reject unavailable s
   }
   const tool = new SubagentTool({} as Bus, sessions as SessionManager, agentTypes as AgentTypesManager, channels as ChannelManager)
   for (const botInstanceId of ['bot-a', 'bot-b']) {
-    const address = { organizationId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-parent' }
+    const address = { projectId: 'org', botInstanceId, platform: 'discord', conversationId: 'same-parent' }
     parentId = channelSessionId(address)
     const ctx: ExecutionContext = {
-      organizationId: 'org', channelAddress: address, sessionId: parentId, physicalSessionId: 'physical',
+      projectId: 'org', channelAddress: address, sessionId: parentId, physicalSessionId: 'physical',
       channel: 'discord', chatId: 'same-parent', senderId: 'alice', messageId: 'input',
       signal: new AbortController().signal, tools: new SessionTools(new Tools('.'), '.'),
     }

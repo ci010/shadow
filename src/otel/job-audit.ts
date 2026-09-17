@@ -49,7 +49,6 @@ export type JobAuditRecordV1 =
     | {
       kind: 'job-requested'
       operation: string
-      approval: JobRequestV1['approval']
       createdAt: string
       deadlineAt: string
       args: AuditValue
@@ -137,7 +136,6 @@ export class JobAuditRecorder {
       correlation: this.#correlation,
       timestamp: this.request.createdAt,
       operation: this.request.operation,
-      approval: this.request.approval,
       createdAt: this.request.createdAt,
       deadlineAt: this.request.deadlineAt,
       args: this.redactor.redactArgs(this.request.args, this.request),

@@ -40,7 +40,7 @@ async function setup(t: TestContext) {
   })
   t.after(async () => {
     session.resetDynamic()
-    await manager.stopWatching()
+    await manager.stop()
     await rm(home, { recursive: true, force: true })
   })
   await manager.ensureLoaded()

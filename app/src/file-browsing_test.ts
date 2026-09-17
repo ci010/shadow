@@ -8,6 +8,11 @@ import { renderToString } from 'vue/server-renderer'
 import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import * as fileHelpers from './composables/useSessionFiles.ts'
+import * as workdirRequestErrors from './workdir-request-error.ts'
+import * as gitFiles from './git-files.ts'
+import { createHomeTreeCache, HomeTreeCacheKey } from './home-tree-cache.ts'
+import { parseSessionGraph } from './folders-sidebar.ts'
+import * as homeTreeCacheModule from './home-tree-cache.ts'
 
 // Exercise the actual SFC setup/watch lifecycle with a headless Vue renderer.
 function component(name: string): Component {
@@ -22,13 +27,16 @@ function component(name: string): Component {
   const module = { exports: {} as { default: Component & { render?: () => null } } }
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)((id: string) =>
-    id.endsWith('.vue') ? {} : id.endsWith('/composables/useSessionFiles') ? fileHelpers : require(id),
+    id.endsWith('.vue') ? {} : id.endsWith('/composables/useSessionFiles') ? fileHelpers
+      : id.endsWith('/workdir-request-error.ts') ? workdirRequestErrors
+      : id.endsWith('/git-files.ts') ? gitFiles
+      : id.endsWith('/home-tree-cache.ts') ? homeTreeCacheModule : require(id),
   module, module.exports)
   module.exports.default.render = () => null
   return module.exports.default
 }
 
-function mount(t: TestContext, name: string, initial: Record<string, unknown>) {
+function mount(t: TestContext, name: string, initial: Record<string, unknown>, homeCache?: ReturnType<typeof createHomeTreeCache>) {
   const props = reactive({ ...initial })
   let instance: any
   const renderer = createRenderer<object, object>({
@@ -40,6 +48,7 @@ function mount(t: TestContext, name: string, initial: Record<string, unknown>) {
   const app = renderer.createApp(defineComponent({
     setup: () => () => h(child, { ...props, ref: (value: unknown) => { instance = value } }),
   }))
+  if (homeCache) app.provide(HomeTreeCacheKey, homeCache)
   app.mount({})
   t.after(() => app.unmount())
   return { props, state: () => instance.$.setupState, unmount: () => app.unmount() }
@@ -61,7 +70,160 @@ async function settle() {
 }
 
 const entry = { name: '.node-version', ext: '', type: 'file', size: 8, mtime: null }
-const base = { apiBase: 'http://localhost', sessionId: '', projectId: 'project-a', active: true }
+const base = { apiBase: 'http://localhost', sessionId: '', folderId: 'folder-a', active: true }
+
+const offlineResponse = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }
+
+test('file explorer combines offline Git/files into one calm state and recovers after checking again', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTree', { ...base, gitOffline: true, gitError: '' })
+  pending[0]!.finish(offlineResponse, 503)
+  await settle()
+  assert.equal(state().offline, true)
+  assert.equal(state().error, '')
+  void state().reload()
+  assert.equal(state().offline, true, 'Keep the offline state visible during the check')
+  pending[1]!.finish({ path: '', entries: [entry] })
+  await settle()
+  assert.equal(state().fileOffline, false)
+  assert.equal(state().offline, true, 'Git still reports the owning node offline')
+  props.gitOffline = false
+  await settle()
+  assert.equal(state().offline, false)
+  assert.deepEqual(state().displayEntries, [entry])
+  const source = readFileSync(new URL('./components/files/FileTree.vue', import.meta.url), 'utf8')
+  assert.match(source, /<NodeOfflineState v-if="offline"/)
+  assert.match(source, /<template v-else>\s*<div v-if="gitError"/)
+  const notice = readFileSync(new URL('./components/files/NodeOfflineState.vue', import.meta.url), 'utf8')
+  assert.match(notice, /role="status"/)
+  assert.match(notice, /Check again/)
+  assert.doesNotMatch(notice, /role="alert"|var\(--c-error/)
+})
+
+test('Git reconnection rechecks an offline file tree and genuine failures do not become offline', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTree', { ...base, gitOffline: true })
+  pending[0]!.finish(offlineResponse, 503)
+  await settle()
+  props.gitOffline = false
+  props.gitStatus = { available: true, entries: [] }
+  await nextTick()
+  assert.equal(pending.length, 2)
+  pending[1]!.finish({ error: 'folder_unavailable' }, 409)
+  await settle()
+  assert.equal(state().offline, false)
+  assert.match(state().error, /folder/)
+})
+
+test('old offline and successful root responses cannot restore another source or project', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTree', base)
+  props.apiBase = 'http://fixture/projects/two'
+  props.folderId = 'second'
+  await nextTick()
+  pending[0]!.finish(offlineResponse, 503)
+  pending[1]!.finish({ path: '', entries: [entry] })
+  await settle()
+  assert.equal(state().offline, false)
+  assert.equal(state().displaySource.apiBase, props.apiBase)
+  void state().reload()
+  props.apiBase = 'http://fixture/projects/three'
+  await nextTick()
+  pending[3]!.finish(offlineResponse, 503)
+  pending[2]!.finish({ path: '', entries: [{ ...entry, name: 'previous-org.txt' }] })
+  await settle()
+  assert.equal(state().offline, true)
+  assert.deepEqual(state().displayEntries, [])
+  assert.equal(state().displaySource.apiBase, props.apiBase)
+})
+
+test('folder children report offline to the explorer, but never from stale project requests', async t => {
+  const pending = requests(t)
+  let offlineEvents = 0
+  const { props, state } = mount(t, 'FileTreeNode', {
+    ...base, dir: '', depth: 0, entry: { ...entry, name: 'folder', type: 'dir' },
+    onNodeOffline: () => { offlineEvents++ },
+  })
+  state().onRowClick()
+  pending[0]!.finish(offlineResponse, 503)
+  await settle()
+  assert.equal(offlineEvents, 1)
+  assert.equal(state().loadError, '')
+  void state().loadChildren()
+  props.apiBase = 'http://fixture/projects/other'
+  await nextTick()
+  pending[1]!.finish(offlineResponse, 503)
+  await settle()
+  assert.equal(offlineEvents, 1)
+  assert.equal(state().loadError, '')
+})
+
+for (const ext of ['.txt', '.png', '.html', '.pdf', '.mp4']) {
+  test(`${ext} previews show explicit offline state, recover and reject previous project responses`, async t => {
+    const pending = requests(t)
+    const { props, state } = mount(t, 'FilePreviewModal', { ...base, remote: true, dir: '', entry: { ...entry, name: `preview${ext}`, ext } })
+    pending[0]!.finish(offlineResponse, 503)
+    await settle()
+    assert.equal(state().offline, true)
+    assert.equal(state().error, '')
+    void state().loadText()
+    assert.equal(state().offline, true)
+    pending[1]!.finish(ext === '.txt' ? { binary: false, content: 'current preview', size: 15 } : { path: '', entries: [] })
+    await settle()
+    assert.equal(state().offline, false)
+    assert.equal(state().loaded, true)
+    void state().loadText()
+    props.apiBase = 'http://fixture/projects/other'
+    await nextTick()
+    pending[3]!.finish({ error: 'denied' }, 403)
+    pending[2]!.finish(offlineResponse, 503)
+    await settle()
+    assert.equal(state().offline, false)
+    assert.match(state().error, /denied/)
+    assert.equal(state().textContent, '')
+  })
+}
+
+test('diff previews recover from offline and discard pending data on a project switch', async t => {
+  const restoreGlobals: Array<() => void> = []
+  for (const [name, value] of Object.entries({
+    document: { addEventListener() {}, removeEventListener() {} },
+    window: { getSelection: () => null },
+  })) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name)
+    Object.defineProperty(globalThis, name, { configurable: true, value })
+    restoreGlobals.push(() => {
+      if (previous) Object.defineProperty(globalThis, name, previous)
+      else Reflect.deleteProperty(globalThis, name)
+    })
+  }
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileDiffPreview', {
+    ...base, path: 'notes.txt', selectionActive: false, canQuote: false, revision: 0,
+  })
+  t.after(() => { for (const restore of restoreGlobals) restore() })
+  pending[0]!.finish(offlineResponse, 503)
+  await settle()
+  assert.equal(state().offline, true)
+  assert.equal(state().error, '')
+  void state().loadDiff()
+  assert.equal(state().offline, true)
+  const diff = { path: 'notes.txt', status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [] }
+  pending[1]!.finish(diff)
+  await settle()
+  assert.equal(state().offline, false)
+  assert.equal(state().diff.path, 'notes.txt')
+  void state().loadDiff()
+  props.apiBase = 'http://fixture/projects/other'
+  await nextTick()
+  pending[3]!.finish(offlineResponse, 503)
+  pending[2]!.finish(diff)
+  await settle()
+  assert.equal(state().offline, true)
+  assert.equal(state().diff, undefined)
+  assert.deepEqual(state().highlighted, [])
+  assert.equal(pending[2]!.signal.aborted, true)
+})
 
 test('changing a text preview encoding cancels stale responses and resets for a different file', async t => {
   const pending = requests(t)
@@ -84,10 +246,10 @@ test('changing a text preview encoding cancels stale responses and resets for a 
 
 test('scratch workbenches hide the explorer and Git without losing the expansion preference', async () => {
   for (const identity of [
-    { sessionId: '', projectId: undefined, explorerEnabled: true, available: false },
-    { sessionId: '', projectId: 'project-a', explorerEnabled: true, available: true },
-    { sessionId: 'web:chat-one', projectId: undefined, explorerEnabled: true, available: true },
-    { sessionId: 'web:chat-one', projectId: undefined, explorerEnabled: false, available: false },
+    { sessionId: '', folderId: undefined, explorerEnabled: true, available: false },
+    { sessionId: '', folderId: 'folder-a', explorerEnabled: true, available: true },
+    { sessionId: 'web:chat-one', folderId: undefined, explorerEnabled: true, available: true },
+    { sessionId: 'web:chat-one', folderId: undefined, explorerEnabled: false, available: false },
   ]) {
     const child = component('FileWorkbench')
     const probe = defineComponent({
@@ -184,7 +346,7 @@ test('a workdir losing Git returns from Changes to its normal file tree', async 
 test('refresh retains loaded root entries and preview while reconciling unchanged data', async t => {
   const pending = requests(t)
   const { state } = mount(t, 'FileTree', { ...base, previewOnOpen: true })
-  const listing = { path: '', entries: [entry], workdir: { kind: 'local', displayPath: 'C:\\project-a' } }
+  const listing = { path: '', entries: [entry], workdir: { kind: 'local', displayPath: 'C:\\folder-a' } }
   pending[0]!.finish(listing)
   await settle()
   const original = state().rootEntries
@@ -259,11 +421,82 @@ test('a newer folder refresh cancels and ignores an older response without clear
 })
 
 const homeListing = { path: '', entries: [entry], workdir: { kind: 'local', scope: 'home', displayPath: 'C:\\synthetic-home' } }
-const reflectionSource = { apiBase: 'http://localhost', sessionId: 'heartbeat:reflector-one', active: true }
+const reflectionSource = { apiBase: 'http://localhost', sessionId: 'cron:opaque-learning-one', active: true }
+
+function learningHomeCache() {
+  const cache = createHomeTreeCache()
+  cache.setSessions(reflectionSource.apiBase, parseSessionGraph({ nodes: [], sessions:
+    [reflectionSource.sessionId, 'cron:opaque-learning-two', 'heartbeat:soul-reflector-two', 'heartbeat:reflector-two', 'heartbeat:reflector-three'].map(sessionId => ({
+      sessionId, automation: { jobId: 'learning:encapsulator', name: 'Encapsulation', runId: sessionId,
+        startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh', config: { source: 'learning', schedule: 'every 2h' } },
+    })),
+  }))
+  return cache
+}
+
+test('separate reflection views reuse only confirmed same-org Home data, expansion and explicit refreshes', async t => {
+  const pending = requests(t)
+  const cache = learningHomeCache()
+  const first = mount(t, 'FileTree', reflectionSource, cache)
+  pending[0].finish(homeListing)
+  await settle()
+  const home = first.state().homeState
+  const folder = { ...entry, name: 'memory', type: 'dir' }
+  const a = mount(t, 'FileTreeNode', {
+    ...reflectionSource, dir: '', depth: 0, entry: folder, workspaceKey: first.state().workspaceKey, homeState: home,
+  })
+  a.state().onRowClick()
+  pending[1].finish({ path: 'memory', entries: [entry], workdir: homeListing.workdir })
+  await settle()
+  const children = a.state().children
+  first.props.active = false
+  a.props.active = false
+  await nextTick()
+  const secondSource = { ...reflectionSource, sessionId: 'cron:opaque-learning-two' }
+  const second = mount(t, 'FileTree', secondSource, cache)
+  assert.equal(second.state().loaded, true, 'Use cached rows immediately instead of a new loading tree')
+  assert.equal(second.state().sourcePending, true, 'The new session must still verify its Home')
+  assert.equal(second.state().homeState, home)
+  const b = mount(t, 'FileTreeNode', {
+    ...secondSource, active: false, dir: '', depth: 0, entry: folder,
+    workspaceKey: second.state().workspaceKey, homeState: home, refreshVersion: home.revision,
+  })
+  assert.equal(b.state().expanded, true)
+  assert.equal(b.state().children, children)
+  pending[2].finish(structuredClone(homeListing))
+  await settle()
+  b.props.active = true
+  await nextTick()
+  assert.equal(pending.length, 3, 'Switching sessions validates the root without refetching loaded folders')
+  assert.equal(second.state().sourcePending, false)
+  const refresh = second.state().reload()
+  pending[3].finish(homeListing)
+  await refresh
+  b.props.refreshVersion = home.revision
+  await nextTick()
+  assert.equal(pending[4].url.pathname, `/api/sessions/${encodeURIComponent(secondSource.sessionId)}/files`)
+  pending[4].finish({ path: 'memory', entries: [entry, { ...entry, name: 'new.txt' }], workdir: homeListing.workdir })
+  await settle()
+  assert.equal(a.state().children.length, 2, 'An explicit refresh updates all views of the same Home')
+  const foreign = mount(t, 'FileTree', { ...secondSource, apiBase: 'http://localhost/projects/other' }, cache)
+  assert.equal(foreign.state().loaded, false)
+  assert.equal(foreign.state().homeState, undefined)
+  pending[5].finish(homeListing)
+  await settle()
+  assert.notEqual(foreign.state().homeState, home, 'Equal filesystem display paths never cross org API scopes')
+  assert.equal(foreign.state().homeState.directories.size, 0)
+  b.props.refreshVersion = home.revision + 1
+  await nextTick()
+  pending[6].finish({ path: 'memory', entries: [{ ...entry, name: 'wrong-home.txt' }],
+    workdir: { ...homeListing.workdir, displayPath: 'D:\\changed-home' } })
+  await settle()
+  assert.match(b.state().loadError, /Folder location changed/)
+  assert.equal(a.state().children.length, 2, 'A changed child-listing root cannot corrupt the shared Home cache')
+})
 
 test('reflection switches retain verified Home rows but cannot open them until the new source is confirmed', async t => {
   const pending = requests(t)
-  const { props, state } = mount(t, 'FileTree', { ...reflectionSource, previewOnOpen: true })
+  const { props, state } = mount(t, 'FileTree', { ...reflectionSource, previewOnOpen: true }, learningHomeCache())
   pending[0]!.finish(homeListing)
   await settle()
   const entries = state().rootEntries
@@ -289,7 +522,7 @@ test('reflection switches retain verified Home rows but cannot open them until t
 
 test('superseded and hidden reflection requests cannot commit an old Home or source', async t => {
   const pending = requests(t)
-  const { props, state } = mount(t, 'FileTree', reflectionSource)
+  const { props, state } = mount(t, 'FileTree', reflectionSource, learningHomeCache())
   pending[0]!.finish(homeListing)
   await settle()
   const entries = state().rootEntries
@@ -322,7 +555,7 @@ test('different roots, remote roots and legacy metadata cannot reuse a verified 
     undefined,
   ]) await t.test(JSON.stringify(workdir) ?? 'legacy listing', async t => {
     const pending = requests(t)
-    const { props, state } = mount(t, 'FileTree', reflectionSource)
+    const { props, state } = mount(t, 'FileTree', reflectionSource, learningHomeCache())
     pending[0]!.finish(homeListing)
     await settle()
     const key = state().workspaceKey
@@ -339,7 +572,7 @@ test('different roots, remote roots and legacy metadata cannot reuse a verified 
 
 test('an unauthorized reflection clears the retained Home and exposes an explicit retryable error', async t => {
   const pending = requests(t)
-  const { props, state } = mount(t, 'FileTree', reflectionSource)
+  const { props, state } = mount(t, 'FileTree', reflectionSource, learningHomeCache())
   pending[0]!.finish(homeListing)
   await settle()
   props.sessionId = 'heartbeat:reflector-two'
@@ -388,34 +621,34 @@ test('a confirmed shared workspace changes node transport without resetting cach
   assert.deepEqual(state().children, [])
 })
 
-test('draft tree loads project files and ignores an old project response after identity changes', async t => {
+test('draft tree loads folder files and ignores an old folder response after identity changes', async t => {
   const pending = requests(t)
   const { props, state } = mount(t, 'FileTree', base)
-  assert.equal(pending[0]?.url.pathname, '/api/projects/project-a/files')
-  props.projectId = 'project-b'
+  assert.equal(pending[0]?.url.pathname, '/api/folders/folder-a/files')
+  props.folderId = 'folder-b'
   await nextTick()
   assert.equal(pending[0]?.signal.aborted, true)
-  assert.equal(pending[1]?.url.pathname, '/api/projects/project-b/files')
+  assert.equal(pending[1]?.url.pathname, '/api/folders/folder-b/files')
   pending[1]!.finish({ path: '', entries: [{ ...entry, name: 'current.custom' }] })
   await settle()
   pending[0]!.finish({ path: '', entries: [{ ...entry, name: 'stale.custom' }] })
   await settle()
   assert.equal(state().rootEntries[0].name, 'current.custom')
   assert.equal(state().loading, false)
-  props.projectId = ''
+  props.folderId = ''
   await nextTick()
   assert.deepEqual(state().rootEntries, [])
   assert.equal(pending.length, 2)
 })
 
-test('expanded project nodes abort and clear their children when the project changes', async t => {
+test('expanded folder nodes abort and clear their children when the folder changes', async t => {
   const pending = requests(t)
   const { props, state } = mount(t, 'FileTreeNode', {
     ...base, dir: '', depth: 0, entry: { ...entry, name: 'docs', type: 'dir' },
   })
   state().onRowClick()
-  assert.equal(pending[0]?.url.pathname, '/api/projects/project-a/files')
-  props.projectId = 'project-b'
+  assert.equal(pending[0]?.url.pathname, '/api/folders/folder-a/files')
+  props.folderId = 'folder-b'
   await nextTick()
   assert.equal(pending[0]?.signal.aborted, true)
   assert.equal(state().expanded, false)
@@ -425,14 +658,14 @@ test('expanded project nodes abort and clear their children when the project cha
   pending[0]!.finish({ path: 'docs', entries: [{ ...entry, name: 'stale' }] })
   await settle()
   assert.equal(state().children[0].name, '.node-version')
-  assert.equal(pending[1]?.url.pathname, '/api/projects/project-b/files')
+  assert.equal(pending[1]?.url.pathname, '/api/folders/folder-b/files')
 })
 
-test('unknown text previews reset, cancel and never display data from a previous project', async t => {
+test('unknown text previews reset, cancel and never display data from a previous folder', async t => {
   const pending = requests(t)
   const { props, state } = mount(t, 'FilePreviewModal', { ...base, dir: '', entry })
-  assert.equal(pending[0]?.url.pathname, '/api/projects/project-a/preview')
-  props.projectId = 'project-b'
+  assert.equal(pending[0]?.url.pathname, '/api/folders/folder-a/preview')
+  props.folderId = 'folder-b'
   await nextTick()
   assert.equal(pending[0]?.signal.aborted, true)
   pending[1]!.finish({ binary: false, content: 'current', size: 20, truncated: true })
@@ -442,7 +675,7 @@ test('unknown text previews reset, cancel and never display data from a previous
   assert.equal(state().textContent, 'current')
   assert.equal(state().truncated, true)
   props.active = false
-  props.projectId = 'project-c'
+  props.folderId = 'folder-c'
   await nextTick()
   assert.equal(state().textContent, '')
   assert.equal(state().truncated, false)
@@ -458,5 +691,5 @@ test('unknown text previews reset, cancel and never display data from a previous
   assert.equal(state().kind, 'html')
   assert.equal(state().binary, false)
   assert.equal(pending.length, 3)
-  assert.equal(new URL(state().staticSrc).pathname, '/api/projects/project-c/static/page.html')
+  assert.equal(new URL(state().staticSrc).pathname, '/api/folders/folder-c/static/page.html')
 })

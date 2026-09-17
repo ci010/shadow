@@ -23,18 +23,18 @@ test('update_convention — adds a session convention', async () => {
   })
 })
 
-test('update_convention — project scope requires a project name', async () => {
+test('update_convention — legacy project scope requires an Initiative association', async () => {
   await withTempWorkspace(async (workspace) => {
     const tool = new ConventionTool(new MemoryStore(workspace))
     const res = await tool.execute(
       { action: 'add', scope: 'project', text: 'x' },
       ectx('discord:1'),
     )
-    assert(res.includes('project name is required'))
+    assert(res.includes('initiative_id is required'))
   })
 })
 
-test('update_convention — project scope writes to the project', async () => {
+test('update_convention — legacy project scope writes to the same Initiative memory', async () => {
   await withTempWorkspace(async (workspace) => {
     const memory = new MemoryStore(workspace)
     const tool = new ConventionTool(memory)
@@ -44,8 +44,28 @@ test('update_convention — project scope writes to the project', async () => {
       ectx('discord:1'),
     )
     assert((await memory.readConventions('discord:1', 'shadow')).includes('chore prefix'))
-    // Not visible to a session in a different project context.
+    // Not injected into an unrelated Initiative context.
     assertEquals(await memory.readConventions('discord:1', 'other'), '')
+  })
+})
+
+test('update_convention — canonical scope inherits and validates the session Initiative', async () => {
+  await withTempWorkspace(async workspace => {
+    const memory = new MemoryStore(workspace)
+    const checked: string[] = []
+    const tool = new ConventionTool(memory, () => 'cleanup', id => {
+      if (id !== 'cleanup') throw new Error('Unknown initiative')
+      checked.push(id)
+    })
+    await tool.execute({ action: 'add', scope: 'initiative', text: 'Preserve history' }, ectx('web:one'))
+    assert((await memory.readConventions('web:two', 'cleanup')).includes('[initiative:cleanup] Preserve history'))
+    assert.deepEqual(checked, ['cleanup'])
+    await assert.rejects(tool.execute({
+      action: 'add', scope: 'initiative', initiative_id: 'other', text: 'No',
+    }, ectx('web:one')), /Unknown initiative/)
+    await assert.rejects(tool.execute({
+      action: 'add', scope: 'initiative', initiative_id: 'cleanup', project: 'other', text: 'No',
+    }, ectx('web:one')), /Conflicting/)
   })
 })
 

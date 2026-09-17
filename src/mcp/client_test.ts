@@ -296,7 +296,7 @@ test('real stdio startup failures include bounded sanitized stderr', async () =>
 test('real HTTP SDK failures disclose response status and sanitized server explanation', async t => {
   const secret = 'synthetic-private-credential'
   t.mock.method(globalThis, 'fetch', async () =>
-    new Response(`Access denied for project; echoed ${secret}`, { status: 403 }))
+    new Response(`Access denied for folder; echoed ${secret}`, { status: 403 }))
   const connection = new McpConnection({
     name: 'fixture', transport: 'streamable-http', url: 'https://example.invalid/mcp',
     headers: { Authorization: `Bearer ${secret}` },
@@ -307,7 +307,7 @@ test('real HTTP SDK failures disclose response status and sanitized server expla
       assert.ok(error instanceof McpError)
       assert.equal(error.diagnostic.httpStatus, 403)
       assert.equal(error.diagnostic.category, 'permission_denied')
-      assert.match(error.diagnostic.message, /Access denied for project/)
+      assert.match(error.diagnostic.message, /Access denied for folder/)
       assert.doesNotMatch(inspect(error), /synthetic-private-credential/)
       return true
     })

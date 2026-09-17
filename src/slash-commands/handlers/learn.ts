@@ -1,11 +1,13 @@
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import type { SlashCommandHandler } from '../index.ts'
-import { createPipelines, triggerLearningPipeline } from '../../agent/learning/pipelines.ts'
+import { LEARNING_AUTOMATIONS } from '../../cron/contracts.ts'
+import { triggerLearningPipeline } from '../../agent/learning/pipelines.ts'
 
 export function createLearnCommand(
   sessions: SessionManager,
+  trigger?: (pipeline: keyof typeof LEARNING_AUTOMATIONS) => Promise<unknown>,
 ): SlashCommandHandler {
-  const VALID_NAMES = Object.keys(createPipelines())
+  const VALID_NAMES = Object.values(LEARNING_AUTOMATIONS).map(p => p.agentType)
 
   return {
     name: 'learn',
@@ -20,14 +22,15 @@ export function createLearnCommand(
         }`
       }
 
-      const pipeline = createPipelines()[name]
+      const pipeline = (Object.keys(LEARNING_AUTOMATIONS) as Array<keyof typeof LEARNING_AUTOMATIONS>)
+        .find(key => LEARNING_AUTOMATIONS[key].agentType === name)
       if (!pipeline) {
         return `Unknown pipeline "${name}". Available: ${VALID_NAMES.join(', ')}`
       }
 
-      await triggerLearningPipeline(sessions, name, pipeline)
-
-      return `Triggered ${name}.`
+      const result = trigger ? await trigger(pipeline) : await triggerLearningPipeline(sessions, pipeline)
+      return result === false ? `No new activity for ${name}.`
+        : `Triggered ${name}.${typeof result === 'string' ? ` Session: ${result}` : ''}`
     },
   }
 }

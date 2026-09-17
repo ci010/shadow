@@ -1,4 +1,4 @@
-import type { ProjectRecord, ProjectsClient } from './projects-client.ts'
+import type { FolderRecord, FoldersClient } from './folders-client.ts'
 
 export interface ChatContextItem {
   kind: 'file' | 'folder'
@@ -7,14 +7,14 @@ export interface ChatContextItem {
 
 /** A draft has no session identity until its first send. Failed sends reuse it. */
 export function createChatDraft(
-  client: Pick<ProjectsClient, 'createSession'>,
-  project?: ProjectRecord,
+  client: Pick<FoldersClient, 'createSession'>,
+  folder?: FolderRecord,
   createId: () => string = () => `chat-${crypto.randomUUID()}`,
 ) {
   return {
-    project,
-    ...deferChatSession(async signal => project
-      ? (await client.createSession(project.id, signal)).sessionId
+    folder,
+    ...deferChatSession(async signal => folder
+      ? (await client.createSession(folder.id, signal)).sessionId
       : `web:${createId()}`),
   }
 }

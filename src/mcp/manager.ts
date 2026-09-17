@@ -1,32 +1,34 @@
 import type { McpServerConfig } from '../config/schema.ts'
-import { McpWatcher } from './watcher.ts'
 
 export class McpManager {
-  private watcher: McpWatcher
-  private servers: McpServerConfig[]
+  private pending: Promise<void> | null = null
   private initPromise: Promise<void> | null = null
+  private stopping = false
 
-  constructor(updateCatalog: (servers: McpServerConfig[]) => Promise<void>, servers: McpServerConfig[] = [], configPath?: string) {
-    this.servers = servers
-    this.watcher = new McpWatcher(updateCatalog, configPath)
-  }
+  constructor(
+    private readonly updateCatalog: (servers: McpServerConfig[]) => Promise<void>,
+    private readonly servers: McpServerConfig[] = [],
+  ) {}
 
   async ensureLoaded(): Promise<void> {
     if (!this.initPromise) {
-      this.initPromise = this.watcher.load(this.servers)
+      this.initPromise = this.load(this.servers)
     }
     await this.initPromise
   }
 
   async load(servers: McpServerConfig[]): Promise<void> {
-    await this.watcher.load(servers)
+    if (this.stopping) throw new Error('MCP manager is stopping')
+    const snapshot = structuredClone(servers)
+    const pending = (this.pending ?? Promise.resolve()).catch(() => {}).then(() => this.updateCatalog(snapshot))
+    this.pending = pending
+    this.initPromise = pending
+    try { await pending }
+    finally { if (this.pending === pending) this.pending = null }
   }
 
-  startWatching(): void {
-    this.watcher.start()
-  }
-
-  async stopWatching(): Promise<void> {
-    await this.watcher.stop()
+  async stop(): Promise<void> {
+    this.stopping = true
+    await this.pending
   }
 }

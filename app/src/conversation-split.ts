@@ -1,13 +1,13 @@
-import { sessionNavigationParent, type SidebarSession } from './projects-sidebar.ts'
+import { sessionNavigationParent, type SidebarSession } from './folders-sidebar.ts'
 
 export const SPLIT_MIN_WIDTH = 1280
 export const CHILD_MIN_WIDTH = 360
 export const SPLIT_HANDLE_WIDTH = 8
 const PRIMARY_MIN_WIDTH = 480
-const PROJECTS_WIDTH = 260
+const FOLDERS_WIDTH = 260
 
 export function childWidthBounds(workspaceWidth: number) {
-  return { min: CHILD_MIN_WIDTH, max: Math.max(CHILD_MIN_WIDTH, Math.min(800, workspaceWidth - PROJECTS_WIDTH - PRIMARY_MIN_WIDTH - SPLIT_HANDLE_WIDTH)) }
+  return { min: CHILD_MIN_WIDTH, max: Math.max(CHILD_MIN_WIDTH, Math.min(800, workspaceWidth - FOLDERS_WIDTH - PRIMARY_MIN_WIDTH - SPLIT_HANDLE_WIDTH)) }
 }
 
 export function clampChildWidth(width: number, workspaceWidth: number): number {

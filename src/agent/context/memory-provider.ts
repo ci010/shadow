@@ -10,21 +10,21 @@ import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
  */
 export function memoryProvider(
   memory: MemoryStore,
-  projectOf: (sessionId: string) => string | undefined,
+  initiativeOf: (sessionId: string) => string | undefined,
 ): SystemPromptProvider {
   return {
     name: 'memory',
     getPromptSection: async (ctx: SessionPromptContext) => {
       const conventions = await memory.readConventions(
         ctx.sessionId,
-        ctx.projectName,
+        ctx.initiativeId,
       )
       // Long-term keyword index is main-agent-only (sub-agents skip it).
       const isMain = ctx.agent.name === 'general' || ctx.agent.name === 'general-legacy'
       const keywords = isMain ? await memory.readKeywords() : ''
       const events = await memory.readEvents(ctx.sessionId, {
-        currentProject: ctx.projectName,
-        projectOf,
+        currentInitiative: ctx.initiativeId,
+        initiativeOf,
       })
       const workingSet = await memory.readWorkingSet(ctx.sessionId)
       const sessionMemory = await memory.readSessionMemory(ctx.sessionId)

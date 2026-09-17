@@ -1,6 +1,32 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatMessageTime, messageTime, userMessageMarkers } from './message-history.ts'
+import { formatMessageTime, messageTime, resendableUserMessage, userMessageMarkers } from './message-history.ts'
+
+test('resend targets only a trailing human message and preserves its attachments', () => {
+  assert.equal(resendableUserMessage([]), undefined)
+  const message = { role: 'user', content: '', media: ['media:photo.png'] }
+  assert.equal(resendableUserMessage([{ role: 'assistant', content: 'Previous reply' }, message]), message)
+  assert.equal(resendableUserMessage([message, { role: 'assistant', content: 'Done' }]), undefined)
+})
+
+test('I/O and background notifications never become resend prompts or fallback content', () => {
+  const answered = [{ role: 'user', content: 'Record a sample' }, { role: 'assistant', content: 'Saved recording.wav' }]
+  for (const message of [
+    { role: 'user', content: 'I/O completed', isSystemEvent: true },
+    { role: 'user', content: 'exec finished', isSystemEvent: true },
+    { role: 'user', content: 'Compacted history', isSummary: true },
+    { role: 'user', content: 'Tool result', event: 'tool_result' },
+    { role: 'tool', content: 'Output' },
+  ]) {
+    assert.equal(resendableUserMessage([...answered, message]), undefined)
+    assert.equal(resendableUserMessage([message]), undefined)
+  }
+  assert.equal(resendableUserMessage([
+    ...answered,
+    { role: 'user', content: 'I/O completed', isSystemEvent: true },
+    { role: 'user', content: 'exec finished', isSystemEvent: true },
+  ]), undefined)
+})
 
 test('history rail includes only real user turns, preserving rendered message indexes and timestamps', () => {
   assert.deepEqual(userMessageMarkers([

@@ -81,8 +81,6 @@ test('Main cluster pairs, approves, persists, and restores challenge credentials
       body: JSON.stringify({
         version: 1,
         expectedDeviceIdentityFingerprint: fingerprint,
-        uiScopes: [],
-        nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
       }),
     },
   )
@@ -110,18 +108,18 @@ test('Main cluster pairs, approves, persists, and restores challenge credentials
   assertEquals(challengeResponse.status, 201)
 
   cluster.registry.advertiseCapability(authentication, {
-    version: 1, nodeId: authentication.nodeId, capabilityId: 'project',
-    kind: 'workdir', displayName: 'Project', displayPath: '/child/project',
-    permissions: [], approvalPolicy: 'session', online: true,
+    version: 1, nodeId: authentication.nodeId, capabilityId: 'folder',
+    kind: 'workdir', displayName: 'Folder', displayPath: '/child/folder',
+    permissions: [], online: true,
   })
   const inventory = cluster.getNodeInventory()
   assertEquals(inventory.nodes[0].connection, 'offline')
   assertEquals(inventory.nodes[0].capabilities[0], {
-    capabilityId: 'project', kind: 'workdir', displayName: 'Project',
-    displayPath: '/child/project', online: false,
+    capabilityId: 'folder', kind: 'workdir', displayName: 'Folder',
+    displayPath: '/child/folder', online: false,
   })
   assertEquals(cluster.workdirCapabilityLookup({
-    version: 1, nodeId: authentication.nodeId, capabilityId: 'project',
+    version: 1, nodeId: authentication.nodeId, capabilityId: 'folder',
   }), { node: 'offline' })
   await cluster.save()
 
@@ -173,7 +171,6 @@ test('Main cluster exposes structured remote execution failure while a node is o
       args: { path: 'README.md' },
       createdAt: createdAt.toISOString(),
       deadlineAt: new Date(createdAt.getTime() + 10_000).toISOString(),
-      approval: 'none',
     }, new AbortController().signal)
   ) events.push(event)
 

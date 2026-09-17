@@ -44,8 +44,6 @@ async function createApp(requestLimit = 20) {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: fingerprint,
     credentialId: auth.credentialId,
-    uiScopes: [],
-    nodePrivileges: ['jobs:execute'],
   }, baseTime)
   const authority = new DeviceChallengeAuthority(registry, {
     challengeIdFactory: () => 'challenge-1',

@@ -10,6 +10,7 @@ import {
 import { type ProcessEntryResult, runProcessEntry } from '../process-entry.ts'
 import { startProductionChildRuntime } from '../production-child.ts'
 import { startMainRuntime } from './start.ts'
+import { resolveServiceEnvironment } from '../service-mode.ts'
 
 export async function runBackendCli(
   hooks: BackendProcessHooks = nodeProcessHooks,
@@ -27,9 +28,18 @@ export async function runBackendCli(
   }
 }
 
-export function runRootProcessEntry(
+export async function runRootProcessEntry(
   hooks: BackendProcessHooks = nodeProcessHooks,
 ): Promise<ProcessEntryResult> {
+  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' ? 1 : 2)
+  const environment = await resolveServiceEnvironment(runtimeArgs, {
+    GATEWAY_PORT: process.env.GATEWAY_PORT,
+    GATEWAY_HOST: process.env.GATEWAY_HOST,
+    ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE,
+    WINDOWS_USE_LAUNCH_TOKEN: process.env.WINDOWS_USE_LAUNCH_TOKEN,
+    WINDOWS_USE_LAUNCH_TOKEN_FILE: process.env.WINDOWS_USE_LAUNCH_TOKEN_FILE,
+    GATEWAY_LAUNCH_CREDENTIAL: process.env.GATEWAY_LAUNCH_CREDENTIAL,
+  })
   return runProcessEntry(hooks.argv, {
     loadConfig,
     startMainRuntime,
@@ -55,10 +65,7 @@ export function runRootProcessEntry(
     runtime: {
       readTextFile: (path) => readFile(path, 'utf8'),
       process: hooks,
-      env: {
-        GATEWAY_PORT: process.env.GATEWAY_PORT,
-        WINDOWS_USE_LAUNCH_TOKEN: process.env.WINDOWS_USE_LAUNCH_TOKEN,
-      },
+      env: environment,
       includeSigterm: getOs() !== 'windows',
     },
   })

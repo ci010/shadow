@@ -12,7 +12,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 import { toolInvocationContract, type SessionTools } from './registry.ts'
 import type { ChromeManager } from '../browser/chrome-manager.ts'
 import { registerTypeScriptLoader } from '../utils/typescript.ts'
-import { getOrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope } from '../projects/scope.ts'
 
 /**
  * Describes an MCP server that can be connected on-demand and whose tools
@@ -175,7 +175,7 @@ function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
       (value === undefined || value === 'true' || value === 'false')) {
       forwarded.push(arg)
     } else {
-      throw new Error('Organization Chrome accepts only a managed remote-debugging-port and reviewed capability/telemetry switches; external endpoints, auto-connect, profiles and other launch options are not supported')
+      throw new Error('Project Chrome accepts only a managed remote-debugging-port and reviewed capability/telemetry switches; external endpoints, auto-connect, profiles and other launch options are not supported')
     }
   }
   return { args: forwarded, port }
@@ -198,10 +198,11 @@ export class ImportTool implements Tool {
   private readonly builtins: Map<string, LoadableEntry>
   private readonly sessions = new Set<SessionTools>()
   private readonly imports = new WeakMap<SessionTools, Promise<unknown>>()
-  private readonly scope = getOrganizationScope()
-  private readonly organizationId?: string
+  private readonly scope = getProjectScope()
+  private readonly projectId?: string
   private readonly browserKeys = new WeakMap<SessionTools, Map<string, string>>()
   readonly name = 'import_tool'
+  readonly supportsRemoteWorkdir = true
   readonly description = 'Import a tool or MCP server into the current session. ' +
     'Source: v:tools/<name> for pre-registered, .ts for script tools, .json for MCP config files. ' +
     'Read v:tools for available sources. Returns current tool contracts before execution. Active until sleep or configuration changes.'
@@ -232,9 +233,9 @@ export class ImportTool implements Tool {
     private chromeManager?: ChromeManager,
   ) {
     this.builtins = new Map(loadable)
-    this.organizationId = this.scope?.organizationId ?? chromeManager?.organizationId
-    if (this.scope && chromeManager && chromeManager.organizationId !== this.organizationId) {
-      throw new Error('Import tool Chrome organization binding mismatch')
+    this.projectId = this.scope?.projectId ?? chromeManager?.projectId
+    if (this.scope && chromeManager && chromeManager.projectId !== this.projectId) {
+      throw new Error('Import tool Chrome project binding mismatch')
     }
   }
 
@@ -468,15 +469,25 @@ export class ImportTool implements Tool {
   }
 
   private contextError(source: string, context: ExecutionContext): string | undefined {
+    if (context.remoteWorkdir &&
+      (source !== `${VIRTUAL_TOOLS_PREFIX}initiative` || !this.canInvokeFromRemote('initiative'))) {
+      return 'Error: remote workdirs can import only the built-in Project-Home initiative tool.'
+    }
     const entry = source.startsWith(VIRTUAL_TOOLS_PREFIX) ? this.loadable.get(source.slice(VIRTUAL_TOOLS_PREFIX.length)) : undefined
     if (entry && isMcpLoadable(entry)) {
       const manager = entry.chromeManager ?? entry.sharedConn?.chromeManager ?? this.chromeManager
       if ((entry.config.name === 'chrome-devtools' || entry.chromeManager || entry.sharedConn?.chromeManager) &&
-        context.organizationId !== (this.organizationId ?? manager?.organizationId)) {
-        return 'Error: import tool Chrome organization binding mismatch'
+        context.projectId !== (this.projectId ?? manager?.projectId)) {
+        return 'Error: import tool Chrome project binding mismatch'
       }
     }
     return undefined
+  }
+
+  canInvokeFromRemote(toolName: string): boolean {
+    const entry = this.loadable.get(toolName)
+    return toolName === 'initiative' && entry !== undefined && entry === this.builtins.get(toolName) &&
+      !isMcpLoadable(entry) && !isFactoryLoadable(entry) && entry.supportsRemoteWorkdir === true
   }
 
   /** Import the catalog entry that owns a dynamic tool name, when determinable. */
@@ -558,22 +569,22 @@ export class ImportTool implements Tool {
 
     const chromeManager = entry.chromeManager ?? connOwner.chromeManager ??
       (connOwner.config.name === 'chrome-devtools' ? this.chromeManager : undefined)
-    const scope = getOrganizationScope()
-    const organizationId = this.organizationId ?? scope?.organizationId ?? chromeManager?.organizationId
-    const managedChrome = organizationId !== undefined &&
+    const scope = getProjectScope()
+    const projectId = this.projectId ?? scope?.projectId ?? chromeManager?.projectId
+    const managedChrome = projectId !== undefined &&
       (chromeManager !== undefined || connOwner.config.name === 'chrome-devtools' ||
         name === 'chrome-devtools' || name === 'chrome-devtools-full')
-    if (managedChrome && (!chromeManager || chromeManager.organizationId !== organizationId ||
-      (scope && (scope.organizationId !== organizationId || (this.scope && scope !== this.scope))) ||
+    if (managedChrome && (!chromeManager || chromeManager.projectId !== projectId ||
+      (scope && (scope.projectId !== projectId || (this.scope && scope !== this.scope))) ||
       this.scope?.closed)) {
-      return 'Error: organization Chrome requires its own runtime-managed browser'
+      return 'Error: project Chrome requires its own runtime-managed browser'
     }
     let configArgs: string[]
     try {
       const configPath = entry.configPath ?? connOwner.configPath
       configArgs = configPath ? await readConfigArgs(configPath, managedChrome) : []
     } catch (error) {
-      return `Error loading organization Chrome config: ${error instanceof Error ? error.message : String(error)}`
+      return `Error loading project Chrome config: ${error instanceof Error ? error.message : String(error)}`
     }
     let effectiveArgs = [...(connOwner.config.args ?? []), ...configArgs, ...extraCliArgs]
     if (managedChrome && chromeManager) {
@@ -582,12 +593,12 @@ export class ImportTool implements Tool {
         const [packageName, ...baseArgs] = connOwner.config.args ?? []
         if (connOwner.config.transport !== 'stdio' || connOwner.config.url ||
           !packageName || !/^chrome-devtools-mcp(?:@[a-zA-Z0-9.*^~+-]+)?$/.test(packageName)) {
-          throw new Error('Organization Chrome requires the built-in managed Chrome DevTools adapter')
+          throw new Error('Project Chrome requires the built-in managed Chrome DevTools adapter')
         }
         parsed = managedChromeArgs([...baseArgs, ...configArgs, ...extraCliArgs])
         effectiveArgs = [packageName, ...parsed.args]
       } catch (error) {
-        return `Error loading organization Chrome: ${error instanceof Error ? error.message : String(error)}`
+        return `Error loading project Chrome: ${error instanceof Error ? error.message : String(error)}`
       }
       let keys = this.browserKeys.get(sessionTools)
       if (!keys) {
@@ -605,7 +616,7 @@ export class ImportTool implements Tool {
         })
       }
       const result = await chromeManager.allocate(key, parsed.port)
-      if ('error' in result) return `Error launching organization Chrome: ${result.error}`
+      if ('error' in result) return `Error launching project Chrome: ${result.error}`
       effectiveArgs.push(...result.extraArgs)
     } else if (chromeManager) {
       // Check if port/user-data-dir were explicitly provided

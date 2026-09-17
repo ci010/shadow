@@ -7,7 +7,7 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { activeSpan } from './tracing.ts'
 import { initializeNodeTelemetry } from './runtime.ts'
 import { OtelStore } from './store.ts'
-import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
 test('Node telemetry persists asynchronous spans and correlated console logs', async () => {
   const store = new OtelStore(':memory:')
@@ -194,7 +194,7 @@ test('Node telemetry shares handles within one scope and restores globals after 
   const originalConsole = levels.map((level) => console[level])
   const first = initializeNodeTelemetry(firstStore)
   const duplicate = initializeNodeTelemetry(firstStore)
-  const scope = createOrganizationScope('second')
+  const scope = createProjectScope('second')
   const second = initializeNodeTelemetry(secondStore, { scope })
   try {
     activeSpan('host-store', () => console.info('host telemetry'))
@@ -303,7 +303,7 @@ test('live spans clean up per-store only after its last telemetry handle shuts d
   const secondStore = new OtelStore(':memory:')
   const first = initializeNodeTelemetry(firstStore)
   const duplicate = initializeNodeTelemetry(firstStore)
-  const scope = createOrganizationScope('second')
+  const scope = createProjectScope('second')
   const second = initializeNodeTelemetry(secondStore, { scope })
   try {
     const running = trace.getTracer('test').startSpan('agent.chat', { attributes: { sessionId: 'parent' } })
@@ -330,26 +330,26 @@ test('live spans clean up per-store only after its last telemetry handle shuts d
   }
 })
 
-test('organization telemetry routes interleaved timers, bound events and late span endings to exactly one owner', async () => {
+test('project telemetry routes interleaved timers, bound events and late span endings to exactly one owner', async () => {
   const host = new OtelStore(':memory:')
   const stores = [new OtelStore(':memory:'), new OtelStore(':memory:')]
-  const scopes = [createOrganizationScope('org-a'), createOrganizationScope('org-b')]
+  const scopes = [createProjectScope('org-a'), createProjectScope('org-b')]
   const hostHandle = initializeNodeTelemetry(host)
   const handles = stores.map((store, i) => initializeNodeTelemetry(store, { scope: scopes[i] }))
   try {
     const callbacks = scopes.map((scope, i) => scope.run(() => scope.bind(() => {
-      assert.equal(getOrganizationScope(), scope)
+      assert.equal(getProjectScope(), scope)
       activeSpan(`event-${i}`, () => console.info(`event-log-${i}`))
     })))
     await Promise.all(scopes.map((scope, i) => scope.run(async () => {
       await activeSpan('agent.chat', async (span) => {
         span.setAttribute('sessionId', 'same-session')
-        span.setAttribute('projectName', 'same-project')
+        span.setAttribute('initiativeId', 'same-folder')
         await new Promise<void>((resolve) => setTimeout(resolve, i === 0 ? 12 : 2))
         console.info(`timer-log-${i}`)
         assert.equal(stores[i].querySessionSpans({ sessionId: 'same-session' }).entries.length, 1)
         callbacks[1 - i]()
-        assert.equal(getOrganizationScope(), scope)
+        assert.equal(getProjectScope(), scope)
       })
     })))
     stores.forEach((store, i) => {
@@ -359,7 +359,7 @@ test('organization telemetry routes interleaved timers, bound events and late sp
       assert(spans.every((span) => span.parent_span_id === null))
     })
     activeSpan('host-only', () => console.info('host-log'))
-    const unknown = createOrganizationScope('unregistered')
+    const unknown = createProjectScope('unregistered')
     unknown.run(() => activeSpan('unknown', () => console.warn('unregistered-org-log')))
     assert.deepEqual((host.querySpans() as StoredSpan[]).map((span) => span.name), ['host-only'])
     assert.equal(host.queryLogs().length, 1)
@@ -371,7 +371,7 @@ test('organization telemetry routes interleaved timers, bound events and late sp
     const abandoned = scopes[0].run(() => trace.getTracer('test').startSpan('abandoned'))
     await handles[0].shutdown()
     scopes[0].close()
-    const replacementScope = createOrganizationScope('org-a')
+    const replacementScope = createProjectScope('org-a')
     const replacement = initializeNodeTelemetry(stores[0], { scope: replacementScope })
     try {
       abandoned.end()
@@ -391,16 +391,16 @@ test('organization telemetry routes interleaved timers, bound events and late sp
   }
 })
 
-test('telemetry rejects ambiguous host and cross-organization store registrations', async () => {
+test('telemetry rejects ambiguous host and cross-project store registrations', async () => {
   const host = new OtelStore(':memory:')
   const other = new OtelStore(':memory:')
   const handle = initializeNodeTelemetry(host)
   try {
     assert.throws(() => initializeNodeTelemetry(other), /only one store/)
-    assert.throws(() => createOrganizationScope('org').run(() => initializeNodeTelemetry(other)), /explicit scope binding/)
-    assert.throws(() => initializeNodeTelemetry(host, { organizationId: 'other' }), /cannot be shared/)
-    assert.throws(() => initializeNodeTelemetry(other, { organizationId: 'wrong', scope: createOrganizationScope('actual') }), /does not match/)
-    assert.throws(() => createOrganizationScope(' '), /organizationId/)
+    assert.throws(() => createProjectScope('org').run(() => initializeNodeTelemetry(other)), /explicit scope binding/)
+    assert.throws(() => initializeNodeTelemetry(host, { projectId: 'other' }), /cannot be shared/)
+    assert.throws(() => initializeNodeTelemetry(other, { projectId: 'wrong', scope: createProjectScope('actual') }), /does not match/)
+    assert.throws(() => createProjectScope(' '), /projectId/)
   } finally {
     await handle.shutdown()
     host.close()

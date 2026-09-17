@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
 import { Hono } from 'hono'
 import { uiPlugin } from '../../../src/gateway/ui.ts'
+import { LiveFixture } from './live-fixture.ts'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -24,14 +25,17 @@ mkdirSync(join(directory, 'Home'), { recursive: true })
 mkdirSync(join(directory, 'DifferentHome'), { recursive: true })
 const home = realpathSync(join(directory, 'Home'))
 const differentHome = realpathSync(join(directory, 'DifferentHome'))
-const one = 'heartbeat:reflector-one'
-const two = 'heartbeat:soul-reflector-two'
-const labels = { [one]: 'Reflection one (read-only)', [two]: 'Reflection two (read-only)' }
+const one = 'cron:opaque-run-one'
+const two = 'cron:opaque-run-two'
+const automation = { jobId: 'learning:encapsulator', name: 'Encapsulation', runId: 'one', startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh',
+  config: { source: 'learning', schedule: 'every 5m', agentType: 'encapsulator' } }
 let normalChats = true
 let secondHome = home
 let failSource = ''
 let graphGate: Promise<void> | undefined
 let rootGate: { sessionId: string; wait: Promise<void> } | undefined
+let detailsGate: Promise<void> | undefined
+let childrenGate: Promise<void> | undefined
 let graphRequests = 0
 const files: Array<{ sessionId: string; path: string }> = []
 const previews: Array<{ sessionId: string; path: string }> = []
@@ -39,44 +43,51 @@ const errors: string[] = []
 let phase = 'initializing'
 let window: BrowserWindow | undefined
 const ui = new Hono()
+const live = new LiveFixture()
 uiPlugin(argument('layout-assets'))(ui)
 const server = createServer(async (request, response) => {
   try {
+    if (await live.handle(request, response)) return
     const url = new URL(request.url!, 'http://127.0.0.1')
-    const path = url.pathname
+    const path = url.pathname.replace(/^\/projects\/default(?=\/)/, '')
     const json = (data: unknown, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)) }
+    if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-15T00:00:00Z' }] })
     if (path === '/api/provider/setup') return json({ ready: true, provider: 'custom', model: 'synthetic-model', authMode: 'none', hasApiKey: false })
     if (path === '/api/provider/configured') return json({ providers: [{ provider: 'custom', model: 'synthetic-model', selected: true, authMode: 'none', hasApiKey: false }] })
     if (path === '/debug/models') return json({ models: ['synthetic-model'] })
-    if (path === '/api/config') return json({ agent: { model: 'synthetic-model' } })
-    if (path === '/api/projects') return json({ projects: [] })
+    if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: home, temperature: 0.7 } })
+    if (path === '/api/folders') return json({ folders: [] })
+    if (path === '/api/automations') return json({ automations: [{
+      id: automation.jobId, name: automation.name, source: 'learning', session: 'fresh', schedule: 'every 5m', task: 'Review new activity', agentType: automation.config.agentType, enabled: true,
+    }] })
+    if (path === `/api/automations/${encodeURIComponent(automation.jobId)}/runs`) return json({ total: 2, offset: 0, runs: [
+      { id: 'one', sessionId: one, startedAt: automation.startedAt, status: 'completed', title: 'Reflection one' },
+      { id: 'two', sessionId: two, startedAt: '2026-09-16T01:00:00Z', status: 'completed', title: 'Reflection two' },
+    ] })
     if (path === '/api/sessions/graph') {
       graphRequests++
       if (graphGate) await graphGate
       return json({
         sessions: [
-          ...(normalChats ? [{ sessionId: 'web:chat-normal', current: 'physical-normal', title: 'Ordinary chat' }] : []),
-          { sessionId: one, current: 'physical-one', title: 'Reflection one' },
-          { sessionId: two, current: 'physical-two', title: 'Reflection two' },
+          ...(normalChats ? [{ sessionId: 'web:chat-normal', projectId: 'default', current: 'physical-normal', title: 'Ordinary chat' }] : []),
+          { sessionId: one, projectId: 'default', current: 'physical-one', title: 'Reflection one', automation },
+          { sessionId: two, projectId: 'default', current: 'physical-two', title: 'Reflection two', automation: { ...automation, runId: 'two' } },
         ],
         nodes: [{ physicalId: 'physical-one', logicalId: one }, { physicalId: 'physical-two', logicalId: two }],
       })
     }
     if (path === '/api/sessions/stages') return json({ stages: { [one]: 'idle', [two]: 'idle' } })
-    if (path === '/api/chat/events') {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      response.write(': reflection fixture\n\n')
-      return
-    }
     const route = path.match(/^\/api\/sessions\/([^/]+)(?:\/(.*))?$/)
     if (route) {
       const sessionId = decodeURIComponent(route[1])
+      if (route[2] === 'background-tasks') return json({ sessionId, total: 0, tasks: [] })
       assert.ok([one, two].includes(sessionId))
       const operation = route[2]
       if (operation === 'files') {
         const folder = url.searchParams.get('path') || ''
         files.push({ sessionId, path: folder })
         if (!folder && rootGate?.sessionId === sessionId) await rootGate.wait
+        if (folder && childrenGate) await childrenGate
         if (failSource === sessionId) return json({ error: 'workdir_unavailable', message: 'Synthetic Home validation failure' }, 503)
         const names = folder === '' ? ['agents', 'memory.md'] : folder === 'agents' ? ['nested'] : [
           'stable.txt', ...Array.from({ length: 48 }, (_, index) => `item-${String(index).padStart(2, '0')}.txt`),
@@ -91,7 +102,10 @@ const server = createServer(async (request, response) => {
         return json({ binary: false, size: 20, content: 'Synthetic Home file\n', truncated: false })
       }
       if (operation === 'git/status') return json({ available: false, reason: 'not_repository', entries: [] })
-      if (operation === 'details') return json({ sessionId, name: sessionId === one ? 'Reflection one' : 'Reflection two', workdir: { kind: 'local', displayPath: 'C:\\synthetic\\execution-only' }, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageScope: 'session' })
+      if (operation === 'details') {
+        if (detailsGate) await detailsGate
+        return json({ sessionId, name: sessionId === one ? 'Reflection one' : 'Reflection two', workdir: { kind: 'local', displayPath: 'C:\\synthetic\\execution-only' }, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
+      }
       if (operation === 'context') return json({ systemPrompt: 'Synthetic reflection context', tools: [] })
       if (!operation) return json({ messages: [{ role: 'assistant', content: sessionId === one ? 'First reflection.' : 'Second reflection.' }], currentPhysicalId: sessionId === one ? 'physical-one' : 'physical-two', previousPhysicalId: null })
     }
@@ -128,76 +142,46 @@ async function click(selector: string): Promise<void> {
   await waitFor(`!!document.querySelector(${JSON.stringify(selector)})`)
   await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
 }
-const sessionButton = (sessionId: string) => `.projects-sidebar .session-select[aria-label="${labels[sessionId]}"]`
-const row = (path: string) => `.workbench-explorer .tree-row[data-path="${path}"]`
-async function expandHome(): Promise<void> {
-  await waitFor(`document.querySelector('.file-tree-root-label')?.textContent === 'Home' && !!document.querySelector(${JSON.stringify(row('agents'))})`)
-  await click(row('agents'))
-  await waitFor(`!!document.querySelector(${JSON.stringify(row('agents/nested'))})`)
-  await click(row('agents/nested'))
-  await waitFor(`!!document.querySelector(${JSON.stringify(row('agents/nested/stable.txt'))})`)
-  await evaluate(`document.querySelector('.file-tree-body').scrollTop = 40`)
+const sessionButton = (sessionId: string) => `.automation-run[data-session-id="${sessionId}"]`
+async function selectRun(sessionId: string) {
+  await waitFor("!!document.querySelector('select[aria-label=\"Run\"]')")
+  await evaluate(`(() => {
+    const select = document.querySelector('select[aria-label="Run"]');
+    select.value = ${JSON.stringify(sessionId)};
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`)
 }
+const pane = '.project-conversation:not([style*="display: none"])'
+const row = (path: string) => `${pane} .workbench-explorer .tree-row[data-path="${path}"]`
 async function rememberHome(): Promise<void> {
   await evaluate(`window.homeRefs = {
-    root: document.querySelector('.file-tree-root'),
+    root: document.querySelector('${pane} .file-tree-root'),
     folder: document.querySelector(${JSON.stringify(row('agents'))}),
     nested: document.querySelector(${JSON.stringify(row('agents/nested'))}),
     leaf: document.querySelector(${JSON.stringify(row('agents/nested/stable.txt'))}),
-    scrollTop: document.querySelector('.file-tree-body').scrollTop
+    scrollTop: document.querySelector('${pane} .file-tree-body').scrollTop
   }`)
 }
 async function assertHomeIdentity(): Promise<void> {
   assert.deepEqual(await evaluate(`(() => {
-    const selectors = { root: '.file-tree-root', folder: ${JSON.stringify(row('agents'))}, nested: ${JSON.stringify(row('agents/nested'))}, leaf: ${JSON.stringify(row('agents/nested/stable.txt'))} };
+    const selectors = { root: '${pane} .file-tree-root', folder: ${JSON.stringify(row('agents'))}, nested: ${JSON.stringify(row('agents/nested'))}, leaf: ${JSON.stringify(row('agents/nested/stable.txt'))} };
     return Object.entries(selectors).filter(([key, selector]) => !window.homeRefs[key].isConnected || window.homeRefs[key] !== document.querySelector(selector)).map(([key]) => key);
   })()`), [], `${phase}: verified Home rows retain their actual DOM objects`)
-  assert.equal(await evaluate(`window.homeRefs.leaf.getClientRects().length > 0 && document.querySelector('.file-tree-body').scrollTop === window.homeRefs.scrollTop`), true, 'Nested expansion and explorer scroll position stay unchanged')
-}
-async function sharedSwitch(target: string, checkGeometry = true): Promise<void> {
-  let releaseGraph!: () => void, releaseRoot!: () => void
-  graphGate = new Promise(resolve => { releaseGraph = resolve })
-  rootGate = { sessionId: target, wait: new Promise(resolve => { releaseRoot = resolve }) }
-  const beforeGraph = graphRequests
-  const beforeFiles = files.length
-  const beforePreviews = previews.length
-  await evaluate(`window.sidebarRefs = {
-    toggle: document.querySelector('.self-reflection-toggle'),
-    target: document.querySelector(${JSON.stringify(sessionButton(target))}),
-    toggleY: document.querySelector('.self-reflection-toggle').getBoundingClientRect().y,
-    rowY: document.querySelector(${JSON.stringify(sessionButton(target))}).getBoundingClientRect().y
-  }`)
-  await click(sessionButton(target))
-  await waitRequest(() => graphRequests > beforeGraph && files.slice(beforeFiles).some(item => item.sessionId === target && item.path === ''), 'selection starts graph refresh and candidate Home validation')
-  await assertHomeIdentity()
-  const pendingSidebar = await evaluate<{ same: boolean; toggleDelta: number; rowDelta: number }>(`({
-    same: window.sidebarRefs.toggle.isConnected && window.sidebarRefs.target.isConnected
-      && window.sidebarRefs.toggle === document.querySelector('.self-reflection-toggle')
-      && window.sidebarRefs.target === document.querySelector(${JSON.stringify(sessionButton(target))}),
-    toggleDelta: document.querySelector('.self-reflection-toggle').getBoundingClientRect().y - window.sidebarRefs.toggleY,
-    rowDelta: document.querySelector(${JSON.stringify(sessionButton(target))}).getBoundingClientRect().y - window.sidebarRefs.rowY
+  const state = await evaluate<{ visible: boolean; scrollTop: number; savedScrollTop: number }>(`({
+    visible:window.homeRefs.leaf.getClientRects().length > 0,
+    scrollTop:document.querySelector('${pane} .file-tree-body').scrollTop,
+    savedScrollTop:window.homeRefs.scrollTop
   })`)
-  assert.equal(pendingSidebar.same, true, 'Loading graph never remounts the selected reflection row or toggle')
-  if (checkGeometry) {
-    assert.ok(Math.abs(pendingSidebar.toggleDelta) < 1 && Math.abs(pendingSidebar.rowDelta) < 1, `Loading conversations causes no sidebar jump: ${JSON.stringify(pendingSidebar)}`)
-  }
-  assert.equal(await evaluate(`Array.from(document.querySelectorAll('.file-tree-note')).some(node => node.getClientRects().length && /Loading files/i.test(node.textContent))`), false)
-  assert.equal(await evaluate(`!!(window.homeRefs.folder.closest('[aria-disabled="true"]') || window.homeRefs.folder.querySelector('[aria-disabled="true"]'))`), true, 'Retained Home rows are explicitly disabled during new-source validation')
-  await click(row('agents'))
-  await click(row('agents/nested/stable.txt'))
-  await assertHomeIdentity()
-  assert.equal(previews.length, beforePreviews, 'Pending retained-file clicks cannot use the old client or open a preview')
-  assert.equal(files.slice(beforeFiles).some(item => item.path !== ''), false, 'Children do not fetch before the new Home has been validated')
-  graphGate = undefined
-  releaseGraph()
-  rootGate = undefined
-  releaseRoot()
-  await waitRequest(() => files.slice(beforeFiles).some(item => item.sessionId === target && item.path === 'agents/nested'), 'preserved expanded descendants refetch through the new session endpoint')
-  await waitFor(`document.querySelector(${JSON.stringify(sessionButton(target))})?.getAttribute('aria-current') === 'page'`)
-  await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
-  await assertHomeIdentity()
-  assert.equal(files.slice(beforeFiles).every(item => item.sessionId === target), true, 'A committed shared Home never fetches children through the previous session transport')
-  if (checkGeometry) assert.equal(await evaluate(`Math.abs(document.querySelector('.self-reflection-toggle').getBoundingClientRect().y - window.sidebarRefs.toggleY) < 1 && Math.abs(document.querySelector(${JSON.stringify(sessionButton(target))}).getBoundingClientRect().y - window.sidebarRefs.rowY) < 1`), true)
+  assert.deepEqual(state, { visible: true, scrollTop: state.savedScrollTop, savedScrollTop: state.savedScrollTop }, 'Nested expansion and explorer scroll position stay unchanged')
+}
+async function pointerClick(selector: string): Promise<void> {
+  const point = await evaluate<{ x: number; y: number }>(`(() => {
+    const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});
+    const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}
+  })()`)
+  await window!.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
+  await window!.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...point })
+  await window!.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...point })
 }
 async function main(): Promise<void> {
   await app.whenReady()
@@ -213,42 +197,118 @@ async function main(): Promise<void> {
   window = new BrowserWindow({ width: 1400, height: 1000, show: false, webPreferences: { offscreen: true, backgroundThrottling: false,
     preload: join(directory, 'layout-preload.cjs'), additionalArguments: [`--layout-api-base=${origin}`] } })
   window.webContents.on('console-message', details => { if (details.level === 'error') errors.push(details.message) })
-  await window.loadURL(`${origin}/chat/${encodeURIComponent(one)}`)
+  await window.loadURL(`${origin}/projects/default/chat`)
   window.webContents.debugger.attach('1.3')
   await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
-  await waitFor(`!!document.querySelector('.self-reflection-toggle')`)
-  if (await evaluate(`document.querySelector('.self-reflection-toggle').getAttribute('aria-expanded')`) !== 'true') await click('.self-reflection-toggle')
-  await expandHome()
+  await waitFor(`!!document.querySelector('.automation-entry')`)
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.folders-header [aria-haspopup="menu"]')).opacity`), '1',
+    'Project new-work action remains visible independently of hover-only folder row actions')
+  await click('.automation-entry')
+  await waitFor(`!!document.querySelector(${JSON.stringify(sessionButton(one))})`)
+  phase = 'first reflection has one stable layout while graph and details are delayed'
+  let releaseGraph!: () => void, releaseDetails!: () => void
+  graphGate = new Promise(resolve => { releaseGraph = resolve })
+  detailsGate = new Promise(resolve => { releaseDetails = resolve })
+  await pointerClick(sessionButton(one))
+  await waitFor(`!!document.querySelector('${pane} .chat-workspace:not(.is-draft)')`)
+  await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+  const before = await evaluate<{ x: number; explorer: boolean; popup: boolean }>(`({
+    x:document.querySelector('${pane} .chat-panel').getBoundingClientRect().x,
+    explorer:!!document.querySelector('${pane} .workbench-explorer')?.getClientRects().length,
+    popup:!!document.querySelector('.hover-info-popup')
+  })`)
+  console.log('LAYOUT_BASELINE ' + JSON.stringify(before))
+  assert.equal(before.explorer, true, 'Reflection Home layout is reserved before graph/details complete')
+  assert.equal(before.popup, false, 'Clicking a full session row must not flash its hover card')
+  assert.match(await evaluate<string>(`document.querySelector('${pane} .chat-history').textContent`), /Loading history/, 'An unresolved conversation must not flash an empty-history state')
+  graphGate = undefined
+  releaseGraph()
+  await waitFor(`!!document.querySelector(${JSON.stringify(row('agents'))})`)
+  detailsGate = undefined
+  releaseDetails()
+  await waitFor(`document.querySelector('${pane} .heading-folder')?.textContent === 'execution-only'`)
+  assert.equal(await evaluate(`document.querySelector('${pane} .chat-panel').getBoundingClientRect().x`), before.x, 'Details must not push the conversation sideways')
+
+  phase = 'folder click leaves sibling geometry and other regions unchanged'
+  let releaseChildren!: () => void
+  childrenGate = new Promise(resolve => { releaseChildren = resolve })
+  const siblingY = await evaluate<number>(`document.querySelector(${JSON.stringify(row('memory.md'))}).getBoundingClientRect().y`)
+  await pointerClick(row('agents'))
+  await waitRequest(() => files.some(item => item.sessionId === one && item.path === 'agents'), 'folder fetch starts')
+  const pending = await evaluate(`({
+    siblingY:document.querySelector(${JSON.stringify(row('memory.md'))}).getBoundingClientRect().y,
+    popup:!!document.querySelector('.hover-info-popup'),
+    heading:document.querySelector('${pane} .heading-folder').textContent,
+    x:document.querySelector('${pane} .chat-panel').getBoundingClientRect().x
+  })`)
+  assert.deepEqual(pending, { siblingY, popup: false, heading: 'execution-only', x: before.x }, 'No transient loading row, popup, or conversation shift on folder click')
+  childrenGate = undefined
+  releaseChildren()
+  await waitFor(`!!document.querySelector(${JSON.stringify(row('agents/nested'))})`)
+  await click(row('agents/nested'))
+  await waitFor(`!!document.querySelector(${JSON.stringify(row('agents/nested/stable.txt'))})`)
+  phase = 'keyboard focus and explicit hover-card navigation remain available'
+  await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+  await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
+  await waitFor(`!!document.querySelector('.hover-info-popup')`)
+  await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  if (!await evaluate(`!!document.querySelector('${pane} .workbench-explorer')?.getClientRects().length`)) {
+    await click(`${pane} [aria-label="Toggle files"]`)
+    await waitFor(`!!document.querySelector('${pane} .workbench-explorer')?.getClientRects().length`)
+  }
+  await evaluate(`document.querySelector('${pane} .file-tree-body').scrollTop = 40`)
+  await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
   await rememberHome()
-  phase = 'shared Home with ordinary Chats'
-  await sharedSwitch(two)
-  phase = 'removing ordinary Chats from fixture inventory'
-  normalChats = false
-  await sharedSwitch(one, false)
-  await waitFor(`!document.querySelector('.legacy-chats .session-select')`)
-  phase = 'shared Home with empty ordinary Chats'
-  await sharedSwitch(two)
-  phase = 'shared Home in collapsed Projects rail'
-  await click('[aria-label="Collapse projects"]')
-  await waitFor(`!!document.querySelector('.projects-sidebar.is-rail')`)
-  await sharedSwitch(one)
-  phase = 'different Home invalidates shared identities'
+
+  phase = 'another reflection reuses Home expansion without fetching loaded descendants'
+  let releaseRoot!: () => void
+  rootGate = { sessionId: two, wait: new Promise(resolve => { releaseRoot = resolve }) }
+  const beforeSecond = files.length
+  await selectRun(two)
+  await waitRequest(() => files.slice(beforeSecond).some(item => item.sessionId === two), 'new reflection verifies its Home')
+  assert.equal(await evaluate(`!!document.querySelector(${JSON.stringify(row('agents/nested/stable.txt'))})?.getClientRects().length`), true)
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row('agents'))})?.getAttribute('aria-disabled')`), 'true')
+  assert.equal(await evaluate(`document.querySelector('${pane} .file-tree-body').scrollTop === window.homeRefs.scrollTop`), true, 'Home scroll belongs to the workspace, not its chat')
+  rootGate = undefined
+  releaseRoot()
+  await waitFor(`document.querySelector(${JSON.stringify(row('agents'))})?.getAttribute('aria-disabled') === 'false'`)
+  assert.deepEqual(files.slice(beforeSecond), [{ sessionId: two, path: '' }], 'Only the root is verified; cached folders are not refreshed on chat switch')
+
+  phase = 'a changed canonical Home cannot reuse another root expansion'
   secondHome = differentHome
-  const beforeDifferent = files.length
-  await click(sessionButton(two))
-  await waitRequest(() => files.slice(beforeDifferent).some(item => item.sessionId === two && item.path === ''), 'different Home validation')
-  await waitFor(`document.querySelector('.file-tree-root')?.getAttribute('aria-label')?.includes(${JSON.stringify(differentHome)})`)
-  assert.equal(await evaluate(`window.homeRefs.folder.isConnected || window.homeRefs.nested.isConnected || window.homeRefs.leaf.isConnected`), false, 'A different canonical Home never inherits the previous subtree')
-  await expandHome()
-  await rememberHome()
-  phase = 'failed candidate validation clears retained Home'
+  await click(`${pane} [aria-label="Refresh files"]`)
+  await waitFor(`document.querySelector('${pane} .file-tree-root')?.getAttribute('aria-label')?.includes(${JSON.stringify(differentHome)})`)
+  await waitFor(`document.querySelector('${pane} .heading-folder')?.textContent === 'execution-only'`)
+  assert.equal(await evaluate(`!!document.querySelector(${JSON.stringify(row('agents/nested'))})`), false, 'A different canonical Home never inherits a cached subtree')
+  phase = 'returning to a cached reflection retains resolved title and expanded Home'
+  detailsGate = new Promise(resolve => { releaseDetails = resolve })
+  await selectRun(one)
+  await waitFor(`document.querySelector('select[aria-label="Run"]')?.value === ${JSON.stringify(one)}`)
+  assert.equal(await evaluate(`document.querySelector('${pane} .heading-folder')?.textContent`), 'execution-only', 'Cached headers never flash Loading folder on activation')
+  await assertHomeIdentity()
+  detailsGate = undefined
+  releaseDetails()
+  phase = 'mobile drawer keeps directory actions local'
+  window.setSize(500, 850)
+  await waitFor(`innerWidth <= 700 && !!document.querySelector('${pane} .workbench-explorer.drawer')`)
+  if (!await evaluate(`!!document.querySelector('${pane} .workbench-explorer')?.getClientRects().length`)) {
+    await click(`${pane} [aria-label="Toggle files"]`)
+  }
+  await waitFor(`!!document.querySelector('${pane} .workbench-explorer.drawer')?.getClientRects().length`)
+  await pointerClick(row('agents'))
+  assert.equal(await evaluate(`!!document.querySelector('.hover-info-popup')`), false)
+  assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true)
+  phase = 'folder failures remain explicit and recoverable'
   failSource = one
-  await click(sessionButton(one))
-  await waitFor(`!document.querySelector('.workbench-explorer .tree-row[data-path]') && !!document.querySelector('.file-tree-note')`)
-  assert.equal(await evaluate(`window.homeRefs.folder.isConnected || window.homeRefs.leaf.isConnected`), false)
-  assert.match(await evaluate<string>(`document.querySelector('.workbench-explorer').textContent`), /unavailable|failed|retry/i)
+  await click(`${pane} [aria-label="Refresh files"]`)
+  await waitFor(`!!document.querySelector('${pane} .file-tree-note.error')`)
+  assert.match(await evaluate<string>(`document.querySelector('${pane} .file-tree-note.error').textContent`), /unavailable|failure|retry/i)
+  failSource = ''
+  await click(`${pane} [aria-label="Refresh files"]`)
+  await waitFor(`!document.querySelector('${pane} .file-tree-note.error')`)
   assert.deepEqual(errors, [], 'Reflection fixture has no unexpected native client or server failures')
-  console.log('LAYOUT_RESULT ' + JSON.stringify({ ok: true, fixture: 'reflection-stability', graphRequests, listingRequests: files.length, sharedHomeCases: 4, differentHome: true, failedValidation: true }))
+  console.log('LAYOUT_RESULT ' + JSON.stringify({ ok: true, fixture: 'reflection-stability', graphRequests, listingRequests: files.length, firstSelection: true, folderGeometry: true, cachedHome: true, keyboard: true, mobile: true }))
 }
 main().catch(error => {
   console.error(error)
@@ -263,6 +323,7 @@ main().catch(error => {
     window.webContents.disableDeviceEmulation()
     window.destroy()
   }
+  live.close()
   server.closeAllConnections()
   server.close()
   app.exit(process.exitCode || 0)

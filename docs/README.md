@@ -5,8 +5,11 @@
 | Document | Read it for |
 | --- | --- |
 | [Project README](../README.md) | Node/pnpm setup, running, builds, and deployment cautions |
+| [Windows release verification](release.md) | Build gates, verified downloads, package identity and installation acceptance boundaries |
 | [Contributor guide](../AGENTS.md) | Repository conventions and change boundaries |
-| [Architecture](architecture.md) | Features, organization ownership/storage/routing, execution flow, persistence, and known limitations |
+| [Architecture](architecture.md) | Features, project ownership/storage/routing, execution flow, persistence, and known limitations |
+| [Shared live transport](realtime-protocol.md) | Multiplexed SSE, topic ownership, replay/reset, reconnect recovery, and resource limits |
+| [Frontend I/O](io.md) | Browser capture panels, adhoc backend connection protocol, controls, and verification limits |
 
 **Status, September 2026:** the supported development direction is a direct
 Node.js 24.15+ backend with pnpm, a Vue web application, and an Electron host.
@@ -14,12 +17,12 @@ Multi-device infrastructure is **work in progress**. Local agent behavior,
 implemented device infrastructure, and future product plans are different things.
 The architecture reference identifies those boundaries.
 
-Organization groups now have independently composed backend runtimes and Homes,
-not a global organization switcher or UI-only tags. Provider credentials and
-devices stay App-wide; model defaults, sessions, bots, and learning belong to an
-organization. See the [README organization guide](../README.md#organizations) and
-[source-backed architecture](architecture.md#organizations-ownership-storage-and-routing)
-for the sibling storage layout, default-organization migration, startup recovery,
+Project groups now have independently composed backend runtimes and Homes,
+not a global project switcher or UI-only tags. Provider credentials and
+devices stay App-wide; model defaults, sessions, bots, and learning belong to a
+project. See the [README project guide](../README.md#projects) and
+[source-backed architecture](architecture.md#projects-ownership-storage-and-routing)
+for the canonical sibling storage layout, fresh Default startup, recovery,
 and verified remote-folder ownership with its Child upgrade boundary. This implementation does not
 establish OS sandboxing, multi-tenant authorization, or distributed release
 readiness. Mac/WSL SSH fixtures remain test environments, not portable installs.
@@ -48,6 +51,10 @@ boundaries, checkpoints, and deferred work.
 
 These are **workstream specifications and historical checkpoints**, not an
 installation guide or evidence that the entire distributed product is ready.
+In older specifications, directory Project means today's Folder/Repository.
+The old long-running
+`ProjectTool` is a separate concept, now Initiative. Historical names are
+preserved rather than rewriting proposals as current implementation.
 Unqualified phrases such as “current,” “integrated,” or “MVP” refer to the
 checkpoint within that document. Old Deno commands, test counts, package layouts,
 and file ownership locks are preserved as history; use the current README and

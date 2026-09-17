@@ -33,7 +33,6 @@ export async function executeRemoteShell(
     args: parsed,
     createdAt: createdAt.toISOString(),
     deadlineAt: new Date(createdAt.getTime() + timeoutMs).toISOString(),
-    approval: 'none',
   }, target.signal)) {
     if (event.type === 'stdout') stdout.push(event.chunk)
     if (event.type === 'stderr') stderr.push(event.chunk)

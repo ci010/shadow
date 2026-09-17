@@ -8,7 +8,7 @@ import { getOs } from '../utils/runtime.ts'
 import type { z } from 'zod'
 import type { ChromeToolSchema } from '../config/schema.ts'
 import { createServer } from 'node:net'
-import { getOrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope } from '../projects/scope.ts'
 
 type ChromeConfig = z.infer<typeof ChromeToolSchema>
 
@@ -40,7 +40,7 @@ async function canBindPort(port: number): Promise<boolean> {
   })
 }
 
-/** One host-owned allocator is shared across orgs; leases never share profiles or processes. */
+/** One host-owned allocator is shared across projects; leases never share profiles or processes. */
 export class ChromePortAllocator {
   private reservations = new Map<number, symbol>()
 
@@ -80,9 +80,9 @@ export interface ChromeRuntimeOperations {
 }
 
 export interface ChromeManagerOptions {
-  organizationId?: string
+  projectId?: string
   portAllocator?: ChromePortAllocator
-  /** Injectable process boundary; organization ownership checks cannot be overridden. */
+  /** Injectable process boundary; project ownership checks cannot be overridden. */
   runtime?: ChromeRuntimeOperations
 }
 
@@ -282,7 +282,7 @@ export class ChromeManager {
   private releasing = new Map<string, Promise<void>>()
   private stopped = false
   private controller = new AbortController()
-  readonly organizationId?: string
+  readonly projectId?: string
 
   constructor(
     private workspace: string,
@@ -290,11 +290,11 @@ export class ChromeManager {
     private options: ChromeManagerOptions = {},
   ) {
     this.options = { ...options }
-    const scope = getOrganizationScope()
-    this.organizationId = options.organizationId ?? scope?.organizationId
-    if (scope && scope.organizationId !== this.organizationId) throw new Error('Chrome runtime organization mismatch')
-    if (this.organizationId !== undefined && (!this.organizationId.trim() || !options.portAllocator)) {
-      throw new Error('Organization Chrome requires a host-owned port allocator')
+    const scope = getProjectScope()
+    this.projectId = options.projectId ?? scope?.projectId
+    if (scope && scope.projectId !== this.projectId) throw new Error('Chrome runtime project mismatch')
+    if (this.projectId !== undefined && (!this.projectId.trim() || !options.portAllocator)) {
+      throw new Error('Project Chrome requires a host-owned port allocator')
     }
   }
 
@@ -320,12 +320,12 @@ export class ChromeManager {
   ): Promise<ChromeAllocation> {
     await this.releasing.get(sessionKey)
     if (this.stopped) return { error: 'Chrome manager is stopped' }
-    if (this.organizationId !== undefined && explicitUserDataDir !== undefined) {
-      return { error: 'Organization browser profiles are runtime-managed; explicit user-data-dir is not supported' }
+    if (this.projectId !== undefined && explicitUserDataDir !== undefined) {
+      return { error: 'Project browser profiles are runtime-managed; explicit user-data-dir is not supported' }
     }
     const pending = this.pending.get(sessionKey)
     if (pending) return pending
-    const operation = this.organizationId === undefined
+    const operation = this.projectId === undefined
       ? this.allocateLegacy(sessionKey, explicitPort, explicitUserDataDir)
       : this.allocateIsolated(sessionKey, explicitPort)
     this.pending.set(sessionKey, operation)

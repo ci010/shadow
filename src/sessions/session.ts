@@ -19,6 +19,7 @@ import {
   type WorkdirCapabilityLookup,
 } from './locality.ts'
 import { SessionResumeError } from './recovery.ts'
+import type { PromptCaptureStore } from './prompt-capture.ts'
 
 /** Tracks whether the LLM loop is calling the provider or executing tools. */
 export type TurnPhase = 'llm' | 'tool'
@@ -43,6 +44,8 @@ export class Session extends BaseSession {
   private inboxWaiter: ((event: LoopEvent) => void) | null = null
   private stopController = new AbortController()
   private readonly stopped: Promise<void>
+  private promptRevision = 0
+  private builtPromptRevision = 0
 
   get completion(): Promise<void> { return this.stopped }
   get accepting(): boolean { return !this.stopController.signal.aborted }
@@ -71,6 +74,7 @@ export class Session extends BaseSession {
     workdirCapabilityLookup?: WorkdirCapabilityLookup,
     remoteExecutor?: Executor,
     evalBridge?: ToolBridgeFactory,
+    promptCaptures?: PromptCaptureStore,
   ) {
     super(
       workspace,
@@ -84,6 +88,7 @@ export class Session extends BaseSession {
       workdirCapabilityLookup,
       remoteExecutor,
       evalBridge,
+      promptCaptures,
     )
     this.stopped = this.run()
     this.stopped.catch((err) =>
@@ -92,6 +97,10 @@ export class Session extends BaseSession {
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
+
+  invalidateSystemPrompt(): void {
+    this.promptRevision++
+  }
 
   /** Current turn phase: idle (no turn), llm (waiting on LLM), or tool (executing tools). */
   get phase(): 'idle' | 'llm' | 'tool' {
@@ -392,6 +401,14 @@ export class Session extends BaseSession {
           steerQueue.map((m) => buildUserChatMessage(m, this.workspace, cwd)),
         ),
       )
+    }
+    while (this.rebuildSystemPrompt && this.builtPromptRevision !== this.promptRevision) {
+      const revision = this.promptRevision
+      const content = await this.rebuildSystemPrompt()
+      const message: ChatMessage = { role: 'system', content }
+      if (this.messages[0]?.role === 'system') this.messages[0] = message
+      else this.messages.unshift(message)
+      this.builtPromptRevision = revision
     }
   }
 

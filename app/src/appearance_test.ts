@@ -54,7 +54,7 @@ test('all shape tokens and existing Uno corner utilities resolve to square corne
   assert.doesNotMatch(styles, /!important/)
 })
 
-test('app-owned Vue and CSS keep square corners except the cursor highlight and send button', async () => {
+test('app-owned Vue and CSS keep square corners except the cursor highlight, send button and loading indicator', async () => {
   async function check(directory: URL): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const url = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory)
@@ -65,6 +65,9 @@ test('app-owned Vue and CSS keep square corners except the cursor highlight and 
         ? original.replace(/(\.mouse-glow\s*\{[^}]*?)border-radius: 50%;/, '$1')
         : url.pathname.endsWith('/components/ChatTab.vue')
           ? original.replace(/(\.composer-send\s*\{[^}]*?)border-radius: 50%;/, '$1')
+          : url.pathname.endsWith('/components/SessionActivity.vue')
+            ? original.replace(/(\.activity-spinner\s*\{[^}]*?)border-radius: 50%;/, '$1')
+              .replace(/(\.working:not\(\.waiting\):not\(\.waiting-for-call\) \.activity-symbol::after\s*\{[^}]*?)border-radius: 50%;/, '$1')
           : original
       for (const match of source.matchAll(/\bborder(?:-[\w]+)*-radius\s*:\s*([^;}]+)/g)) {
         assert.match(match[1].trim(), /^(?:0(?:px)?|var\(--radius-[\w-]+\))$/, `${url.pathname}: ${match[0]}`)
@@ -83,6 +86,19 @@ test('cursor highlight remains circular independently of square interface tokens
   const compiled = compileStyle({ source: sheet, filename: 'App.vue', id: 'data-v-app', scoped: true })
   assert.deepEqual(compiled.errors, [])
   assert.match(compiled.code, /\.mouse-glow\[data-v-app\]\s*\{[^}]*border-radius: 50%;/)
+})
+
+test('loading ring and center stay circular independently of square interface tokens', async () => {
+  const source = await readFile(new URL('./components/SessionActivity.vue', import.meta.url), 'utf8')
+  const { descriptor } = parse(source)
+  const sheet = descriptor.styles.map(style => style.content).join('\n')
+  assert.match(sheet, /\.activity-spinner\s*\{[^}]*width: 14px; height: 14px;[^}]*border-radius: 50%;[^}]*animation: activity-spin \.8s linear infinite;/)
+  assert.match(sheet, /\.activity-symbol::after\s*\{[^}]*border-radius: 50%;/)
+  assert.match(sheet, /\.activity-dot\s*\{[^}]*border-radius: var\(--radius-circle\);/)
+  assert.match(sheet, /@media \(prefers-reduced-motion: reduce\) \{ \.activity-spinner \{ animation: none; \} \}/)
+  const compiled = compileStyle({ source: sheet, filename: 'SessionActivity.vue', id: 'data-v-activity', scoped: true })
+  assert.deepEqual(compiled.errors, [])
+  assert.match(compiled.code, /\.activity-spinner\[data-v-activity\]\s*\{[^}]*border-radius: 50%;/)
 })
 
 test('assistant, system, compaction, tool and execution rows share one pane-relative width cap without changing user alignment', () => {

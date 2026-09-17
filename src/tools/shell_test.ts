@@ -148,7 +148,7 @@ function execTool(
   )
 }
 
-test('ExecTool command interception retains organization and exact bot identity without spawning', async () => {
+test('ExecTool command interception retains project and exact bot identity without spawning', async () => {
   const handler = new CommandHandlerManager()
   const intercepted: CommandContext[] = []
   handler.register('userlink', async context => {
@@ -157,13 +157,13 @@ test('ExecTool command interception retains organization and exact bot identity 
   })
   const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
   const tool = execTool(sandbox, executor, undefined, handler)
-  const address = { organizationId: 'org', botInstanceId: 'bot-a', platform: 'discord', conversationId: 'chat' }
+  const address = { projectId: 'org', botInstanceId: 'bot-a', platform: 'discord', conversationId: 'chat' }
   const result = await tool.execute({ script: 'userlink verify qq target' }, {
-    ...context(sandbox), organizationId: 'org', channelAddress: address, channel: 'discord', chatId: 'chat',
+    ...context(sandbox), projectId: 'org', channelAddress: address, channel: 'discord', chatId: 'chat',
   })
   assert.equal(result, 'Handled')
   assert.equal(intercepted.length, 1)
-  assert.equal(intercepted[0].organizationId, 'org')
+  assert.equal(intercepted[0].projectId, 'org')
   assert.deepEqual(intercepted[0].channelAddress, address)
   assert.equal(executor.calls.length, 0)
 })

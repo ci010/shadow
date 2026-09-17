@@ -1,32 +1,26 @@
-import type { WorkdirRefV1 } from '../sessions/locality.ts'
-import type { WorkdirIdentityV1 } from '../execution/workdir-identity.ts'
+import { join } from 'node:path'
 
-interface ProjectBase {
-  organizationId?: string
+export const DEFAULT_PROJECT_ID = 'default'
+
+export interface ProjectRecord {
   id: string
   name: string
-  path: string
   createdAt: string
 }
 
-export interface LocalProjectRecord extends ProjectBase {
-  kind?: 'local'
+export interface SessionRef {
+  projectId: string
+  sessionId: string
 }
 
-export interface RemoteProjectRecord extends ProjectBase {
-  kind: 'remote'
-  /** Display metadata only. Never resolve this path on Main. */
-  path: string
-  workdir: WorkdirRefV1
-  identity: WorkdirIdentityV1
+export function projectPaths(hostHome: string, projectId: string) {
+  if (!/^(?:default|[0-9a-f]{8}-[0-9a-f-]{27})$/.test(projectId)) {
+    throw new TypeError('Invalid project ID')
+  }
+  const root = join(hostHome, 'projects', projectId)
+  return { root, home: join(root, 'workspace'), configPath: join(root, 'config', 'project.json') }
 }
 
-export type ProjectRecord = LocalProjectRecord | RemoteProjectRecord
-
-export interface CloneOperation {
-  id: string
-  state: 'running' | 'succeeded' | 'failed' | 'cancelled'
-  destination: string
-  project?: ProjectRecord
-  error?: string
+export function projectBasePath(projectId: string): string {
+  return `/projects/${encodeURIComponent(projectId)}/`
 }

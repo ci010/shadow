@@ -852,7 +852,7 @@ export class ExecTool implements Tool {
       cwd,
       channel: context.channel,
       senderId: context.senderId,
-      ...(context.organizationId ? { organizationId: context.organizationId } : {}),
+      ...(context.projectId ? { projectId: context.projectId } : {}),
       ...(context.channelAddress ? { channelAddress: context.channelAddress } : {}),
       ...(context.inputSource ? { inputSource: context.inputSource } : {}),
     })

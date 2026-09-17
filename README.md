@@ -8,102 +8,141 @@ and can be hosted inside an **Electron** desktop application.
 pairing, execution capabilities, and product UI scaffolding exist, but they do
 not imply a production-ready distributed system.
 
-## Organizations
+The [frontend I/O guide](docs/io.md) describes user-approved browser capture panels
+connected to agent-started adhoc services, with backend-driven controls and files.
 
-Organizations are persistent ownership boundaries, not just sidebar folders.
-The sidebar shows multiple organization groups together: **there is no global
-organization switcher**. Their conversations, bots, and background runtimes can
+## Projects
+
+Projects are persistent ownership boundaries, not just sidebar folders.
+Folder and Repository refer to a Project's file resources, not another layer
+of projects.
+The sidebar shows multiple project groups together: **there is no global
+project switcher**. Their conversations, bots, and background runtimes can
 run concurrently; selecting a conversation does not retarget another group's
-work. Each group has projects, retained **Start from scratch** chats, and
-**Self reflection** activity.
+work. Each group has folders/repositories, retained **Start from scratch** chats, and
+**Automations** that start a fresh context for each run.
 
-Each organization owns its Home, sessions, context, memory, identity/Soul,
+Each project owns its Home, sessions, context, memory, identity/Soul,
 workspace skills and agent overrides, learning, bots, and diagnostics.
-**Self reflection** is a UI grouping within that ownership boundary, not a
-separate organization. A session belongs to one organization and at most one
-folder project. Local folder registration rejects another organization's folder
-and overlapping parent/child paths; project code stays in its original folder.
-Agent messaging, forks, and delegation cannot target another organization's
+**Automations** is a UI grouping within that ownership boundary, not a
+separate project. A session belongs to one project and at most one
+registered folder. Local folder registration rejects another project's folder
+and overlapping parent/child paths; code stays in its original folder.
+Agent messaging, forks, and delegation cannot target another project's
 sessions. This is application data/context isolation, **not an OS sandbox**:
 `exec`, imported code, and MCP still have the backend user's host permissions.
 
-Provider connections/credentials and device pairing remain App-wide.
-Organization settings (the gear beside its name) control **General**, **Models**,
-**Bots**, and **Learning**. Model defaults/parameters are independent per
-organization; conversation overrides remain local to that conversation.
-Changing shared provider credentials does not overwrite other organizations'
-model preferences. A failed organization reports its own startup error with
-**Retry organization startup**; healthy organizations remain usable.
+**Start from scratch** leaves the registered folder unselected, but the agent
+still receives its current project's identity and a bounded summary of the
+project's registered folders. It can read/search `v:project/folders` for the
+complete current folder metadata and availability, scoped to that project.
+This is discovery, not a working-directory change or additional permission.
+Remote paths are display metadata only; remote operations still need their
+node/workdir capability. Folder contents, READMEs and repository instructions
+are not automatically loaded. Delegated sessions still inherit the parent's
+folder/workdir; this does not add cross-folder execution.
 
-The Organizations sidebar resizes from its right edge (or with arrow keys on
-the resize handle) and collapses into a narrow organization-icon rail. Width
+Provider connections/credentials and device pairing remain App-wide.
+Project settings (the gear beside its name) control **General**, **Models**,
+**Bots**, and **Learning**. Model, effort, and temperature resolve independently:
+**conversation/draft → project → App → built-in defaults**. Every editable layer
+can be unset; the built-in model is `gpt-6-astra@copilot` with `medium` effort.
+App defaults are in **App settings → Models**. Unset project settings follow
+App defaults without copying the resolved value into project configuration.
+Conversation overrides remain local to that conversation.
+Changing shared provider credentials does not overwrite other projects'
+model preferences. A failed project reports its own startup error with
+**Retry project startup**; healthy projects remain usable.
+
+The Projects sidebar resizes from its right edge (or with arrow keys on
+the resize handle) and collapses into a narrow project-icon rail. Width
 and collapsed state are remembered on this installation. Selecting a rail icon
-expands that organization's group without changing the current conversation.
+expands that project's group without changing the current conversation.
 
 Use a folder row's **...** menu, or right-click the row, to **Remove folder**
-or **Move to organization...**. Both actions change membership only: they never
+or **Move to project...**. Both actions change membership only: they never
 move or delete files on disk. Existing conversations, memory, and learning stay
-in the original organization; those conversations lose access to that folder.
-The destination starts with a new project identity, not transferred history.
-Stop active work in the source organization first; busy checks conservatively
-cover the whole source organization. Overlapping folder ownership and remote
+in the original project; those conversations lose access to that folder.
+The destination starts with a new folder identity, not transferred history.
+Stop active work in the source project first; busy checks conservatively
+cover the whole source project. Overlapping folder ownership and remote
 jobs whose termination is unconfirmed can also block the change. Unconfirmed
 remote jobs remain blocked across restart; automatic recovery is not yet
-implemented. These controls do not delete or merge organizations.
+implemented. These controls do not delete or merge projects.
 
-### Existing data and storage
+### Storage
 
-At first startup, the stopped legacy Home is copied and verified into the
-renameable **Default** organization (`default`); old Home content, session
-history/IDs, memory, learned skills/identity, learning watermarks, and legacy bot
-configuration are retained there, not copied into every new organization.
-JSONL and SQLite session metadata receive the organization identity without
-regenerating conversation history. Fresh organizations start without inherited
-memory or bots, using shipped built-in skills/agent definitions.
+The host storage root is a **sibling** of the configured `agent.workspace`:
+`${workspaceBase}.projects`. Its catalog is `projects.v2.json`. Each project
+uses `projects/<id>/workspace` under that root, with adjacent
+`config/project.json` and `config/bots.v1.json`.
 
-The actual host storage root is a **sibling** of the configured legacy Home:
-`${legacyHome}.organizations`. Each organization uses
-`organizations/<id>/workspace` under that root, with adjacent
-`config/organization.json` and `config/bots.v1.json`. The original Home is **not
-deleted**; shared provider credentials and the device registry retain their
-existing locations. Stop legacy writers before migration and back up real data.
-External symlinks/junctions inside Home are unsupported by automatic migration:
-startup stops for manual review rather than following them or silently dropping
-content. Conflicting targets, invalid recovery metadata, or a changed source
-also require review; do not delete the original Home or migration metadata to
-bypass the error. See [organization storage and routing](docs/architecture.md#organizations-ownership-storage-and-routing)
-for the layout and recovery boundary.
+The renameable **Default** project (`default`) starts with a fresh Home when
+this catalog is absent. Existing Homes outside this layout
+are not copied, imported, or migrated. Old directories are not
+deleted, but their histories and memory will not appear in the new catalog.
+Shared provider credentials and the device registry retain their existing
+locations. See [project storage and routing](docs/architecture.md#projects-ownership-storage-and-routing)
+for the layout.
 
-Organization content requests use `/organizations/<id>/` plus their existing
-`api/...` or `v1/...` suffixes. The App catalog is `/api/organizations`; shared
-provider/device routes remain at the root. Unscoped legacy content routes always
+Project content requests use `/projects/<id>/` plus their existing
+`api/...` or `v1/...` suffixes. The App catalog is `/api/projects`; scoped folder
+registration uses `/projects/<id>/api/folders`. Only canonical Project routes
+and ownership fields are supported, without alternate scope aliases or field
+translation. Shared provider/device routes remain at the
+root. Unscoped content routes always
 refer to **Default**, never whichever conversation happens to be visible.
 
-**Remote organization projects:** an updated Child advertising `workdir.identity`
-can verify and register its selected folder in the owning organization before
+**Remote project folders:** an updated Child advertising `workdir.identity`
+can verify and register its selected folder in the owning project before
 the first session is created. Main checks Child-reported directory/ancestor
 identities, never canonicalizing a remote display path on Main. Another
-organization cannot claim an identical, aliased, or overlapping folder on that
-node. Existing migrated remote sessions retain their capability references and
-reserve ownership for Default; those reservations must be verified before new
-projects are opened on the same node.
-Registration and access to registered projects revalidate every saved claim and
-project on that device. An unavailable or retargeted **other** saved capability
-can therefore also block opening a new session in an existing project or reading
-its project resources. Ownership checks intentionally fail closed: restore and
+project cannot claim an identical, aliased, or overlapping folder on that
+node. Registered remote folders retain their capability references and
+ownership reservations across restart; those reservations must be verified
+before new folders are opened on the same node.
+Registration and access to registered folders revalidate every saved claim and
+folder on that device. An unavailable or retargeted **other** saved capability
+can therefore also block opening a new session in an existing folder or reading
+its resources. Ownership checks intentionally fail closed: restore and
 revalidate the affected capability, not a Main-local fallback. Existing session
 records remain preserved.
 
 Older Children without this operation return
-`409 remote_workdir_identity_unsupported` with `upgrade_node` for new project
+`409 remote_workdir_identity_unsupported` with `upgrade_node` for new folder
 actions; existing remote sessions retain their supported execution paths.
 An unavailable device/workdir returns `503 remote_workdir_unavailable`.
 Update Main and Child, then reconnect. The Mac/WSL SSH test environments also
 need that Child rollout; they are not portable, autostart-capable releases.
 Passing native tests does not upgrade or restart already-running Child processes.
-Remote project listings, UTF-8 text previews, and Git inspection use the owning
+Remote folder listings, UTF-8 text previews, and Git inspection use the owning
 Child. Raw/static remote media remains unsupported (`501`), as does remote
 cloning. These additions do not complete distributed release hardening.
+
+### Initiatives: shared work, not another folder
+
+The former `project` tool is now `initiative`: Project-local SQLite records for
+goals, work items, dependencies, and an append-only activity log. Creator,
+coordinating owner, and item assignee are separate logical session IDs. Claims
+and changes are transactional; stopping a session does not complete its work or
+silently transfer responsibility.
+
+Agents import `v:tools/initiative` and issue bounded SQL through `invoke_tool`.
+This is a documented SQL subset, not arbitrary SQLite: single-table reads,
+guarded writes and batches are supported; joins, CTEs, subqueries, DDL, and
+access to other databases are not. Read-only views expose ready work, the
+current session's todos, and activity/handoff information. Session todos are
+views of shared items, not a second task database; `.plans` remains available
+for design and planning documents. Small requests need no Initiative.
+
+Existing `projects/<slug>/project.md` work records are imported once into
+`initiatives.sqlite`, retaining the originals as read-only archives. Legacy
+session links migrate in both JSONL and SQLite without changing logical IDs.
+This tool also works for remote-workdir sessions because it accesses only the
+owning Project's Home, not the remote filesystem. Other remote dynamic
+tools, scripts, and MCP imports remain unsupported.
+See the [Initiative SQL contract](src/initiatives/README.md) for schema,
+permissions, limits, and migration errors.
 
 ## Documentation
 
@@ -193,8 +232,11 @@ pnpm desktop
 ```
 
 The development command builds the backend and Electron main/preload, starts
-Vite, and launches Electron. The packaging command additionally builds the
-production UI and creates a Windows NSIS installer in `desktop/release`.
+Vite, and launches Electron. The packaging command runs typechecks and the
+focused release tests, builds the production UI, creates a Windows NSIS
+installer in `desktop/release`, and verifies that fresh package. See
+[release verification](docs/release.md) for download mirrors/caches, artifact
+identity checks, and the remaining Windows installation/service acceptance boundary.
 
 Desktop development uses a separate profile at `.tmp/desktop-dev/user-data` in
 the worktree, rather than the installed application's profile. An absolute
@@ -215,21 +257,31 @@ rejected credentials. Readiness follows the selected provider, not just the
 presence of an OpenAI key. Each configured provider has a card; **Configure**
 opens its existing settings without exposing the saved key. The large **Add
 provider** card offers providers not yet configured and named local endpoints.
-Saving updates the shared provider connection; organization model defaults are
+Saving updates the shared provider connection; project model defaults are
 managed separately. A card marked **Configured**
 means settings exist, not that its connection has been checked.
 
-**Organization settings → Bots** configures **QQ, Feishu, and Discord** bot
-instances. An organization can have several bots on the same platform, each with
+**Project settings → Bots** configures **QQ, Feishu, and Discord** bot
+instances. A project can have several bots on the same platform, each with
 its own name, credentials, sender policy, and runtime lifecycle. Each bot shows
 configuration and runtime status separately, with
 setup instructions, **Save and connect**, **Connect**, and **Disconnect** actions.
-Advanced settings include sender allowlists and trusted admin group IDs. Saved
+Advanced settings separate sender allowlists, admin group IDs, and **Trusted group
+or channel IDs** (`trustedChats`). Trust is an explicit declaration about everyone
+who can read replies, not just allowed senders. Unlisted groups and unknown
+audiences receive restrained shared-conversation guidance; trusted groups and
+direct conversations use normal assistant behavior. This does not grant admin
+or tool permissions. List exact conversation IDs; Discord threads must be listed
+separately and do not inherit trust from a server or parent channel.
+
+Saving a trust change refreshes active reusable conversations before their next
+model request. An already-running model request or one-shot task/call keeps its
+existing context; saving cannot retract an in-flight reply. Saved
 credentials are never returned to the form; leave a password field blank to keep
 its existing value. Changes are saved on Main, not in browser storage. Only Main
 administrators can manage these settings. Bot setup remains accessible before
 a model provider is ready; answering messages still requires a working provider.
-Legacy WeChat/iLink adapters are not started by organization runtimes; their
+Legacy WeChat/iLink adapters are not started by project runtimes; their
 retained configuration is not a connected bot. Old `/providers` links
 redirect to `/settings/providers`; `/settings/channels` opens Default's Bots.
 QQ and Discord show **Connected** only after gateway readiness. Feishu shows
@@ -253,7 +305,7 @@ Clients of Shadow's compatible chat API can preserve this continuation by
 round-tripping the assistant message's optional `provider_state` field unchanged.
 
 For GPT models, the conversation **Effort** menu offers **None, Low, Medium,
-High, XHigh, Max**, plus **Default** to inherit organization settings. Explicit levels
+High, XHigh, Max**, plus **Default** to inherit project settings. Explicit levels
 are sent unchanged as `reasoning_effort` for Chat Completions or
 `reasoning.effort` for Responses. **None** disables thinking and maps to `none`;
 it is distinct from **Default**. Provider/model capability checks still apply:
@@ -265,7 +317,9 @@ DeepSeek's current catalog is `deepseek-flash` (V4.1 Flash, including images) an
 The **Effort** control supports `low`, `high`, and `max`, sent as
 `reasoning_effort`. **Thinking** uses `thinking.type: "enabled"` or `"disabled"`;
 when disabled, effort is omitted without clearing the saved preference.
-Unset controls inherit configuration, then DeepSeek's enabled/high defaults.
+Unset controls follow the configuration inheritance chain. DeepSeek accepts only
+low/high/max effort; choose a supported level explicitly if the inherited value
+is medium or xhigh. Unsupported levels are reported, not silently lowered.
 Temperature is omitted during thinking because DeepSeek ignores it.
 Full history, previous turns' reasoning and tool-call IDs are retained; both
 JSONL and SQLite preserve session settings and history across restarts.
@@ -294,9 +348,12 @@ not undo completed side effects, and non-cooperative tools can delay cleanup.
 Stopped, failed, or restart-interrupted conversations show a **Continue** banner
 above the composer. It continues from saved history instead of resending the
 original message. Restart recovery marks interrupted work but does not start a
-model request until you choose Continue. Saved tool results remain intact;
-missing results are marked as unknown outcomes, not replayed automatically.
-External effects whose results were not saved cannot be guaranteed exactly-once.
+model request until you choose Continue. Continue adds no prompt or event message
+to the model context: it executes unfinished tool calls with their original IDs,
+then submits the real results, or submits existing results directly. Results are
+saved individually as tools finish, even while sibling tools are still running.
+After a crash, a call without a saved result may run again when you choose Continue;
+external effects in that unsaved interval cannot be guaranteed exactly-once.
 In-memory queued messages are not reconstructed after a crash. Successfully
 completed conversations and unsent cancelled drafts do not show this banner.
 
@@ -330,28 +387,96 @@ conversations cannot draw directly into a pending message.
 Reselecting the active project or conversation is a no-op; use the project's
 chevron to expand or collapse it. Model and Effort changes keep the composer in place while
 saving; selecting the current value does not issue another save.
-On desktop, Projects can collapse into a 64px icon rail. Root projects and chats
+On desktop, Projects can collapse into a 64px icon rail. Folder rows and chats
 show component-based information cards on hover or keyboard focus, including
 conversation navigation and new-conversation actions. Expanding restores the
 previous sidebar width. Narrow-screen project drawers remain full-width.
 Tree information and file navigation hints use these components, not native
-browser title tooltips.
+browser title tooltips. Clicking a full-width tree row performs its action
+without opening an information card; hover and keyboard focus still reveal it.
 Conversation information cards clamp long titles and descriptions without
-changing saved text. **Self reflection** groups reflector and soul-reflector
-sessions, including their descendants, separately from projects and Chats.
-The section starts collapsed in both the full sidebar and icon rail; session
-refreshes preserve the user's expansion choice and do not insert loading rows
-above existing conversations.
-For local Self reflection sessions and their descendants, the file browser
+changing saved text. **Automations** shows one stable entry per fresh-context
+scheduled task, not one row per generated conversation. This includes
+agent-created jobs and the learning pipelines (reflection, encapsulation, and
+soul reflection). Open an entry for paginated **Runs** and read-only
+**Configuration**; opening a run keeps the existing conversation, file browser,
+and Diagnosis, with a run selector above it. Refresh never switches away from
+the run being inspected. Run ownership comes from explicit metadata, not matching
+prompts or mutable titles. Jobs that append to an existing or dedicated reusable
+session keep their ordinary conversation presentation.
+For local built-in learning runs and their descendants, the file browser
 shows **Home**, not the session's managed workdir. Listing, previews, downloads,
 and Git Changes share that root; this does not change the agent's execution cwd.
 Quotes from Home use absolute source paths. Remote or unavailable workdirs never
 fall back to local Home.
-Switching between reflector sessions retains the loaded Home tree and nested
+Switching between learning runs retains the loaded Home tree and nested
 expansion state while validating the next session's browsing root. Rows cannot
 be opened during that check. Only a confirmed matching local Home reuses the
 tree; another root, Main, project, or remote workdir never shares its identity.
 Failed validation clears the retained rows and reports an error.
+Folder conversations also retain their own explorer and resolved header
+when hidden, so returning does not reset expanded folders or flash a loading
+folder label. Learning runs share an in-memory, project-scoped cache of
+confirmed Home entries, folder expansion, and scroll position. A different
+run validates its root without reloading unchanged expanded directories;
+**Refresh files** refreshes the shared listing and invalidates cached children.
+Removed directories, changed roots, and different Folder or Project identities cannot
+inherit that cached directory state.
+When a workdir's owning node is offline, Files and Git show one **Node offline**
+state rather than duplicate request errors. **Check again** retries both after
+reconnection. Missing/revoked capabilities and genuine file errors remain
+distinct; offline status never selects Main's local filesystem instead.
+When the current conversation owns running background work, a **Background
+tasks** disclosure appears above its input. Expand it to see process, tool, and
+agent task titles and start times. Finished tasks disappear automatically;
+other conversations and projects never share this list. It uses the
+shared live connection and a bounded active-pane refresh, not another stream.
+This read-only inventory does not expose process output or stop controls, and
+does not survive a Main restart or add remote background execution support.
+
+Live updates share one application-owned SSE connection per Main base, rather
+than opening a socket for each cached conversation or submitted request.
+Hidden idle conversations release their subscriptions, including when the
+workspace is cached behind Nodes or Settings. Already-submitted requests keep
+their completion subscription without keeping a separate HTTP response open.
+Returning to a direct chat refreshes its history without replacing its composer
+or unsent draft. Draft input and attachments clear only after admission is
+confirmed; a rejected submission leaves them available to retry.
+While the agent runs, the composer remains available for guidance, attachments,
+and context; **Send** and **Stop request** are separate controls. Only message
+preparation/admission temporarily locks submission. Follow-ups use the existing
+interactive session scheduler: they can interrupt an LLM request or steer at a
+tool boundary according to the backend's existing policy. A parent waiting on a
+blocking call also accepts guidance; call/task traces themselves remain read-only.
+Follow-up admission does not erase current output or retarget Stop to an input
+that was merged into the existing turn.
+Deleting a conversation uses an in-app confirmation showing its name and the
+child-session deletion scope. Cancel is focused by default; deletion errors stay
+in the dialog for review and retry, and confirmed child deletions also clear
+their cached conversation views.
+For a run identified as learning by the project graph, Home browsing does not wait for
+session-header metadata to reserve its layout. Directory requests show their
+busy state inside the existing folder row rather than inserting a temporary
+loading row that shifts its siblings. Browsing requests still use the owning
+project's validated session endpoints.
+
+The shared feed carries project-qualified chat, session invalidation, log,
+and span topics. Bounded replay cursors support reconnection and suppress
+duplicate events; a missed replay window or Main restart explicitly resets the
+affected views to saved snapshots. Reconnection never resubmits a chat command.
+Legacy chat/telemetry streaming endpoints now return HTTP 410. External clients
+must subscribe through `/api/live` and use the JSON admission response from
+`POST /api/chat/send`; `stream:true` is rejected without submitting a message.
+The synchronous `/api/chat/message` endpoint remains supported. See
+[realtime protocol migration](docs/realtime-protocol.md#retired-streaming-apis).
+Transient output is not a durable event log: persisted history remains the
+source of truth, and interrupted work still follows the explicit continuation
+workflow. Disconnected live updates show a retryable app-level notice.
+Session invalidations are coalesced; visible project sidebars also reconcile
+every 20 seconds. Intermediate execution stages, Nodes, and provider settings
+are not all push-driven: visible chat activity and Nodes retain bounded polling,
+and provider reads retain their 30-second deadline even when a view supplies its
+own cancellation signal.
 
 The backend saves provider settings in the selected Main directory's
 `config/bot.config.json`. Copilot credentials remain in the desktop profile's
@@ -370,8 +495,8 @@ device roles, connection status, and node IDs remain available in **Nodes**.
 Projects dock to the left edge; the session list and chat history scroll
 independently while the composer stays visible. Narrow browser windows expose
 Projects through a toggle. New conversations start as a centered, unsent draft.
-Project drafts prominently show the folder name and path above the input;
-scratch drafts explicitly say that no project folder is selected.
+Folder drafts prominently show the folder name and path above the input;
+scratch drafts explicitly say that no registered folder is selected.
 No session ID, history request, or sidebar conversation is created until the
 first message is sent. Background clicks do not focus the composer. An
 unmodified letter (a-z), digit (1-9), or Backspace focuses it and lets the browser
@@ -387,7 +512,25 @@ contains only **Model** and **Effort**; each opens a submenu in the same popover
 Model retains searchable options, provider labels, and the current selection
 marked. Back/Left returns to the two-row menu; Escape returns from a submenu,
 then closes the menu. Model selection is scoped to the conversation/draft;
-organization defaults are available in Organization settings → Models.
+project defaults are available in Project settings → Models.
+Selecting a conversation model saves it immediately, without sending a message.
+**Follow project default** clears that model override; **Default** clears the
+conversation's thinking/effort overrides. Unsent model/effort choices are saved
+locally per installation, project and draft location; they survive renderer
+reloads and are removed after successful first-message admission. This does not
+persist unsent message text or attachments. Existing explicit choices remain
+pinned, including values written by older versions; clear them to opt into
+inheritance.
+
+App and project configuration use one cached `ConfigStore` save/load mechanism:
+read the file once, validate and serialize programmatic changes, atomically
+replace the file, and await runtime activation. Failed activation restores the
+previous file and cached settings. Environment-only credentials remain in
+memory, not written into configuration. Configuration files are not watched:
+use settings/API changes for live updates; manual file edits require a restart.
+MCP catalog updates are applied directly by the save path; skills and agent
+instruction documents still retain their own filesystem watchers.
+
 Returning from Settings
 restores the existing chat and unsent draft; leaving settings cancels any pending
 device login, as does switching to Channels. Channel form drafts survive switching
@@ -406,7 +549,7 @@ configured model's known/explicit limit; no limit is invented for unknown models
 Effort combines thinking and reasoning intensity, scoped to the conversation.
 **None** disables thinking and clears the explicit intensity; **Low**, **High**,
 and **Max** enable thinking and set that effort together. **Default** clears both
-overrides and uses organization settings. Model support still applies; provider
+overrides and uses project settings. Model support still applies; provider
 rejections are surfaced rather than retrying with a different setting. Draft choices
 stay local until the first send; existing-session changes are persisted before
 sending another turn. Sidebar lineage/expand controls and conversation tool,
@@ -468,7 +611,8 @@ envelopes record the group/direct distinction. Older histories without that
 metadata show names only when distinct recorded sender IDs establish multiple
 participants; ambiguous old records are not guessed to be group chats.
 
-Frontend UI uses square corners, except for the circular mouse highlight and send button. The radius tokens in
+Frontend UI uses square corners, except for the circular mouse highlight, send button,
+and loading spinner (including its center dot). The radius tokens in
 `app/src/styles.css`, including controls, surfaces, overlays, badges, and
 indicators, are all zero; UnoCSS rounded utilities use those same tokens.
 This does not restyle native operating-system windows or sandboxed file content.
@@ -486,10 +630,10 @@ Source and Changes documents for the same path can remain open independently.
 The Conversation document has a **Diagnosis** button at the top right; click it
 again to return to the conversation. There is no second Conversation/Diagnosis
 tab row.
-Except for Self reflection's Home view, Files shows the current effective workdir of that logical session, including when
+Except for built-in learning's Home view, Files shows the current effective workdir of that logical session, including when
 Conversation displays an older segment. Its root label shows the directory name;
 hover or focus it to see the backend-resolved full path, including for empty
-directories. Empty directories have no placeholder row. Folder conversations browse their registered project directory,
+directories. Empty directories have no placeholder row. Folder conversations browse their registered folder directory,
 while free chats browse their managed session directory under Home. Inherited
 workdirs still use their owning session's directory. Chat history and shared
 memory are separate from this file listing. Remote paths are display information,
@@ -509,6 +653,11 @@ Middle-click a file tab to close it; Conversation cannot be closed.
 **Ctrl+W** closes the selected source or diff file tab in the active pane, returning
 to Conversation when the last file closes. Electron intercepts the shortcut even
 when a file preview iframe has focus; it does not close the application window.
+**Ctrl+Shift+W** closes all source and diff file tabs in the active conversation,
+including when Conversation is selected, and returns to Conversation. Right-click
+a file tab (or press Shift+F10 while it has focus) for **Close**, **Close others**,
+and **Close all**. Close others keeps the clicked tab; Conversation always remains.
+These actions do not affect other conversations or files on disk.
 Open tabs are remembered per
 conversation while the workspace is mounted. Narrow and split panes use a
 collapsible explorer drawer so the content remains usable. Markdown
@@ -539,7 +688,7 @@ inside the owning session's static file route. Refresh
 reloads the tree. Remote filesystem failures stay explicit and never select a
 Main-local folder as a fallback; remote preview formats depend on executor support.
 The visible explorer loads automatically for existing sessions and registered
-project drafts. Project drafts browse the registered folder by project ID,
+folder drafts. Folder drafts browse the registered folder by folder ID,
 without creating a session; scratch drafts without a folder hide the explorer
 and its toggle and make no file requests. Selecting a project or sending the
 first message makes the explorer available without changing its expansion preference.
@@ -564,13 +713,25 @@ stream. The former System & Tools drawer is replaced by Diagnosis's **Trace**,
 **System prompt** and **Tools** views; resend remains beside the composer.
 Trace shows the displayed physical segment's recorded messages grouped by user
 turn, searchable tool arguments/results, and Input / Model / Tools timing lanes.
-Select a timing bar to inspect attributes, errors and matched tool results.
-Zoom and pan the overview to inspect dense activity; parallel calls occupy
-separate tracks. Turns and tool-call details can be folded in bulk, and search
+The overview defaults to the latest five minutes of recorded activity, following
+new activity until you move or zoom the window. Drag the window slider or use its
+previous/next buttons to browse without shrinking the entire conversation;
+**Latest 5 min** restores the default. Parallel calls occupy separate tracks.
+Hover or keyboard-focus a timing bar for an in-app metadata popup. Select it to
+read details directly below the graph: input content, or a matched tool call's
+original JSON, formatted arguments and result, alongside span attributes and errors.
+Model calls show their returned message, returned tool calls, visible reasoning
+and usage. New calls capture that display content directly on the execution span
+(not provider continuation/encrypted state), so compaction does not break the
+association. Older calls can use history when the recorded input message count
+and completion interval uniquely identify the response; the inspector labels
+this historical match. Running calls show a waiting state, and failed or
+unmatchable legacy calls explicitly report missing responses. Unmatched tool
+calls are also marked unavailable. Turns and tool-call details can be folded in bulk, and search
 matches all entered terms across text and metadata. The expandable all-spans
 list includes nested execution spans.
 
-Execution timing is fetched from `GET /organizations/<id>/v1/query/session-spans` with an exact
+Execution timing is fetched from `GET /projects/<id>/v1/query/session-spans` with an exact
 logical session ID and physical segment filter. The trace UI follows the
 `audit:read` visibility scope; the API inherits the gateway's existing configured
 launch-credential authentication (UI scopes are not server authorization).
@@ -583,23 +744,67 @@ not presented as historical per-call snapshots. Unsent drafts never fetch trace
 data or materialize sessions. Inspect older segments through Conversation's
 segment navigation before opening Diagnosis.
 
-Each organization's Projects **+** menu contains **Open folder**, **Open remote folder**,
+#### Inspecting prompts during development
+
+`GET /projects/<id>/api/sessions/<encoded-session-id>/context` returns the
+current `systemPrompt` and `tools`, with a `source` label:
+`active-history` is the active session's in-memory prompt; `preview` is rebuilt
+from current configuration for an inactive session. Add `?view=preview` to
+explicitly rebuild, including named `sections` and their character counts.
+A preview does not reconstruct the original input's sender/audience context.
+Neither result is a historical model-request snapshot.
+
+For actual session-loop requests, explicitly enable in-memory capture before
+starting the development backend (PowerShell):
+
+```powershell
+$env:SHADOW_DEBUG_PROMPTS = '1'
+pnpm dev:server
+```
+
+Then query the same endpoint with `?view=captured`. It returns newest-first
+`captures` with project, logical/physical session, turn and request IDs,
+timestamp, loop iteration, configured provider/model options, and exact
+system messages and tool schemas passed to `provider.chat`. Capture occurs
+after pending context updates, before the provider call, including calls that
+subsequently fail. The corresponding model span carries
+`prompt.capture.request_id` for correlation. `boundary: provider-input` means **before** adapter
+transformations, routing and retries, not a serialized HTTP request. Auxiliary
+classification and handoff-summary calls are not captured.
+
+Capture defaults off and is rejected when `NODE_ENV=production`. Keep the
+development gateway on loopback. Context queries use the host's existing
+local-client/launch-credential authorization and return `Cache-Control: no-store`.
+No user/tool message bodies, provider continuation state or authentication
+headers are retained by this feature, but system prompts can contain private
+memory and identity information: do not share captures indiscriminately.
+There is no automatic log/database export.
+Each project retains at most 20 captures with a 16 MiB system/tools payload
+budget; oversized payloads return `payload: omitted-size-limit` rather than
+truncated content. Deleting a session removes its captures; runtime shutdown
+clears all of them. An empty capture list means nothing is retained for that
+session, not that a preview was sent. Disabled capture returns
+`404 prompt_capture_disabled`. The existing Diagnosis UI continues to show
+current context, not these per-request captures. Unset the environment variable
+or set it to `0` and restart to disable capture.
+
+Each project's Folders **+** menu contains **Open folder**, **Open remote folder**,
 **Clone repo**, and **Start from scratch**. Open remote folder opens a new draft
 with the remote-device picker already open. Choose a connected Child's advertised
 workspace; selection does not create a session before the first send. It does not
 register arbitrary paths on another machine. On send, Main verifies the Child's
-folder identity and registers the project in that organization; unsupported
+folder identity and registers the folder in that project; unsupported
 Children or ownership conflicts return an explicit error rather than using Main.
 Open folder registers an existing directory using
 Electron's native folder picker (the browser accepts an explicit Main-local path).
 Registered folders remain visible when empty. Each folder's own **+** opens a
-draft associated with that project. Its session is created on the first send;
+draft associated with that folder. Its session is created on the first send;
 filesystem tools and shell then use that folder as their working directory.
 Collapse a folder to hide its conversations.
 
-Projects, conversations and files use the shared `TreeRow.vue` component for
+Folders, conversations and files use the shared `TreeRow.vue` component for
 single-line labels, 12px nesting, 16px icons, disclosure and selected/focused
-states. Conversation descriptions remain in the row tooltip. Project/session
+states. Conversation descriptions remain in the row tooltip. Folder/session
 disclosure buttons stay separate from selection; file folders toggle when
 their row is activated. The shared row supplies icon, metadata and action slots;
 each caller retains its own data loading, lineage and actions.
@@ -657,20 +862,20 @@ Remote inline Node/TypeScript, background execution, and call-mode exec remain
 unsupported. Shell commands run as the Child user: a workdir is not an OS sandbox.
 
 Main's authenticated administrator API has a dedicated remote-conversation path:
-`POST /organizations/<id>/api/sessions/remote` with
+`POST /projects/<id>/api/sessions/remote` with
 `{"nodeId":"child-id","capabilityId":"workdir-id"}`.
-This verifies remote folder ownership and creates or reuses the organization's
+This verifies remote folder ownership and creates or reuses the project's
 project before creating the conversation. An optional UUID `requestId` makes
 retries refer to the same conversation; reusing it for a different capability
 returns a conflict. The unscoped legacy endpoint targets Default.
-For an already registered project, first send instead uses
-`POST /organizations/<id>/api/projects/<project-id>/sessions`, also accepting
+For an already registered folder, first send instead uses
+`POST /projects/<id>/api/folders/<project-id>/sessions`, also accepting
 an optional UUID `requestId` (an empty body remains supported). Remote projects
 revalidate their saved folder identity; retries reuse the conversation rather
 than selecting a new capability, and a request ID owned by another project is
 a `409` conflict.
 It accepts only an online workdir capability, not an absolute/display path, and
-returns `projectId`, `sessionId`, and `chatId` for the normal scoped chat endpoints. Its durable workdir
+returns `folderId`, `sessionId`, and `chatId` for the normal scoped chat endpoints. Its durable workdir
 reference uses the existing JSONL/SQLite session state. Existing conversations are
 not silently moved.
 
@@ -687,8 +892,11 @@ and the same read-only inspection limits as local Git. Git staging, commits,
 branch management and remote cloning are not added by this UI.
 Pairing, connection authentication, revocation, workdir resolution and supported
 operation validation remain in place. There is no additional node approval UI.
-Update both Main and Child to use the `none` approval-policy contract; older
-Child versions may still require their legacy local approvals.
+Execution approval policies, grants, pending requests, and the Child-local
+approval API have been removed. Update Main and Child together: new wire
+contracts reject the retired approval fields rather than silently bypassing an
+old request's requirements. Saved registry snapshots automatically discard
+legacy policy metadata while retaining paired identities and capability bindings.
 
 For a blocked call outcome, the model returns raw JSON without Markdown fences:
 `{"status":"blocked","reason":"Missing decision or permission","partialWork":"Actions already taken and side effects"}`.
@@ -712,7 +920,9 @@ the final result crosses the caller's context boundary.
 Agent definitions can set `defaultMode: session|task|call`. The old `ephemeral`
 frontmatter is accepted with a deprecation warning (`true` maps to `task`, `false`
 to `session`); replace it instead of supplying both fields. Existing session
-history remains readable. Safety guidance applies in every mode; `soul: false`
+history remains readable. Runtime describes the role and conversation audience
+instead of injecting a generic Safety checklist; tool and execution contracts
+still apply in every mode. `soul: false`
 can explicitly omit SOUL context without changing execution lifetime.
 Root callers may omit `mode` only when the selected role's default is allowed.
 Sub-sessions and tasks must select `mode` explicitly; invalid choices fail rather
@@ -776,7 +986,7 @@ This does not add pairing/revocation controls or complete remote execution parit
 The retired Child Approvals route redirects to Nodes; paired devices need no
 additional operation approvals.
 After updating the backend, restart `pnpm desktop:dev` to enable the inventory API.
-Internal capability IDs and unconnected approval policies are not shown.
+Internal capability IDs are not shown.
 
 The composer's **+** menu offers **Add file** and **Add folder** in the local Main
 desktop app. Native pickers support multiple selections; removable chips show
@@ -786,7 +996,7 @@ working directory. Reading them still uses the agent's filesystem tools and
 their existing access controls. Native context selection is unavailable in the
 browser and on Child installations; it does not imply remote file-transfer support.
 
-Folder registrations persist in `<workspace>/projects.v1.json`; session
+Folder registrations persist in `<workspace>/folders.v2.json`; session
 associations persist in the selected JSONL or SQLite store.
 Reopening the same canonical folder reuses its project; existing unassociated
 conversations remain under **Chats**. Start from scratch retains the managed
@@ -825,7 +1035,12 @@ The `app` renderer uses Vite 8 and Vue Router 5 with explicit routes. UnoCSS's
 `presetWind3` retains the existing utility styles; `presetIcons` loads local
 Lucide (general UI) and Simple Icons (brands) collections on demand. Icons are
 compiled into CSS masks using `currentColor`, without a runtime icon CDN or
-shipping the entire collections.
+shipping the entire collections. Source scanning includes Vue templates and
+TypeScript class maps before the first development stylesheet response, so
+icons do not depend on route-load order or a later HMR update.
+Project sidebars omit empty-conversation/folder guidance and hide empty Chats
+and Automations sections; folder rows and creation actions remain available.
+Loading, offline and retryable error states are still shown.
 
 ```html
 <span class="i-lucide-folder-open w-4 h-4" aria-hidden="true"></span>
@@ -848,6 +1063,12 @@ sandboxed with Node integration disabled; a narrow preload bridge handles setup,
 and the main process owns backend startup, authorization, and shutdown. The
 distributed setup/Child flows remain WIP.
 
+An explicit [Windows service mode](docs/release.md#opt-in-headless-windows-service)
+uses the bundled WinSW host and Electron's Node mode. In this mode the desktop
+attaches to an independently managed backend and does not stop it on exit.
+Service registration is a separate, administrator-approved operation, never
+performed by the build or automatically by ordinary desktop startup.
+
 ## Commands
 
 | Command | Purpose |
@@ -858,8 +1079,9 @@ distributed setup/Child flows remain WIP.
 | `pnpm build:all` | Both production builds |
 | `pnpm test` | Backend, script, and frontend logic tests using Node's test runner |
 | `pnpm test:desktop` | Electron lifecycle and bootstrap tests |
+| `pnpm test:release` | Focused build, packaging, service-mode and Electron release checks |
 | `pnpm test:packaged` | Exercise a built Windows package after relocating it outside the repository |
-| `pnpm typecheck` | Backend/scripts and desktop TypeScript checks |
+| `pnpm typecheck` | Backend/scripts, desktop and Vue application typechecks |
 | `pnpm desktop:dev` / `pnpm desktop` | Desktop development / Windows installer |
 | `pnpm migrate:sessions <directory>` | Explicit JSONL-to-SQLite history migration; retains source files |
 | `pnpm dev:searxng` | Optional SearXNG service |
@@ -916,7 +1138,31 @@ such as `rawResponse`. Existing stored traces are not rewritten.
 See the [architecture reference](docs/architecture.md)
 for session lifetime and execution boundaries.
 
-## Existing cron jobs
+## Scheduled conversations
+
+The `cron` tool supports three context modes:
+
+| `session` | Execution context | Sidebar |
+| --- | --- | --- |
+| `origin` (default) | Append events to the creating conversation | Ordinary conversation |
+| `isolated` | Reuse the dedicated `cron:<job-id>` conversation across ticks | Ordinary conversation |
+| `fresh` | Start an independent context for every run | One entry under Automations, with run history |
+
+Fresh jobs accept a readable `name` and an optional `agentType`. They retain the
+origin's project/effective workdir reference, not its conversation transcript.
+Remote workdir references remain capabilities and are revalidated; a missing
+origin or unavailable workdir is not silently replaced by Main's filesystem.
+Reflection, encapsulation, and soul reflection register managed fresh jobs on
+the same project scheduler. Their activity gates and reflection watermark
+remain in effect, so a check does not necessarily create a conversation.
+
+Run identity and execution status are retained with session metadata in JSONL
+and SQLite. Removed definitions with retained runs remain visible as inactive
+history. Legacy built-in runs are narrowly classified by their original source
+address and agent type; their outcome is shown as unknown, not inferred from
+dispatch acceptance.
+
+### Existing cron jobs
 
 The Node scheduler uses standard cron weekdays: `0` (or `7`) is Sunday,
 `1` is Monday, and names such as `SUN` and `MON` are supported. Deno used
@@ -936,7 +1182,8 @@ There is no automatic conversion or Deno scheduling compatibility layer.
 | `/api/*` | Configuration, sessions, providers, web chat, and runtime APIs |
 | `/v1/traces`, `/v1/logs`, `/v1/metrics` | OTLP/HTTP JSON ingest |
 | `/v1/query/*` | Stored telemetry queries |
-| `/v1/stream/{spans,logs}` | Live telemetry over SSE |
+| `/api/live` | Shared, cursor-based SSE for project-qualified chat, sessions, logs and spans |
+| `/api/chat/send` | JSON message admission; live output uses `/api/live` |
 | `/*` | Production SPA, when installed |
 
 The normal gateway binds to loopback by default (`GATEWAY_HOST`,

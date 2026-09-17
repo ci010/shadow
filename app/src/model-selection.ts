@@ -1,8 +1,12 @@
 import { inject, provide, type InjectionKey, type Ref } from 'vue'
 import type { ProviderSetupInput } from './provider-setup.ts'
+import type { ReasoningSettings } from './session-settings.ts'
 
 export interface ModelSelection {
   current: Readonly<Ref<string>>
+  inherited?: Readonly<Ref<string>>
+  inheriting?: Readonly<Ref<boolean>>
+  defaultReasoning?: Readonly<Ref<ReasoningSettings>>
   options: Readonly<Ref<readonly string[]>>
   disabled: Readonly<Ref<boolean>>
   loading: Readonly<Ref<boolean>>

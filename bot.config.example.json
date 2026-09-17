@@ -1,6 +1,7 @@
 {
   "agent": {
-    "model": "gpt-4.1",
+    "model": "gpt-6-astra@copilot",
+    "reasoningEffort": "medium",
     "workspace": "./workspace",
     "sessionStorage": "sqlite"
   },

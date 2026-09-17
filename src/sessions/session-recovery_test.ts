@@ -28,7 +28,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   while (!predicate()) { assert(Date.now() < deadline, 'Timed out waiting for recovery fixture'); await delay(2) }
 }
 function fixture(workspace: string, store: SessionStore) {
-  const calls: Array<{ messages: ChatMessage[]; signal: AbortSignal; resolve: (response: LLMResponse) => void }> = []
+  const calls: Array<{ messages: ChatMessage[]; signal: AbortSignal; resolve: (response: LLMResponse) => void; reject: (error: Error) => void }> = []
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => ['fixture'],
     async chat(messages, _tools, options) {
@@ -36,14 +36,18 @@ function fixture(workspace: string, store: SessionStore) {
       const signal = options!.signal!
       const abort = () => pending.reject(signal.reason)
       signal.addEventListener('abort', abort, { once: true })
-      calls.push({ messages: structuredClone(messages), signal, resolve: pending.resolve })
+      calls.push({ messages: structuredClone(messages), signal, resolve: pending.resolve, reject: pending.reject })
       try { signal.throwIfAborted(); return await pending.promise }
       finally { signal.removeEventListener('abort', abort) }
     },
   }
   const bus = new Bus()
   const facts: SessionTurnFact[] = []
+  const toolResults: string[] = []
   bus.on('session.turn.finished', fact => { facts.push(fact) })
+  bus.on('message.outbound', message => {
+    if (message.event === 'tool_result' && message.toolCallId) toolResults.push(message.toolCallId)
+  })
   const tools = new Tools(workspace)
   const context = new ContextBuilder(workspace)
   let preparationFails = false
@@ -61,7 +65,7 @@ function fixture(workspace: string, store: SessionStore) {
   } as unknown as SessionManagerDeps)
   const app = new Hono()
   sessionsApiPlugin(sessions)(app)
-  return { sessions, calls, tools, app, facts, emitted: () => emitted, failPreparation: (fail: boolean) => { preparationFails = fail } }
+  return { sessions, calls, tools, app, facts, toolResults, emitted: () => emitted, failPreparation: (fail: boolean) => { preparationFails = fail } }
 }
 const post = (app: Hono, id: string, action: string, body: object) => app.request(`/api/sessions/${encodeURIComponent(id)}/${action}`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -103,7 +107,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const history = f.calls[2].messages
         assert.equal(history.filter(message => JSON.stringify(message.content).includes('Perform original request')).length, 1)
         assert.equal(history.filter(message => message.tool_call_id === 'effect-one').length, 1)
-        assert.equal(history.filter(message => String(message.content).includes('type="session-resume"')).length, 1)
+        assert.deepEqual(history, f.calls[1].messages, 'Continue submits the exact prior API context, not a new prompt')
         assert.equal(effects, 1)
         const accepted = await results.find(result => result.status === 202)!.json()
         const resumedActivity = await (await f.app.request('/api/sessions/stages')).json()
@@ -122,16 +126,25 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: abrupt restart repairs unknown tool outcomes, never auto-runs, and preserves recovery across reloads`, async () => {
+  test(`${Store.name}: restart preserves unfinished calls and Continue executes only missing results`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
       const id = 'web:chat-crashed'
+      const continuity: ChatMessage['provider_state'] = {
+        provider: 'copilot', model: llm.model,
+        reasoning: [{ type: 'reasoning', id: 'reasoning-original', encrypted_content: 'synthetic-state', summary: [] }],
+        outputItems: [
+          { type: 'reasoning', id: 'reasoning-original', encrypted_content: 'synthetic-state', summary: [] },
+          { type: 'function_call', call_id: 'known', name: 'fixture_effect', arguments: '{}' },
+          { type: 'function_call', call_id: 'unknown', name: 'fixture_effect', arguments: '{"value":42}' },
+        ],
+      }
       await seed(store, id, { mode: 'session', executionStatus: 'running', lastActivityAt: '2025-01-01T00:00:00Z' }, [
         { role: 'user', content: 'Original interrupted input' },
-        { role: 'assistant', content: null, tool_calls: [
+        { role: 'assistant', content: null, provider_state: continuity, reasoning_content: 'Original reasoning', tool_calls: [
           { id: 'known', type: 'function', function: { name: 'fixture_effect', arguments: '{}' } },
-          { id: 'unknown', type: 'function', function: { name: 'fixture_effect', arguments: '{}' } },
+          { id: 'unknown', type: 'function', function: { name: 'fixture_effect', arguments: '{"value":42}' } },
         ] },
         { role: 'tool', tool_call_id: 'known', name: 'fixture_effect', content: 'Committed receipt' },
       ])
@@ -153,13 +166,18 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.recoverIncompleteSessions()
         assert.deepEqual(f.sessions.getSessionRecovery(id), recovery)
         const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
-        assert.equal(records.filter(record => record.tool_call_id === 'unknown').length, 1)
-        assert.match(String(records.at(-1)!.content), /Outcome unknown: side effects may already have occurred/)
+        assert.equal(records.length, 3, 'Startup only updates recovery metadata, never the transcript')
+        assert.equal(records.filter(record => record.tool_call_id === 'unknown').length, 0)
         await f.sessions.stop()
         const restored = fixture(workspace, store)
-        let repeatedEffects = 0
+        const executions: string[] = []
         restored.tools.register({ name: 'fixture_effect', description: '', parameters: { type: 'object', properties: {} },
-          execute: async () => { repeatedEffects++; return 'must not replay' } })
+          execute: async (args, context) => {
+            assert.deepEqual(args, { value: 42 })
+            executions.push(context.toolCallId!)
+            assert.equal(restored.calls.length, 0, 'Pending calls finish before contacting the provider')
+            return 'Recovered result'
+          } })
         try {
           await restored.sessions.start()
           assert.deepEqual(restored.sessions.getSessionRecovery(id), recovery)
@@ -173,12 +191,157 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
           await waitFor(() => restored.calls.length === 1)
           assert.deepEqual(restored.calls[0].messages.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['known', 'unknown'])
-          assert.match(String(restored.calls[0].messages.at(-1)!.content), /not a replay/)
-          assert.equal(repeatedEffects, 0)
+          assert.equal(restored.calls[0].messages.at(-1)!.content, 'Recovered result')
+          assert.deepEqual(executions, ['unknown'])
+          assert.equal(restored.calls[0].messages.filter(message => message.role === 'user').length, 1)
+          assert.equal(restored.calls[0].messages.filter(message => message.role === 'assistant').length, 1)
+          assert.deepEqual(restored.calls[0].messages.find(message => message.role === 'assistant')?.provider_state, continuity)
+          assert.equal(restored.calls[0].messages.find(message => message.role === 'assistant')?.reasoning_content, 'Original reasoning')
           restored.calls[0].resolve(done())
           await waitFor(() => restored.facts.length === 1)
         } finally { await restored.sessions.stop() }
       } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: repeated failed continuations do not change API context or persisted messages`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-repeat-continue'
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        const before = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        for (let attempt = 0; attempt < 3; attempt++) {
+          f.calls[attempt].reject(new Error('Synthetic API failure'))
+          await waitFor(() => !!f.sessions.getSessionRecovery(id))
+          const recovery = f.sessions.getSessionRecovery(id)!
+          assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
+          await waitFor(() => f.calls.length === attempt + 2)
+          assert.deepEqual(f.calls[attempt + 1].messages, f.calls[0].messages)
+          assert.deepEqual(await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0))), before)
+        }
+        f.calls[3].resolve(done())
+        await waitFor(() => f.facts.length === 4)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: Stop preserves a finishing tool result and Continue runs the unstarted next group`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-pending-group'
+      const release = Promise.withResolvers<string>()
+      const executed: string[] = []
+      f.tools.register({ name: 'fixture_wait', description: '', parameters: { type: 'object', properties: {} },
+        execute: async (_args, context) => { executed.push(context.toolCallId!); return release.promise } })
+      f.tools.register({ name: 'fixture_read', description: '', parameters: { type: 'object', properties: {} }, readonly: true,
+        execute: async (_args, context) => { executed.push(context.toolCallId!); return 'Read receipt' } })
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: null, toolCalls: [
+          { id: 'first', name: 'fixture_wait', arguments: {} },
+          { id: 'second', name: 'fixture_read', arguments: {} },
+        ] })
+        await waitFor(() => executed.length === 1)
+        await post(f.app, id, 'cancel', { requestId: 'original' })
+        release.resolve('Committed receipt after cancellation')
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        assert.deepEqual(records.filter(record => record.role === 'tool').map(record => [record.tool_call_id, record.content]),
+          [['first', 'Committed receipt after cancellation']])
+        const recovery = f.sessions.getSessionRecovery(id)!
+        assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
+        await waitFor(() => f.calls.length === 2)
+        assert.deepEqual(executed, ['first', 'second'])
+        assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'tool').map(message => [message.tool_call_id, message.content]),
+          [['first', 'Committed receipt after cancellation'], ['second', 'Read receipt']])
+        assert.equal(f.calls[1].messages.filter(message => message.role === 'user').length, 1)
+        f.calls[1].resolve(done())
+        await waitFor(() => f.facts.length === 2)
+      } finally { release.resolve('cleanup'); await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: an aborted tool with no result remains pending for Continue`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-aborted-tool'
+      const executions: string[] = []
+      f.tools.register({ name: 'fixture_abort', description: '', parameters: { type: 'object', properties: {} },
+        execute: async (_args, context) => {
+          executions.push(context.toolCallId!)
+          if (executions.length > 1) return 'Resumed real result'
+          await delay(60_000, undefined, { signal: context.signal })
+          throw new Error('Fixture should have been cancelled')
+        } })
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: null, toolCalls: [{ id: 'original-call', name: 'fixture_abort', arguments: {} }] })
+        await waitFor(() => executions.length === 1)
+        await post(f.app, id, 'cancel', { requestId: 'original' })
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        assert.equal(records.filter(record => record.role === 'tool').length, 0, 'Cancellation must not fabricate a tool result')
+        const recovery = f.sessions.getSessionRecovery(id)!
+        await post(f.app, id, 'resume', { recoveryId: recovery.id })
+        await waitFor(() => f.calls.length === 2)
+        assert.deepEqual(executions, ['original-call', 'original-call'])
+        assert.deepEqual(f.calls[1].messages.map(message => message.role), ['system', 'user', 'assistant', 'tool'])
+        assert.equal(f.calls[1].messages.at(-1)?.content, 'Resumed real result')
+        f.calls[1].resolve(done())
+        await waitFor(() => f.facts.length === 2)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: a completed parallel result is durable while a sibling is still running`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-parallel-results'
+      const release = Promise.withResolvers<string>()
+      let executions = 0
+      f.tools.register({ name: 'fixture_parallel', description: '', parameters: { type: 'object', properties: {} }, readonly: true,
+        execute: async (_args, context) => {
+          executions++
+          return context.toolCallId === 'slow' ? release.promise : 'Fast committed receipt'
+        } })
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: null, toolCalls: [
+          { id: 'slow', name: 'fixture_parallel', arguments: {} },
+          { id: 'fast', name: 'fixture_parallel', arguments: {} },
+        ] })
+        await waitFor(() => f.toolResults.includes('fast'))
+        assert.equal(executions, 2)
+        const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        assert.deepEqual(records.filter(record => record.role === 'tool').map(record => record.tool_call_id), ['fast'])
+        await post(f.app, id, 'cancel', { requestId: 'original' })
+        release.resolve('Slow committed receipt')
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        const recovery = f.sessions.getSessionRecovery(id)!
+        await post(f.app, id, 'resume', { recoveryId: recovery.id })
+        await waitFor(() => f.calls.length === 2)
+        assert.equal(executions, 2)
+        assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['fast', 'slow'])
+        f.calls[1].resolve(done())
+        await waitFor(() => f.facts.length === 2)
+      } finally { release.resolve('cleanup'); await f.sessions.stop(); store.close?.() }
     })
   })
 

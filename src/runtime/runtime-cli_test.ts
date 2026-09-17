@@ -113,6 +113,7 @@ test('main start receives plan, paths, loopback context and shuts down once for 
   test.dependencies.env = {
     GATEWAY_PORT: '43123',
     SHADOW_LOOPBACK_PORT: '49999',
+    WINDOWS_USE_LAUNCH_TOKEN: 'synthetic-service-token',
   }
   test.dependencies.includeSigterm = true
 
@@ -131,7 +132,7 @@ test('main start receives plan, paths, loopback context and shuts down once for 
   assertEquals(received, {
     plan: result.plan,
     paths: result.paths,
-    context: { loopbackPort: 43123 },
+    context: { loopbackPort: 43123, launchCredential: 'synthetic-service-token' },
   })
   assertEquals(test.listeners.size, 0)
 })
@@ -174,6 +175,20 @@ test('child start invokes only the child lifecycle factory', async () => {
     launchCredential: 'child-launch-secret',
   })
   assertEquals(test.mainCalls(), 0)
+})
+
+test('service startup rejects missing control credentials before creating a runtime', async () => {
+  const test = harness({
+    version: 1, mode: 'main', dataDir: './state', localNodeId: 'service-main',
+  })
+  test.dependencies.env = { GATEWAY_PORT: '43123' }
+  await assertRejects(
+    () => dispatchRuntimeCli(['server', 'start', '--config', 'bootstrap.json', '--service'], test.dependencies),
+    (error: unknown) => error instanceof RuntimeCliError &&
+      error.code === 'environment_invalid' && error.message.includes('credential'),
+  )
+  assertEquals(test.mainCalls(), 0)
+  assertEquals(test.listeners.size, 0)
 })
 
 test('dispatcher reports role mismatch as an actionable typed error', async () => {

@@ -2,23 +2,23 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { addChatContext, chatContextName, composeChatMessage, createChatDraft } from './chat-draft.ts'
 
-const project = { id: 'project-a', name: 'demo', path: 'C:\\fixtures\\demo', createdAt: '2026-09-10T00:00:00Z' }
+const folder = { id: 'folder-a', name: 'demo', path: 'C:\\fixtures\\demo', createdAt: '2026-09-10T00:00:00Z' }
 
-test('opening or replacing scratch and project drafts does not allocate sessions', () => {
+test('opening or replacing scratch and folder drafts does not allocate sessions', () => {
   let calls = 0
-  const client = { createSession: async () => { calls++; return { sessionId: 'web:chat-project', chatId: 'chat-project' } } }
+  const client = { createSession: async () => { calls++; return { sessionId: 'web:chat-folder', chatId: 'chat-folder' } } }
   const id = () => { calls++; return 'chat-scratch' }
   for (let i = 0; i < 4; i++) {
     createChatDraft(client, undefined, id)
-    const draft = createChatDraft(client, project, id)
-    assert.equal(draft.project, project)
+    const draft = createChatDraft(client, folder, id)
+    assert.equal(draft.folder, folder)
   }
   assert.equal(calls, 0)
 })
 
 test('first scratch send allocates one identity, reused for duplicate sends and retries', async () => {
   let calls = 0
-  const draft = createChatDraft({ createSession: async () => { throw new Error('Unexpected project request') } }, undefined, () => {
+  const draft = createChatDraft({ createSession: async () => { throw new Error('Unexpected folder request') } }, undefined, () => {
     calls++
     return 'chat-scratch'
   })
@@ -27,34 +27,34 @@ test('first scratch send allocates one identity, reused for duplicate sends and 
   assert.equal(calls, 1)
 })
 
-test('project creation is deferred to send, deduplicated and retains its registered project', async () => {
+test('folder creation is deferred to send, deduplicated and retains its registered folder', async () => {
   let calls = 0
   let finish!: (value: { sessionId: string; chatId: string }) => void
   const draft = createChatDraft({
     createSession: async id => {
-      assert.equal(id, project.id)
+      assert.equal(id, folder.id)
       calls++
       return new Promise(resolve => { finish = resolve })
     },
-  }, project)
+  }, folder)
   const first = draft.prepare()
   const second = draft.prepare()
-  finish({ sessionId: 'web:chat-project', chatId: 'chat-project' })
-  assert.deepEqual(await Promise.all([first, second, draft.prepare()]), Array(3).fill('web:chat-project'))
+  finish({ sessionId: 'web:chat-folder', chatId: 'chat-folder' })
+  assert.deepEqual(await Promise.all([first, second, draft.prepare()]), Array(3).fill('web:chat-folder'))
   assert.equal(calls, 1)
 })
 
-test('project preparation failures surface and allow retry without losing the draft', async () => {
+test('folder preparation failures surface and allow retry without losing the draft', async () => {
   let calls = 0
   const draft = createChatDraft({
     createSession: async () => {
       if (++calls === 1) throw new Error('Main unavailable')
-      return { sessionId: 'web:chat-project', chatId: 'chat-project' }
+      return { sessionId: 'web:chat-folder', chatId: 'chat-folder' }
     },
-  }, project)
+  }, folder)
   await assert.rejects(draft.prepare(), /Main unavailable/)
-  assert.equal(draft.project, project)
-  assert.equal(await draft.prepare(), 'web:chat-project')
+  assert.equal(draft.folder, folder)
+  assert.equal(await draft.prepare(), 'web:chat-folder')
 })
 
 test('file and folder context is deduplicated, named across platforms and serialized into the sent message', () => {

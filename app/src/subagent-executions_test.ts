@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { groupProjectSessions, parseSessionGraph } from './projects-sidebar.ts'
+import { groupFolderSessions, parseSessionGraph } from './folders-sidebar.ts'
 import { childConversationTarget } from './conversation-split.ts'
 import { executionDisplayStage, executionStages, executionStatus, isOneShot, ownedExecutions } from './subagent-executions.ts'
 import { isWaitingStage, isWorkingStage, sessionActivity } from './session-activity.ts'
@@ -13,7 +13,8 @@ const graph = () => ({
     { sessionId: 'web:chat-persistent', mode: 'session', agentType: 'explore', parentSessionId: 'web:chat-root' },
     { sessionId: 'web:chat-task', mode: 'task', agentType: 'explore', parentSessionId: 'web:chat-root', executionStatus: 'pending' },
     { sessionId: 'web:chat-nested-call', mode: 'call', agentType: 'explore', parentSessionId: 'web:chat-task', executionStatus: 'running' },
-    { sessionId: 'heartbeat:reflector-123', mode: 'task', executionStatus: 'completed' },
+    { sessionId: 'heartbeat:reflector-123', mode: 'task', executionStatus: 'completed',
+      automation: { jobId: 'fresh', name: 'Review', runId: 'run', startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh' } },
     { sessionId: 'reflection-task', mode: 'task', parentSessionId: 'heartbeat:reflector-123', executionStatus: 'completed' },
     { sessionId: 'reusable-in-task', mode: 'session', parentSessionId: 'web:chat-task' },
   ],
@@ -26,11 +27,11 @@ const graph = () => ({
 
 test('role and mode are independent; only delegated executions leave the conversation tree', () => {
   const sessions = parseSessionGraph(graph())
-  const groups = groupProjectSessions([], sessions)
+  const groups = groupFolderSessions([], sessions)
   assert.deepEqual(groups.chats.map(item => [item.sessionId, item.depth]), [
     ['web:chat-root', 0], ['web:chat-persistent', 1], ['reusable-in-task', 1],
   ])
-  assert.deepEqual(groups.reflections.map(item => item.sessionId), ['heartbeat:reflector-123'])
+  assert.deepEqual(groups.automations[0].sessions.map(item => item.sessionId), ['heartbeat:reflector-123', 'reflection-task'])
   assert.equal(sessions.find(item => item.sessionId === 'reusable-in-task')?.parentSessionId, 'web:chat-task', 'Grouping never mutates diagnostic lineage')
   assert.equal(sessions.find(item => item.sessionId === 'web:chat-task')?.isDirectChat, false, 'Mode overrides even web chat ID prefixes')
   assert.equal(sessions.find(item => item.sessionId === 'web:chat-persistent')?.isDirectChat, true)
@@ -55,7 +56,7 @@ test('legacy graphs retain their old conversation and input behavior', () => {
   assert.equal(sessions[1].parentSessionId, 'web:chat-parent')
   assert.equal(sessions[1].isDirectChat, true)
   assert.equal(isOneShot(sessions[1]), false, 'Do not interpret ephemeral config in the new UI')
-  assert.equal(groupProjectSessions([], sessions).chats.length, 2)
+  assert.equal(groupFolderSessions([], sessions).chats.length, 2)
   assert.equal(ownedExecutions(sessions, 'web:chat-parent').length, 0)
 })
 
@@ -66,7 +67,7 @@ test('refresh keeps stable card IDs and tree IDs despite terminal transitions an
   next.nodes.push({ physicalId: 'new-root', logicalId: 'web:chat-root', parentPhysicalId: 'p-root' })
   const after = parseSessionGraph(next)
   assert.deepEqual(ownedExecutions(before, 'web:chat-root').map(item => item.sessionId), ownedExecutions(after, 'web:chat-root').map(item => item.sessionId))
-  assert.deepEqual(groupProjectSessions([], before).chats, groupProjectSessions([], after).chats)
+  assert.deepEqual(groupFolderSessions([], before).chats, groupFolderSessions([], after).chats)
 })
 
 test('all execution states are explicit and terminal states never regress to idle or stale activity', () => {
@@ -100,7 +101,7 @@ test('orphaned and cyclic executions retain a bounded diagnostic entry', () => {
     { sessionId: 'a', mode: 'task', parentSessionId: 'b' },
     { sessionId: 'b', mode: 'task', parentSessionId: 'a' },
   ], nodes: [] })
-  assert.deepEqual(new Set(groupProjectSessions([], sessions).chats.map(item => item.sessionId)), new Set(['orphan', 'a', 'b']))
+  assert.deepEqual(new Set(groupFolderSessions([], sessions).chats.map(item => item.sessionId)), new Set(['orphan', 'a', 'b']))
 })
 
 test('async tasks never override the owning conversation activity', () => {
@@ -136,7 +137,7 @@ test('blocking call waits belong to their task or reusable sub-session, never it
 })
 
 test('mode surfaces compile without replacing existing composer, hidden preview or child-pane controls', async () => {
-  for (const filename of ['ExecutionMessage.vue', 'ConversationEvent.vue', 'ChatTab.vue', 'AgentsTab.vue', 'SessionActivity.vue', 'YieldQuestion.vue', 'ProjectSessionList.vue']) {
+  for (const filename of ['ExecutionMessage.vue', 'ConversationEvent.vue', 'ChatTab.vue', 'AgentsTab.vue', 'SessionActivity.vue', 'YieldQuestion.vue', 'FolderSessionList.vue']) {
     const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
     const { descriptor, errors } = parse(source, { filename })
     assert.deepEqual(errors, [])
@@ -151,15 +152,16 @@ test('mode surfaces compile without replacing existing composer, hidden preview 
       assert.doesNotMatch(source, /fetch\(/)
     }
     if (filename === 'ChatTab.vue') {
-      assert.match(source, /:explorer-enabled="!embedded && \(!activeSessionId \|\| !!currentWorkdir\)"/)
+      assert.match(source, /:explorer-enabled="!embedded && \(!activeSessionId \|\| !!currentWorkdir \|\| expectedHome\)"/)
+      assert.match(source, /<FileWorkbench[^>]*:session-id="activeSessionId"/)
       assert.match(source, /conversationDocumentVisible\.value && activeSessionId\.value/)
       assert.match(source, /if \(isExecution\.value\) \{\s*composerError\.value/)
       assert.match(source, /ctxRes && !ctxRes\.ok/)
-      assert.match(source, /if \(props\.embedded\) emit\('child-navigation', sessionId\)/)
+      assert.match(source, /inspectExecution, restoreSession \} = useConversationNavigation\(/)
       assert.match(source, /<ExecutionMessage v-if="inlineExecutions.entries.has\(idx\)"/, 'Executions occupy the original tool-call position')
       assert.doesNotMatch(source, /<ExecutionCards|expandedEvents/)
       assert.match(source, /<YieldQuestion v-if="!isCall"/, 'Leaf calls must not mount or poll yield controls')
-      assert.match(source, /if \(awaitingCall\.value\) return/, 'Blocking callers cannot send followup input')
+      assert.doesNotMatch(source, /if \(awaitingCall\.value\) return/, 'Callers can submit guidance while a blocking call runs')
       assert.doesNotMatch(source, /waiting-for-subagent|waiting-for-user/)
     }
     if (filename === 'AgentsTab.vue') assert.doesNotMatch(source, /ephemeral/i)

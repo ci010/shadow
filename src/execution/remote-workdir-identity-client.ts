@@ -20,7 +20,7 @@ export async function executeRemoteWorkdirIdentity(target: RemoteFilesystemTarge
   for await (const event of target.executor.execute({
     version: 1, jobId: id, idempotencyKey: id, sessionId: target.sessionId, turnId: target.turnId,
     nodeId: target.nodeId, capabilityId: target.capabilityId, operation: WORKDIR_IDENTITY_OPERATION,
-    args: {}, approval: 'none', createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 30_000).toISOString(),
+    args: {}, createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 30_000).toISOString(),
   }, signal)) {
     if (event.type === 'stderr' || (event.type === 'stdout' && (bytes += Buffer.byteLength(event.chunk)) > MAX_WORKDIR_IDENTITY_BYTES)) {
       controller.abort()

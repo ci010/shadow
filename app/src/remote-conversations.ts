@@ -1,8 +1,8 @@
 import { createChatDraft, deferChatSession } from './chat-draft.ts'
 import { capabilityAvailability, type NodeInventoryEntry } from './node-inventory.ts'
-import { isRecord } from './projects-sidebar.ts'
+import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
-import type { ProjectRecord, ProjectsClient } from './projects-client.ts'
+import type { FolderRecord, FoldersClient } from './folders-client.ts'
 
 export interface RemoteConversationTarget {
   nodeId: string
@@ -23,17 +23,17 @@ export function remoteConversationTargets(nodes: readonly NodeInventoryEntry[]):
     })))
 }
 
-export function createProjectChatDraft(client: Pick<ProjectsClient, 'createSession'>, project?: ProjectRecord) {
-  if (project?.kind !== 'remote') return createChatDraft(client, project)
+export function createFolderChatDraft(client: Pick<FoldersClient, 'createSession'>, folder?: FolderRecord) {
+  if (folder?.kind !== 'remote') return createChatDraft(client, folder)
   const remote: RemoteConversationTarget = {
-    nodeId: project.workdir.nodeId, capabilityId: project.workdir.capabilityId,
-    nodeName: project.workdir.nodeId, displayName: project.workdir.displayName ?? project.name,
-    displayPath: project.workdir.displayPathSnapshot ?? project.path, available: false,
+    nodeId: folder.workdir.nodeId, capabilityId: folder.workdir.capabilityId,
+    nodeName: folder.workdir.nodeId, displayName: folder.workdir.displayName ?? folder.name,
+    displayPath: folder.workdir.displayPathSnapshot ?? folder.path, available: false,
   }
   const requestId = crypto.randomUUID()
   return {
-    project, remote,
-    ...deferChatSession(async signal => (await client.createSession(project.id, signal, requestId)).sessionId),
+    folder, remote,
+    ...deferChatSession(async signal => (await client.createSession(folder.id, signal, requestId)).sessionId),
   }
 }
 
@@ -51,11 +51,11 @@ export function createRemoteChatDraft(apiBase: string, target: RemoteConversatio
       if (!response.ok) {
         if (response.status === 409 && response.headers.get('content-type')?.includes('application/json')) {
           const detail: unknown = await response.json()
-          if (isRecord(detail) && ['remote_project_identity_required', 'remote_workdir_identity_unsupported'].includes(String(detail.error))) {
-            throw new Error('This device cannot verify remote folder ownership for an organization. Update Main and the device to a version supporting ownership verification, then retry. No local folder was used.')
+          if (isRecord(detail) && ['remote_folder_identity_required', 'remote_workdir_identity_unsupported'].includes(String(detail.error))) {
+            throw new Error('This device cannot verify remote folder ownership for a project. Update Main and the device to a version supporting ownership verification, then retry. No local folder was used.')
           }
-          if (isRecord(detail) && detail.error === 'folder_owned_by_another_organization') {
-            throw new Error('This remote folder overlaps a project in another organization. Choose a different folder. No local folder was used.')
+          if (isRecord(detail) && detail.error === 'folder_owned_by_another_project') {
+            throw new Error('This remote folder overlaps a folder in another project. Choose a different folder. No local folder was used.')
           }
           if (isRecord(detail) && ['remote_workdir_changed', 'legacy_remote_identity_unavailable'].includes(String(detail.error))) {
             throw new Error('An existing remote folder could not be verified. Restore and reconnect its original folder capability before retrying. No local folder was used.')
@@ -76,7 +76,7 @@ export function createRemoteChatDraft(apiBase: string, target: RemoteConversatio
       }
       return `web:${result.chatId}`
     }),
-    project: undefined,
+    folder: undefined,
     remote: selection,
   }
 }

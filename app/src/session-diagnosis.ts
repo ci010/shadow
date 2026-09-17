@@ -10,6 +10,9 @@ export interface DiagnosisEvent {
   content: string
   timestamp?: number
   callId?: string
+  toolCall?: string
+  toolCalls?: string
+  inputMessageCount?: number
   arguments?: string
   result?: string
   reasoning?: string
@@ -119,12 +122,13 @@ export function parseTracePage(value: unknown, sessionId: string, physicalSessio
   }
 }
 
-export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[]; physicalId?: string } {
+export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[]; modelResponses: DiagnosisEvent[]; physicalId?: string } {
   if (!record(value) || !Array.isArray(value.messages)
     || (value.currentPhysicalId !== undefined && typeof value.currentPhysicalId !== 'string')) {
     throw new Error('Invalid session history response.')
   }
   const events: DiagnosisEvent[] = []
+  const modelResponses: DiagnosisEvent[] = []
   const calls = new Map<string, DiagnosisEvent>()
   let turn = 0
   for (const [index, message] of value.messages.entries()) {
@@ -151,14 +155,18 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
       : message.role === 'system' ? 'SYSTEM'
       : message.role === 'assistant' ? 'ASSISTANT'
       : message.role === 'user' ? 'USER' : 'CONTEXT'
+    const response: DiagnosisEvent = {
+      id: `message-${index}`, kind, turn,
+      title: kind === 'CONTEXT' ? (message.name === '__compaction_summary__' ? 'Compaction context' : 'Session event') : kind.toLowerCase(),
+      content, timestamp: time,
+      reasoning: detailText(message.reasoning_text ?? message.reasoning_content) || undefined,
+      usage: message.usage ? detailText(message.usage) : undefined,
+      toolCalls: Array.isArray(message.tool_calls) && message.tool_calls.length ? detailText(message.tool_calls) : undefined,
+      inputMessageCount: message.role === 'assistant' ? index + (record(value.messages[0]) && value.messages[0].role === 'system' ? 0 : 1) : undefined,
+    }
+    if (message.role === 'assistant') modelResponses.push(response)
     if (content || message.role !== 'assistant' || message.reasoning_content || message.reasoning_text) {
-      events.push({
-        id: `message-${index}`, kind, turn,
-        title: kind === 'CONTEXT' ? (message.name === '__compaction_summary__' ? 'Compaction context' : 'Session event') : kind.toLowerCase(),
-        content, timestamp: time,
-        reasoning: detailText(message.reasoning_text ?? message.reasoning_content) || undefined,
-        usage: message.usage ? detailText(message.usage) : undefined,
-      })
+      events.push(response)
     }
     if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) throw new Error('Invalid tool calls in history.')
     for (const [callIndex, call] of (message.tool_calls ?? []).entries()) {
@@ -167,13 +175,13 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
       const args = detailText(call.function.arguments)
       const event: DiagnosisEvent = {
         id: `message-${index}-call-${callIndex}`, kind: 'TOOL', turn,
-        title: call.function.name, content: args, arguments: args, timestamp: time, callId: call.id,
+        title: call.function.name, content: args, arguments: args, timestamp: time, callId: call.id, toolCall: detailText(call),
       }
       events.push(event)
       calls.set(call.id, event)
     }
   }
-  return { events, physicalId: value.currentPhysicalId }
+  return { events, modelResponses, physicalId: value.currentPhysicalId }
 }
 
 export function eventMatches(event: DiagnosisEvent, query: string, kind = 'ALL'): boolean {
@@ -182,6 +190,7 @@ export function eventMatches(event: DiagnosisEvent, query: string, kind = 'ALL')
 }
 
 export function spanMatches(span: SessionTraceSpan, query: string): boolean {
+  if (!query.trim()) return true
   return matchesTerms([span.name, span.traceId, span.spanId, span.statusMessage, ...Object.values(span.attributes),
     ...span.events.map(event => `${event.name} ${Object.values(event.attributes).join(' ')}`)].join('\n'), query)
 }
@@ -208,12 +217,65 @@ export function correlateToolSpans(events: readonly DiagnosisEvent[], spans: rea
   return result
 }
 
+export interface ModelResponseDetail {
+  event: DiagnosisEvent
+  source: 'recorded' | 'history'
+}
+
+export function recordedModelResponse(span: SessionTraceSpan): ModelResponseDetail | undefined {
+  if (span.name !== 'agent.chat') return undefined
+  const response = span.events.find(event => event.name === 'model.response')
+  if (!response) return undefined
+  const raw = response.attributes.message
+  if (!raw) throw new Error('Recorded model response is missing its message.')
+  let message: unknown
+  try { message = JSON.parse(raw) } catch { throw new Error('Recorded model response contains invalid message JSON.') }
+  if (!record(message) || message.role !== 'assistant') throw new Error('Recorded model response is not an assistant message.')
+  const { modelResponses } = parseDiagnosisHistory({ messages: [message] })
+  return { event: { ...modelResponses[0], id: `response-${traceKey(span)}` }, source: 'recorded' }
+}
+
+/** Legacy providers recorded the input length before serializing the request.
+ * Match that position only when the persisted response also falls in this call's
+ * completion interval; never zip span order to messages or reuse ambiguous IDs.
+ */
+export function correlateModelSpans(events: readonly DiagnosisEvent[], spans: readonly SessionTraceSpan[]): Map<string, ModelResponseDetail> {
+  const chats = spans.filter(span => span.name === 'agent.chat').sort((a, b) => a.startTime - b.startTime)
+  const responses = events.filter(event => event.kind === 'ASSISTANT' && event.timestamp !== undefined)
+  const candidates = new Map<string, { span: SessionTraceSpan; event: DiagnosisEvent }[]>()
+  for (const [index, span] of chats.entries()) {
+    if (span.live || span.statusCode === 2 || span.endTime === undefined) continue
+    const count = Number(span.attributes['llm.input_messages'])
+    if (!Number.isSafeInteger(count) || count <= 0) continue
+    const nextStart = chats[index + 1]?.startTime ?? Infinity
+    const completedAt = Math.floor(span.endTime)
+    const matches = responses.filter(event => event.inputMessageCount === count && event.timestamp !== undefined
+      && event.timestamp >= completedAt && event.timestamp <= Math.ceil(nextStart))
+    if (matches.length !== 1) continue
+    const event = matches[0]
+    const group = candidates.get(event.id) ?? []
+    group.push({ span, event })
+    candidates.set(event.id, group)
+  }
+  const result = new Map<string, ModelResponseDetail>()
+  for (const group of candidates.values()) {
+    if (group.length === 1) result.set(traceKey(group[0].span), { event: group[0].event, source: 'history' })
+  }
+  return result
+}
+
 function matchesTerms(text: string, query: string): boolean {
   const haystack = text.toLowerCase()
   return query.toLowerCase().trim().split(/\s+/).every(term => haystack.includes(term))
 }
 
 export interface TraceWindow { start: number; end: number }
+export const DEFAULT_TRACE_WINDOW_MS = 5 * 60 * 1000
+
+export function latestTraceWindow(full: TraceWindow): TraceWindow {
+  return { start: Math.max(full.start, full.end - DEFAULT_TRACE_WINDOW_MS), end: full.end }
+}
+
 export function fitTraceWindow(window: TraceWindow, full: TraceWindow): TraceWindow {
   const duration = Math.max(0, Math.min(window.end - window.start, full.end - full.start))
   const start = Math.max(full.start, Math.min(window.start, full.end - duration))

@@ -38,28 +38,56 @@ test('Child runtime starts injected services in dependency order before readines
 
   const runtime = startChildRuntime(config, {
     nodeIdentity: service('node-identity'),
-    capabilityRegistry: service('capability-registry'),
     localExecutors: service('local-executors'),
-    approvalService: service('approval-service'),
-    artifactStaging: service('artifact-staging'),
     mainConnector: connector,
-    remoteApiProxy: service('remote-api-proxy'),
+    localControl: service('local-control'),
   })
 
   await runtime.ready
   assertEquals(events, [
     'start:node-identity',
-    'start:capability-registry',
     'start:local-executors',
-    'start:approval-service',
-    'start:artifact-staging',
     'start:main-connector',
-    'start:remote-api-proxy',
+    'start:local-control',
     'connect:main',
   ])
 
   await runtime.shutdown()
   await runtime.finished
+  assertEquals(events.slice(-4), [
+    'stop:local-control',
+    'stop:main-connector',
+    'stop:local-executors',
+    'stop:node-identity',
+  ])
+})
+
+test('Child runtime works without a local control listener or placeholder services', async () => {
+  const events: string[] = []
+  const service = recordingService(events)
+  const active = controlledConnection()
+  const runtime = startChildRuntime(config, {
+    nodeIdentity: service('node-identity'),
+    localExecutors: service('local-executors'),
+    mainConnector: {
+      ...service('main-connector'),
+      connect: () => Promise.resolve(active.connection),
+    },
+  })
+
+  await runtime.ready
+  await until(active.observed)
+  await runtime.shutdown()
+  await runtime.finished
+  assertEquals(active.closeCalls(), 1)
+  assertEquals(events, [
+    'start:node-identity',
+    'start:local-executors',
+    'start:main-connector',
+    'stop:main-connector',
+    'stop:local-executors',
+    'stop:node-identity',
+  ])
 })
 
 test('Child runtime reconnects after disconnect with capped exponential backoff', async () => {
@@ -137,10 +165,10 @@ test('Child runtime rolls back a partial start in reverse order', async () => {
   const events: string[] = []
   const service = recordingService(events)
   const dependencies = dependenciesWith({}, service)
-  dependencies.approvalService = {
+  dependencies.localControl = {
     start: () => {
-      events.push('start:approval-service')
-      return Promise.reject(new Error('approval startup failed'))
+      events.push('start:local-control')
+      return Promise.reject(new Error('local control startup failed'))
     },
     shutdown: () => Promise.resolve(),
   }
@@ -148,17 +176,17 @@ test('Child runtime rolls back a partial start in reverse order', async () => {
   const runtime = startChildRuntime(config, dependencies)
   await assertRejects(
     () => runtime.ready,
-    (error) => error instanceof Error && error.message.includes('approval startup failed'),
+    (error) => error instanceof Error && error.message.includes('local control startup failed'),
   )
   await runtime.finished
 
   assertEquals(events, [
     'start:node-identity',
-    'start:capability-registry',
     'start:local-executors',
-    'start:approval-service',
+    'start:main-connector',
+    'start:local-control',
+    'stop:main-connector',
     'stop:local-executors',
-    'stop:capability-registry',
     'stop:node-identity',
   ])
 })
@@ -218,19 +246,16 @@ function recordingService(events: string[]) {
 function dependenciesWith(
   connector: Partial<ChildRuntimeDependencies['mainConnector']> = {},
   service = recordingService([]),
-): ChildRuntimeDependencies & { approvalService: ChildRuntimeService } {
+): ChildRuntimeDependencies & { localControl: ChildRuntimeService } {
   return {
     nodeIdentity: service('node-identity'),
-    capabilityRegistry: service('capability-registry'),
     localExecutors: service('local-executors'),
-    approvalService: service('approval-service'),
-    artifactStaging: service('artifact-staging'),
     mainConnector: {
       ...service('main-connector'),
       connect: () => Promise.reject(new Error('Main offline')),
       ...connector,
     },
-    remoteApiProxy: service('remote-api-proxy'),
+    localControl: service('local-control'),
   }
 }
 

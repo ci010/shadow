@@ -6,7 +6,7 @@ export interface FakeState {
   total: number
 }
 
-/** Minimal SessionManager fake exposing only what the flush touches. */
+/** Minimal SessionManager fake exposing only what learning dispatch touches. */
 export function fakeSessions(workspace: string, states: FakeState[]) {
   const started: Array<{ agentType?: string; task?: string; signal?: AbortSignal }> = []
   const sessions = {
@@ -20,6 +20,7 @@ export function fakeSessions(workspace: string, states: FakeState[]) {
       const s = states.find((x) => x.sessionId === sessionId)
       return Promise.resolve({ messages: [], total: s?.total ?? 0 })
     },
+    getSessionState: () => undefined,
     startSession: (opts: { agentType?: string; task?: string; signal?: AbortSignal }) => {
       started.push(opts)
       return Promise.resolve('spawned')

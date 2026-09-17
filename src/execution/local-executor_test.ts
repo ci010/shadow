@@ -22,7 +22,6 @@ import {
   FILESYSTEM_READ_OPERATION,
   FILESYSTEM_WRITE_OPERATION,
 } from './capability-filesystem.ts'
-import { InMemoryLocalApprovalService } from './local-approval.ts'
 
 function request(
   jobId: string,
@@ -41,7 +40,6 @@ function request(
     args: { script: 'ignored', cwd: cwd() },
     createdAt: createdAt.toISOString(),
     deadlineAt: new Date(createdAt.getTime() + 10_000).toISOString(),
-    approval: 'none',
     ...overrides,
   }
 }
@@ -140,6 +138,9 @@ test('execution contracts validate versions, malformed data, and unknown fields'
   assert(validateJobRequestV1(valid).success)
   assertEquals(validateJobRequestV1({ ...valid, version: 2 }).success, false)
   assertEquals(validateJobRequestV1({ ...valid, surprise: true }).success, false)
+  for (const approval of ['none', 'local-required']) {
+    assertEquals(validateJobRequestV1({ ...valid, approval }).success, false)
+  }
   assertEquals(
     validateJobRequestV1({ ...valid, deadlineAt: 'not-a-date' }).success,
     false,
@@ -154,6 +155,7 @@ test('execution contracts validate versions, malformed data, and unknown fields'
   }
   assert(validateJobEventV1(event).success)
   assertEquals(validateJobEventV1({ ...event, type: 'future-event' }).success, false)
+  assertEquals(validateJobEventV1({ ...event, type: 'awaiting-approval' }).success, false)
 })
 
 test('LocalExecutor deduplicates jobId and emits one ordered terminal stream', async () => {
@@ -347,40 +349,27 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
   }
 })
 
-test('LocalExecutor waits for Child approval and honors session grants', async () => {
+test('LocalExecutor runs registered process capabilities directly', async () => {
   const manager = new FakeProcessManager()
-  const approvals = new InMemoryLocalApprovalService([{
-    capabilityId: 'shell-1',
-    displayName: 'Local shell',
-    policy: 'session',
-  }])
   const executor = new LocalExecutor(
     manager as unknown as Pick<ProcessManager, 'spawn'>,
     'local',
     [],
     ['shell-1'],
-    approvals,
   )
   const firstEvents = collect(executor.execute(
-    request('approval-first'),
+    request('direct-first'),
     new AbortController().signal,
   ))
-  while (approvals.listPending().length === 0) await Promise.resolve()
-  assertEquals(
-    (await executor.getStatus('approval-first'))?.state,
-    'awaiting-approval',
-  )
-  assertEquals(approvals.approve('approval-first', 'session'), true)
   assertEquals((await firstEvents).map((event) => event.type), [
     'accepted',
-    'awaiting-approval',
     'started',
     'stdout',
     'completed',
   ])
 
   const grantedEvents = await collect(executor.execute(
-    request('approval-granted'),
+    request('direct-next'),
     new AbortController().signal,
   ))
   assertEquals(grantedEvents.map((event) => event.type), [
@@ -392,51 +381,23 @@ test('LocalExecutor waits for Child approval and honors session grants', async (
   assertEquals(manager.spawnCount, 2)
 })
 
-test('LocalExecutor denial and cancellation while awaiting approval are terminal', async () => {
+test('LocalExecutor never spawns a pre-cancelled or expired job', async () => {
   const manager = new FakeProcessManager()
-  const approvals = new InMemoryLocalApprovalService([{
-    capabilityId: 'shell-1',
-    displayName: 'Local shell',
-    policy: 'always',
-  }])
   const executor = new LocalExecutor(
     manager as unknown as Pick<ProcessManager, 'spawn'>,
     'local',
     [],
     ['shell-1'],
-    approvals,
   )
-  const deniedEvents = collect(executor.execute(
-    request('approval-denied'),
-    new AbortController().signal,
+  const cancelledEvents = await collect(executor.execute(
+    request('pre-cancelled'),
+    AbortSignal.abort(),
   ))
-  while (approvals.listPending().length === 0) await Promise.resolve()
-  approvals.deny('approval-denied')
-  const denied = await deniedEvents
-  assertEquals(denied.map((event) => event.type), [
-    'accepted',
-    'awaiting-approval',
-    'rejected',
-  ])
-  const deniedTerminal = denied.at(-1)
-  assertEquals(
-    deniedTerminal && 'receipt' in deniedTerminal
-      ? deniedTerminal.receipt.reason?.code
-      : undefined,
-    'local-approval-denied',
-  )
+  assertEquals(cancelledEvents.map(event => event.type), ['accepted', 'cancel-acknowledged'])
 
-  const cancelledEvents = collect(executor.execute(
-    request('approval-cancelled'),
-    new AbortController().signal,
-  ))
-  while (approvals.listPending().length === 0) await Promise.resolve()
-  await executor.cancel('approval-cancelled')
-  assertEquals((await cancelledEvents).at(-1)?.type, 'cancel-acknowledged')
-  assertEquals(approvals.listPending(), [])
-
-  const expiring = request('approval-expired', {
-    deadlineAt: new Date(Date.now() + 20).toISOString(),
+  const expiring = request('expired-before-start', {
+    createdAt: new Date(Date.now() - 200).toISOString(),
+    deadlineAt: new Date(Date.now() - 100).toISOString(),
   })
   const expiredEvents = await collect(executor.execute(
     expiring,
@@ -444,9 +405,7 @@ test('LocalExecutor denial and cancellation while awaiting approval are terminal
   ))
   assertEquals(expiredEvents.map((event) => event.type), [
     'accepted',
-    'awaiting-approval',
     'expired',
   ])
-  assertEquals(approvals.listPending(), [])
   assertEquals(manager.spawnCount, 0)
 })

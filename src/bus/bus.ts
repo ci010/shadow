@@ -38,6 +38,7 @@ export interface BusTopics {
   'session.input.accepted': AcceptedSessionInput
   'session.message.appended': { sessionId: string; physicalSessionId: string; message: ChatMessage }
   'session.turn.finished': SessionTurnFact
+  'background.task.changed': { sessionId: string; taskId: string; status: 'running' | 'completed' | 'failed' }
 }
 
 // Allow string keys for extensibility (workspace-defined topics)

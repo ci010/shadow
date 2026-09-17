@@ -26,10 +26,6 @@ import type { RuntimeDerivedPaths } from './runtime-cli.ts'
 import type { ProtectedDeviceKeyStore } from '../cluster/device-credentials.ts'
 import type { DeviceCredentialReferenceStore } from '../cluster/device-credential-reference-store.ts'
 import type { ChallengeFetch } from '../cluster/device-challenge-client.ts'
-import {
-  InMemoryLocalApprovalService,
-  type LocalApprovalService,
-} from '../execution/local-approval.ts'
 import { ChildLocalControlService } from './child-local-control.ts'
 import { childLocalNodeInventory } from './node-inventory.ts'
 import { CapabilityShell, WORKDIR_PROCESS_EXECUTE_OPERATION } from '../execution/capability-shell.ts'
@@ -43,7 +39,6 @@ export interface ProductionChildOptions {
   readonly processManager?: ProcessManager
   readonly webSocketFactory?: NodeWebSocketFactory
   readonly fetchChallenge?: ChallengeFetch
-  readonly approvalService?: LocalApprovalService
   readonly localControl?: {
     readonly port: number
     readonly launchCredential: string
@@ -86,7 +81,6 @@ export async function startProductionChildRuntime(
       kind: 'shell',
       displayName: 'Local shell',
       permissions: ['process.execute'],
-      approvalPolicy: 'none',
       online: true,
     },
     ...workdirs.map((workdir): CapabilityDescriptorV1 => ({
@@ -97,22 +91,14 @@ export async function startProductionChildRuntime(
       displayName: workdir.displayName,
       displayPath: workdir.rootPath,
       permissions: [FILESYSTEM_READ_OPERATION, FILESYSTEM_WRITE_OPERATION, WORKDIR_PROCESS_EXECUTE_OPERATION, GIT_STATUS_OPERATION, GIT_DIFF_OPERATION, WORKDIR_IDENTITY_OPERATION],
-      approvalPolicy: 'none',
       online: true,
     })),
   ]
-  const approvalService = options.approvalService ??
-    new InMemoryLocalApprovalService(capabilities.map((capability) => ({
-      capabilityId: capability.capabilityId,
-      displayName: capability.displayName,
-      policy: capability.approvalPolicy,
-    })))
   const executor = new LocalExecutor(
     processManager,
     config.localNodeId,
     [filesystem, new CapabilityShell(workdirs), new CapabilityGit(workdirs), new CapabilityWorkdirIdentity(workdirs)],
     ['process-execute'],
-    approvalService,
   )
   const validateCredential = async (signal: AbortSignal): Promise<void> => {
     await resolveDeviceCredentialForConnect(
@@ -161,19 +147,15 @@ export async function startProductionChildRuntime(
   const localControl = options.localControl
     ? new ChildLocalControlService({
       ...options.localControl,
-      approvalService,
       requestShutdown: () => runtime?.shutdown(),
       nodeInventory: () => childLocalNodeInventory(config, capabilities, '0.1.0'),
     })
     : undefined
   runtime = startChildRuntime(config, {
     nodeIdentity: new CredentialIdentityService(validateCredential),
-    capabilityRegistry: new PassiveChildService(),
     localExecutors: new LocalExecutorService(processManager),
-    approvalService,
-    artifactStaging: new PassiveChildService(),
     mainConnector: connector,
-    remoteApiProxy: localControl ?? new PassiveChildService(),
+    localControl,
   })
   if (localControl) {
     runtime.ready.then(() => localControl.markReady(), () => {})
@@ -205,16 +187,6 @@ class LocalExecutorService implements ChildRuntimeService {
       process.exitedAt === undefined
     )
     await Promise.all(running.map((process) => this.processManager.terminate(process)))
-  }
-}
-
-class PassiveChildService implements ChildRuntimeService {
-  start(_signal: AbortSignal): Promise<void> {
-    return Promise.resolve()
-  }
-
-  shutdown(): Promise<void> {
-    return Promise.resolve()
   }
 }
 

@@ -54,7 +54,9 @@ async function fixture(t: TestContext, raw: Record<string, unknown> = {}, enviro
   const bus = new Bus()
   let configure: ((channel: FakeChannel) => void) | undefined
   let received = 0
-  const manager = new ChannelManager(active, bus, {} as SessionManager, async () => {
+  let invalidations = 0
+  const sessions = { invalidateSystemPrompts: () => { invalidations++ } } as SessionManager
+  const manager = new ChannelManager(active, bus, sessions, async () => {
     received++
     return { status: 'accepted', sessionId: 'fixture', inputId: 'message' }
   }, (id) => {
@@ -84,6 +86,7 @@ async function fixture(t: TestContext, raw: Record<string, unknown> = {}, enviro
     app, manager, created, store,
     active: () => active,
     received: () => received,
+    invalidations: () => invalidations,
     configure: (callback: (channel: FakeChannel) => void) => { configure = callback },
     persisted: () => JSON.parse(readFileSync(path, 'utf8')),
     patch: (id: string, config: unknown, authorized = true) => app.request(`/api/channels/${id}`, {
@@ -126,6 +129,8 @@ test('strict partial patches validate required credentials and never blank store
     { secret: '' }, { secret: '   ' }, { secret: '__SHADOW_REDACTED__' },
     { intents: -1 }, { intents: 1.5 }, { intents: 0x1_0000_0000 }, { sandbox: 1 },
     { allowFrom: [123] }, { adminChats: 'admin' }, { appId: 'line\nbreak' },
+    { trustedChats: 'room' }, { trustedChats: [123] }, { trustedChats: [' '] },
+    { trustedChats: ['room\n'] }, { trustedChats: Array(1001).fill('room') },
   ]) assert.equal((await f.patch('qq', patch)).status, 400)
   assert.equal((await f.patch('discord', { triggerMode: 'invalid' })).status, 400)
   assert.equal(f.created.length, 0)
@@ -166,6 +171,25 @@ test('persisted config reconnects immediately; only transport events mark connec
   assert.deepEqual(f.persisted().fixture, { preserve: true })
   assert.equal(f.persisted().providers.fixture.apiKey, 'synthetic-provider-secret')
   assert.doesNotMatch(JSON.stringify(f.manager.status('qq')), /synthetic-/)
+})
+
+test('trusted audience configuration is independent, persisted and revocable', async t => {
+  const f = await fixture(t)
+  assert.equal((await f.patch('discord', { allowFrom: ['alice'], adminChats: ['room'] })).status, 200)
+  assert.equal(f.manager.isTrustedConversation('discord', 'room'), false)
+  assert.equal(f.invalidations(), 0)
+  const response = await f.patch('discord', { trustedChats: [' room '] })
+  assert.equal(response.status, 200)
+  assert.deepEqual((await response.json()).channel.config.trustedChats, ['room'])
+  assert.deepEqual(f.persisted().channels.discord.trustedChats, ['room'])
+  assert.equal(f.manager.isTrustedConversation('discord', 'room'), true)
+  assert.equal(f.manager.isTrustedConversation('discord', 'thread'), false)
+  assert.equal(f.manager.isTrustedConversation('qq', 'room'), false)
+  assert.equal(f.invalidations(), 1)
+  assert.equal((await f.patch('discord', { trustedChats: [] })).status, 200)
+  assert.equal(f.manager.isTrustedConversation('discord', 'room'), false)
+  assert.equal(f.invalidations(), 2)
+  assert.deepEqual(f.persisted().channels.discord.adminChats, ['room'])
 })
 
 test('concurrent channel and provider saves preserve independent fields and serialize lifecycle', async (t) => {
@@ -322,9 +346,9 @@ test('real channel GET and PATCH responses round-trip through the frontend parse
   const { parseChannelList, parseChannelStatus } = await import('../../app/src/channel-settings.ts')
   const f = await fixture(t)
   const publicConfig: Record<ChannelId, ChannelSetupStatus['config']> = {
-    qq: { appId: 'qq-app', sandbox: true, markdown: false, intents: 0xffffffff, allowFrom: ['qq-sender'], adminChats: ['qq-admin'] },
-    feishu: { appId: 'feishu-app', allowFrom: ['feishu-sender'], adminChats: ['feishu-admin'] },
-    discord: { triggerMode: 'all', reactionEmoji: '', allowFrom: ['discord-sender'], adminChats: ['discord-admin'] },
+    qq: { appId: 'qq-app', sandbox: true, markdown: false, intents: 0xffffffff, allowFrom: ['qq-sender'], adminChats: ['qq-admin'], trustedChats: ['qq-room'] },
+    feishu: { appId: 'feishu-app', allowFrom: ['feishu-sender'], adminChats: ['feishu-admin'], trustedChats: ['feishu-room'] },
+    discord: { triggerMode: 'all', reactionEmoji: '', allowFrom: ['discord-sender'], adminChats: ['discord-admin'], trustedChats: ['discord-room'] },
   }
   const credentials: Record<ChannelId, Record<string, string>> = {
     qq: { secret: 'synthetic-qq-secret', token: 'synthetic-qq-token' },

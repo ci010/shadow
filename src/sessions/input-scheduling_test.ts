@@ -74,6 +74,7 @@ async function fixture(options: {
   quickModel?: string
   sleepInactivityMs?: number
   handoff?: HandoffManager
+  buildSystemPrompt?: () => Promise<string>
 } = {}) {
   await mkdir('.test-data', { recursive: true })
   const workspace = await mkdtemp(join(process.cwd(), '.test-data', 'input-scheduling-'))
@@ -107,7 +108,7 @@ async function fixture(options: {
     context: {
       buildSystemPrompt: async () => {
         preparations++
-        return 'Fixture'
+        return options.buildSystemPrompt ? options.buildSystemPrompt() : 'Fixture'
       },
     },
     agentTypes: {
@@ -138,14 +139,112 @@ async function fixture(options: {
   }
 }
 
+test('invalidated reusable prompts refresh before the next model request, without rewriting history', async () => {
+  let prompt = 'Trusted audience'
+  const f = await fixture({ manager: true, buildSystemPrompt: async () => prompt })
+  try {
+    await f.manager.deliver(f.state.sessionId, input('first'))
+    await waitFor(() => f.calls.length === 1)
+    assert.equal(f.calls[0].messages[0].content, 'Trusted audience')
+    prompt = 'Shared audience'
+    f.manager.invalidateSystemPrompts()
+    f.calls[0].resolve(done())
+    await waitFor(() => f.facts.length === 1)
+    await f.manager.deliver(f.state.sessionId, input('second'))
+    await waitFor(() => f.calls.length === 2)
+    assert.equal(f.calls[1].messages[0].content, 'Shared audience')
+    assert.equal(f.calls[1].messages.filter(message => message.role === 'system').length, 1)
+    assert(f.calls[1].messages.some(message => message.role === 'assistant' && message.content === 'Finished'))
+    assert.equal(f.preparations(), 2)
+    f.calls[1].resolve(done())
+    await waitFor(() => f.facts.length === 2)
+  } finally { await f.close() }
+})
+
+test('audience invalidation during prompt preparation cannot install a stale prompt', async () => {
+  const gate = Promise.withResolvers<void>()
+  let prompt = 'Trusted audience'
+  let builds = 0
+  const f = await fixture({ manager: true, buildSystemPrompt: async () => {
+    const snapshot = prompt
+    if (++builds === 1) await gate.promise
+    return snapshot
+  } })
+  try {
+    const admitted = f.manager.deliver(f.state.sessionId, input('first'))
+    await waitFor(() => builds === 1)
+    prompt = 'Shared audience'
+    f.manager.invalidateSystemPrompts()
+    gate.resolve()
+    await admitted
+    await waitFor(() => f.calls.length === 1)
+    assert.equal(f.calls[0].messages[0].content, 'Shared audience')
+    assert.equal(builds, 2)
+    f.calls[0].resolve(done())
+    await waitFor(() => f.facts.length === 1)
+  } finally { gate.resolve(); await f.close() }
+})
+
+test('audience changes during tool execution refresh the next request and preserve tool pairing', async () => {
+  let prompt = 'Trusted audience'
+  const gate = Promise.withResolvers<string>()
+  const started = Promise.withResolvers<void>()
+  const f = await fixture({ manager: true, buildSystemPrompt: async () => prompt })
+  f.tools.register({
+    name: 'audience_wait', description: '', parameters: { type: 'object', properties: {} },
+    execute: async () => { started.resolve(); return gate.promise },
+  })
+  try {
+    await f.manager.deliver(f.state.sessionId, input('first'))
+    await waitFor(() => f.calls.length === 1)
+    f.calls[0].resolve({ content: null, toolCalls: [{ id: 'audience-tool', name: 'audience_wait', arguments: {} }] })
+    await started.promise
+    prompt = 'Shared audience'
+    f.manager.invalidateSystemPrompts()
+    gate.resolve('Completed tool')
+    await waitFor(() => f.calls.length === 2)
+    assert.equal(f.calls[1].messages[0].content, 'Shared audience')
+    assert.equal(f.calls[1].messages.filter(message => message.tool_call_id === 'audience-tool').length, 1)
+    f.calls[1].resolve(done())
+    await waitFor(() => f.facts.length === 1)
+  } finally { gate.resolve('cleanup'); await f.close() }
+})
+
+test('failed prompt refresh reports failure rather than sending stale audience context', async () => {
+  let fail = false
+  const f = await fixture({ manager: true, buildSystemPrompt: async () => {
+    if (fail) throw new Error('Audience context unavailable')
+    return 'Current audience'
+  } })
+  try {
+    await f.manager.deliver(f.state.sessionId, input('first'))
+    await waitFor(() => f.calls.length === 1)
+    f.calls[0].resolve(done())
+    await waitFor(() => f.facts.length === 1)
+    fail = true
+    f.manager.invalidateSystemPrompts()
+    await f.manager.deliver(f.state.sessionId, input('second'))
+    await waitFor(() => f.facts.length === 2)
+    assert.equal(f.facts[1].status, 'failed')
+    assert.match(f.facts[1].error!, /Audience context unavailable/)
+    assert.equal(f.calls.length, 1)
+    fail = false
+    await f.manager.deliver(f.state.sessionId, input('third'))
+    await waitFor(() => f.calls.length === 2)
+    assert.equal(f.calls[1].messages[0].content, 'Current audience')
+    f.calls[1].resolve(done())
+    await waitFor(() => f.facts.length === 3)
+  } finally { await f.close() }
+})
+
 for (const outcome of ['tools', 'failure', 'cancel'] as const) {
-  test(`organization bot address reaches every ${outcome} outbound event`, async () => {
-    const address = { organizationId: 'org-a', botInstanceId: 'bot-a', platform: 'qq', conversationId: 'shared-room' }
-    const f = await fixture({ state: { sessionId: channelSessionId(address), organizationId: address.organizationId } })
+  test(`project bot address reaches every ${outcome} outbound event`, async () => {
+    const address = { projectId: 'org-a', botInstanceId: 'bot-a', platform: 'qq', conversationId: 'shared-room' }
+    const f = await fixture({ state: { sessionId: channelSessionId(address), projectId: address.projectId } })
     f.tools.register({
       name: 'fixture_address', description: '', parameters: { type: 'object', properties: {} },
       execute: async (_args, ctx) => {
-        assert.equal(ctx.organizationId, address.organizationId)
+        assert.equal(ctx.projectId, address.projectId)
         assert.deepEqual(ctx.channelAddress, address)
         return 'Address retained'
       },

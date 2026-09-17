@@ -78,7 +78,7 @@ async function startDesktopApp(api: ShadowDesktopApi): Promise<void> {
 	renderDesktopOutcome(api, await resolveDesktopBootstrap(api))
 }
 
-const desktopApi = globalThis.shadowDesktop
+const desktopApi = window.shadowDesktop
 if (desktopApi) {
 	await startDesktopApp(desktopApi)
 } else {

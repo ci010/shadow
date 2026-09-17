@@ -29,7 +29,7 @@ const id = `hover-info-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const anchor = ref<HTMLElement>()
 const popup = ref<HTMLElement>()
 const opened = ref(false)
-const position = ref({ left: '0px', top: '0px', visibility: 'hidden' })
+const position = ref<{ left: string; top: string; visibility: 'hidden' | 'visible' }>({ left: '0px', top: '0px', visibility: 'hidden' })
 const triggerProps = computed(() => props.disabled ? {} : {
   'data-hover-info-trigger': id,
   'aria-describedby': opened.value && !props.interactive ? id : undefined,
@@ -118,7 +118,9 @@ function scheduleClose() {
     if (!contains(document.activeElement)) close()
   }, 180)
 }
-function focusIn() { if (!suppressFocus) void show() }
+function focusIn(event: FocusEvent) {
+  if (!suppressFocus && event.target instanceof HTMLElement && event.target.matches(':focus-visible')) void show()
+}
 function focusOut(event: FocusEvent) { if (!contains(event.relatedTarget)) { clearTimers(); closeTimer = setTimeout(() => close(), 0) } }
 function anchorClick() { if (props.interactive) void show() }
 async function focusPopup() {

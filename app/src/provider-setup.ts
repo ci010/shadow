@@ -143,7 +143,7 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
     try {
       response = await request(apiUrl(apiBase, path).toString(), {
         ...init,
-        signal: init?.signal ?? AbortSignal.timeout(30_000),
+        signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
         headers: { 'Content-Type': 'application/json', ...init?.headers },
       })
     } catch (error) {

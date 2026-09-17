@@ -1,7 +1,7 @@
 <template>
   <section class="channels-view" aria-labelledby="channels-title">
     <header class="channels-heading">
-      <div><h2 id="channels-title">Bots</h2><p>Connect multiple bots to this organization's Home chats. Each connection runs independently.</p></div>
+      <div><h2 id="channels-title">Bots</h2><p>Connect multiple bots to this project's Home chats. Each connection runs independently.</p></div>
       <button :disabled="loading || !!saving" @click="refresh()">Refresh status</button>
     </header>
     <p v-if="!available" role="status">Channel settings are managed by Main administrators.</p>
@@ -85,7 +85,7 @@ import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../channel-settings.ts'
 import { botChannel, botDraft, botPatch, createBotSettingsClient, type BotInstanceStatus } from '../bot-settings.ts'
 
-const props = defineProps<{ apiBase: string; organizationId: string; available: boolean; active: boolean }>()
+const props = defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean }>()
 const channels = ref<BotInstanceStatus[]>([])
 const drafts = ref<Partial<Record<string, ChannelDraft>>>({})
 const errors = ref<Partial<Record<string, string>>>({})
@@ -113,7 +113,7 @@ async function refresh(background = false) {
   request = controller
   if (!background) loading.value = true
   try {
-    const result = await createBotSettingsClient(props.apiBase, props.organizationId).list(controller.signal)
+    const result = await createBotSettingsClient(props.apiBase, props.projectId).list(controller.signal)
     if (controller.signal.aborted) return
     channels.value = result
     listError.value = ''
@@ -141,7 +141,7 @@ async function update(channel: BotInstanceStatus, patch: { displayName?: string;
   errors.value[channel.id] = ''
   notice.value = ''
   try {
-    const result = await createBotSettingsClient(props.apiBase, props.organizationId).save(channel.id, patch, controller.signal)
+    const result = await createBotSettingsClient(props.apiBase, props.projectId).save(channel.id, patch, controller.signal)
     if (controller.signal.aborted) return
     channels.value = channels.value.map(item => item.id === result.id ? result : item)
     if (resetDraft) drafts.value[channel.id] = botDraft(result)
@@ -174,7 +174,7 @@ async function addBot() {
   saving.value = 'create'
   listError.value = ''
   try {
-    const bot = await createBotSettingsClient(props.apiBase, props.organizationId).create(newPlatform.value, newName.value, controller.signal)
+    const bot = await createBotSettingsClient(props.apiBase, props.projectId).create(newPlatform.value, newName.value, controller.signal)
     if (controller.signal.aborted) return
     channels.value.push(bot)
     configure(bot)
@@ -191,7 +191,7 @@ async function removeBot(bot: BotInstanceStatus) {
   saving.value = bot.id
   errors.value[bot.id] = ''
   try {
-    await createBotSettingsClient(props.apiBase, props.organizationId).remove(bot.id, controller.signal)
+    await createBotSettingsClient(props.apiBase, props.projectId).remove(bot.id, controller.signal)
     if (controller.signal.aborted) return
     channels.value = channels.value.filter(item => item.id !== bot.id)
     delete drafts.value[bot.id]

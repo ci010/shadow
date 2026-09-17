@@ -6,17 +6,17 @@ import {
 } from '@opentelemetry/sdk-trace-node'
 import { format } from 'node:util'
 import type { OtelStore, OtlpSpan } from './store.ts'
-import { createOrganizationScope, getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope, getProjectScope, type ProjectScope } from '../projects/scope.ts'
 
 export interface NodeTelemetryHandle {
-  readonly scope?: OrganizationScope
+  readonly scope?: ProjectScope
   shutdown(): Promise<void>
 }
 
 export interface NodeTelemetryOptions {
   serviceName?: string
-  organizationId?: string
-  scope?: OrganizationScope
+  projectId?: string
+  scope?: ProjectScope
 }
 
 type OtlpValue =
@@ -72,7 +72,7 @@ function spanSnapshot(span: ReadableSpan, ended: boolean): OtlpSpan {
 
 interface TelemetryState {
   provider: NodeTracerProvider
-  targets: Map<OrganizationScope | undefined, TelemetryTarget>
+  targets: Map<ProjectScope | undefined, TelemetryTarget>
   restoreConsole(): void
 }
 
@@ -81,7 +81,7 @@ interface TelemetryTarget {
   serviceName: string
   references: number
   active: boolean
-  scope?: OrganizationScope
+  scope?: ProjectScope
 }
 
 let current: TelemetryState | undefined
@@ -94,32 +94,32 @@ export function initializeNodeTelemetry(
   store: OtelStore,
   options: NodeTelemetryOptions = {},
 ): NodeTelemetryHandle {
-  const orgScope = options.scope ?? (options.organizationId === undefined
-    ? undefined : createOrganizationScope(options.organizationId))
-  if (!orgScope && getOrganizationScope()) {
-    throw new Error('Organization telemetry requires explicit scope binding')
+  const orgScope = options.scope ?? (options.projectId === undefined
+    ? undefined : createProjectScope(options.projectId))
+  if (!orgScope && getProjectScope()) {
+    throw new Error('Project telemetry requires explicit scope binding')
   }
-  if (orgScope?.closed || (options.organizationId !== undefined && orgScope?.organizationId !== options.organizationId)) {
-    throw new Error('Telemetry scope does not match the organization runtime')
+  if (orgScope?.closed || (options.projectId !== undefined && orgScope?.projectId !== options.projectId)) {
+    throw new Error('Telemetry scope does not match the project runtime')
   }
   const serviceName = options.serviceName ?? process.env.OTEL_SERVICE_NAME ?? 'shadow'
   if (!current) {
-    const targets = new Map<OrganizationScope | undefined, TelemetryTarget>()
+    const targets = new Map<ProjectScope | undefined, TelemetryTarget>()
     const owners = new WeakMap<object, TelemetryTarget>()
-    const unbound = new WeakSet<OrganizationScope>()
-    const findTarget = (scope = getOrganizationScope()) => {
+    const unbound = new WeakSet<ProjectScope>()
+    const findTarget = (scope = getProjectScope()) => {
       if (scope?.closed) return undefined
       const target = targets.get(scope)
       if (scope && !target && !unbound.has(scope)) {
         unbound.add(scope)
-        process.stderr.write(`[otel] Organization runtime has no bound telemetry store: ${JSON.stringify(scope.organizationId)}\n`)
+        process.stderr.write(`[otel] Project runtime has no bound telemetry store: ${JSON.stringify(scope.projectId)}\n`)
       }
       return target
     }
     const scope = { name: 'shadow-console', version: '0.1.0' }
     const processor: SpanProcessor = {
       onStart(span, parentContext) {
-        const target = findTarget(getOrganizationScope(parentContext))
+        const target = findTarget(getProjectScope(parentContext))
         if (!target) return
         owners.set(span, target)
         const { traceId, spanId } = span.spanContext()
@@ -137,7 +137,7 @@ export function initializeNodeTelemetry(
                 attributes: attributes({
                   ...span.resource.attributes,
                   'service.name': target.serviceName,
-                  ...(target.scope ? { 'organization.id': target.scope.organizationId } : {}),
+                  ...(target.scope ? { 'project.id': target.scope.projectId } : {}),
                 }),
               },
               scopeSpans: [{
@@ -185,7 +185,7 @@ export function initializeNodeTelemetry(
             resourceLogs: [{
               resource: { attributes: attributes({
                 'service.name': target.serviceName,
-                ...(target.scope ? { 'organization.id': target.scope.organizationId } : {}),
+                ...(target.scope ? { 'project.id': target.scope.projectId } : {}),
               }) },
               scopeLogs: [{
                 scope,
@@ -223,14 +223,14 @@ export function initializeNodeTelemetry(
   const state = current
   const existing = state.targets.get(orgScope)
   if (existing && existing.store !== store) {
-    throw new Error('A telemetry scope may have only one store; bind each organization explicitly')
+    throw new Error('A telemetry scope may have only one store; bind each project explicitly')
   }
   for (const target of state.targets.values()) {
     if (target.store === store && target.scope !== orgScope) {
       throw new Error('A telemetry store cannot be shared between scopes')
     }
-    if (orgScope && target.scope?.organizationId === orgScope.organizationId && target.scope !== orgScope) {
-      throw new Error('Organization telemetry is already registered with another runtime scope')
+    if (orgScope && target.scope?.projectId === orgScope.projectId && target.scope !== orgScope) {
+      throw new Error('Project telemetry is already registered with another runtime scope')
     }
   }
   const target = existing ?? { store, serviceName, references: 0, active: true, scope: orgScope }

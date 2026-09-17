@@ -4,7 +4,7 @@
         <nav class="tab-nav" aria-label="Main navigation">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
-            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { organizationId: route.params.organizationId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
+            <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
               <button class="tab" :class="{ active: isActive }" :aria-current="isActive ? 'page' : undefined" @click="navigate">
                 {{ item.label }}
               </button>
@@ -24,9 +24,10 @@
     <div class="mouse-glow-layer" aria-hidden="true"><div ref="glowEl" class="mouse-glow" /></div>
 
     <main class="app-main">
-      <div v-if="['agents', 'spans', 'logs'].includes(String(route.name))" class="resource-scope" aria-label="Organization scope">
-        Organization
-        <router-link :to="{ name: 'organization-settings', params: { organizationId: route.params.organizationId, section: 'general' } }">{{ route.params.organizationId }}</router-link>
+      <IoHost :bridge="ioBridge" @open-conversation="router.push(projectChatLocation($event))" />
+      <div v-if="['agents', 'spans', 'logs'].includes(String(route.name))" class="resource-scope" aria-label="Project scope">
+        Project
+        <router-link :to="{ name: 'project-settings', params: { projectId: route.params.projectId, section: 'general' } }">{{ route.params.projectId }}</router-link>
       </div>
       <aside v-if="showChildRecovery" class="recovery-panel" role="status">
         <div class="recovery-copy">
@@ -37,16 +38,20 @@
           <router-link :to="{ name: 'nodes' }">Manage this node</router-link>
         </div>
       </aside>
+      <aside v-if="liveError" class="recovery-panel" role="status">
+        <div class="recovery-copy"><strong>Live updates interrupted</strong><span>{{ liveError }}</span></div>
+        <div class="recovery-links"><button type="button" class="btn" @click="livePool.retry()">Retry live updates</button></div>
+      </aside>
       <div
         class="route-content"
-        :class="{ 'chat-route': route.name === 'chat' || route.name === 'organizations' }"
+        :class="{ 'chat-route': route.name === 'chat' || route.name === 'projects' }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
-        <KeepAlive :key="resolvedBase" include="OrganizationsWorkspace,OrganizationSettings">
+        <KeepAlive :key="resolvedBase" include="ProjectsWorkspace,ProjectSettings">
           <component
             :is="Component"
-            :key="viewRoute.name === 'chat' || viewRoute.name === 'organizations' ? 'organizations-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.organizationId ?? '')}`"
-            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, organizationId: viewRoute.params.organizationId, hostApiBase: resolvedBase, visible: route.name === 'chat' || route.name === 'organizations' }"
+            :key="viewRoute.name === 'chat' || viewRoute.name === 'projects' ? 'projects-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.projectId ?? '')}`"
+            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: route.name === 'chat' || route.name === 'projects' }"
             v-on="viewRoute.name === 'settings' ? providerViewEvents : {}"
             @update:log-count="logCount = $event"
           />
@@ -59,16 +64,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
 import DesktopFrame from './DesktopFrame.vue'
-import { organizationBase } from './api-url.ts'
+import IoHost from './components/io/IoHost.vue'
+import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
+import { projectChatLocation } from './projects.ts'
+import { projectBase } from './api-url.ts'
+import { useLiveClientPool } from './composables/useLiveClient.ts'
+import type { LiveStatus } from './live-client.ts'
 
 const route = useRoute()
+const ioBridge = createIoBridge()
+provide(ioBridgeKey, ioBridge)
 const router = useRouter()
 const lastChatLocation = ref('/chat')
 watch(() => route.fullPath, (path) => {
@@ -76,10 +88,14 @@ watch(() => route.fullPath, (path) => {
 }, { immediate: true })
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
+const livePool = useLiveClientPool()
+const liveStatuses = ref<readonly LiveStatus[]>([])
+const stopLiveStatus = livePool.observe(statuses => { liveStatuses.value = statuses })
+const liveError = computed(() => liveStatuses.value.find(status => status.error)?.error ?? '')
 
 const resolvedBase = computed(() => installationContext.value.apiBase)
-const contentBase = computed(() => typeof route.params.organizationId === 'string' && route.name !== 'chat'
-  ? organizationBase(resolvedBase.value, route.params.organizationId) : resolvedBase.value)
+const contentBase = computed(() => typeof route.params.projectId === 'string' && route.name !== 'chat'
+  ? projectBase(resolvedBase.value, route.params.projectId) : resolvedBase.value)
 const showChildRecovery = computed(() =>
   installationContext.value.mode === 'child' &&
   installationContext.value.mainConnection !== 'connected'
@@ -139,7 +155,7 @@ function providerConfigured() {
 
 watch(resolvedBase, () => { void refreshProvider() })
 const onConfigChanged = (event: Event) => {
-  if (!(event as CustomEvent<{ organizationId?: string }>).detail?.organizationId) void refreshProvider(true)
+  if (!(event as CustomEvent<{ projectId?: string }>).detail?.projectId) void refreshProvider(true)
 }
 
 const navigationGroups = computed(() => {
@@ -195,6 +211,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopLiveStatus()
   window.removeEventListener('mousemove', onMouseMove)
   window.removeEventListener('shadow:config-changed', onConfigChanged)
   ++providerGeneration

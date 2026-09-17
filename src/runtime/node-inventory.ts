@@ -5,8 +5,8 @@ import {
   inventoryCapability,
   type NodeInventoryEntry,
 } from '../cluster/node-inventory.ts'
-import type { ProjectRegistry } from '../projects/registry.ts'
-import { localProjectWorkdirRef } from '../sessions/locality.ts'
+import type { FolderRegistry } from '../folders/registry.ts'
+import { localFolderWorkdirRef } from '../sessions/locality.ts'
 import type { ChildBootstrapConfigV1 } from './bootstrap-config.ts'
 import {
   type GatewayClientAddressRegistry,
@@ -34,7 +34,7 @@ export function authorizeMainNodeInventory(
 export function mainLocalNodeInventory(options: {
   readonly localNodeId: string
   readonly implementationVersion: string
-  readonly projects: Pick<ProjectRegistry, 'list' | 'lookupWorkdir'>
+  readonly folders: Pick<FolderRegistry, 'list' | 'lookupWorkdir'>
   readonly shellAvailable: boolean
 }): NodeInventoryEntry {
   return {
@@ -50,14 +50,14 @@ export function mainLocalNodeInventory(options: {
         displayName: 'Local shell',
         online: true,
       }] : []),
-      ...options.projects.list().filter(project => project.kind !== 'remote').map((project) => {
-        const ref = localProjectWorkdirRef(project.id)
+      ...options.folders.list().filter(folder => folder.kind !== 'remote').map((folder) => {
+        const ref = localFolderWorkdirRef(folder.id)
         return {
           capabilityId: ref.capabilityId,
           kind: 'workdir' as const,
-          displayName: project.name,
-          displayPath: project.path,
-          online: options.projects.lookupWorkdir(ref)?.capability?.online === true,
+          displayName: folder.name,
+          displayPath: folder.path,
+          online: options.folders.lookupWorkdir(ref)?.capability?.online === true,
         }
       }),
     ],

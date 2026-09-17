@@ -8,6 +8,7 @@ import { errMsg } from '../utils/truncate.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
 import { isExecutionMode } from '../sessions/execution-mode.ts'
 import { channelAddressFromSessionId, channelSessionId } from '../bus/events.ts'
+import { parseInitiativeId } from '../sessions/initiative-metadata.ts'
 
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
@@ -24,6 +25,10 @@ export class SubagentTool implements Tool {
       description: {
         type: 'string',
         description: 'Short description of the sub-agent session\'s purpose.',
+      },
+      initiative_id: {
+        type: 'string',
+        description: 'Existing Initiative ID in this Project. The child receives its shared SQL work context; omission inherits the parent association.',
       },
       agent_type: {
         type: 'string',
@@ -70,6 +75,12 @@ export class SubagentTool implements Tool {
       return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
     }
     const parentState = this.sessions.getSessionState(ctx.sessionId)
+    const initiativeId = parseInitiativeId({
+      initiativeId: args.initiative_id,
+      initiativeName: args.initiative_name,
+      projectName: args.project_name,
+    }) ?? parentState?.initiativeId
+    if (initiativeId) this.sessions.assertInitiativeAccess(initiativeId)
     const typeName = args.agent_type != null ? String(args.agent_type) : args.mode === 'call' ? parentState?.agentType ?? 'general' : 'sub'
     const reportTo = args.report_to != null ? String(args.report_to) : undefined
     const preloadTools = args.preload_tools && typeof args.preload_tools === 'object' && !Array.isArray(args.preload_tools)
@@ -102,7 +113,7 @@ export class SubagentTool implements Tool {
     const originChatId = ctx.chatId ?? 'direct'
     const originAddress = ctx.channelAddress ?? channelAddressFromSessionId(ctx.sessionId)
     if (originAddress && (originAddress.platform !== originChannel || originAddress.conversationId !== originChatId
-      || (ctx.organizationId !== undefined && originAddress.organizationId !== ctx.organizationId))) {
+      || (ctx.projectId !== undefined && originAddress.projectId !== ctx.projectId))) {
       throw new Error('Subagent source bot address does not match its session context')
     }
 
@@ -153,8 +164,8 @@ export class SubagentTool implements Tool {
         preloadTools,
         workspaceRoot,
         workdir: parentState?.workdir,
-        projectId: parentState?.projectId,
-        projectName: parentState?.projectName,
+        folderId: parentState?.folderId,
+        initiativeId,
       },
     )
 

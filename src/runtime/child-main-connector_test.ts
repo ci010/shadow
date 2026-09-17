@@ -97,9 +97,8 @@ const capability: CapabilityDescriptorV1 = {
   capabilityId: 'shell-1',
   nodeId: authentication.nodeId,
   kind: 'shell',
-  displayName: 'Project shell',
+  displayName: 'Folder shell',
   permissions: ['process.execute'],
-  approvalPolicy: 'session',
   online: true,
 }
 
@@ -134,8 +133,6 @@ function approvedRegistry(): InMemoryPairingNodeRegistry {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: 'fingerprint-1',
     credentialId: authentication.credentialId,
-    uiScopes: [],
-    nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
   }, new Date(baseTime.getTime() + 2_000))
   return registry
 }

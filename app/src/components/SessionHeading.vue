@@ -51,12 +51,12 @@ import ComposerPopover from './ComposerPopover.vue'
 import { chatContextName } from '../chat-draft.ts'
 import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; name: string; organizationName?: string; physicalId: string | null; revision: number; active: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; physicalId: string | null; revision: number; active: boolean }>()
 const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']] }>()
 const details = ref<SessionDetails | null>(null)
 const loading = ref(false)
 const error = ref('')
-const name = computed(() => [props.organizationName, details.value?.name?.trim() || props.name || 'Conversation'].filter(Boolean).join(' / '))
+const name = computed(() => [props.projectName, details.value?.name?.trim() || props.name || 'Conversation'].filter(Boolean).join(' / '))
 const folder = computed(() => details.value?.workdir.kind === 'remote'
   ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || 'Remote device'} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : 'Remote folder')}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
   : details.value?.workdir.displayPath
@@ -81,7 +81,6 @@ async function loadDetails() {
     if (!controller.signal.aborted) { details.value = result; emit('workdir', result.workdir) }
   } catch (cause) {
     if (!controller.signal.aborted) {
-      details.value = null
       error.value = cause instanceof Error ? cause.message : 'Session details are unavailable. Reopen the menu to retry.'
     }
   } finally {
@@ -93,9 +92,12 @@ function cancel() {
   request = undefined
   loading.value = false
 }
-watch(() => [props.sessionId, props.physicalId, props.revision, props.active], () => {
+watch(() => [props.apiBase, props.sessionId, props.physicalId, props.revision, props.active] as const, (next, previous) => {
   cancel()
-  details.value = null
+  if (!previous || next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]) {
+    details.value = null
+    error.value = ''
+  }
   if (props.active) void loadDetails()
 }, { immediate: true })
 onDeactivated(cancel)

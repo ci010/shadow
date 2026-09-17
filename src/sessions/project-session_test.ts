@@ -18,7 +18,7 @@ import { WriteTool } from '../tools/filesystem.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { ExecTool } from '../tools/shell.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
-import { localProjectWorkdirRef, managedSessionWorkdirRef, resolveSessionLocations, type WorkdirCapabilityLookup } from './locality.ts'
+import { localFolderWorkdirRef, managedSessionWorkdirRef, resolveSessionLocations, type WorkdirCapabilityLookup } from './locality.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
@@ -29,16 +29,16 @@ import { channelMessageInput, type SessionTurnFact } from './input.ts'
 
 const llm: LlmRuntimeConfig = { model: 'fixture', contextWindow: 100_000, temperature: 0 }
 
-test('project attachment context distinguishes absolute private uploads from relative project uploads', async () => {
+test('folder attachment context distinguishes absolute private uploads from relative folder uploads', async () => {
   await mkdir('.test-data', { recursive: true })
-  const root = await mkdtemp(join(process.cwd(), '.test-data', 'project-media-'))
+  const root = await mkdtemp(join(process.cwd(), '.test-data', 'folder-media-'))
   try {
-    const project = join(root, 'project')
+    const folder = join(root, 'folder')
     const privateData = join(root, 'session')
-    await mkdir(join(project, 'uploads'), { recursive: true })
+    await mkdir(join(folder, 'uploads'), { recursive: true })
     await mkdir(join(privateData, 'uploads'), { recursive: true })
     await writeFile(join(privateData, 'uploads', 'image.png'), 'private image')
-    await writeFile(join(project, 'uploads', 'image.png'), 'project image')
+    await writeFile(join(folder, 'uploads', 'image.png'), 'folder image')
     const input = channelMessageInput(message('a', [
         join(privateData, 'uploads', 'image.png'),
         join(privateData, 'uploads', 'notes.txt'),
@@ -47,14 +47,14 @@ test('project attachment context distinguishes absolute private uploads from rel
     assert(input.kind === 'message')
     const built = await buildUserChatMessage(
       input,
-      root, project,
+      root, folder,
     )
     assert(Array.isArray(built.content))
     deepEqual(built.content.slice(2), [
       { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('private image').toString('base64')}`, detail: 'auto' } },
       { type: 'text', text: `[file: ${join(privateData, 'uploads', 'notes.txt')}]` },
-      { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('project image').toString('base64')}`, detail: 'auto' } },
-      { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('project image').toString('base64')}`, detail: 'auto' } },
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('folder image').toString('base64')}`, detail: 'auto' } },
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from('folder image').toString('base64')}`, detail: 'auto' } },
       { type: 'text', text: '[file: uploads/notes.txt]' },
     ])
   } finally {
@@ -65,7 +65,7 @@ test('project attachment context distinguishes absolute private uploads from rel
 function message(chatId: string, media?: string[]): InboundMessage {
   return {
     channel: 'web', chatId, senderId: 'fixture', messageId: crypto.randomUUID(),
-    content: 'Write project fixtures', timestamp: new Date().toISOString(), media,
+    content: 'Write folder fixtures', timestamp: new Date().toISOString(), media,
   }
 }
 
@@ -79,7 +79,7 @@ function manager(
   const fixtureBus = new Bus()
   return Object.assign(new SessionManager({
     workspace, store, tools, provider, workdirCapabilityLookup, bus: fixtureBus,
-    context: { buildSystemPrompt: async () => 'Synthetic project context' },
+    context: { buildSystemPrompt: async () => 'Synthetic folder context' },
     handoffManager: { shouldHandoff: () => false },
     agentTypes: {
       resolve: () => ({ name: 'fixture', description: '', prompt: '', defaultMode: 'session', source: 'builtin' }),
@@ -107,10 +107,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     await mkdir('.test-data', { recursive: true })
     const root = await mkdtemp(join(process.cwd(), '.test-data', 'fork-upload-'))
     const home = join(root, 'main')
-    const project = join(root, 'project')
-    await mkdir(project)
+    const folder = join(root, 'folder')
+    await mkdir(folder)
     const lookup: WorkdirCapabilityLookup = () => ({
-      node: 'online', capability: { kind: 'workdir', online: true, path: project },
+      node: 'online', capability: { kind: 'workdir', online: true, path: folder },
     })
     const provider: LLMProvider = {
       name: 'fixture', listModels: () => ['fixture'],
@@ -124,7 +124,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       status: 'accepted', sessionId: `web:${msg.chatId}`, inputId: msg.messageId,
     }))
     let app = new Hono()
-    const uploads: Array<{ chatId: string; parentChatId: string; path: string; projectId?: string; ownerSessionId?: string }> = []
+    const uploads: Array<{ chatId: string; parentChatId: string; path: string; folderId?: string; ownerSessionId?: string }> = []
     const verifyUpload = async (upload: typeof uploads[number]) => {
       const urls = [
         `/api/media?chatId=${upload.chatId}&path=${encodeURIComponent(upload.path)}`,
@@ -138,25 +138,25 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const state = sessions.getSessionState(`web:${upload.chatId}`)
       if (state) {
         equal(state.workspaceRoot, upload.ownerSessionId)
-        equal(state.projectId, upload.projectId)
+        equal(state.folderId, upload.folderId)
         const locations = resolveSessionLocations(home, state, undefined, lookup)
         equal(locations.sessionDataDir, sessionWorkspacePath(home, upload.ownerSessionId ?? state.sessionId))
         assert(locations.workdir.available && locations.workdir.locality === 'local')
-        equal(locations.workdir.path, upload.projectId ? project : locations.sessionDataDir)
+        equal(locations.workdir.path, upload.folderId ? folder : locations.sessionDataDir)
       }
     }
     try {
       await store.init()
       await sessions.start()
       await channel.start(app)
-      await sessions.buildSession('web:project-parent', undefined, {
-        projectId: 'folder-a', workdir: localProjectWorkdirRef('folder-a'),
+      await sessions.buildSession('web:folder-parent', undefined, {
+        folderId: 'folder-a', workdir: localFolderWorkdirRef('folder-a'),
       })
       await sessions.buildSession('web:legacy-parent')
       await sessions.buildSession('web:managed-parent', undefined, {
         workdir: managedSessionWorkdirRef('web:managed-parent'),
       })
-      for (const parentChatId of ['project-parent', 'fork-project-parent', 'legacy-parent', 'managed-parent']) {
+      for (const parentChatId of ['folder-parent', 'fork-folder-parent', 'legacy-parent', 'managed-parent']) {
         const chatId = `fork-${parentChatId}`
         const form = new FormData()
         form.set('chatId', chatId)
@@ -166,7 +166,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const { path } = await response.json() as { path: string }
         assert(isAbsolute(path))
         equal(path, join(sessionWorkspacePath(home, `web:${chatId}`), 'uploads', basename(path)))
-        const upload = { chatId, parentChatId, path, projectId: sessions.getSessionState(`web:${parentChatId}`)?.projectId }
+        const upload = { chatId, parentChatId, path, folderId: sessions.getSessionState(`web:${parentChatId}`)?.folderId }
         uploads.push(upload)
         await verifyUpload(upload)
         const sent = await app.request('/api/chat/send', {
@@ -225,11 +225,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     }
   })
 
-  test(`${Store.name}: folder cwd, session grouping, forks, and restart preserve project isolation`, async () => {
+  test(`${Store.name}: folder cwd, session grouping, forks, and restart preserve folder isolation`, async () => {
     await mkdir('.test-data', { recursive: true })
-    const root = await mkdtemp(join(process.cwd(), '.test-data', 'project-session-'))
+    const root = await mkdtemp(join(process.cwd(), '.test-data', 'folder-session-'))
     const home = join(root, 'main')
-    const folders = { a: join(root, 'project-a'), b: join(root, 'project-b') }
+    const folders = { a: join(root, 'folder-a'), b: join(root, 'folder-b') }
     for (const path of [home, ...Object.values(folders)]) await mkdir(path)
     const lookup: WorkdirCapabilityLookup = (ref) => {
       const path = ref.capabilityId === 'local-project-v1:a' ? folders.a
@@ -260,7 +260,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         : {
           content: null,
           toolCalls: [
-            { id: 'write-1', name: 'write', arguments: { path: 'relative.txt', content: 'project file' } },
+            { id: 'write-1', name: 'write', arguments: { path: 'relative.txt', content: 'folder file' } },
             {
               id: 'exec-1', name: 'exec', arguments: {
                 script: process.platform === 'win32'
@@ -277,11 +277,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await sessions.start()
       for (const id of ['a', 'b'] as const) {
         await sessions.buildSession(`web:${id}`, undefined, {
-          projectId: id, projectName: 'unrelated-planning-notes',
-          workdir: localProjectWorkdirRef(id), description: `Project ${id}`,
+          folderId: id, initiativeId: 'unrelated-planning-notes',
+          workdir: localFolderWorkdirRef(id), description: `Folder ${id}`,
         })
         await dispatchAndFinish(sessions, message(id))
-        equal(await readFile(join(folders[id], 'relative.txt'), 'utf8'), 'project file')
+        equal(await readFile(join(folders[id], 'relative.txt'), 'utf8'), 'folder file')
         equal((await readFile(join(folders[id], 'shell.txt'), 'utf8')).trim(), folders[id])
         equal(existsSync(join(sessionWorkspacePath(home, `web:${id}`), 'relative.txt')), false)
       }
@@ -292,22 +292,30 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await sessions.buildSession('web:nested', { id: 'web:fork' })
       for (const id of ['web:fork', 'web:nested']) {
         const state = sessions.getSessionState(id)!
-        equal(state.projectId, 'a')
-        deepEqual(state.workdir, localProjectWorkdirRef('a'))
+        equal(state.folderId, 'a')
+        deepEqual(state.workdir, localFolderWorkdirRef('a'))
         equal(state.workspaceRoot, undefined)
         equal(resolveSessionLocations(home, state, undefined, lookup).sessionDataDir, sessionWorkspacePath(home, id))
       }
-      await sessions.buildSession('web:legacy', undefined, { projectName: 'a' })
-      equal(sessions.getSessionState('web:legacy')!.projectId, undefined)
+      await sessions.buildSession('web:legacy', undefined, { initiativeId: 'a' })
+      equal(sessions.getSessionState('web:legacy')!.folderId, undefined)
       const legacy = resolveSessionLocations(home, sessions.getSessionState('web:legacy')!, undefined, lookup)
       assert(legacy.workdir.available && legacy.workdir.locality === 'local')
       equal(legacy.workdir.path, sessionWorkspacePath(home, 'web:legacy'))
       await dispatchAndFinish(sessions, message('legacy'))
-      equal(await readFile(join(legacy.workdir.path, 'relative.txt'), 'utf8'), 'project file')
+      equal(await readFile(join(legacy.workdir.path, 'relative.txt'), 'utf8'), 'folder file')
       deepEqual(observedCwds.slice(-2), [legacy.workdir.path, legacy.workdir.path])
       await sessions.buildSession('web:managed-child', { id: 'web:legacy' }, { workspaceRoot: 'web:legacy' })
-      await sessions.buildSession('heartbeat:reflector-fixture')
-      await sessions.buildSession('web:reflection-fork', { id: 'heartbeat:reflector-fixture' })
+      await sessions.buildSession('cron:opaque-learning-run', undefined, {
+        automation: {
+          jobId: 'learning:reflector', name: 'Reflection', runId: 'fixture',
+          startedAt: new Date().toISOString(), contextMode: 'fresh',
+          config: { source: 'learning', schedule: 'every 5m', agentType: 'reflector' },
+        },
+      })
+      await sessions.buildSession('web:reflection-fork', { id: 'cron:opaque-learning-run' }, {
+        parentSessionId: 'cron:opaque-learning-run',
+      })
 
       await sessions.addChild('web:a', 'web:fork')
       await sessions.setSessionConfig('web:a', { temperature: 0.2 })
@@ -319,12 +327,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       sessions = manager(home, store, tools, provider, lookup)
       await sessions.start()
       deepEqual(JSON.parse(JSON.stringify(sessions.getSessionState('web:a'))), saved)
-      equal(sessions.getSessionState('web:nested')!.projectId, 'a')
-      equal((await store.listSessions()).find((s) => s.sessionId === 'web:a')?.projectId, 'a')
-      equal(sessions.listSessions().find((s) => s.sessionId === 'web:a')?.projectId, 'a')
+      equal(sessions.getSessionState('web:nested')!.folderId, 'a')
+      equal((await store.listSessions()).find((s) => s.sessionId === 'web:a')?.folderId, 'a')
+      equal(sessions.listSessions().find((s) => s.sessionId === 'web:a')?.folderId, 'a')
       const app = new Hono()
       sessionsApiPlugin(sessions)(app)
-      for (const id of ['heartbeat:reflector-fixture', 'web:reflection-fork']) {
+      for (const id of ['cron:opaque-learning-run', 'web:reflection-fork']) {
         const response = await app.request(`/api/sessions/${encodeURIComponent(id)}/files`)
         equal(response.status, 200)
         deepEqual((await response.json()).workdir, { kind: 'local', displayPath: home, scope: 'home' })
@@ -340,8 +348,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert(listing.entries.some((entry: { name: string }) => entry.name === 'relative.txt'))
       }
       const graph = await (await app.request('/api/sessions/graph')).json()
-      equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === 'web:a').projectId, 'a')
-      equal(graph.nodes.find((s: { logicalId: string }) => s.logicalId === 'web:a').projectId, 'a')
+      equal(graph.sessions.find((s: { sessionId: string }) => s.sessionId === 'web:a').folderId, 'a')
+      equal(graph.nodes.find((s: { logicalId: string }) => s.logicalId === 'web:a').folderId, 'a')
       const persisted = Promise.withResolvers<void>()
       const stopped = Promise.withResolvers<void>()
       const originalSave = store.saveState.bind(store)
@@ -357,7 +365,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           create: async () => ({
             targetSessionId: 'web_a-1', timestamp: new Date().toISOString(),
             context: { summary: 'Fixture', currentObjective: '', recentTranscript: [] },
-            prompt: 'Compacted project fixture',
+            prompt: 'Compacted folder fixture',
           }),
         } as unknown as HandoffManager,
         () => stopped.resolve(), undefined, undefined, undefined, lookup,
@@ -368,35 +376,35 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await persisted.promise
         const compactedState = await store.getState('web:a')
         equal(compactedState?.segmentIndex, 1)
-        deepEqual(compactedState?.workdir, localProjectWorkdirRef('a'))
-        equal(compactedState?.projectId, 'a')
-        equal(compactedState?.projectName, 'unrelated-planning-notes')
+        deepEqual(compactedState?.workdir, localFolderWorkdirRef('a'))
+        equal(compactedState?.folderId, 'a')
+        equal(compactedState?.initiativeId, 'unrelated-planning-notes')
         deepEqual(compactedState?.children, ['web:fork'])
-        equal(compactedState?.description, 'Project a')
+        equal(compactedState?.description, 'Folder a')
         equal(compactedState?.config?.temperature, 0.2)
-        equal((await store.readFirstRecord('web_a-1'))?.summary_context, 'Compacted project fixture')
+        equal((await store.readFirstRecord('web_a-1'))?.summary_context, 'Compacted folder fixture')
       } finally {
         clearTimeout(timeout)
         compacting.stop()
         await stopped.promise
         store.saveState = originalSave
       }
-      await writeFile(join(folders.b, 'relative.txt'), 'other project unchanged')
+      await writeFile(join(folders.b, 'relative.txt'), 'other folder unchanged')
       await dispatchAndFinish(sessions, message('a'))
-      equal(await readFile(join(folders.b, 'relative.txt'), 'utf8'), 'other project unchanged')
+      equal(await readFile(join(folders.b, 'relative.txt'), 'utf8'), 'other folder unchanged')
 
       await rm(folders.a, { recursive: true })
       await rejects(dispatchAndFinish(sessions, message('a')), /workdir unavailable/)
       equal(existsSync(folders.a), false)
       await sessions.buildSession('web:unknown', undefined, {
-        workdir: { ...localProjectWorkdirRef('unknown'), displayPathSnapshot: folders.b },
+        workdir: { ...localFolderWorkdirRef('unknown'), displayPathSnapshot: folders.b },
       })
       await rejects(dispatchAndFinish(sessions, message('unknown')), /workdir unavailable/)
       await sessions.buildSession('web:remote', undefined, {
-        workdir: { ...localProjectWorkdirRef('b'), nodeId: 'remote', displayPathSnapshot: folders.b },
+        workdir: { ...localFolderWorkdirRef('b'), nodeId: 'remote', displayPathSnapshot: folders.b },
       })
       await rejects(dispatchAndFinish(sessions, message('remote')), /remote executor/)
-      equal(await readFile(join(folders.b, 'relative.txt'), 'utf8'), 'other project unchanged')
+      equal(await readFile(join(folders.b, 'relative.txt'), 'utf8'), 'other folder unchanged')
     } finally {
       await sessions.stop()
       store.close?.()

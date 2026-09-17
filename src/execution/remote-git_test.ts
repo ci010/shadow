@@ -7,10 +7,9 @@ import { syncBuiltinESMExports } from 'node:module'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import { ProcessManager } from './processes/manager.ts'
-import { projectFixture } from '../projects/test-fixtures.ts'
+import { folderFixture } from '../folders/test-fixtures.ts'
 import { CapabilityGit, GIT_STATUS_OPERATION, GIT_DIFF_OPERATION, MAX_GIT_RESULT_BYTES } from './capability-git.ts'
 import { LocalExecutor } from './local-executor.ts'
-import { InMemoryLocalApprovalService } from './local-approval.ts'
 import { executeRemoteGit } from './remote-git-client.ts'
 import type { Executor } from './executor.ts'
 import type { JobRequestV1, JobEventV1 } from './contracts.ts'
@@ -37,7 +36,7 @@ function fake(output: string, completed = true) {
 }
 
 test('remote Git uses the Child workdir for status and HEAD diff, with no prompts or Git mutation', async t => {
-  const { root, folders } = await projectFixture(t)
+  const { root, folders } = await folderFixture(t)
   const git = (...args: string[]) => exec('git', ['-c', 'core.autocrlf=false', '-c', `core.hooksPath=${devNull}`,
     '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-C', folders, ...args])
   await git('init', '--quiet')
@@ -51,8 +50,7 @@ test('remote Git uses the Child workdir for status and HEAD diff, with no prompt
   await writeFile(join(folders, 'inside', 'file.txt'), 'after\n')
   await writeFile(join(folders, 'outside.txt'), 'do not expose\n')
   const index = await readFile(join(folders, '.git', 'index'))
-  const approval = new InMemoryLocalApprovalService([{ capabilityId: 'workdir', displayName: 'Child', policy: 'none' }])
-  const local = new LocalExecutor(new ProcessManager(), 'child', [new CapabilityGit([{ capabilityId: 'workdir', rootPath: join(folders, 'inside') }])], [], approval)
+  const local = new LocalExecutor(new ProcessManager(), 'child', [new CapabilityGit([{ capabilityId: 'workdir', rootPath: join(folders, 'inside') }])], [])
   const requests: JobRequestV1[] = []
   const executor: Executor = {
     execute(request, signal) { requests.push(request); return local.execute(request, signal) },
@@ -69,13 +67,12 @@ test('remote Git uses the Child workdir for status and HEAD diff, with no prompt
   assert(!JSON.stringify(requests).includes(root))
   assert.deepEqual(requests.map(request => [request.nodeId, request.capabilityId, request.operation, request.args]),
     [['child', 'workdir', GIT_STATUS_OPERATION, {}], ['child', 'workdir', GIT_DIFF_OPERATION, { path: 'file.txt' }]])
-  assert.deepEqual(approval.listPending(), [])
   assert.deepEqual(await readFile(join(folders, '.git', 'index')), index)
   assert.equal((await executeRemoteGit(target(executor), 'diff', 'missing.txt')).status, 404)
 })
 
 test('remote Git reports non-repositories, invalid arguments and unknown bindings explicitly', async t => {
-  const { root, folders } = await projectFixture(t)
+  const { root, folders } = await folderFixture(t)
   const spawn = childProcess.spawn
   t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: SpawnOptions) =>
     spawn(command, args, { ...options, env: { ...options.env, GIT_CEILING_DIRECTORIES: root } }))

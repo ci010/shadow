@@ -42,6 +42,10 @@ export interface GatewayRouteOptions {
 const CORS_METHODS = ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] as const
 const CORS_HEADERS = ['Content-Type', 'Authorization'] as const
 
+// A 32 KiB live-topic JSON query can occupy 96 KiB after percent encoding.
+// Bound the parser while retaining room for the cursor and ordinary headers.
+export const GATEWAY_MAX_HEADER_BYTES = 128 * 1024
+
 export function resolveLaunchCredential(
   explicitCredential?: string,
   environmentCredential?: string,
@@ -242,6 +246,7 @@ export function serveGateway(
   const server = serve({
     port,
     hostname: host,
+    serverOptions: { maxHeaderSize: GATEWAY_MAX_HEADER_BYTES },
     fetch: (request, bindings) => {
       const hostname = bindings.incoming.socket.remoteAddress
       if (hostname) {

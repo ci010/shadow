@@ -4,7 +4,9 @@ import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
-import { ProjectsFixture, type FixtureSession } from './projects-fixture.js'
+import { FoldersFixture, type FixtureSession } from './folders-fixture.js'
+import { LiveFixture } from './live-fixture.ts'
+import { activeWorkspaceScript } from './active-workspace.ts'
 
 function argument(name: string): string {
   const value = process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -20,10 +22,12 @@ let selectedModel = initialModel
 let selectedProvider = 'copilot'
 let providerReady = true
 let providerReads = 0
-let saveGate: Promise<void> | undefined
-let rejectNextSave = false
-let rejectedSaves = 0
 const saves: unknown[] = []
+const sessionConfigs = new Map<string, Record<string, unknown>>()
+const sessionPatches: Array<{ sessionId: string; patch: Record<string, unknown> }> = []
+let settingsGate: Promise<void> | undefined
+let rejectSettings = false
+let rejectedSettings = 0
 const failures: string[] = []
 const blockedRequests: string[] = []
 const apiRequests = new Set<string>()
@@ -58,7 +62,8 @@ const sessions: FixtureSession[] = Array.from({ length: 90 }, (_, index) => ({
   description: `Synthetic description ${'long-description-'.repeat(12)}`,
   current: `physical-fixture-${index}`,
 }))
-const projects = new ProjectsFixture(directory, sessions)
+const folders = new FoldersFixture(directory, sessions)
+const live = new LiveFixture()
 let implicitPaidRequests = 0
 const prompt = '# Synthetic system prompt\n\n' + 'A fixture instruction, not a live agent. '.repeat(400)
 const tools = Array.from({ length: 12 }, (_, index) => ({
@@ -75,20 +80,52 @@ const status = () => ({
 
 const server = createServer(async (request, response) => {
   try {
+    if (live.handle(request, response)) return
     const url = new URL(request.url!, 'http://127.0.0.1')
-    const path = url.pathname
+    const path = url.pathname.replace(/^\/projects\/default(?=\/)/, '')
     const json = (data: unknown) => {
       response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
       response.end(JSON.stringify(data))
     }
     if (path.startsWith('/api/') || path.startsWith('/debug/')) apiRequests.add(`${request.method} ${path}`)
+    if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
+    if (path === '/api/automations') return json({ automations: [] })
+    const background = path.match(/^\/api\/sessions\/([^/]+)\/background-tasks$/)
+    if (background) return json({ sessionId: decodeURIComponent(background[1]), total: 0, tasks: [] })
+    if (path === '/v1/query/session-spans' && request.method === 'GET') return json({ entries: [], total: 0, hasMore: false })
     if (path === '/api/chat/send' || path.startsWith('/v1/')) {
       implicitPaidRequests += 1
-      failures.push(`Project action attempted a model request: ${request.method} ${path}`)
+      failures.push(`Folder action attempted a model request: ${request.method} ${path}`)
       response.writeHead(409).end()
       return
     }
-    if (await projects.handle(request, response, path)) return
+    const configRoute = path.match(/^\/api\/sessions\/([^/]+)\/config$/)
+    if (configRoute && request.method === 'PATCH') {
+      const sessionId = decodeURIComponent(configRoute[1])
+      assert.ok(sessions.some(session => session.sessionId === sessionId))
+      let text = ''
+      for await (const chunk of request) text += chunk
+      const patch = JSON.parse(text)
+      sessionPatches.push({ sessionId, patch })
+      const gate = settingsGate
+      settingsGate = undefined
+      await gate
+      if (rejectSettings) {
+        rejectSettings = false
+        rejectedSettings++
+        response.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: 'Synthetic session settings rejection' }))
+        return
+      }
+      const config = { ...sessionConfigs.get(sessionId) }
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete config[key]
+        else config[key] = value
+      }
+      sessionConfigs.set(sessionId, config)
+      live.publisher.invalidateSessions(sessionId)
+      return json({ key: sessionId, config })
+    }
+    if (await folders.handle(request, response, path)) return
     if (path === '/api/provider/configured') {
       json({ providers: providerReady ? [...new Set(['copilot', selectedProvider])].map(provider => ({
         provider, selected: provider === selectedProvider,
@@ -103,16 +140,6 @@ const server = createServer(async (request, response) => {
         for await (const chunk of request) body += chunk
         const input = JSON.parse(body) as { model: string; provider: string }
         saves.push(input)
-        const gate = saveGate
-        saveGate = undefined
-        await gate
-        if (rejectNextSave) {
-          rejectNextSave = false
-          rejectedSaves += 1
-          response.writeHead(503, { 'Content-Type': 'application/json' })
-          response.end(JSON.stringify({ error: 'Synthetic provider rejection' }))
-          return
-        }
         selectedModel = input.model
         selectedProvider = input.provider
         providerReady = true
@@ -140,15 +167,21 @@ const server = createServer(async (request, response) => {
         expiresAt: Date.now() + 600_000, intervalMs: 1000,
       })
     } else if (path === '/debug/models') json({ models: [initialModel, alternateModel] })
-    else if (path === '/api/config') json({ agent: { provider: selectedProvider, model: selectedModel } })
-    else if (path === '/api/sessions/graph') json(projects.graph())
+    else if (path === '/api/config') json({ agent: { provider: selectedProvider, model: selectedModel, workspace: directory, temperature: 0.7 } })
+    else if (path === '/api/sessions/graph') {
+      const graph = folders.graph()
+      json({ ...graph, sessions: graph.sessions.map(session => ({ ...session, config: sessionConfigs.get(session.sessionId) })) })
+    }
     else if (path === '/api/sessions/stages') json({ stages: { [sessionId]: 'idle' } })
     else if (path === '/api/chat/session') json({ history, systemPrompt: prompt, tools })
-    else if (path.startsWith('/api/sessions/')) json({ previousPhysicalId: null, messages: history })
-    else if (path === '/api/chat/events') {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' })
-      response.write(': synthetic fixture connected\n\n')
-    } else if (path === '/debug/agent-types') {
+    else if (/^\/api\/sessions\/[^/]+$/.test(path)) json({ previousPhysicalId: null, messages: history })
+    else if (/^\/api\/sessions\/[^/]+\/details$/.test(path)) json({
+      sessionId: decodeURIComponent(path.split('/')[3]), name: null, workdir: { kind: 'local', displayPath: directory },
+      usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null },
+    })
+    else if (/^\/api\/sessions\/[^/]+\/files$/.test(path)) json({ path: '', workdir: { kind: 'local', displayPath: directory }, entries: [] })
+    else if (/^\/api\/sessions\/[^/]+\/git\/status$/.test(path)) json({ available: false, reason: 'not_repository', entries: [] })
+    else if (path === '/debug/agent-types') {
       json(Array.from({ length: 40 }, (_, index) => ({
         name: `fixture-agent-${index}`, description: 'Synthetic non-chat layout fixture '.repeat(5),
         source: 'builtin', canSpawn: false, ephemeral: false,
@@ -194,6 +227,7 @@ interface Box {
   scrollHeight: number
   overflowX: string
   overflowY: string
+  paddingBottom: number
   display: string
 }
 interface Measurements {
@@ -216,17 +250,17 @@ interface Measurements {
 const selectors = [
   'html', 'body', '.desktop-frame', '.desktop-title-bar', '.runtime-status-bar',
   '.desktop-content', '.app-main', '.route-content', '.chat-workspace',
-  '.sessions-sidebar', '.projects-scroll', '.chat-panel', '.chat-header',
+  '.projects-sidebar', '.project-groups', '.chat-panel', '.conversation-heading-row',
   '.chat-messages', '.chat-composer', '.composer-input textarea',
-  '.composer-toolbar', '.composer-model', '.composer-model select', '.composer-send',
-  '.right-pane', '.right-pane-toggle', '.window-controls', '.desktop-window-title',
+  '.composer-toolbar', '.composer-controls', '[aria-label="Choose model"]', '.composer-send',
+  '.session-diagnosis', '.diagnosis-toggle', '.window-controls', '.desktop-window-title',
   '.mouse-glow', '.mouse-glow-layer',
-  '#project-actions', '.project-dialog',
+  '.folder-menu', '.folder-dialog',
 ]
 
 async function evaluate<T>(window: BrowserWindow, script: string): Promise<T> {
   assert.ok(ownedWindows.has(window) && !window.isVisible(), 'Only hidden test-owned windows may be inspected')
-  return window.webContents.executeJavaScript(script) as Promise<T>
+  return window.webContents.executeJavaScript(activeWorkspaceScript(script)) as Promise<T>
 }
 async function waitFor(window: BrowserWindow, expression: string): Promise<void> {
   const deadline = Date.now() + 15_000
@@ -249,7 +283,7 @@ async function measure(window: BrowserWindow): Promise<Measurements> {
         width: rect.width, height: rect.height,
         clientWidth: node.clientWidth, clientHeight: node.clientHeight,
         scrollWidth: node.scrollWidth, scrollHeight: node.scrollHeight,
-        overflowX: style.overflowX, overflowY: style.overflowY, display: style.display
+        overflowX: style.overflowX, overflowY: style.overflowY, paddingBottom: parseFloat(style.paddingBottom), display: style.display
       };
     }
     const send = document.querySelector('.composer-send');
@@ -258,9 +292,9 @@ async function measure(window: BrowserWindow): Promise<Measurements> {
     return {
       viewport: { width: innerWidth, height: innerHeight }, boxes,
       title: document.title, frames: document.querySelectorAll('.desktop-frame').length,
-      sessionCount: document.querySelectorAll('.project-session-row').length,
+      sessionCount: document.querySelectorAll('.folder-session-row').length,
       messageCount: document.querySelectorAll('.chat-bubble').length,
-      model: document.querySelector('.composer-model select')?.value ?? null,
+      model: document.querySelector('[aria-label="Choose model"]')?.title ?? null,
       sendUncovered: Boolean(send && (hit === send || send.contains(hit))),
       sendHitTarget: hit ? hit.tagName.toLowerCase() + '.' + Array.from(hit.classList).join('.') : null,
       desktop: Boolean(window.shadowDesktop),
@@ -302,38 +336,33 @@ function documentChecks(metrics: Measurements, label: string): void {
   check(!metrics.legacyProviderButton, `${label}: legacy .provider-settings-btn must be removed`)
   check(metrics.activeTabs.length === 1, `${label}: exactly one top-level tab must have aria-current=page`)
 }
-function chatChecks(metrics: Measurements, label: string, mobile: boolean, toolsOpen: boolean, expectedModel = initialModel): void {
+function chatChecks(metrics: Measurements, label: string, mobile: boolean, expectedModel = initialModel): void {
   documentChecks(metrics, label)
-  for (const selector of ['.chat-workspace', '.chat-panel', '.chat-header', '.chat-messages', '.chat-composer', '.composer-input textarea', '.composer-toolbar', '.composer-model', '.composer-model select', '.composer-send']) bounded(metrics, selector, label)
-  if (!mobile || !toolsOpen) check(metrics.sendUncovered, `${label}: .composer-send is covered or outside hit-test viewport; hit=${metrics.sendHitTarget}`)
+  for (const selector of ['.chat-workspace', '.chat-panel', '.conversation-heading-row', '.chat-messages', '.chat-composer', '.composer-input textarea', '.composer-toolbar', '.composer-controls', '[aria-label="Choose model"]', '.composer-send']) bounded(metrics, selector, label)
+  check(metrics.sendUncovered, `${label}: .composer-send is covered or outside hit-test viewport; hit=${metrics.sendHitTarget}`)
   check(metrics.sessionCount === sessions.length, `${label}: synthetic session list did not mount (${metrics.sessionCount}/${sessions.length})`)
   check(metrics.messageCount === 72, `${label}: synthetic history did not mount`)
-  check(metrics.model === expectedModel, `${label}: global model not injected into composer`)
+  check(metrics.model?.includes(expectedModel), `${label}: conversation model not reflected in picker (${metrics.model})`)
   const messages = box(metrics, '.chat-messages')
   check(['auto', 'scroll'].includes(messages.overflowY) && messages.scrollHeight > messages.clientHeight,
     `${label}: .chat-messages must scroll internally`)
   const composer = box(metrics, '.chat-composer')
   const textarea = box(metrics, '.composer-input textarea')
   const toolbar = box(metrics, '.composer-toolbar')
-  const model = box(metrics, '.composer-model')
+  const model = box(metrics, '.composer-controls')
   const send = box(metrics, '.composer-send')
-  check(messages.bottom <= composer.top + 1, `${label}: .chat-messages overlaps .chat-composer`)
+  check(messages.paddingBottom >= messages.bottom - composer.top, `${label}: scroll padding must keep the final message above the overlay composer`)
   check(textarea.bottom <= toolbar.top + 1, `${label}: textarea must occupy its own row above .composer-toolbar`)
   check(Math.abs(textarea.width - toolbar.width) <= 2, `${label}: textarea must fill the composer width`)
   check(model.right <= send.left + 1 && Math.abs(send.right - toolbar.right) <= 2, `${label}: model-left / Send-right toolbar alignment`)
   if (!mobile) {
-    const sidebar = box(metrics, '.sessions-sidebar')
-    const list = box(metrics, '.projects-scroll')
+    const sidebar = box(metrics, '.projects-sidebar')
+    const list = box(metrics, '.project-groups')
     check(Math.abs(sidebar.left) <= 1, `${label}: .sessions-sidebar must touch the left edge`)
     check(Math.abs(sidebar.top - box(metrics, '.desktop-title-bar').bottom) <= 1, `${label}: .sessions-sidebar must start immediately below chrome`)
     check(['auto', 'scroll'].includes(list.overflowY) && list.scrollHeight > list.clientHeight,
-      `${label}: .projects-scroll must scroll internally`)
+      `${label}: .folders-scroll must scroll internally`)
     check(Math.abs(box(metrics, '.desktop-title-bar').height - 44) <= 1, `${label}: title bar should be 44px`)
-  }
-  if (toolsOpen) {
-    bounded(metrics, '.right-pane', label)
-    bounded(metrics, '.right-pane-toggle', label)
-    if (!mobile) check(box(metrics, '.chat-panel').right <= box(metrics, '.right-pane').left + 1, `${label}: tools pane overlaps chat panel`)
   }
 }
 function report(label: string, metrics: Measurements): void {
@@ -356,68 +385,68 @@ async function waitForTab(window: BrowserWindow, text: string): Promise<void> {
   await waitFor(window, `Array.from(document.querySelectorAll('.tab-nav [aria-current="page"]')).some(node => node.textContent.trim() === ${JSON.stringify(text)})`)
 }
 
-async function runProjects(window: BrowserWindow, width: number, desktop: boolean): Promise<void> {
-  const label = `projects-${width}`
-  const folder = (path: string) => `Array.from(document.querySelectorAll('.project-folder')).find(node => node.title === ${JSON.stringify(path)})`
-  const group = (path: string) => `${folder(path)}?.closest('.project-group')`
+async function runFolders(window: BrowserWindow, width: number, desktop: boolean): Promise<void> {
+  const label = `folders-${width}`
+  const folder = (path: string) => `Array.from(document.querySelectorAll('.folder-folder')).find(node => node.title === ${JSON.stringify(path)})`
+  const group = (path: string) => `${folder(path)}?.closest('.folder-group')`
   const showSidebar = async () => {
     await evaluate(window, `(() => {
-      if (!document.querySelector('.sessions-sidebar').getBoundingClientRect().width) document.querySelector('.mobile-sessions-toggle').click();
-      document.querySelector('.projects-scroll').scrollTop = 0;
+      if (!document.querySelector('.projects-sidebar').getBoundingClientRect().width) document.querySelector('.projects-mobile-toggle').click();
+      document.querySelector('.project-groups').scrollTop = 0;
     })()`)
-    await waitFor(window, `document.querySelector('.sessions-sidebar')?.getBoundingClientRect().width > 0`)
+    await waitFor(window, `document.querySelector('.projects-sidebar')?.getBoundingClientRect().width > 0`)
   }
   const menu = async (action?: string) => {
     await showSidebar()
-    await evaluate(window, `document.querySelector('[aria-label="Add project"]').click()`)
-    await waitFor(window, `document.querySelectorAll('#project-actions [role="menuitem"]').length === 3`)
-    const items = await evaluate(window, `Array.from(document.querySelectorAll('#project-actions [role="menuitem"]')).map(node => node.textContent.trim())`)
-    check(JSON.stringify(items) === JSON.stringify(['Open folder', 'Clone repo', 'Start from scratch']), `${label}: project menu must have exactly the three requested actions`)
-    bounded(await measure(window), '#project-actions', label)
-    if (action) await evaluate(window, `Array.from(document.querySelectorAll('#project-actions [role="menuitem"]')).find(node => node.textContent.trim() === ${JSON.stringify(action)}).click()`)
+    await evaluate(window, `document.querySelector('[aria-label="New work in Default"]').click()`)
+    await waitFor(window, `document.querySelectorAll('.folder-menu [role="menuitem"]').length === 3`)
+    const items = await evaluate(window, `Array.from(document.querySelectorAll('.folder-menu [role="menuitem"]')).map(node => node.textContent.trim())`)
+    check(JSON.stringify(items) === JSON.stringify(['Open folder', 'Clone repository', 'Start from scratch']), `${label}: folder menu must have exactly the three requested actions`)
+    bounded(await measure(window), '.folder-menu', label)
+    if (action) await evaluate(window, `Array.from(document.querySelectorAll('.folder-menu [role="menuitem"]')).find(node => node.textContent.trim() === ${JSON.stringify(action)}).click()`)
   }
   const field = async (name: string, value: string) => {
     await evaluate(window, `(() => {
-      const input = Array.from(document.querySelectorAll('.project-dialog .dialog-field')).find(node => node.firstElementChild.textContent.trim() === ${JSON.stringify(name)}).querySelector('input');
+      const input = Array.from(document.querySelectorAll('.folder-dialog .dialog-field')).find(node => node.firstElementChild.textContent.trim() === ${JSON.stringify(name)}).querySelector('input');
       input.value = ${JSON.stringify(value)};
       input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`)
   }
   const dialogButton = async (text: string) => {
-    await evaluate(window, `Array.from(document.querySelectorAll('.project-dialog button')).find(node => node.textContent.trim() === ${JSON.stringify(text)}).click()`)
+    await evaluate(window, `Array.from(document.querySelectorAll('.folder-dialog button')).find(node => node.textContent.trim() === ${JSON.stringify(text)}).click()`)
   }
   const queuePicker = async (value: string | null) => {
-    await evaluate(window, `window.layoutFixture.queueProjectDirectories([${JSON.stringify(value)}])`)
+    await evaluate(window, `window.layoutFixture.queueFolderDirectories([${JSON.stringify(value)}])`)
   }
   const state = async (text: string) => {
     await waitFor(window, `document.querySelector('.clone-status strong')?.textContent === ${JSON.stringify(text)}`)
     const metrics = await measure(window)
-    bounded(metrics, '.project-dialog', `${label}-${text}`)
+    bounded(metrics, '.folder-dialog', `${label}-${text}`)
     documentChecks(metrics, `${label}-${text}`)
   }
   const openClone = async (name: string) => {
-    await menu('Clone repo')
-    await waitFor(window, `Boolean(document.querySelector('.project-dialog'))`)
-    await evaluate(window, `Array.from(document.querySelectorAll('.project-dialog button')).find(node => node.textContent.trim() === 'Clone another repository')?.click()`)
+    await menu('Clone repository')
+    await waitFor(window, `Boolean(document.querySelector('.folder-dialog'))`)
+    await evaluate(window, `Array.from(document.querySelectorAll('.folder-dialog button')).find(node => node.textContent.trim() === 'Clone another repository')?.click()`)
     await field('Repository URL', 'https://example.invalid/synthetic/layout.git')
     if (desktop) {
-      await queuePicker(projects.root)
+      await queuePicker(folders.root)
       await dialogButton('Browse…')
-      await waitFor(window, `document.querySelector('.project-dialog input[placeholder="Absolute folder path"]')?.value === ${JSON.stringify(projects.root)}`)
-    } else await field('Parent folder', projects.root)
+      await waitFor(window, `document.querySelector('.folder-dialog input[placeholder="Absolute folder path"]')?.value === ${JSON.stringify(folders.root)}`)
+    } else await field('Parent folder', folders.root)
     await field('New folder name', name)
-    bounded(await measure(window), '.project-dialog', `${label}-clone-form`)
+    bounded(await measure(window), '.folder-dialog', `${label}-clone-form`)
   }
   const submitClone = async () => {
-    await evaluate(window, `document.querySelector('.project-dialog form').requestSubmit()`)
+    await evaluate(window, `document.querySelector('.folder-dialog form').requestSubmit()`)
     await state('Cloning repository…')
   }
 
   await clickTab(window, 'Chat')
-  await waitFor(window, `document.querySelectorAll('.project-folder').length === ${projects.projects.length}`)
+  await waitFor(window, `document.querySelectorAll('.folder-folder').length === ${folders.folders.length}`)
   await showSidebar()
-  await evaluate(window, `Array.from(document.querySelectorAll('.project-toggle[aria-expanded="false"]')).forEach(node => node.click())`)
-  await waitFor(window, `document.querySelectorAll('.project-session-row').length === ${sessions.length}`)
+  await evaluate(window, `Array.from(document.querySelectorAll('.folder-toggle[aria-expanded="false"]')).forEach(node => node.click())`)
+  await waitFor(window, `document.querySelectorAll('.folder-session-row').length === ${sessions.length}`)
   await evaluate(window, `Array.from(document.querySelectorAll('.legacy-chats .session-select')).find(node => node.title.includes(${JSON.stringify(sessionId)})).click()`)
   await waitFor(window, `document.querySelector('.chat-heading-copy')?.textContent.includes(${JSON.stringify(sessionId)})`)
   const previousRoute = await evaluate<string>(window, 'location.pathname')
@@ -425,164 +454,166 @@ async function runProjects(window: BrowserWindow, width: number, desktop: boolea
   await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`)
   check(await evaluate(window, `document.activeElement.textContent.trim() === 'Start from scratch'`), `${label}: End must focus the final menu item`)
   await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))`)
-  check(await evaluate(window, `document.activeElement.textContent.trim() === 'Clone repo'`), `${label}: ArrowUp must move menu focus`)
+  check(await evaluate(window, `document.activeElement.textContent.trim() === 'Clone repository'`), `${label}: ArrowUp must move menu focus`)
   await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
-  await waitFor(window, `!document.querySelector('#project-actions')`)
-  check(await evaluate(window, `document.activeElement.getAttribute('aria-label') === 'Add project'`), `${label}: Escape must close menu and return keyboard focus`)
+  await waitFor(window, `!document.querySelector('.folder-menu')`)
+  check(await evaluate(window, `document.activeElement.getAttribute('aria-label') === 'New work in Default'`), `${label}: Escape must close menu and return keyboard focus`)
 
-  const empty = projects.projects.find((project) => project.id === projects.initialEmptyId)!
-  const tree = projects.projects.find((project) => project.id === projects.treeId)!
-  check(await evaluate(window, `${group(empty.path)}?.textContent.includes('No conversations yet')`), `${label}: an empty registered folder must remain visible`)
-  await evaluate(window, `${group(empty.path)}.querySelector('.project-toggle').click()`)
-  check(await evaluate(window, `!${group(empty.path)}?.querySelector('.project-conversations')`), `${label}: collapse must hide empty project contents`)
-  await evaluate(window, `${group(empty.path)}.querySelector('.project-toggle').click()`)
+  const empty = folders.folders.find((folder) => folder.id === folders.initialEmptyId)!
+  const tree = folders.folders.find((folder) => folder.id === folders.treeId)!
+  check(await evaluate(window, `Boolean(${group(empty.path)}?.querySelector('.folder-folder'))`), `${label}: an empty registered folder must remain visible`)
+  check(await evaluate(window, `!${group(empty.path)}?.querySelector('.folder-conversations')`), `${label}: an empty folder must not create placeholder rows`)
+  check(await evaluate(window, `!document.querySelector('.folders-sidebar').textContent.match(/No conversations yet|No unassociated conversations|Open a folder to keep|Fresh-context tasks appear here/)`), `${label}: sidebar must not repeat empty-state hints`)
+  await evaluate(window, `${group(empty.path)}.querySelector('.folder-toggle').click()`)
+  check(await evaluate(window, `!${group(empty.path)}?.querySelector('.folder-conversations')`), `${label}: collapse must hide empty folder contents`)
+  await evaluate(window, `${group(empty.path)}.querySelector('.folder-toggle').click()`)
   await evaluate(window, `${group(tree.path)}.querySelector('.lineage-toggle').click()`)
-  await waitFor(window, `${group(tree.path)}?.querySelectorAll('.project-session-row').length === 1`)
+  await waitFor(window, `${group(tree.path)}?.querySelectorAll('.folder-session-row').length === 1`)
   await evaluate(window, `${group(tree.path)}.querySelector('.lineage-toggle').click()`)
-  await waitFor(window, `${group(tree.path)}?.querySelectorAll('.project-session-row').length === 2`)
+  await waitFor(window, `${group(tree.path)}?.querySelectorAll('.folder-session-row').length === 2`)
   check(await evaluate(window, `(() => {
-    const rows = ${group(tree.path)}.querySelectorAll('.project-session-row');
+    const rows = ${group(tree.path)}.querySelectorAll('.folder-session-row');
     return parseFloat(rows[1].style.paddingLeft) > parseFloat(rows[0].style.paddingLeft)
       && rows[1].querySelector('.session-select').title.includes('Parent: web:chat-fixture-88');
-  })()`), `${label}: physical parent/child lineage must be retained inside project grouping`)
-  check(await evaluate(window, `document.querySelectorAll('.legacy-chats .project-session-row').length === 88`), `${label}: legacy Chats must retain all unassociated sessions`)
+  })()`), `${label}: physical parent/child lineage must be retained inside folder grouping`)
+  check(await evaluate(window, `document.querySelectorAll('.legacy-chats .folder-session-row').length === 88`), `${label}: legacy Chats must retain all unassociated sessions`)
   check(await evaluate(window, `(() => {
     const name = ${folder(tree.path)}.querySelector('.tree-label');
     return name.scrollWidth > name.clientWidth && getComputedStyle(name).textOverflow === 'ellipsis';
-  })()`), `${label}: long project names must ellipsize rather than expand the sidebar`)
-  await scrollProof(window, '.projects-scroll')
+  })()`), `${label}: long folder names must ellipsize rather than expand the sidebar`)
+  await scrollProof(window, '.project-groups')
 
-  const openedPath = join(projects.root, `Opened folder ${width}`)
+  const openedPath = join(folders.root, `Opened folder ${width}`)
   const openFolder = async () => {
     if (desktop) await queuePicker(openedPath)
     await menu('Open folder')
     if (!desktop) {
-      await waitFor(window, `Boolean(document.querySelector('.project-dialog'))`)
+      await waitFor(window, `Boolean(document.querySelector('.folder-dialog'))`)
       await field('Folder path', openedPath)
       await dialogButton('Open folder')
     }
-    await waitFor(window, `${folder(openedPath)} !== undefined && !document.querySelector('.project-dialog')`)
+    await waitFor(window, `${folder(openedPath)} !== undefined && !document.querySelector('.folder-dialog')`)
   }
-  const createdBeforeOpen = projects.createdSessions.length
+  const createdBeforeOpen = folders.createdSessions.length
   await openFolder()
   await openFolder()
-  check(await evaluate(window, `Array.from(document.querySelectorAll('.project-folder')).filter(node => node.title === ${JSON.stringify(openedPath)}).length === 1`), `${label}: repeated folder registration must not duplicate the row`)
-  check(projects.createdSessions.length === createdBeforeOpen, `${label}: opening a folder must not create a conversation`)
+  check(await evaluate(window, `Array.from(document.querySelectorAll('.folder-folder')).filter(node => node.title === ${JSON.stringify(openedPath)}).length === 1`), `${label}: repeated folder registration must not duplicate the row`)
+  check(folders.createdSessions.length === createdBeforeOpen, `${label}: opening a folder must not create a conversation`)
   check(await evaluate(window, 'location.pathname') === previousRoute, `${label}: opening a folder must preserve the current Chat`)
   if (desktop) {
-    const registrations = projects.registrations.length
+    const registrations = folders.registrations.length
     await queuePicker(null)
     await menu('Open folder')
-    await waitFor(window, `!document.querySelector('.project-dialog') && !document.querySelector('#project-actions')`)
-    check(projects.registrations.length === registrations, `${label}: native picker cancellation must not register a folder`)
+    await waitFor(window, `!document.querySelector('.folder-dialog') && !document.querySelector('.folder-menu')`)
+    check(folders.registrations.length === registrations, `${label}: native picker cancellation must not register a folder`)
   }
 
   await menu('Start from scratch')
   await waitFor(window, `location.pathname !== ${JSON.stringify(previousRoute)} && Boolean(document.querySelector('.composer-input textarea'))`)
-  check(projects.createdSessions.length === createdBeforeOpen, `${label}: Scratch must not create a project-bound conversation`)
+  check(folders.createdSessions.length === createdBeforeOpen, `${label}: Scratch must not create a folder-bound conversation`)
   await showSidebar()
   await evaluate(window, `${group(openedPath)}.querySelector('.folder-add').click()`)
-  await waitFor(window, `document.querySelector('.project-session-row.active .session-select')?.title.includes('web:chat-project-fixture-')`)
-  const created = projects.createdSessions.at(-1)!
-  const opened = projects.projects.find((project) => project.path === openedPath)!
-  check(created.projectId === opened.id, `${label}: project + must bind the new conversation on the server`)
-  check(await evaluate(window, `decodeURIComponent(location.pathname).endsWith(${JSON.stringify(created.sessionId)})`), `${label}: project + must select the server-returned conversation`)
-  check(sessions.find((session) => session.sessionId === created.sessionId)?.projectId === opened.id, `${label}: graph refresh must retain the server project association`)
+  await waitFor(window, `document.querySelector('.folder-session-row.active .session-select')?.title.includes('web:chat-folder-fixture-')`)
+  const created = folders.createdSessions.at(-1)!
+  const opened = folders.folders.find((folder) => folder.path === openedPath)!
+  check(created.folderId === opened.id, `${label}: folder + must bind the new conversation on the server`)
+  check(await evaluate(window, `decodeURIComponent(location.pathname).endsWith(${JSON.stringify(created.sessionId)})`), `${label}: folder + must select the server-returned conversation`)
+  check(sessions.find((session) => session.sessionId === created.sessionId)?.folderId === opened.id, `${label}: graph refresh must retain the server folder association`)
 
-  projects.nextClone = 'succeeded'
+  folders.nextClone = 'succeeded'
   await openClone(`cloned-${width}`)
-  const createdBeforeClone = projects.createdSessions.length
+  const createdBeforeClone = folders.createdSessions.length
   await submitClone()
   await state('Repository cloned')
-  const cloned = projects.operations.get(projects.cloneInputs.at(-1)!.operationId)!
-  check(cloned.project !== undefined, `${label}: successful clone must register its project`)
+  const cloned = folders.operations.get(folders.cloneInputs.at(-1)!.operationId)!
+  check(cloned.folder !== undefined, `${label}: successful clone must register its folder`)
   await dialogButton('Done')
-  await waitFor(window, `!document.querySelector('.project-dialog') && ${folder(cloned.destination)} !== undefined`)
-  check(projects.createdSessions.length === createdBeforeClone, `${label}: clone success must not automatically create or send a conversation`)
+  await waitFor(window, `!document.querySelector('.folder-dialog') && ${folder(cloned.destination)} !== undefined`)
+  check(folders.createdSessions.length === createdBeforeClone, `${label}: clone success must not automatically create or send a conversation`)
 
   if (width === 900) {
-    projects.nextClone = 'failed'
+    folders.nextClone = 'failed'
     await openClone('failed-900')
     await submitClone()
     await state('Clone failed')
-    check(await evaluate(window, `document.querySelector('.clone-status')?.textContent.includes('partial checkout') && Boolean(document.querySelector('.project-error[role="alert"]'))`), `${label}: clone failure must preserve safe recovery guidance`)
-    projects.nextClone = 'succeeded'
+    check(await evaluate(window, `document.querySelector('.clone-status')?.textContent.includes('partial checkout') && Boolean(document.querySelector('.folder-error[role="alert"]'))`), `${label}: clone failure must preserve safe recovery guidance`)
+    folders.nextClone = 'succeeded'
     await field('New folder name', 'retry-900')
     await dialogButton('Retry clone')
     await state('Repository cloned')
     await dialogButton('Done')
-    await waitFor(window, `!document.querySelector('.project-dialog')`)
+    await waitFor(window, `!document.querySelector('.folder-dialog')`)
 
-    projects.nextClone = 'running'
+    folders.nextClone = 'running'
     await openClone('cancel-900')
     await submitClone()
-    const cancelId = projects.cloneInputs.at(-1)!.operationId
+    const cancelId = folders.cloneInputs.at(-1)!.operationId
     await dialogButton('Cancel clone')
     await state('Clone cancelled')
-    check(projects.cancelled.has(cancelId), `${label}: Cancel clone must DELETE the active operation`)
+    check(folders.cancelled.has(cancelId), `${label}: Cancel clone must DELETE the active operation`)
     await dialogButton('Cancel')
-    await waitFor(window, `!document.querySelector('.project-dialog')`)
+    await waitFor(window, `!document.querySelector('.folder-dialog')`)
 
     for (const trigger of ['escape', 'deactivate'] as const) {
       await openClone(`failed-cancel-${trigger}-900`)
-      projects.nextCancellation = 'failed'
+      folders.nextCancellation = 'failed'
       await submitClone()
-      const failedCancelId = projects.cloneInputs.at(-1)!.operationId
+      const failedCancelId = folders.cloneInputs.at(-1)!.operationId
       if (trigger === 'escape') {
-        await evaluate(window, `document.querySelector('.project-dialog').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+        await evaluate(window, `document.querySelector('.folder-dialog').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
         await state('Clone failed')
-        check(await evaluate(window, `Boolean(document.querySelector('.project-dialog')) && document.querySelector('.clone-status')?.textContent.includes('partial checkout')`), `${label}: failed cancellation must retain modal recovery guidance`)
+        check(await evaluate(window, `Boolean(document.querySelector('.folder-dialog')) && document.querySelector('.clone-status')?.textContent.includes('partial checkout')`), `${label}: failed cancellation must retain modal recovery guidance`)
       }
       await clickTab(window, 'Settings')
       await waitForTab(window, 'Settings')
-      check(projects.operations.get(failedCancelId)?.state === 'failed', `${label}: ${trigger} cancellation must preserve its terminal failure`)
+      check(folders.operations.get(failedCancelId)?.state === 'failed', `${label}: ${trigger} cancellation must preserve its terminal failure`)
       await clickTab(window, 'Chat')
       await waitForTab(window, 'Chat')
       await showSidebar()
       await waitFor(window, `Array.from(document.querySelectorAll('.sidebar-error button')).some(node => node.textContent.trim() === 'Review clone')`)
       await evaluate(window, `Array.from(document.querySelectorAll('.sidebar-error button')).find(node => node.textContent.trim() === 'Review clone').click()`)
       await state('Clone failed')
-      check(await evaluate(window, `document.querySelector('.checkout-path')?.textContent === ${JSON.stringify(projects.operations.get(failedCancelId)!.destination)}`), `${label}: Review clone must recover the ${trigger} cancellation's checkout`)
+      check(await evaluate(window, `document.querySelector('.checkout-path')?.textContent === ${JSON.stringify(folders.operations.get(failedCancelId)!.destination)}`), `${label}: Review clone must recover the ${trigger} cancellation's checkout`)
       await dialogButton('Cancel')
-      await waitFor(window, `!document.querySelector('.project-dialog')`)
+      await waitFor(window, `!document.querySelector('.folder-dialog')`)
     }
 
     await openClone('hide-before-ack-900')
-    projects.holdNextAcknowledgement = true
-    await evaluate(window, `document.querySelector('.project-dialog form').requestSubmit()`)
+    folders.holdNextAcknowledgement = true
+    await evaluate(window, `document.querySelector('.folder-dialog form').requestSubmit()`)
     await state('Starting clone…')
-    const hiddenId = projects.cloneInputs.at(-1)!.operationId
+    const hiddenId = folders.cloneInputs.at(-1)!.operationId
     try {
-      await evaluate(window, `document.querySelector('.project-dialog').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
-      await waitFor(window, `!document.querySelector('.project-dialog')`)
-      check(projects.cancelled.has(hiddenId), `${label}: hiding a starting clone must cancel before POST acknowledgement`)
-    } finally { projects.acknowledgements.get(hiddenId)?.() }
+      await evaluate(window, `document.querySelector('.folder-dialog').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+      await waitFor(window, `!document.querySelector('.folder-dialog')`)
+      check(folders.cancelled.has(hiddenId), `${label}: hiding a starting clone must cancel before POST acknowledgement`)
+    } finally { folders.acknowledgements.get(hiddenId)?.() }
 
     await openClone('deactivate-before-ack-900')
-    projects.holdNextAcknowledgement = true
-    await evaluate(window, `document.querySelector('.project-dialog form').requestSubmit()`)
+    folders.holdNextAcknowledgement = true
+    await evaluate(window, `document.querySelector('.folder-dialog form').requestSubmit()`)
     await state('Starting clone…')
-    const deactivatedId = projects.cloneInputs.at(-1)!.operationId
+    const deactivatedId = folders.cloneInputs.at(-1)!.operationId
     try {
       await clickTab(window, 'Settings')
       await waitForTab(window, 'Settings')
-      check(projects.cancelled.has(deactivatedId), `${label}: cached Chat deactivation must cancel an unacknowledged clone`)
-      check(await evaluate(window, `!document.querySelector('.project-dialog') && !document.querySelector('#project-actions')`), `${label}: navigation must remove teleported project surfaces`)
-    } finally { projects.acknowledgements.get(deactivatedId)?.() }
+      check(folders.cancelled.has(deactivatedId), `${label}: cached Chat deactivation must cancel an unacknowledged clone`)
+      check(await evaluate(window, `!document.querySelector('.folder-dialog') && !document.querySelector('.folder-menu')`), `${label}: navigation must remove teleported folder surfaces`)
+    } finally { folders.acknowledgements.get(deactivatedId)?.() }
     await clickTab(window, 'Chat')
     await waitForTab(window, 'Chat')
   }
   await showSidebar()
-  await evaluate(window, `Array.from(document.querySelectorAll('.project-toggle[aria-expanded="false"]')).forEach(node => node.click())`)
+  await evaluate(window, `Array.from(document.querySelectorAll('.folder-toggle[aria-expanded="false"]')).forEach(node => node.click())`)
   await evaluate(window, `Array.from(document.querySelectorAll('.legacy-chats .session-select')).find(node => node.title.includes(${JSON.stringify(sessionId)})).click()`)
   await waitFor(window, `document.querySelector('.chat-heading-copy')?.textContent.includes(${JSON.stringify(sessionId)})`)
   const metrics = await measure(window)
   report(`${label}-complete`, metrics)
-  chatChecks(metrics, `${label}-complete`, width < 700, false, selectedModel)
-  check(implicitPaidRequests === 0, `${label}: project operations must never issue an implicit model/Chat POST`)
-  const nativePickerCalls = desktop ? await evaluate<number>(window, 'window.layoutFixture.projectPickerCalls()') : 0
+  chatChecks(metrics, `${label}-complete`, width < 700, selectedModel)
+  check(implicitPaidRequests === 0, `${label}: folder operations must never issue an implicit model/Chat POST`)
+  const nativePickerCalls = desktop ? await evaluate<number>(window, 'window.layoutFixture.folderPickerCalls()') : 0
   check(!desktop || nativePickerCalls >= 4, `${label}: native folder picker must be exercised for open, reopen, cancellation, and clone target`)
-  console.log(`LAYOUT_PROJECTS ${JSON.stringify({ width, projects: projects.projects.length, graphSessions: sessions.length, treeChildren: 2, nativePickerCalls, implicitPaidRequests })}`)
+  console.log(`LAYOUT_FOLDERS ${JSON.stringify({ width, folders: folders.folders.length, graphSessions: sessions.length, treeChildren: 2, nativePickerCalls, implicitPaidRequests })}`)
 }
 
 async function scrollProof(window: BrowserWindow, selector: string): Promise<void> {
@@ -595,7 +626,8 @@ async function scrollProof(window: BrowserWindow, selector: string): Promise<voi
 }
 
 async function runViewport(origin: string, width: number, height: number, desktop: boolean): Promise<void> {
-  projects.reset()
+  folders.reset()
+  sessionConfigs.clear()
   selectedModel = initialModel
   selectedProvider = 'copilot'
   providerReady = true
@@ -634,9 +666,9 @@ async function runViewport(origin: string, width: number, height: number, deskto
       deviceScaleFactor: 1,
       scale: 1,
     })
-    await waitFor(window, `document.querySelectorAll('.project-folder').length === 2 && document.querySelectorAll('.legacy-chats .project-session-row').length === 88`)
-    await evaluate(window, `Array.from(document.querySelectorAll('.project-toggle[aria-expanded="false"]')).forEach(node => node.click()); document.querySelector('.legacy-chats .session-select').click()`)
-    await waitFor(window, `document.querySelectorAll('.chat-bubble').length === 72 && document.querySelector('.composer-model select')?.disabled === false`)
+    await waitFor(window, `document.querySelectorAll('.folder-folder').length === 2 && document.querySelectorAll('.legacy-chats .folder-session-row').length === 88`)
+    await evaluate(window, `Array.from(document.querySelectorAll('.folder-toggle[aria-expanded="false"]')).forEach(node => node.click()); document.querySelector('.legacy-chats .session-select').click()`)
+    await waitFor(window, `document.querySelectorAll('.chat-bubble').length === 72 && document.querySelector('[aria-label="Choose model"]')?.disabled === false`)
     await evaluate(window, `(() => {
       const point = { clientX: innerWidth - 1, clientY: innerHeight - 1, bubbles: true };
       window.dispatchEvent(new PointerEvent('pointermove', point));
@@ -658,9 +690,9 @@ async function runViewport(origin: string, width: number, height: number, deskto
     const glow = box(metrics, '.mouse-glow')
     check(glow.right > width && glow.bottom > height, `${label}: pointer edge must exercise decorative overflow rather than a stationary glow`)
     report(`${label}-chat-pointer-edge`, metrics)
-    chatChecks(metrics, `${label}-chat`, mobile, false)
+    chatChecks(metrics, `${label}-chat`, mobile)
     await scrollProof(window, '.chat-messages')
-    if (!mobile) await scrollProof(window, '.projects-scroll')
+    if (!mobile) await scrollProof(window, '.project-groups')
 
     await evaluate(window, `(() => {
       const textarea = document.querySelector('.composer-input textarea');
@@ -670,26 +702,29 @@ async function runViewport(origin: string, width: number, height: number, deskto
     await waitFor(window, `document.querySelector('.composer-send')?.disabled === false`)
     metrics = await measure(window)
     report(`${label}-long-draft`, metrics)
-    chatChecks(metrics, `${label}-long-draft`, mobile, false)
+    chatChecks(metrics, `${label}-long-draft`, mobile)
     const textarea = box(metrics, '.composer-input textarea')
     check(textarea.scrollHeight > textarea.clientHeight && ['auto', 'scroll'].includes(textarea.overflowY), `${label}: long textarea must scroll internally`)
 
     await evaluate(window, `(() => {
       const textarea = document.querySelector('.composer-input textarea');
       textarea.value = ''; textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('.right-pane-toggle').click();
+      document.querySelector('.diagnosis-toggle').click();
     })()`)
-    await waitFor(window, `document.querySelector('.right-pane-toggle')?.getAttribute('aria-expanded') === 'true'`)
+    await waitFor(window, `document.querySelector('.diagnosis-toggle')?.getAttribute('aria-pressed') === 'true'`)
+    await evaluate(window, `Array.from(document.querySelectorAll('.diagnosis-views button')).find(button => button.textContent.startsWith('Tools')).click()`)
     metrics = await measure(window)
     report(`${label}-tools-open`, metrics)
-    chatChecks(metrics, `${label}-tools-open`, mobile, true)
-    await evaluate(window, `document.querySelector('.right-pane-toggle').click()`)
-    await waitFor(window, `document.querySelector('.right-pane-toggle')?.getAttribute('aria-expanded') === 'false'`)
+    documentChecks(metrics, `${label}-tools-open`)
+    bounded(metrics, '.session-diagnosis', `${label}-tools-open`)
+    check(box(metrics, '.composer-send').width === 0, `${label}: diagnosis must hide the conversation composer`)
+    await evaluate(window, `document.querySelector('.diagnosis-toggle').click()`)
+    await waitFor(window, `document.querySelector('.diagnosis-toggle')?.getAttribute('aria-pressed') === 'false'`)
     metrics = await measure(window)
     report(`${label}-tools-closed`, metrics)
-    chatChecks(metrics, `${label}-tools-closed`, mobile, false)
+    chatChecks(metrics, `${label}-tools-closed`, mobile)
 
-    const modelSelector = '.chat-composer select[aria-label="Model for new turns"]'
+    const modelSelector = '.chat-composer [aria-label="Choose model"]'
     const draft = 'Synthetic unsent draft\nMust survive model saves and provider settings.'
     await evaluate(window, `(() => {
       const input = document.querySelector('.composer-input textarea');
@@ -704,27 +739,43 @@ async function runViewport(origin: string, width: number, height: number, deskto
     })()`)
     const chatUrl = await evaluate<string>(window, 'location.pathname + location.search + location.hash')
     const saveCount = saves.length
-    const readsBeforeSave = providerReads
-    let finishSave!: () => void
-    saveGate = new Promise<void>((done) => { finishSave = done })
-    await evaluate(window, `(() => {
-      const select = document.querySelector(${JSON.stringify(modelSelector)});
-      select.value = ${JSON.stringify(alternateModel)};
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    })()`)
-    try {
-      await waitFor(window, `document.querySelector(${JSON.stringify(modelSelector)})?.disabled === true`)
-      check(await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)})?.title === ${JSON.stringify(initialModel)}`), `${label}: model must not commit before server acceptance`)
-      check(await draftRetained(), `${label}: draft or textarea identity lost during pending model save`)
-    } finally {
-      finishSave()
+    const chooseModel = async (model: string) => {
+      await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)}).click()`)
+      await evaluate(window, `document.querySelector('.model-menu-model').click()`)
+      await waitFor(window, `!!document.querySelector('.model-search')`)
+      await evaluate(window, `document.querySelector(${JSON.stringify(`.model-option[title="${model}"]`)}).click()`)
+      await waitFor(window, `!document.querySelector('.composer-popover') && document.querySelector(${JSON.stringify(modelSelector)}).title.includes(${JSON.stringify(model)})`)
     }
-    await waitFor(window, `document.querySelector(${JSON.stringify(modelSelector)})?.value === ${JSON.stringify(alternateModel)} && !document.querySelector(${JSON.stringify(modelSelector)})?.disabled`)
-    check(saves.length === saveCount + 1, `${label}: model selector must use global provider setup API`)
-    const saved = saves.at(-1) as { provider?: string; model?: string } | undefined
-    check(saved?.provider === 'copilot' && saved.model === alternateModel && Object.keys(saved).length === 2, `${label}: incorrect global model save payload`)
-    check(providerReads > readsBeforeSave, `${label}: global model save must refresh provider status`)
-    check(await draftRetained(), `${label}: draft or textarea identity lost after global model save/refresh`)
+    const chooseEffort = async (label: string) => {
+      await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)}).click()`)
+      await evaluate(window, `document.querySelector('.model-menu-effort').click()`)
+      await waitFor(window, `!!document.querySelector('.effort-option')`)
+      await evaluate(window, `Array.from(document.querySelectorAll('.effort-option')).find(button => button.querySelector('.setting-option-copy > span').textContent.trim() === ${JSON.stringify(label)}).click()`)
+    }
+    const patchesBeforeModel = sessionPatches.length
+    await chooseModel(alternateModel)
+    check(saves.length === saveCount && selectedModel === initialModel, `${label}: conversation model overrides must not change App provider defaults`)
+    check(sessionPatches.length === patchesBeforeModel, `${label}: next-turn model selection must remain local until admission`)
+    check(await draftRetained(), `${label}: model selection lost draft or textarea identity`)
+
+    let finishSave!: () => void
+    settingsGate = new Promise<void>(done => { finishSave = done })
+    await chooseEffort('High')
+    try {
+      await waitFor(window, `document.querySelector(${JSON.stringify(modelSelector)})?.getAttribute('aria-busy') === 'true'`)
+      check(await draftRetained(), `${label}: pending session settings lost the unsent draft`)
+    } finally { finishSave() }
+    await waitFor(window, `document.querySelector(${JSON.stringify(modelSelector)})?.getAttribute('aria-busy') !== 'true' && document.querySelector('.model-effort').textContent.includes('High')`)
+    assert.deepEqual(sessionPatches.at(-1), { sessionId, patch: { thinking: { type: 'enabled' }, reasoningEffort: 'high' } })
+    assert.deepEqual(sessionConfigs.get(sessionId), { thinking: { type: 'enabled' }, reasoningEffort: 'high' })
+    rejectSettings = true
+    await chooseEffort('Low')
+    await waitFor(window, `!!document.querySelector('.composer-error') && document.querySelector(${JSON.stringify(modelSelector)})?.getAttribute('aria-busy') !== 'true'`)
+    check(await evaluate(window, `document.querySelector('.model-effort').textContent.includes('High')`), `${label}: rejected session settings must retain accepted effort`)
+    check(sessionConfigs.get(sessionId)?.reasoningEffort === 'high', `${label}: rejection changed persisted session settings`)
+    check(await draftRetained(), `${label}: rejected session settings lost the draft`)
+    await chooseEffort('Default')
+    await waitFor(window, `!document.querySelector('.composer-error') && document.querySelector(${JSON.stringify(modelSelector)})?.getAttribute('aria-busy') !== 'true'`)
 
     await clickTab(window, 'Settings')
     await waitForTab(window, 'Settings')
@@ -736,17 +787,12 @@ async function runViewport(origin: string, width: number, height: number, deskto
     documentChecks(metrics, `${label}-providers`)
     check(['auto', 'scroll'].includes(box(metrics, '.route-content').overflowY), `${label}: Providers must use normal route scrolling`)
 
-    await evaluate(window, `(() => {
-      const select = document.querySelector('select[aria-label="Model for new turns"]');
-      select.value = ${JSON.stringify(initialModel)};
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    })()`)
-    await waitFor(window, `document.querySelector('select[aria-label="Model for new turns"]')?.value === ${JSON.stringify(initialModel)} && !document.querySelector('select[aria-label="Model for new turns"]')?.disabled`)
-    check(await evaluate(window, `location.pathname === '/settings' && Boolean(document.querySelector('.provider-setup'))`), `${label}: global model changes must not leave Settings`)
+    check(await evaluate(window, `!Array.from(document.querySelectorAll('[aria-label="Choose model"]')).some(node => node.getClientRects().length)`), `${label}: App provider settings must not expose a global conversation model picker`)
     await clickTab(window, 'Chat')
     await waitForTab(window, 'Chat')
     await waitFor(window, `Boolean(document.querySelector('.composer-input textarea'))`)
     check(await draftRetained(), `${label}: Chat tab return lost draft or textarea identity`)
+    check(await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)}).title.includes(${JSON.stringify(alternateModel)})`), `${label}: cached conversation must retain its own next-turn model`)
     check(await evaluate(window, 'location.pathname + location.search + location.hash') === chatUrl, `${label}: Chat tab must return to the remembered session URL`)
 
     await clickTab(window, 'Settings')
@@ -772,19 +818,8 @@ async function runViewport(origin: string, width: number, height: number, deskto
     check(await evaluate(window, 'location.pathname + location.search + location.hash') === chatUrl, `${label}: Back to workspace must restore the remembered session URL`)
     metrics = await measure(window)
     report(`${label}-draft-retained`, metrics)
-    chatChecks(metrics, `${label}-draft-retained`, mobile, false, initialModel)
-
-    rejectNextSave = true
-    await evaluate(window, `(() => {
-      const select = document.querySelector(${JSON.stringify(modelSelector)});
-      select.value = ${JSON.stringify(alternateModel)};
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    })()`)
-    await waitFor(window, `Boolean(document.querySelector('.provider-error[role="alert"]')) && !document.querySelector(${JSON.stringify(modelSelector)})?.disabled`)
-    check(await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)})?.value === ${JSON.stringify(initialModel)}`), `${label}: rejected model save must retain the previously accepted model`)
-    check(selectedModel === initialModel, `${label}: rejected save changed synthetic backend model`)
-    check(await draftRetained(), `${label}: rejected model save lost the chat draft`)
-    console.log(`LAYOUT_INTERACTIONS ${JSON.stringify({ label, draftRetained: await draftRetained(), providerRefreshed: providerReads > readsBeforeSave, rejectedModelRetained: selectedModel === initialModel, loginCancelled: Boolean(pendingLogin && cancelledLogins.has(pendingLogin)) })}`)
+    chatChecks(metrics, `${label}-draft-retained`, mobile, alternateModel)
+    console.log(`LAYOUT_INTERACTIONS ${JSON.stringify({ label, draftRetained: await draftRetained(), conversationModel: alternateModel, sessionSettings: true, globalModelUnchanged: selectedModel === initialModel, loginCancelled: Boolean(pendingLogin && cancelledLogins.has(pendingLogin)) })}`)
 
     if (desktop) {
       await evaluate(window, `document.querySelector('[aria-label="Maximize window"]').click()`)
@@ -826,7 +861,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
     check(selectedProvider === 'layout-provider', `${label}: keyless synthetic provider form was not saved`)
     check(await draftRetained(), `${label}: successful provider save lost cached Chat draft`)
     check(await evaluate(window, 'location.pathname + location.search + location.hash') === chatUrl, `${label}: successful provider save must restore remembered Chat URL`)
-    check(await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)})?.value === ${JSON.stringify(initialModel)}`), `${label}: restored Chat must receive the provider's current model`)
+    check(await evaluate(window, `document.querySelector(${JSON.stringify(modelSelector)})?.title.includes(${JSON.stringify(alternateModel)})`), `${label}: provider configuration must not overwrite the cached conversation's model`)
 
     await evaluate(window, `Array.from(document.querySelectorAll('.tab')).find(node => node.textContent.trim() === 'Agents').click()`)
     await waitFor(window, `document.querySelectorAll('.agent-item').length === 40`)
@@ -851,7 +886,7 @@ async function runViewport(origin: string, width: number, height: number, deskto
     providerReady = false
     selectedProvider = 'openai'
     await window.loadURL(`${origin}/agents`)
-    await waitFor(window, `document.querySelector('#provider-setup-title')?.textContent.trim() === 'Connect a model provider'`)
+    await waitFor(window, `document.querySelector('.setup-title')?.textContent.trim() === 'Connect a model provider'`)
     check(await evaluate(window, `!document.querySelector('.chat-workspace') && !document.querySelector('.agent-item')`), `${label}: missing-key startup must show onboarding, not a failed route`)
     onboardingGates += 1
     metrics = await measure(window)
@@ -861,12 +896,12 @@ async function runViewport(origin: string, width: number, height: number, deskto
     selectedProvider = 'copilot'
     await evaluate(window, `Array.from(document.querySelectorAll('.provider-setup button')).find(node => node.textContent.trim() === 'Recheck configuration').click()`)
     await waitFor(window, `document.querySelectorAll('.agent-item').length === 40 && !document.querySelector('.provider-setup')`)
-    check(await evaluate(window, `location.pathname.startsWith('/agents')`), `${label}: recovered startup gate must release the requested route`)
+    check(await evaluate(window, `location.pathname.startsWith('/projects/default/agents')`), `${label}: recovered startup gate must release the requested route`)
     onboardingRecoveries += 1
     metrics = await measure(window)
     report(`${label}-onboarding-recovered`, metrics)
     documentChecks(metrics, `${label}-onboarding-recovered`)
-    await runProjects(window, width, desktop)
+    await runFolders(window, width, desktop)
   } finally {
     ownedWindows.delete(window)
     window.destroy()
@@ -878,6 +913,7 @@ async function main(): Promise<void> {
   const deadline = setTimeout(() => {
     console.log('LAYOUT_FAILURE fixture exceeded 115 seconds')
     for (const window of ownedWindows) window.destroy()
+    live.close()
     app.exit(1)
   }, 115_000)
 
@@ -901,7 +937,7 @@ async function main(): Promise<void> {
     await new Promise<void>((done) => server.close(() => done()))
   }
   for (const failure of failures) console.log(`LAYOUT_FAILURE ${failure}`)
-  console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: failures.length === 0, failures: failures.length, viewports: 3, apiRoutes: apiRequests.size, successfulSetupWrites: saves.length - rejectedSaves, rejectedModelSaves: rejectedSaves, cancelledLogins: cancelledLogins.size, providersEntries, onboardingGates, onboardingRecoveries, projectRegistrations: projects.registrations.length, projectSessions: projects.createdSessions.length, cloneStarts: projects.cloneInputs.length, cloneCancels: projects.cancelled.size, failedCancellations: projects.failedCancellations, implicitPaidRequests, externalRequests: blockedRequests.length })}`)
+  console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: failures.length === 0, failures: failures.length, viewports: 3, apiRoutes: apiRequests.size, successfulSetupWrites: saves.length, sessionSettingsWrites: sessionPatches.length - rejectedSettings, rejectedSessionSettings: rejectedSettings, cancelledLogins: cancelledLogins.size, providersEntries, onboardingGates, onboardingRecoveries, folderRegistrations: folders.registrations.length, folderSessions: folders.createdSessions.length, cloneStarts: folders.cloneInputs.length, cloneCancels: folders.cancelled.size, failedCancellations: folders.failedCancellations, implicitPaidRequests, externalRequests: blockedRequests.length })}`)
   app.exit(failures.length === 0 ? 0 : 1)
 }
 

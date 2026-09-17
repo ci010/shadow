@@ -1,23 +1,23 @@
 import type { DirListing, FileEntry } from './composables/useSessionFiles.ts'
-import { isSelfReflectionId } from '../../src/sessions/session-purpose.ts'
 
 export interface FileTreeSource {
   apiBase: string
   sessionId: string
-  projectId?: string
+  folderId?: string
+  home?: boolean
 }
 
 export function fileWorkspaceKey(source: FileTreeSource, workdir?: DirListing['workdir']): string {
-  if (workdir?.kind === 'local' && workdir.scope === 'home' && workdir.displayPath && !source.projectId) {
+  if (workdir?.kind === 'local' && workdir.scope === 'home' && workdir.displayPath && !source.folderId) {
     return JSON.stringify([source.apiBase, 'home', workdir.displayPath])
   }
-  return JSON.stringify([source.apiBase, source.sessionId, source.projectId, workdir?.kind, workdir?.displayPath, workdir?.scope])
+  return JSON.stringify([source.apiBase, source.sessionId, source.folderId, workdir?.kind, workdir?.displayPath, workdir?.scope])
 }
 
 /** Keep the last verified Home inert until the new session's listing confirms its root. */
 export function canRetainHomeTree(previous: FileTreeSource, next: FileTreeSource, workdir?: DirListing['workdir']): boolean {
-  return previous.apiBase === next.apiBase && !previous.projectId && !next.projectId
-    && !!previous.sessionId && isSelfReflectionId(next.sessionId)
+  return previous.apiBase === next.apiBase && !previous.folderId && !next.folderId
+    && !!previous.sessionId && next.home === true
     && workdir?.kind === 'local' && workdir.scope === 'home' && !!workdir.displayPath
 }
 

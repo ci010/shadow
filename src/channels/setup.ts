@@ -12,9 +12,9 @@ export const secretFields: Record<ChannelId, readonly string[]> = {
   discord: ['token'],
 }
 const publicFields: Record<ChannelId, readonly string[]> = {
-  qq: ['appId', 'sandbox', 'intents', 'markdown', 'allowFrom', 'adminChats'],
-  feishu: ['appId', 'allowFrom', 'adminChats'],
-  discord: ['triggerMode', 'reactionEmoji', 'allowFrom', 'adminChats'],
+  qq: ['appId', 'sandbox', 'intents', 'markdown', 'allowFrom', 'adminChats', 'trustedChats'],
+  feishu: ['appId', 'allowFrom', 'adminChats', 'trustedChats'],
+  discord: ['triggerMode', 'reactionEmoji', 'allowFrom', 'adminChats', 'trustedChats'],
 }
 const text = z.string().max(16_384).refine((value) => !/[\x00-\x1f]/.test(value))
 const secret = text.refine((value) => value.trim().length > 0 && value !== REDACTED_SECRET)
@@ -22,6 +22,7 @@ const common = {
   enabled: z.boolean().optional(),
   allowFrom: z.array(text.refine((value) => value.trim().length > 0)).max(1000).optional(),
   adminChats: z.array(text.refine((value) => value.trim().length > 0)).max(1000).optional(),
+  trustedChats: z.array(text.transform(value => value.trim()).pipe(z.string().min(1))).max(1000).optional(),
 }
 export const channelPatchSchemas = {
   qq: z.object({

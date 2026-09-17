@@ -70,13 +70,13 @@ test('Git clients use registered IDs, preserve abort signals and report server e
       assert.equal(input.searchParams.get('path'), 'src/a.ts')
       return Response.json({ path: 'src/a.ts', status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [hunk] })
     }
-    assert.equal(input.pathname, '/api/projects/project-a/git/status')
+    assert.equal(input.pathname, '/api/folders/folder-a/git/status')
     return Response.json({ available: true, entries: changes })
   })
-  assert.equal((await createGitFilesClient('http://main', '', 'project-a').status(signal)).entries.length, changes.length)
+  assert.equal((await createGitFilesClient('http://main', '', 'folder-a').status(signal)).entries.length, changes.length)
   assert.equal((await createGitFilesClient('http://main', 'web:chat-one').diff('src/a.ts', signal)).path, 'src/a.ts')
   t.mock.method(globalThis, 'fetch', async () => Response.json({ message: 'Git command timed out. Retry.' }, { status: 503 }))
-  await assert.rejects(createGitFilesClient('http://main', '', 'project-a').status(signal), /timed out/)
+  await assert.rejects(createGitFilesClient('http://main', '', 'folder-a').status(signal), /timed out/)
   const diagnostic = 'Git inspection failed. Check repository access and integrity; no changes were made. [Git status; stage=exit; exit=128; cause=unsafe_ownership]'
   t.mock.method(globalThis, 'fetch', async () => Response.json({ error: 'git_failed', message: diagnostic }, { status: 500 }))
   await assert.rejects(createGitFilesClient('http://main', 'web:chat-fixture').status(signal), { message: diagnostic })

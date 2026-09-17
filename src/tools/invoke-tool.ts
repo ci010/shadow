@@ -3,6 +3,7 @@ import type { SessionTools } from './registry.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 
 export interface DynamicToolImporter {
+  canInvokeFromRemote?(toolName: string): boolean
   importForInvocation(
     toolName: string,
     sessionTools: SessionTools,
@@ -15,6 +16,7 @@ export interface DynamicToolImporter {
  */
 export class InvokeTool implements Tool {
   readonly name = 'invoke_tool'
+  readonly supportsRemoteWorkdir = true
   readonly description =
     'Execute a tool by its exact name. Known catalog tools are connected lazily; arguments are validated against the current schema before execution. Use search with space "tools:" to find names, descriptions and schemas. No separate import is required for catalog tools. Skills are optional guidance.'
   readonly parameters: ToolParameters = {
@@ -40,6 +42,9 @@ export class InvokeTool implements Tool {
   ): Promise<string> {
     const name = typeof args.name === 'string' ? args.name : ''
     if (!name) return 'Error: name is required'
+    if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(name)) {
+      return 'Error: remote workdirs support only the built-in Project-Home initiative tool through invoke_tool.'
+    }
 
     const toolArgs = args.args
     if (

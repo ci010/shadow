@@ -1,6 +1,5 @@
 import type { Context, Hono } from 'hono'
 import type { GatewayPlugin } from '../gateway/types.ts'
-import type { NodePrivilege, UiScope } from './contracts.ts'
 import { isClusterIdentifier } from './contracts.ts'
 import type {
   ApprovalV1,
@@ -18,21 +17,6 @@ export interface NodeAdministrationApiOptions {
   readonly now?: () => Date
   readonly maxBodyBytes?: number
 }
-
-const UI_SCOPES = new Set<UiScope>([
-  'chat:read',
-  'chat:write',
-  'knowledge:read',
-  'main:admin',
-  'nodes:admin',
-  'audit:read',
-])
-const NODE_PRIVILEGES = new Set<NodePrivilege>([
-  'capabilities:advertise',
-  'jobs:execute',
-  'jobs:cancel',
-  'artifacts:transfer',
-])
 
 export function nodeAdministrationApiPlugin(
   options: NodeAdministrationApiOptions,
@@ -93,8 +77,6 @@ export function nodeAdministrationApiPlugin(
           expectedDeviceIdentityFingerprint:
             request.expectedDeviceIdentityFingerprint,
           credentialId,
-          uiScopes: request.uiScopes,
-          nodePrivileges: request.nodePrivileges,
         }, now())
         return context.json({ version: 1, ...authentication }, 200, {
           'Cache-Control': 'no-store',
@@ -119,8 +101,6 @@ function unauthorized(context: Context): Response {
 function parseApproval(value: unknown): {
   expectedDeviceIdentityFingerprint: string
   credentialId?: string
-  uiScopes: UiScope[]
-  nodePrivileges: NodePrivilege[]
 } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('approval must be an object')
@@ -130,8 +110,6 @@ function parseApproval(value: unknown): {
     'version',
     'expectedDeviceIdentityFingerprint',
     'credentialId',
-    'uiScopes',
-    'nodePrivileges',
   ])
   if (
     candidate.version !== 1 ||
@@ -149,26 +127,7 @@ function parseApproval(value: unknown): {
     ...(candidate.credentialId === undefined
       ? {}
       : { credentialId: candidate.credentialId as string }),
-    uiScopes: parseUniqueValues(candidate.uiScopes, UI_SCOPES, 'uiScopes'),
-    nodePrivileges: parseUniqueValues(
-      candidate.nodePrivileges,
-      NODE_PRIVILEGES,
-      'nodePrivileges',
-    ),
   }
-}
-
-function parseUniqueValues<T extends string>(
-  value: unknown,
-  allowed: ReadonlySet<T>,
-  field: string,
-): T[] {
-  if (
-    !Array.isArray(value) ||
-    value.some((entry) => typeof entry !== 'string' || !allowed.has(entry as T)) ||
-    new Set(value).size !== value.length
-  ) throw new TypeError(`${field} is invalid`)
-  return value as T[]
 }
 
 class BodyTooLargeError extends Error {}

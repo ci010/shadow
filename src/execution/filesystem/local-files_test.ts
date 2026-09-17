@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, realpath, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
-import { projectFixture } from '../../projects/test-fixtures.ts'
+import { folderFixture } from '../../folders/test-fixtures.ts'
 import { filePreviewLimit } from './contracts.ts'
 import { FileReadError, localFiles } from './local-files.ts'
 
 test('local filesystem reads expose sorted entries and bounded previews without HTTP identities', async t => {
-  const { folders } = await projectFixture(t)
+  const { folders } = await folderFixture(t)
   await mkdir(join(folders, 'folder'))
   await writeFile(join(folders, 'z.TXT'), 'z'.repeat(300))
   await writeFile(join(folders, 'a.txt'), 'a')
@@ -33,7 +33,7 @@ test('local filesystem reads expose sorted entries and bounded previews without 
 })
 
 test('local filesystem core preserves path/type errors, missing files and abort reasons', async t => {
-  const { root, folders } = await projectFixture(t)
+  const { root, folders } = await folderFixture(t)
   const outside = join(root, 'outside')
   await mkdir(outside)
   await writeFile(join(outside, 'secret.txt'), 'outside')
@@ -55,7 +55,7 @@ test('local filesystem core preserves path/type errors, missing files and abort 
 })
 
 test('local raw streams preserve bytes and remain cancellable after ownership transfer', async t => {
-  const { folders } = await projectFixture(t)
+  const { folders } = await folderFixture(t)
   const bytes = Buffer.from([0, 255, 17, 128])
   await writeFile(join(folders, 'image.png'), bytes)
   const result = await localFiles(folders, 'raw', 'image.png', new AbortController().signal)

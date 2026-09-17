@@ -76,7 +76,7 @@ const title = ref<HTMLElement | null>(null)
 defineExpose({ focusTitle: () => title.value?.focus() })
 const knownProviders = [...providerPresets.map(item => item.id), 'custom']
 const lead = computed(() => props.mode === 'edit'
-  ? 'Update this shared connection. Default models are configured separately in each organization.'
+  ? 'Update this shared connection. Default models are configured separately in each project.'
   : props.excludedProviders.includes('copilot')
     ? 'Configure an API key or add a named local model endpoint.'
     : 'Sign in with GitHub Copilot, or configure an API key or local model endpoint.')

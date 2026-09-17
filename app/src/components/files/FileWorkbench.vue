@@ -2,9 +2,9 @@
   <div ref="root" class="file-workbench" :class="{ 'explorer-docked': expanded && wide }" :style="{ '--explorer-width': `${explorerWidth}px` }">
     <button v-if="expanded && !wide" class="explorer-backdrop" aria-label="Dismiss files" @click="collapseExplorer" />
     <aside v-if="explorerAvailable" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" aria-label="File explorer" @keydown.esc.stop.prevent="collapseExplorer">
-      <FileTree :api-base="apiBase" :session-id="sessionId" :project-id="projectId" tree-only :active="active && expanded"
+      <FileTree :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded"
         :remote="remote"
-        :git-status="gitStatus" :git-loading="gitLoading" :git-error="gitError" @refresh-git="refreshGit" @open="openFile">
+        :git-status="gitStatus" :git-loading="gitLoading" :git-error="gitError" :git-offline="gitOffline" @refresh-git="refreshGit" @open="openFile">
         <template #actions>
           <HoverInfo text="Collapse files" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="workbench-button" aria-label="Collapse files" @click="collapseExplorer"><span class="i-lucide-panel-left-close" aria-hidden="true" /></button></HoverInfo>
         </template>
@@ -26,7 +26,7 @@
             </button>
           </div>
           <div ref="documentTabs" class="document-tabs">
-          <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))">
+          <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))" @contextmenu.prevent.stop="openTabMenu($event, fileTabKey(file))">
             <HoverInfo :text="`${file.path}${file.view === 'diff' ? '\nChanges from HEAD' : ''}`" v-slot="{ triggerProps }">
             <button v-bind="triggerProps" :id="tabId(fileTabKey(file))" role="tab" :aria-selected="tabs.selected === fileTabKey(file)" :tabindex="tabs.selected === fileTabKey(file) ? 0 : -1" :aria-controls="panelId(fileTabKey(file))" :aria-label="`${file.path}${file.view === 'diff' ? ' changes' : ''}`" @click="selectTab(fileTabKey(file))" @keydown="tabKey($event, fileTabKey(file))">
               <span class="document-icon" :class="file.view === 'diff' ? 'i-lucide-file-diff' : 'i-lucide-file'" aria-hidden="true" /><span class="document-name">{{ file.entry.name }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span>
@@ -36,6 +36,15 @@
             <button v-bind="triggerProps" class="document-close" :aria-label="`Close ${file.path}${file.view === 'diff' ? ' changes' : ''}`" @click="closeFile(fileTabKey(file))"><span class="i-lucide-x" aria-hidden="true" /></button>
             </HoverInfo>
           </div>
+          <Teleport to="body">
+            <div v-if="tabMenu" class="document-menu-backdrop" @pointerdown.self="dismissTabMenu(true)" @contextmenu.prevent.self="dismissTabMenu(true)">
+              <div ref="menuElement" class="document-menu" role="menu" aria-label="File tab actions" :style="menuPosition" @keydown="menuKey">
+                <button type="button" role="menuitem" @click="runTabAction('close')">Close</button>
+                <button type="button" role="menuitem" :disabled="tabs.files.length < 2" @click="runTabAction('others')">Close others</button>
+                <button type="button" role="menuitem" @click="runTabAction('all')"><span>Close all</span><span class="document-menu-shortcut">Ctrl+Shift+W</span></button>
+              </div>
+            </div>
+          </Teleport>
           </div>
         </div>
         <slot name="actions" />
@@ -45,10 +54,11 @@
           <slot />
         </div>
         <div v-for="file in tabs.files" v-show="tabs.selected === fileTabKey(file)" :id="panelId(fileTabKey(file))" :key="`${contextKey}:${fileTabKey(file)}`" class="file-document" role="tabpanel" :aria-labelledby="tabId(fileTabKey(file))">
-          <FileDiffPreview v-if="(sessionId || projectId) && file.view === 'diff'" :api-base="apiBase" :session-id="sessionId" :project-id="projectId"
+          <FileDiffPreview v-if="(sessionId || folderId) && file.view === 'diff'" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
             :path="file.path" :active="active && tabs.selected === fileTabKey(file)" :selection-active="keyboardActive && tabs.selected === fileTabKey(file)"
             :can-quote="canQuote" :revision="gitRevision" @quote="emit('quote', $event)" @open-source="openFile({ path: file.path, entry: file.entry })" />
-          <FilePreviewModal v-else-if="sessionId || projectId" inline :api-base="apiBase" :session-id="sessionId" :project-id="projectId"
+          <FilePreviewModal v-else-if="sessionId || folderId" inline :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
+            :remote="remote"
             :context-key="contextKey" @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)"
             :active="active && tabs.selected === fileTabKey(file)" :selection-active="keyboardActive && tabs.selected === fileTabKey(file)" :can-quote="canQuote"
             :entry="file.entry" :dir="file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''"
@@ -70,9 +80,9 @@ import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
-import { closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type OpenFile } from '../../file-workbench.ts'
+import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type OpenFile } from '../../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; projectId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false })
 const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
@@ -85,13 +95,16 @@ const explorerWidth = computed(() => clampSidebarWidth(preferredWidth.value, res
 const wide = computed(() => width.value >= 760)
 const preference = ref<boolean>()
 const remoteExpanded = ref(false)
-const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.projectId))
+const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.folderId))
 const expanded = computed(() => explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? wide.value)))
 const tabs = ref<FileTabs>({ files: [], selected: '' })
 const gitActive = computed(() => explorerAvailable.value && props.active && (expanded.value || tabs.value.files.some(file => file.view === 'diff' && fileTabKey(file) === tabs.value.selected)))
-const { status: gitStatus, loading: gitLoading, error: gitError, revision: gitRevision, refresh: refreshGit } = useWorkdirGit(
-  () => ({ apiBase: props.apiBase, sessionId: props.sessionId, projectId: props.projectId }), gitActive)
+const { status: gitStatus, loading: gitLoading, error: gitError, offline: gitOffline, revision: gitRevision, refresh: refreshGit } = useWorkdirGit(
+  () => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId }), gitActive)
 const cachedTabs = new Map<string, FileTabs>()
+const tabMenu = ref<{ key: string }>()
+const menuElement = ref<HTMLElement>()
+const menuPosition = ref({ left: '0px', top: '0px' })
 let observer: ResizeObserver | undefined
 let composing = false
 const tabId = (path: string) => `${id}-tab-${encodeURIComponent(path)}`
@@ -114,6 +127,53 @@ function closeFile(path: string, focusSelected = true) {
   tabs.value = closeFileTab(tabs.value, path)
   if (focusSelected) void nextTick(() => document.getElementById(tabId(tabs.value.selected))?.focus({ preventScroll: true }))
 }
+function dismissTabMenu(restoreFocus = false) {
+  const key = tabMenu.value?.key
+  tabMenu.value = undefined
+  if (restoreFocus && key !== undefined) document.getElementById(tabId(key))?.focus({ preventScroll: true })
+}
+async function openTabMenu(event: MouseEvent | KeyboardEvent, key: string) {
+  if (!props.active || !props.keyboardActive || !tabs.value.files.some(file => fileTabKey(file) === key)) return
+  const anchor = document.getElementById(tabId(key))?.getBoundingClientRect()
+  if (!anchor) return
+  const x = event instanceof MouseEvent && event.button === 2 ? event.clientX : anchor.left
+  const y = event instanceof MouseEvent && event.button === 2 ? event.clientY : anchor.bottom
+  tabMenu.value = { key }
+  const menu = tabMenu.value
+  menuPosition.value = { left: `${x}px`, top: `${y}px` }
+  await nextTick()
+  if (tabMenu.value !== menu || !menuElement.value) return
+  const bounds = menuElement.value.getBoundingClientRect()
+  menuPosition.value = {
+    left: `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`,
+    top: `${Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8))}px`,
+  }
+  menuElement.value.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
+}
+function runTabAction(action: 'close' | 'others' | 'all') {
+  const key = tabMenu.value?.key
+  if (key === undefined) return
+  dismissTabMenu()
+  if (action === 'close') return closeFile(key)
+  tabs.value = action === 'all' ? closeAllFileTabs(tabs.value) : closeOtherFileTabs(tabs.value, key)
+  void nextTick(() => document.getElementById(tabId(tabs.value.selected))?.focus({ preventScroll: true }))
+}
+function menuKey(event: KeyboardEvent) {
+  if (event.key === 'Escape' || event.key === 'Tab') {
+    event.preventDefault()
+    event.stopPropagation()
+    dismissTabMenu(true)
+    return
+  }
+  const buttons = Array.from(menuElement.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])
+  const index = buttons.findIndex(button => button === document.activeElement)
+  const next = nextDocumentTab(buttons.map((_, i) => String(i)), String(index),
+    event.key === 'ArrowDown' ? 'ArrowRight' : event.key === 'ArrowUp' ? 'ArrowLeft' : event.key)
+  if (next === undefined) return
+  event.preventDefault()
+  buttons[Number(next)]?.focus()
+}
+function dismissMenuOnWindowChange() { dismissTabMenu() }
 function preventMiddleScroll(event: MouseEvent) {
   if (event.button === 1) event.preventDefault()
 }
@@ -131,6 +191,11 @@ function scrollTabs(event: WheelEvent) {
   strip.scrollLeft = next
 }
 function tabKey(event: KeyboardEvent, path: string) {
+  if (path && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+    event.preventDefault()
+    void openTabMenu(event, path)
+    return
+  }
   if (event.key === 'Delete' && path) { event.preventDefault(); closeFile(path); return }
   const next = nextDocumentTab(['', ...tabs.value.files.map(fileTabKey)], path, event.key)
   if (next === undefined) return
@@ -144,7 +209,7 @@ function tabKey(event: KeyboardEvent, path: string) {
 }
 function shortcutContext() {
   const overlayOpen = Array.from(document.querySelectorAll<HTMLElement>(
-    '[role="dialog"], [role="menu"], dialog[open], [popover]:popover-open, .project-dialog-backdrop, .project-menu-backdrop, .composer-popover-backdrop',
+    '[role="dialog"], [role="menu"], dialog[open], [popover]:popover-open, .folder-dialog-backdrop, .folder-menu-backdrop, .composer-popover-backdrop',
   )).some(element => element.getClientRects().length > 0
     && (!element.classList.contains('hover-info-popup') || element.contains(document.activeElement)))
   return {
@@ -162,6 +227,12 @@ function closeCurrentFile(): boolean {
   closeFile(key)
   return true
 }
+function closeAllDocuments(): boolean {
+  if (!canCloseAllDocuments(tabs.value, shortcutContext())) return false
+  tabs.value = closeAllFileTabs(tabs.value)
+  void nextTick(() => document.getElementById(tabId(''))?.focus({ preventScroll: true }))
+  return true
+}
 function cycleTab(direction: DocumentTabDirection): boolean {
   const next = cycleDocumentTab(tabs.value, direction, shortcutContext())
   if (next === undefined) return false
@@ -174,6 +245,11 @@ function cycleTab(direction: DocumentTabDirection): boolean {
   return true
 }
 function documentKey(event: KeyboardEvent) {
+  if (isCloseAllDocumentsKey(event) && closeAllDocuments()) {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   if (isCloseDocumentKey(event) && closeCurrentFile()) {
     event.preventDefault()
     event.stopPropagation()
@@ -187,6 +263,7 @@ function documentKey(event: KeyboardEvent) {
 function nativeDocumentKey(event: Event) {
   const direction: unknown = (event as CustomEvent).detail
   if (direction === 'close') closeCurrentFile()
+  else if (direction === 'close-all') closeAllDocuments()
   else if (direction === -1 || direction === 1) cycleTab(direction)
 }
 function compositionStart() { composing = true }
@@ -200,11 +277,16 @@ function toggleExplorer() {
   if (props.remote) remoteExpanded.value = !expanded.value
   else preference.value = !expanded.value
 }
+function measureWidth() {
+  if (root.value?.getClientRects().length) width.value = root.value.getBoundingClientRect().width
+}
 watch(() => props.contextKey, (key, previous) => {
+  dismissTabMenu()
   remoteExpanded.value = false
   if (previous !== undefined) cachedTabs.set(previous, tabs.value)
   tabs.value = cachedTabs.get(key) ?? { files: [], selected: '' }
 })
+watch(() => props.active && props.keyboardActive, active => { if (!active) dismissTabMenu() })
 watch(() => tabs.value.selected === '', value => emit('conversation-visible', value), { immediate: true, flush: 'sync' })
 onMounted(() => {
   // Check overlays before a target's Tab handler can dismiss them.
@@ -212,10 +294,11 @@ onMounted(() => {
   document.addEventListener('compositionstart', compositionStart, true)
   document.addEventListener('compositionend', compositionEnd, true)
   window.addEventListener('blur', compositionEnd)
+  window.addEventListener('blur', dismissMenuOnWindowChange)
+  window.addEventListener('resize', dismissMenuOnWindowChange)
   window.addEventListener('shadow:cycle-document-tab', nativeDocumentKey)
-  observer = new ResizeObserver(() => {
-    if (root.value?.getClientRects().length) width.value = root.value.getBoundingClientRect().width
-  })
+  measureWidth()
+  observer = new ResizeObserver(measureWidth)
   if (root.value) observer.observe(root.value)
 })
 onUnmounted(() => {
@@ -224,6 +307,8 @@ onUnmounted(() => {
   document.removeEventListener('compositionstart', compositionStart, true)
   document.removeEventListener('compositionend', compositionEnd, true)
   window.removeEventListener('blur', compositionEnd)
+  window.removeEventListener('blur', dismissMenuOnWindowChange)
+  window.removeEventListener('resize', dismissMenuOnWindowChange)
   window.removeEventListener('shadow:cycle-document-tab', nativeDocumentKey)
 })
 </script>
@@ -239,6 +324,12 @@ onUnmounted(() => {
 .document-tablist { display: flex; flex: 1; min-width: 0; }
 .document-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .conversation-tab { flex: 0 0 auto; }
+.document-menu-backdrop { position: fixed; inset: 0; z-index: 900; }
+.document-menu { position: fixed; display: flex; flex-direction: column; width: 268px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 5px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
+.document-menu button { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 36px; padding: 8px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.document-menu button:hover:not(:disabled), .document-menu button:focus-visible { background: var(--c-bg-muted); }
+.document-menu button:disabled { color: var(--c-text-secondary); opacity: .5; cursor: default; }
+.document-menu-shortcut { color: var(--c-text-secondary); font-size: 12px; white-space: nowrap; }
 .document-tab { display: flex; flex-shrink: 0; min-width: 0; max-width: 240px; border-right: 1px solid var(--c-border); color: var(--c-text-secondary); }
 .document-tab.selected { background: var(--c-bg); color: var(--c-text); box-shadow: inset 0 2px var(--c-blue); }
 .document-tab [role="tab"] { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 12px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
@@ -254,6 +345,7 @@ button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .workbench-explorer.drawer { position: absolute; inset: calc(41px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .explorer-backdrop { position: absolute; inset: calc(41px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }
 @media (max-width: 700px) {
+  .document-menu button { min-height: 44px; }
   .workbench-content.draft-document { padding: 58px 0 28px; }
 }
 </style>

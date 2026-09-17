@@ -34,6 +34,15 @@ export function closeFileTab(state: FileTabs, path: string): FileTabs {
     ? (neighbour ? fileTabKey(neighbour) : '') : state.selected }
 }
 
+export function closeAllFileTabs(state: FileTabs): FileTabs {
+  return state.files.length ? { files: [], selected: '' } : state
+}
+
+export function closeOtherFileTabs(state: FileTabs, keep: string): FileTabs {
+  const file = state.files.find(file => fileTabKey(file) === keep)
+  return file ? { files: [file], selected: keep } : state
+}
+
 export function nextDocumentTab(paths: string[], current: string, key: string): string | undefined {
   const index = paths.indexOf(current)
   if (key === 'Home') return paths[0]
@@ -68,9 +77,17 @@ export function documentTabDirection(event: DocumentTabKey): DocumentTabDirectio
   return event.shiftKey ? -1 : 1
 }
 
-export function isCloseDocumentKey(event: DocumentTabKey & { repeat?: boolean }): boolean {
-  return event.key.toLowerCase() === 'w' && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey
+function isDocumentCloseKey(event: DocumentTabKey & { repeat?: boolean }): boolean {
+  return event.key.toLowerCase() === 'w' && event.ctrlKey && !event.altKey && !event.metaKey
     && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented && !event.repeat
+}
+
+export function isCloseDocumentKey(event: DocumentTabKey & { repeat?: boolean }): boolean {
+  return !event.shiftKey && isDocumentCloseKey(event)
+}
+
+export function isCloseAllDocumentsKey(event: DocumentTabKey & { repeat?: boolean }): boolean {
+  return event.shiftKey && isDocumentCloseKey(event)
 }
 
 export interface DocumentShortcutContext {
@@ -85,6 +102,10 @@ export interface DocumentShortcutContext {
 function canHandleDocumentShortcut(context: DocumentShortcutContext): boolean {
   return context.active && context.keyboardActive && context.visible && context.explorerEnabled
     && !context.overlayOpen && !context.composing
+}
+
+export function canCloseAllDocuments(state: FileTabs, context: DocumentShortcutContext): boolean {
+  return state.files.length > 0 && canHandleDocumentShortcut(context)
 }
 
 export function selectedFileToClose(state: FileTabs, context: DocumentShortcutContext): string | undefined {

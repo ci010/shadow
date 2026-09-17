@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
+import type { ServiceConnection } from '../service/connection.js'
+import { ServiceAttachmentSupervisor } from '../service/supervisor.js'
 import {
   createAuthenticatedShutdownRequest,
   createSidecarReadinessProbe,
@@ -44,6 +46,7 @@ export interface RuntimeHostOptions {
   readonly supervisorFactory: RuntimeSupervisorFactory
   readonly tokenFactory?: RuntimeTokenFactory
   readonly onAuthorizationChanged?: RuntimeAuthorizationChanged
+  readonly revalidateOnStart?: boolean
 }
 
 export interface QuitEvent {
@@ -76,6 +79,7 @@ export class RuntimeHost {
   private launchRequest: SidecarStartRequest | undefined
   private startPromise: Promise<SidecarStatus> | undefined
   private stopPromise: Promise<void> | undefined
+  private stopping = false
 
   constructor(private readonly options: RuntimeHostOptions) {
     this.paths = resolveRuntimePaths(options.paths)
@@ -91,12 +95,14 @@ export class RuntimeHost {
   }
 
   start(options: RuntimeLaunchOptions): Promise<SidecarStatus> {
+    if (this.stopping) throw new Error('Runtime host is stopping')
     if (this.launchRequest) {
       this.assertSameLaunch(options)
-      return this.startPromise ?? Promise.resolve(this.status)
+      if (this.startPromise) return this.startPromise
+      if (!this.options.revalidateOnStart) return Promise.resolve(this.status)
     }
 
-    const request: SidecarStartRequest = {
+    const request: SidecarStartRequest = this.launchRequest ?? {
       role: options.role,
       executablePath: this.paths.executablePath,
       entryPath: this.paths.entryPath,
@@ -108,8 +114,9 @@ export class RuntimeHost {
         : { localExecutor: options.localExecutor }),
     }
     this.launchRequest = request
-    this.supervisor = this.options.supervisorFactory(options.role)
+    this.supervisor ??= this.options.supervisorFactory(options.role)
     this.startPromise = this.supervisor.start(request).then((status) => {
+      if (this.stopping) throw new Error('Runtime host stopped during startup')
       if (status.phase !== 'ready') {
         this.clearFailedStart(request)
         return status
@@ -126,12 +133,15 @@ export class RuntimeHost {
     }).catch((error: unknown) => {
       this.clearFailedStart(request)
       throw error
+    }).finally(() => {
+      if (this.options.revalidateOnStart) this.startPromise = undefined
     })
     return this.startPromise
   }
 
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise
+    this.stopping = true
     this.stopPromise = this.stopActiveRuntime()
     return this.stopPromise
   }
@@ -168,7 +178,23 @@ export class RuntimeHost {
 export function createProductionRuntimeHost(
   paths: RuntimePathsInput,
   onAuthorizationChanged?: RuntimeAuthorizationChanged,
+  serviceConnection?: ServiceConnection,
 ): RuntimeHost {
+  if (serviceConnection) {
+    return new RuntimeHost({
+      paths,
+      revalidateOnStart: true,
+      tokenFactory: () => serviceConnection.launchToken,
+      supervisorFactory: () => new ServiceAttachmentSupervisor(
+        serviceConnection,
+        createSidecarReadinessProbe({
+          expectedRole: serviceConnection.descriptor.role,
+          fetch: (input, init) => globalThis.fetch(input, { ...init, redirect: 'error' }),
+        }),
+      ),
+      ...(onAuthorizationChanged ? { onAuthorizationChanged } : {}),
+    })
+  }
   const authenticatedShutdownRequest = createAuthenticatedShutdownRequest()
   return new RuntimeHost({
     paths,

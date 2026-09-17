@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isAbsolute, join, relative } from 'node:path'
 import { ChromeManager, ChromePortAllocator, type ChromeRuntimeOperations } from './chrome-manager.ts'
-import { createOrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope } from '../projects/scope.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 
 test('host browser allocator reserves before async probes and stale lease release cannot free a replacement', async () => {
@@ -27,7 +27,7 @@ test('host browser allocator reserves before async probes and stale lease releas
   }
 })
 
-test('two organization browsers use distinct managed profiles and shared port leases without reusing host browsers', async () => {
+test('two project browsers use distinct managed profiles and shared port leases without reusing host browsers', async () => {
   await withTempWorkspace(async (root) => {
     const active = new Map<number, number>()
     const launches: Array<{ port: number; profile: string; pid: number }> = []
@@ -52,7 +52,7 @@ test('two organization browsers use distinct managed profiles and shared port le
     const allocator = new ChromePortAllocator(async (port) => !active.has(port))
     const homes = [join(root, 'a'), join(root, 'b')]
     const managers = homes.map((home, i) => new ChromeManager(home, () => ({ basePort: 9222 }), {
-      organizationId: i ? 'b' : 'a', portAllocator: allocator, runtime,
+      projectId: i ? 'b' : 'a', portAllocator: allocator, runtime,
     }))
     try {
       const [a, b, duplicate] = await Promise.all([
@@ -84,7 +84,7 @@ test('two organization browsers use distinct managed profiles and shared port le
   })
 })
 
-test('organization browser shutdown aborts pending launch and releases its lease without publishing a session', async () => {
+test('project browser shutdown aborts pending launch and releases its lease without publishing a session', async () => {
   await withTempWorkspace(async (home) => {
     const entered = Promise.withResolvers<AbortSignal>()
     const release = Promise.withResolvers<void>()
@@ -100,7 +100,7 @@ test('organization browser shutdown aborts pending launch and releases its lease
       },
       terminateChrome: (pid) => { stopped.push(pid) },
     }
-    const manager = new ChromeManager(home, () => ({ basePort: 9222 }), { organizationId: 'a', portAllocator: allocator, runtime })
+    const manager = new ChromeManager(home, () => ({ basePort: 9222 }), { projectId: 'a', portAllocator: allocator, runtime })
     const pending = manager.allocate('same')
     const signal = await entered.promise
     const stopping = manager.releaseAll()
@@ -115,11 +115,11 @@ test('organization browser shutdown aborts pending launch and releases its lease
   })
 })
 
-test('organization browser construction fails closed without the host allocator', () => {
-  const scope = createOrganizationScope('a')
+test('project browser construction fails closed without the host allocator', () => {
+  const scope = createProjectScope('a')
   assert.throws(() => scope.run(() => new ChromeManager('unused', () => ({ basePort: 9222 }))), /host-owned port allocator/)
   assert.throws(() => scope.run(() => new ChromeManager('unused', () => ({ basePort: 9222 }), {
-    organizationId: 'b', portAllocator: new ChromePortAllocator(async () => true),
-  })), /organization mismatch/)
+    projectId: 'b', portAllocator: new ChromePortAllocator(async () => true),
+  })), /project mismatch/)
   scope.close()
 })

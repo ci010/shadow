@@ -35,6 +35,18 @@ test('restored activity requires validated server input identities, never sessio
   }
 })
 
+test('call-wait metadata distinguishes blocking calls from yields without inventing activity', () => {
+  const stages = { task: 'waiting', reusable: 'waiting', yield: 'waiting', idle: 'idle', finished: 'completed' }
+  assert.deepEqual(parseSessionStages({ stages, waitingForCalls: { task: true, reusable: true, yield: false, idle: true, finished: true, absent: true } }), {
+    task: 'waiting-for-call', reusable: 'waiting-for-call', yield: 'waiting', idle: 'idle', finished: 'completed',
+  })
+  assert.deepEqual(parseSessionStages({ stages, waitingForCalls: { task: false } }), stages)
+  assert.deepEqual(parseSessionStages({ stages }), stages, 'Older snapshots retain their original stage meanings')
+  for (const waitingForCalls of [null, [], 1, { task: 'true' }, { task: null }]) {
+    assert.throws(() => parseSessionStages({ stages, waitingForCalls }), /activity is unavailable/)
+  }
+})
+
 test('only validated persisted recovery advertises Resume; idle, finished, legacy status and drafts do not fabricate it', () => {
   const recoveries = { 'web:chat-one': { id: 'paused', reason: 'stopped' }, 'web:chat-two': { id: 'crashed', reason: 'interrupted' } }
   assert.deepEqual(parseSessionRecoveries({ recoveries }), recoveries)

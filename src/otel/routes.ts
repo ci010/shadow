@@ -17,64 +17,12 @@ function intParam(
   return Number.isNaN(n) ? undefined : n
 }
 
-function sseStream(store: OtelStore, kind: 'spans' | 'logs'): Response {
-  let lastId = kind === 'spans'
-    ? store.getLatestSpanId()
-    : store.getLatestLogId()
-  let closed = false
-  const enc = new TextEncoder()
-
-  const stream = new ReadableStream({
-    start(c) {
-      c.enqueue(
-        enc.encode(
-          `event: hello\ndata: {"status":"ok","lastId":${lastId}}\n\n`,
-        ),
-      )
-    },
-    async pull(c) {
-      while (!closed) {
-        try {
-          const rows = (kind === 'spans'
-            ? store.querySpans({ afterId: lastId, limit: 50, ascending: true })
-            : store.queryLogs({
-              afterId: lastId,
-              limit: 50,
-              ascending: true,
-            })) as { id: number }[]
-          for (const row of rows) {
-            c.enqueue(
-              enc.encode(`event: ${kind === 'spans' ? 'span' : 'log'}\n`),
-            )
-            c.enqueue(enc.encode(`data: ${JSON.stringify(row)}\n\n`))
-            lastId = row.id
-          }
-        } catch { /* keep alive */ }
-        await new Promise((r) => setTimeout(r, 1000))
-      }
-    },
-    cancel() {
-      closed = true
-    },
-  })
-
-  return new Response(stream, {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    },
-  })
-}
-
 /**
- * Gateway plugin that exposes OTLP/HTTP ingest, query, and SSE streams.
+ * Gateway plugin that exposes OTLP/HTTP ingest and queries.
  *
  *   POST /v1/traces  /v1/logs  /v1/metrics      — OTLP/HTTP JSON ingest
  *   GET  /v1/query/{spans,session-spans,logs,metrics,stats} — paged queries
- *   GET  /v1/stream/{spans,logs}                — SSE tail
+ * Realtime tails use project topics on /api/live.
  */
 export function otelPlugin(store: OtelStore): GatewayPlugin {
   return (app: Hono) => {
@@ -224,8 +172,10 @@ export function otelPlugin(store: OtelStore): GatewayPlugin {
         metrics: store.countMetrics(),
       }))
 
-    // ── SSE streams ────────────────────────────────────────────────────
-    app.get('/v1/stream/spans', () => sseStream(store, 'spans'))
-    app.get('/v1/stream/logs', () => sseStream(store, 'logs'))
+    for (const kind of ['spans', 'logs']) {
+      app.get(`/v1/stream/${kind}`, (c) => c.json({
+        error: 'stream_retired', message: `Subscribe to ${kind} topics through /api/live.`,
+      }, 410))
+    }
   }
 }

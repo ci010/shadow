@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import config from '../vite.config.ts'
+import unoConfig from '../unocss.config.ts'
 
 test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes page', async (t) => {
   const backend = createHttpServer((request, response) => {
@@ -41,24 +42,35 @@ test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes
   const base = vite.resolvedUrls?.local[0]
   assert.ok(base)
   const signal = AbortSignal.timeout(15_000)
+  const icons = await fetch(new URL('/@id/__x00__/__uno.css', base), { signal })
+  assert.equal(icons.status, 200)
+  const iconCss = await icons.text()
+  const expectedIcons = unoConfig.content.inline[0]().split(' ')
+  assert.ok(expectedIcons.length > 30, 'Scan actual application icon references')
+  for (const icon of expectedIcons) {
+    assert.ok(iconCss.includes(`.${icon}{`) || iconCss.includes(`.${icon},`),
+      `${icon} must be available before any Vue route is requested`)
+  }
+  assert.match(iconCss, /data:image\/svg\+xml/)
+  assert.doesNotMatch(iconCss, /https?:\/\/(?:api\.iconify|api\.simplesvg|api\.unisvg)/)
   assert.deepEqual(await (await fetch(new URL('/nodes/v1', base), { signal })).json(), { path: '/nodes/v1' })
   for (const path of [
-    '/organizations/default/api/sessions',
-    '/organizations/example/v1/query/logs',
-    '/organizations/example/api/channels?instance=one',
+    '/projects/default/api/sessions',
+    '/projects/example/v1/query/logs',
+    '/projects/example/api/channels?instance=one',
   ]) {
     assert.deepEqual(await (await fetch(new URL(path, base), { signal })).json(), { path })
   }
   for (const path of [
-    '/organizations',
-    '/organizations/default/chat/web%3Achat-example',
-    '/organizations/example/settings/bots',
-    '/organizations/example/logs',
+    '/projects',
+    '/projects/default/chat/web%3Achat-example',
+    '/projects/example/settings/bots',
+    '/projects/example/logs',
   ]) {
-    const organizationPage = await fetch(new URL(path, base), { signal })
-    assert.equal(organizationPage.status, 200)
-    assert.match(organizationPage.headers.get('content-type') ?? '', /text\/html/)
-    assert.match(await organizationPage.text(), /src\/main\.ts/)
+    const projectPage = await fetch(new URL(path, base), { signal })
+    assert.equal(projectPage.status, 200)
+    assert.match(projectPage.headers.get('content-type') ?? '', /text\/html/)
+    assert.match(await projectPage.text(), /src\/main\.ts/)
   }
   const page = await fetch(new URL('/nodes', base), { signal })
   assert.equal(page.status, 200)

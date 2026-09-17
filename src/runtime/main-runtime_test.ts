@@ -37,7 +37,7 @@ test('Main runtime supports a relative workspace, readiness, idempotent shutdown
   } finally {
     process.chdir(originalCwd)
     await rm(workspace, { recursive: true })
-    await rm(`${workspace}.organizations`, { recursive: true, force: true })
+    await rm(`${workspace}.projects`, { recursive: true, force: true })
   }
 })
 
@@ -65,6 +65,6 @@ test('Main finishes remaining cleanup and surfaces producer shutdown failures', 
   } finally {
     process.chdir(originalCwd)
     await rm(workspace, { recursive: true, force: true })
-    await rm(`${workspace}.organizations`, { recursive: true, force: true })
+    await rm(`${workspace}.projects`, { recursive: true, force: true })
   }
 })

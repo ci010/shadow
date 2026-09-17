@@ -62,7 +62,6 @@ export class AgentApp {
     await this.agentTypes.load()
     this.skills.startWatching()
     this.agentTypes.startWatching()
-    this.mcpManager.startWatching()
     await this.sessions.start()
     this.running = true
 
@@ -75,24 +74,24 @@ export class AgentApp {
     console.log('Agent loop stopped')
     await this.skills.stopWatching()
     await this.agentTypes.stopWatching()
-    await this.mcpManager.stopWatching()
+    await this.mcpManager.stop()
   }
 
   /** Only channel adapters enter the slash-command boundary. */
   async receiveChannelMessage(msg: InboundMessage): Promise<DeliveryReceipt> {
-    const release = this.sessions.acquireProjectAccess()
+    const release = this.sessions.acquireFolderAccess()
     try { return await this.receiveChannelMessageWithAccess(msg) }
     finally { release() }
   }
 
   private async receiveChannelMessageWithAccess(msg: InboundMessage): Promise<DeliveryReceipt> {
     if (!this.running) throw new Error('Agent is not accepting input')
-    if (this.sessions.organizationId && msg.channelAddress &&
-      msg.channelAddress.organizationId !== this.sessions.organizationId) {
-      throw new Error('Channel input belongs to another organization')
+    if (this.sessions.projectId && msg.channelAddress &&
+      msg.channelAddress.projectId !== this.sessions.projectId) {
+      throw new Error('Channel input belongs to another project')
     }
     const sessionId = deriveSessionId(msg)
-    this.sessions.assertProjectAccess(sessionId)
+    this.sessions.assertFolderAccess(sessionId)
     if (msg.senderId.trim()) {
       await this.identity?.observeInboundAccount(msg.channel, msg.senderId, msg.chatId, msg.senderName, msg.channelAddress)
     }

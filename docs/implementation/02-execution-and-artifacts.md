@@ -6,6 +6,11 @@
 
 # S2: Execution and Artifacts
 
+> **Retired execution-approval design:** the approval fields, waiting state,
+> grants, and local approval service described below have been removed.
+> Cancellation, deadlines, capability/workdir validation, and device pairing
+> remain. See the [current architecture](../architecture.md).
+
 > Owner: runtime execution
 >
 > Depends on: S0, S1

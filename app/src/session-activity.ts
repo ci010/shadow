@@ -46,11 +46,18 @@ export function parseSessionStages(value: unknown): Record<string, SessionStage>
     || typeof value.stages !== 'object' || value.stages === null || Array.isArray(value.stages)) {
     throw new Error('Session activity is unavailable.')
   }
+  const waitingForCalls = 'waitingForCalls' in value ? value.waitingForCalls : undefined
+  if (waitingForCalls !== undefined && (typeof waitingForCalls !== 'object' || waitingForCalls === null
+    || Array.isArray(waitingForCalls) || Object.values(waitingForCalls).some(waiting => typeof waiting !== 'boolean'))) {
+    throw new Error('Session activity is unavailable.')
+  }
   const result: Record<string, SessionStage> = {}
   for (const [id, stage] of Object.entries(value.stages)) {
     if (!isWorkingStage(stage) && stage !== 'idle' && stage !== 'inactive' && stage !== 'pending'
       && stage !== 'completed' && stage !== 'failed' && stage !== 'cancelled') throw new Error('Session activity is unavailable.')
-    result[id] = stage
+    result[id] = stage === 'waiting' && waitingForCalls
+      && Object.prototype.hasOwnProperty.call(waitingForCalls, id)
+      && (waitingForCalls as Record<string, boolean>)[id] ? 'waiting-for-call' : stage
   }
   return result
 }

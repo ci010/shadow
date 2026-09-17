@@ -1,6 +1,6 @@
 import type { LearningPipelineStatus, LearningStatus } from '../../src/agent/learning/service.ts'
-import { organizationJson } from './organizations.ts'
-import { isRecord } from './projects-sidebar.ts'
+import { projectJson } from './projects.ts'
+import { isRecord } from './folders-sidebar.ts'
 
 export type { LearningPipelineStatus, LearningStatus }
 export const learningPipelines = [
@@ -31,13 +31,13 @@ function parsePipeline(value: unknown): LearningPipelineStatus {
   }
 }
 
-export function parseLearningStatus(value: unknown, organizationId: string): LearningStatus {
-  if (!isRecord(value) || value.organizationId !== organizationId || typeof value.enabled !== 'boolean'
+export function parseLearningStatus(value: unknown, projectId: string): LearningStatus {
+  if (!isRecord(value) || value.projectId !== projectId || typeof value.enabled !== 'boolean'
     || typeof value.stopped !== 'boolean' || !isRecord(value.pipelines)) {
     throw new Error('Main returned invalid learning ownership or status. Refresh before retrying.')
   }
   return {
-    organizationId, enabled: value.enabled, stopped: value.stopped,
+    projectId, enabled: value.enabled, stopped: value.stopped,
     pipelines: {
       reflector: parsePipeline(value.pipelines.reflector),
       encapsulator: parsePipeline(value.pipelines.encapsulator),
@@ -54,6 +54,6 @@ export function learningPipelineState(status: LearningStatus, pipeline: Learning
   return pipeline.pending ? 'Waiting for next check' : 'Waiting for activity'
 }
 
-export async function fetchLearningStatus(base: string, organizationId: string, signal: AbortSignal, request: typeof fetch = fetch): Promise<LearningStatus> {
-  return parseLearningStatus(await organizationJson(base, '/api/learning', { signal }, request), organizationId)
+export async function fetchLearningStatus(base: string, projectId: string, signal: AbortSignal, request: typeof fetch = fetch): Promise<LearningStatus> {
+  return parseLearningStatus(await projectJson(base, '/api/learning', { signal }, request), projectId)
 }

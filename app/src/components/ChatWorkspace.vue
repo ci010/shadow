@@ -2,7 +2,7 @@
   <div ref="workspace" class="conversation-workspace" :class="{ 'has-child': childId, 'is-split': split, 'is-resizing': !!drag }" :style="split ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLIT_HANDLE_WIDTH}px ${childWidth}px` } : undefined">
     <div v-show="!childId || wide" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
       <ChatTab ref="primary" :api-base="apiBase" enable-child-pane :child-session-id="childId"
-        :organization-id="organizationId" :organization-name="organizationName" :managed="managed" :session-id="sessionId" :initial-project="initialProject" :open-remote="openRemote"
+        :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote"
         :visible="visible && route.name === 'chat' && (!childId || wide)" :keyboard-active="visible && (!childId || wide) && activePane === 'primary'"
         @open-child="openChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
     </div>
@@ -11,7 +11,7 @@
       @pointerdown="startResize" @pointermove="resize" @pointerup="stopResize" @pointercancel="stopResize" @lostpointercapture="stopResize" @keydown="resizeKey" />
     <aside v-if="childId" id="child-conversation-pane" class="child-conversation" aria-label="Child conversation"
       @pointerdown.capture="activePane = 'child'" @focusin="activePane = 'child'">
-      <ChatTab :key="childId" :api-base="apiBase" :organization-id="organizationId" :organization-name="organizationName" embedded :session-id="childId" :visible="visible && route.name === 'chat'" :keyboard-active="visible && (!wide || activePane === 'child')" @child-navigation="navigateChild">
+      <ChatTab :key="childId" :api-base="apiBase" :project-id="projectId" :project-name="projectName" embedded :session-id="childId" :visible="visible && route.name === 'chat'" :keyboard-active="visible && (!wide || activePane === 'child')" @child-navigation="navigateChild">
         <template #pane-actions>
           <button class="close-child" :aria-label="wide ? 'Close child conversation' : 'Back to main conversation'" :title="wide ? 'Close child conversation' : 'Back to main conversation'" @click="closeChild">
             <span class="w-4 h-4" :class="wide ? 'i-lucide-panel-right-close' : 'i-lucide-arrow-left'" aria-hidden="true" />
@@ -27,9 +27,9 @@ import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted,
 import { useRoute, useRouter } from 'vue-router'
 import ChatTab from './ChatTab.vue'
 import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_HANDLE_WIDTH, SPLIT_MIN_WIDTH } from '../conversation-split.ts'
-import type { ProjectRecord } from '../projects-client.ts'
+import type { FolderRecord } from '../folders-client.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; organizationId?: string; organizationName?: string; managed?: boolean; sessionId?: string; initialProject?: ProjectRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string }>(), { visible: true })
+const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string }>(), { visible: true })
 const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string] }>()
 const route = useRoute()
 const router = useRouter()
@@ -55,7 +55,7 @@ function openChild(target: { primaryId: string; childId: string }) {
   if (props.managed) { emit('navigate', target.primaryId, target.childId); return }
   childId.value = target.childId
   activePane.value = 'child'
-  void router.replace({ name: 'chat', params: { organizationId: props.organizationId, sessionId: target.primaryId }, query: { child: target.childId } })
+  void router.replace({ name: 'chat', params: { projectId: props.projectId, sessionId: target.primaryId }, query: { child: target.childId } })
 }
 function navigateChild(id: string) {
   if (props.managed) { emit('navigate', props.sessionId ?? '', id); return }

@@ -5,7 +5,7 @@ import { EventService } from '../events/service.ts'
 import type { SessionTurnFact, SessionInput } from '../sessions/input.ts'
 import { BackgroundTaskManager } from './background-task.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
-import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 const fact: SessionTurnFact = {
@@ -15,7 +15,7 @@ const fact: SessionTurnFact = {
 }
 
 test('background display callbacks retain exact source bot from explicit replies and encoded session IDs', async (t) => {
-  const scope = createOrganizationScope('org')
+  const scope = createProjectScope('org')
   const bus = new Bus()
   const displays: OutboundMessage[] = []
   const events = new EventService('.', bus, async (sessionId, input) => ({
@@ -23,11 +23,11 @@ test('background display callbacks retain exact source bot from explicit replies
   }), scope)
   const tasks = new BackgroundTaskManager(bus, events, scope)
   bus.on('message.outbound', (message) => {
-    assert.equal(getOrganizationScope(), scope)
+    assert.equal(getProjectScope(), scope)
     displays.push(message)
   })
   const addresses = ['first-bot', 'second-bot'].map((botInstanceId) => ({
-    organizationId: 'org', botInstanceId, platform: 'qq', conversationId: 'same-chat',
+    projectId: 'org', botInstanceId, platform: 'qq', conversationId: 'same-chat',
   }))
   try {
     for (const explicit of [true, false]) {

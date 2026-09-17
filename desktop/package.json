@@ -22,11 +22,21 @@
       "output": "release"
     },
     "files": [
-      "dist/**/*",
+      "dist/**/*.js",
+      "dist/**/*.cjs",
       "assets/**/*",
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "release-manifest.v1.json",
+        "to": "release-manifest.v1.json"
+      },
+      {
+        "from": "service",
+        "to": "service",
+        "filter": ["**/*"]
+      },
       {
         "from": "backend",
         "to": "backend",
@@ -45,6 +55,12 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false
     }
   },
   "devDependencies": {

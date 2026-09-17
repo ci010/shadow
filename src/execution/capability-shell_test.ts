@@ -7,7 +7,6 @@ import { ProcessManager } from './processes/manager.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { CapabilityShell, parseWorkdirProcessArgs, WORKDIR_PROCESS_EXECUTE_OPERATION } from './capability-shell.ts'
 import { LocalExecutor } from './local-executor.ts'
-import { InMemoryLocalApprovalService, type LocalApprovalPolicy } from './local-approval.ts'
 import { CapabilityFilesystem } from './capability-filesystem.ts'
 import { RemoteExecutor } from './remote-executor.ts'
 import { executeRemoteShell } from './remote-shell-client.ts'
@@ -19,7 +18,7 @@ function request(args: unknown, overrides: Partial<JobRequestV1> = {}): JobReque
   return {
     version: 1, jobId: id, idempotencyKey: id, sessionId: 'session', turnId: 'turn',
     nodeId: 'child', capabilityId: 'root', operation: WORKDIR_PROCESS_EXECUTE_OPERATION,
-    args, approval: 'none', createdAt: new Date(now).toISOString(),
+    args, createdAt: new Date(now).toISOString(),
     deadlineAt: new Date(now + 10_000).toISOString(), ...overrides,
   }
 }
@@ -38,11 +37,10 @@ async function until(predicate: () => boolean): Promise<void> {
   assert.fail('Condition not reached')
 }
 
-function setup(root: string, policy: LocalApprovalPolicy = 'grant') {
+function setup(root: string) {
   const manager = new ProcessManager()
-  const approval = new InMemoryLocalApprovalService([{ capabilityId: 'root', displayName: 'Child project', policy }])
   const workdirs = [{ capabilityId: 'root', rootPath: root }]
-  const local = new LocalExecutor(manager, 'child', [new CapabilityShell(workdirs), new CapabilityFilesystem(workdirs)], [], approval)
+  const local = new LocalExecutor(manager, 'child', [new CapabilityShell(workdirs), new CapabilityFilesystem(workdirs)], [])
   const requests: JobRequestV1[] = []
   const events: JobEventV1[] = []
   const remote = new RemoteExecutor({
@@ -57,7 +55,7 @@ function setup(root: string, policy: LocalApprovalPolicy = 'grant') {
     },
     dispatchCancellation(_nodeId, jobId) { void local.cancel(jobId) },
   })
-  return { manager, approval, local, remote, requests, events }
+  return { manager, local, remote, requests, events }
 }
 
 test('capability shell rejects invalid wire args, absolute paths, traversal, node, env and display snapshots', async () => {
@@ -82,22 +80,22 @@ test('capability shell rejects invalid wire args, absolute paths, traversal, nod
   })
 })
 
-test('workdir shell requires a Child approval authority even when wire approval is none', async () => {
+test('workdir shell rejects an unregistered capability without spawning', async () => {
   await withTempWorkspace(async root => {
     const manager = new ProcessManager()
     const executor = new LocalExecutor(manager, 'child', [new CapabilityShell([{ capabilityId: 'root', rootPath: root }])])
-    const events = await collect(executor.execute(request({ script: 'echo never' }), new AbortController().signal))
+    const events = await collect(executor.execute(request({ script: 'echo never' }, { capabilityId: 'unknown' }), new AbortController().signal))
     const terminal = events.at(-1)!
     assert.equal(terminal.type, 'rejected')
     assert('receipt' in terminal)
-    assert.equal(terminal.receipt.reason?.code, 'approval-required')
+    assert.equal(terminal.receipt.reason?.code, 'capability-denied')
     assert.equal(manager.list().length, 0)
   })
 })
 
 test('trusted Child executes shell, file writes and reads without an approval roundtrip', async () => {
   await withTempWorkspace(async root => {
-    const fixture = setup(root, 'none')
+    const fixture = setup(root)
     const output = await executeRemoteShell({
       executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
     }, { script: 'echo trusted-node' }, 10_000)
@@ -108,32 +106,18 @@ test('trusted Child executes shell, file writes and reads without an approval ro
     ] as const) {
       const events = await collect(fixture.local.execute(request(args, { operation }), new AbortController().signal))
       assert.equal(events.at(-1)?.type, 'completed')
-      assert(!events.some(event => event.type === 'awaiting-approval'))
       if (operation === 'filesystem.read') assert(events.some(event => event.type === 'stdout' && event.chunk.includes('trusted-files')))
     }
-    assert(!fixture.events.some(event => event.type === 'awaiting-approval'))
-    assert.deepEqual(fixture.approval.listPending(), [])
-    assert.deepEqual(fixture.approval.listGrants(), [])
+    assert(fixture.requests.every(job => !Object.hasOwn(job, 'approval')))
   })
 })
 
-test('remote shell waits for local approval, uses Child root, preserves stderr and nonzero receipts', async () => {
+test('remote shell uses Child root and preserves stderr and nonzero receipts', async () => {
   await withTempWorkspace(async root => {
     const fixture = setup(root)
-    const readJob = request({ path: 'unused' }, { operation: 'filesystem.read' })
-    const readApproval = fixture.approval.authorize(readJob, new AbortController().signal, () => {})
-    fixture.approval.approve(readJob.jobId, 'capability')
-    assert.equal(await readApproval, true)
     const target = { executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal }
     const script = process.platform === 'win32' ? 'cd & echo error-output 1>&2 & exit /b 7' : 'pwd; echo error-output >&2; exit 7'
     const pending = executeRemoteShell(target, { script }, 10_000)
-    await until(() => fixture.approval.listPending().length === 1)
-    assert.equal(fixture.manager.list().length, 0)
-    const approval = fixture.approval.listPending()[0]!
-    assert.match(approval.summary.action, /not sandboxed/)
-    assert.deepEqual(approval.summary.process, { script })
-    assert.equal(approval.operation, WORKDIR_PROCESS_EXECUTE_OPERATION)
-    assert(fixture.approval.approve(approval.approvalId, 'capability'))
     const result = await pending
     assert.match(result, /Error: remote exec failed/)
     assert.match(result, /exit code 7/)
@@ -143,7 +127,6 @@ test('remote shell waits for local approval, uses Child root, preserves stderr a
     assert.equal(fixture.manager.list().length, 0)
     const next = await executeRemoteShell(target, { script: 'echo granted' }, 10_000)
     assert.match(next, /granted/)
-    assert.equal(fixture.approval.listPending().length, 0)
   })
 })
 
@@ -166,8 +149,6 @@ test('remote shell timeout and cancellation await owned process cleanup and keep
           ? 'echo before-wait & ping -n 30 127.0.0.1 > nul'
           : 'echo before-wait; sleep 30',
       }, mode === 'deadline' ? 1200 : 10_000)
-      await until(() => fixture.approval.listPending().length === 1)
-      fixture.approval.approve(fixture.approval.listPending()[0]!.approvalId, 'once')
       await until(() => fixture.manager.list().some(p => p.stdoutChunks.length > 0))
       const owned = fixture.manager.list()[0]!
       if (mode === 'cancel') controller.abort()
@@ -182,20 +163,18 @@ test('remote shell timeout and cancellation await owned process cleanup and keep
   })
 })
 
-test('remote shell cancellation and deadline while awaiting approval never spawn', async () => {
+test('workdir shell cancellation and expiration before admission never spawn', async () => {
   await withTempWorkspace(async root => {
-    for (const mode of ['deadline', 'cancel', 'deny'] as const) {
+    for (const mode of ['deadline', 'cancel'] as const) {
       const fixture = setup(root)
-      const controller = new AbortController()
-      const pending = executeRemoteShell({
-        executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: controller.signal,
-      }, { script: 'echo never' }, mode === 'deadline' ? 200 : 10_000)
-      await until(() => fixture.approval.listPending().length === 1)
-      if (mode === 'cancel') controller.abort()
-      if (mode === 'deny') fixture.approval.deny(fixture.approval.listPending()[0]!.approvalId)
-      assert.match(await pending, /Error: remote exec/)
+      const job = request({ script: 'echo never' }, mode === 'deadline' ? {
+        createdAt: new Date(Date.now() - 2000).toISOString(),
+        deadlineAt: new Date(Date.now() - 1000).toISOString(),
+      } : {})
+      const events = await collect(fixture.local.execute(job,
+        mode === 'cancel' ? AbortSignal.abort() : new AbortController().signal))
+      assert.deepEqual(events.map(event => event.type), ['accepted', mode === 'cancel' ? 'cancel-acknowledged' : 'expired'])
       assert.equal(fixture.manager.list().length, 0)
-      assert.equal(fixture.events.some(event => event.type === 'started'), false)
     }
   })
 })
@@ -209,8 +188,6 @@ test('oversized shell output is split into bounded events and fails explicitly, 
     const pending = executeRemoteShell({
       executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
     }, { script }, 10_000)
-    await until(() => fixture.approval.listPending().length === 1)
-    fixture.approval.approve(fixture.approval.listPending()[0]!.approvalId, 'once')
     assert.match(await pending, /Error: remote exec failed \[process-output-too-large\]/)
     for (const event of fixture.events) assert(Buffer.byteLength(JSON.stringify(event)) < 256 * 1024)
   })
@@ -225,8 +202,6 @@ test('POSIX foreground completion also terminates owned children with redirected
     const pending = executeRemoteShell({
       executor: fixture.remote, nodeId: 'child', capabilityId: 'root', sessionId: 'session', turnId: 'turn', signal: new AbortController().signal,
     }, { script: '(sleep 1; echo leaked > leaked.txt) >/dev/null 2>&1 & echo done' }, 10_000)
-    await until(() => fixture.approval.listPending().length === 1)
-    fixture.approval.approve(fixture.approval.listPending()[0]!.approvalId, 'once')
     assert.match(await pending, /done/)
     await delay(1200)
     await assert.rejects(access(join(root, 'leaked.txt')), { code: 'ENOENT' })

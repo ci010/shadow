@@ -3,9 +3,10 @@ import { test } from 'node:test'
 import { join, resolve } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
-import { projectFixture } from '../projects/test-fixtures.ts'
-import { ProjectError } from '../projects/registry.ts'
+import { folderFixture } from '../folders/test-fixtures.ts'
+import { FolderError } from '../folders/registry.ts'
 import type { SessionState } from './session-store.ts'
+import { LEARNING_AUTOMATIONS } from '../cron/contracts.ts'
 import { Hono } from 'hono'
 import { channelSessionId } from '../bus/events.ts'
 import type {
@@ -69,13 +70,50 @@ class RouteFilesystemExecutor implements Executor {
   }
 }
 
+test('file and Git routes distinguish offline nodes from unavailable capabilities without Main fallback', async () => {
+  const executor = new RouteFilesystemExecutor()
+  let node: 'online' | 'offline' | 'missing' | 'revoked' = 'offline'
+  let capability: { kind: string; online: boolean } | undefined = { kind: 'workdir', online: true }
+  const app = new Hono()
+  sessionsApiPlugin({
+    workspace: 'C:\\synthetic-main-must-not-be-read',
+    remoteExecutor: executor,
+    getSessionState: () => ({ sessionId: 'remote', workdir: { version: 1, nodeId: 'child', capabilityId: 'folder' } }),
+    workdirCapabilityLookup: () => ({ node, capability }),
+  } as unknown as SessionManager)(app)
+  for (const [state, folder, reason] of [
+    ['offline', capability, 'node-offline'],
+    ['missing', capability, 'node-missing'],
+    ['revoked', capability, 'capability-revoked'],
+    ['online', undefined, 'capability-missing'],
+    ['online', { kind: 'workdir', online: false }, 'capability-offline'],
+    ['online', { kind: 'shell', online: true }, 'incompatible'],
+  ] as const) {
+    node = state
+    capability = folder
+    for (const suffix of ['files', 'files?path=child', 'preview?path=notes.txt', 'raw?path=notes.txt', 'git/status', 'git/diff?path=notes.txt']) {
+      const response = await app.request(`/api/sessions/remote/${suffix}`)
+      assert.equal(response.status, 503)
+      assert.deepEqual(await response.json(), workdirUnavailableApiResult('remote', {
+        available: false, workdir: { version: 1, nodeId: 'child', capabilityId: 'folder' }, reason,
+      }))
+    }
+  }
+  assert.equal(executor.requests.length, 0)
+  node = 'online'
+  capability = { kind: 'workdir', online: true }
+  assert.equal((await app.request('/api/sessions/remote/files')).status, 200)
+  assert.equal((await app.request('/api/sessions/remote/git/status')).status, 200)
+  assert.equal(executor.requests.length, 2)
+})
+
 test('cancel route requires an existing authorized logical session and distinguishes idle from requested', async () => {
   let cancellations = 0
   let phase = 'idle'
   const key = 'web:chat-cancel'
   const app = new Hono()
   sessionsApiPlugin({
-    organizationId: 'owned-org',
+    projectId: 'owned-org',
     getSessionState: (id: string) => id === key ? { sessionId: key } : undefined,
     getActiveSession: () => ({ get phase() { return phase }, activeRequestId: 'current-request', cancel: () => { cancellations++ } }),
   } as unknown as SessionManager)(app)
@@ -108,18 +146,18 @@ test('cancel route requires an existing authorized logical session and distingui
   const denied = new Hono()
   sessionsApiPlugin({
     getSessionState: () => ({ sessionId: key }),
-    assertProjectAccess: () => { throw new ProjectError('project_unavailable', 'Project unavailable', 409) },
+    assertFolderAccess: () => { throw new FolderError('folder_unavailable', 'Folder unavailable', 409) },
     getActiveSession: () => { throw new Error('Must not reach active session after access denial') },
   } as unknown as SessionManager)(denied)
   assert.equal((await denied.request(endpoint, { method: 'POST' })).status, 409)
 })
 
 test('session route parameters retain encoded bot components without a second decoding pass', async t => {
-  const { workspace } = await projectFixture(t)
+  const { workspace } = await folderFixture(t)
   const id = channelSessionId({
-    organizationId: 'org', botInstanceId: 'bot', platform: 'qq', conversationId: 'room:part%/child',
+    projectId: 'org', botInstanceId: 'bot', platform: 'qq', conversationId: 'room:part%/child',
   })
-  const state: SessionState = { sessionId: id, segmentIndex: 0, organizationId: 'org' }
+  const state: SessionState = { sessionId: id, segmentIndex: 0, projectId: 'org' }
   const seen: string[] = []
   const manager = {
     workspace,
@@ -145,27 +183,59 @@ test('session route parameters retain encoded bot components without a second de
   assert(seen.every(key => key === id))
 })
 
-test('reflection browsing uses configured Home across file and Git routes without changing execution cwd', async t => {
-  const { workspace, root } = await projectFixture(t)
+test('learning automation browsing uses Home for legacy and fresh runs and descendants without changing execution cwd', async t => {
+  const { workspace, root } = await folderFixture(t)
   execFileSync('git', ['init', '--quiet', workspace])
   await writeFile(join(workspace, 'home.txt'), 'from Home\n')
   await writeFile(join(workspace, 'image.png'), new Uint8Array([1, 2, 3]))
   await mkdir(join(workspace, 'page'))
   await writeFile(join(workspace, 'page', 'index.html'), '<h1>Home</h1>')
   await writeFile(join(root, 'outside.txt'), 'outside Home')
+  const folder = join(root, 'folder')
+  await mkdir(folder)
+  await writeFile(join(folder, 'folder.txt'), 'from effective folder\n')
+  const folderWorkdir = { version: 1 as const, nodeId: 'local', capabilityId: 'fixture-folder' }
   const states: Record<string, SessionState> = {
-    'heartbeat:reflector-fixture': { sessionId: 'heartbeat:reflector-fixture', segmentIndex: 0 },
-    'heartbeat:soul-reflector-fixture': { sessionId: 'heartbeat:soul-reflector-fixture', segmentIndex: 0 },
-    'web:chat-child': { sessionId: 'web:chat-child', segmentIndex: 0, parent: { id: 'heartbeat:reflector-fixture' } },
+    'web:legacy-child': { sessionId: 'web:legacy-child', segmentIndex: 0, parent: { id: 'heartbeat:reflector-1750000000000' } },
+    'web:task-child': { sessionId: 'web:task-child', segmentIndex: 0, parentSessionId: 'cron:fresh-encapsulator' },
+    'web:chat-grandchild': { sessionId: 'web:chat-grandchild', segmentIndex: 0, parentSessionId: 'web:task-child' },
     'web:chat-normal': { sessionId: 'web:chat-normal', segmentIndex: 0, description: 'Reflect: ordinary conversation' },
-    'heartbeat:encapsulator-fixture': { sessionId: 'heartbeat:encapsulator-fixture', segmentIndex: 0 },
+    'heartbeat:reflector-fixture': { sessionId: 'heartbeat:reflector-fixture', segmentIndex: 0 },
     'web:cycle': { sessionId: 'web:cycle', segmentIndex: 0, parent: { id: 'web:cycle' } },
+    'cron:generic': {
+      sessionId: 'cron:generic', segmentIndex: 0, agentType: 'reflector', workdir: folderWorkdir,
+      parentSessionId: 'cron:fresh-reflector',
+      automation: {
+        jobId: 'user-job', name: 'Self reflection', runId: 'generic', startedAt: '2026-01-01T00:00:00Z', contextMode: 'fresh',
+        config: { source: 'cron', schedule: 'every 1h', agentType: 'reflector' },
+      },
+    },
+    'web:generic-child': { sessionId: 'web:generic-child', segmentIndex: 0, parentSessionId: 'cron:generic', workdir: folderWorkdir },
+  }
+  const homeIds = ['web:legacy-child', 'web:task-child', 'web:chat-grandchild']
+  for (const job of Object.values(LEARNING_AUTOMATIONS)) {
+    const legacyId = `heartbeat:${job.agentType}-1750000000000`
+    const freshId = `cron:fresh-${job.agentType}`
+    states[legacyId] = { sessionId: legacyId, segmentIndex: 0, agentType: job.agentType }
+    states[freshId] = {
+      sessionId: freshId, segmentIndex: 0, agentType: job.agentType, mode: 'task',
+      automationVersion: 1, parentSessionId: null,
+      automation: {
+        jobId: job.id, name: job.name, runId: freshId, startedAt: '2026-01-01T00:00:00Z', contextMode: 'fresh',
+        config: { source: 'learning', schedule: 'every 1h', agentType: job.agentType },
+      },
+    }
+    homeIds.push(legacyId, freshId)
   }
   const original = structuredClone(states)
   const app = new Hono()
-  const manager = { workspace, getSessionState: (id: string) => states[id] ?? null }
+  const manager = {
+    workspace, getSessionState: (id: string) => states[id] ?? null,
+    workdirCapabilityLookup: (ref: { capabilityId: string }) => ref.capabilityId === 'fixture-folder'
+      ? { node: 'online', capability: { kind: 'workdir', online: true, path: folder } } : { node: 'missing' },
+  }
   sessionsApiPlugin(manager as unknown as SessionManager)(app)
-  for (const id of ['heartbeat:reflector-fixture', 'heartbeat:soul-reflector-fixture', 'web:chat-child']) {
+  for (const id of homeIds) {
     const base = `/api/sessions/${encodeURIComponent(id)}`
     const listing = await (await app.request(`${base}/files`)).json()
     assertEquals(listing.workdir, { kind: 'local', displayPath: workspace, scope: 'home' })
@@ -192,19 +262,28 @@ test('reflection browsing uses configured Home across file and Git routes withou
     assert(execution.available && execution.locality === 'local')
     assertNotEquals(execution.path, workspace)
   }
-  for (const id of ['web:chat-normal', 'heartbeat:encapsulator-fixture', 'web:cycle', 'heartbeat:reflector-missing']) {
+  for (const id of ['web:chat-normal', 'heartbeat:reflector-fixture', 'web:cycle', 'heartbeat:reflector-missing']) {
     assertEquals((await app.request(`/api/sessions/${encodeURIComponent(id)}/preview?path=home.txt`)).status, 404)
   }
+  for (const id of ['cron:generic', 'web:generic-child']) {
+    const base = `/api/sessions/${encodeURIComponent(id)}`
+    const listing = await (await app.request(`${base}/files`)).json()
+    assertEquals(listing.workdir, { kind: 'local', displayPath: folder })
+    const preview = await (await app.request(`${base}/preview?path=folder.txt`)).json()
+    assertEquals(preview.content, 'from effective folder\n')
+    assertEquals(preview.sourcePath, undefined)
+    assertEquals((await app.request(`${base}/preview?path=home.txt`)).status, 404)
+  }
   assertEquals(states, original)
-  states['heartbeat:reflector-fixture']!.workdir = { version: 1, nodeId: 'child', capabilityId: 'remote-workdir' }
-  assertEquals((await app.request('/api/sessions/heartbeat%3Areflector-fixture/files')).status, 503)
+  states['cron:fresh-reflector']!.workdir = { version: 1, nodeId: 'child', capabilityId: 'remote-workdir' }
+  assertEquals((await app.request('/api/sessions/cron%3Afresh-reflector/files')).status, 503)
   const remoteApp = new Hono()
   sessionsApiPlugin({
     ...manager,
     workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true } }),
   } as unknown as SessionManager)(remoteApp)
-  assertEquals((await remoteApp.request('/api/sessions/heartbeat%3Areflector-fixture/files')).status, 501)
-  assertEquals(await (await remoteApp.request('/api/sessions/heartbeat%3Areflector-fixture/git/status')).json(),
+  assertEquals((await remoteApp.request('/api/sessions/cron%3Afresh-reflector/files')).status, 501)
+  assertEquals(await (await remoteApp.request('/api/sessions/cron%3Afresh-reflector/git/status')).json(),
     { available: false, reason: 'remote_unsupported', entries: [] })
 })
 
@@ -231,7 +310,7 @@ test('session file base returns actionable unavailable capability details', () =
       workdir: {
         version: 1,
         nodeId: 'child-node',
-        capabilityId: 'project-capability',
+        capabilityId: 'folder-capability',
       },
     },
   )
@@ -242,7 +321,7 @@ test('session file base returns actionable unavailable capability details', () =
     error: 'workdir_unavailable',
     key: 'discord:top',
     nodeId: 'child-node',
-    capabilityId: 'project-capability',
+    capabilityId: 'folder-capability',
     reason: 'node-missing',
     action: 'connect_node',
   })
@@ -265,7 +344,7 @@ test('session file routes dispatch remote listings and previews but not raw byte
     workspace: resolve('workspace'),
     remoteExecutor: executor,
     getNodeInventory: () => ({
-      nodes: [{ nodeId: 'child-1', capabilities: [{ capabilityId: 'workdir-1', kind: 'workdir', displayPath: '/srv/project' }] }],
+      nodes: [{ nodeId: 'child-1', capabilities: [{ capabilityId: 'workdir-1', kind: 'workdir', displayPath: '/srv/folder' }] }],
     }),
     workdirCapabilityLookup: () => ({
       node: 'online' as const,
@@ -289,7 +368,7 @@ test('session file routes dispatch remote listings and previews but not raw byte
   assertEquals(await listingResponse.json(), {
     key: 'remote',
     path: '',
-    workdir: { kind: 'remote', displayPath: '/srv/project' },
+    workdir: { kind: 'remote', displayPath: '/srv/folder' },
     entries: [
       { name: 'folder', type: 'dir', ext: '', size: 0, mtime: null },
       { name: 'a.md', type: 'file', ext: '.md', size: 0, mtime: null },

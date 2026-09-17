@@ -6,7 +6,7 @@ import { ImportTool, type LoadableEntry, type McpLoadable } from './load-tool.ts
 import { SessionTools, Tools } from './registry.ts'
 import { McpConnection } from '../mcp/client.ts'
 import { ChromeManager, ChromePortAllocator, type ChromeRuntimeOperations } from '../browser/chrome-manager.ts'
-import { createOrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope } from '../projects/scope.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ExecutionContext } from './context.ts'
 
@@ -27,7 +27,7 @@ function catalog(browser: McpLoadable): Map<string, LoadableEntry> {
 test('scoped built-in Chrome rejects all unowned connection/launch forms from every argument source before allocating or connecting', async (t) => {
   await withTempWorkspace(async (home) => {
     const manager = new ChromeManager(home, () => ({ basePort: 9222 }), {
-      organizationId: 'a', portAllocator: new ChromePortAllocator(async () => true),
+      projectId: 'a', portAllocator: new ChromePortAllocator(async () => true),
     })
     const allocate = t.mock.method(manager, 'allocate', async () => { throw new Error('must not allocate') })
     const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('must not connect') })
@@ -55,7 +55,7 @@ test('scoped built-in Chrome rejects all unowned connection/launch forms from ev
         for (const name of ['chrome-devtools', 'chrome-devtools-full']) {
           assert.match(await importer.importSource({
             source: `v:tools/${name}`, args: source === 'caller' ? args : [],
-          }, tools), /^Error loading organization Chrome:/)
+          }, tools), /^Error loading project Chrome:/)
         }
       }
     }
@@ -67,7 +67,7 @@ test('scoped built-in Chrome rejects all unowned connection/launch forms from ev
     for (const malformed of ['{', '{}', '{"args":[null]}', 'null']) {
       await writeFile(browser.configPath, malformed)
       assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools-full' },
-        new SessionTools(new Tools(home), home)), /^Error loading organization Chrome config:/)
+        new SessionTools(new Tools(home), home)), /^Error loading project Chrome config:/)
     }
     assert.equal(allocate.mock.callCount(), 0)
     assert.equal(connect.mock.callCount(), 0)
@@ -75,11 +75,11 @@ test('scoped built-in Chrome rejects all unowned connection/launch forms from ev
   })
 })
 
-test('built-in Chrome requires an exact organization manager even through shared aliases and cached auto-imports', async (t) => {
-  const scope = createOrganizationScope('a')
-  const otherScope = createOrganizationScope('b')
+test('built-in Chrome requires an exact project manager even through shared aliases and cached auto-imports', async (t) => {
+  const scope = createProjectScope('a')
+  const otherScope = createProjectScope('b')
   const manager = new ChromeManager('unused', () => ({ basePort: 9222 }), {
-    organizationId: 'b', portAllocator: new ChromePortAllocator(async () => true),
+    projectId: 'b', portAllocator: new ChromePortAllocator(async () => true),
   })
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('must not connect') })
   try {
@@ -93,8 +93,8 @@ test('built-in Chrome requires an exact organization manager even through shared
     const tools = new SessionTools(new Tools('unused'), 'unused')
     assert.match(await scope.run(() => importer.importSource({ source: 'v:tools/chrome-devtools' }, tools)), /requires its own runtime-managed browser/)
     assert.match(await importer.execute({ source: 'v:tools/chrome-devtools' },
-      { organizationId: 'a', tools } as ExecutionContext), /Chrome organization binding mismatch/)
-    const replacement = createOrganizationScope('b')
+      { projectId: 'a', tools } as ExecutionContext), /Chrome project binding mismatch/)
+    const replacement = createProjectScope('b')
     try {
       assert.match(await replacement.run(() => importer.importSource({ source: 'v:tools/chrome-devtools' }, tools)),
         /requires its own runtime-managed browser/)
@@ -135,8 +135,8 @@ test('managed imports allocate distinct browsers per org and session, reuse alia
       },
     }
     const allocator = new ChromePortAllocator(async (port) => !live.has(port))
-    const managers = ['a', 'b'].map((organizationId) => new ChromeManager(join(home, organizationId),
-      () => ({ basePort: 9222 }), { organizationId, portAllocator: allocator, runtime }))
+    const managers = ['a', 'b'].map((projectId) => new ChromeManager(join(home, projectId),
+      () => ({ basePort: 9222 }), { projectId, portAllocator: allocator, runtime }))
     const connect = t.mock.method(McpConnection.prototype, 'connect', async function (this: McpConnection) {
       assert.equal(this.config.args?.filter((arg) => arg.startsWith('--browserUrl=')).length, 1)
       assert(!this.config.args?.some((arg) => arg.startsWith('--remote-debugging-port')))
@@ -161,7 +161,7 @@ test('managed imports allocate distinct browsers per org and session, reuse alia
       assert.equal(connect.mock.callCount(), 3)
       assert.match(await importers[0].importSource({
         source: 'v:tools/chrome-devtools-full', args: ['--autoConnect'],
-      }, sessions[0]), /^Error loading organization Chrome:/)
+      }, sessions[0]), /^Error loading project Chrome:/)
       assert.equal(connect.mock.callCount(), 3)
       assert.equal(launches.length, 3)
       sessions[0].resetDynamic()

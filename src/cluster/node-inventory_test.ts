@@ -30,9 +30,8 @@ const capability: CapabilityDescriptorV1 = {
   capabilityId: 'workdir-1',
   kind: 'workdir',
   displayName: 'Remote folder',
-  displayPath: '/child/opaque/project',
+  displayPath: '/child/opaque/folder',
   permissions: ['private-operation'],
-  approvalPolicy: 'always',
   online: true,
 }
 
@@ -51,8 +50,6 @@ function registryFixture(): InMemoryPairingNodeRegistry {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: 'private-fingerprint',
     credentialId: auth.credentialId,
-    uiScopes: ['nodes:admin'],
-    nodePrivileges: ['capabilities:advertise'],
   }, now)
   registry.advertiseCapability(auth, capability)
   return registry
@@ -106,7 +103,7 @@ test('inventory authorization fails closed independently and retains launch prot
   })).status, 404)
 })
 
-test('restored inventory is offline and only projects allowlisted remote fields', () => {
+test('restored inventory is offline and only folders allowlisted remote fields', () => {
   const registry = registryFixture()
   const restored = new InMemoryPairingNodeRegistry()
   restored.restoreSnapshot(registry.exportSnapshot(now), now)
@@ -124,7 +121,7 @@ test('restored inventory is offline and only projects allowlisted remote fields'
       capabilityId: 'workdir-1',
       kind: 'workdir',
       displayName: 'Remote folder',
-      displayPath: '/child/opaque/project',
+      displayPath: '/child/opaque/folder',
       online: false,
     }],
   })
@@ -203,7 +200,7 @@ test('inventory follows actual node WebSocket authentication, advertisements and
   assert.equal(advertised.capabilities.length, 2)
   assert.equal(advertised.capabilities[0].online, false)
   assert.equal(advertised.capabilities[1].online, true)
-  assert.equal(advertised.capabilities[1].displayPath, '/child/opaque/project')
+  assert.equal(advertised.capabilities[1].displayPath, '/child/opaque/folder')
   socket.send(JSON.stringify({
     version: 1, sequence: 3, type: 'capability-withdraw',
     nodeId: auth.nodeId, capabilityId: 'new-workdir',
@@ -215,7 +212,7 @@ test('inventory follows actual node WebSocket authentication, advertisements and
   const disconnected = await remote()
   assert.equal(disconnected.connection, 'offline')
   assert.ok(disconnected.capabilities.every((value: { online: boolean }) => !value.online))
-  assert.equal(disconnected.capabilities[0].displayPath, '/child/opaque/project')
+  assert.equal(disconnected.capabilities[0].displayPath, '/child/opaque/folder')
   const reconnected = new WebSocket(`${base.replace('http:', 'ws:')}/cluster/v1/node`)
   await new Promise<void>((resolve, reject) => {
     reconnected.addEventListener('open', () => resolve(), { once: true })

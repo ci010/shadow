@@ -11,7 +11,7 @@ import type {
   SystemEvent,
 } from './types.ts'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
-import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 
 const SUBSCRIPTIONS_FILE = '.events/subscriptions.json'
 const SOURCES_FILE = '.events/sources.json'
@@ -72,7 +72,7 @@ export class EventService {
     private workspace: string,
     private bus: Bus,
     private deliver: DeliverInput,
-    private scope: OrganizationScope | undefined = getOrganizationScope(),
+    private scope: ProjectScope | undefined = getProjectScope(),
   ) {
     this.subscriptionsPath = workspacePath(workspace, SUBSCRIPTIONS_FILE)
     this.sourcesPath = workspacePath(workspace, SOURCES_FILE)

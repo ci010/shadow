@@ -51,13 +51,12 @@ test('pairing and capability contracts validate states, versions, and unknown fi
     capabilityId: 'capability-1',
     nodeId: 'node-1',
     kind: 'shell',
-    displayName: 'Project shell',
+    displayName: 'Folder shell',
     permissions: ['process.execute'],
-    approvalPolicy: 'session',
     online: true,
   }
   assert(validateCapabilityDescriptorV1(capability).success)
-  assert(validateCapabilityDescriptorV1({ ...capability, approvalPolicy: 'none' }).success)
+  assert.equal(validateCapabilityDescriptorV1({ ...capability, approvalPolicy: 'none' }).success, false)
   assert.equal(validateCapabilityDescriptorV1({ ...capability, approvalPolicy: 'invalid' }).success, false)
   assert.equal(validateCapabilityDescriptorV1({ ...capability, kind: 'root-access' }).success, false)
 })
@@ -94,10 +93,10 @@ test('registry snapshot contract is strict, versioned, and validates nested stat
 test('workdir display metadata is optional, bounded and display-only', () => {
   const capability = {
     version: 1, capabilityId: 'workdir', nodeId: 'child', kind: 'workdir',
-    displayName: '项目', permissions: [], approvalPolicy: 'session', online: true,
+    displayName: '项目', permissions: [], online: true,
   }
   assert(validateCapabilityDescriptorV1(capability).success)
-  for (const displayPath of ['/home/user/project', 'Z:\\project', 'opaque:path', 'a'.repeat(4096)]) {
+  for (const displayPath of ['/home/user/folder', 'Z:\\folder', 'opaque:path', 'a'.repeat(4096)]) {
     assert(validateCapabilityDescriptorV1({ ...capability, displayPath }).success)
   }
   for (const displayPath of [null, 7, '', ' ', 'a'.repeat(4097), '/a\nb', '/a\0b', '\u202eabc']) {
@@ -123,7 +122,6 @@ test('node-control envelopes carry runtime-validated S2 jobs and events', () => 
     args: { command: 'node --test' },
     createdAt: '2026-08-26T00:00:00.000Z',
     deadlineAt: '2026-08-26T00:01:00.000Z',
-    approval: 'none',
   }
   const event: JobEventV1 = {
     version: 1,

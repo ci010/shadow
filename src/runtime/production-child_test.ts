@@ -9,7 +9,6 @@ import {
 } from '../cluster/device-credentials.ts'
 import { startProductionChildRuntime } from './production-child.ts'
 import type { RuntimeDerivedPaths } from './runtime-cli.ts'
-import type { LocalApprovalService } from '../execution/local-approval.ts'
 
 const paths: RuntimeDerivedPaths = {
   bootstrapConfigPath: '/state/bootstrap.json',
@@ -118,24 +117,6 @@ test('production Child starts with a correlated protected key and shuts down', a
     load: () => Promise.resolve(reference),
     save: () => Promise.resolve(),
   }
-  let approvalStarts = 0
-  let approvalShutdowns = 0
-  const approvalService: LocalApprovalService = {
-    authorize: () => Promise.resolve(false),
-    listPending: () => [],
-    listGrants: () => [],
-    approve: () => false,
-    deny: () => false,
-    revoke: () => 0,
-    start: () => {
-      approvalStarts++
-      return Promise.resolve()
-    },
-    shutdown: () => {
-      approvalShutdowns++
-      return Promise.resolve()
-    },
-  }
   const runtime = await startProductionChildRuntime(
     {
       version: 1,
@@ -143,13 +124,12 @@ test('production Child starts with a correlated protected key and shuts down', a
       dataDir: './data',
       localNodeId: 'node-1',
       mainEndpoint: 'https://main.example.test',
-      workdirs: [{ capabilityId: 'project-root', displayName: 'Child project', rootPath: process.cwd() }],
+      workdirs: [{ capabilityId: 'folder-root', displayName: 'Child folder', rootPath: process.cwd() }],
     },
     paths,
     {
       keyStore,
       referenceStore,
-      approvalService,
       localControl: {
         port: localControlPort,
         launchCredential: 'production-child-secret',
@@ -190,7 +170,7 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes[0].capabilities, [{
     capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
   }, {
-    capabilityId: 'project-root', kind: 'workdir', displayName: 'Child project', online: true, displayPath: process.cwd(),
+    capabilityId: 'folder-root', kind: 'workdir', displayName: 'Child folder', online: true, displayPath: process.cwd(),
   }])
   assertEquals(JSON.stringify(body).includes('credential'), false)
   assertEquals(JSON.stringify(body).includes('fingerprint'), false)
@@ -203,6 +183,4 @@ test('production Child starts with a correlated protected key and shuts down', a
     undefined,
   ])
   await runtime.finished
-  assertEquals(approvalStarts, 1)
-  assertEquals(approvalShutdowns, 1)
 })

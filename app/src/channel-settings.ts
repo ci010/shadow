@@ -1,5 +1,5 @@
 import type { ChannelId, ChannelSetupStatus } from '../../src/channels/setup-contract.ts'
-import { isRecord } from './projects-sidebar.ts'
+import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
 
 export type ChannelDraft = Record<string, string | boolean>
@@ -15,7 +15,8 @@ export interface ChannelField {
 }
 const accessFields: ChannelField[] = [
   { key: 'allowFrom', label: 'Allowed sender IDs', kind: 'list', advanced: true, hint: 'One ID per line. Empty allows all senders permitted by the platform.' },
-  { key: 'adminChats', label: 'Admin group chat IDs', kind: 'list', advanced: true, hint: 'One ID per line. Only add trusted groups; direct messages already have admin privileges.' },
+  { key: 'adminChats', label: 'Admin group chat IDs', kind: 'list', advanced: true, hint: 'One ID per line. Grants admin privileges, not audience trust. Direct messages already have admin privileges.' },
+  { key: 'trustedChats', label: 'Trusted group or channel IDs', kind: 'list', advanced: true, hint: 'One exact ID per line, including threads separately. Only list conversations where you trust everyone who can read replies. Uses normal assistant behavior; grants no admin privileges.' },
 ]
 export const channelDefinitions: Array<{
   id: ChannelId; label: string; description: string; portal: string; instructions: string[]; fields: ChannelField[]

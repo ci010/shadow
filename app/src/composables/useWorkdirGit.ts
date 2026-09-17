@@ -1,10 +1,12 @@
 import { onUnmounted, ref, shallowRef, watch, type Ref } from 'vue'
 import { createGitFilesClient, type GitStatus } from '../git-files.ts'
+import { isNodeOfflineError } from '../workdir-request-error.ts'
 
-export function useWorkdirGit(source: () => { apiBase: string; sessionId: string; projectId?: string }, active: Ref<boolean>) {
+export function useWorkdirGit(source: () => { apiBase: string; sessionId: string; folderId?: string }, active: Ref<boolean>) {
   const status = shallowRef<GitStatus>()
   const loading = ref(false)
   const error = ref('')
+  const offline = ref(false)
   const revision = ref(0)
   let controller: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -19,14 +21,15 @@ export function useWorkdirGit(source: () => { apiBase: string; sessionId: string
   async function refresh() {
     stop()
     const current = source()
-    if (!active.value || !(current.sessionId || current.projectId)) return
+    if (!active.value || !(current.sessionId || current.folderId)) return
     const request = new AbortController()
     controller = request
-    loading.value = !status.value
+    loading.value = !status.value || offline.value
     try {
-      const next = await createGitFilesClient(current.apiBase, current.sessionId, current.projectId).status(request.signal)
+      const next = await createGitFilesClient(current.apiBase, current.sessionId, current.folderId).status(request.signal)
       if (request.signal.aborted) return
       error.value = ''
+      offline.value = false
       const nextFingerprint = JSON.stringify(next)
       if (nextFingerprint !== fingerprint) {
         fingerprint = nextFingerprint
@@ -34,7 +37,10 @@ export function useWorkdirGit(source: () => { apiBase: string; sessionId: string
       }
       revision.value++
     } catch (cause) {
-      if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load Git changes. Retry.'
+      if (!request.signal.aborted) {
+        offline.value = isNodeOfflineError(cause)
+        error.value = offline.value ? '' : cause instanceof Error ? cause.message : 'Could not load Git changes. Retry.'
+      }
     } finally {
       if (controller === request) {
         controller = undefined
@@ -43,15 +49,16 @@ export function useWorkdirGit(source: () => { apiBase: string; sessionId: string
       }
     }
   }
-  watch(() => [source().apiBase, source().sessionId, source().projectId], () => {
+  watch(() => [source().apiBase, source().sessionId, source().folderId], () => {
     stop()
     status.value = undefined
     fingerprint = ''
     error.value = ''
+    offline.value = false
     revision.value++
     void refresh()
   }, { immediate: true })
   watch(active, enabled => { if (enabled) void refresh(); else stop() })
   onUnmounted(stop)
-  return { status, loading, error, revision, refresh }
+  return { status, loading, error, offline, revision, refresh }
 }

@@ -124,7 +124,7 @@ test('failed image replacement leaves the previous attachment and its preview va
 })
 
 test('source metadata follows replacement, repeat drag and upload; removal drops the reference text', async () => {
-  const source = { path: 'C:\\project\\diagrams\\image.png', modified: true }
+  const source = { path: 'C:\\folder\\diagrams\\image.png', modified: true }
   let urls = 0
   const options = { source, createObjectUrl: () => `blob:${++urls}`, revokeObjectUrl: () => {} }
   const first = updateImageAttachment([], 'stable-image', new File(['first'], 'image-marked.png'), options)
@@ -150,21 +150,21 @@ test('source metadata follows replacement, repeat drag and upload; removal drops
 test('same-named images remain paired with their exact upload and source paths; plain uploads invent no origin', () => {
   const attachments = [
     { key: 'one', path: 'uploads/first.png', file: new File(['first'], 'image.png'), kind: 'image' as const,
-      source: { path: '/project-a/images/image.png', modified: true } },
+      source: { path: '/folder-a/images/image.png', modified: true } },
     { key: 'two', path: 'uploads/second.png', file: new File(['second'], 'image.png'), kind: 'image' as const,
-      source: { path: '/project-b/images/image.png', modified: false } },
+      source: { path: '/folder-b/images/image.png', modified: false } },
     { key: 'paste', path: 'uploads/clipboard.png', file: new File(['clipboard'], 'clipboard.png'), kind: 'image' as const },
   ]
   const content = composeImageReferenceMessage('', attachments)
-  assert.ok(content.includes('Attached image: "uploads/first.png"\n  Original file: "/project-a/images/image.png"\n  Version: marked copy; original file unchanged.'))
-  assert.ok(content.includes('Attached image: "uploads/second.png"\n  Original file: "/project-b/images/image.png"\n  Version: original image (unmarked).'))
+  assert.ok(content.includes('Attached image: "uploads/first.png"\n  Original file: "/folder-a/images/image.png"\n  Version: marked copy; original file unchanged.'))
+  assert.ok(content.includes('Attached image: "uploads/second.png"\n  Original file: "/folder-b/images/image.png"\n  Version: original image (unmarked).'))
   assert.ok(!content.includes('clipboard'))
   const mixed = composeImageReferenceMessage('', [attachments[2]!, attachments[0]!, attachments[1]!])
   assert.ok(mixed.includes('Media item: 2 of 3 (message attachment order).'))
   assert.ok(mixed.includes('Media item: 3 of 3 (message attachment order).'))
   assert.ok(!mixed.includes('Media item: 1 of 3'))
   assert.equal(composeImageReferenceMessage('Pasted image', [attachments[2]!]), 'Pasted image')
-  const unusual = { ...attachments[0]!, source: { path: '/project/"quoted"\nname.png', modified: true } }
+  const unusual = { ...attachments[0]!, source: { path: '/folder/"quoted"\nname.png', modified: true } }
   assert.ok(composeImageReferenceMessage('', [unusual]).includes(JSON.stringify(unusual.source.path)))
 })
 

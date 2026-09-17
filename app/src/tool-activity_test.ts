@@ -58,12 +58,12 @@ test('failed, legacy and pending edits never invent counts; partial aggregates a
 
 test('dynamic writes, legacy JSON calls and orphan results retain detail', () => {
   const batch = groupToolActivity([
-    call('invoke_tool', { name: 'write', args: { path: '/project/a.ts', match: 'old' } }), success(1, 1),
+    call('invoke_tool', { name: 'write', args: { path: '/folder/a.ts', match: 'old' } }), success(1, 1),
     { event: 'tool_call', content: 'read({"path":"a.ts"})' }, result('read result'),
     result('orphan'),
   ]).get(0)!
   assert.equal(batch.entries[0].title, 'Edit a.ts')
-  assert.equal(batch.entries[0].file, '/project/a.ts')
+  assert.equal(batch.entries[0].file, '/folder/a.ts')
   assert.match(batch.entries[0].arguments, /"args"/)
   assert.equal(batch.entries[1].title, 'View a.ts')
   assert.equal(batch.entries[2].result, 'orphan')

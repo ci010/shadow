@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
-import { createServer, type ServerResponse } from 'node:http'
+import { createServer } from 'node:http'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
+import { LiveFixture } from './live-fixture.ts'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -30,6 +31,7 @@ const reusableCall = 'web:chat-mode-reusable-call'
 const userFork = 'web:chat-mode-user-fork'
 const reflection = 'heartbeat:reflector-mode-fixture'
 const unplaced = 'web:chat-mode-older-execution'
+const liveExecutions = new Set<string>()
 const sessions = [
   { sessionId: root, title: 'Owning conversation', mode: 'session', agentType: 'general' },
   { sessionId: userFork, title: 'Quoted side chat', mode: 'session', agentType: 'general', parentSessionId: null },
@@ -45,7 +47,7 @@ const sessions = [
   { sessionId: unplaced, title: 'Execution from older history', mode: 'task', agentType: 'explore', parentSessionId: root, executionStatus: 'completed' },
 ]
 function trace(id: string) {
-  const children = sessions.filter(item => item.parentSessionId === id && item.mode !== 'session' && item.sessionId !== unplaced)
+  const children = sessions.filter(item => item.parentSessionId === id && item.mode !== 'session' && item.sessionId !== unplaced && !liveExecutions.has(item.sessionId))
   return [
     { role: 'assistant', content: `Internal trace for ${id}.` },
     ...(children.length ? [{
@@ -61,8 +63,7 @@ function trace(id: string) {
     })), { role: 'assistant', content: 'Work continues after delegation.' }] : []),
   ]
 }
-const streams = new Set<ServerResponse>()
-const receivedEvents: Array<Record<string, unknown>> = []
+const live = new LiveFixture()
 const failures: string[] = []
 const fileReads: string[] = []
 const yieldReads: string[] = []
@@ -75,19 +76,23 @@ let rootStreaming = false
 let reusableYield = false
 const server = createServer(async (request, response) => {
   try {
+    if (live.handle(request, response)) return
     const url = new URL(request.url!, 'http://127.0.0.1')
-    const path = decodeURIComponent(url.pathname)
+    const path = decodeURIComponent(url.pathname).replace(/^\/projects\/default(?=\/)/, '')
     const json = (data: unknown, status = 200) => {
       response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
       response.end(JSON.stringify(data))
     }
     if (request.method !== 'GET') { sends++; return json({ error: 'Fixture forbids mutations' }, 403) }
     const provider = { ready: true, provider: 'custom', model: 'synthetic-model', authMode: 'none', hasApiKey: false }
+    if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
+    if (path === '/api/projects/default/status') return json({ state: 'ready' })
+    if (path === '/api/automations') return json({ automations: [] })
     if (path === '/api/provider/setup') return json(provider)
     if (path === '/api/provider/configured') return json({ providers: [{ ...provider, selected: true }] })
     if (path === '/debug/models') return json({ models: ['synthetic-model'] })
-    if (path === '/api/config') return json({ agent: { model: 'synthetic-model' } })
-    if (path === '/api/projects') return json({ projects: [] })
+    if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: directory, temperature: 0.7 } })
+    if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/sessions/graph') {
       graphRequests++
       if (malformedGraph) return json({ sessions: [{ sessionId: task, mode: 'ephemeral' }], nodes: [] })
@@ -108,24 +113,19 @@ const server = createServer(async (request, response) => {
       [reusable]: reusableYield || sessions.find(item => item.sessionId === reusable)!.waitingForCall ? 'waiting' : 'idle',
       [nested]: sessions.find(item => item.sessionId === nested)!.executionStatus === 'running' ? 'llm' : 'idle',
       [reflection]: 'idle',
-    } })
+    }, waitingForCalls: Object.fromEntries(sessions.map(item => [item.sessionId, !!item.waitingForCall])) })
     if (path === '/api/chat/session') return json({
       history: url.searchParams.get('chatId') === userFork.replace('web:', '')
         ? [{ role: 'assistant', content: 'Side chat quotation source.' }]
-        : [{ role: 'user', content: 'Inspect this project without changing my draft.' }, ...trace(url.searchParams.get('chatId') === reusable.replace('web:', '') ? reusable : root), ...receivedEvents],
+        : [{ role: 'user', content: 'Inspect this folder without changing my draft.' }, ...trace(url.searchParams.get('chatId') === reusable.replace('web:', '') ? reusable : root),
+          ...live.history(`web:${url.searchParams.get('chatId')}`)],
       systemPrompt: '', tools: [],
     })
-    if (path === '/api/chat/events') {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' })
-      response.write(': synthetic execution fixture\n\n')
-      streams.add(response)
-      response.on('close', () => streams.delete(response))
-      return
-    }
     const match = path.match(/^\/api\/sessions\/([^/]+)(?:\/(.*))?$/)
     if (match) {
       const id = match[1]
       const operation = match[2]
+      if (operation === 'background-tasks') return json({ sessionId: id, total: 0, tasks: [] })
       assert.ok(sessions.some(item => item.sessionId === id), `Unknown fixture session: ${id}`)
       if (operation === 'details') return json({ sessionId: id, name: sessions.find(item => item.sessionId === id)!.title, workdir: { kind: 'local', displayPath: 'C:\\fixtures\\subagent-modes' }, usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
       if (operation === 'context') return id === rejectContext
@@ -195,7 +195,8 @@ async function runViewport(origin: string, width: number, height: number) {
   rejectContext = ''
   rootStreaming = false
   reusableYield = false
-  receivedEvents.length = 0
+  liveExecutions.clear()
+  live.histories.clear()
   sessions.find(item => item.sessionId === task)!.executionStatus = 'running'
   sessions.find(item => item.sessionId === task)!.waitingForCall = false
   sessions.find(item => item.sessionId === reusable)!.waitingForCall = false
@@ -212,6 +213,13 @@ async function runViewport(origin: string, width: number, height: number) {
   try {
     await window.loadURL(`${origin}/chat/${encodeURIComponent(root)}`)
     await waitFor(window, `!!document.querySelector(${JSON.stringify(card(task))}) && !!document.querySelector('.primary-conversation textarea')`)
+    assert.equal(await evaluate(window, `(() => {
+      const spinner = document.querySelector(${JSON.stringify(card(task))})?.querySelector('.activity-spinner');
+      if (!spinner) return false;
+      const ring = getComputedStyle(spinner), center = getComputedStyle(spinner.parentElement, '::after');
+      return ring.borderRadius === '50%' && ring.width === '14px' && ring.height === '14px'
+        && center.borderRadius === '50%' && ring.animationName.includes('activity-spin');
+    })()`), true, 'Loading remains circular on desktop and mobile despite square interface tokens')
     await waitFor(window, `!document.querySelector('.primary-conversation .chat-messages')?.textContent.includes('Loading history') && document.querySelector('.primary-conversation .heading-folder')?.textContent.includes('subagent-modes')`)
     if (width > 700) await waitFor(window, `!!document.querySelector('.primary-conversation .tree-row[data-path="fixture.txt"]')`)
     assert.equal(await evaluate(window, `!!document.querySelector('.primary-conversation .chat-working, .primary-conversation .yield-question')`), false, 'Async child execution does not suspend the idle parent or invite a human response')
@@ -219,11 +227,11 @@ async function runViewport(origin: string, width: number, height: number) {
     await evaluate(window, `(() => {
       const input = document.querySelector('.primary-conversation textarea');
       input.value = 'Keep this exact unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true }));
-      window.modeRefs = { card: document.querySelector(${JSON.stringify(card(task))}), input, tree: document.querySelector('.projects-sidebar .session-select') };
+      window.modeRefs = { card: document.querySelector(${JSON.stringify(card(task))}), input, tree: document.querySelector('.folders-sidebar .session-select') };
     })()`)
-    assert.equal(await evaluate(window, `Array.from(document.querySelectorAll('.projects-sidebar .session-select')).some(node => /Inspect repository|execution with|Verify repository findings/.test(node.textContent))`), false)
-    assert.equal(await evaluate(window, `Array.from(document.querySelectorAll('.projects-sidebar .session-select')).some(node => node.textContent.includes('Reusable explorer'))`), true)
-    assert.equal(await evaluate(window, `document.querySelector('.self-reflection-count')?.textContent`), '1')
+    assert.equal(await evaluate(window, `Array.from(document.querySelectorAll('.folders-sidebar .session-select')).some(node => /Inspect repository|execution with|Verify repository findings/.test(node.textContent))`), false)
+    assert.equal(await evaluate(window, `Array.from(document.querySelectorAll('.folders-sidebar .session-select')).some(node => node.textContent.includes('Reusable explorer'))`), true)
+    assert.equal(await evaluate(window, `Array.from(document.querySelectorAll('.folders-sidebar .session-select')).filter(node => node.textContent.includes('System self reflection')).length`), 1, 'Legacy records without automation metadata remain inspectable')
     await click(window, '.primary-conversation .unlinked-executions summary')
     await click(window, '.primary-conversation .unlinked-executions button')
     await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes(${JSON.stringify(unplaced)})`)
@@ -244,14 +252,17 @@ async function runViewport(origin: string, width: number, height: number) {
     sessions.find(item => item.sessionId === task)!.executionStatus = 'waiting'
     sessions.find(item => item.sessionId === task)!.waitingForCall = true
     sessions.find(item => item.sessionId === nested)!.executionStatus = 'running'
+    live.publisher.invalidateSessions(task)
     await waitFor(window, `document.querySelector(${JSON.stringify(card(task))})?.textContent.includes('Waiting for call')`)
     assert.ok(graphRequests > before)
     assert.equal(await evaluate(window, `window.modeRefs.card === document.querySelector(${JSON.stringify(card(task))}) && window.modeRefs.input === document.querySelector('.primary-conversation textarea') && window.modeRefs.tree.isConnected`), true, 'Graph refresh preserves actual card, tree and composer DOM identity')
     malformedGraph = true
-    await waitFor(window, `document.querySelector('.projects-sidebar')?.textContent.includes('Cannot read conversations')`)
+    live.publisher.invalidateSessions()
+    await waitFor(window, `document.querySelector('.folders-sidebar')?.textContent.includes('Cannot read conversations')`)
     assert.equal(await evaluate(window, `window.modeRefs.card.isConnected && document.querySelector('.primary-conversation textarea').value === 'Keep this exact unsent draft'`), true)
     malformedGraph = false
-    await waitFor(window, `!document.querySelector('.projects-sidebar')?.textContent.includes('Cannot read conversations')`)
+    live.publisher.invalidateSessions()
+    await waitFor(window, `!document.querySelector('.folders-sidebar')?.textContent.includes('Cannot read conversations')`)
 
     await click(window, card(task))
     await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes(${JSON.stringify(task)})`)
@@ -270,6 +281,7 @@ async function runViewport(origin: string, width: number, height: number) {
     sessions.find(item => item.sessionId === nested)!.executionStatus = 'completed'
     sessions.find(item => item.sessionId === task)!.waitingForCall = false
     sessions.find(item => item.sessionId === task)!.executionStatus = 'running'
+    live.publisher.invalidateSessions(nested)
     await waitFor(window, `document.querySelector('.child-conversation .execution-summary')?.textContent.includes('Completed')`)
     assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation .execution-summary .activity-spinner')`), false, 'Terminal call never remains animated')
     await screenshot(window, `subagent-mode-nested-${viewport}`)
@@ -290,8 +302,8 @@ async function runViewport(origin: string, width: number, height: number) {
     await waitFor(window, `!document.querySelector('.child-conversation')`)
     assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
 
-    if (width <= 700) await click(window, '.mobile-sessions-toggle')
-    await click(window, '.projects-sidebar .session-select[aria-label="Quoted side chat"]')
+    if (width <= 700) await click(window, '.projects-mobile-toggle')
+    await click(window, '.folders-sidebar .session-select[aria-label="Quoted side chat"]')
     await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes('Side chat quotation source.') && !!document.querySelector('.child-conversation textarea') && !document.querySelector('.child-conversation .chat-messages')?.textContent.includes('Loading history')`)
     assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea') === window.modeRefs.input && window.modeRefs.input.value === 'Keep this exact unsent draft'`), true, 'Context-only fork must retain its original primary pane and draft')
     assert.equal(await evaluate(window, `new URLSearchParams(location.search).get('child')`), userFork)
@@ -311,6 +323,7 @@ async function runViewport(origin: string, width: number, height: number) {
     })()`)
     await click(window, '.selection-menu button[aria-keyshortcuts="Q"]')
     await waitFor(window, `document.querySelector('.child-conversation textarea')?.value.includes('> Side chat quotation source.')`)
+    live.publisher.invalidateSessions(userFork)
     const refreshDeadline = Date.now() + 10000
     while (graphRequests <= beforeForkRefresh && Date.now() < refreshDeadline) await new Promise(resolve => setTimeout(resolve, 50))
     assert.ok(graphRequests > beforeForkRefresh)
@@ -319,8 +332,8 @@ async function runViewport(origin: string, width: number, height: number) {
     await click(window, '.close-child')
     await waitFor(window, `!document.querySelector('.child-conversation')`)
 
-    if (width <= 700) await click(window, '.mobile-sessions-toggle')
-    await click(window, '.projects-sidebar .session-select[aria-label="Reusable explorer"]')
+    if (width <= 700) await click(window, '.projects-mobile-toggle')
+    await click(window, '.folders-sidebar .session-select[aria-label="Reusable explorer"]')
     await waitFor(window, `!!document.querySelector('.child-conversation textarea')`)
     await evaluate(window, `(() => {
       const input = document.querySelector('.child-conversation textarea');
@@ -328,28 +341,32 @@ async function runViewport(origin: string, width: number, height: number) {
     })()`)
     sessions.find(item => item.sessionId === reusable)!.waitingForCall = true
     sessions.find(item => item.sessionId === reusableCall)!.executionStatus = 'running'
-    await waitFor(window, `document.querySelector('.child-conversation .chat-working')?.textContent.includes('Waiting for call') && document.querySelector('.child-conversation textarea')?.disabled === true`)
+    live.publisher.invalidateSessions(reusable)
+    await waitFor(window, `document.querySelector('.child-conversation .chat-working')?.textContent.includes('Waiting for call') && document.querySelector('.child-conversation textarea')?.disabled === false`)
     assert.equal(await evaluate(window, `!!document.querySelector('.child-conversation .chat-working .activity-spinner, .child-conversation .working-wave, .child-conversation .yield-question')`), false)
     assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
     sessions.find(item => item.sessionId === reusable)!.waitingForCall = false
     sessions.find(item => item.sessionId === reusableCall)!.executionStatus = 'completed'
+    live.publisher.invalidateSessions(reusable)
     await waitFor(window, `document.querySelector('.child-conversation textarea')?.disabled === false`)
     assert.equal(await evaluate(window, `document.querySelector('.child-conversation textarea').value`), 'Keep reusable draft')
     reusableYield = true
+    live.publisher.invalidateSessions(reusable)
     await waitFor(window, `document.querySelector('.child-conversation .yield-question')?.textContent.includes('Which verification should continue?')`)
     assert.equal(await evaluate(window, `document.querySelector('.child-conversation .chat-working').textContent.includes('Waiting for a response')`), true)
     reusableYield = false
+    live.publisher.invalidateSessions(reusable)
     await waitFor(window, `!document.querySelector('.child-conversation .yield-question')`)
     await click(window, '.close-child')
     await waitFor(window, `!document.querySelector('.child-conversation')`)
 
-    // The root stream and file preview remain independent of execution inspection.
+    // Root chat events and file previews remain independent of execution inspection.
     if (width > 700) {
       await click(window, '.primary-conversation .tree-row[data-path="fixture.txt"]')
       await waitFor(window, `document.querySelector('.primary-conversation .file-document')?.textContent.includes('Synthetic preview content')`)
       rootStreaming = true
-      for (const stream of streams) stream.write(`data: ${JSON.stringify({ event: 'response', content: 'Synthetic live response', done: false })}\n\n`)
-      await waitFor(window, `document.querySelector('.primary-conversation textarea')?.disabled === true`)
+      live.chat(root, { event: 'response', content: 'Synthetic live response', done: false })
+      await waitFor(window, `!!document.querySelector('.primary-conversation [aria-label="Stop current request"]') && document.querySelector('.primary-conversation textarea')?.disabled === false`)
       assert.equal(await evaluate(window, `document.querySelector('.primary-conversation .conversation-document').getClientRects().length`), 0)
       await click(window, '.primary-conversation .conversation-tab button')
       await click(window, card(task))
@@ -357,11 +374,12 @@ async function runViewport(origin: string, width: number, height: number) {
       assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
       await click(window, '.close-child')
       rootStreaming = false
-      for (const stream of streams) stream.write(`data: ${JSON.stringify({ event: 'response', content: 'Synthetic live response', done: true })}\n\n`)
+      live.finish(root)
     }
     await waitFor(window, `document.querySelector('.primary-conversation textarea')?.disabled === false`)
-    const emit = (payload: unknown) => { for (const stream of streams) stream.write(`data: ${JSON.stringify(payload)}\n\n`) }
+    const emit = (payload: Parameters<LiveFixture['chat']>[1]) => live.chat(root, payload)
     const liveId = `web:chat-mode-live-${width}`
+    liveExecutions.add(liveId)
     emit({ event: 'tool_call', toolCallId: `spawn-${liveId}`, toolName: 'subagent',
       toolCall: { name: 'subagent', arguments: { mode: 'task', description: 'Live delegated work', task: 'Synthetic assignment' } }, done: false })
     await waitFor(window, `Array.from(document.querySelectorAll('.primary-conversation .execution-inspect')).some(button => button.disabled && button.textContent.includes('Live delegated work'))`)
@@ -371,10 +389,12 @@ async function runViewport(origin: string, width: number, height: number) {
     emit({ event: 'tool_result', toolCallId: `spawn-${parallelId}`, toolName: 'subagent',
       content: JSON.stringify({ sessionId: parallelId, mode: 'task', status: 'completed' }), done: false })
     sessions.push({ sessionId: liveId, title: 'Live delegated work', mode: 'task', agentType: 'explore', parentSessionId: root, executionStatus: 'running' })
+    live.publisher.invalidateSessions(liveId)
     await waitFor(window, `!!document.querySelector(${JSON.stringify(card(liveId))}) && !document.querySelector(${JSON.stringify(card(liveId))}).disabled`)
     emit({ event: 'tool_result', toolCallId: `spawn-${liveId}`, toolName: 'subagent',
       content: JSON.stringify({ sessionId: liveId, mode: 'task', status: 'running' }), done: false })
     emit({ event: 'response', content: 'Parent continues after admission.', done: true })
+    live.finish(root)
     await waitFor(window, `document.querySelector('.primary-conversation textarea')?.disabled === false`)
     assert.equal(await evaluate(window, `document.querySelector(${JSON.stringify(card(parallelId))})?.textContent.includes('Parallel delegated work')`), true, 'Parallel results keep their originating tool card')
     assert.equal(await evaluate(window, `document.querySelector(${JSON.stringify(card(liveId))})?.textContent.includes('Live delegated work')`), true, 'The later result cannot overwrite the earlier parallel result')
@@ -386,12 +406,13 @@ async function runViewport(origin: string, width: number, height: number) {
       ],
     }
     sessions.find(item => item.sessionId === liveId)!.executionStatus = 'completed'
-    receivedEvents.push(completion)
+    live.publisher.invalidateSessions(liveId)
     emit({ event: 'session_message', message: completion })
-    emit({ event: 'session_message', message: completion })
+    live.publisher.chat(root, { event: 'session_message', message: completion })
     await waitFor(window, `document.querySelector('[data-event-id="inline-result"] .event-body')?.innerText.includes('Synthetic result: 56')`)
     assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').disabled`), false, 'Receiving a task result does not pretend the parent is working')
     emit({ event: 'response', content: 'Parent acknowledges the completed task.', done: true })
+    live.finish(root)
     await waitFor(window, `document.querySelector('.primary-conversation .chat-messages')?.textContent.includes('Parent acknowledges')`)
     assert.equal(await evaluate(window, `document.querySelectorAll('[data-event-id="inline-result"]').length`), 1, 'Event ID deduplicates live delivery')
     assert.equal(await evaluate(window, `(() => {
@@ -410,6 +431,15 @@ async function runViewport(origin: string, width: number, height: number) {
   } catch (cause) {
     await screenshot(window, `subagent-mode-failure-${viewport}`)
     console.log(`LAYOUT_SUBAGENT_MODE_FAILURE ${JSON.stringify(await evaluate(window, 'document.body.innerText.slice(0, 3500)'))}`)
+    if (sessions.find(item => item.sessionId === task)?.waitingForCall) {
+      const beforeReload = await evaluate(window, `document.querySelector(${JSON.stringify(card(task))})?.textContent`)
+      await window.reload()
+      await waitFor(window, `!!document.querySelector(${JSON.stringify(card(task))})`)
+      console.log(`LAYOUT_SUBAGENT_MODE_REFRESH ${JSON.stringify({
+        beforeReload, afterReload: await evaluate(window, `document.querySelector(${JSON.stringify(card(task))})?.textContent`),
+        task: sessions.find(item => item.sessionId === task), graphRequests, topics: live.connections.filter(connection => !connection.closed).map(connection => connection.topics),
+      })}`)
+    }
     throw cause
   } finally { window.destroy() }
 }
@@ -429,7 +459,7 @@ async function main() {
     console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: false, error: String(cause), failures })}`)
     process.exitCode = 1
   } finally {
-    for (const stream of streams) stream.end()
+    live.close()
     server.closeAllConnections()
     server.close()
     app.exit(Number(process.exitCode ?? 0))

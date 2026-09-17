@@ -5,13 +5,21 @@
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-600">Log Stream</h2>
         <div class="flex items-center gap-2 text-xs text-ink/60">
-          <span class="tag" :class="{ active: connected }">{{ connected ? 'Live' : 'Connecting...' }}</span>
+          <span class="tag" :class="{ active: connected && !error && !windowFull }">{{ error ? 'Needs retry' : windowFull ? 'Paused' : connected ? 'Live' : 'Connecting...' }}</span>
         </div>
       </div>
       <p class="mt-2 text-sm text-ink/60">Live tail of logs. Newest entries appear at the top.</p>
+      <div v-if="error" role="alert" class="mt-3 text-sm">
+        {{ error }} <button class="btn ghost" @click="retryLogs">Retry logs</button>
+      </div>
+      <div v-if="windowFull" role="status" class="mt-3 text-sm">
+        Live buffer full. Older pages and selection are preserved.
+        <button class="btn ghost" @click="refreshLogs">Load latest logs</button>
+      </div>
 
       <div class="mt-4">
-        <div v-if="logEntries.length === 0" class="text-ink/40">No logs yet.</div>
+        <div v-if="loading" role="status" class="text-sm text-ink/60">Loading logs…</div>
+        <div v-if="logEntries.length === 0 && !loading && !error" class="text-ink/40">No logs yet.</div>
         <LogList v-else :entries="logEntries" :selected-id="selectedLog?.id" :height="560" @select="selectLog"
           @load-more="loadMoreLogs" />
       </div>
@@ -110,7 +118,9 @@
 
 <script setup lang="ts">
 import { apiUrl } from '../api-url.ts'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
+import { createLiveRefresh } from '../live-refresh.ts'
 import LogList, { type LogEntry } from './LogList.vue'
 
 export type PromptMessage = {
@@ -130,10 +140,15 @@ const connected = ref(false)
 const loading = ref(false)
 const hasMore = ref(true)
 
-let eventSource: EventSource | null = null
-let reconnectTimer: number | null = null
+const pool = useLiveClientPool()
+const error = ref('')
+const windowFull = ref(false)
+let refreshLogs = () => {}
+let retryLogs = () => {}
+let loadMoreLogs = async () => {}
 let logSeq = 0
 const PAGE_SIZE = 20
+const LIVE_LIMIT = 1000
 
 const isTraceLog = computed(() => selectedLog.value?.kind === 'trace')
 
@@ -211,118 +226,154 @@ const traceResponseMessages = computed<PromptMessage[]>(() => {
   return [{ role: 'assistant', content: content == null ? '' : String(content), tool_calls: mappedToolCalls }]
 })
 
-function buildUrl(path: string, params?: Record<string, string>): string {
-  const url = apiUrl(props.apiBase, path)
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, value)
-    }
-  }
-  return url.toString()
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-/**
- * Load initial logs (newest first, displayed at the top).
- * Uses cursor-based pagination with the SQLite backend.
- */
-async function loadInitialLogs(): Promise<void> {
-  if (loading.value) return
+function validatedLog(value: unknown): LogEntry {
+  if (!record(value) || !Number.isSafeInteger(value.id) || Number(value.id) <= 0
+    || typeof value.time !== 'number' || !Number.isFinite(value.time) || !('body' in value)) {
+    throw new Error('Invalid log record received.')
+  }
+  for (const key of ['attributes', 'resource', 'scope']) {
+    const raw = value[key]
+    const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (parsed == null) continue
+    if (key === 'attributes'
+      ? !Array.isArray(parsed) || !parsed.every(item => record(item) && typeof item.key === 'string')
+      : !record(parsed)) throw new Error(`Invalid log ${key}.`)
+  }
+  return apiEntryToLogEntry(value)
+}
+
+function mergeLogs(entries: LogEntry[]): LogEntry[] {
+  return [...new Map(entries.map(entry => [entry.id, entry])).values()]
+    .sort((a, b) => (b.dbId ?? 0) - (a.dbId ?? 0))
+}
+
+watch(() => props.apiBase, (base, _previous, onCleanup) => {
+  const scope = new AbortController()
+  let page: AbortController | undefined
+  let automaticCount = 0
+  let buffering = true
+  let retryPage = false
+  const pending = new Map<string, LogEntry>()
+  logEntries.value = []
+  selectedLog.value = null
+  error.value = ''
+  windowFull.value = false
+  hasMore.value = true
   loading.value = true
-  try {
-    // Load newest PAGE_SIZE entries (API returns newest first by default)
-    const res = await fetch(buildUrl('/v1/query/logs', { limit: String(PAGE_SIZE) }))
-    const data = await res.json()
-    const entries: Record<string, unknown>[] = data.entries ?? []
-    const total = data.total ?? 0
-
-    if (entries.length === 0) {
-      hasMore.value = false
-      return
-    }
-
-    // Convert API entries to LogEntry format
-    logEntries.value = entries.map((entry) => apiEntryToLogEntry(entry))
-    hasMore.value = entries.length < total
-  } catch {
-    // ignore
-  } finally {
-    loading.value = false
-  }
-}
-
-/**
- * Load more (older) logs when user scrolls to bottom.
- * Uses cursor-based pagination (beforeId).
- */
-async function loadMoreLogs(): Promise<void> {
-  if (loading.value || !hasMore.value || logEntries.value.length === 0) return
-  loading.value = true
-  try {
-    // Get the oldest entry's ID to paginate before it
-    const oldestEntry = logEntries.value[logEntries.value.length - 1]
-    const oldestId = oldestEntry.dbId
-
-    if (!oldestId) {
-      hasMore.value = false
-      return
-    }
-
-    const res = await fetch(buildUrl('/v1/query/logs', { beforeId: String(oldestId), limit: String(PAGE_SIZE) }))
-    const data = await res.json()
-    const entries: Record<string, unknown>[] = data.entries ?? []
-
-    if (entries.length === 0) {
-      hasMore.value = false
-      return
-    }
-
-    // Append older entries to the end
-    const newEntries = entries.map((entry) => apiEntryToLogEntry(entry))
-    logEntries.value = [...logEntries.value, ...newEntries]
-    hasMore.value = entries.length >= PAGE_SIZE
-  } catch {
-    // ignore
-  } finally {
-    loading.value = false
-  }
-}
-
-function stopStreaming(): void {
   connected.value = false
-  if (reconnectTimer) {
-    window.clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
-}
 
-function startSse(): void {
-  eventSource = new EventSource(buildUrl('/v1/stream/logs'))
-  eventSource.addEventListener('hello', () => {
-    connected.value = true
+  async function query(signal: AbortSignal, beforeId?: number) {
+    const url = apiUrl(base, '/v1/query/logs')
+    url.searchParams.set('limit', String(PAGE_SIZE))
+    if (beforeId !== undefined) url.searchParams.set('beforeId', String(beforeId))
+    const response = await fetch(url, { signal })
+    if (!response.ok) throw new Error(`Log query failed (${response.status}).`)
+    const data: unknown = await response.json()
+    if (!record(data) || !Array.isArray(data.entries) || typeof data.total !== 'number' || !Number.isFinite(data.total)) {
+      throw new Error('Invalid log query response.')
+    }
+    return { entries: data.entries.map(validatedLog), total: data.total }
+  }
+  const snapshot = createLiveRefresh({
+    load: signal => {
+      buffering = true
+      loading.value = true
+      return query(signal)
+    },
+    apply: data => {
+      const merged = mergeLogs([...data.entries, ...pending.values()])
+      logEntries.value = merged.slice(0, LIVE_LIMIT)
+      automaticCount = logEntries.value.length
+      windowFull.value = merged.length >= LIVE_LIMIT
+      pending.clear()
+      buffering = false
+      hasMore.value = data.entries.length < data.total
+      loading.value = false
+      error.value = ''
+    },
+    onError: () => {
+      loading.value = false
+      error.value = 'Could not load saved logs. Check Main and retry.'
+    },
   })
-  eventSource.addEventListener('log', (event) => {
-    const data = (event as MessageEvent).data
-    if (data) {
-      try {
-        const entry = JSON.parse(String(data)) as Record<string, unknown>
-        // Prepend new logs to the top (newest first)
-        logEntries.value = [apiEntryToLogEntry(entry), ...logEntries.value]
-      } catch {
-        // Ignore parse errors
+  refreshLogs = () => {
+    page?.abort()
+    page = undefined
+    retryPage = false
+    pending.clear()
+    buffering = true
+    loading.value = true
+    snapshot.refresh()
+  }
+  loadMoreLogs = async () => {
+    if (loading.value || !hasMore.value || !logEntries.value.length) return
+    const beforeId = logEntries.value.at(-1)?.dbId
+    if (beforeId === undefined) return
+    const current = new AbortController()
+    page = current
+    const signal = AbortSignal.any([scope.signal, current.signal, AbortSignal.timeout(15_000)])
+    loading.value = true
+    try {
+      const data = await query(signal, beforeId)
+      signal.throwIfAborted()
+      logEntries.value = mergeLogs([...logEntries.value, ...data.entries])
+      hasMore.value = data.entries.length >= PAGE_SIZE
+      retryPage = false
+      error.value = ''
+    } catch {
+      if (!scope.signal.aborted && !current.signal.aborted) {
+        retryPage = true
+        error.value = 'Could not load older logs. Retry to keep browsing.'
+      }
+    } finally {
+      if (page === current) {
+        page = undefined
+        loading.value = false
       }
     }
+  }
+  retryLogs = () => { if (retryPage) void loadMoreLogs(); else refreshLogs() }
+  const subscription = pool.client(base).subscribe({
+    kind: 'logs', projectId: liveProjectId(base),
+  }, {
+    event: envelope => {
+      try {
+        const entry = validatedLog(envelope.payload)
+        if (buffering) {
+          pending.set(entry.id, entry)
+          if (pending.size > LIVE_LIMIT) pending.delete(pending.keys().next().value!)
+        } else if (logEntries.value.some(item => item.id === entry.id)) {
+          return
+        } else if (automaticCount < LIVE_LIMIT) {
+          automaticCount++
+          logEntries.value = [entry, ...logEntries.value]
+        } else {
+          // Freeze the contiguous window rather than evicting explicitly loaded history.
+          windowFull.value = true
+        }
+      } catch {
+        error.value = 'Could not read a live log. Retry logs to reload saved state.'
+      }
+    },
+    reset: () => refreshLogs(),
   })
-  eventSource.addEventListener('error', () => {
-    stopStreaming()
-    reconnectTimer = window.setTimeout(() => {
-      startSse()
-    }, 1500)
+  const observe = pool.observe(statuses => {
+    connected.value = statuses.length > 0 && statuses.every(status => status.phase === 'live')
   })
-}
+  snapshot.refresh()
+  onCleanup(() => {
+    subscription.close()
+    scope.abort()
+    page?.abort()
+    snapshot.dispose()
+    observe()
+    pending.clear()
+  })
+}, { immediate: true })
 
 function selectLog(entry: LogEntry): void {
   selectedLog.value = entry
@@ -451,8 +502,7 @@ function parseOtelAttributes(raw: unknown): Record<string, string> {
  * otel_logs schema: id, time, observed_time, severity, severity_text, body, attributes, trace_id, span_id, resource, scope
  */
 function apiEntryToLogEntry(entry: Record<string, unknown>): LogEntry {
-  logSeq += 1
-  const id = `log-${logSeq}`
+  const id = `log-${entry.id}`
   const dbId = typeof entry.id === 'number' ? entry.id : undefined
 
   // Unwrap OTLP AnyValue body → plain string
@@ -542,15 +592,6 @@ function buildTraceSummary(parsed: Record<string, unknown>): string {
 
 watch(() => logEntries.value.length, (count) => {
   emit('update:logCount', count)
-})
-
-onMounted(async () => {
-  await loadInitialLogs()
-  startSse()
-})
-
-onBeforeUnmount(() => {
-  stopStreaming()
 })
 
 defineExpose({ logCount: computed(() => logEntries.value.length) })

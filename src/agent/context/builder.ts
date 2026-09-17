@@ -14,7 +14,7 @@ import type { ChannelAddress } from '../../bus/events.ts'
  * fields, not per-message execution state.
  */
 export interface SessionPromptContext {
-  organizationId?: string
+  projectId?: string
   channelAddress?: ChannelAddress
   mode?: ExecutionMode
   /** Structural delegation owner, not a context-only fork source. */
@@ -32,8 +32,10 @@ export interface SessionPromptContext {
   defaultExecShell?: ExecShell
   /** Resolved agent type definition (from agent-types registry) */
   agent: AgentTypeDefinition
-  /** Project name for shared context (from SessionState). */
-  projectName?: string
+  /** Stable Initiative ID for shared work context (from SessionState). */
+  initiativeId?: string
+  /** Selected registered folder, independent of the effective workdir capability. */
+  folderId?: string
   /** Session id owning the shared working directory (subagents inherit the spawner's). */
   workspaceRoot?: string
   /** Node-bound capability selecting the session's effective working directory. */
@@ -59,6 +61,12 @@ export interface SystemPromptProvider {
   getPromptSection(
     ctx: SessionPromptContext,
   ): Promise<string | null> | string | null
+}
+
+export interface SystemPromptSection {
+  name: string
+  content: string
+  characters: number
 }
 
 /**
@@ -90,13 +98,19 @@ export class ContextBuilder {
   async buildSystemPrompt(
     ctx: SessionPromptContext,
   ): Promise<string> {
-    const sections: string[] = []
+    return (await this.buildSystemPromptDetails(ctx)).systemPrompt
+  }
 
+  async buildSystemPromptDetails(
+    ctx: SessionPromptContext,
+  ): Promise<{ systemPrompt: string; sections: SystemPromptSection[] }> {
+    const sections: SystemPromptSection[] = []
     for (const provider of this.providers) {
       const section = await provider.getPromptSection(ctx)
-      if (section?.trim()) sections.push(section.trim())
+      const content = section?.trim()
+      if (content) sections.push({ name: provider.name, content, characters: content.length })
     }
 
-    return sections.join('\n\n---\n\n')
+    return { systemPrompt: sections.map(section => section.content).join('\n\n---\n\n'), sections }
   }
 }

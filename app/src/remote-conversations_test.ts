@@ -2,13 +2,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { parse, compileScript, compileTemplate, compileStyle } from 'vue/compiler-sfc'
-import { createProjectChatDraft, createRemoteChatDraft, remoteConversationTargets } from './remote-conversations.ts'
-import { createProjectsClient, type ProjectRecord } from './projects-client.ts'
+import { createFolderChatDraft, createRemoteChatDraft, remoteConversationTargets } from './remote-conversations.ts'
+import { createFoldersClient, type FolderRecord } from './folders-client.ts'
 import { type NodeInventoryEntry } from './node-inventory.ts'
 
 const node: NodeInventoryEntry = {
   nodeId: 'wsl', displayName: 'WSL Ubuntu', role: 'child', connection: 'connected',
-  capabilities: [{ capabilityId: 'workspace', kind: 'workdir', displayName: 'Project', displayPath: '/home/test/project', online: true }],
+  capabilities: [{ capabilityId: 'workspace', kind: 'workdir', displayName: 'Folder', displayPath: '/home/test/folder', online: true }],
 }
 const target = remoteConversationTargets([node])[0]!
 const requestId = '11111111-1111-4111-8111-111111111111'
@@ -16,7 +16,7 @@ const requestId = '11111111-1111-4111-8111-111111111111'
 test('remote picker offers only Child workdir capabilities and never treats offline or revoked nodes as available', () => {
   assert.deepEqual(remoteConversationTargets([{ ...node, role: 'main' }]), [])
   assert.equal(target.available, true)
-  assert.equal(target.displayPath, '/home/test/project')
+  assert.equal(target.displayPath, '/home/test/folder')
   for (const connection of ['offline', 'revoked'] as const) {
     assert.equal(remoteConversationTargets([{ ...node, connection }])[0]?.available, false)
   }
@@ -34,7 +34,7 @@ test('remote drafts allocate nothing before first send and preserve one server i
   }
   const draft = createRemoteChatDraft('http://localhost', target, request, () => requestId)
   assert.equal(calls, 0)
-  assert.equal(draft.project, undefined)
+  assert.equal(draft.folder, undefined)
   assert.equal(draft.remote.nodeId, 'wsl')
   assert.deepEqual(await Promise.all([draft.prepare(), draft.prepare()]), ['web:chat-test', 'web:chat-test'])
   assert.equal(await draft.prepare(), 'web:chat-test')
@@ -44,15 +44,15 @@ test('remote drafts allocate nothing before first send and preserve one server i
 test('lost remote creation replies retry with the same draft UUID while another draft keeps its own identity', async () => {
   const bodies: Array<{ requestId: string; nodeId: string; capabilityId: string }> = []
   const request: typeof fetch = async (input, init) => {
-    assert.equal(String(input), 'http://fixture/organizations/a/api/sessions/remote')
+    assert.equal(String(input), 'http://fixture/projects/a/api/sessions/remote')
     const body = JSON.parse(String(init?.body))
     bodies.push(body)
     if (bodies.length === 1) throw new Error('Synthetic lost reply')
-    return Response.json({ chatId: `chat-${body.requestId}`, sessionId: `web:chat-${body.requestId}`, projectId: 'remote-project',
+    return Response.json({ chatId: `chat-${body.requestId}`, sessionId: `web:chat-${body.requestId}`, folderId: 'remote-folder',
       workdir: { version: 1, nodeId: 'wsl', capabilityId: 'workspace' } })
   }
-  const draft = createRemoteChatDraft('http://fixture/organizations/a/', target, request)
-  const other = createRemoteChatDraft('http://fixture/organizations/a/', target, request)
+  const draft = createRemoteChatDraft('http://fixture/projects/a/', target, request)
+  const other = createRemoteChatDraft('http://fixture/projects/a/', target, request)
   assert.equal(bodies.length, 0)
   await assert.rejects(draft.prepare(), /lost reply/)
   const sessionId = await draft.prepare()
@@ -65,26 +65,26 @@ test('lost remote creation replies retry with the same draft UUID while another 
   assert.deepEqual(Object.keys(bodies[0]).sort(), ['capabilityId', 'nodeId', 'requestId'])
 })
 
-test('reopened remote project drafts retain device metadata and retry with the same request and project identity', async () => {
-  const project: ProjectRecord = {
-    id: 'remote-project', name: 'Remote project', kind: 'remote', path: 'C:\\display-only', createdAt: '2026-09-14',
+test('reopened remote folder drafts retain device metadata and retry with the same request and folder identity', async () => {
+  const folder: FolderRecord = {
+    id: 'remote-folder', name: 'Remote folder', kind: 'remote', path: 'C:\\display-only', createdAt: '2026-09-14',
     workdir: { version: 1, nodeId: 'wsl', capabilityId: 'workspace' },
     identity: { version: 1, rootId: 'a'.repeat(64), ancestorIds: [] },
   }
   const calls: string[] = []
-  const draft = createProjectChatDraft(createProjectsClient('http://fixture/organizations/a/', async (input, init) => {
-    assert.equal(String(input), 'http://fixture/organizations/a/api/projects/remote-project/sessions')
+  const draft = createFolderChatDraft(createFoldersClient('http://fixture/projects/a/', async (input, init) => {
+    assert.equal(String(input), 'http://fixture/projects/a/api/folders/remote-folder/sessions')
     const body = JSON.parse(String(init?.body))
     assert.deepEqual(body, { requestId: body.requestId })
     calls.push(body.requestId)
     if (calls.length === 1) throw new Error('Synthetic lost reply')
     return Response.json({ chatId: 'chat-remote', sessionId: 'web:chat-remote' })
-  }), project)
+  }), folder)
   assert.deepEqual(calls, [])
   assert.ok('remote' in draft)
   assert.equal(draft.remote.nodeId, 'wsl')
   assert.equal(draft.remote.displayPath, 'C:\\display-only')
-  assert.equal(draft.project, project)
+  assert.equal(draft.folder, folder)
   await assert.rejects(draft.prepare(), /Cannot reach Main/)
   assert.equal(await draft.prepare(), 'web:chat-remote')
   assert.equal(await draft.prepare(), 'web:chat-remote')
@@ -104,11 +104,11 @@ test('unavailable and mismatched remote creation results fail without selecting 
   assert.equal(draft.remote.nodeId, 'wsl')
 })
 
-test('organization remote ownership rejection explains the required upgrade and retains the selected draft', async () => {
+test('project remote ownership rejection explains the required upgrade and retains the selected draft', async () => {
   const urls: string[] = []
-  const draft = createRemoteChatDraft('http://fixture/organizations/a/', target, async input => {
+  const draft = createRemoteChatDraft('http://fixture/projects/a/', target, async input => {
     urls.push(String(input))
-    return Response.json({ error: 'remote_project_identity_required', action: 'upgrade_node' }, { status: 409 })
+    return Response.json({ error: 'remote_folder_identity_required', action: 'upgrade_node' }, { status: 409 })
   })
   assert.equal(urls.length, 0)
   await assert.rejects(draft.prepare(), /Update Main and the device.*No local folder was used/)
@@ -116,13 +116,13 @@ test('organization remote ownership rejection explains the required upgrade and 
   assert.equal(draft.remote.capabilityId, 'workspace')
   await assert.rejects(draft.prepare(), /ownership verification/)
   assert.deepEqual(urls, [
-    'http://fixture/organizations/a/api/sessions/remote',
-    'http://fixture/organizations/a/api/sessions/remote',
+    'http://fixture/projects/a/api/sessions/remote',
+    'http://fixture/projects/a/api/sessions/remote',
   ])
 })
 
 test('remote selector and chat surfaces compile with accessible device selection and deferred creation', async () => {
-  for (const file of ['ExecutionLocationSelector.vue', 'ComposerPopover.vue', 'ProjectsSidebar.vue', 'ChatTab.vue', 'SessionHeading.vue', 'files/FileTree.vue', 'files/FileWorkbench.vue']) {
+  for (const file of ['ExecutionLocationSelector.vue', 'ComposerPopover.vue', 'FoldersSidebar.vue', 'ChatTab.vue', 'SessionHeading.vue', 'files/FileTree.vue', 'files/FileWorkbench.vue']) {
     const filename = new URL(`./components/${file}`, import.meta.url)
     const source = await readFile(filename, 'utf8')
     const { descriptor } = parse(source)

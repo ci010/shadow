@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  correlateToolSpans, eventMatches, fetchDiagnosisJson, formatTraceDuration, mergeTraceSpans, parseDiagnosisHistory, parseTracePage,
-  fitTraceWindow, spanDuration, spanMatches, stackTimelineItems, traceDuration, type SessionTraceSpan,
+  correlateModelSpans, correlateToolSpans, eventMatches, fetchDiagnosisJson, formatTraceDuration, mergeTraceSpans, parseDiagnosisHistory, parseTracePage, recordedModelResponse, traceKey,
+  DEFAULT_TRACE_WINDOW_MS, fitTraceWindow, latestTraceWindow, spanDuration, spanMatches, stackTimelineItems, traceDuration, type SessionTraceSpan,
 } from './session-diagnosis.ts'
 
 function span(overrides: Partial<SessionTraceSpan> = {}): SessionTraceSpan {
@@ -40,6 +40,7 @@ test('parallel tool results are paired by ID rather than adjacent position or na
   ] })
   assert.equal(events.filter(event => event.kind === 'TOOL').length, 3)
   assert.equal(events[1].result, 'A')
+  assert.deepEqual(JSON.parse(events[1].toolCall!), { id: 'first', function: { name: 'read', arguments: '{"path":"a"}' } })
   assert.equal(events[2].result, 'B')
   assert.equal(events[3].callId, 'orphan')
   assert.equal(events[4].kind, 'ASSISTANT')
@@ -52,12 +53,13 @@ test('tool calls without results or timestamps remain explicitly incomplete', ()
   assert.equal(events[0].result, undefined)
   assert.equal(events[0].timestamp, undefined)
   assert.equal(events[0].arguments, '{malformed')
+  assert.equal(JSON.parse(events[0].toolCall!).function.arguments, '{malformed')
 })
 
 test('search includes reasoning, arguments, results and errors without changing event classification', () => {
   const { events } = parseDiagnosisHistory({ messages: [
     { role: 'assistant', content: '', tool_calls: [{ id: 'call-1', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }] },
-    { role: 'tool', content: 'project instructions', tool_call_id: 'call-1' },
+    { role: 'tool', content: 'folder instructions', tool_call_id: 'call-1' },
   ] })
   assert.equal(eventMatches(events[0], 'readme', 'TOOL'), true)
   assert.equal(eventMatches(events[0], 'tool readme instructions'), true)
@@ -105,6 +107,19 @@ test('timeline zoom and panning stay inside recorded data and parallel calls rem
   assert.deepEqual(stackTimelineItems([{ start: 0, end: 100 }, { start: 10, end: 50 }, { start: 110, end: 200 }]).map(item => item.track), [0, 1, 0])
 })
 
+test('default trace window shows exactly the latest five minutes, not the whole conversation', () => {
+  const start = Date.parse('2026-09-17T00:00:00Z')
+  const end = start + 6 * 60 * 60 * 1000
+  assert.equal(DEFAULT_TRACE_WINDOW_MS, 300_000)
+  assert.deepEqual(latestTraceWindow({ start, end }), { start: end - 300_000, end })
+  assert.deepEqual(latestTraceWindow({ start, end: start + 1000 }), { start, end: start + 1000 })
+  assert.deepEqual(latestTraceWindow({ start, end: start }), { start, end: start })
+  assert.deepEqual(latestTraceWindow({ start: 0, end: 0 }), { start: 0, end: 0 })
+  const manual = { start: start + 600_000, end: start + 900_000 }
+  assert.deepEqual(fitTraceWindow(manual, { start: start - 600_000, end: end + 600_000 }), manual)
+  assert.deepEqual(latestTraceWindow({ start, end: end + 600_000 }), { start: end + 300_000, end: end + 600_000 })
+})
+
 test('reused provider call IDs never attach another turn timing or result to a trace span', () => {
   const message = (id: string) => ({ role: 'assistant', tool_calls: [{ id, function: { name: 'read', arguments: '{}' } }] })
   const { events } = parseDiagnosisHistory({ messages: [message('reused'), { role: 'tool', tool_call_id: 'reused', content: 'first' }, message('reused'), { role: 'tool', tool_call_id: 'reused', content: 'second' }, message('unique')] })
@@ -119,4 +134,53 @@ test('an older running backend gives an actionable trace upgrade message', async
   t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 404 }))
   await assert.rejects(fetchDiagnosisJson(new URL('http://localhost/v1/query/session-spans'), new AbortController().signal), /Restart Shadow/)
   await assert.rejects(fetchDiagnosisJson(new URL('http://localhost/api/sessions/missing'), new AbortController().signal), /HTTP 404/)
+})
+
+test('model response snapshots display returned content, reasoning, usage and tool-only messages', () => {
+  const message = {
+    role: 'assistant', content: 'Final model response', reasoning_text: 'Visible reasoning',
+    usage: { totalTokens: 12 },
+    tool_calls: [{ id: 'call-1', function: { name: 'read', arguments: '{"path":"fixture.txt"}' } }],
+  }
+  const model = span({ events: [{ name: 'model.response', time: 2000, attributes: { message: JSON.stringify(message) } }] })
+  const detail = recordedModelResponse(model)!
+  assert.equal(detail.source, 'recorded')
+  assert.equal(detail.event.content, message.content)
+  assert.equal(detail.event.reasoning, message.reasoning_text)
+  assert.deepEqual(JSON.parse(detail.event.toolCalls!), message.tool_calls)
+  assert.deepEqual(JSON.parse(detail.event.usage!), message.usage)
+  assert.equal(recordedModelResponse({ ...model, name: 'agent.tool' }), undefined)
+  assert.equal(recordedModelResponse(span()), undefined)
+  assert.equal(recordedModelResponse({ ...model, events: [{ name: 'model.response', time: 2000, attributes: { message: JSON.stringify({ ...message, content: null, reasoning_text: undefined }) } }] })?.event.content, '')
+  assert.throws(() => recordedModelResponse(span({ events: [{ name: 'model.response', time: 0, attributes: { message: '{invalid' } }] })), /invalid message JSON/)
+  assert.throws(() => recordedModelResponse(span({ events: [{ name: 'model.response', time: 0, attributes: {} }] })), /missing its message/)
+})
+
+test('legacy model responses match original message positions and completion intervals, including tool-only returns', () => {
+  const messages = [
+    { role: 'user', content: 'Start', timestamp: new Date(500).toISOString() },
+    { role: 'assistant', content: null, timestamp: new Date(2000).toISOString(), tool_calls: [{ id: 'call-1', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'call-1', content: 'result', timestamp: new Date(2200).toISOString() },
+    { role: 'assistant', content: 'Finished', timestamp: new Date(4000).toISOString() },
+  ]
+  const chats = [
+    span({ endTime: 2000.5, attributes: { 'llm.input_messages': '2' } }),
+    span({ spanId: 'second', startTime: 3000, endTime: 4000, attributes: { 'llm.input_messages': '4' } }),
+  ]
+  for (const history of [messages, [{ role: 'system', content: 'System' }, ...messages]]) {
+    const { events, modelResponses } = parseDiagnosisHistory({ messages: history })
+    assert.equal(events.filter(event => event.kind === 'ASSISTANT').length, 1, 'Tool-only replies do not add duplicate recorded events')
+    assert.equal(modelResponses.length, 2)
+    const matched = correlateModelSpans(modelResponses, chats)
+    assert.equal(matched.get(traceKey(chats[0]))?.source, 'history')
+    assert.equal(JSON.parse(matched.get(traceKey(chats[0]))!.event.toolCalls!)[0].id, 'call-1')
+    assert.equal(matched.get(traceKey(chats[1]))?.event.content, 'Finished')
+  }
+  const { modelResponses } = parseDiagnosisHistory({ messages })
+  assert.equal(correlateModelSpans(modelResponses, [span({ attributes: {} })]).size, 0)
+  assert.equal(correlateModelSpans(modelResponses, [{ ...chats[0], live: true }]).size, 0)
+  assert.equal(correlateModelSpans(modelResponses, [{ ...chats[0], statusCode: 2 }]).size, 0)
+  assert.equal(correlateModelSpans(modelResponses, [{ ...chats[0], endTime: 2100 }]).size, 0)
+  assert.equal(correlateModelSpans(modelResponses, [{ ...chats[0], endTime: 800 }, { ...chats[0], spanId: 'retry' }]).size, 1, 'Earlier abandoned attempt cannot steal a retry response')
+  assert.equal(correlateModelSpans([...modelResponses, { ...modelResponses[0], id: 'ambiguous' }], chats).size, 1, 'Ambiguous positions are not guessed')
 })

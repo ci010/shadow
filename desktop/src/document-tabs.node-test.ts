@@ -9,7 +9,7 @@ class FakeWindow extends EventEmitter {
   messages: unknown[] = []
   webContents = Object.assign(new EventEmitter(), {
     isDestroyed: () => this.destroyed,
-    send: (channel: string, direction: number | 'close') => { this.messages.push([channel, direction]) },
+    send: (channel: string, direction: number | 'close' | 'close-all') => { this.messages.push([channel, direction]) },
   })
   isDestroyed = () => this.destroyed
 }
@@ -56,16 +56,16 @@ test('native dispatch preserves other modifiers, plain Tab, key-up and compositi
 
 test('preload only relays validated directions and removes its listener on disposal', () => {
   const ipc = new EventEmitter()
-  const directions: Array<number | 'close'> = []
+  const directions: Array<number | 'close' | 'close-all'> = []
   const dispose = receiveDocumentTabShortcuts(ipc, direction => { directions.push(direction) })
-  for (const value of [1, -1, 'close', 'delete', 0, '1', null, {}, true, undefined]) {
+  for (const value of [1, -1, 'close', 'close-all', 'delete', 0, '1', null, {}, true, undefined]) {
     ipc.emit(DOCUMENT_TAB_CHANNEL, {}, value)
   }
-  assert.deepEqual(directions, [1, -1, 'close'])
+  assert.deepEqual(directions, [1, -1, 'close', 'close-all'])
   dispose()
   dispose()
   ipc.emit(DOCUMENT_TAB_CHANNEL, {}, 1)
-  assert.deepEqual(directions, [1, -1, 'close'])
+  assert.deepEqual(directions, [1, -1, 'close', 'close-all'])
   assert.equal(ipc.listenerCount(DOCUMENT_TAB_CHANNEL), 0)
 })
 
@@ -95,10 +95,23 @@ test('native Ctrl+W closes one document and suppresses the window accelerator in
   window.webContents.emit('before-input-event', event, { ...input, key: 'W', code: 'KeyW', isAutoRepeat: true })
   assert.equal(prevented, 2)
   assert.deepEqual(window.messages, [[DOCUMENT_TAB_CHANNEL, 'close']])
-  for (const patch of [{ shift: true }, { meta: true }, { alt: true }, { control: false }, { isComposing: true }, { type: 'keyUp' }]) {
+  for (const patch of [{ meta: true }, { alt: true }, { control: false }, { isComposing: true }, { type: 'keyUp' }]) {
     window.webContents.emit('before-input-event', { preventDefault: () => assert.fail('unrelated shortcut consumed') },
       { ...input, key: 'w', code: 'KeyW', ...patch })
   }
   window.emit('closed')
   assert.equal(window.webContents.listenerCount('before-input-event'), 0)
+})
+
+test('native Ctrl+Shift+W closes all files once without triggering window close', () => {
+  const window = new FakeWindow()
+  const dispose = installDocumentTabShortcuts(window)
+  let prevented = 0
+  for (const isAutoRepeat of [false, true]) {
+    window.webContents.emit('before-input-event', { preventDefault: () => { prevented++ } },
+      { ...input, key: 'W', code: 'KeyW', shift: true, isAutoRepeat })
+  }
+  assert.equal(prevented, 2)
+  assert.deepEqual(window.messages, [[DOCUMENT_TAB_CHANNEL, 'close-all']])
+  dispose()
 })

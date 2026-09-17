@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { installDocumentTabShortcuts } from '../../src/document-tabs.js'
 import { installWindowControls } from '../../src/window-controls.js'
-import { installProjectDirectoryPicker } from '../../src/project-directories.js'
+import { installFolderDirectoryPicker } from '../../src/folder-directories.js'
 import { installChatContextPickers } from '../../src/chat-context.js'
 
 const argument = process.argv.find(value => value.startsWith('--layout-root='))?.slice('--layout-root='.length)
@@ -39,7 +39,7 @@ async function main() {
       const cleanup = [
         installWindowControls(ipcMain, window),
         installDocumentTabShortcuts(window),
-        installProjectDirectoryPicker(ipcMain, window, async () => null),
+        installFolderDirectoryPicker(ipcMain, window, async () => null),
         installChatContextPickers(ipcMain, window, { selectFiles: async () => [], selectFolders: async () => [] }),
       ]
       let closed = false

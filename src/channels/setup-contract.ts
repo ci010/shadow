@@ -17,7 +17,7 @@ export interface ChannelSetupStatus {
 
 export interface BotInstanceStatus extends Omit<ChannelSetupStatus, 'id'> {
   id: string
-  organizationId: string
+  projectId: string
   platform: ChannelId
   displayName: string
 }

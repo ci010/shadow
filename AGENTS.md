@@ -43,9 +43,10 @@ dependency, JSR import scheme, or a compatibility shim to emulate Deno.
 | `pnpm build:all` | Build both |
 | `pnpm test` | Existing backend, script, and frontend-logic tests using Node with `tsx` |
 | `pnpm test:desktop` | Electron lifecycle/bootstrap tests |
-| `pnpm typecheck` | Backend/scripts and desktop TypeScript checks |
+| `pnpm test:release` | Focused build, package, service-mode and Electron release checks |
+| `pnpm typecheck` | Backend/scripts, desktop and Vue application typechecks |
 | `pnpm desktop:dev` | Build and launch the development desktop path |
-| `pnpm desktop` | Build the current Windows installer target |
+| `pnpm desktop` | Validate, build and verify the current Windows installer target |
 
 For a focused test, use, for example:
 
@@ -67,6 +68,7 @@ particular command covers all packages.
 | Composition and CLI | `src/index.ts`, `src/runtime/`, `src/runtime/main/` |
 | Message routing and session loop | `src/agent/app.ts`, `src/sessions/` |
 | Context, identity, memory | `src/agent/context/`, `src/agent/memory.ts`, `src/sessions/handoff/`, `src/agent/learning/` |
+| Projects, folders, and initiatives | `src/projects/` owns runtime/data boundaries; `src/folders/` owns file resources; `src/initiatives/` owns coordinated work |
 | Provider implementations | `src/providers/` |
 | Tool contracts and implementations | `src/tools/context.ts`, `src/tools/`, `src/script-runtime/`, `src/tools/hooks/` |
 | Skills and runtime agent definitions | `src/skills/`, `src/agent/types/` |
@@ -92,7 +94,7 @@ current task's explicit ownership.
   contracts instead of importing backend services into the renderer.
 - Keep Main composition under `src/runtime/main/`; `src/index.ts` is the stable
   process entrypoint. Execution capabilities must not import HTTP gateway code.
-  Organization scopes belong to `src/organizations/`, with telemetry context
+  Project scopes belong to `src/projects/`, with telemetry context
   integration under `src/otel/`. Slash-command handlers adapt learning services,
   rather than owning pipelines or persistence. Keep platform SDKs with channels,
   not in general-purpose `utils`.
@@ -101,6 +103,11 @@ current task's explicit ownership.
 - Preserve logical session IDs, physical segments, parent/child lineage,
   workdir references, and tool-call/result pairing. Changes to persisted state
   must cover **both JSONL and SQLite**, old records, and migration behavior.
+- Project is a runtime/data boundary, not a Git repository. Folder IDs select
+  registered file resources; Initiative IDs select shared work context. Keep
+  project memories partitioned and directory ownership exclusive. Initiative
+  SQL must stay within the runtime-bound Project database; session todos are
+  views of shared items, not a second task store.
 - Distinguish shared Home, session data, and effective workdir. Use the locality
   resolver and path helpers rather than rebuilding paths in each feature.
   `workspaceRoot` is an owning **session ID**, not a filesystem path.

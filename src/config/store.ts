@@ -48,7 +48,7 @@ function hasPlaceholder(value: unknown): boolean {
   return isRecord(value) && Object.values(value).some(hasPlaceholder)
 }
 
-/** Synchronous final commit keeps cancellation, persistence and live activation indivisible. */
+/** Replace a persisted document atomically, without exposing a partially written file. */
 export function writePrivateFile(path: string, content: string): void {
   const staging = `${path}.${randomUUID()}.new`
   try {
@@ -63,31 +63,50 @@ export function writePrivateFile(path: string, content: string): void {
 export interface ConfigStoreOptions {
   configPath?: string
   getConfig?: () => Config
-  onChanged?: (config: Config) => void
+  onChanged?: (config: Config, raw: RawConfig) => void | Promise<void>
 }
 
 export class ConfigStore {
+  private snapshot?: { path: string; text: string; raw: RawConfig }
+  private loading?: Promise<void>
+  private pending: Promise<unknown> = Promise.resolve()
+
   constructor(private readonly options: ConfigStoreOptions = {}) {}
 
-  private async path(): Promise<string> {
-    const path = this.options.configPath ?? await resolveConfigPath()
-    if (!path) throw new Error('No configuration file is available.')
-    return path
+  private async load(): Promise<void> {
+    if (this.snapshot) return
+    this.loading ??= (async () => {
+      const path = this.options.configPath ?? await resolveConfigPath()
+      if (!path) throw new Error('No configuration file is available.')
+      const text = readFileSync(path, 'utf8')
+      const raw: unknown = JSON.parse(text)
+      if (!isRecord(raw)) throw new TypeError('Configuration must be an object.')
+      ConfigSchema.parse(raw)
+      this.snapshot = { path, text, raw }
+    })().finally(() => { this.loading = undefined })
+    await this.loading
   }
 
   async read(): Promise<RawConfig> {
-    return JSON.parse(readFileSync(await this.path(), 'utf8')) as RawConfig
+    await this.load()
+    return structuredClone(this.snapshot!.raw)
   }
 
-  async update(
+  update(
     mutate: (raw: RawConfig) => unknown,
     signal?: AbortSignal,
   ): Promise<Config> {
-    const path = await this.path()
+    const next = this.pending.catch(() => {}).then(() => this.commit(mutate, signal))
+    this.pending = next
+    return next
+  }
+
+  private async commit(mutate: (raw: RawConfig) => unknown, signal?: AbortSignal): Promise<Config> {
     signal?.throwIfAborted()
-    const previousText = readFileSync(path, 'utf8')
-    const previous = JSON.parse(previousText)
+    await this.load()
+    const { path, text: previousText, raw: previous } = this.snapshot!
     const raw = restoreSecrets(mutate(structuredClone(previous)), previous)
+    if (!isRecord(raw)) throw new TypeError('Configuration must be an object.')
     if (hasPlaceholder(raw)) throw new Error('Unknown credential placeholder.')
     const parsed = ConfigSchema.parse(raw)
     // Preserve environment-only credentials without ever copying them to disk.
@@ -96,6 +115,33 @@ export class ConfigStore {
       if (provider.apiKey === undefined && active?.providers[name]?.apiKey) {
         provider.apiKey = active.providers[name].apiKey
       }
+    }
+    const previousProviders = isRecord(previous.providers) ? previous.providers : {}
+    const nextProviders = isRecord(raw.providers) ? raw.providers : {}
+    for (const [name, provider] of Object.entries(active?.providers ?? {})) {
+      const before = isRecord(previousProviders[name]) ? previousProviders[name] : {}
+      const after = isRecord(nextProviders[name]) ? nextProviders[name] : {}
+      if (before.apiKey === undefined && after.apiKey === undefined && provider.apiKey) {
+        parsed.providers[name] ??= {}
+        parsed.providers[name].apiKey = provider.apiKey
+      }
+    }
+    const beforeTools = isRecord(previous.tools) ? previous.tools : {}
+    const afterTools = isRecord(raw.tools) ? raw.tools : {}
+    for (const key of ['braveApiKey', 'firecrawlApiKey'] as const) {
+      if (beforeTools[key] === undefined && afterTools[key] === undefined && active?.tools[key] !== undefined) {
+        parsed.tools[key] = active.tools[key]
+      }
+    }
+    const beforeExec = isRecord(beforeTools.exec) ? beforeTools.exec : {}
+    const afterExec = isRecord(afterTools.exec) ? afterTools.exec : {}
+    if (beforeExec.defaultShell === undefined && afterExec.defaultShell === undefined && active?.tools.exec?.defaultShell) {
+      parsed.tools.exec = { timeoutMs: 60_000, maxOutputBytes: 10_000, ...parsed.tools.exec, defaultShell: active.tools.exec.defaultShell }
+    }
+    const beforeMcp = isRecord(previous.mcp) ? previous.mcp : {}
+    const afterMcp = isRecord(raw.mcp) ? raw.mcp : {}
+    for (const server of active?.mcp.servers ?? []) {
+      if (!(server.name in beforeMcp) && !(server.name in afterMcp)) parsed.mcp.servers.push(structuredClone(server))
     }
     // Channel setup also supports environment-only credentials. Keep those in
     // memory, without copying them into the serialized document.
@@ -119,13 +165,15 @@ export class ConfigStore {
       }))
     }
     signal?.throwIfAborted()
-    writePrivateFile(path, JSON.stringify(raw, null, 2) + '\n')
+    const text = JSON.stringify(raw, null, 2) + '\n'
+    if (text !== previousText) writePrivateFile(path, text)
     try {
-      this.options.onChanged?.(parsed)
-    } catch {
-      writePrivateFile(path, previousText)
-      throw new Error('Configuration could not be activated; the previous file was restored.')
+      await this.options.onChanged?.(parsed, structuredClone(raw))
+    } catch (cause) {
+      if (text !== previousText) writePrivateFile(path, previousText)
+      throw new Error('Configuration could not be activated; the previous file was restored.', { cause })
     }
+    this.snapshot = { path, text, raw: structuredClone(raw) }
     return parsed
   }
 }

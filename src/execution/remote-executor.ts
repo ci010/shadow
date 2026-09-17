@@ -55,16 +55,39 @@ export class RemoteExecutor implements Executor {
     if (!record) {
       record = createRecord(validation.value)
       this.#jobs.set(request.jobId, record)
-      try {
-        this.dispatcher.dispatchJob(validation.value, {
-          onEvent: (event) => this.#acceptEvent(record!, event),
-          onDisconnect: (reason) => this.#disconnect(record!, reason),
+      if (signal.aborted) {
+        const timestamp = now()
+        this.#acceptEvent(record, {
+          version: 1,
+          jobId: request.jobId,
+          sequence: 0,
+          timestamp,
+          type: 'cancel-acknowledged',
+          receipt: {
+            version: 1,
+            jobId: request.jobId,
+            nodeId: request.nodeId,
+            state: 'cancelled',
+            finishedAt: timestamp,
+            reason: {
+              code: 'cancelled',
+              message: 'Job was cancelled before dispatch',
+              retryable: false,
+            },
+          },
         })
-      } catch (error) {
-        this.#disconnect(
-          record,
-          error instanceof Error ? error.message : 'Remote node is unavailable',
-        )
+      } else {
+        try {
+          this.dispatcher.dispatchJob(validation.value, {
+            onEvent: (event) => this.#acceptEvent(record!, event),
+            onDisconnect: (reason) => this.#disconnect(record!, reason),
+          })
+        } catch (error) {
+          this.#disconnect(
+            record,
+            error instanceof Error ? error.message : 'Remote node is unavailable',
+          )
+        }
       }
     } else if (!sameRequest(record.request, validation.value)) {
       throw new TypeError('jobId is already bound to a different request')
@@ -216,7 +239,6 @@ function wake(record: RemoteJobRecord): void {
 
 function eventState(event: JobEventV1): JobStateV1 {
   if ('receipt' in event) return event.receipt.state
-  if (event.type === 'awaiting-approval') return 'awaiting-approval'
   if (
     event.type === 'started' || event.type === 'stdout' ||
     event.type === 'stderr' || event.type === 'artifact-ready'

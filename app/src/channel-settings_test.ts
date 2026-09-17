@@ -33,6 +33,27 @@ test('channel drafts never contain saved secrets and blank password fields prese
   draft.secret = 'replacement'
   assert.equal(channelPatch(channel, draft, true).secret, 'replacement')
 })
+
+test('trusted audience lists round-trip separately from sender and admin settings', () => {
+  for (const initial of statuses()) {
+    const channel = parseChannelStatus({
+      ...initial, config: { trustedChats: ['room', 'thread'], allowFrom: ['alice'], adminChats: ['admin-room'] },
+    })
+    const draft = channelDraft(channel)
+    assert.equal(draft.trustedChats, 'room\nthread')
+    const patch = channelPatch(channel, { ...draft, trustedChats: 'room\n room \n thread' }, false)
+    assert.deepEqual(patch.trustedChats, ['room', 'thread'])
+    assert.deepEqual(patch.allowFrom, ['alice'])
+    assert.deepEqual(patch.adminChats, ['admin-room'])
+    assert.deepEqual(channelPatch(channel, { ...draft, trustedChats: '' }, false).trustedChats, [])
+    const field = channelDefinitions.find(definition => definition.id === channel.id)!.fields.find(field => field.key === 'trustedChats')!
+    assert.equal(field.kind, 'list')
+    assert.equal(field.advanced, true)
+    assert.match(field.hint!, /everyone who can read replies/)
+    assert.match(field.hint!, /grants no admin privileges/)
+    assert.throws(() => parseChannelStatus({ ...channel, config: { trustedChats: true } }), /invalid channel status/)
+  }
+})
 test('connect validates required credentials, lists, selections and bitmasks; incomplete drafts may be saved disabled', () => {
   for (const channel of statuses()) {
     const draft = channelDraft(channel)
@@ -69,7 +90,7 @@ test('client patches only selected channel and refuses unexpected success payloa
 test('Settings shell and channel forms compile and preserve accessible navigation and hidden drafts', async () => {
   const require = createRequire(new URL('./package.json', import.meta.url))
   const compiler = require('vue/compiler-sfc') as typeof import('vue/compiler-sfc')
-  for (const filename of ['SettingsView.vue', 'OrganizationSettings.vue', 'ChannelsView.vue']) {
+  for (const filename of ['SettingsView.vue', 'ProjectSettings.vue', 'ChannelsView.vue']) {
     const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
     const { descriptor, errors } = compiler.parse(source, { filename })
     assert.deepEqual(errors, [])
@@ -81,10 +102,10 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
       assert.match(source, /ProvidersView v-show=/)
       assert.doesNotMatch(source, /<ChannelsView/)
     }
-    if (filename === 'OrganizationSettings.vue') assert.match(source, /ChannelsView v-if="botsOpened" v-show=/)
+    if (filename === 'ProjectSettings.vue') assert.match(source, /ChannelsView v-if="botsOpened" v-show=/)
   }
   const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
-  assert.doesNotMatch(app, /v-if="hasReadyProvider|v-if="showSetup"/, 'Shared provider readiness must not gate organization views')
+  assert.doesNotMatch(app, /v-if="hasReadyProvider|v-if="showSetup"/, 'Shared provider readiness must not gate project views')
   const router = await readFile(new URL('./router.ts', import.meta.url), 'utf8')
   assert.match(router, /path: '\/providers'.*redirect: '\/settings\/providers'/)
 })

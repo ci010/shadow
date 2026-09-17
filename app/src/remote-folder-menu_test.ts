@@ -35,7 +35,7 @@ function mount(t: TestContext, name: string, initial: Record<string, unknown>) {
 }
 
 test('sidebar remote action opens the existing draft picker without allocating or changing routing ownership', () => {
-  const sidebar = readFileSync(new URL('./components/ProjectsSidebar.vue', import.meta.url), 'utf8')
+  const sidebar = readFileSync(new URL('./components/FoldersSidebar.vue', import.meta.url), 'utf8')
   const chat = readFileSync(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
   const workspace = readFileSync(new URL('./components/ChatWorkspace.vue', import.meta.url), 'utf8')
   assert.match(sidebar, /action.id !== 'remote' \|\| props.remoteFolders/)
@@ -44,7 +44,7 @@ test('sidebar remote action opens the existing draft picker without allocating o
   assert.match(chat, /@remote="createNewWebChat\(undefined, true, true\)"/)
   const createDraft = chat.slice(chat.indexOf('function createNewWebChat('), chat.indexOf('function clearPendingAttachments('))
   assert.match(createDraft, /emit\('primary-change', ''\)/)
-  assert.match(createDraft, /router.replace\(\{ name: 'chat', params: \{ organizationId: props.organizationId \} \}\)/)
+  assert.match(createDraft, /router.replace\(\{ name: 'chat', params: \{ projectId: props.projectId \} \}\)/)
   assert.match(createDraft, /if \(props.managed\) emit\('navigate', ''\)/)
   assert.match(createDraft, /if \(openRemotePicker\) await executionLocationSelector.value\?\.openRemote\(\)/)
   assert.match(createDraft, /else chatInput.value\?\.focus/)

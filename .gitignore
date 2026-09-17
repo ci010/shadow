@@ -10,6 +10,8 @@ build/
 dist/
 desktop/release/
 desktop/backend/
+desktop/service/ShadowService.exe
+desktop/release-manifest.v1.json
 
 # Historical Deno lock (not used by the Node workspace)
 deno.lock
@@ -44,6 +46,12 @@ NUL
 
 workspace/**
 bot.config.json
+/workspace.projects/
+/workspace.organizations/
+/.shadow-test-*/
+/.test-data/
+/temp_adapter_qq/
+/temp_botpy/
 
 # Instructions
 instruction/

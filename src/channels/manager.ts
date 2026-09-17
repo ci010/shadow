@@ -16,15 +16,17 @@ import { SttClient, VoicePipeline } from '../voice/mod.ts'
 import { CHANNEL_IDS, type BotInstanceStatus, type ChannelId, type ChannelSetupStatus, type ChannelState } from './setup-contract.ts'
 import { channelConfigured, channelSetupStatus, ChannelSetupError, isChannelId } from './setup.ts'
 import type { BotInstance, BotInstanceStore } from './bot-store.ts'
-import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
+import type { RealtimePublisher } from '../realtime/hub.ts'
 
 type ChannelFactory = (id: ChannelId, config: Config, instance?: BotInstance) => BaseChannel
 export interface ChannelManagerOptions {
-  organizationId: string
+  projectId: string
   instanceStore: BotInstanceStore
   factory?: ChannelFactory
   /** Defaults to the construction scope; the host closes it after channel shutdown. */
-  scope?: OrganizationScope
+  scope?: ProjectScope
+  realtime?: RealtimePublisher
 }
 
 // Host-wide ownership, not a routing registry. Failed cleanup retains its claim.
@@ -51,8 +53,8 @@ export class ChannelManager {
   private needsApply = new Set<string>()
   private readonly factory?: ChannelFactory
   private readonly options?: ChannelManagerOptions
-  private readonly scope?: OrganizationScope
-  readonly organizationId?: string
+  private readonly scope?: ProjectScope
+  readonly projectId?: string
 
   constructor(
     private config: Config,
@@ -64,10 +66,10 @@ export class ChannelManager {
   ) {
     this.options = typeof factoryOrOptions === 'function' ? options : factoryOrOptions ?? options
     this.factory = typeof factoryOrOptions === 'function' ? factoryOrOptions : this.options?.factory
-    this.organizationId = this.options?.organizationId
-    this.scope = this.options?.scope ?? getOrganizationScope()
-    if (this.options && this.scope && this.scope.organizationId !== this.organizationId) throw new TypeError('Channel manager organization scope mismatch')
-    if (this.options && this.options.instanceStore.organizationId !== this.organizationId) throw new TypeError('Bot store ownership mismatch')
+    this.projectId = this.options?.projectId
+    this.scope = this.options?.scope ?? getProjectScope()
+    if (this.options && this.scope && this.scope.projectId !== this.projectId) throw new TypeError('Channel manager project scope mismatch')
+    if (this.options && this.options.instanceStore.projectId !== this.projectId) throw new TypeError('Bot store ownership mismatch')
     this.bus.declareQueue('message.outbound')
   }
 
@@ -109,6 +111,7 @@ export class ChannelManager {
         allowFrom: ch.web?.allowFrom,
         workspace: this.config.agent.workspace,
         sessionManager: this.sessionManager,
+        realtime: this.options?.realtime,
       })
       this.channels.set('web', web)
     }
@@ -125,7 +128,7 @@ export class ChannelManager {
       if (!this.options || key === 'web') this.bindChannel(channel, key)
     }
     if (this.options && (ch.wechat?.enabled || ch.wechatDesktop?.enabled)) {
-      console.warn('[channel-manager] Legacy WeChat adapters are unavailable in organization runtimes')
+      console.warn('[channel-manager] Legacy WeChat adapters are unavailable in project runtimes')
     }
 
     console.info(
@@ -215,7 +218,9 @@ export class ChannelManager {
   updateBot(id: string, input: { displayName?: string; config?: Record<string, unknown> }, signal?: AbortSignal): Promise<BotInstanceStatus> {
     return this.botOperation(async () => {
       if (this.cleanupFailed.has(id)) throw new ChannelSetupError('channel_restart_required', 503)
+      const previous = this.options!.instanceStore.get(id)
       const bot = this.options!.instanceStore.update(id, input, signal)
+      this.invalidateAudienceIfChanged(previous.config.trustedChats, bot.config.trustedChats)
       if (!await this.stopBot(id)) return this.options!.instanceStore.status(id, this.health.get(id))
       if (bot.enabled && !this.closing) {
         const channel = this.installBot(bot)
@@ -230,7 +235,9 @@ export class ChannelManager {
       this.options!.instanceStore.get(id)
       signal?.throwIfAborted()
       if (!await this.stopBot(id)) throw new ChannelSetupError('channel_restart_required', 503)
+      const previous = this.options!.instanceStore.get(id)
       this.options!.instanceStore.delete(id, signal)
+      this.invalidateAudienceIfChanged(previous.config.trustedChats, undefined)
     })
   }
 
@@ -254,9 +261,9 @@ export class ChannelManager {
   }
 
   private bindChannel(channel: BaseChannel, key = channel.name, bot?: BotInstance): void {
-    if (this.scope) channel.setOrganizationScope?.(this.scope)
+    if (this.scope) channel.setProjectScope?.(this.scope)
     const scope = bot ? {
-      organizationId: bot.organizationId, botInstanceId: bot.id, platform: bot.platform,
+      projectId: bot.projectId, botInstanceId: bot.id, platform: bot.platform,
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
@@ -281,7 +288,7 @@ export class ChannelManager {
   private resolveKey(name: string, address?: ChannelAddress): string | undefined {
     if (!this.options) return address ? undefined : name
     if (address) {
-      if (address.organizationId !== this.organizationId || address.platform !== name) return undefined
+      if (address.projectId !== this.projectId || address.platform !== name) return undefined
       const bot = this.options.instanceStore.list().find(bot => bot.id === address.botInstanceId)
       return bot?.platform === name && !!bot.legacySessionId === !!address.legacySessionId ? bot.id : undefined
     }
@@ -302,6 +309,22 @@ export class ChannelManager {
   private availableChannel(name: string, address?: ChannelAddress): BaseChannel | undefined {
     const key = this.resolveKey(name, address)
     return key ? this.availableByKey(key) : undefined
+  }
+
+  isTrustedConversation(name: string, chatId: string, address?: ChannelAddress): boolean {
+    if (address && address.conversationId !== chatId) return false
+    const key = this.resolveKey(name, address)
+    if (!key) return false
+    const config = this.options
+      ? this.options.instanceStore.list().find(bot => bot.id === key)?.config
+      : isChannelId(name) ? this.config.channels[name] : undefined
+    return config?.trustedChats?.includes(chatId) === true
+  }
+
+  private invalidateAudienceIfChanged(previous?: string[], next?: string[]): void {
+    if (JSON.stringify(previous ?? []) !== JSON.stringify(next ?? [])) {
+      this.sessionManager.invalidateSystemPrompts()
+    }
   }
 
   async getCapabilities(name: string, chatId: string, address?: ChannelAddress): Promise<ChannelCapabilities> {
@@ -430,8 +453,11 @@ export class ChannelManager {
       return
     }
     this.configRevision++
+    const previous = this.config
+    this.config = config
     for (const id of CHANNEL_IDS) {
-      if (JSON.stringify(this.config.channels[id]) !== JSON.stringify(config.channels[id])) {
+      this.invalidateAudienceIfChanged(previous.channels[id]?.trustedChats, config.channels[id]?.trustedChats)
+      if (JSON.stringify(previous.channels[id]) !== JSON.stringify(config.channels[id])) {
         this.needsApply.add(id)
         this.health.set(id, {
           state: 'restart-required',
@@ -439,7 +465,6 @@ export class ChannelManager {
         })
       }
     }
-    this.config = config
   }
 
   updateChannel(id: ChannelId, persist: (active: Config) => Promise<Config>): Promise<ChannelSetupStatus> {
@@ -448,7 +473,11 @@ export class ChannelManager {
       if (this.cleanupFailed.has(id)) throw new ChannelSetupError('channel_restart_required', 503)
       const revision = this.configRevision
       const saved = await persist(this.config)
-      if (revision === this.configRevision) this.config = saved
+      if (revision === this.configRevision) {
+        const previous = this.config.channels[id]?.trustedChats
+        this.config = saved
+        this.invalidateAudienceIfChanged(previous, saved.channels[id]?.trustedChats)
+      }
       const previous = this.channels.get(id)
       if (previous) {
         this.channels.delete(id)
@@ -636,7 +665,7 @@ export class ChannelManager {
           } catch {
             console.error('[channel-manager] Source bot delivery unavailable')
             this.bus.emit('channel.delivery.failed', {
-              organizationId: this.organizationId, channelAddress: msg.channelAddress,
+              projectId: this.projectId, channelAddress: msg.channelAddress,
               channel: msg.channel, chatId: msg.chatId, error: 'source_bot_unavailable',
             })
           }

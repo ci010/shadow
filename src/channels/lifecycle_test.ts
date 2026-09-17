@@ -14,7 +14,7 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import { BotInstanceStore } from './bot-store.ts'
 import { ChannelManager } from './manager.ts'
 import { deriveSessionId } from '../bus/events.ts'
-import { createOrganizationScope, getOrganizationScope } from '../organizations/scope.ts'
+import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
 class FakeSocket {
   readyState = 0
@@ -54,18 +54,18 @@ for (const id of ['qq', 'discord'] as const) {
     ? new QQChannel(new Bus(), { appId: 'synthetic-app', secret: 'synthetic-secret' })
     : new DiscordChannel(new Bus(), { token: 'synthetic-secret' })
 
-  test(`${id} transport callbacks retain their organization scope when invoked by another runtime`, async t => {
+  test(`${id} transport callbacks retain their project scope when invoked by another runtime`, async t => {
     const created = sockets(t)
-    const scope = createOrganizationScope('A')
-    const foreign = createOrganizationScope('B')
+    const scope = createProjectScope('A')
+    const foreign = createProjectScope('B')
     const channel = scope.run(create)
     const observed: Array<string | undefined> = []
     channel.setReceiver(async message => {
-      observed.push(getOrganizationScope()?.organizationId)
+      observed.push(getProjectScope()?.projectId)
       return { status: 'accepted', sessionId: `${id}:${message.chatId}`, inputId: message.messageId }
     })
     const statusScopes: Array<string | undefined> = []
-    channel.setStatusListener(() => statusScopes.push(getOrganizationScope()?.organizationId))
+    channel.setStatusListener(() => statusScopes.push(getProjectScope()?.projectId))
     t.after(async () => { await channel.stop(); scope.close(); foreign.close() })
     await scope.run(() => channel.start(new Hono()))
     const stale = created[0].onmessage
@@ -74,7 +74,7 @@ for (const id of ['qq', 'discord'] as const) {
       created[0].message(id === 'qq'
         ? { op: 0, t: 'C2C_MESSAGE_CREATE', d: { id: 'message', author: { user_openid: 'sender' }, content: 'Hello' } }
         : { op: 0, t: 'MESSAGE_CREATE', d: { id: 'message', channel_id: 'chat', author: { id: 'sender' }, content: 'Hello' } })
-      assert.equal(getOrganizationScope(), foreign)
+      assert.equal(getProjectScope(), foreign)
     })
     await new Promise(resolve => setImmediate(resolve))
     assert.deepEqual(observed, ['A'])
@@ -227,15 +227,15 @@ test('Discord READY uses the actual bot user identity to refuse cross-org duplic
     await Promise.all(managers.map(manager => manager.stopAll()))
     rmSync(root, { recursive: true, force: true })
   })
-  for (const organizationId of ['A', 'B']) {
-    const store = new BotInstanceStore({ organizationId, path: join(root, organizationId, 'bots.json') })
-    store.create('discord', 'Discord', { token: `synthetic-rotated-token-${organizationId}`, enabled: true })
+  for (const projectId of ['A', 'B']) {
+    const store = new BotInstanceStore({ projectId, path: join(root, projectId, 'bots.json') })
+    store.create('discord', 'Discord', { token: `synthetic-rotated-token-${projectId}`, enabled: true })
     const sessions: Pick<SessionManager, 'getSessionState'> = { getSessionState: () => null }
-    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: join(root, organizationId) } }),
+    const manager = new ChannelManager(ConfigSchema.parse({ agent: { workspace: join(root, projectId) } }),
       new Bus(), sessions as SessionManager, async message => {
-        received.push(message.channelAddress!.organizationId)
+        received.push(message.channelAddress!.projectId)
         return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
-      }, { organizationId, instanceStore: store })
+      }, { projectId, instanceStore: store })
     managers.push(manager)
     await manager.init()
     await manager.startAll(new Hono())

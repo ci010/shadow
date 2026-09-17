@@ -1,141 +1,119 @@
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { once } from 'node:events'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:net'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { setTimeout } from 'node:timers/promises'
-import { pathToFileURL } from 'node:url'
-import { promisify } from 'node:util'
+import { once } from 'node:events'
+import { createServer } from 'node:net'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { ConfigSchema } from '../config/schema.ts'
 import { startMainRuntime } from './main/start.ts'
-import type { MainRuntimeHandle } from './main/contracts.ts'
-import type { CloneOperation, ProjectRecord } from '../projects/contracts.ts'
-import { createTempWorkspace } from '../testing/workspace.ts'
+import { withTempWorkspace } from '../testing/workspace.ts'
+import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
+import { projectPaths } from '../projects/contracts.ts'
 
-test('Main serves authorized project creation and restores its session association on restart', async () => {
-  const root = await createTempWorkspace()
-  const originalCwd = process.cwd()
-  const workspace = join(root, 'main')
-  const folder = join(root, 'project')
-  let runtime: MainRuntimeHandle | undefined
-  try {
-    await mkdir(workspace)
-    await mkdir(folder)
-    process.chdir(root)
-    await writeFile(join(folder, 'sentinel.txt'), 'project-only-sentinel')
+test('one host starts fresh Project Homes without importing configured Home data', { timeout: 60000 }, async () => {
+  await withTempWorkspace(async root => {
+    const home = join(root, 'home')
+    const aFolder = join(root, 'folder-a')
+    const bFolder = join(root, 'folder-b')
+    await Promise.all([mkdir(home), mkdir(aFolder), mkdir(bFolder)])
+    await writeFile(join(home, 'SOUL.md'), '# Legacy-only identity\nlegacy-org-sentinel')
+    const legacy = new JsonlSessionStore(join(home, '.sessions'))
+    await legacy.init()
+    await legacy.saveState('web:legacy-chat', { sessionId: 'web:legacy-chat', segmentIndex: 0 })
     const reservation = createServer().listen({ host: '127.0.0.1', port: 0 })
     await once(reservation, 'listening')
     const address = reservation.address()
-    assert.ok(address && typeof address !== 'string')
-    const port = address.port
-    await new Promise<void>((resolve, reject) => {
-      reservation.close((error) => error ? reject(error) : resolve())
+    assert(address && typeof address !== 'string')
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+    const config = ConfigSchema.parse({ agent: { workspace: home, model: 'legacy@openai' },
+      providers: { openai: { apiKey: 'fixture-key', baseUrl: 'http://127.0.0.1:1' } }, channels: {}, mcp: {} })
+    const runtime = await startMainRuntime(config, { gateway: { host: '127.0.0.1', port: address.port, launchCredential: 'fixture-token' } })
+    const request = (path: string, method = 'GET', body?: unknown) => fetch(`http://127.0.0.1:${address.port}${path}`, {
+      method, headers: { authorization: 'Bearer fixture-token', 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
-    const credential = randomUUID()
-    const config = ConfigSchema.parse({
-      agent: { workspace, model: 'fixture-model@openai' },
-      providers: { openai: { apiKey: 'fixture-not-used', baseUrl: 'http://127.0.0.1:1/v1' } },
-      channels: {},
-      mcp: {},
-    })
-    const configPath = join(root, 'bot.config.json')
-    await writeFile(configPath, JSON.stringify(config))
-    const options = { configPath, localNodeId: 'project-main-node', gateway: { host: '127.0.0.1', port, launchCredential: credential } }
-    runtime = await startMainRuntime(config, options)
-    await runtime.ready
-    const url = `http://127.0.0.1:${port}`
-    const headers = { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }
-    const request = (path: string, body?: unknown) => fetch(`${url}${path}`, {
-      headers,
-      ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }),
-    })
-    const unauthorized = await fetch(`${url}/api/projects/register`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: folder }),
-    })
-    assert.equal(unauthorized.status, 401)
-    assert.equal((await fetch(`${url}/nodes/v1`)).status, 401)
-    const initialInventory = await (await request('/nodes/v1')).json()
-    assert.equal(initialInventory.version, 1)
-    assert.equal(initialInventory.nodes.length, 1)
-    assert.equal(initialInventory.nodes[0].nodeId, 'project-main-node')
-    assert.deepEqual(initialInventory.nodes[0].capabilities, [{
-      capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
-    }])
-    const empty = await request('/api/projects')
-    assert.deepEqual(await empty.json(), { projects: [] })
-    const opened = await request('/api/projects/register', { path: folder })
-    assert.equal(opened.status, 200)
-    const { project } = await opened.json() as { project: ProjectRecord }
-    assert.equal(project.path.toLowerCase(), folder.toLowerCase())
-    const projectInventory = await (await request('/nodes/v1')).json()
-    assert.deepEqual(projectInventory.nodes[0].capabilities[1], {
-      capabilityId: `local-project-v1:${project.id}`,
-      kind: 'workdir',
-      displayName: project.name,
-      displayPath: project.path,
-      online: true,
-    })
-    const created = await request(`/api/projects/${project.id}/sessions`, {})
-    assert.equal(created.status, 200)
-    const { sessionId, chatId } = await created.json() as { sessionId: string; chatId: string }
-    assert.equal(sessionId, `web:${chatId}`)
-    assert.match(chatId, /^chat-/)
-    const assertAssociation = async () => {
-      const response = await request('/api/sessions/graph')
-      assert.equal(response.status, 200)
-      const graph = await response.json() as { sessions: { sessionId: string; projectId?: string }[] }
-      assert.equal(graph.sessions.find((session) => session.sessionId === sessionId)?.projectId, project.id)
-      const base = `/api/sessions/${encodeURIComponent(sessionId)}`
-      const context = await request(`${base}/context`)
-      assert.equal(context.status, 200)
-      const { systemPrompt } = await context.json() as { systemPrompt: string }
-      assert.ok(systemPrompt.includes(`**Workspace root (this session)**: \`${project.path}\``))
-      const files = await request(`${base}/files`)
-      assert.equal(files.status, 200)
-      assert.ok((await files.text()).includes('sentinel.txt'))
-      const preview = await request(`${base}/preview?path=sentinel.txt`)
-      assert.equal(preview.status, 200)
-      assert.ok((await preview.text()).includes('project-only-sentinel'))
-    }
-    await assertAssociation()
-    const git = promisify(execFile)
-    await git('git', ['init', '--quiet', folder])
-    await git('git', ['-C', folder, 'add', 'sentinel.txt'])
-    await git('git', [
-      '-C', folder, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
-      '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${join(root, 'no-hooks')}`,
-      'commit', '--quiet', '-m', 'fixture',
-    ])
-    const operationId = randomUUID()
-    const clone = await request('/api/projects/clone', {
-      operationId, url: pathToFileURL(folder).href, parentPath: root, directoryName: 'cloned',
-    })
-    assert.equal(clone.status, 202)
-    let operation = (await clone.json() as { operation: CloneOperation }).operation
-    for (let attempt = 0; attempt < 400 && operation.state === 'running'; attempt++) {
-      await setTimeout(20)
-      const status = await request(`/api/projects/clone/${operationId}`)
-      assert.equal(status.status, 200)
-      operation = (await status.json() as { operation: CloneOperation }).operation
-    }
-    assert.equal(operation.state, 'succeeded', operation.error)
-    assert.ok(operation.project)
-    await runtime.shutdown()
-    await runtime.finished
-    runtime = await startMainRuntime(config, options)
-    await runtime.ready
-    assert.deepEqual(await (await request('/api/projects')).json(), { projects: [project, operation.project] })
-    await assertAssociation()
-    const reopened = await request('/api/projects/register', { path: folder })
-    assert.deepEqual(await reopened.json(), { project })
-  } finally {
-    await runtime?.shutdown()
-    process.chdir(originalCwd)
-    await rm(root, { recursive: true, force: true })
-  }
+    try {
+      const defaultPrefix = '/projects/default'
+      const created = await request('/api/projects', 'POST', { name: 'Independent' })
+      assert.equal(created.status, 201)
+      const { project, runtime: status } = await created.json()
+      assert.equal(status.state, 'ready')
+      const prefix = `/projects/${project.id}`
+      assert.equal((await (await request('/api/projects')).json()).projects.length, 2)
+      const [defaultGraph, freshGraph] = await Promise.all([
+        request(`${defaultPrefix}/api/sessions/graph`).then(r => r.json()),
+        request(`${prefix}/api/sessions/graph`).then(r => r.json()),
+      ])
+      assert.deepEqual(defaultGraph.sessions, [])
+      assert.deepEqual(freshGraph.sessions, [])
+      assert.deepEqual((await (await request(`${defaultPrefix}/api/folders`)).json()).folders, [])
+      assert.deepEqual((await (await request(`${prefix}/api/folders`)).json()).folders, [])
+      assert.equal((await legacy.getState('web:legacy-chat'))?.projectId, undefined)
+      assert.equal((await request(`${prefix}/api/sessions/web%3Alegacy-chat/files`)).status, 404)
+      const oldDefaults = await (await request(`${defaultPrefix}/api/config`)).json()
+      const newDefaults = await (await request(`${prefix}/api/config`)).json()
+      assert.notEqual(oldDefaults.agent.model, 'legacy@openai')
+      assert.notEqual(oldDefaults.agent.workspace, newDefaults.agent.workspace)
+      assert.notEqual(newDefaults.agent.model, 'legacy@openai')
+      assert.deepEqual(newDefaults.mcp, {})
+      const changed = await request(`${prefix}/api/config`, 'PATCH', { ...newDefaults, agent: { ...newDefaults.agent, model: 'independent@openai' } })
+      assert.equal(changed.status, 200, await changed.clone().text())
+      assert.equal((await (await request('/api/config')).json()).agent.model, oldDefaults.agent.model)
+      const updated = await changed.json()
+      const disabled = await request(`${prefix}/api/config`, 'PATCH', { ...updated, learning: { ...updated.learning, enabled: false } })
+      assert.equal(disabled.status, 200)
+      assert.equal((await (await request(`${prefix}/api/learning`)).json()).enabled, false)
+      assert.equal((await (await request(`${defaultPrefix}/api/learning`)).json()).enabled, true)
+      const modelPatch = await request(`${prefix}/api/config/model-defaults`, 'PATCH', { temperature: 0.2 })
+      assert.equal(modelPatch.status, 200)
+      assert.equal((await modelPatch.json()).temperature, 0.2)
+      const providerMutation = await request(`${prefix}/api/config`, 'PATCH', { ...updated, providers: { openai: { apiKey: 'not-allowed' } } })
+      assert.equal(providerMutation.status, 400)
+      const a = await (await request(`${defaultPrefix}/api/folders/register`, 'POST', { path: aFolder })).json()
+      const b = await (await request(`${prefix}/api/folders/register`, 'POST', { path: bFolder })).json()
+      assert.equal((await request(`${prefix}/api/folders/register`, 'POST', { path: aFolder })).status, 409)
+      const childFolder = join(aFolder, 'nested')
+      await mkdir(childFolder)
+      assert.equal((await request(`${prefix}/api/folders/register`, 'POST', { path: childFolder })).status, 409)
+      assert.equal((await request(`${prefix}/api/folders/${a.folder.id}/sessions`, 'POST', {})).status, 404)
+      const sessionResponse = await request(`${prefix}/api/folders/${b.folder.id}/sessions`, 'POST', {})
+      assert.equal(sessionResponse.status, 200)
+      const { sessionId } = await sessionResponse.json()
+      const graph = await (await request(`${prefix}/api/sessions/graph`)).json()
+      assert.equal(graph.sessions[0].sessionId, sessionId)
+      assert.equal(graph.sessions[0].projectId, project.id)
+      const contextResponse = await request(`${prefix}/api/sessions/${encodeURIComponent(sessionId)}/context`)
+      assert.equal(contextResponse.status, 200, await contextResponse.clone().text())
+      const context = await contextResponse.json()
+      assert(!context.systemPrompt.includes('legacy-org-sentinel'))
+      assert.equal((await request(`${defaultPrefix}/api/sessions/${encodeURIComponent(sessionId)}/details`)).status, 404)
+      const unavailableRemote = await request(`${prefix}/api/sessions/remote`, 'POST', { nodeId: 'child', capabilityId: 'folder' })
+      assert.equal(unavailableRemote.status, 503)
+      assert.equal((await unavailableRemote.json()).error, 'remote_workdir_unavailable')
+      const orgPaths = projectPaths(`${home}.projects`, project.id)
+      assert(!(await readFile(orgPaths.configPath, 'utf8')).includes('fixture-key'))
+      assert((await readFile(join(home, 'SOUL.md'), 'utf8')).includes('legacy-org-sentinel'))
+      const oldChat = await (await request(`${defaultPrefix}/api/folders/${a.folder.id}/sessions`, 'POST', {})).json()
+      const movedResponse = await request(`${defaultPrefix}/api/folders/${a.folder.id}/move`, 'POST', { targetProjectId: project.id })
+      assert.equal(movedResponse.status, 200, await movedResponse.clone().text())
+      const moved = (await movedResponse.json()).folder
+      assert.notEqual(moved.id, a.folder.id)
+      const oldKey = encodeURIComponent(oldChat.sessionId)
+      assert.equal((await request(`${defaultPrefix}/api/sessions/${oldKey}`)).status, 200)
+      assert.equal((await request(`${defaultPrefix}/api/sessions/${oldKey}/details`)).status, 200)
+      assert.equal((await request(`${defaultPrefix}/api/sessions/${oldKey}/files`)).status, 409)
+      assert.equal((await request(`${defaultPrefix}/api/chat/send`, 'POST', {
+        chatId: oldChat.chatId, content: '/compact', stream: false,
+      })).status, 409)
+      assert.equal((await request(`${prefix}/api/sessions/${oldKey}/details`)).status, 404)
+      const fresh = await (await request(`${prefix}/api/folders/${moved.id}/sessions`, 'POST', {})).json()
+      const freshContext = await (await request(`${prefix}/api/sessions/${encodeURIComponent(fresh.sessionId)}/context`)).json()
+      assert(!freshContext.systemPrompt.includes('legacy-org-sentinel'))
+      const removed = await request(`${prefix}/api/folders/${moved.id}`, 'DELETE')
+      assert.equal(removed.status, 200, await removed.clone().text())
+      assert.deepEqual(await removed.json(), { removed: true, folderId: moved.id })
+      assert.equal((await request(`${prefix}/api/sessions/${encodeURIComponent(fresh.sessionId)}/files`)).status, 409)
+      assert.equal((await request(`${prefix}/api/sessions/${encodeURIComponent(sessionId)}/files`)).status, 200)
+    } finally { await runtime.shutdown(); await runtime.finished }
+  })
 })

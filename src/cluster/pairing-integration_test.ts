@@ -108,8 +108,6 @@ test('PIN-paired Child proves the same protected key after Main restart', async 
         version: 1,
         expectedDeviceIdentityFingerprint:
           paired.reference.deviceIdentityFingerprint,
-        uiScopes: [],
-        nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
       }),
     },
   )

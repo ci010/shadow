@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { parseMcpServerConfig } from '../mcp/config.ts'
 import { MAX_YIELD_TIMEOUT_MS } from '../sessions/yield-contract.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
+import { DEFAULT_AGENT_MODEL } from './defaults.ts'
 
 // ── Provider configs ────────────────────────────────────────────────────────
 
@@ -33,6 +34,8 @@ const ChannelBaseSchema = z.object({
   allowFrom: z.array(z.string()).optional(),
   /** Chat IDs that have admin privileges. DMs are admin by default; this is for group chats. */
   adminChats: z.array(z.string()).optional(),
+  /** Exact group/channel IDs whose whole audience is trusted; does not grant tool permissions. */
+  trustedChats: z.array(z.string().max(16_384).regex(/^[^\x00-\x1f]+$/).trim().min(1)).max(1000).optional(),
 })
 
 export const DiscordChannelSchema = ChannelBaseSchema.extend({
@@ -146,8 +149,8 @@ export interface McpServerConfig {
 // ── Agent configs ───────────────────────────────────────────────────────────
 
 export const AgentSchema = z.object({
-  /** Model name — the provider is auto-detected from this (e.g. "claude-sonnet-4.6" → copilot). */
-  model: z.string().default('claude-sonnet-4.6'),
+  /** Model name with an optional explicit @provider suffix. */
+  model: z.string().default(DEFAULT_AGENT_MODEL),
   /** Lightweight model for mid-turn intent classification (steer vs abort). */
   quickModel: z.string().optional(),
   /** Workspace root for bootstrap files, skills, memory */
@@ -161,8 +164,8 @@ export const AgentSchema = z.object({
   sessionStorage: z.enum(['jsonl', 'sqlite']).default('jsonl'),
   /** DeepSeek thinking mode toggle */
   thinking: z.object({ type: z.enum(['enabled', 'disabled']) }).optional(),
-  /** DeepSeek reasoning effort level */
-  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
+  /** Default reasoning effort, unless overridden by a conversation. */
+  reasoningEffort: z.enum(REASONING_EFFORTS).default('medium'),
 })
 
 // ── Tool configs ────────────────────────────────────────────────────────────

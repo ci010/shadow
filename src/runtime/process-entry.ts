@@ -15,7 +15,7 @@ export interface ProcessEntryDependencies {
       readonly localNodeId: string
       readonly configPath: string
       readonly clusterSnapshotPath: string
-      readonly gateway: { readonly port?: number }
+      readonly gateway: { readonly port?: number; readonly launchCredential?: string }
     },
   ) => RuntimeLifecycleHandle | Promise<RuntimeLifecycleHandle>
   readonly startChildRuntime: (
@@ -54,7 +54,10 @@ export async function runProcessEntry(
         localNodeId: plan.config.localNodeId,
         configPath: paths.mutableAgentConfigPath,
         clusterSnapshotPath: paths.clusterSnapshotPath,
-        gateway: { port: context.loopbackPort },
+        gateway: {
+          port: context.loopbackPort,
+          ...(context.launchCredential === undefined ? {} : { launchCredential: context.launchCredential }),
+        },
       })
     },
     childFactory: async (plan, paths, context) => {

@@ -38,18 +38,10 @@ export function workspaceProvider(
         lines.push(
           `**Workspace root (this session)**: \`${locations.workdir.path}\``,
           '',
-          'This folder is home. Treat it that way.',
-          '',
-          'Files you create with relative paths land in your **workspace root** —',
-          'that keeps home tidy. Files people upload to you stay in private session data:',
-          `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the project folder).`,
-          'Use the absolute attachment paths supplied in messages. A few shared resources still resolve from home by their',
-          'plain names, never your workspace root:',
-          '',
-          '- `.tmp/` — scratch space for tools and ephemeral data',
-          '',
-          'For example `write("notes.md")` writes into your workspace root, while',
-          '`write("v:memory/today.md")` saves to your shared memory store.',
+          'Keep this folder tidy. Relative file paths resolve from your workspace root.',
+          `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the registered folder).`,
+          'The shared `.tmp/` name resolves from Home, not the workspace root, for scratch/ephemeral data.',
+          '`write("notes.md")` writes into the workspace root; `write("v:memory/today.md")` into shared memory.',
         )
       } else if (!locations.workdir.available) {
         const ref = locations.workdir.workdir
@@ -68,9 +60,15 @@ export function workspaceProvider(
           `**Node**: \`${ref.nodeId}\``,
           `**Capability**: \`${ref.capabilityId}\``,
           '',
-          'Project file and process operations must use the remote executor.',
+          'Folder file and process operations must use the remote executor.',
         )
       }
+
+      lines.push(
+        '',
+        'Files, attachments and images received on any channel are automatically saved in private session uploads, not the registered folder.',
+        'Use the absolute attachment paths supplied in messages; they are not remote workdir paths.',
+      )
 
       const prefixes = virtualFs.prefixes()
       if (prefixes.length > 0) {
@@ -93,23 +91,15 @@ export function workspaceProvider(
         '',
         '## Memory',
         '',
-        'Use stored memories as relevant context, not as a substitute for current evidence.',
-        'Your memory lives under `v:memory/` — read and search there.',
-        '',
-        '### Recap If Needed',
-        '- Use `read` or `search` on `v:memory/` to recap relevant memories.',
+        'Read/search `v:memory/` for relevant context, not as a substitute for current evidence.',
         '',
       )
 
       if (isToolAllowed(ctx.agent, 'write')) {
         lines.push(
-          '### Write It Down',
-          '- **Memory is limited** — if you want to remember something, write it under `v:memory/`',
-          '- "Mental notes" don\'t survive session restarts. Files do.',
-          '- When someone says "remember this" → update the relevant file under `v:memory/`',
-          '- When you learn a lesson → update the relevant memory file, or update relevant skills or create one',
-          "- When you make a mistake → document it so future-you doesn't repeat it",
-          '- Memory files form a **knowledge graph** — use markdown links (not bare code spans) when referencing files. The system validates your writes and reports issues in the tool result. Fix any reported issues.',
+          '- Files survive restarts; mental notes do not. Write what you need to remember under `v:memory/`, including explicit "remember this" requests.',
+          '- Record mistakes to avoid repeating them; save lessons in memory or update/create relevant skills.',
+          '- Memory is a knowledge graph: reference files with markdown links, not bare code spans. Fix write-validation issues reported in tool results.',
           '',
         )
       }

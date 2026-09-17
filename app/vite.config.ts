@@ -18,7 +18,7 @@ export default defineConfig({
     port: 5273,
     strictPort: true,
     proxy: {
-      // Content calls retain their org prefix; organization pages still belong to Vite.
+      // Content calls retain their org prefix; project pages still belong to Vite.
       [SCOPED_BACKEND_PATTERN]: {
         target: API_TARGET,
         changeOrigin: true,

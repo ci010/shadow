@@ -24,9 +24,8 @@ const capability: CapabilityDescriptorV1 = {
   capabilityId: 'shell-1',
   nodeId: 'node-1',
   kind: 'shell',
-  displayName: 'Project shell',
+  displayName: 'Folder shell',
   permissions: ['process.execute'],
-  approvalPolicy: 'session',
   online: true,
 }
 
@@ -59,8 +58,6 @@ function approve(registry: InMemoryPairingNodeRegistry): void {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: 'fingerprint-1',
     credentialId: 'credential-1',
-    uiScopes: ['chat:read'],
-    nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
   }, new Date(baseTime.getTime() + 2_000))
 }
 
@@ -116,8 +113,6 @@ test('pending pairing denies capabilities and fingerprint mismatch cannot approv
       pendingId: 'pending-1',
       expectedDeviceIdentityFingerprint: 'different-fingerprint',
       credentialId: 'credential-1',
-      uiScopes: ['chat:read'],
-      nodePrivileges: ['capabilities:advertise'],
     }, new Date(baseTime.getTime() + 2_000)))
   assertEquals(registry.getPending().length, 1)
 
@@ -137,16 +132,10 @@ test('pending pairing denies capabilities and fingerprint mismatch cannot approv
     }, new Date(baseTime.getTime() + 2_000)))
 })
 
-test('approval grants explicit access and reconnect preserves all identity bindings', () => {
+test('approval establishes device trust and reconnect preserves all identity bindings', () => {
   const registry = new InMemoryPairingNodeRegistry()
   approve(registry)
-  registry.requireUiScope(auth, 'chat:read')
-  registry.requireNodePrivilege(auth, 'jobs:execute')
-  expectCode('scope-denied', () => registry.requireUiScope(auth, 'main:admin'))
-  expectCode(
-    'privilege-denied',
-    () => registry.requireNodePrivilege(auth, 'jobs:cancel'),
-  )
+  assertEquals(registry.authenticate(auth).nodeId, auth.nodeId)
   expectCode('credential-mismatch', () =>
     registry.authenticate({
       ...auth,
@@ -253,8 +242,6 @@ test('registry snapshot restores pairing, authorization, replay, and capability 
     pendingId: 'pending-3',
     expectedDeviceIdentityFingerprint: 'fingerprint-3',
     credentialId: 'credential-3',
-    uiScopes: ['nodes:admin'],
-    nodePrivileges: ['capabilities:advertise'],
   }, new Date(baseTime.getTime() + 4_000))
   source.revoke(
     { deviceId: 'device-3', nodeId: 'node-3', credentialId: 'credential-3' },
@@ -282,8 +269,7 @@ test('registry snapshot restores pairing, authorization, replay, and capability 
     displayName: 'Pending workstation',
     requestedAt: '2026-08-26T00:00:03.000Z',
   }])
-  restored.requireUiScope(auth, 'chat:read')
-  restored.requireNodePrivilege(auth, 'jobs:execute')
+  restored.authenticate(auth)
   assertEquals(restored.listCapabilities('node-1'), [capability])
   assertEquals(restored.listCapabilities('node-3'), [])
   expectCode('node-revoked', () =>
@@ -318,6 +304,32 @@ test('registry snapshot restores pairing, authorization, replay, and capability 
     deviceIdentityFingerprint: 'fingerprint-active',
     displayName: 'Active',
   }, new Date(baseTime.getTime() + 10_000))
+})
+
+test('legacy registry policies are retired without changing pairing or capability ownership', () => {
+  const source = new InMemoryPairingNodeRegistry()
+  approve(source)
+  source.advertiseCapability(auth, capability)
+  const snapshot = source.exportSnapshot(baseTime)
+
+  for (const approvalPolicy of ['none', 'always', 'session', 'grant']) {
+    const legacy = {
+      ...snapshot,
+      capabilities: snapshot.capabilities.map(entry => ({ ...entry, approvalPolicy })),
+    }
+    const restored = new InMemoryPairingNodeRegistry()
+    restored.restoreSnapshot(legacy, baseTime)
+    restored.authenticate(auth)
+    assertEquals(restored.exportSnapshot(baseTime), snapshot)
+    assertEquals(legacy.capabilities[0].approvalPolicy, approvalPolicy)
+    expectCode('invalid-contract', () => restored.restoreSnapshot({
+      ...legacy, capabilities: [{ ...legacy.capabilities[0], nodeId: 'unknown-node' }],
+    }, baseTime))
+    expectCode('invalid-contract', () => restored.restoreSnapshot({
+      ...legacy, capabilities: [{ ...legacy.capabilities[0], approvalPolicy: 'invalid' }],
+    }, baseTime))
+    assertEquals(restored.exportSnapshot(baseTime), snapshot)
+  }
 })
 
 test('registry snapshot restore rejects invalid state atomically', () => {

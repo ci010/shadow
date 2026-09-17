@@ -43,7 +43,6 @@ export async function executeRemoteFilesystemText(
       args,
       createdAt: createdAt.toISOString(),
       deadlineAt: new Date(createdAt.getTime() + 60_000).toISOString(),
-      approval: 'none',
     }, target.signal)
   ) {
     if (event.type === 'stdout') output.push(event.chunk)

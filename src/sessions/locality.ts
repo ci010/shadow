@@ -104,11 +104,11 @@ export function managedSessionWorkdirRef(
   }
 }
 
-export function localProjectWorkdirRef(projectId: string): WorkdirRefV1 {
+export function localFolderWorkdirRef(folderId: string): WorkdirRefV1 {
   return {
     version: 1,
     nodeId: LOCAL_NODE_ID,
-    capabilityId: `local-project-v1:${projectId}`,
+    capabilityId: `local-project-v1:${folderId}`,
   }
 }
 

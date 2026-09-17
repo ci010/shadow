@@ -39,7 +39,7 @@ function fixture(pick: (kind: Kind) => Promise<string[]>) {
 }
 
 const invalidResults: unknown[] = [
-  undefined, null, {}, 'C:\\Projects', [null], [undefined], [1], [''],
+  undefined, null, {}, 'C:\\Folders', [null], [undefined], [1], [''],
   ['relative\\file'], ['C:relative'], ['\\drive-relative'], ['\\\\'], ['\\\\server'],
   ['C:\\bad\nfile'], ['/bad\0file'], ['/bad\u007ffile'], ['/bad\u0085file'],
   ['/' + 'x'.repeat(10_000)], Array(1), Array(1_001).fill('/file'),
@@ -48,8 +48,8 @@ const invalidResults: unknown[] = [
 
 test('chat pickers return multiple local references unchanged or an empty cancellation', async () => {
   const selections = {
-    files: ['C:\\Projects\\你好.txt', '/projects/a b.txt', '\\\\server\\share\\file.txt'],
-    folders: ['C:\\Projects', '/projects', '\\\\server\\share'],
+    files: ['C:\\Folders\\你好.txt', '/folders/a b.txt', '\\\\server\\share\\file.txt'],
+    folders: ['C:\\Folders', '/folders', '\\\\server\\share'],
   }
   let canceled = false
   const { invoke, dispose } = fixture(async (kind) => canceled ? [] : selections[kind])

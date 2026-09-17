@@ -23,10 +23,10 @@ const activity = computed(() => sessionActivity(props.stage))
 .session-activity.idle { color: var(--c-success); }
 .session-activity.inactive, .session-activity.unknown { opacity: .5; }
 .activity-symbol { position: relative; display: grid; place-items: center; width: 16px; height: 16px; }
-.activity-spinner { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-bottom-color: transparent; border-radius: var(--radius-circle); animation: activity-spin .8s linear infinite; }
+.activity-spinner { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-bottom-color: transparent; border-radius: 50%; animation: activity-spin .8s linear infinite; }
 .activity-dot { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: var(--radius-circle); }
 .idle .activity-dot { background: currentColor; }
-.working:not(.waiting):not(.waiting-for-call) .activity-symbol::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: var(--radius-circle); background: currentColor; opacity: .7; }
+.working:not(.waiting):not(.waiting-for-call) .activity-symbol::after { content: ''; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .7; }
 .activity-label { font-weight: 500; white-space: nowrap; }
 .compact { padding: 3px; }
 @keyframes activity-spin { to { transform: rotate(360deg); } }

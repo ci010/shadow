@@ -21,13 +21,13 @@ interface PendingLink {
   targetAccount: string
   createdAt: string
   expiresAt: string
-  organizationId?: string
+  projectId?: string
   targetAddress?: ChannelAddress
   requesterAddress?: ChannelAddress
 }
 
 const addressSchema = z.object({
-  organizationId: z.string().min(1),
+  projectId: z.string().min(1),
   botInstanceId: z.string().min(1),
   platform: z.string().min(1),
   conversationId: z.string().min(1),
@@ -43,14 +43,14 @@ const stateSchema = z.object({
     targetAccount: z.string().min(1),
     createdAt: z.string().datetime(),
     expiresAt: z.string().datetime(),
-    organizationId: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
     requesterAddress: addressSchema.optional(),
     targetAddress: addressSchema.optional(),
   })).default({}),
 })
 
 export interface IdentityLinkOptions {
-  organizationId?: string
+  projectId?: string
   requesterAddress?: ChannelAddress
   /** Optional disambiguation among observed accounts; never an arbitrary destination. */
   targetBotInstanceId?: string
@@ -89,7 +89,7 @@ export class IdentityManager {
   private state: IdentityState | null = null
   private operations: Promise<unknown> = Promise.resolve()
 
-  constructor(workspace: string, private readonly organizationId?: string) {
+  constructor(workspace: string, private readonly projectId?: string) {
     this.workspace = workspace
     this.identitiesDir = workspacePath(workspace, IDENTITIES_DIR)
     this.indexPath = workspacePath(workspace, INDEX_FILE)
@@ -203,10 +203,10 @@ export class IdentityManager {
     options: IdentityLinkOptions = {},
   ): Promise<IdentityLinkChallengeResult> {
     return this.withState(async state => {
-      const organizationId = options.organizationId ?? options.requesterAddress?.organizationId ?? this.organizationId
-      if (this.organizationId && organizationId !== this.organizationId) throw new Error('Identity organization mismatch')
-      if (options.requesterAddress && options.requesterAddress.organizationId !== organizationId) throw new Error('Identity organization mismatch')
-      if (organizationId && organizationId !== 'default' && !options.requesterAddress) {
+      const projectId = options.projectId ?? options.requesterAddress?.projectId ?? this.projectId
+      if (this.projectId && projectId !== this.projectId) throw new Error('Identity project mismatch')
+      if (options.requesterAddress && options.requesterAddress.projectId !== projectId) throw new Error('Identity project mismatch')
+      if (projectId && projectId !== 'default' && !options.requesterAddress) {
         throw new Error('Source bot address is unavailable')
       }
       const requesterAccount = this.accountKey(
@@ -215,17 +215,17 @@ export class IdentityManager {
         options.requesterAddress,
       )
       const candidates = Object.entries(state.accountAddresses).filter(([key, address]) =>
-        address.organizationId === organizationId && address.platform === targetChannel
+        address.projectId === projectId && address.platform === targetChannel
         && key === this.accountKey(targetChannel, targetSenderId, address)
         && (!options.targetBotInstanceId || address.botInstanceId === options.targetBotInstanceId))
       if (candidates.length > 1) throw new Error('Ambiguous target account; specify userlink verify <channel> <senderId> <botInstanceId>')
       const targetAddress = candidates[0]?.[1]
       const legacyRequester = !options.requesterAddress || options.requesterAddress.legacySessionId === true
-      const legacyAllowed = (!organizationId || organizationId === 'default') && legacyRequester && !options.targetBotInstanceId
+      const legacyAllowed = (!projectId || projectId === 'default') && legacyRequester && !options.targetBotInstanceId
       if (!targetAddress && !legacyAllowed) throw new Error('Target bot address is unavailable; ask that account to send a message on the intended bot first')
       const targetAccount = this.accountKey(targetChannel, targetSenderId, targetAddress)
       const targetChatId = targetAddress?.conversationId ?? state.accountChats[targetAccount] ?? null
-      if (organizationId && !targetChatId) throw new Error('Target account has no known chat session; ask it to send a message first')
+      if (projectId && !targetChatId) throw new Error('Target account has no known chat session; ask it to send a message first')
 
       const requesterProfile = state.accounts[requesterAccount] ??
         this.inferProfileName(
@@ -246,7 +246,7 @@ export class IdentityManager {
         targetAccount,
         createdAt: now.toISOString(),
         expiresAt,
-        ...(organizationId ? { organizationId } : {}),
+        ...(projectId ? { projectId } : {}),
         ...(options.requesterAddress ? { requesterAddress: { ...options.requesterAddress } } : {}),
         ...(targetAddress ? { targetAddress: { ...targetAddress } } : {}),
       }
@@ -271,12 +271,12 @@ export class IdentityManager {
     senderId: string,
     code: string,
     address?: ChannelAddress,
-    organizationId = address?.organizationId ?? this.organizationId,
+    projectId = address?.projectId ?? this.projectId,
   ): Promise<IdentityConfirmLinkResult> {
     return this.withState(async state => {
       const normalizedCode = code.trim().toUpperCase()
-      if (this.organizationId && organizationId !== this.organizationId) throw new Error('Identity organization mismatch')
-      if (address && address.organizationId !== organizationId) throw new Error('Identity organization mismatch')
+      if (this.projectId && projectId !== this.projectId) throw new Error('Identity project mismatch')
+      if (address && address.projectId !== projectId) throw new Error('Identity project mismatch')
       const pending = state.pendingLinks[normalizedCode]
       if (!pending) {
         throw new Error('Invalid confirmation code')
@@ -289,15 +289,15 @@ export class IdentityManager {
         throw new Error('Confirmation code expired')
       }
 
-      if (pending.organizationId && pending.organizationId !== organizationId) throw new Error('Confirmation belongs to a different organization')
+      if (pending.projectId && pending.projectId !== projectId) throw new Error('Confirmation belongs to a different project')
       if (pending.targetAddress) {
-        if (!address || address.organizationId !== pending.targetAddress.organizationId
+        if (!address || address.projectId !== pending.targetAddress.projectId
           || address.botInstanceId !== pending.targetAddress.botInstanceId
           || address.platform !== pending.targetAddress.platform
           || address.conversationId !== pending.targetAddress.conversationId) {
           throw new Error('Confirmation must arrive from the target bot and conversation')
         }
-      } else if ((organizationId && organizationId !== 'default') || (address && !address.legacySessionId)) {
+      } else if ((projectId && projectId !== 'default') || (address && !address.legacySessionId)) {
         throw new Error('Legacy confirmation has no authoritative target bot address; request a new challenge')
       }
       const currentAccount = this.accountKey(channel, senderId, address)
@@ -357,8 +357,8 @@ export class IdentityManager {
     for (const pending of Object.values(parsed.pendingLinks)) {
       if (pending.targetAddress) this.validateAddress(pending.targetAddress)
       if (pending.requesterAddress) this.validateAddress(pending.requesterAddress)
-      if (this.organizationId && pending.organizationId && pending.organizationId !== this.organizationId) {
-        throw new Error('Persisted identity challenge organization mismatch')
+      if (this.projectId && pending.projectId && pending.projectId !== this.projectId) {
+        throw new Error('Persisted identity challenge project mismatch')
       }
     }
     this.state = { ...parsed, version: 2 }
@@ -380,14 +380,14 @@ export class IdentityManager {
 
   private validateAddress(address: ChannelAddress): void {
     addressSchema.parse(address)
-    if (this.organizationId && address.organizationId !== this.organizationId) throw new Error('Identity organization mismatch')
-    if (address.legacySessionId && (address.organizationId !== 'default' || address.botInstanceId !== `legacy-${address.platform}`)) {
+    if (this.projectId && address.projectId !== this.projectId) throw new Error('Identity project mismatch')
+    if (address.legacySessionId && (address.projectId !== 'default' || address.botInstanceId !== `legacy-${address.platform}`)) {
       throw new Error('Invalid legacy identity bot address')
     }
   }
 
   private accountKey(channel: string, senderId: string, address?: ChannelAddress): string {
-    if (!address && this.organizationId && this.organizationId !== 'default' && ['qq', 'discord', 'feishu'].includes(channel)) {
+    if (!address && this.projectId && this.projectId !== 'default' && ['qq', 'discord', 'feishu'].includes(channel)) {
       throw new Error('Source bot address is unavailable')
     }
     if (address) {

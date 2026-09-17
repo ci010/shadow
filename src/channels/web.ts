@@ -9,8 +9,18 @@ import type { Hono } from 'hono'
 import { saveToUploads, sessionWorkspacePath } from '../utils/paths.ts'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { resolveSessionLocations } from '../sessions/locality.ts'
-import { ProjectError } from '../projects/registry.ts'
+import { FolderError } from '../folders/registry.ts'
 import { isConfigObject, parseSessionConfigPatch, type SessionConfigPatch } from '../sessions/config-patch.ts'
+import type { RealtimePublisher } from '../realtime/hub.ts'
+import type { RealtimeTurnFinishedPayload } from '../realtime/protocol.ts'
+
+function outboundPayload(msg: OutboundMessage) {
+  return {
+    event: msg.event ?? 'response', content: msg.content, done: msg.done ?? false,
+    media: msg.media, usage: msg.usage, toolCall: msg.toolCall,
+    toolCallId: msg.toolCallId, toolName: msg.toolName,
+  }
+}
 
 function escapesRoot(root: string, target: string): boolean {
   const rel = relative(root, target)
@@ -41,11 +51,10 @@ export async function resolveSessionMediaPath(
 }
 
 /**
- * Web channel — exposes HTTP+SSE endpoints so browser frontends
- * (like dag-chat) can send messages and receive streamed responses.
+ * Web channel — HTTP commands with responses published through shared realtime.
  *
  * Endpoints:
- *  POST /api/chat/send     — send message (with optional media refs), returns SSE stream
+ *  POST /api/chat/send     — admit a message and return its request ID
  *  POST /api/chat/message  — send message, wait for full response (sync REST)
  *  POST /api/chat/upload   — upload file/image, returns absolute private-session path
  *  GET  /api/chat/uploads/* — serve uploaded / outbound media files
@@ -62,13 +71,6 @@ export class WebChannel extends AbstractChannel {
   }
   private workspace: string
 
-  /**
-   * Pending SSE connections keyed by `requestId` (the messageId we set on
-   * the inbound message). The session loop sets `replyTo` on outbound
-   * messages to match this, so we can correlate response → request.
-   */
-  private pending = new Map<string, ReadableStreamDefaultController>()
-
   /** Pending sync REST requests keyed by requestId. */
   private syncPending = new Map<string, {
     resolve: (resp: { content: string; media?: string[] }) => void
@@ -77,17 +79,6 @@ export class WebChannel extends AbstractChannel {
     media: string[]
     timer: ReturnType<typeof setTimeout>
   }>()
-
-  /**
-   * Persistent per-chat SSE connections keyed by `chatId`. These stay open for
-   * the lifetime of an open browser tab (via GET /api/chat/events) and receive
-   * background/unsolicited messages — e.g. cron ticks, scheduled self-awake
-   * events, or subagent replies — that are not tied to an active request.
-   */
-  private eventStreams = new Map<string, Set<ReadableStreamDefaultController>>()
-
-  /** Keep-alive timer that periodically pings open event streams. */
-  private keepAliveTimer?: number
 
   private sessionManager?: SessionManager
   private readonly subscriptions: string[] = []
@@ -98,6 +89,7 @@ export class WebChannel extends AbstractChannel {
       allowFrom?: string[]
       workspace?: string
       sessionManager?: SessionManager
+      realtime?: RealtimePublisher
     },
   ) {
     super(bus, opts.allowFrom, true)
@@ -106,22 +98,25 @@ export class WebChannel extends AbstractChannel {
 
     this.acceptToolResults = true
 
-    // Subscribe to all outbound messages and route to SSE / sync connections
     this.subscriptions.push(this.bus.on('message.outbound', this.bindCallback((msg) => {
       if (msg.channel !== 'web') return
-      const toRequest = this.pushToSSE(msg)
-      const toSync = this.pushToSync(msg)
-      // Background/unsolicited messages (no matching active request) are pushed
-      // to the persistent per-chat event stream so open browsers receive them
-      // live without a manual refresh.
-      if (!toRequest && !toSync) this.pushToEventStream(msg)
+      opts.realtime?.chat(`web:${msg.chatId}`, outboundPayload(msg), msg.replyTo)
+      this.pushToSync(msg)
     })))
     this.subscriptions.push(this.bus.on('session.message.appended', this.bindCallback(({ sessionId, physicalSessionId, message }) => {
       if (!sessionId.startsWith('web:') || message.role !== 'user') return
       const first = typeof message.content === 'string' ? message.content
         : message.content?.[0]?.type === 'text' ? message.content[0].text : ''
       if (!first || !/^<event\s/.test(first)) return
-      this.broadcastEvent(sessionId.slice(4), { event: 'session_message', physicalSessionId, message })
+      const payload = { event: 'session_message', physicalSessionId, message }
+      opts.realtime?.chat(sessionId, payload)
+    })))
+    this.subscriptions.push(this.bus.on('session.turn.finished', this.bindCallback(fact => {
+      if (!fact.sessionId.startsWith('web:')) return
+      const payload: RealtimeTurnFinishedPayload = {
+        event: 'turn_finished', done: true, status: fact.status, turnId: fact.turnId,
+      }
+      opts.realtime?.chat(fact.sessionId, payload, fact.inputId)
     })))
   }
 
@@ -148,9 +143,9 @@ export class WebChannel extends AbstractChannel {
           }
           if (typeof body?.parentSessionId === 'string') ids.push(body.parentSessionId)
         }
-        try { for (const id of ids) this.sessionManager?.assertProjectAccess?.(id) }
+        try { for (const id of ids) this.sessionManager?.assertFolderAccess?.(id) }
         catch (error) {
-          if (error instanceof ProjectError) return c.json({ error: error.code, message: error.message }, error.status)
+          if (error instanceof FolderError) return c.json({ error: error.code, message: error.message }, error.status)
           throw error
         }
         return next()
@@ -356,7 +351,7 @@ export class WebChannel extends AbstractChannel {
       }
     })
 
-    // ── POST /api/chat/send — accept a message and return SSE stream ──
+    // ── POST /api/chat/send — admit a message; output uses /api/live ──
     app.post('/api/chat/send', async (c) => {
       let rawBody: unknown
       try {
@@ -397,12 +392,18 @@ export class WebChannel extends AbstractChannel {
       if (!content && !retry && (!media || media.length === 0)) {
         return c.json({ error: 'chatId and content or media are required' }, 400)
       }
+      if (stream === true) {
+        return c.json({
+          error: 'stream_retired',
+          message: 'Subscribe to /api/live and send without stream:true. No message was submitted.',
+        }, 410)
+      }
 
       const requestId = crypto.randomUUID()
 
       const sessionId = `${this.name}:${chatId}`
       const state = await this.sessionManager?.getSessionState(sessionId)
-      // Set parent linkage before creating the stream (async, must happen before inbound)
+      // Parent linkage must exist before admission.
       if (!state) {
         if (parentChatId) {
           await this.sessionManager?.buildSession(sessionId, {
@@ -425,45 +426,6 @@ export class WebChannel extends AbstractChannel {
         }
       }
 
-      // Admission-only submit (steering / queuing). Used when a turn is
-      // already active in the browser: we don't open a dedicated SSE stream —
-      // the message is steered into the running turn (its reply flows through
-      // the active request's stream) or, if the turn is aborted/restarted,
-      // through the persistent GET /api/chat/events stream. This avoids
-      // registering a per-request controller that would never receive `done`.
-      if (stream === false) {
-        try {
-          await this.handleIncoming(
-            senderId ?? 'web-user',
-            chatId,
-            content ?? '',
-            requestId,
-            {
-              senderName: senderId ?? 'web-user',
-              ...(retry ? { retry: true } : {}),
-            },
-            media,
-          )
-          return c.json({ requestId, chatId })
-        } catch (err) {
-          return c.json(
-            { error: err instanceof Error ? err.message : 'Message admission failed' },
-            err instanceof ChannelAdmissionError ? err.status : 503,
-          )
-        }
-      }
-
-      // Create SSE stream
-      const sseStream = new ReadableStream({
-        start: (controller) => {
-          // Register before admission so even an immediate response is captured.
-          this.pending.set(requestId, controller)
-        },
-        cancel: () => {
-          this.pending.delete(requestId)
-        },
-      })
-
       try {
         await this.handleIncoming(
           senderId ?? 'web-user',
@@ -476,63 +438,18 @@ export class WebChannel extends AbstractChannel {
           },
           media,
         )
+        return c.json({ requestId, chatId })
       } catch (err) {
-        this.pending.delete(requestId)
-        await sseStream.cancel()
         return c.json(
           { error: err instanceof Error ? err.message : 'Message admission failed' },
           err instanceof ChannelAdmissionError ? err.status : 503,
         )
       }
-
-      return new Response(sseStream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'X-Shadow-Request-Id': requestId,
-          'Access-Control-Expose-Headers': 'X-Shadow-Request-Id',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
-        },
-      })
     })
 
-    // ── GET /api/chat/events?chatId=<id> — persistent SSE for background pushes ──
-    app.get('/api/chat/events', (c) => {
-      const chatId = c.req.query('chatId')
-      if (!chatId) return c.json({ error: 'chatId is required' }, 400)
-
-      const encoder = new TextEncoder()
-      let selfController: ReadableStreamDefaultController | null = null
-      const stream = new ReadableStream({
-        start: (controller) => {
-          selfController = controller
-          let set = this.eventStreams.get(chatId)
-          if (!set) {
-            set = new Set()
-            this.eventStreams.set(chatId, set)
-          }
-          set.add(controller)
-          // Initial comment so the client knows the stream is live.
-          controller.enqueue(encoder.encode(': connected\n\n'))
-        },
-        cancel: () => {
-          const set = this.eventStreams.get(chatId)
-          if (!set || !selfController) return
-          set.delete(selfController)
-          if (set.size === 0) this.eventStreams.delete(chatId)
-        },
-      })
-
-      return new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
-        },
-      })
-    })
+    app.get('/api/chat/events', (c) => c.json({
+      error: 'stream_retired', message: 'Subscribe to chat topics through /api/live.',
+    }, 410))
 
     // ── GET /api/chat/session?chatId=<id> — retrieve session context + history ──
     app.get('/api/chat/session', async (c) => {
@@ -613,50 +530,13 @@ export class WebChannel extends AbstractChannel {
     })
 
     console.info(
-      '[web] Web channel started — POST /api/chat/send, GET /api/chat/events, GET /api/chat/session, GET /api/media',
+      '[web] Web channel started — POST /api/chat/send, GET /api/chat/session, GET /api/media; realtime via /api/live',
     )
-
-    // Periodically ping open event streams so proxies/browsers keep them alive
-    // and closed connections get pruned.
-    this.keepAliveTimer = setInterval(this.bindCallback(() => {
-      const encoder = new TextEncoder()
-      for (const [chatId, set] of this.eventStreams) {
-        for (const controller of set) {
-          try {
-            controller.enqueue(encoder.encode(': ping\n\n'))
-          } catch {
-            set.delete(controller)
-          }
-        }
-        if (set.size === 0) this.eventStreams.delete(chatId)
-      }
-    }), 25_000) as unknown as number
   }
 
   async stop(): Promise<void> {
     this.setAccepting(false)
     for (const subscription of this.subscriptions.splice(0)) this.bus.off(subscription)
-    if (this.keepAliveTimer !== undefined) {
-      clearInterval(this.keepAliveTimer)
-      this.keepAliveTimer = undefined
-    }
-
-    for (const controller of this.pending.values()) {
-      try {
-        controller.close()
-      } catch { /* already closed */ }
-    }
-    this.pending.clear()
-
-    for (const set of this.eventStreams.values()) {
-      for (const controller of set) {
-        try {
-          controller.close()
-        } catch { /* already closed */ }
-      }
-    }
-    this.eventStreams.clear()
-
     for (const [id, p] of this.syncPending) {
       clearTimeout(p.timer)
       p.reject(new Error('Web channel stopped'))
@@ -664,9 +544,8 @@ export class WebChannel extends AbstractChannel {
     }
   }
 
-  async send(msg: OutboundMessage): Promise<string | null> {
-    // Delivery is handled by onOutbound → pushToSSE.
-    // ChannelManager.dispatchOutbound still calls this, return a stable id.
+  async send(_msg: OutboundMessage): Promise<string | null> {
+    // The outbound subscription publishes to realtime and pending sync requests.
     return null
   }
 
@@ -676,49 +555,17 @@ export class WebChannel extends AbstractChannel {
     _content: string,
     _media?: string[],
   ): Promise<void> {
-    // Progressive updates go through pushToSSE via onOutbound subscription.
+    // Progressive updates use the same outbound subscription.
   }
 
   // ── Internal ──────────────────────────────────────────────────────
 
-  private pushToSSE(msg: OutboundMessage): boolean {
-    // Match by replyTo (set to our requestId by the session loop)
+  private pushToSync(msg: OutboundMessage): void {
     const requestId = msg.replyTo
-    if (!requestId) return false
-
-    const controller = this.pending.get(requestId)
-    if (!controller) return false
-
-    try {
-      const data = JSON.stringify({
-        event: msg.event ?? 'response',
-        content: msg.content,
-        done: msg.done ?? false,
-        media: msg.media,
-        usage: msg.usage,
-        toolCall: msg.toolCall,
-        toolCallId: msg.toolCallId,
-        toolName: msg.toolName,
-      })
-      const encoder = new TextEncoder()
-      controller.enqueue(encoder.encode(`data: ${data}\n\n`))
-
-      if (msg.done) {
-        controller.close()
-        this.pending.delete(requestId)
-      }
-    } catch {
-      this.pending.delete(requestId)
-    }
-    return true
-  }
-
-  private pushToSync(msg: OutboundMessage): boolean {
-    const requestId = msg.replyTo
-    if (!requestId) return false
+    if (!requestId) return
 
     const pending = this.syncPending.get(requestId)
-    if (!pending) return false
+    if (!pending) return
 
     if (msg.content) pending.chunks.push(msg.content)
     if (msg.media) pending.media.push(...msg.media)
@@ -731,41 +578,5 @@ export class WebChannel extends AbstractChannel {
         media: pending.media.length ? pending.media : undefined,
       })
     }
-    return true
-  }
-
-  /**
-   * Push a background/unsolicited message (cron tick, scheduled self-awake,
-   * subagent reply, …) to every persistent event stream open for its chat, so
-   * connected browsers render it live without a manual refresh.
-   */
-  private pushToEventStream(msg: OutboundMessage): void {
-    this.broadcastEvent(msg.chatId, {
-      event: msg.event ?? 'response',
-      content: msg.content,
-      done: msg.done ?? false,
-      media: msg.media,
-      usage: msg.usage,
-      toolCall: msg.toolCall,
-      toolCallId: msg.toolCallId,
-      toolName: msg.toolName,
-    })
-  }
-
-  private broadcastEvent(chatId: string, payload: unknown): void {
-    const set = this.eventStreams.get(chatId)
-    if (!set || set.size === 0) return
-    const data = JSON.stringify(payload)
-    const encoder = new TextEncoder()
-    const chunk = encoder.encode(`data: ${data}\n\n`)
-
-    for (const controller of set) {
-      try {
-        controller.enqueue(chunk)
-      } catch {
-        set.delete(controller)
-      }
-    }
-    if (set.size === 0) this.eventStreams.delete(chatId)
   }
 }

@@ -7,6 +7,7 @@ import { app, BrowserWindow, nativeImage, session } from 'electron'
 import { Hono } from 'hono'
 import { uiPlugin } from '../../../src/gateway/ui.ts'
 import { serveLocalFiles } from '../../../src/gateway/local-files.ts'
+import { LiveFixture } from './live-fixture.ts'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -24,6 +25,7 @@ app.commandLine.appendSwitch('disable-background-networking')
 app.commandLine.appendSwitch('disable-component-update')
 app.on('window-all-closed', () => {})
 const ui = new Hono()
+const live = new LiveFixture()
 uiPlugin(assets)(ui)
 const sessionId = 'web:chat-image-annotation'
 const chatId = sessionId.slice(4)
@@ -54,33 +56,32 @@ let finishSend: (() => void) | undefined
 let phase = 'initializing'
 const server = createServer(async (request, response) => {
   try {
+    if (live.handle(request, response)) return
     const url = new URL(request.url!, 'http://127.0.0.1')
-    const path = url.pathname
+    const path = url.pathname.replace(/^\/projects\/default(?=\/)/, '')
     requests.push({ method: request.method!, path })
     const json = (data: unknown, status = 200) => {
       response.writeHead(status, { 'Content-Type': 'application/json' })
       response.end(JSON.stringify(data))
     }
     if (path === '/api/provider/setup') return json({ ready: true, provider: 'custom', model: 'synthetic-model', authMode: 'none', hasApiKey: false })
+    if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
+    if (path === '/api/automations') return json({ automations: [] })
     if (path === '/api/provider/configured') return json({ providers: [{ provider: 'custom', model: 'synthetic-model', selected: true, authMode: 'none', hasApiKey: false }] })
-    if (path === '/api/projects') return json({ projects: [] })
-    if (path === '/api/config') return json({ agent: { model: 'synthetic-model' } })
+    if (path === '/api/folders') return json({ folders: [] })
+    if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: sourceDirectory, temperature: 0.7 } })
     if (path === '/debug/models') return json({ models: ['synthetic-model'] })
     if (path === '/api/sessions/graph') return json({
       sessions: [{ sessionId, title: 'Image annotation regression', current: 'physical-image' }],
       nodes: [{ physicalId: 'physical-image', logicalId: sessionId }],
     })
-    if (path === '/api/sessions/stages') return json({ stages: { [sessionId]: 'idle' } })
-    if (path === '/api/chat/session') return json({ history: [{ role: 'assistant', content: 'Synthetic image context conversation.' }], systemPrompt: 'Synthetic fixture.', tools: [] })
-    if (path === '/api/chat/events') {
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      response.write(': image fixture\n\n')
-      return
-    }
+    if (path === '/api/sessions/stages') return json({ stages: { [sessionId]: live.activeRequests.has(sessionId) ? 'llm' : 'idle' }, activeRequestIds: Object.fromEntries(live.activeRequests) })
+    if (path === '/api/chat/session') return json({ history: [{ role: 'assistant', content: 'Synthetic image context conversation.' }, ...live.history(sessionId)], systemPrompt: 'Synthetic fixture.', tools: [] })
     const route = path.match(/^\/api\/sessions\/([^/]+)(?:\/(.*))?$/)
     if (route) {
       assert.equal(decodeURIComponent(route[1]), sessionId, 'The fixture must not create or switch conversations')
       const kind = route[2]
+      if (kind === 'background-tasks') return json({ sessionId, total: 0, tasks: [] })
       if (kind === 'files' || kind === 'raw' || kind === 'preview') {
         assert.equal(request.method, 'GET', 'Image source is read-only')
         if (kind === 'raw') {
@@ -111,7 +112,7 @@ const server = createServer(async (request, response) => {
         return
       }
       if (kind === 'git/status') return json({ available: false, reason: 'not_repository', entries: [] })
-      if (kind === 'details') return json({ sessionId, name: 'Image annotation regression', workdir: { kind: 'local', displayPath: sourceDirectory }, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageScope: 'session' })
+      if (kind === 'details') return json({ sessionId, name: 'Image annotation regression', workdir: { kind: 'local', displayPath: sourceDirectory }, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
       if (!kind) return json({ messages: [], currentPhysicalId: 'physical-image', previousPhysicalId: null })
     }
     if (path === '/api/chat/upload') {
@@ -127,13 +128,16 @@ const server = createServer(async (request, response) => {
     if (path === '/api/chat/send') {
       let body = ''
       for await (const chunk of request) body += chunk
-      sends.push(JSON.parse(body))
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      response.write(`data: ${JSON.stringify({ event: 'response', content: 'Synthetic image received.', done: false })}\n\n`)
-      finishSend = () => {
-        response.end(`data: ${JSON.stringify({ event: 'response', content: 'Synthetic image received.', done: true })}\n\n`)
-      }
-      return
+      const input = JSON.parse(body)
+      if (input.stream === true) return json({ error: 'stream_removed' }, 410)
+      assert.equal(input.chatId, chatId)
+      assert.ok(live.hub.stats.clients > 0, 'Subscribe before admission')
+      sends.push(input)
+      const acknowledgement = live.admit(input.chatId)
+      live.history(sessionId).push({ role: 'user', content: input.content, timestamp: new Date().toISOString() })
+      live.chat(sessionId, { event: 'response', content: 'Synthetic image received.', done: false })
+      finishSend = () => live.finish(sessionId)
+      return json(acknowledgement)
     }
     if (path === '/api/media') {
       const upload = uploads.find(item => item.path === url.searchParams.get('path'))
@@ -169,7 +173,7 @@ async function waitFor(source: string): Promise<void> {
     if (await evaluate(source)) return
     await new Promise(resolve => setTimeout(resolve, 40))
   }
-  throw new Error(`${phase}: timed out waiting for ${source}; errors=${JSON.stringify(errors)}`)
+  throw new Error(`${phase}: timed out waiting for ${source}; errors=${JSON.stringify(errors)}; listings=${JSON.stringify(fileListRequests)}; body=${await evaluate('document.body.innerText.slice(0, 1800)')}`)
 }
 async function waitRequest(predicate: () => boolean, label: string): Promise<void> {
   const end = Date.now() + 8000
@@ -859,6 +863,7 @@ main().catch(error => {
     window.webContents.disableDeviceEmulation()
     window.destroy()
   }
+  live.close()
   server.closeAllConnections()
   server.close()
   app.exit(process.exitCode || 0)

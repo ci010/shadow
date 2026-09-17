@@ -22,7 +22,7 @@ function agent(name: string, defaultMode: ExecutionMode = 'session'): AgentTypeD
 function ctx(
   sessionId: string,
   a: AgentTypeDefinition,
-  projectName?: string,
+  initiativeId?: string,
 ): SessionPromptContext {
   return {
     behavior: {} as SessionConfig,
@@ -30,7 +30,7 @@ function ctx(
     sessionId,
     chatId: sessionId,
     agent: a,
-    projectName,
+    initiativeId,
   }
 }
 

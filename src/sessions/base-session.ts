@@ -13,6 +13,7 @@ import {
   type ChatMessage,
   type LLMProvider,
   type LLMResponseUsage,
+  type ToolCall,
   TokenLimitExceededError,
 } from '../providers/provider.ts'
 import type { SessionTools } from '../tools/registry.ts'
@@ -31,6 +32,8 @@ import type { SessionState, StoredMessage } from './session-store.ts'
 import type { Executor } from '../execution/executor.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { ReadTool } from '../tools/read.ts'
+import { pendingToolCalls } from './recovery.ts'
+import type { PromptCaptureStore } from './prompt-capture.ts'
 
 /**
  * Shared base for all session types.
@@ -54,6 +57,7 @@ export abstract class BaseSession {
     protected readonly workdirCapabilityLookup?: WorkdirCapabilityLookup,
     protected readonly remoteExecutor?: Executor,
     protected readonly evalBridge?: ToolBridgeFactory,
+    protected readonly promptCaptures?: PromptCaptureStore,
   ) {
   }
 
@@ -178,6 +182,7 @@ export abstract class BaseSession {
     executionContext: ExecutionContext,
     llm: LlmRuntimeConfig,
     signal: AbortSignal,
+    turnId: string = crypto.randomUUID(),
   ): Promise<string> {
     const model = executionContext.model ?? llm.model
     const temperature = executionContext.temperature ?? llm.temperature
@@ -186,6 +191,17 @@ export abstract class BaseSession {
     const reasoningEffort = executionContext.reasoningEffort ??
       llm.reasoningEffort
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
+
+    const pending = pendingToolCalls(this.messages)
+    if (pending.length) {
+      await this.executeToolCalls(pending.map(call => {
+        const args: unknown = JSON.parse(call.function.arguments)
+        if (!args || typeof args !== 'object' || Array.isArray(args)) {
+          throw new Error(`Saved tool call ${call.id} has invalid arguments`)
+        }
+        return { id: call.id, name: call.function.name, arguments: args as Record<string, unknown> }
+      }), executionContext, llm, signal)
+    }
 
     for (let i = 0; i < 100; i++) {
       const toolDefs = this.tools.getDefinitions()
@@ -205,15 +221,42 @@ export abstract class BaseSession {
 
       const response = await withAbort(activeSpan(
         'agent.chat',
-        () =>
-          this.provider.chat(this.messages, toolDefs, {
+        async (chatSpan) => {
+          const captureId = this.promptCaptures?.capture({
+            projectId: this.state.projectId,
+            sessionId: this.id,
+            physicalSessionId: this.physicalSessionId,
+            turnId,
+            iteration: i,
+            provider: this.provider.name,
+          }, this.messages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
+          if (captureId) chatSpan.setAttribute('prompt.capture.request_id', captureId)
+          const response = await this.provider.chat(this.messages, toolDefs, {
             model,
             maxTokens,
             temperature,
             signal,
             thinking,
             reasoningEffort,
-          }),
+          })
+          signal.throwIfAborted()
+          // Keep the returned message with its call, including across compaction.
+          // Provider continuity (including encrypted state) is not display content.
+          chatSpan.addEvent('model.response', {
+            message: JSON.stringify({
+              role: 'assistant',
+              content: response.content,
+              reasoning_text: response.reasoningText ?? response.reasoningContent,
+              tool_calls: response.toolCalls.map(tc => ({
+                id: tc.id,
+                type: 'function',
+                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+              })),
+              usage: response.usage,
+            }),
+          })
+          return response
+        },
         { attributes: { ...traceAttributes, model } },
         span.context,
       ).catch((err) => err as Error), signal)
@@ -266,89 +309,100 @@ export abstract class BaseSession {
         return response.content ?? ''
       }
 
-      const groups = groupTools(response.toolCalls, this.tools)
-      const pendingResults = new Map(response.toolCalls.map((call) => [call.id, call]))
+      await this.executeToolCalls(response.toolCalls, executionContext, llm, signal)
+    }
+    throw new Error('Session turn exceeded the maximum number of iterations')
+  }
 
-      this.onToolPhaseStart()
-      try {
-        for (const group of groups) {
-          signal.throwIfAborted()
+  private async executeToolCalls(
+    calls: ToolCall[],
+    executionContext: ExecutionContext,
+    llm: LlmRuntimeConfig,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const groups = groupTools(calls, this.tools)
+    const pendingResults = new Map(calls.map(call => [call.id, call]))
+    const traceAttributes = { sessionId: this.id, physicalSessionId: this.physicalSessionId }
+    using span = uspan('agent.tools', { attributes: traceAttributes })
+    const recordResult = async (call: ToolCall, content: string) => {
+      await this.appendMessages(llm, { role: 'tool', content, tool_call_id: call.id, name: call.name })
+      pendingResults.delete(call.id)
+      this.bus.emit('message.outbound', {
+        event: 'tool_result',
+        channel: executionContext.channel,
+        chatId: executionContext.chatId,
+        channelAddress: executionContext.channelAddress,
+        replyTo: executionContext.platformMessageId,
+        content,
+        toolCallId: call.id,
+        toolName: call.name,
+        done: false,
+      })
+    }
 
-          for (const tc of group.calls) {
-            const display = this.tools.getChatTextDisplay(tc.name, tc.arguments)
-            this.bus.emit('message.outbound', {
-              event: 'tool_call',
-              channel: executionContext.channel,
-              chatId: executionContext.chatId,
-              channelAddress: executionContext.channelAddress,
-              replyTo: executionContext.platformMessageId,
-              content: display || tc.name,
-              toolCall: { name: tc.name, arguments: tc.arguments },
-              toolCallId: tc.id,
-              toolName: tc.name,
-              done,
-            })
-          }
-          const execution = Promise.all(
-            group.calls.map((tc) =>
-              activeSpan(
-                `agent.tool`,
-                () =>
-                  this.tools.execute(tc.name, tc.arguments, {
-                    ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
-                  }),
-                {
-                  attributes: {
-                    ...traceAttributes,
-                    'tool.call_id': tc.id,
-                    'tool.name': tc.name,
-                  },
-                },
-                span.context,
-              )
-            ),
-          )
-          const results = await (this.state.mode === 'call' ? withAbort(execution, signal) : execution)
-          await this.appendMessages(
-            llm,
-            ...group.calls.map((call, idx) => ({
-              role: 'tool',
-              content: results[idx],
-              tool_call_id: call.id,
-              name: call.name,
-            } satisfies ChatMessage)),
-          )
-          for (const call of group.calls) pendingResults.delete(call.id)
-
-          for (let idx = 0; idx < group.calls.length; idx++) {
-            this.bus.emit('message.outbound', {
-              event: 'tool_result',
-              channel: executionContext.channel,
-              chatId: executionContext.chatId,
-              channelAddress: executionContext.channelAddress,
-              replyTo: executionContext.platformMessageId,
-              content: results[idx],
-              toolCallId: group.calls[idx].id,
-              toolName: group.calls[idx].name,
-              done,
-            })
-          }
+    this.onToolPhaseStart()
+    try {
+      for (const group of groups) {
+        signal.throwIfAborted()
+        for (const tc of group.calls) {
+          const display = this.tools.getChatTextDisplay(tc.name, tc.arguments)
+          this.bus.emit('message.outbound', {
+            event: 'tool_call',
+            channel: executionContext.channel,
+            chatId: executionContext.chatId,
+            channelAddress: executionContext.channelAddress,
+            replyTo: executionContext.platformMessageId,
+            content: display || tc.name,
+            toolCall: { name: tc.name, arguments: tc.arguments },
+            toolCallId: tc.id,
+            toolName: tc.name,
+            done: false,
+          })
         }
-      } catch (error) {
-        // A cancelled later tool group still needs results for its persisted
-        // assistant calls before another input can safely use this history.
+        // Persist each completed result without waiting for sibling tools.
+        // Serialize writes to keep the JSONL log and state file ordered.
+        let writes = Promise.resolve()
+        const executions = group.calls.map(async tc => {
+          const result = await activeSpan('agent.tool',
+            () => this.tools.execute(tc.name, tc.arguments, {
+              ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
+            }),
+            { attributes: { ...traceAttributes, 'tool.call_id': tc.id, 'tool.name': tc.name } },
+            span.context,
+          )
+          if (this.state.mode !== 'call') {
+            writes = writes.then(() => recordResult(tc, result))
+            await writes
+          }
+          return result
+        })
+
+        if (this.state.mode === 'call') {
+          const results = await withAbort(Promise.all(executions), signal)
+          for (let index = 0; index < group.calls.length; index++) {
+            await recordResult(group.calls[index], results[index])
+          }
+        } else {
+          const outcomes = await Promise.allSettled(executions)
+          const failure = outcomes.find(outcome => outcome.status === 'rejected')
+          if (failure?.status === 'rejected') throw failure.reason
+        }
+      }
+    } catch (error) {
+      // Reusable sessions retain unfinished calls for Continue. Bounded
+      // executions are terminal and must close their call/result pairs.
+      if (this.state.mode && this.state.mode !== 'session') {
         await this.appendMessages(llm, ...Array.from(pendingResults.values(), (call) => ({
           role: 'tool' as const,
           content: signal.aborted ? 'Tool execution cancelled.' : `Tool execution failed: ${errMsg(error)}`,
           tool_call_id: call.id,
           name: call.name,
         })))
-        throw error
-      } finally {
-        this.onToolPhaseEnd()
       }
+      throw error
+    } finally {
+      this.onToolPhaseEnd()
     }
-    throw new Error('Session turn exceeded the maximum number of iterations')
   }
 
   // ── Shared message processing ──────────────────────────────────────────
@@ -429,10 +483,6 @@ export abstract class BaseSession {
       if (input.kind === 'control') {
         if (input.command.type === 'resume') {
           if (!this.messages.some(message => message.role !== 'system')) throw new Error('No saved history to continue.')
-          await this.persistMessages(llm, {
-            role: 'user',
-            content: '<event type="session-resume" source="user" />\nContinue the interrupted request from this saved history. Do not repeat completed operations. Missing tool results have unknown outcomes: inspect actual state and ask before repeating irreversible actions. This is continuation, not a replay of the last user input.',
-          })
         } else {
           // Retry alone supports fallback content when the original send was lost.
           const hasReplayable = this.messages.some((m) => m.role !== 'system')
@@ -447,6 +497,14 @@ export abstract class BaseSession {
           }
         }
       } else {
+        // A new input supersedes unfinished calls; only Continue/Retry execute
+        // them. Close their pairs before appending the newly admitted context.
+        await this.persistMessages(llm, ...pendingToolCalls(this.messages).map(call => ({
+          role: 'tool' as const,
+          content: 'Tool execution cancelled.',
+          tool_call_id: call.id,
+          name: call.function.name,
+        })))
         const message = await buildUserChatMessage(
           input, this.workspace, messageWorkdir,
         )
@@ -462,7 +520,7 @@ export abstract class BaseSession {
 
       console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
       const executionContext: ExecutionContext = {
-        organizationId: this.state.organizationId,
+        projectId: this.state.projectId,
         evalBridge: this.evalBridge,
         channelAddress: msg.channelAddress,
         ...attributes,
@@ -480,7 +538,7 @@ export abstract class BaseSession {
       }
 
       signal.throwIfAborted()
-      fact.content = await this.runLlmLoop(executionContext, llm, signal)
+      fact.content = await this.runLlmLoop(executionContext, llm, signal, queryId)
     } catch (err) {
       if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
         fact.status = 'cancelled'

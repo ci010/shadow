@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { resolve } from 'node:path'
-import { stat, mkdir, rm, readFile } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import type { MainRuntimeHandle, MainRuntimeOptions } from './contracts.ts'
 import { resolveUiDistDirectory } from './paths.ts'
 import type { Config } from '../../config/schema.ts'
@@ -15,44 +15,32 @@ import { authorizeMainNodeInventory, mainLocalNodeInventory } from '../node-inve
 import { LocalRuntimeControl } from '../local-control.ts'
 import { devProxyPlugin } from '../../gateway/dev-proxy.ts'
 import { uiPlugin } from '../../gateway/ui.ts'
-import { createOrganizationScope } from '../../organizations/scope.ts'
-import { ProjectRegistry } from '../../projects/registry.ts'
-import { OrganizationCatalog } from '../../organizations/catalog.ts'
-import { AppProviderConfigStore, OrganizationConfigStore } from '../../organizations/config-store.ts'
-import { DEFAULT_ORGANIZATION_ID, organizationPaths, organizationBasePath } from '../../organizations/contracts.ts'
-import { registerOrganizationGateway } from '../../organizations/gateway.ts'
-import type { OrganizationRuntime, OrganizationRuntimeFactory } from '../../organizations/runtime.ts'
-import { migrateLegacyHome } from '../../organizations/home-migration.ts'
-import { migrateHomeSessionOrganizations, reserveLegacyRemoteSessionWorkdirs } from '../../organizations/session-migration.ts'
+import { createProjectScope } from '../../projects/scope.ts'
+import { ProjectCatalog } from '../../projects/catalog.ts'
+import { AppProviderConfigStore, ProjectConfigStore } from '../../projects/config-store.ts'
+import { appModelDefaultsPlugin } from '../../config/model-routes.ts'
+import { projectPaths, projectBasePath } from '../../projects/contracts.ts'
+import { registerProjectGateway } from '../../projects/gateway.ts'
+import type { ProjectRuntime, ProjectRuntimeFactory } from '../../projects/runtime.ts'
+import { reserveRemoteSessionWorkdirs } from '../../projects/session-ownership.ts'
 import { OtelStore } from '../../otel/store.ts'
 import { initializeNodeTelemetry } from '../../otel/runtime.ts'
 import { otelPlugin } from '../../otel/routes.ts'
 import { ChromePortAllocator } from '../../browser/chrome-manager.ts'
+import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 
-export async function startOrganizationHost(
+export async function startProjectHost(
   config: Config,
   options: MainRuntimeOptions,
-  factory: OrganizationRuntimeFactory,
+  factory: ProjectRuntimeFactory,
   selfCodeRoot: string,
 ): Promise<MainRuntimeHandle> {
-  const legacyHome = resolve(config.agent.workspace)
-  const hostHome = `${legacyHome}.organizations`
-  const catalog = new OrganizationCatalog(hostHome, [legacyHome])
+  const baseHome = resolve(config.agent.workspace)
+  const hostHome = `${baseHome}.projects`
+  const catalog = new ProjectCatalog(hostHome, [baseHome])
   await catalog.init()
-  const defaultPaths = organizationPaths(hostHome, DEFAULT_ORGANIZATION_ID)
-  await mkdir(legacyHome, { recursive: true })
-  await migrateLegacyHome({
-    sourceHome: legacyHome, targetHome: defaultPaths.home, organizationId: DEFAULT_ORGANIZATION_ID, sourceIsQuiescent: true,
-    prepare: async stagedHome => {
-      await rm(resolve(stagedHome, '.cluster'), { recursive: true, force: true })
-      await migrateHomeSessionOrganizations(stagedHome, DEFAULT_ORGANIZATION_ID)
-    },
-  })
-  const legacyProjects = new ProjectRegistry(defaultPaths.home)
-  await legacyProjects.init()
-  await catalog.importProjects(DEFAULT_ORGANIZATION_ID, legacyProjects.list())
-  for (const organization of catalog.list()) {
-    await reserveLegacyRemoteSessionWorkdirs(organizationPaths(hostHome, organization.id).home, catalog, organization.id)
+  for (const project of catalog.list()) {
+    await reserveRemoteSessionWorkdirs(projectPaths(hostHome, project.id).home, catalog, project.id)
   }
 
   const cleanup: Array<() => unknown> = []
@@ -60,13 +48,15 @@ export async function startOrganizationHost(
     return await startHostServices()
   } catch (error) {
     for (const close of cleanup.reverse()) {
-      try { await close() } catch (cleanupError) { console.error('[organizations] Host startup cleanup failed', cleanupError) }
+      try { await close() } catch (cleanupError) { console.error('[projects] Host startup cleanup failed', cleanupError) }
     }
     throw error
   }
 
   async function startHostServices(): Promise<MainRuntimeHandle> {
   const app = new Hono()
+  const realtimeHub = new RealtimeHub()
+  cleanup.push(() => realtimeHub.close())
   const hostOtelStore = new OtelStore(resolve(hostHome, '.host.otel.db'))
   let hostTelemetry: ReturnType<typeof initializeNodeTelemetry>
   try { hostTelemetry = initializeNodeTelemetry(hostOtelStore, { serviceName: 'shadow-host' }) }
@@ -77,34 +67,32 @@ export async function startOrganizationHost(
   const clientAddresses = new GatewayClientAddressRegistry()
   const launchCredential = resolveLaunchCredential(options.gateway?.launchCredential, process.env.GATEWAY_LAUNCH_CREDENTIAL, process.env.WINDOWS_USE_LAUNCH_TOKEN)
   const authorize = (request: Request) => authorizeMainNodeInventory(request, launchCredential, clientAddresses)
-  const runtimes = new Map<string, OrganizationRuntime>()
-  const scopes = new Map<string, ReturnType<typeof createOrganizationScope>>()
-  const stores = new Map<string, OrganizationConfigStore>()
+  const runtimes = new Map<string, ProjectRuntime>()
+  const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
+  const stores = new Map<string, ProjectConfigStore>()
   const starts = new Map<string, Promise<void>>()
   const failures = new Map<string, string>()
   let stopping = false
   let activeConfig = config
   const copilotAuth = new CopilotAuthenticator()
   const chromePortAllocator = new ChromePortAllocator()
-  const serializedLegacy = options.configPath
-    ? JSON.parse(await readFile(options.configPath, 'utf8')) as Record<string, unknown> : undefined
   let provider = createAggregatedProvider(config, copilotAuth)
   const mainCluster = await createMainCluster({
     authorizeInventory: authorize,
     localNodeInventory: () => mainLocalNodeInventory({
       localNodeId: options.localNodeId ?? 'local', implementationVersion: '0.1.0', shellAvailable: true,
-      projects: {
-        list: () => catalog.projects(),
+      folders: {
+        list: () => catalog.folders(),
         lookupWorkdir: ref => {
           for (const runtime of runtimes.values()) {
-            const result = runtime.projects.lookupWorkdir(ref)
+            const result = runtime.folders.lookupWorkdir(ref)
             if (result?.capability) return result
           }
           return { node: 'online' }
         },
       },
     }),
-    snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(options.clusterSnapshotPath ?? resolve(legacyHome, '.cluster', 'registry.v1.json')),
+    snapshotAdapter: new AtomicFileRegistrySnapshotAdapter(options.clusterSnapshotPath ?? resolve(baseHome, '.cluster', 'registry.v1.json')),
     localHello: { protocolMajor: 1, protocolMinor: 0, implementationVersion: '0.1.0', features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'] },
     authorizeOfferCreation: request => launchCredential ? validateLaunchCredential(request.headers.get('Authorization') ?? undefined, launchCredential) : false,
     clientKey: request => clientAddresses.resolve(request),
@@ -113,50 +101,51 @@ export async function startOrganizationHost(
   const sharedConfigStore = new AppProviderConfigStore({
     configPath: options.configPath,
     getConfig: () => activeConfig,
-    onChanged: changed => {
+    onChanged: async changed => {
       const updatedProvider = createAggregatedProvider(changed, copilotAuth)
       const previous = activeConfig
       const previousProvider = provider
       activeConfig = changed
       provider = updatedProvider
       try {
-        for (const [id, store] of stores) scopes.get(id)?.run(() => store.refreshShared())
+        for (const [id, store] of stores) await scopes.get(id)?.run(() => store.refreshShared())
       } catch (error) {
         activeConfig = previous
         provider = previousProvider
         for (const [id, store] of stores) {
-          try { scopes.get(id)?.run(() => store.refreshShared()) }
-          catch (restoreError) { console.error(`[organizations:${id}] Provider rollback failed`, restoreError) }
+          try { await scopes.get(id)?.run(() => store.refreshShared()) }
+          catch (restoreError) { console.error(`[projects:${id}] Provider rollback failed`, restoreError) }
         }
         throw error
       }
       providerSetup.invalidate()
     },
   })
+  if (options.configPath) await sharedConfigStore.read()
   const providerSetup = new ProviderSetup({ store: sharedConfigStore, getConfig: () => activeConfig, auth: copilotAuth })
   cleanup.push(() => providerSetup.dispose())
   let gatewayBaseUrl = `http://127.0.0.1:${options.gateway?.port ?? process.env.GATEWAY_PORT ?? process.env.REST_API_PORT ?? 3123}`
   const start = (id: string): Promise<void> => {
-    if (stopping) return Promise.reject(new Error('Organization host is stopping'))
+    if (stopping) return Promise.reject(new Error('Project host is stopping'))
     if (runtimes.has(id)) return Promise.resolve()
     const pending = starts.get(id)
     if (pending) return pending
     const work = (async () => {
-      const organization = catalog.get(id)
-      if (!organization) throw new Error('Organization not found')
-      const scope = createOrganizationScope(id)
+      const project = catalog.get(id)
+      if (!project) throw new Error('Project not found')
+      const scope = createProjectScope(id)
       scopes.set(id, scope)
-      const paths = organizationPaths(hostHome, id)
-      const store = new OrganizationConfigStore({
+      const paths = projectPaths(hostHome, id)
+      const store = new ProjectConfigStore({
         configPath: paths.configPath, home: paths.home, getSharedConfig: () => activeConfig,
         onChanged: changed => runtimes.get(id)?.updateConfig(changed),
       })
-      let runtime: OrganizationRuntime | undefined
+      let runtime: ProjectRuntime | undefined
       try {
-        const orgConfig = await store.init(id === DEFAULT_ORGANIZATION_ID ? config : undefined, id === DEFAULT_ORGANIZATION_ID ? serializedLegacy : undefined)
-        runtime = await scope.run(() => factory(orgConfig, {
-          organization, home: paths.home, scope, catalog, configStore: store,
-          mainCluster, copilotAuth, chromePortAllocator, authorize, gatewayBaseUrl: gatewayBaseUrl + organizationBasePath(id), selfCodeRoot,
+        const projectConfig = await store.init()
+        runtime = await scope.run(() => factory(projectConfig, {
+          project, home: paths.home, scope, catalog, configStore: store,
+          mainCluster, copilotAuth, chromePortAllocator, authorize, gatewayBaseUrl: gatewayBaseUrl + projectBasePath(id), selfCodeRoot, realtimeHub,
         }))
         await runtime.ready
         if (stopping) {
@@ -168,26 +157,27 @@ export async function startOrganizationHost(
         runtimes.set(id, runtime)
         failures.delete(id)
       } catch (error) {
-        if (runtime) await scope.run(() => runtime!.shutdown()).catch(cleanup => console.error(`[organizations:${id}] Cleanup failed`, cleanup))
+        if (runtime) await scope.run(() => runtime!.shutdown()).catch(cleanup => console.error(`[projects:${id}] Cleanup failed`, cleanup))
         scope.close()
         scopes.delete(id)
-        failures.set(id, 'Organization could not start. Check host diagnostics and retry.')
-        console.error(`[organizations:${id}] Startup failed`, error)
+        failures.set(id, 'Project could not start. Check host diagnostics and retry.')
+        console.error(`[projects:${id}] Startup failed`, error)
       }
     })()
     starts.set(id, work)
-    void work.finally(() => starts.delete(id)).catch(error => console.error('[organizations] Startup failed', error))
+    void work.finally(() => starts.delete(id)).catch(error => console.error('[projects] Startup failed', error))
     return work
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [...mainCluster.plugins, localControl.plugin(), providerSetup.plugin(), providerPlugin(() => provider, () => providerSetup.status())], {
+  registerGatewayRoutes(app, [...mainCluster.plugins, localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), providerPlugin(() => provider, () => providerSetup.status())], {
     launchCredential, launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
   })
+  registerRealtimeRoute(app, realtimeHub, authorize)
   const hostDiagnostics = new Hono()
   otelPlugin(hostOtelStore)(hostDiagnostics)
   app.route('/host', hostDiagnostics)
-  registerOrganizationGateway(app, {
+  registerProjectGateway(app, {
     catalog, start, clientAddresses,
     lookup: id => {
       const runtime = runtimes.get(id)
@@ -215,6 +205,7 @@ export async function startOrganizationHost(
   let shutdownPromise: Promise<void> | undefined
   shutdown = () => shutdownPromise ??= (async () => {
     stopping = true
+    realtimeHub.close()
     localControl.markStopping()
     const errors: unknown[] = []
     const clean = async (operation: () => unknown) => {
@@ -241,10 +232,10 @@ export async function startOrganizationHost(
   try {
     await gateway.ready
     gatewayBaseUrl = `http://127.0.0.1:${gateway.addr.port}`
-    for (const organization of catalog.list()) await start(organization.id)
+    for (const project of catalog.list()) await start(project.id)
     localControl.markReady()
   } catch (error) {
-    await shutdown().catch(cleanup => console.error('[organizations] Host cleanup failed', cleanup))
+    await shutdown().catch(cleanup => console.error('[projects] Host cleanup failed', cleanup))
     throw error
   }
   return { ready: Promise.resolve(), finished: gateway.finished, shutdown }

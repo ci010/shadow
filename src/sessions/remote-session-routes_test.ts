@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Hono } from 'hono'
 import { join } from 'node:path'
-import { projectFixture } from '../projects/test-fixtures.ts'
+import { folderFixture } from '../folders/test-fixtures.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionManager } from './session-manager.ts'
@@ -13,7 +13,7 @@ import type { SessionStore } from './session-store.ts'
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: remote conversation creation checks Main authority and persists only capability references`, async t => {
-    const { workspace } = await projectFixture(t)
+    const { workspace } = await folderFixture(t)
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()
     let created = 0

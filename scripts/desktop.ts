@@ -3,12 +3,21 @@ import { createRequire } from 'node:module'
 import { rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { manageChildren, runPnpm, startNode } from './processes.ts'
+import { createReleaseManifest, sourceFingerprint } from './release-manifest.ts'
+import { prepareReleaseDownloads } from './release-downloads.ts'
 
 const mode = process.argv[2] ?? 'build'
 if (mode !== 'build' && mode !== 'dev') {
   throw new TypeError(`Unknown desktop mode "${mode}". Use "build" or "dev".`)
 }
 
+const sourceHash = mode === 'build' ? await sourceFingerprint(process.cwd()) : undefined
+if (mode === 'build') {
+  if (process.platform !== 'win32') throw new Error('The release target is Windows x64.')
+  if (process.arch !== 'x64') throw new Error('The release target currently requires a Windows x64 build host.')
+  await runPnpm(['typecheck'])
+  await runPnpm(['test:release'])
+}
 await runPnpm(['build'])
 await runPnpm(['--filter', '@shadow/desktop', 'build'])
 
@@ -19,7 +28,10 @@ if (mode === 'build') {
     '--filter', '@shadow/shadow', 'deploy', '--prod',
     '--node-linker', 'hoisted', 'desktop/backend',
   ])
-  await runPnpm(['--filter', '@shadow/desktop', 'dist'])
+  const electronDist = await prepareReleaseDownloads(process.cwd())
+  await createReleaseManifest(process.cwd(), sourceHash!)
+  await runPnpm(['--filter', '@shadow/desktop', 'dist', `--config.electronDist=${electronDist}`])
+  await runPnpm(['test:packaged'])
 } else {
   const port = process.env.VITE_DEV_PORT ?? '5273'
   const url = `http://127.0.0.1:${port}`

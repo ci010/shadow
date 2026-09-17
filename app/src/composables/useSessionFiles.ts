@@ -1,6 +1,7 @@
-// Shared helpers for browsing session workdirs or registered Main-local projects.
+// Shared helpers for browsing session workdirs or registered Main-local folders.
 import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/execution/filesystem/text-encoding.ts'
 import { apiUrl } from '../api-url.ts'
+import { nodeOfflineError, workdirUnavailableMessage } from '../workdir-request-error.ts'
 
 export interface FileEntry {
   name: string
@@ -90,8 +91,8 @@ function buildUrl(apiBase: string, path: string, params: Record<string, string>)
   return url.toString()
 }
 
-/** A project ID selects registry-backed routes, never a renderer-supplied path. */
-export function useSessionFiles(apiBase: string, projectId?: string) {
+/** A folder ID selects registry-backed routes, never a renderer-supplied path. */
+export function useSessionFiles(apiBase: string, folderId?: string) {
   async function requestFile(url: string, signal?: AbortSignal): Promise<Response> {
     const deadline = AbortSignal.timeout(30_000)
     try {
@@ -103,8 +104,8 @@ export function useSessionFiles(apiBase: string, projectId?: string) {
       throw error
     }
   }
-  const root = (sessionId: string) => projectId
-    ? `/api/projects/${encodeURIComponent(projectId)}`
+  const root = (sessionId: string) => folderId
+    ? `/api/folders/${encodeURIComponent(folderId)}`
     : `/api/sessions/${encodeURIComponent(sessionId)}`
 
   async function listDir(sessionId: string, path = '', signal?: AbortSignal): Promise<DirListing> {
@@ -184,13 +185,19 @@ export function useSessionFiles(apiBase: string, projectId?: string) {
   async function fileRequestError(response: Response): Promise<Error> {
     const data: unknown = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null
     const code = isRecord(data) ? data.error : undefined
+    const offline = nodeOfflineError(response.status, data)
+    if (offline) return offline
+    if (response.status === 401 || response.status === 403) return new Error('Access to these files was denied.')
+    if (response.status === 404) return new Error('This file or folder is no longer available. Refresh the file tree.')
     if (code === 'invalid_text_encoding') return new Error('This text encoding is unsupported. Choose another encoding.')
     if (code === 'remote_encoding_unavailable') return new Error('Encoding changes are not supported by this remote workdir. No local file was used.')
     if (code === 'remote_workdir_requires_executor') return new Error('This remote workdir does not support this file operation yet. No local folder was used.')
+    const unavailable = workdirUnavailableMessage(data)
+    if (unavailable) return new Error(unavailable)
+    if (code === 'remote_filesystem_failed' && isRecord(data) && data.code === 'path-denied') return new Error('Access to this file or folder was denied by the owning node.')
+    if (isRecord(data) && typeof data.message === 'string') return new Error(data.message)
     if (code === 'workdir_unavailable' || code === 'remote_filesystem_failed') return new Error('The session workdir is unavailable. Check the owning node and retry.')
-    if (code === 'folder_unavailable') return new Error('The project folder is unavailable or has changed. Restore it or open the folder again.')
-    if (response.status === 404) return new Error('This file or folder is no longer available. Refresh the file tree.')
-    if (response.status === 401 || response.status === 403) return new Error('Access to these files was denied.')
+    if (code === 'folder_unavailable') return new Error('The folder is unavailable or has changed. Restore it or open the folder again.')
     return new Error(`Could not load files (${response.status}). Retry when Main is available.`)
   }
 

@@ -1,5 +1,5 @@
 import type { NodeInventoryCapability, NodeInventoryEntry, NodeInventoryResponse } from '../../src/cluster/node-inventory.ts'
-import { isRecord } from './projects-sidebar.ts'
+import { isRecord } from './folders-sidebar.ts'
 import { apiUrl, hostBase } from './api-url.ts'
 
 export type { NodeInventoryEntry }

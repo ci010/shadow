@@ -21,8 +21,8 @@ const state: WizardState = { version: 1, revision: 1, mode: 'main', step: 'compl
 let maximized = false
 const calls: string[] = []
 const listeners = new Set<(value: DesktopWindowState) => void>()
-const projectDirectories: Array<string | null> = []
-let projectPickerCalls = 0
+const folderDirectories: Array<string | null> = []
+let folderPickerCalls = 0
 const unused = async (): Promise<never> => { throw new Error('Unsupported layout fixture action') }
 
 const disposeDocumentShortcuts = receiveDocumentTabShortcuts(ipcRenderer, direction => {
@@ -31,12 +31,12 @@ const disposeDocumentShortcuts = receiveDocumentTabShortcuts(ipcRenderer, direct
 window.addEventListener('unload', disposeDocumentShortcuts, { once: true })
 
 const api: ShadowDesktopApi = {
-  projects: {
+  folders: {
     selectDirectory: async (...args: unknown[]) => {
-      if (args.length) throw new Error('Project directory picker accepts no arguments')
-      projectPickerCalls += 1
-      if (projectDirectories.length === 0) throw new Error('Synthetic project picker was not queued')
-      return projectDirectories.shift()!
+      if (args.length) throw new Error('Folder directory picker accepts no arguments')
+      folderPickerCalls += 1
+      if (folderDirectories.length === 0) throw new Error('Synthetic folder picker was not queued')
+      return folderDirectories.shift()!
     },
   },
   bootstrap: {
@@ -73,8 +73,8 @@ const api: ShadowDesktopApi = {
 contextBridge.exposeInMainWorld('shadowDesktop', api)
 contextBridge.exposeInMainWorld('layoutFixture', {
   windowCalls: () => [...calls],
-  queueProjectDirectories: (values: Array<string | null>) => { projectDirectories.push(...values) },
-  projectPickerCalls: () => projectPickerCalls,
+  queueFolderDirectories: (values: Array<string | null>) => { folderDirectories.push(...values) },
+  folderPickerCalls: () => folderPickerCalls,
   publishWindowState: (value: boolean) => {
     maximized = value
     for (const listener of listeners) listener({ maximized })

@@ -34,7 +34,7 @@ export function staticFilePath(c: Context): string | null {
 export async function serveLocalFiles(
   c: Context,
   base: string,
-  identity: { key: string } | { projectId: string },
+  identity: { key: string } | { folderId: string },
   operation: LocalFileOperation,
   path: string,
   maxBytes = filePreviewLimit(c.req.query('maxBytes')),

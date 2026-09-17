@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
@@ -53,9 +54,12 @@ import { installRuntimeRequestAuthorization } from './runtime-authorization.js'
 import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
-import { installProjectDirectoryPicker } from './project-directories.js'
+import { installFolderDirectoryPicker } from './folder-directories.js'
 import { installChatContextPickers } from './chat-context.js'
 import { installDocumentTabShortcuts } from './document-tabs.js'
+import { installMediaPermissions } from './media-permissions.js'
+import { loadServiceConnection, selectServiceConnectionPath } from './service/connection.js'
+import { createServiceBootstrapCoordinator } from './service/bootstrap.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
@@ -141,10 +145,17 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
 
 export function createMainWindow(target: RendererTarget): BrowserWindow {
   const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
+  installMediaPermissions(ipcMain, window, target, {
+    getDisplaySources: () => desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 480, height: 270 },
+      fetchWindowIcons: false,
+    }),
+  })
   removeNativeMenus(Menu, window)
   installWindowControls(ipcMain, window)
   installDocumentTabShortcuts(window)
-  installProjectDirectoryPicker(ipcMain, window, async () => {
+  installFolderDirectoryPicker(ipcMain, window, async () => {
     const result = await dialog.showOpenDialog(window, {
       properties: ['openDirectory', 'createDirectory'],
     })
@@ -212,6 +223,15 @@ function parseWizardEvent(value: unknown): WizardEvent {
 
 async function start(): Promise<void> {
   const userDataPath = app.getPath('userData')
+  const serviceConnectionPath = selectServiceConnectionPath(
+    app.commandLine.hasSwitch('service-connection')
+      ? app.commandLine.getSwitchValue('service-connection')
+      : undefined,
+    process.env.SHADOW_SERVICE_CONNECTION,
+  )
+  const serviceConnection = serviceConnectionPath === undefined
+    ? undefined
+    : await loadServiceConnection(serviceConnectionPath)
   const configPath = runtimeConfigPath(userDataPath)
   const storage = new AtomicFileBootstrapStateStorage(
     bootstrapStatePath(userDataPath),
@@ -226,8 +246,10 @@ async function start(): Promise<void> {
     resourcesPath: process.resourcesPath,
     userDataPath,
     packaged: app.isPackaged,
-  }, onAuthorizationChanged)
-  const coordinator = new BootstrapCoordinator(
+  }, onAuthorizationChanged, serviceConnection)
+  const coordinator = serviceConnection
+    ? createServiceBootstrapCoordinator(serviceConnection.descriptor, runtimeHost)
+    : new BootstrapCoordinator(
     storage,
     new AtomicRuntimeConfigWriter(configPath),
     new AtomicMainAgentConfigInitializer(configPath),
@@ -241,6 +263,12 @@ async function start(): Promise<void> {
     ),
   )
   registerRuntimeHostQuitLifecycle(app, runtimeHost)
+  if (serviceConnection) {
+    const result = await coordinator.ensureRuntime()
+    if (!result.ok) {
+      throw new Error('Service attachment failed; start the installed service or correct its connection descriptor. No sidecar was launched.')
+    }
+  }
   registerIpcHandlers(coordinator)
   const developmentUrl = process.env.VITE_DEV_URL?.trim()
   const target = resolveRendererTarget({
@@ -269,6 +297,12 @@ if (!process.env.SHADOW_DESKTOP_DISABLE_AUTO_START) {
   }
   app.whenReady().then(start).catch((error: unknown) => {
     console.error('[desktop] Failed to start', error)
+    if (app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined) {
+      dialog.showErrorBox(
+        'Shadow service connection failed',
+        'The explicitly selected service could not be attached. Check its descriptor, credential permissions, and authenticated readiness with manage.ps1 -Action Start. No local sidecar was launched.',
+      )
+    }
     app.quit()
   })
   app.on('window-all-closed', () => app.quit())

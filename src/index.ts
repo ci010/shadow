@@ -3,7 +3,7 @@ import { runRootProcessEntry } from './runtime/main/cli.ts'
 
 export { runBackendCli, runRootProcessEntry } from './runtime/main/cli.ts'
 export { startMainRuntime } from './runtime/main/start.ts'
-export { createOrganizationRuntime } from './runtime/main/organization-runtime.ts'
+export { createProjectRuntime } from './runtime/main/project-runtime.ts'
 export type { MainRuntimeHandle, MainRuntimeOptions } from './runtime/main/contracts.ts'
 
 if (import.meta.main) {

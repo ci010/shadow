@@ -8,7 +8,7 @@ import { SessionMemoryParser } from '../session-memory.ts'
 import { HandoffManager } from './manager.ts'
 import { HandoffSession } from './session.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
-import { createOrganizationScope, getOrganizationScope } from '../../organizations/scope.ts'
+import { createProjectScope, getProjectScope } from '../../projects/scope.ts'
 import { JsonlSessionStore } from '../session-store-jsonl.ts'
 import type { LLMProvider } from '../../providers/provider.ts'
 import { join } from 'node:path'
@@ -68,12 +68,12 @@ test('handoff_summary tool — captures context, no memory-curation step', async
 
 test('concurrent same-session handoffs use the shared provider with isolated captures, memories and runtime context', async () => {
   await withTempWorkspace(async (root) => {
-    const scopes = [createOrganizationScope('a'), createOrganizationScope('b')]
+    const scopes = [createProjectScope('a'), createProjectScope('b')]
     const homes = [join(root, 'a'), join(root, 'b')]
     const provider: LLMProvider = {
       name: 'fixture', listModels: () => ['fixture'],
       async chat(messages) {
-        const owner = getOrganizationScope()?.organizationId
+        const owner = getProjectScope()?.projectId
         assert(owner === 'a' || owner === 'b')
         await new Promise<void>((resolve) => setTimeout(resolve, owner === 'a' ? 5 : 1))
         if (messages.at(-1)?.role === 'tool') return { content: 'done', toolCalls: [] }
@@ -92,7 +92,7 @@ test('concurrent same-session handoffs use the shared provider with isolated cap
     try {
       const results = await Promise.all(managers.map((manager) => manager.create(
         'same-session', 'same-source', 'same-target',
-        [{ role: 'user', content: 'Summarize this organization only' }], 'fixture',
+        [{ role: 'user', content: 'Summarize this project only' }], 'fixture',
       )))
       for (let i = 0; i < managers.length; i++) {
         const marker = i ? 'b' : 'a'

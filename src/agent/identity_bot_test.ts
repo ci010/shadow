@@ -19,9 +19,9 @@ test('identity keeps default legacy profiles and confirmations, but never assign
   await writeFile(join(workspace, 'memory', 'identities', 'index.json'), JSON.stringify(old))
   const foreign = new IdentityManager(workspace, 'new-org')
   await assert.rejects(foreign.confirmLink('qq', 'bob', 'LEGACY',
-    { organizationId: 'new-org', botInstanceId: 'bot', platform: 'qq', conversationId: 'room' }), /Legacy confirmation/)
+    { projectId: 'new-org', botInstanceId: 'bot', platform: 'qq', conversationId: 'room' }), /Legacy confirmation/)
   const identity = new IdentityManager(workspace, 'default')
-  const requester = { organizationId: 'default', botInstanceId: 'legacy-discord', platform: 'discord', conversationId: 'room', legacySessionId: true }
+  const requester = { projectId: 'default', botInstanceId: 'legacy-discord', platform: 'discord', conversationId: 'room', legacySessionId: true }
   const target = { ...requester, botInstanceId: 'legacy-qq', platform: 'qq' }
   await identity.observeInboundAccount('discord', 'alice', 'room', 'New Name', requester)
   await identity.observeInboundAccount('qq', 'bob', 'room', 'New Name', target)
@@ -46,7 +46,7 @@ test('identity serializes concurrent observations and isolates same sender/displ
   t.after(() => rm(workspace, { recursive: true, force: true }))
   const identity = new IdentityManager(workspace, 'org')
   const addresses = ['a', 'b', 'c'].map(botInstanceId =>
-    ({ organizationId: 'org', botInstanceId, platform: 'qq', conversationId: 'same' }))
+    ({ projectId: 'org', botInstanceId, platform: 'qq', conversationId: 'same' }))
   const assigned = await Promise.all(addresses.map(address =>
     identity.observeInboundAccount('qq', 'same-sender', 'same', 'Same Name', address)))
   assert.equal(new Set(assigned.map(result => result?.profileName)).size, 3)
@@ -59,7 +59,7 @@ test('identity serializes concurrent observations and isolates same sender/displ
   }
   await assert.rejects(reloaded.observeInboundAccount('discord', 'sender', 'same', undefined, addresses[0]), /platform address mismatch/)
   await assert.rejects(reloaded.observeInboundAccount('qq', 'sender', 'other', undefined, addresses[0]), /chat address mismatch/)
-  await assert.rejects(new IdentityManager(workspace, 'foreign').lookupByAccount('qq', 'sender'), /organization mismatch/)
+  await assert.rejects(new IdentityManager(workspace, 'foreign').lookupByAccount('qq', 'sender'), /project mismatch/)
 })
 
 test('identity rejects malformed persisted addresses without overwriting identity history', async t => {
@@ -67,7 +67,7 @@ test('identity rejects malformed persisted addresses without overwriting identit
   t.after(() => rm(workspace, { recursive: true, force: true }))
   await mkdir(join(workspace, 'memory', 'identities'), { recursive: true })
   const path = join(workspace, 'memory', 'identities', 'index.json')
-  const content = JSON.stringify({ accounts: { 'qq:sender': 'Keep' }, accountAddresses: { key: { organizationId: 'org' } } })
+  const content = JSON.stringify({ accounts: { 'qq:sender': 'Keep' }, accountAddresses: { key: { projectId: 'org' } } })
   await writeFile(path, content)
   await assert.rejects(new IdentityManager(workspace, 'org').lookupByAccount('qq', 'sender'))
   assert.equal(await readFile(path, 'utf8'), content)

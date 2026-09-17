@@ -6,6 +6,11 @@
 
 # S0: Contracts and Decisions
 
+> **Retired execution-approval design:** approval policies and per-job approval
+> fields below are historical, not current contracts. Paired nodes now execute
+> supported operations directly; device pairing and capability ownership checks
+> remain. See the [current architecture](../architecture.md).
+
 > Owner: architecture lead
 >
 > Blocks: every implementation stream

@@ -2,6 +2,9 @@ import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import { readFileIfExists, workspacePath } from '../../utils/paths.ts'
+import { LEARNING_AUTOMATIONS, resolveAutomationSession } from '../../cron/contracts.ts'
+import { CronDispatcher } from '../../cron/dispatch.ts'
+import type { CronJob } from '../../cron/service.ts'
 
 // ── Reflector watermark ────────────────────────────────────────────────────
 
@@ -48,7 +51,11 @@ async function computeSessionDiff(
   signal?.throwIfAborted()
   const allSessions = sessions.listSessions()
   // Filter out internal pipeline sessions
-  const userSessions = allSessions.filter((s) => !s.sessionId.startsWith('heartbeat:'))
+  const userSessions = allSessions.filter((s) => {
+    if (s.sessionId.startsWith('heartbeat:') || s.sessionId.startsWith('sleep:')) return false
+    const state = sessions.getSessionState?.(s.sessionId)
+    return !state || resolveAutomationSession(state)?.config?.source !== 'learning'
+  })
 
   const entries: SessionDiffEntry[] = []
   const newWatermarkSessions: Record<string, WatermarkSession> = {}
@@ -111,48 +118,15 @@ function buildReflectorTask(entries: SessionDiffEntry[]): string {
 
 // ── Pipelines ──────────────────────────────────────────────────────────────
 
-interface PipelineDef {
-  agentType: string
-  taskFn: (sessions: SessionManager) => Promise<string> | string
-  /** Called after the session is started (e.g. to persist watermark). */
-  afterStart?: (sessions: SessionManager) => Promise<void>
+export function learningJob(pipeline: keyof typeof LEARNING_AUTOMATIONS): CronJob {
+  return { ...LEARNING_AUTOMATIONS[pipeline], source: 'learning', session: 'fresh', schedule: 'manual', createdAt: new Date().toISOString() }
 }
 
-export function createPipelines(): Record<string, PipelineDef> {
-  // Shared state so afterStart can access the computed watermark
-  let pendingWatermark: { workspace: string; watermark: ReflectWatermark } | null = null
-
-  return {
-    'reflector': {
-      agentType: 'reflector',
-      async taskFn(sessions) {
-        const watermark = await readWatermark(sessions.workspace)
-        const { entries, newWatermark } = await computeSessionDiff(sessions, watermark)
-        pendingWatermark = { workspace: sessions.workspace, watermark: newWatermark }
-        return buildReflectorTask(entries)
-      },
-      async afterStart() {
-        if (pendingWatermark) {
-          await writeWatermark(pendingWatermark.workspace, pendingWatermark.watermark)
-          pendingWatermark = null
-        }
-      },
-    },
-    'encapsulator': {
-      agentType: 'encapsulator',
-      taskFn: () => {
-        const today = new Date().toISOString().slice(0, 10)
-        return `Encapsulate: manual trigger — read event log at memory/events/${today}.jsonl and referenced wiki items. Encapsulate recurring complexity into a skill, tool/CLI, or dedicated agent.`
-      },
-    },
-    'soul-reflector': {
-      agentType: 'soul-reflector',
-      taskFn: () => {
-        const today = new Date().toISOString().slice(0, 10)
-        return `Soul Reflect: manual trigger — read event log at memory/events/${today}.jsonl and identity wiki items under memory/identities/. Refine SOUL.md based on stable interaction patterns.`
-      },
-    },
-  }
+export function learningTask(pipeline: 'encapsulator' | 'soulReflector'): string {
+  const today = new Date().toISOString().slice(0, 10)
+  return pipeline === 'encapsulator'
+    ? `Encapsulate: read event log at memory/events/${today}.jsonl and referenced wiki items. Encapsulate recurring complexity into a skill, tool/CLI, or dedicated agent.`
+    : `Soul Reflect: read event log at memory/events/${today}.jsonl and identity wiki items under memory/identities/. Refine SOUL.md based on stable interaction patterns.`
 }
 
 /**
@@ -164,6 +138,7 @@ export function createPipelines(): Record<string, PipelineDef> {
 export async function triggerReflectorFlush(
   sessions: SessionManager,
   signal?: AbortSignal,
+  dispatch?: (task: string) => Promise<string>,
 ): Promise<boolean> {
   signal?.throwIfAborted()
   const watermark = await readWatermark(sessions.workspace)
@@ -171,29 +146,20 @@ export async function triggerReflectorFlush(
   signal?.throwIfAborted()
   if (entries.length === 0) return false
 
-  const sessionId = await sessions.startSession({
-    channel: 'heartbeat',
-    agentType: 'reflector',
-    task: buildReflectorTask(entries),
-    signal,
-  })
+  const sessionId = await (dispatch
+    ? dispatch(buildReflectorTask(entries))
+    : new CronDispatcher(sessions, async () => {}).dispatch(learningJob('reflector'), signal ?? new AbortController().signal, buildReflectorTask(entries)))
   if (!sessionId) throw new Error('Reflector session was not accepted')
+  signal?.throwIfAborted()
   await writeWatermark(sessions.workspace, newWatermark)
   return true
 }
 
-export async function triggerLearningPipeline(
+export function triggerLearningPipeline(
   sessions: SessionManager,
-  name: string,
-  pipeline: PipelineDef,
-): Promise<void> {
-  const task = await pipeline.taskFn(sessions)
-
-  const sessionId = await sessions.startSession({
-    agentType: pipeline.agentType,
-    task,
-  })
-  if (!sessionId) throw new Error(`${name} session was not accepted`)
-
-  await pipeline.afterStart?.(sessions)
+  pipeline: keyof typeof LEARNING_AUTOMATIONS,
+): Promise<boolean | string> {
+  return pipeline === 'reflector' ? triggerReflectorFlush(sessions)
+    : new CronDispatcher(sessions, async () => {}).dispatch(
+      learningJob(pipeline), new AbortController().signal, learningTask(pipeline))
 }

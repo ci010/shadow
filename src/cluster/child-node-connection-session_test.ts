@@ -15,7 +15,6 @@ import {
   CapabilityFilesystem,
   FILESYSTEM_READ_OPERATION,
 } from '../execution/capability-filesystem.ts'
-import { InMemoryLocalApprovalService } from '../execution/local-approval.ts'
 import { ChildNodeConnectionSession } from './child-node-connection-session.ts'
 import type { CapabilityDescriptorV1, VersionHelloV1 } from './contracts.ts'
 import { createInMemoryNodeDuplexPair } from './in-memory-node-duplex.ts'
@@ -47,9 +46,8 @@ const capability: CapabilityDescriptorV1 = {
   capabilityId: 'shell-1',
   nodeId: auth.nodeId,
   kind: 'shell',
-  displayName: 'Project shell',
+  displayName: 'Folder shell',
   permissions: ['process.execute'],
-  approvalPolicy: 'session',
   online: true,
 }
 const request: JobRequestV1 = {
@@ -64,7 +62,6 @@ const request: JobRequestV1 = {
   args: { command: 'echo hello' },
   createdAt: baseTime.toISOString(),
   deadlineAt: new Date(baseTime.getTime() + 60_000).toISOString(),
-  approval: 'none',
 }
 
 class SuccessfulExecutor implements Executor {
@@ -209,8 +206,6 @@ function approvedRegistry(): InMemoryPairingNodeRegistry {
     pendingId: 'pending-1',
     expectedDeviceIdentityFingerprint: 'fingerprint-1',
     credentialId: auth.credentialId,
-    uiScopes: [],
-    nodePrivileges: ['capabilities:advertise', 'jobs:execute'],
   }, new Date(baseTime.getTime() + 2_000))
   return registry
 }
@@ -350,16 +345,16 @@ test('workdir display metadata is advertised only when negotiated with Main', as
     try {
       await child.authenticated
       child.advertiseCapability({
-        ...capability, kind: 'workdir', displayPath: '/child/project',
+        ...capability, kind: 'workdir', displayPath: '/child/folder',
       })
       await waitFor(() => registry.listCapabilities(auth.nodeId).length === 1)
       const advertised = registry.listCapabilities(auth.nodeId)[0]
-      assertEquals(advertised.displayPath, supported ? '/child/project' : undefined)
+      assertEquals(advertised.displayPath, supported ? '/child/folder' : undefined)
       assertThrows(() => child.advertiseCapability({
         ...capability, kind: 'workdir', displayPath: '/child\nforged',
       }), NodeSessionError)
       assertThrows(() => child.advertiseCapability({
-        ...capability, nodeId: 'another-node', kind: 'workdir', displayPath: '/child/project',
+        ...capability, nodeId: 'another-node', kind: 'workdir', displayPath: '/child/folder',
       }), NodeSessionError)
     } finally {
       await closePair(child, childRun, mainRun)
@@ -389,11 +384,6 @@ test('child node session executes a confined workdir read and rejects shell capa
       },
     })
     let spawnCount = 0
-    const approvals = new InMemoryLocalApprovalService([{
-      capabilityId: 'workdir-1',
-      displayName: 'Test workdir',
-      policy: 'grant',
-    }])
     const executor = new LocalExecutor(
       {
         spawn: () => {
@@ -409,7 +399,6 @@ test('child node session executes a confined workdir read and rejects shell capa
         }]),
       ],
       ['shell-1'],
-      approvals,
     )
     const child = childSession(pair.client, executor)
     const mainRun = main.run()
@@ -421,7 +410,6 @@ test('child node session executes a confined workdir read and rejects shell capa
       kind: 'workdir',
       displayName: 'Test workdir',
       permissions: ['filesystem.read', 'filesystem.write'],
-      approvalPolicy: 'grant',
       online: true,
     }
 
@@ -439,8 +427,6 @@ test('child node session executes a confined workdir read and rejects shell capa
       createdAt: createdAt.toISOString(),
       deadlineAt: new Date(createdAt.getTime() + 10_000).toISOString(),
     })
-    await waitFor(() => approvals.listPending().length === 1)
-    assertEquals(approvals.approve('workdir-read', 'once'), true)
     await completed.get('workdir-read')?.promise
     main.dispatchJob({
       ...request,
@@ -456,7 +442,6 @@ test('child node session executes a confined workdir read and rejects shell capa
 
     assertEquals(received.get('workdir-read')?.map((event) => event.type), [
       'accepted',
-      'awaiting-approval',
       'stdout',
       'completed',
     ])

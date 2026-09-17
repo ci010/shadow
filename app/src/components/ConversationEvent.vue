@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { eventPresentation, type ChatEventMeta } from '../chat-events.ts'
-import type { SidebarSession } from '../projects-sidebar.ts'
+import type { SidebarSession } from '../folders-sidebar.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 const props = defineProps<{ meta: ChatEventMeta; timestamp?: string; source?: SidebarSession }>()
 defineEmits<{ inspect: [id: string]; interact: [] }>()

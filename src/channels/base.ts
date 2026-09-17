@@ -7,7 +7,7 @@ import type { ChannelState } from './setup-contract.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 
 export interface ChannelDecision {
   channelAddress?: ChannelAddress
@@ -40,7 +40,7 @@ export interface BaseChannel {
   /** Channel identifier (e.g., "discord", "telegram"). */
   readonly name: string
   setBotScope?(scope: Omit<ChannelAddress, 'conversationId'>): void
-  setOrganizationScope?(scope: OrganizationScope): void
+  setProjectScope?(scope: ProjectScope): void
   setIdentityHandler?(handler: (identity: string) => void): void
   withConnection?<T>(operation: () => T): T
   connectionGuard?(): () => void
@@ -85,7 +85,7 @@ export abstract class AbstractChannel implements BaseChannel {
   private decisionHandler?: ChannelDecisionHandler
   private requestController = new AbortController()
   private connectionContext = new AsyncLocalStorage<AbortSignal>()
-  private organizationScope = getOrganizationScope()
+  private projectScope = getProjectScope()
   protected chatActiveMessage: Map<string, {
     messageId: string
     bufferedChunks: string[]
@@ -104,23 +104,23 @@ export abstract class AbstractChannel implements BaseChannel {
 
   setBotScope(scope: Omit<ChannelAddress, 'conversationId'>): void {
     if (this.botScope) throw new Error('Channel scope is immutable')
-    if (!scope.organizationId || !scope.botInstanceId || scope.platform !== this.name) throw new TypeError('Invalid bot scope')
-    if (this.organizationScope && this.organizationScope.organizationId !== scope.organizationId) throw new TypeError('Bot telemetry scope mismatch')
+    if (!scope.projectId || !scope.botInstanceId || scope.platform !== this.name) throw new TypeError('Invalid bot scope')
+    if (this.projectScope && this.projectScope.projectId !== scope.projectId) throw new TypeError('Bot telemetry scope mismatch')
     this.botScope = Object.freeze({ ...scope })
   }
 
-  setOrganizationScope(scope: OrganizationScope): void {
-    if ((this.organizationScope && this.organizationScope !== scope)
-      || (this.botScope && this.botScope.organizationId !== scope.organizationId)) {
-      throw new TypeError('Channel organization scope is immutable')
+  setProjectScope(scope: ProjectScope): void {
+    if ((this.projectScope && this.projectScope !== scope)
+      || (this.botScope && this.botScope.projectId !== scope.projectId)) {
+      throw new TypeError('Channel project scope is immutable')
     }
-    this.organizationScope = scope
+    this.projectScope = scope
   }
 
   protected bindCallback<A extends unknown[]>(callback: (...args: A) => void): (...args: A) => void {
     return (...args) => {
-      if (this.organizationScope?.closed) return
-      if (this.organizationScope) this.organizationScope.run(() => callback(...args))
+      if (this.projectScope?.closed) return
+      if (this.projectScope) this.projectScope.run(() => callback(...args))
       else callback(...args)
     }
   }
@@ -146,13 +146,13 @@ export abstract class AbstractChannel implements BaseChannel {
   protected mediaSourceId(nativeId: string): string {
     this.assertConnection()
     return (this.botScope
-      ? `${this.botScope.organizationId}_${this.botScope.botInstanceId}_${this.name}_${nativeId}`
+      ? `${this.botScope.projectId}_${this.botScope.botInstanceId}_${this.name}_${nativeId}`
       : `${this.name}_${nativeId}`).replace(/[^a-zA-Z0-9_-]/g, '_')
   }
 
   setReceiver(receiver: ReceiveChannelMessage): void {
-    this.receiver = message => this.organizationScope
-      ? this.organizationScope.run(() => receiver(message)) : receiver(message)
+    this.receiver = message => this.projectScope
+      ? this.projectScope.run(() => receiver(message)) : receiver(message)
   }
 
   setStatusListener(listener: (state: ChannelState) => void): void {
@@ -164,8 +164,8 @@ export abstract class AbstractChannel implements BaseChannel {
   }
 
   setDecisionHandler(handler: ChannelDecisionHandler): void {
-    this.decisionHandler = decision => this.organizationScope
-      ? this.organizationScope.run(() => handler(decision)) : handler(decision)
+    this.decisionHandler = decision => this.projectScope
+      ? this.projectScope.run(() => handler(decision)) : handler(decision)
   }
 
   protected async answerDecision(decision: ChannelDecision): Promise<string> {
@@ -204,7 +204,7 @@ export abstract class AbstractChannel implements BaseChannel {
   withConnection<T>(operation: () => T): T {
     this.assertConnection()
     const run = () => this.connectionContext.run(this.requestController.signal, operation)
-    return this.organizationScope ? this.organizationScope.run(run) : run()
+    return this.projectScope ? this.projectScope.run(run) : run()
   }
 
   protected assertConnection(): void {

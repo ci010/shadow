@@ -12,7 +12,7 @@ import type { CommandContext } from './command-handler.ts'
 function context(workspace: string, address: ChannelAddress, senderId: string, args: string): CommandContext {
   return {
     commandName: 'userlink', rawCommand: `userlink ${args}`, args, workspace, cwd: workspace,
-    channel: address.platform, senderId, organizationId: address.organizationId, channelAddress: address, inputSource: 'user',
+    channel: address.platform, senderId, projectId: address.projectId, channelAddress: address, inputSource: 'user',
   }
 }
 
@@ -21,12 +21,12 @@ test('userlink persists exact target bot, resolves explicit ambiguity and confir
   t.after(() => rm(workspace, { recursive: true, force: true }))
   const identity = new IdentityManager(join(workspace, 'a'), 'a')
   const foreign = new IdentityManager(join(workspace, 'b'), 'b')
-  const address = { organizationId: 'a', botInstanceId: 'bot-a', platform: 'qq', conversationId: 'same-chat' }
+  const address = { projectId: 'a', botInstanceId: 'bot-a', platform: 'qq', conversationId: 'same-chat' }
   const target = { ...address, botInstanceId: 'bot-b' }
   await identity.observeInboundAccount('qq', 'alice', 'same-chat', 'Alice', address)
   await identity.observeInboundAccount('qq', 'bob', 'same-chat', 'Bob', address)
   await identity.observeInboundAccount('qq', 'bob', 'same-chat', 'Bob', target)
-  await foreign.observeInboundAccount('qq', 'bob', 'same-chat', 'Bob', { ...target, organizationId: 'b' })
+  await foreign.observeInboundAccount('qq', 'bob', 'same-chat', 'Bob', { ...target, projectId: 'b' })
   const originalSibling = await identity.lookupByAccount('qq', 'bob', address)
   const bus = new Bus()
   const outbound: OutboundMessage[] = []
@@ -42,14 +42,14 @@ test('userlink persists exact target bot, resolves explicit ambiguity and confir
   const saved = JSON.parse(await readFile(join(workspace, 'a', 'memory', 'identities', 'index.json'), 'utf8'))
   assert.deepEqual(saved.pendingLinks[code].targetAddress, target)
   assert.deepEqual(saved.pendingLinks[code].requesterAddress, address)
-  assert.equal(saved.pendingLinks[code].organizationId, 'a')
+  assert.equal(saved.pendingLinks[code].projectId, 'a')
   const reloaded = new IdentityManager(join(workspace, 'a'), 'a')
-  for (const wrong of [address, { ...target, conversationId: 'other' }, { ...target, organizationId: 'b' }]) {
-    await assert.rejects(reloaded.confirmLink('qq', 'bob', code, wrong), /organization|target bot/)
+  for (const wrong of [address, { ...target, conversationId: 'other' }, { ...target, projectId: 'b' }]) {
+    await assert.rejects(reloaded.confirmLink('qq', 'bob', code, wrong), /project|target bot/)
   }
   await assert.rejects(reloaded.confirmLink('qq', 'alice', code, target), /different account/)
   await assert.rejects(reloaded.confirmLink('qq', 'bob', code), /target bot/)
-  await assert.rejects(foreign.confirmLink('qq', 'bob', code, { ...target, organizationId: 'b' }), /Invalid confirmation/)
+  await assert.rejects(foreign.confirmLink('qq', 'bob', code, { ...target, projectId: 'b' }), /Invalid confirmation/)
   const confirm = createUserLinkCommandHandler(join(workspace, 'a'), reloaded, bus)
   assert.match(await confirm(context(workspace, target, 'bob', `confirm ${code}`)) ?? '', /SUCCESS/)
   assert.deepEqual(await reloaded.lookupByAccount('qq', 'bob', target), await reloaded.lookupByAccount('qq', 'alice', address))
@@ -61,7 +61,7 @@ test('scoped userlink supports an unambiguous new target and refuses unknown or 
   const workspace = await createTempWorkspace()
   t.after(() => rm(workspace, { recursive: true, force: true }))
   const identity = new IdentityManager(workspace, 'org')
-  const address = { organizationId: 'org', botInstanceId: 'source', platform: 'discord', conversationId: 'chat' }
+  const address = { projectId: 'org', botInstanceId: 'source', platform: 'discord', conversationId: 'chat' }
   const target = { ...address, botInstanceId: 'target', platform: 'qq' }
   const bus = new Bus()
   const outbound: OutboundMessage[] = []

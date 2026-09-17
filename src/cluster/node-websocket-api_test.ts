@@ -190,7 +190,6 @@ test('node WebSocket owner routes jobs by node and disconnects owned work', asyn
     args: { path: 'README.md' },
     createdAt: createdAt.toISOString(),
     deadlineAt: new Date(createdAt.getTime() + 10_000).toISOString(),
-    approval: 'none',
   }
   const disconnects: string[] = []
   api.dispatchJob(request, {

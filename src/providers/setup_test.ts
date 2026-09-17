@@ -109,6 +109,22 @@ async function settle(setup: ProviderSetup, id: string): Promise<void> {
   assert.notEqual(setup.get(id)?.state, 'pending', 'Flow did not settle')
 }
 
+test('Copilot sign-in defaults to Astra without replacing an explicit Copilot choice', async t => {
+  for (const [raw, expected] of [
+    [{}, 'gpt-6-astra@copilot'],
+    [{ agent: { model: 'gpt-4o@openai' } }, 'gpt-6-astra@copilot'],
+    [{ agent: { model: 'claude-sonnet-4.6' } }, 'claude-sonnet-4.6@copilot'],
+  ] as const) {
+    const f = fixture(t, raw)
+    const login = await f.setup.start()
+    f.auth.releasePoll()
+    await settle(f.setup, login.loginId)
+    assert.equal(f.setup.get(login.loginId)?.state, 'succeeded')
+    assert.equal(f.active().agent.model, expected)
+    assert.equal(f.active().agent.reasoningEffort, 'medium')
+  }
+})
+
 function inventoryEnvironment(t: TestContext): void {
   const original = new Map<string, string | undefined>()
   for (const name of ['OPENAI', 'ANTHROPIC', 'DEEPSEEK', 'OPENROUTER', 'GEMINI', 'GROQ', 'STEPFUN', 'KIMI']) {

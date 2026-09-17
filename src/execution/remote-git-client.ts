@@ -27,7 +27,7 @@ export async function executeRemoteGit(target: RemoteFilesystemTarget, operation
     version: 1, jobId: id, idempotencyKey: id, sessionId: target.sessionId, turnId: target.turnId,
     nodeId: target.nodeId, capabilityId: target.capabilityId,
     operation: operation === 'status' ? GIT_STATUS_OPERATION : GIT_DIFF_OPERATION,
-    args: operation === 'status' ? {} : { path }, approval: 'none',
+    args: operation === 'status' ? {} : { path },
     createdAt: new Date(now).toISOString(), deadlineAt: new Date(now + 30_000).toISOString(),
   }, signal)) {
     if (event.type === 'stderr' || (event.type === 'stdout' && (bytes += Buffer.byteLength(event.chunk, 'utf8')) > MAX_GIT_RESULT_BYTES)) {

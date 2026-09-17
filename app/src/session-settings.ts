@@ -1,4 +1,4 @@
-import { isRecord } from './projects-sidebar.ts'
+import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
 import { isGptModel, isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 
@@ -7,8 +7,12 @@ export interface ReasoningSettings {
   reasoningEffort?: ReasoningEffort | null
 }
 
+export interface ConversationSettings extends ReasoningSettings {
+  model?: string | null
+}
+
 export const effortOptions = [
-  { value: 'default', label: 'Default', description: 'Use organization thinking and effort settings' },
+  { value: 'default', label: 'Default', description: 'Use project thinking and effort settings' },
   { value: 'none', label: 'None', description: 'No thinking' },
   { value: 'low', label: 'Low', description: '' },
   { value: 'medium', label: 'Medium', description: '' },
@@ -38,10 +42,10 @@ export function reasoningSettingsForEffort(effort: EffortChoice): ReasoningSetti
 export async function updateSessionSettings(
   apiBase: string,
   sessionId: string,
-  patch: ReasoningSettings,
+  patch: ConversationSettings,
   signal: AbortSignal,
   request: typeof fetch = fetch,
-): Promise<ReasoningSettings> {
+): Promise<ConversationSettings> {
   const response = await request(apiUrl(apiBase, `/api/sessions/${encodeURIComponent(sessionId)}/config`).toString(), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -55,11 +59,13 @@ export async function updateSessionSettings(
     throw new Error('Main returned invalid conversation settings. Please try again.')
   }
   const config = isRecord(data.config) ? data.config : {}
-  if ((config.thinking !== undefined && (!isRecord(config.thinking) || !['enabled', 'disabled'].includes(String(config.thinking.type))))
+  if ((config.model !== undefined && (typeof config.model !== 'string' || !config.model.trim()))
+    || (config.thinking !== undefined && (!isRecord(config.thinking) || !['enabled', 'disabled'].includes(String(config.thinking.type))))
     || (config.reasoningEffort !== undefined && !isReasoningEffort(config.reasoningEffort))) {
     throw new Error('Main returned invalid conversation settings. Please try again.')
   }
   return {
+    ...(typeof config.model === 'string' ? { model: config.model } : {}),
     thinking: isRecord(config.thinking) ? { type: config.thinking.type === 'enabled' ? 'enabled' : 'disabled' } : null,
     reasoningEffort: isReasoningEffort(config.reasoningEffort) ? config.reasoningEffort : null,
   }

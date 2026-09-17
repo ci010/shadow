@@ -1,6 +1,6 @@
 <template>
   <div class="settings-view">
-    <header class="settings-heading"><h1>App settings</h1><p>Provider connections are shared. Model defaults, bots and learning belong to each organization.</p></header>
+    <header class="settings-heading"><h1>App settings</h1><p>Provider connections and App model defaults are shared. Projects and conversations can override these defaults.</p></header>
     <p v-if="!available" role="status">Settings are managed by Main administrators.</p>
     <div v-else class="settings-layout">
       <nav class="settings-navigation" aria-label="Settings sections">
@@ -10,6 +10,7 @@
         </RouterLink>
       </nav>
       <div class="settings-section">
+        <ModelDefaultsForm v-if="section === 'models'" :api-base="apiBase" scope="app" />
         <ProvidersView v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
           @configured="$emit('configured')" @retry="$emit('retry')" @close="$emit('close')" />
       </div>
@@ -22,14 +23,16 @@ import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import type { ProviderSetupStatus } from '../provider-setup.ts'
 import ProvidersView from './ProvidersView.vue'
+import ModelDefaultsForm from './ModelDefaultsForm.vue'
 
 const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean }>()
 defineEmits<{ configured: []; retry: []; close: [] }>()
 const route = useRoute()
 const sections = [
   { id: 'providers', label: 'Providers', icon: 'i-lucide-cpu' },
+  { id: 'models', label: 'Models', icon: 'i-lucide-sliders-horizontal' },
 ]
-const section = computed(() => 'providers')
+const section = computed(() => route.params.section === 'models' ? 'models' : 'providers')
 </script>
 
 <style scoped>

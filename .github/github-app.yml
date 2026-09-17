@@ -1,0 +1,17 @@
+scripts:
+  - name: Electron
+    command: pnpm desktop:dev
+  - name: dev
+    command: pnpm dev
+  - name: start
+    command: pnpm start
+  - name: dev:app
+    command: pnpm dev:app
+  - name: dev:docker
+    command: pnpm dev:docker
+  - name: dev:docker:compose
+    command: pnpm dev:docker:compose
+  - name: dev:searxng
+    command: pnpm dev:searxng
+  - name: dev:server
+    command: pnpm dev:server

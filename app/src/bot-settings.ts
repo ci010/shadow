@@ -1,7 +1,7 @@
 import type { BotInstanceStatus, ChannelId, ChannelSetupStatus } from '../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelDraft, channelPatch, parseChannelStatus, type ChannelDraft } from './channel-settings.ts'
 import { apiUrl } from './api-url.ts'
-import { isRecord } from './projects-sidebar.ts'
+import { isRecord } from './folders-sidebar.ts'
 
 export type { BotInstanceStatus }
 
@@ -19,25 +19,25 @@ export function botPatch(bot: BotInstanceStatus, draft: ChannelDraft, enabled: b
   return { displayName, config: channelPatch(botChannel(bot), draft, enabled) }
 }
 
-export function parseBotStatus(value: unknown, organizationId: string): BotInstanceStatus {
+export function parseBotStatus(value: unknown, projectId: string): BotInstanceStatus {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id
-    || value.organizationId !== organizationId || typeof value.platform !== 'string'
+    || value.projectId !== projectId || typeof value.platform !== 'string'
     || !channelDefinitions.some(item => item.id === value.platform)
     || typeof value.displayName !== 'string' || !value.displayName.trim()) {
     throw new Error('Main returned invalid bot ownership or status. Refresh before retrying.')
   }
   const status = parseChannelStatus({ ...value, id: value.platform })
-  return { ...status, id: value.id, organizationId, platform: status.id, displayName: value.displayName }
+  return { ...status, id: value.id, projectId, platform: status.id, displayName: value.displayName }
 }
 
-export function parseBotList(value: unknown, organizationId: string): BotInstanceStatus[] {
+export function parseBotList(value: unknown, projectId: string): BotInstanceStatus[] {
   if (!isRecord(value) || !Array.isArray(value.channels)) throw new Error('Main returned an invalid bot list. Refresh to retry.')
-  const bots = value.channels.map(item => parseBotStatus(item, organizationId))
+  const bots = value.channels.map(item => parseBotStatus(item, projectId))
   if (new Set(bots.map(bot => bot.id)).size !== bots.length) throw new Error('Main returned duplicate bot IDs. Refresh to retry.')
   return bots
 }
 
-export function createBotSettingsClient(base: string, organizationId: string, request: typeof fetch = fetch) {
+export function createBotSettingsClient(base: string, projectId: string, request: typeof fetch = fetch) {
   async function json(path: string, init?: RequestInit): Promise<unknown> {
     const response = await request(apiUrl(base, `/api/channels${path}`), {
       ...init, headers: { 'Content-Type': 'application/json' },
@@ -53,12 +53,12 @@ export function createBotSettingsClient(base: string, organizationId: string, re
   }
   function parseUpdate(value: unknown, id?: string) {
     if (!isRecord(value)) throw new Error('Main returned an invalid bot update. Refresh to retry.')
-    const bot = parseBotStatus(value.channel, organizationId)
+    const bot = parseBotStatus(value.channel, projectId)
     if (id && bot.id !== id) throw new Error('Main returned another bot. Refresh before retrying.')
     return bot
   }
   return {
-    async list(signal?: AbortSignal) { return parseBotList(await json('', { signal }), organizationId) },
+    async list(signal?: AbortSignal) { return parseBotList(await json('', { signal }), projectId) },
     async create(platform: ChannelId, displayName: string, signal?: AbortSignal) {
       if (!displayName.trim()) throw new Error('Enter a bot name.')
       return parseUpdate(await json('', { method: 'POST', body: JSON.stringify({ platform, displayName: displayName.trim(), config: { enabled: false } }), signal }))

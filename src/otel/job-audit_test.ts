@@ -26,7 +26,6 @@ function request(): JobRequestV1 {
     args: { command: 'secret-command', token: 'secret-token' },
     createdAt: timestamp,
     deadlineAt: '2026-08-26T10:01:00.000Z',
-    approval: 'none',
   }
 }
 
@@ -187,7 +186,7 @@ test('job audit identifies duplicate and out-of-order events without replaying t
   await audit.appendEvent(event(0, { type: 'accepted' }))
   await audit.appendEvent(event(2, { type: 'started', pid: 123 }))
   await audit.appendEvent(event(0, { type: 'accepted' }))
-  await audit.appendEvent(event(1, { type: 'awaiting-approval' }))
+  await audit.appendEvent(event(1, { type: 'accepted' }))
 
   assertEquals(sink.records.map((record) => record.kind), [
     'job-event',

@@ -12,6 +12,9 @@ import type {
 import { parseWorkdirRefV1 } from './locality.ts'
 import { isExecutionMode } from './execution-mode.ts'
 import { parseSessionRecovery } from './session-store.ts'
+import { parseAutomationSessionRef } from '../cron/contracts.ts'
+import { normalizeInitiativeMetadata, parseInitiativeId, InitiativeMetadataError } from './initiative-metadata.ts'
+import { validateOwnership, OwnershipValidationError } from '../projects/ownership.ts'
 
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 50
@@ -28,14 +31,17 @@ interface SessionPrototypeV1 {
 }
 
 const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
-  'organizationId',
+  'ownershipVersion',
+  'automation',
+  'automationVersion',
+  'projectId',
   'config',
   'parent',
   'workspaceRoot',
   'workdir',
   'agentType',
-  'projectName',
-  'projectId',
+  'initiativeId',
+  'folderId',
   'reportTo',
   'originUser',
   'description',
@@ -72,8 +78,12 @@ function isPreloadTools(
 
 function parseMetadata(value: unknown): SessionMetadata | null {
   if (!isRecord(value)) return null
+  value = normalizeInitiativeMetadata(validateOwnership(value))
+  if (!isRecord(value)) return null
 
-  const metadata: SessionMetadata = {}
+  const metadata: SessionMetadata = { ownershipVersion: 2 }
+  if (value.automation !== undefined) metadata.automation = parseAutomationSessionRef(value.automation)
+  if (value.automationVersion === 1) metadata.automationVersion = 1
   if (value.recovery !== undefined) metadata.recovery = parseSessionRecovery(value.recovery)
   if (typeof value.completionReported === 'boolean') metadata.completionReported = value.completionReported
   if (isExecutionMode(value.mode)) metadata.mode = value.mode
@@ -87,11 +97,11 @@ function parseMetadata(value: unknown): SessionMetadata | null {
 
   for (
     const key of [
-      'organizationId',
+      'projectId',
       'workspaceRoot',
       'agentType',
-      'projectName',
-      'projectId',
+      'initiativeId',
+      'folderId',
       'reportTo',
       'originUser',
       'description',
@@ -278,6 +288,7 @@ export class SqliteSessionStore implements SessionStore {
     prototype: string | null
   }): SessionState {
     let metadata: SessionMetadata = {}
+    if (!row.prototype) throw new OwnershipValidationError('Missing session prototype metadata')
     if (row.prototype) {
       try {
         const parsed: unknown = JSON.parse(row.prototype)
@@ -290,15 +301,18 @@ export class SqliteSessionStore implements SessionStore {
             row.key,
             Object.fromEntries(
               Object.entries(parsed.metadata).filter(([key]) =>
+                key !== 'projectName' && key !== 'initiativeName' &&
                 !SESSION_METADATA_KEYS.has(key as keyof SessionMetadata)
               ),
             ),
           )
-        } else if (isRecord(parsed) && !('version' in parsed)) {
-          // Legacy rows stored SessionConfig directly in prototype.
-          metadata.config = parsed as SessionConfig
+        } else {
+          throw new OwnershipValidationError('Unsupported session prototype version or metadata')
         }
-      } catch { /* ignore malformed prototype data */ }
+      } catch (error) {
+        if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError) throw error
+        throw new OwnershipValidationError('Invalid session prototype metadata')
+      }
     }
     return {
       sessionId: row.key,
@@ -324,18 +338,22 @@ export class SqliteSessionStore implements SessionStore {
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })
     const prototype: SessionPrototypeV1 = {
       version: PROTOTYPE_VERSION,
       metadata: {
         ...this.prototypeMetadataExtras.get(sessionKey),
-        organizationId: state.organizationId,
+        ownershipVersion: 2,
+        projectId: state.projectId,
         config: state.config,
         parent: state.parent,
         workspaceRoot: state.workspaceRoot,
         workdir: state.workdir,
         agentType: state.agentType,
-        projectName: state.projectName,
-        projectId: state.projectId,
+        initiativeId: parseInitiativeId({ ...state }),
+        folderId: state.folderId,
+        automation: parseAutomationSessionRef(state.automation),
+        automationVersion: state.automationVersion,
         reportTo: state.reportTo,
         originUser: state.originUser,
         description: state.description,
@@ -367,7 +385,7 @@ export class SqliteSessionStore implements SessionStore {
         sessionId: string
         segmentIndex: number
         lastActivityAt?: string
-        projectId?: string
+        folderId?: string
       }
     >
   > {
@@ -382,7 +400,7 @@ export class SqliteSessionStore implements SessionStore {
       sessionId: r.key,
       segmentIndex: r.segment_count ?? 0,
       lastActivityAt: r.last_activity_at ?? undefined,
-      projectId: this.parseRow(r).projectId,
+      folderId: this.parseRow(r).folderId,
     }))
   }
 

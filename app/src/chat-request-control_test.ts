@@ -259,6 +259,6 @@ test('Continue is prominent above the composer, gated by persisted recovery rath
   assert(source.indexOf('class="resume-bar"') < source.indexOf('class="composer-box"'))
   assert.match(source, /currentRecovery = computed\(\(\) => activeSessionId\.value \? sessionRecoveries\.value\[activeSessionId\.value\] : undefined\)/)
   assert.equal((source.match(/await resumeChatRequest\(/g) ?? []).length, 1)
-  assert.match(source, /Continue from saved history, without resending your message/)
+  assert.match(source, /Resume unfinished tool calls or send their saved results, without adding a message/)
   assert.match(source, /sessionRecoveries\.value\[sessionId\]\?\.id === priorRecoveryId/)
 })

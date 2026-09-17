@@ -12,7 +12,7 @@ import { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { MemoryStore } from '../memory.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 
-test('the same role retains safety and tool guidance in every execution mode', async () => {
+test('the same role retains tool guidance without generic safety in every execution mode', async () => {
   const roles = await getBuiltinAgentTypes()
   const verify = roles.find(role => role.name === 'verify')!
   assert.equal(verify.defaultMode, 'task')
@@ -21,8 +21,7 @@ test('the same role retains safety and tool guidance in every execution mode', a
       behavior: {}, sessionId: 'fixture:verify', channel: 'fixture', chatId: 'verify',
       agent: verify, mode,
     })
-    assert(prompt?.includes('## Safety'))
-    assert(prompt?.includes('Don\'t exfiltrate private data'))
+    assert(!prompt?.includes('## Safety'))
     assert(prompt?.includes('## Tools Guide'))
     assert(prompt?.includes(`## Execution Contract: ${mode[0].toUpperCase()}${mode.slice(1)}`))
     assert.equal(verify.defaultMode, 'task')
@@ -30,7 +29,7 @@ test('the same role retains safety and tool guidance in every execution mode', a
   }
 })
 
-test('call contract overrides orchestration habits without dropping safety', async () => {
+test('call contract overrides orchestration habits without changing tool restrictions', async () => {
   const general = (await getBuiltinAgentTypes()).find(role => role.name === 'general')!
   const prompt = await guidelineProvider().getPromptSection({
     behavior: {}, sessionId: 'fixture:call', channel: 'fixture', chatId: 'call',
@@ -45,9 +44,46 @@ test('call contract overrides orchestration habits without dropping safety', asy
   assert(prompt?.includes('foreground-only'))
   assert(prompt?.includes('120-second execution deadline'))
   assert(prompt?.includes('Do not send a duplicate completion notification'))
-  assert(prompt?.includes('all safety rules'))
+  assert(prompt?.includes('Keep role tool constraints and the current environment context'))
   assert(!general.prompt.includes('both are delegated by default'))
   assert(!general.prompt.includes('If you listed a subtask, delegate it'))
+})
+
+test('compact call guidance preserves machine-readable outcomes and bounded execution', async () => {
+  const roles = await getBuiltinAgentTypes()
+  for (const agent of roles) {
+    const prompt = (await guidelineProvider().getPromptSection({
+      behavior: {}, sessionId: 'fixture:call-contract', channel: 'fixture', chatId: 'call',
+      agent, mode: 'call',
+    }))!
+    const shapes = [...prompt.matchAll(/^\{"status":"(?:blocked|failed)".+$/gm)]
+      .map(([json]) => JSON.parse(json))
+    assert.equal(shapes.length, 2)
+    assert.deepEqual(Object.keys(shapes[0]), ['status', 'reason', 'partialWork'])
+    assert.equal(shapes[0].status, 'blocked')
+    assert.equal(typeof shapes[0].reason, 'string')
+    assert(shapes[0].reason.length > 0)
+    assert.equal(typeof shapes[0].partialWork, 'string')
+    assert.deepEqual(Object.keys(shapes[1]), ['status', 'error'])
+    assert.equal(shapes[1].status, 'failed')
+    assert.equal(typeof shapes[1].error, 'string')
+    assert(shapes[1].error.length > 0)
+
+    const text = prompt.replace(/\s+/g, ' ')
+    for (const rule of [
+      /raw JSON without fences or a preamble/,
+      /Reasons\/errors must be nonempty; success returns a normal final answer/,
+      /These limits override role coordination instructions/,
+      /caller decides or yields before issuing a new call/,
+      /local and foreground-only: timeout_ms must be 1 through 120000, never zero/,
+      /timeout\/cancellation terminates it, never backgrounds it/,
+      /120-second execution deadline plus up to 10 seconds for cleanup/,
+      /No remote exec or detached work via any tool\/script/,
+      /Intermediate work stays in this call's trace/,
+      /Inherited context is a snapshot, not a live conversation/,
+      /filesystem and other external side effects are not rolled back/,
+    ]) assert.match(text, rule, `${agent.name}: ${rule}`)
+  }
 })
 
 test('delegation capabilities narrow by structural role, not agent type or context ancestry', async () => {
@@ -109,6 +145,35 @@ test('prompt guides expose only current delegation modes and permitted coordinat
     ...ctx, mode: 'task', agent: { ...general, allowedTools: ['read', 'search'] },
   }))!
   assert.doesNotMatch(restricted, /### Decisions|Use yield|### Shell|### Delegation|You may create/)
+})
+
+test('compact coordination guidance retains decision and completion routing protocols', async () => {
+  const general = (await getBuiltinAgentTypes()).find(role => role.name === 'general')!
+  for (const mode of ['session', 'task'] as const) {
+    for (const parentSessionId of [undefined, 'fixture:parent']) {
+      const prompt = (await guidelineProvider().getPromptSection({
+        behavior: {}, sessionId: 'fixture:coordination', channel: 'fixture', chatId: 'coordination',
+        agent: general, mode, parentSessionId,
+      }))!.replace(/\s+/g, ' ')
+      assert.match(prompt, /Invoke directly, never inside exec\/scripts/)
+      assert.match(prompt, /action: "ask".*question.*exactly three distinct `options`, `default_option` matching one/)
+      assert.match(prompt, /Wait for the result; the default is not permission to proceed early/)
+      assert.match(prompt, /Session\/global configuration controls waiting, not model arguments/)
+      assert.match(prompt, /silent: true.*without triggering a response/)
+      assert.match(prompt, /completion routing does not grant messaging permission/)
+      if (mode === 'session') {
+        assert.match(prompt, /action: "answer".*request_id.*one exact `option`/)
+        assert.match(prompt, /An ordinary message is not an answer/)
+        assert.match(prompt, /Asynchronous creation admits an ID, not a result/)
+        assert.match(prompt, /report_to.*not ownership or decisions, and grants no messaging permission/)
+        assert.match(prompt, /do not sleep or poll/)
+      } else {
+        assert.doesNotMatch(prompt, /action: "answer"/)
+        assert.match(prompt, /No follow-up assignments or promises/)
+        assert.match(prompt, /only blocking leaf calls. Finish them before reporting your final result/)
+      }
+    }
+  }
 })
 
 test('soul and memory role policy is independent of invocation lifetime', async () => {

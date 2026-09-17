@@ -74,8 +74,8 @@ test('insecure local transport is an explicit Child-only setting', () => {
 
 test('Child workdirs are strict, absolute, and Child-only', () => {
   const rootPath = process.platform === 'win32'
-    ? 'C:\\Projects\\alpha'
-    : '/projects/alpha'
+    ? 'C:\\Folders\\alpha'
+    : '/folders/alpha'
   assertEquals(
     parseBootstrapConfigV1({
       version: 1,
@@ -86,7 +86,7 @@ test('Child workdirs are strict, absolute, and Child-only', () => {
       workdirs: [{
         capabilityId: 'workdir-alpha',
         rootPath,
-        displayName: 'Alpha project',
+        displayName: 'Alpha folder',
       }],
     }),
     {
@@ -98,7 +98,7 @@ test('Child workdirs are strict, absolute, and Child-only', () => {
       workdirs: [{
         capabilityId: 'workdir-alpha',
         rootPath,
-        displayName: 'Alpha project',
+        displayName: 'Alpha folder',
       }],
     },
   )

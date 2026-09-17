@@ -2,10 +2,6 @@ import {
   type InstallationMode,
   parseBootstrapConfigV1,
 } from './bootstrap-config.ts'
-import {
-  planRuntimeComposition,
-  type RuntimeCompositionPlan,
-} from './composition.ts'
 
 export type RuntimeCommand = 'start' | 'validate'
 
@@ -21,7 +17,6 @@ export interface RuntimeArgumentPlan {
 
 export interface RuntimeStartupPlan extends RuntimeArgumentPlan {
   readonly config: ReturnType<typeof parseBootstrapConfigV1>
-  readonly composition: RuntimeCompositionPlan
 }
 
 export class RuntimeArgumentError extends Error {
@@ -112,11 +107,5 @@ export function planRuntimeStartup(
   return {
     ...argumentsPlan,
     config,
-    composition: planRuntimeComposition(
-      config,
-      config.mode === 'main'
-        ? { localExecutor: argumentsPlan.localExecutor }
-        : {},
-    ),
   }
 }

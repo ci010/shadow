@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { inlineExecutionMessages } from './execution-messages.ts'
-import { parseSessionGraph } from './projects-sidebar.ts'
+import { parseSessionGraph } from './folders-sidebar.ts'
 import { groupToolActivity, pairToolResults, type ToolActivityMessage } from './tool-activity.ts'
 import { parseChatEvent, eventPresentation, eventSourceSession } from './chat-events.ts'
 

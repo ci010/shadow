@@ -5,8 +5,9 @@ import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
 import { SessionResumeError } from './recovery.ts'
 import type { SessionRecovery } from './session-store.ts'
-import { ProjectError } from '../projects/registry.ts'
-import { isSelfReflectionId } from './session-purpose.ts'
+import { FolderError } from '../folders/registry.ts'
+import { isLearningAutomationSession } from './session-purpose.ts'
+import { resolveAutomationSession } from '../cron/contracts.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
 import {
@@ -132,11 +133,15 @@ function sessionFileBase(
   let ancestor: string | undefined = key
   while (ancestor && !visited.has(ancestor)) {
     visited.add(ancestor)
-    if (isSelfReflectionId(ancestor)) {
+    const ancestorState = sessions.getSessionState(ancestor)
+    if (!ancestorState) break
+    if (isLearningAutomationSession(ancestorState)) {
       // This is a browsing root, not a change to the agent's execution workdir.
       return { ...base, path: resolve(sessions.workspace), scope: 'home' }
     }
-    ancestor = sessions.getSessionState(ancestor)?.parent?.id
+    if (resolveAutomationSession(ancestorState)) break
+    ancestor = Object.hasOwn(ancestorState, 'parentSessionId')
+      ? ancestorState.parentSessionId ?? undefined : ancestorState.parent?.id
   }
   return base
 }
@@ -159,19 +164,26 @@ function sessionFileBase(
  */
 export function sessionsApiPlugin(
   sessions: SessionManager | undefined,
+  options: { authorizeContext?: (request: Request) => boolean | Promise<boolean> } = {},
 ): GatewayPlugin {
   return (app: Hono) => {
     app.use('/api/sessions/:key/*', async (c, next) => {
+      if (c.req.path.endsWith('/context')) {
+        c.header('Cache-Control', 'no-store')
+        if (options.authorizeContext && !await options.authorizeContext(c.req.raw)) {
+          return c.json({ error: 'unauthorized' }, 401)
+        }
+      }
       if (!c.req.path.slice('/api/sessions/'.length).includes('/')) return next()
-      if (sessions?.organizationId && !sessions.getSessionState(c.req.param('key') ?? '')) {
+      if (sessions?.projectId && !sessions.getSessionState(c.req.param('key') ?? '')) {
         return c.json({ error: 'session_not_found' }, 404)
       }
       const suffix = c.req.path.slice('/api/sessions/'.length)
       if (sessions && (/\/(?:files|raw|preview|static|git)(?:\/|$)/.test(suffix) ||
         c.req.method !== 'GET' || suffix.endsWith('/context'))) {
-        try { sessions.assertProjectAccess?.(c.req.param('key') ?? '') }
+        try { sessions.assertFolderAccess?.(c.req.param('key') ?? '') }
         catch (error) {
-          if (error instanceof ProjectError) return c.json({ error: error.code, message: error.message }, error.status)
+          if (error instanceof FolderError) return c.json({ error: error.code, message: error.message }, error.status)
           throw error
         }
       }
@@ -210,7 +222,7 @@ export function sessionsApiPlugin(
       const list = await sessions.listSessions()
 
       const nodes: Array<{
-        organizationId?: string
+        projectId?: string
         mode: string
         agentType: string
         parentSessionId: string | null
@@ -218,7 +230,7 @@ export function sessionsApiPlugin(
         executionStatus: string
         physicalId: string
         logicalId: string
-        projectId?: string
+        folderId?: string
         parentPhysicalId: string | null
         parentIndex: number | null
         isCurrent: boolean
@@ -242,6 +254,7 @@ export function sessionsApiPlugin(
         enrichedSessions.push({
           ...session,
           ...execution,
+          automation: state ? resolveAutomationSession(state) : undefined,
           title: execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined,
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
@@ -254,10 +267,10 @@ export function sessionsApiPlugin(
             null
           nodes.push({
             ...execution,
-            ...(state?.organizationId ? { organizationId: state.organizationId } : {}),
+            ...(state?.projectId ? { projectId: state.projectId } : {}),
             physicalId,
             logicalId: session.sessionId,
-            projectId: state?.projectId,
+            folderId: state?.folderId,
             parentPhysicalId,
             parentIndex: state?.parent?.index ?? null,
             isCurrent: i === session.segmentIndex,
@@ -387,15 +400,36 @@ export function sessionsApiPlugin(
         return c.json({ error: 'sessions_unavailable' }, 501)
       }
       const key = c.req.param('key')
+      const view = c.req.query('view')
+      if ((c.req.queries('view')?.length ?? 0) > 1 ||
+        (view !== undefined && view !== 'preview' && view !== 'captured')) {
+        return c.json({ error: 'invalid_context_view', message: 'Use view=preview or view=captured, or omit view for current context.' }, 400)
+      }
       try {
-        const result = await sessions.getContext({ sessionId: key })
+        if (view === 'captured') {
+          if (!options.authorizeContext) return c.json({ error: 'prompt_capture_authorization_unavailable' }, 403)
+          if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+          const captures = sessions.getPromptCaptures(key)
+          if (!captures) return c.json({ error: 'prompt_capture_disabled' }, 404)
+          return c.json({
+            key, source: 'captured', boundary: 'provider-input',
+            captures,
+            note: 'Captured system messages and tools at session provider calls, before adapter transformations; not HTTP wire payloads. Empty means no retained capture.',
+          })
+        }
+        const result = await sessions.getContext({ sessionId: key, preview: view === 'preview' })
         if (!result) {
           return c.json({ error: 'session_not_found', key }, 404)
         }
         return c.json({
           key,
+          source: result.source,
           systemPrompt: result.systemPrompt,
           tools: result.tools,
+          ...(result.sections ? { sections: result.sections } : {}),
+          note: result.source === 'preview'
+            ? 'Rebuilt from current session configuration; per-input identity and historical provider requests are not reconstructed.'
+            : 'Current in-memory system message and tool definitions, not a captured provider request.',
         })
       } catch (err) {
         return c.json({

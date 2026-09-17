@@ -9,7 +9,7 @@ const entry = (name: string, fields: Partial<FileEntry> = {}): FileEntry => ({
 
 test('only a verified local Home shares workspace identity across sessions', () => {
   const a = { apiBase: 'http://main', sessionId: 'heartbeat:reflector-one' }
-  const b = { ...a, sessionId: 'heartbeat:soul-reflector-two' }
+  const b = { ...a, sessionId: 'cron:opaque-two', home: true }
   const home = { kind: 'local', scope: 'home', displayPath: 'C:\\Home' } as const
   assert.equal(fileWorkspaceKey(a, home), fileWorkspaceKey(b, home))
   assert.equal(canRetainHomeTree(a, b, home), true)
@@ -18,10 +18,10 @@ test('only a verified local Home shares workspace identity across sessions', () 
     assert.equal(canRetainHomeTree(a, b, workdir), false)
   }
   assert.notEqual(fileWorkspaceKey(a, home), fileWorkspaceKey(b, { ...home, displayPath: 'D:\\Home' }))
-  for (const next of [{ ...b, apiBase: 'http://other-main' }, { ...b, projectId: 'project-a' }, { ...b, sessionId: 'web:chat-one' }]) {
+  for (const next of [{ ...b, apiBase: 'http://other-main' }, { ...b, folderId: 'folder-a' }, { ...b, home: false }]) {
     assert.equal(canRetainHomeTree(a, next, home), false)
   }
-  assert.equal(canRetainHomeTree({ ...a, projectId: 'project-a' }, b, home), false)
+  assert.equal(canRetainHomeTree({ ...a, folderId: 'folder-a' }, b, home), false)
   assert.equal(canRetainHomeTree(a, b, { ...home, displayPath: null }), false)
   assert.notEqual(fileWorkspaceKey(a, home), fileWorkspaceKey({ ...b, apiBase: 'http://other-main' }, home))
 })

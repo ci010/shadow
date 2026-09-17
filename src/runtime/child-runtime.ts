@@ -20,12 +20,9 @@ export interface MainConnector extends ChildRuntimeService {
 
 export interface ChildRuntimeDependencies {
   readonly nodeIdentity: ChildRuntimeService
-  readonly capabilityRegistry: ChildRuntimeService
   readonly localExecutors: ChildRuntimeService
-  readonly approvalService: ChildRuntimeService
-  readonly artifactStaging: ChildRuntimeService
   readonly mainConnector: MainConnector
-  readonly remoteApiProxy: ChildRuntimeService
+  readonly localControl?: ChildRuntimeService
 }
 
 export interface ChildRuntimeHandle {
@@ -92,12 +89,9 @@ export function startChildRuntime(
 
   const services = [
     dependencies.nodeIdentity,
-    dependencies.capabilityRegistry,
     dependencies.localExecutors,
-    dependencies.approvalService,
-    dependencies.artifactStaging,
     dependencies.mainConnector,
-    dependencies.remoteApiProxy,
+    ...(dependencies.localControl ? [dependencies.localControl] : []),
   ]
 
   const ready = (async () => {

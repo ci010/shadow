@@ -13,6 +13,15 @@ export interface UserMessageMarker {
   timestamp?: string
 }
 
+export function isUserMessage(message: HistoryMessage): boolean {
+  return message.role === 'user' && !message.isSystemEvent && !message.isSummary && !message.event
+}
+
+export function resendableUserMessage<T extends HistoryMessage>(messages: readonly T[]): T | undefined {
+  const last = messages.at(-1)
+  return last && isUserMessage(last) ? last : undefined
+}
+
 export function messageTime(timestamp?: string, locale?: string): { dateTime?: string; label: string; title: string } {
   const date = typeof timestamp === 'string' && timestamp ? new Date(timestamp) : undefined
   if (!date || !Number.isFinite(date.getTime())) return { label: 'Time unavailable', title: 'No timestamp was recorded for this message.' }
@@ -25,7 +34,7 @@ export function messageTime(timestamp?: string, locale?: string): { dateTime?: s
 
 export function userMessageMarkers(messages: readonly HistoryMessage[]): UserMessageMarker[] {
   return messages.flatMap((message, index) => {
-    if (message.role !== 'user' || message.isSystemEvent || message.isSummary || message.event) return []
+    if (!isUserMessage(message)) return []
     const text = message.content.replace(/\s+/g, ' ').trim()
     return [{ index, preview: text || 'Attachment', timestamp: message.timestamp }]
   })

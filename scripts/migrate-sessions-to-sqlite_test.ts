@@ -1,4 +1,4 @@
-import { deepEqual as assertEquals } from 'node:assert/strict'
+import { deepEqual as assertEquals, rejects as assertRejects } from 'node:assert/strict'
 import { test } from 'node:test'
 import { rm } from 'node:fs/promises'
 import { createTempWorkspace } from '../src/testing/workspace.ts'
@@ -8,10 +8,14 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { migrateSessionsToSqlite } from './migrate-sessions-to-sqlite.ts'
 import { SqliteSessionStore } from '../src/sessions/session-store-sqlite.ts'
 import type { SessionState } from '../src/sessions/session-store.ts'
+import { OwnershipValidationError } from '../src/projects/ownership.ts'
 
 test('migration preserves modern SessionState metadata and JSONL logs', async () => {
   const sessionsDir = await createTempWorkspace()
   const state: SessionState & { futureMetadata: { retained: boolean } } = {
+    ownershipVersion: 2,
+    projectId: 'owner',
+    folderId: 'directory',
     sessionId: 'discord:complete',
     segmentIndex: 3,
     lastActivityAt: '2026-08-26T12:34:56.000Z',
@@ -21,7 +25,7 @@ test('migration preserves modern SessionState metadata and JSONL logs', async ()
     parent: { id: 'discord:parent', physicalId: 'parent-2', index: 17 },
     workspaceRoot: 'discord:root',
     agentType: 'researcher',
-    projectName: 'shadow',
+    initiativeId: 'shadow',
     reportTo: 'discord:parent',
     originUser: 'Ada',
     description: 'Check migration parity',
@@ -77,9 +81,10 @@ test('migration preserves modern SessionState metadata and JSONL logs', async ()
   }
 })
 
-test('migration translates legacy state aliases and is repeatable', async () => {
+test('migration translates history aliases with canonical ownership and is repeatable', async () => {
   const sessionsDir = await createTempWorkspace()
   const legacyState = {
+    ownershipVersion: 2,
     key: 'legacy:key',
     currentSessionId: 'legacy-segment-2',
     historyChain: ['legacy-segment-0', 'legacy-segment-1', 'legacy-segment-2'],
@@ -103,6 +108,7 @@ test('migration translates legacy state aliases and is repeatable', async () => 
 
     const store = new SqliteSessionStore(sessionsDir)
     assertEquals(await store.getState('legacy:key'), {
+      ownershipVersion: 2,
       sessionId: 'legacy:key',
       segmentIndex: 2,
       lastActivityAt: legacyState.lastActivityAt,
@@ -111,6 +117,19 @@ test('migration translates legacy state aliases and is repeatable', async () => 
     })
     assertEquals(await store.countSessionLog('legacy-segment-2'), 1)
     store.close()
+  } finally {
+    await rm(sessionsDir, { recursive: true })
+  }
+})
+
+test('migration refuses to reinterpret unversioned Project ownership and closes its database', async () => {
+  const sessionsDir = await createTempWorkspace()
+  const statePath = join(sessionsDir, 'old.json')
+  const state = JSON.stringify({ sessionId: 'web:old', segmentIndex: 0, projectId: 'ambiguous' })
+  try {
+    await writeFile(statePath, state)
+    await assertRejects(migrateSessionsToSqlite(sessionsDir), OwnershipValidationError)
+    assertEquals(await readFile(statePath, 'utf8'), state)
   } finally {
     await rm(sessionsDir, { recursive: true })
   }

@@ -1,5 +1,4 @@
 import type {
-  InstallationContextV1,
   InstallationMode,
   UiScope,
 } from './installation-context.ts'
@@ -9,7 +8,6 @@ export type AppRouteName =
   | 'chat'
   | 'nodes'
   | 'settings'
-  | 'approvals'
   | 'agents'
   | 'spans'
   | 'logs'
@@ -73,7 +71,7 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
 ]
 
 export function navigationFor(
-  context: Pick<InstallationContextV1, 'mode' | 'uiScopes'>,
+  context: { readonly mode: InstallationMode; readonly uiScopes: readonly UiScope[] },
 ): NavigationItem[] {
   const scopes = new Set(context.uiScopes)
 

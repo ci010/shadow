@@ -5,7 +5,7 @@ import type { Tools } from '../tools/registry.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import type { EventService } from '../events/service.ts'
 import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
-import { getOrganizationScope, type OrganizationScope } from '../organizations/scope.ts'
+import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 
 export type BackgroundTaskStatus = 'running' | 'completed' | 'failed'
 export type BackgroundTaskKind = 'tool' | 'subagent' | 'process'
@@ -60,7 +60,7 @@ export class BackgroundTaskManager {
   constructor(
     private bus: Bus,
     private events: EventService,
-    private scope: OrganizationScope | undefined = getOrganizationScope(),
+    private scope: ProjectScope | undefined = getProjectScope(),
   ) {
     // Auto-complete session-bound tasks when the session finishes.
     this.subscriptionId = this.bus.on('session.turn.finished', (fact) => this.runOwned(() => {
@@ -86,7 +86,7 @@ export class BackgroundTaskManager {
     this.stopped = true
     this.bus.off(this.subscriptionId)
     for (const task of this.tasks.values()) {
-      this.failTask(task.id, 'Organization runtime stopped', true, true)
+      this.failTask(task.id, 'Project runtime stopped', true, true)
     }
     await Promise.allSettled(this.callbacks)
   }
@@ -117,8 +117,8 @@ export class BackgroundTaskManager {
     },
   ): string {
     if (this.stopped) throw new Error('BackgroundTaskManager is stopped')
-    if (context.organizationId !== this.scope?.organizationId || tools !== context.tools) {
-      throw new Error('Background tool task organization/context binding mismatch')
+    if (context.projectId !== this.scope?.projectId || tools !== context.tools) {
+      throw new Error('Background tool task project/context binding mismatch')
     }
     const controller = new AbortController()
     const executionContext: ExecutionContext = {
@@ -196,6 +196,7 @@ export class BackgroundTaskManager {
     }
     record.promise.catch(() => {})
     this.tasks.set(taskId, record)
+    this.changed(record)
 
     return {
       taskId,
@@ -204,9 +205,9 @@ export class BackgroundTaskManager {
     }
   }
 
-  listTasks(sessionId?: string): BackgroundTaskSummary[] {
+  listTasks(sessionId?: string, status?: BackgroundTaskStatus): BackgroundTaskSummary[] {
     return Array.from(this.tasks.values())
-      .filter((task) => !sessionId || task.sessionId === sessionId)
+      .filter((task) => (!sessionId || task.sessionId === sessionId) && (!status || task.status === status))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .map((task) => ({
         id: task.id,
@@ -346,6 +347,7 @@ export class BackgroundTaskManager {
     task.status = 'completed'
     task.completedAt = new Date().toISOString()
     task.result = result
+    this.changed(task)
     task.resolve(result)
     this.notifyCallback(task)
   }
@@ -366,6 +368,7 @@ export class BackgroundTaskManager {
     task.status = 'failed'
     task.completedAt = new Date().toISOString()
     task.error = message
+    this.changed(task)
     task.reject(reason)
     if (!skipCallback) this.notifyCallback(task)
   }
@@ -378,6 +381,12 @@ export class BackgroundTaskManager {
     })
     this.callbacks.add(pending)
     void pending.then(() => this.callbacks.delete(pending))
+  }
+
+  private changed(task: BackgroundTaskRecord): void {
+    if (task.sessionId) this.bus.emit('background.task.changed', {
+      sessionId: task.sessionId, taskId: task.id, status: task.status,
+    })
   }
 
   private async publishCallback(task: BackgroundTaskRecord): Promise<void> {

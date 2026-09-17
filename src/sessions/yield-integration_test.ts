@@ -206,7 +206,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: cancel HTTP stops an infinite wait without choosing a default or leaking tool pairs`, async () => {
+  test(`${Store.name}: cancel HTTP leaves the unanswered tool pending and Continue resumes it without new context`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -228,8 +228,22 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.sessions.yields.get('web:root'), null)
         const history = await f.sessions.getHistory('web:root')
         const results = history.messages.filter(item => item.tool_call_id === 'ask-call')
-        assert.equal(results.length, 1)
-        assert.match(String(results[0]?.content), /abort|cancel/i)
+        assert.equal(results.length, 0, 'An unanswered question has no tool result')
+        assert.equal(history.messages.filter(item => item.role === 'assistant' && item.tool_calls?.some(call => call.id === 'ask-call')).length, 1)
+        await waitFor(() => !!f.sessions.getSessionRecovery('web:root'))
+        await f.sessions.resumeSession('web:root', f.sessions.getSessionRecovery('web:root')!.id)
+        await waitFor(() => !!f.sessions.yields.get('web:root'))
+        const resumed = f.sessions.yields.get('web:root')!
+        assert.notEqual(resumed.id, request.id)
+        assert.equal(f.calls.length, 1, 'Continue resumes the pending tool before another model request')
+        assert.equal((await answer(f.app, 'web:root', request.id, 'Continue')).status, 404)
+        assert.equal((await answer(f.app, 'web:root', resumed.id, 'Change approach')).status, 200)
+        await waitFor(() => f.calls.length === 2)
+        assert.deepEqual(f.calls[1].messages.map(item => item.role), ['system', 'user', 'assistant', 'tool'])
+        assert.equal(f.calls[1].messages.at(-1)?.tool_call_id, 'ask-call')
+        assert.equal(JSON.parse(String(f.calls[1].messages.at(-1)?.content)).option, 'Change approach')
+        f.calls[1].resolve(done())
+        await waitFor(() => f.facts.length === 2)
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })

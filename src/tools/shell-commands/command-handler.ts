@@ -1,7 +1,7 @@
 import type { ChannelAddress } from '../../bus/events.ts'
 
 export interface CommandContext {
-  organizationId?: string
+  projectId?: string
   channelAddress?: ChannelAddress
   inputSource?: 'user' | 'session' | 'event'
   commandName: string

@@ -5,7 +5,7 @@ import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDeta
 const details: SessionDetails = {
   sessionId: 'web:chat-example',
   name: 'Inspect the source',
-  workdir: { kind: 'local', displayPath: 'C:\\projects\\shadow' },
+  workdir: { kind: 'local', displayPath: 'C:\\folders\\shadow' },
   usage: { promptTokens: 40_000, completionTokens: 5_000, totalTokens: 45_000 },
   usageScope: 'session',
   context: { usedTokens: 20_000, windowTokens: 100_000 },

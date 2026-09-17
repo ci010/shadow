@@ -136,12 +136,12 @@ test('relevance gate — same project keeps related events', async () => {
       { when: '2026-07-07T08:01:00Z', who: 'o', what: 'other proj', origin: 'discord:3' },
     ])
     const memory = new MemoryStore(workspace)
-    const projectOf = (sid: string) =>
+    const initiativeOf = (sid: string) =>
       ({ 'discord:2': 'shadow', 'discord:3': 'other' })[sid]
 
     const out = await memory.readEvents('discord:1', {
-      currentProject: 'shadow',
-      projectOf,
+      currentInitiative: 'shadow',
+      initiativeOf,
     })
     assert(out.includes('same proj'))
     assert(!out.includes('other proj'))
@@ -197,7 +197,7 @@ test('conventions — merges scopes with tags in order agent→project→session
     const lines = out.split('\n')
     assertEquals(lines[0], '### Conventions (always in effect)')
     assertEquals(lines[1], '- [agent] answer concisely')
-    assertEquals(lines[2], '- [project:shadow] deps use chore: prefix')
+    assertEquals(lines[2], '- [initiative:shadow] deps use chore: prefix')
     assertEquals(lines[3], "- [session] don't touch build")
   })
 })
@@ -257,5 +257,3 @@ test('keywords — derived from topic/identity filenames', async () => {
     assert(!out.includes('notes'))
   })
 })
-
-

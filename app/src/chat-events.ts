@@ -1,4 +1,4 @@
-import { isRecord } from './projects-sidebar.ts'
+import { isRecord } from './folders-sidebar.ts'
 
 export interface ChatEventMeta {
   type: string

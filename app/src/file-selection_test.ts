@@ -86,13 +86,13 @@ test('rendered source provenance trusts generated block records, never file-supp
 })
 
 test('Markdown link and image normalization preserves safe scope and rejects unsafe resources', () => {
-  const root = 'http://localhost/api/projects/project/static/'
+  const root = 'http://localhost/api/folders/folder/static/'
   const base = `${root}docs/readme.md`
   assert.equal(fileMarkdownUrl('image.png', 'src', base, root), `${root}docs/image.png`)
   assert.equal(fileMarkdownUrl('../index.html', 'href', base, root), `${root}index.html`)
   assert.equal(fileMarkdownUrl('mailto:person@example.com', 'href', base, root), 'mailto:person@example.com')
   assert.equal(fileMarkdownUrl('https://example.com/image.png', 'src', base, root), 'https://example.com/image.png')
-  for (const value of ['../../outside', '/api/projects/other/static/file', 'javascript:alert(1)', 'data:text/html,test', 'file:///private']) {
+  for (const value of ['../../outside', '/api/folders/other/static/file', 'javascript:alert(1)', 'data:text/html,test', 'file:///private']) {
     assert.equal(fileMarkdownUrl(value, 'href', base, root), undefined, value)
     assert.equal(fileMarkdownUrl(value, 'src', base, root), undefined, value)
   }
