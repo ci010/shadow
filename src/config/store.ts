@@ -14,6 +14,16 @@ function isSecret(key: string, parent: string): boolean {
   return parent === 'env' || /(?:apiKey|token|secret|password|credential|encryptKey)$/i.test(key)
 }
 
+function restoreExplicitPlaceholders(next: unknown, previous: unknown): unknown {
+  if (next === REDACTED_SECRET && typeof previous === 'string') return previous
+  if (Array.isArray(next)) return next.map((value, index) =>
+    restoreExplicitPlaceholders(value, Array.isArray(previous) ? previous[index] : undefined))
+  if (!isRecord(next)) return next
+  return Object.fromEntries(Object.entries(next).map(([key, value]) => [
+    key, restoreExplicitPlaceholders(value, isRecord(previous) && Object.hasOwn(previous, key) ? previous[key] : undefined),
+  ]))
+}
+
 export function redactConfig(value: unknown, parent = ''): unknown {
   if (Array.isArray(value)) return value.map((entry) => redactConfig(entry, parent))
   if (!isRecord(value)) return value
@@ -26,6 +36,8 @@ export function redactConfig(value: unknown, parent = ''): unknown {
 }
 
 function restoreSecrets(next: unknown, previous: unknown, parent = ''): unknown {
+  // MCP is an editable document: omission means deletion, not secret retention.
+  if (parent === 'mcp') return restoreExplicitPlaceholders(next, previous)
   if (Array.isArray(next)) return next.map((value, index) =>
     restoreSecrets(value, Array.isArray(previous) ? previous[index] : undefined, parent))
   if (!isRecord(next)) return next
@@ -166,11 +178,19 @@ export class ConfigStore {
     }
     signal?.throwIfAborted()
     const text = JSON.stringify(raw, null, 2) + '\n'
+    if (readFileSync(path, 'utf8') !== previousText) {
+      throw new Error('Configuration changed on disk; reload the runtime before updating it. No file was overwritten.')
+    }
     if (text !== previousText) writePrivateFile(path, text)
     try {
       await this.options.onChanged?.(parsed, structuredClone(raw))
     } catch (cause) {
-      if (text !== previousText) writePrivateFile(path, previousText)
+      if (text !== previousText) {
+        if (readFileSync(path, 'utf8') !== text) {
+          throw new Error('Configuration activation failed and the file changed externally; the external edit was preserved. Reload the runtime.', { cause })
+        }
+        writePrivateFile(path, previousText)
+      }
       throw new Error('Configuration could not be activated; the previous file was restored.', { cause })
     }
     this.snapshot = { path, text, raw: structuredClone(raw) }

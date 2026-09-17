@@ -59,7 +59,7 @@
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <SessionHeading :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
-            :name="activeSessionName" :project-name="projectName" :physical-id="viewingPhysicalId" :revision="detailsRevision"
+            :name="activeSessionName" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <button :id="domId('diagnosis-toggle')" class="diagnosis-toggle" :aria-controls="domId('diagnosis-panel')"
             :aria-pressed="activePanel === 'diagnosis'" :title="activePanel === 'diagnosis' ? 'Back to conversation' : 'Open diagnosis'"
@@ -74,7 +74,7 @@
 
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history">
-        <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-3 chat-messages" style="position: relative;">
+        <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-3 chat-messages" style="position: relative;" @click="openConversationLink">
           <div v-if="loadingHistory" class="text-sm text-ink/50">Loading history...</div>
           <div v-else-if="messages.length === 0 && !composerError" class="text-sm text-ink/40 select-none">{{ isExecution ? 'No execution trace yet.' : 'No messages yet. Send one below.' }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
@@ -374,9 +374,20 @@ import { useConversationNavigation } from '../composables/useConversationNavigat
 import ToolActivityGroup from './ToolActivityGroup.vue'
 import { groupToolActivity } from '../tool-activity.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
+import { conversationLinkSession, isDirectConversation } from '../project-coordination.ts'
 
 const route = useRoute()
 const router = useRouter()
+
+function openConversationLink(event: MouseEvent) {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+  const anchor = event.target instanceof Element ? event.target.closest('a') : null
+  const id = anchor && conversationLinkSession(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
+  if (!id) return
+  event.preventDefault()
+  if (props.embedded) void router.push({ name: 'chat', params: { projectId: props.projectId, sessionId: id } })
+  else requestSession(id)
+}
 
 const marked = new Marked({ breaks: true })
 marked.use({
@@ -499,7 +510,7 @@ const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessi
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
   const id = activeSessionId.value
-  return id.startsWith('web:chat-') && (!props.embedded || !!activeSession.value) && !isExecution.value
+  return isDirectConversation(id) && (!props.embedded || !!activeSession.value) && !isExecution.value
 })
 const chatInput = ref<HTMLTextAreaElement>()
 const messagesContainer = ref<HTMLElement>()

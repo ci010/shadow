@@ -20,8 +20,12 @@
       <template v-else>
         <div class="trace-heading">
           <div><h2>Session trace</h2><p>{{ physicalId ? 'History and execution for this physical segment.' : 'History and execution for the current segment.' }}</p></div>
+          <button class="diagnosis-button" :disabled="exporting" @click="exportDiagnosis">{{ exporting ? 'Exporting...' : 'Export for agent' }}</button>
           <button class="diagnosis-button" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing...' : 'Refresh' }}</button>
         </div>
+        <p class="timeline-note">Agent exports contain bounded, best-effort-redacted evidence for this segment. Review before sharing.</p>
+        <p v-if="exportStatus" class="timeline-note" role="status">{{ exportStatus }}</p>
+        <div v-if="exportError" class="diagnosis-error" role="alert">{{ exportError }}</div>
         <div v-if="error" class="diagnosis-error" role="alert">{{ error }}<span v-if="events.length || spans.length"> Showing the last successful snapshot.</span></div>
         <div class="trace-metrics">
           <div title="Union of loaded execution spans, excluding gaps between turns. Not the age of the conversation."><strong>{{ formatTraceDuration(duration) }}</strong><span>Duration <small v-if="hasMore">(loaded spans)</small></span></div>
@@ -156,6 +160,7 @@
 
 <script setup lang="ts">
 import { apiUrl } from '../api-url.ts'
+import { fetchDiagnosisExport } from '../diagnosis-export.ts'
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import HoverInfo from './HoverInfo.vue'
 import TraceEventDetails from './TraceEventDetails.vue'
@@ -190,6 +195,10 @@ const modelResponses = ref<DiagnosisEvent[]>([])
 const spans = ref<SessionTraceSpan[]>([])
 const loading = ref(false)
 const error = ref('')
+const exporting = ref(false)
+const exportError = ref('')
+const exportStatus = ref('')
+let exportRequest: AbortController | undefined
 const now = ref(Date.now())
 const selectedId = ref('')
 const expanded = reactive(new Set<string>())
@@ -366,6 +375,35 @@ function url(path: string, params: Record<string, string> = {}): URL {
   for (const [key, value] of Object.entries(params)) target.searchParams.set(key, value)
   return target
 }
+async function exportDiagnosis(): Promise<void> {
+  if (exportRequest || !props.active || !props.canReadTrace) return
+  const controller = new AbortController()
+  exportRequest = controller
+  exporting.value = true
+  exportError.value = ''
+  exportStatus.value = ''
+  try {
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])
+    const result = await fetchDiagnosisExport(props.apiBase, props.sessionId, props.physicalId, signal)
+    signal.throwIfAborted()
+    const href = URL.createObjectURL(new Blob([result.json], { type: 'application/json' }))
+    const anchor = document.createElement('a')
+    anchor.href = href
+    anchor.download = result.filename
+    document.body.append(anchor)
+    try { anchor.click() } finally {
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(href), 1000)
+    }
+    exportStatus.value = result.partial
+      ? 'Exported a partial snapshot. Follow its pagination and truncation metadata for more evidence; review before sharing.'
+      : 'Exported the recorded segment snapshot. Historical prompts may be unavailable; review before sharing.'
+  } catch (cause) {
+    if (!controller.signal.aborted) exportError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    if (exportRequest === controller) { exportRequest = undefined; exporting.value = false }
+  }
+}
 async function tracePage(signal: AbortSignal, cursor?: number): Promise<TracePage> {
   const params: Record<string, string> = { sessionId: props.sessionId, limit: '200' }
   if (currentPhysicalId) params.physicalSessionId = currentPhysicalId
@@ -440,6 +478,9 @@ async function loadEarlier(): Promise<void> {
   }
 }
 function stop(): void {
+  exportRequest?.abort()
+  exportRequest = undefined
+  exporting.value = false
   request?.abort()
   request = undefined
   loading.value = false
@@ -456,6 +497,8 @@ watch(() => [props.sessionId, props.physicalId, props.apiBase], () => {
   hasMore.value = false
   loaded = false
   error.value = ''
+  exportError.value = ''
+  exportStatus.value = ''
   query.value = ''
   filter.value = 'ALL'
   selectedId.value = ''

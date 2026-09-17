@@ -4,7 +4,7 @@ import { readFile, stat as nodeStat } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { McpToolAdapter } from '../mcp/adapter.ts'
 import { McpConnection } from '../mcp/client.ts'
-import { parseMcpServerConfig } from '../mcp/config.ts'
+import { parseMcpConfigDocument, parseMcpServerConfig } from '../mcp/config.ts'
 import { mcpCleanupFailure, mcpFailure } from '../mcp/errors.ts'
 import { toolSearchScore } from './search-tools.ts'
 import type { McpServerConfig } from '../config/schema.ts'
@@ -13,6 +13,10 @@ import { toolInvocationContract, type SessionTools } from './registry.ts'
 import type { ChromeManager } from '../browser/chrome-manager.ts'
 import { registerTypeScriptLoader } from '../utils/typescript.ts'
 import { getProjectScope } from '../projects/scope.ts'
+import { isDeepStrictEqual } from 'node:util'
+import { randomUUID } from 'node:crypto'
+import { SkillToolDeclarationsSchema, resolveSkillToolSource, type SkillToolDeclaration, type SkillDirectoryResolver } from '../skills/tool-declarations.ts'
+import type { Skill } from '../skills/loader.ts'
 
 /**
  * Describes an MCP server that can be connected on-demand and whose tools
@@ -48,7 +52,17 @@ export interface McpLoadable {
   chromeManager?: ChromeManager
 }
 
-export type LoadableEntry = Tool | McpLoadable | FactoryLoadable
+export type LoadableEntry = Tool | McpLoadable | FactoryLoadable | ScriptLoadable
+
+interface ScriptLoadable {
+  script: SkillToolDeclaration & { skill: string; admin?: boolean }
+  sourceVersion: string
+  resource: { active: boolean }
+}
+
+function isScriptLoadable(entry: LoadableEntry): entry is ScriptLoadable {
+  return 'script' in entry
+}
 
 /**
  * A factory that creates tool(s) on demand — used when a tool needs
@@ -109,8 +123,8 @@ class ScriptToolAdapter implements Tool {
   readonly description: string
   readonly parameters: ToolParameters
 
-  constructor(private mod: ScriptToolModule) {
-    this.name = mod.name
+  constructor(private mod: ScriptToolModule, registeredName?: string, private validate?: (context: ExecutionContext) => Promise<void>) {
+    this.name = registeredName ?? mod.name
     this.description = mod.description
     this.parameters = mod.parameters as ToolParameters
   }
@@ -119,13 +133,16 @@ class ScriptToolAdapter implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    await this.validate?.(context)
     const callTool = async (
       name: string,
       toolArgs: Record<string, unknown>,
     ): Promise<unknown> => {
       const result = context.tools.hasDynamic(name)
         ? await context.tools.executeDynamic(name, toolArgs, context)
-        : await context.tools.execute(name, toolArgs, context)
+        : context.tools.has(name)
+        ? await context.tools.execute(name, toolArgs, context)
+        : await context.tools.execute('invoke_tool', { name, args: toolArgs }, context)
       try {
         return JSON.parse(result)
       } catch {
@@ -195,6 +212,7 @@ function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
  */
 export class ImportTool implements Tool {
   private readonly configured = new Map<string, McpLoadable>()
+  private readonly skillTools = new WeakMap<SessionTools, Map<string, ScriptLoadable>>()
   private readonly builtins: Map<string, LoadableEntry>
   private readonly sessions = new Set<SessionTools>()
   private readonly imports = new WeakMap<SessionTools, Promise<unknown>>()
@@ -231,6 +249,7 @@ export class ImportTool implements Tool {
     private loadable: Map<string, LoadableEntry>,
     private workspace: string,
     private chromeManager?: ChromeManager,
+    private getSkillDirectory: SkillDirectoryResolver = () => undefined,
   ) {
     this.builtins = new Map(loadable)
     this.projectId = this.scope?.projectId ?? chromeManager?.projectId
@@ -239,7 +258,68 @@ export class ImportTool implements Tool {
     }
   }
 
+  isBuiltinName(name: string): boolean { return this.builtins.has(name) }
+
+  registerBuiltin(name: string, entry: LoadableEntry): void {
+    if (this.configured.has(name) || [...this.sessions].some(tools => this.skillTools.get(tools)?.has(name))) {
+      throw new Error(`Built-in source "${name}" conflicts with an installed catalog source`)
+    }
+    this.builtins.set(name, entry)
+    this.loadable.set(name, entry)
+  }
+
+  private catalogFor(tools: SessionTools): Map<string, LoadableEntry> {
+    return new Map([...this.loadable, ...(this.skillTools.get(tools) ?? [])])
+  }
+
+  async registerSkillTools(skill: Skill, context: ExecutionContext): Promise<string[]> {
+    if (skill.meta.toolsError) throw new Error(`Invalid tools in skill "${skill.meta.name}": ${skill.meta.toolsError}`)
+    const declarations = SkillToolDeclarationsSchema.parse(skill.meta.tools ?? {})
+    if (Object.keys(declarations).length && context.remoteWorkdir) throw new Error('Skill TypeScript tools require a local workdir')
+    if (skill.meta.admin && !context.admin) throw new Error('This skill requires an admin session')
+    if (this.projectId && context.projectId !== this.projectId) throw new Error('Skill tool Project binding mismatch')
+    const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
+    return this.withImports(context.tools, signal, async () => {
+      const current = this.skillTools.get(context.tools) ?? new Map<string, ScriptLoadable>()
+      const next = new Map<string, ScriptLoadable>()
+      for (const [name, declaration] of Object.entries(declarations)) {
+        if (!context.tools.has('invoke_tool') || !context.tools.canUseDynamic(name)) {
+          throw new Error(`Skill tool "${name}" is not available for this agent type`)
+        }
+        const previous = current.get(name)
+        if (context.tools.has(name) || this.loadable.has(name) || name === 'import_tool' || name === 'install_tool' ||
+          (previous && previous.script.skill !== skill.meta.name) ||
+          (!previous && context.tools.hasDynamic(name))) {
+          throw new Error(`Skill tool "${name}" conflicts with an existing tool; choose another frontmatter alias`)
+        }
+        const source = await resolveSkillToolSource(skill.meta.name, declaration.source, this.getSkillDirectory)
+        const info = await nodeStat(source, { bigint: true })
+        const sourceVersion = `${info.mtimeNs}:${info.ctimeNs}:${info.size}`
+        const script = { ...declaration, source, skill: skill.meta.name, admin: skill.meta.admin }
+        next.set(name, previous && previous.sourceVersion === sourceVersion && isDeepStrictEqual(previous.script, script)
+          ? previous : { script, sourceVersion, resource: { active: true } })
+      }
+      signal.throwIfAborted()
+      for (const [name, entry] of current) {
+        if (entry.script.skill === skill.meta.name && next.get(name) !== entry) {
+          entry.resource.active = false
+          current.delete(name)
+        }
+      }
+      for (const [name, entry] of next) current.set(name, entry)
+      this.skillTools.set(context.tools, current)
+      return [...next.keys()]
+    })
+  }
+
   async updateMcpServers(servers: McpServerConfig[]): Promise<void> {
+    for (const tools of this.sessions) {
+      for (const server of servers) {
+        if (this.skillTools.get(tools)?.has(server.name)) {
+          throw new Error(`MCP source "${server.name}" conflicts with an active skill tool; choose another server name`)
+        }
+      }
+    }
     const next = new Map<string, McpLoadable>()
     for (const server of servers) {
       const config = parseMcpServerConfig(server.name, server)
@@ -264,15 +344,17 @@ export class ImportTool implements Tool {
   }
 
   catalogEntries(tools: SessionTools): Array<{ name: string; content: string }> {
-    if ((!tools.has('import_tool') && !tools.has('search')) || !tools.has('invoke_tool')) return []
-    return [...this.loadable].map(([name, entry]) => ({
+    if ((!tools.has('read') && !tools.has('import_tool') && !tools.has('search')) || !tools.has('invoke_tool')) return []
+    return [...this.catalogFor(tools)].map(([name, entry]) => ({
       name,
       content: JSON.stringify({
         source: `${VIRTUAL_TOOLS_PREFIX}${name}`,
-        kind: isMcpLoadable(entry) ? 'mcp' : 'tool',
+        kind: isMcpLoadable(entry) ? 'mcp' : isScriptLoadable(entry) ? 'typescript' : 'tool',
+        ...(isScriptLoadable(entry) ? { skill: entry.script.skill } : {}),
         description: isMcpLoadable(entry)
           ? entry.config.description ?? `MCP server ${entry.config.name} (${entry.config.transport})`
-          : isFactoryLoadable(entry) ? `On-demand tool ${name}` : entry.description,
+          : isFactoryLoadable(entry) ? `On-demand tool ${name}`
+          : isScriptLoadable(entry) ? `Skill TypeScript tool ${name}; loaded on tool discovery or invocation` : entry.description,
       }),
     }))
   }
@@ -304,14 +386,14 @@ export class ImportTool implements Tool {
     }
     const selected = typeof args.source === 'string'
       ? args.source.replace(/^v:tools\//, '') : undefined
-    if (selected !== undefined && !this.loadable.has(selected)) return `Error: unknown catalog source "${selected}".`
+    if (selected !== undefined && !this.catalogFor(context.tools).has(selected)) return `Error: unknown catalog source "${selected}".`
     const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
     return this.withImports(context.tools, signal, async () => {
       const candidates = new Map<string, { tool: Tool; source?: string }>()
       const errors: Array<{ source: string; message: string }> = []
       const searchedSources: string[] = []
       const deferredSources: string[] = []
-      const sources = [...this.loadable].filter(([name]) => selected === undefined || name === selected)
+      const sources = [...this.catalogFor(context.tools)].filter(([name]) => selected === undefined || name === selected)
       const scan = async ([name, entry]: [string, LoadableEntry]) => {
         const source = `${VIRTUAL_TOOLS_PREFIX}${name}`
         if (selected === undefined && (isFactoryLoadable(entry) ||
@@ -395,7 +477,11 @@ export class ImportTool implements Tool {
   private async withImports<T>(tools: SessionTools, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
     if (!this.sessions.has(tools)) {
       this.sessions.add(tools)
-      tools.onReset(() => { this.sessions.delete(tools) })
+      tools.onReset(() => {
+        this.sessions.delete(tools)
+        for (const entry of this.skillTools.get(tools)?.values() ?? []) entry.resource.active = false
+        this.skillTools.delete(tools)
+      })
     }
     const pending = (this.imports.get(tools) ?? Promise.resolve())
       .catch(() => {})
@@ -487,7 +573,7 @@ export class ImportTool implements Tool {
   canInvokeFromRemote(toolName: string): boolean {
     const entry = this.loadable.get(toolName)
     return toolName === 'initiative' && entry !== undefined && entry === this.builtins.get(toolName) &&
-      !isMcpLoadable(entry) && !isFactoryLoadable(entry) && entry.supportsRemoteWorkdir === true
+      !isMcpLoadable(entry) && !isFactoryLoadable(entry) && !isScriptLoadable(entry) && entry.supportsRemoteWorkdir === true
   }
 
   /** Import the catalog entry that owns a dynamic tool name, when determinable. */
@@ -504,7 +590,7 @@ export class ImportTool implements Tool {
       return typeof result === 'string' ? result : undefined
     })
 
-    if (this.loadable.has(toolName)) {
+    if (this.catalogFor(sessionTools).has(toolName)) {
       return await load(toolName)
     }
 
@@ -531,7 +617,7 @@ export class ImportTool implements Tool {
     extraArgs: string[],
     options: ImportOptions,
   ): Promise<Tool[] | string> {
-    const entry = this.loadable.get(name)
+    const entry = this.catalogFor(tools).get(name)
     if (!entry) {
       const available = [...this.loadable.keys()]
       const hint = available.length > 0
@@ -546,6 +632,18 @@ export class ImportTool implements Tool {
 
     if (isFactoryLoadable(entry)) {
       return await this.loadFactory(name, entry, tools, options)
+    }
+
+    if (isScriptLoadable(entry)) {
+      await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
+      if (tools.hasDynamic(name)) return tools.activeDynamicTools().filter(tool => tool.name === name)
+      return this.loadScript(entry.script.source, tools, entry.script.args ?? [], options, name, entry.resource, async context => {
+        if (!entry.resource.active) throw new Error('Skill tool registration expired; read the skill again')
+        if (entry.script.admin && !context.admin) throw new Error('This skill requires an admin session')
+        if (context.remoteWorkdir) throw new Error('Skill TypeScript tools require a local workdir')
+        if (this.projectId && context.projectId !== this.projectId) throw new Error('Skill tool Project binding mismatch')
+        await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
+      })
     }
 
     // Plain Tool
@@ -747,24 +845,8 @@ export class ImportTool implements Tool {
 
     let configs: McpServerConfig[]
     try {
-      const data: unknown = JSON.parse(text)
-      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('MCP config must be an object')
-      if ('mcpServers' in data) {
-        if (!data.mcpServers || typeof data.mcpServers !== 'object' || Array.isArray(data.mcpServers)) {
-          throw new Error('mcpServers must be an object')
-        }
-        const entries = Object.entries(data.mcpServers)
-        if (!entries.length) throw new Error('mcpServers is empty')
-        if (selectedServer !== undefined && !entries.some(([name]) => name === selectedServer)) {
-          throw new Error('Selected MCP server does not exist in this file')
-        }
-        configs = entries.filter(([name]) => selectedServer === undefined || name === selectedServer)
-          .map(([name, value]) => parseMcpServerConfig(name, value))
-      } else {
-        const name = 'name' in data && typeof data.name === 'string' ? data.name : basename(absolutePath, '.json')
-        if (selectedServer !== undefined && selectedServer !== name) throw new Error('Selected MCP server does not match this config')
-        configs = [parseMcpServerConfig(name, data)]
-      }
+      if (selectedServer !== undefined && typeof selectedServer !== 'string') throw new TypeError('server must be a string')
+      configs = parseMcpConfigDocument(JSON.parse(text), { defaultName: basename(absolutePath, '.json'), server: selectedServer })
       if (extraArgs.length && configs.some(config => config.transport !== 'stdio')) {
         throw new Error('Extra CLI arguments apply only to stdio MCP servers')
       }
@@ -818,6 +900,22 @@ export class ImportTool implements Tool {
     initArgs: string[],
     options: ImportOptions,
   ): Promise<string> {
+    const result = await this.loadScript(path, sessionTools, initArgs, options)
+    return typeof result === 'string' ? result
+      : `Custom tool "${result[0].name}" loaded for this session.\n${toolInvocationContract(result)}`
+  }
+
+  private async loadScript(
+    path: string,
+    sessionTools: SessionTools,
+    initArgs: string[],
+    options: ImportOptions,
+    registeredName?: string,
+    resource?: { active: boolean },
+    validate?: (context: ExecutionContext) => Promise<void>,
+  ): Promise<Tool[] | string> {
+    options.signal.throwIfAborted()
+    const registrationExpired = () => resource?.active === false
     const absolutePath = isAbsolute(path) ? path : resolve(this.workspace, path)
 
     try {
@@ -827,11 +925,13 @@ export class ImportTool implements Tool {
     }
 
     let mod: Record<string, unknown>
+    options.signal.throwIfAborted()
+    if (registrationExpired()) return 'Error: skill tool registration changed before loading; read the skill again'
     try {
       registerTypeScriptLoader()
       const specifier = pathToFileURL(absolutePath).href
       // Cache-bust so re-loading a modified module picks up changes
-      mod = await import(`${specifier}?v=${Date.now()}`)
+      mod = await import(`${specifier}?v=${randomUUID()}`)
     } catch (err) {
       return `Error importing tool module: ${err instanceof Error ? err.message : String(err)
         }`
@@ -845,6 +945,8 @@ export class ImportTool implements Tool {
       )
     }
 
+    options.signal.throwIfAborted()
+    if (registrationExpired()) return 'Error: skill tool registration changed before initialization; read the skill again'
     // Call optional init() with load-time args
     if (mod.init && initArgs.length > 0) {
       try {
@@ -854,9 +956,10 @@ export class ImportTool implements Tool {
       }
     }
 
-    const tool = new ScriptToolAdapter(mod)
+    const tool = new ScriptToolAdapter(mod, registeredName, validate)
     options.signal.throwIfAborted()
-    sessionTools.registerDynamic(tool)
-    return `Custom tool "${tool.name}" loaded for this session.\n${toolInvocationContract([tool])}`
+    if (registrationExpired()) return `Error: skill tool "${tool.name}" changed while loading; read the skill again`
+    sessionTools.registerDynamic(tool, undefined, resource)
+    return [tool]
   }
 }

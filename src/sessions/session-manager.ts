@@ -29,7 +29,8 @@ import { newPhysicalSessionId } from '../utils/paths.ts'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
-import { LOCAL_NODE_ID, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
+import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
+import { parseTopicMetadata, parseTopicSessionFields, type TopicMetadata } from './topic-contract.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
 import { isConfigObject, type SessionConfigPatch } from './config-patch.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -117,6 +118,7 @@ export interface SessionManagerDeps {
   bus: Bus
   provider: LLMProvider
   tools: Tools
+  toolLoader?: Pick<ImportTool, 'importSource'>
   identity: IdentityManager
   context: ContextBuilder
   quickModel?: string
@@ -207,6 +209,8 @@ export class SessionManager {
   private readonly completionEvents = new Map<string, { sourceId: string; targetId: string }>()
   private readonly deleting = new Set<string>()
   private readonly calls = new Map<string, BlockingCallFrame>()
+  private readonly topicUpdates = new Map<string, Promise<void>>()
+  private readonly stateCreations = new Map<string, Promise<unknown>>()
 
   acquireFolderAccess(): () => void {
     return this.deps.acquireFolderAccess?.() ?? (() => {})
@@ -220,7 +224,7 @@ export class SessionManager {
       const state = this.sessionStates[id]
       if (!state) return
       this.deps.assertSessionFolder?.(state)
-      for (const parent of [state.parent?.id, state.parentSessionId, state.workspaceRoot]) {
+      for (const parent of [delegationOwner(state)]) {
         if (parent) check(parent)
       }
     }
@@ -228,7 +232,7 @@ export class SessionManager {
   }
 
   get hasFolderWork(): boolean {
-    return this.preparations.size > 0 || this.executionAdmissions.size > 0 ||
+    return this.preparations.size > 0 || this.executionAdmissions.size > 0 || this.topicUpdates.size > 0 || this.stateCreations.size > 0 ||
       this.reporting.size > 0 || this.calls.size > 0 ||
       Object.values(this.sessions).some(session => !(session instanceof Session) || !session.quiescent)
   }
@@ -249,7 +253,8 @@ export class SessionManager {
     while (previous !== affected.size) {
       previous = affected.size
       for (const [id, state] of Object.entries(this.sessionStates)) {
-        if ([state.parent?.id, state.parentSessionId, state.workspaceRoot].some(parent => parent && affected.has(parent))) affected.add(id)
+        const owner = delegationOwner(state)
+        if (owner && affected.has(owner)) affected.add(id)
       }
     }
     return [...affected]
@@ -278,7 +283,7 @@ export class SessionManager {
     }
     if (this.deleting.has(sessionId)) throw new Error('Delegation owner is being deleted.')
     if (!this.getAllowedSubagentModes(sessionId).includes(mode)) throw new Error(`Execution mode "${mode}" is not allowed from this session.`)
-    const role = this.resolveAgentTypeTools(state.agentType)
+    const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
     if (role.allowedTools?.length ? !role.allowedTools.includes('subagent') : role.blockedTools?.includes('subagent')) {
       throw new Error('The owner role does not permit subagent creation.')
     }
@@ -315,7 +320,7 @@ export class SessionManager {
       await this.saveState(sessionId, state)
       throw error
     }
-    const role = this.resolveAgentTypeTools(state.agentType)
+    const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
     const tools = new CallTools(context.tools, this.workspace, role.allowedTools, role.blockedTools)
     const frame: BlockingCallFrame = {
       callerId: context.sessionId, tools, cancelled: false,
@@ -521,7 +526,7 @@ export class SessionManager {
     const parent = this.getSessionState(parentId)
     if (!parent) throw new YieldError('unavailable', 'The parent session no longer exists.')
     const definitions = this.getToolDefinitions(parentId,
-      this.getActiveSession(parentId) ? undefined : this.resolveAgentTypeTools(parent.agentType))
+      this.getActiveSession(parentId) ? undefined : this.resolveAgentTypeTools(parent.agentType, parent.sessionKind))
     if (!definitions.some(tool => tool.name === 'yield')) {
       throw new YieldError('unavailable', 'The parent must have the yield tool enabled to answer.')
     }
@@ -610,10 +615,29 @@ export class SessionManager {
           ? 'session' : this.deps.agentTypes.resolve(state.agentType ?? 'general')?.defaultMode ?? 'session'
         state.mode = historical
       }
+      if (state.mode === 'session') {
+        const formerOwner = state.parentSessionId ?? (state.parent?.index === undefined
+          && (state.workspaceRoot || state.reportTo || state.description || state.parent?.physicalId) ? state.parent?.id : undefined)
+        if (formerOwner || state.workspaceRoot) {
+          // Keep workspaceRoot as a data-location compatibility key, not an owner:
+          // managed-session capabilities and sessionDataDir must not change.
+          state.workdir = normalizeSessionLocality(state).workdir
+        }
+        if (formerOwner && formerOwner !== state.sessionId) state.createdBySessionId ??= formerOwner
+        state.parentSessionId = null
+        delete state.reportTo
+        state.sessionKind ??= state.sessionId === 'web:orchestrator' && state.agentType === 'orchestrator'
+          ? 'orchestrator' : state.automation ? undefined : 'topic'
+      }
       if (state.mode !== 'session' && ['running', 'waiting', 'pending'].includes(state.executionStatus ?? '')) {
         state.executionStatus = 'cancelled'
       }
       if (state.mode !== 'session') state.executionId ??= state.sessionId
+      await this.store.saveState(state.sessionId, state)
+    }
+    for (const state of Object.values(this.sessionStates)) {
+      if (!state.children) continue
+      state.children = state.children.filter(id => delegationOwner(this.sessionStates[id]) === state.sessionId)
       await this.store.saveState(state.sessionId, state)
     }
     // Legacy one-shot records remain closed even when they predate lifecycle status.
@@ -657,20 +681,17 @@ export class SessionManager {
 
   private reportCompletion(fact: SessionTurnFact): Promise<void> {
     const state = this.sessionStates[fact.sessionId]
-    if (!state || state.mode === 'call') return Promise.resolve()
-    const oneShot = state.mode !== 'session'
+    if (!state || state.mode !== 'task') return Promise.resolve()
     const targetId = state.reportTo
     if (!targetId || targetId === fact.sessionId || this.deleting.has(targetId)
-      || (oneShot && targetId === (state.parentSessionId ?? state.parent?.id) && !this.sessionStates[targetId])
-      || (oneShot && state.completionReported)
-      || (!oneShot && fact.status === 'cancelled')) return Promise.resolve()
-    const key = oneShot ? fact.sessionId : `${fact.sessionId}:${fact.turnId}`
+      || (targetId === (state.parentSessionId ?? state.parent?.id) && !this.sessionStates[targetId])
+      || state.completionReported) return Promise.resolve()
+    const key = fact.sessionId
     const pending = this.reporting.get(key)
     if (pending) return pending
     const report = Promise.resolve().then(async () => {
       const content = (fact.status === 'failed' ? fact.error : fact.content)?.trim()
-      if (!oneShot && !content && fact.status === 'completed') return
-      const eventId = oneShot ? `subagent-completion:${fact.sessionId}` : crypto.randomUUID()
+      const eventId = `subagent-completion:${fact.sessionId}`
       this.completionEvents.set(eventId, { sourceId: fact.sessionId, targetId })
       try {
         await this.deps.events.emit({
@@ -681,13 +702,11 @@ export class SessionManager {
           origin: { sessionId: fact.sessionId, inputId: fact.inputId, source: { kind: 'session', sessionId: fact.sessionId } },
           meta: {
             kind: 'subagent', sourceSessionId: fact.sessionId, agentType: state.agentType,
-            ...(oneShot ? { mode: state.mode, executionId: state.executionId, executionStatus: fact.status } : {}),
+            mode: state.mode, executionId: state.executionId, executionStatus: fact.status,
           },
         })
-        if (oneShot) {
-          state.completionReported = true
-          await this.saveState(state.sessionId, state)
-        }
+        state.completionReported = true
+        await this.saveState(state.sessionId, state)
       } finally {
         this.completionEvents.delete(eventId)
       }
@@ -720,6 +739,8 @@ export class SessionManager {
       // Admission errors belong to their deliver callers. Wait for them rather
       // than allowing an in-flight preparation to outlive shutdown.
       await Promise.allSettled(this.preparations.values())
+      await Promise.allSettled(this.topicUpdates.values())
+      await Promise.allSettled(this.stateCreations.values())
       for (const session of Object.values(this.sessions)) {
         if (sessions.has(session)) continue
         sessions.add(session)
@@ -954,14 +975,32 @@ export class SessionManager {
       parentToolCallId?: string
       config?: SessionConfig
       automation?: AutomationSessionRef
+      sessionKind?: 'topic' | 'orchestrator'
+      topic?: TopicMetadata
+      createdBySessionId?: string
+      topicRequestHash?: string
     },
   ): Promise<void> {
     const release = this.acquireFolderAccess()
-    try { await this.buildSessionWithAccess(sessionId, parent, stateFields) }
+    try { await this.withStateCreation(sessionId, () => this.buildSessionWithAccess(sessionId, parent, stateFields)) }
     finally { release() }
   }
 
   private async buildSessionWithAccess(...[sessionId, parent, stateFields]: Parameters<SessionManager['buildSession']>): Promise<void> {
+    const topicFields = parseTopicSessionFields(stateFields ?? {})
+    const coordinator = sessionId === 'web:orchestrator' || stateFields?.agentType === 'orchestrator'
+      || topicFields.sessionKind === 'orchestrator'
+    if (coordinator && (sessionId !== 'web:orchestrator' || stateFields?.agentType !== 'orchestrator'
+      || topicFields.sessionKind !== 'orchestrator' || (stateFields?.mode !== undefined && stateFields.mode !== 'session'))) {
+      throw new Error('The Project orchestrator must use web:orchestrator, agentType orchestrator, and sessionKind orchestrator.')
+    }
+    if (topicFields.createdBySessionId) {
+      const creator = this.sessionStates[topicFields.createdBySessionId]
+      if (!creator || (this.deps.projectId && creator.projectId !== this.deps.projectId)) {
+        throw new Error('Topic creator must belong to this project')
+      }
+      this.assertFolderAccess(topicFields.createdBySessionId)
+    }
     const automation = parseAutomationSessionRef(stateFields?.automation)
     const initiativeId = parseInitiativeId({
       initiativeId: stateFields?.initiativeId ?? (parent ? this.sessionStates[parent.id]?.initiativeId : undefined),
@@ -984,7 +1023,7 @@ export class SessionManager {
       }
       if (stateFields?.folderId && !this.deps.ownsFolder?.(stateFields.folderId)) throw new Error('Folder does not belong to this project')
       if (stateFields?.workdir && !this.deps.ownsWorkdir?.(stateFields.workdir)) throw new Error('Workdir does not belong to this project')
-      const inherited = parent ? this.sessionStates[parent.id] : undefined
+      const inherited = stateFields?.parentSessionId ? this.sessionStates[stateFields.parentSessionId] : undefined
       if (inherited?.folderId && stateFields?.folderId && stateFields.folderId !== inherited.folderId) {
         throw new Error('Child sessions cannot switch folders')
       }
@@ -998,8 +1037,12 @@ export class SessionManager {
       )
     }
     if (stateFields?.mode !== undefined && !isExecutionMode(stateFields.mode)) throw new TypeError('Invalid execution mode.')
-    const mode = stateFields?.mode ?? agent.defaultMode
-    const ownerId = stateFields?.parentSessionId === null ? undefined
+    const mode = stateFields?.mode ?? agent.defaultMode ?? 'session'
+    if (mode !== 'session' && (topicFields.topic || topicFields.sessionKind)) throw new Error('Topic metadata requires mode=session')
+    if (mode === 'session' && stateFields?.parentSessionId) {
+      throw new Error('Long-lived session ownership is not allowed; use independent topic creation instead.')
+    }
+    const ownerId = mode === 'session' || stateFields?.parentSessionId === null ? undefined
       : stateFields?.parentSessionId ?? (parent?.index === undefined && stateFields !== undefined ? parent?.id : undefined)
     if (ownerId) this.assertCanCreateChild(ownerId, mode)
     if (mode === 'call' && (!ownerId || stateFields?.reportTo !== undefined)) {
@@ -1011,6 +1054,8 @@ export class SessionManager {
 
     const startEvent: SessionStartEvent = {
       projectId: this.deps.projectId,
+      ...topicFields,
+      sessionKind: topicFields.sessionKind ?? (mode === 'session' && !automation ? 'topic' : undefined),
       previous_physical_id: null,
       timestamp: ts,
     }
@@ -1037,6 +1082,8 @@ export class SessionManager {
     const state: SessionState = {
       ownershipVersion: 2,
       projectId: this.deps.projectId,
+      ...topicFields,
+      sessionKind: topicFields.sessionKind ?? (mode === 'session' && !automation ? 'topic' : undefined),
       mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
       automation,
       automationVersion: 1,
@@ -1053,14 +1100,15 @@ export class SessionManager {
       agentType: stateFields?.agentType,
       initiativeId,
       folderId: stateFields?.folderId ?? parentState?.folderId,
-      reportTo: stateFields?.reportTo,
+      reportTo: mode === 'session' ? undefined : stateFields?.reportTo,
       originUser: stateFields?.originUser,
       description: stateFields?.description,
       preloadTools: stateFields?.preloadTools,
     }
     if (state.mode !== 'session') state.executionId = sessionId
 
-    await this.saveState(sessionId, state)
+    await this.store.saveState(sessionId, state)
+    this.sessionStates[sessionId] = state
   }
 
   /**
@@ -1152,7 +1200,7 @@ export class SessionManager {
 
   /**
    * Record a child session ID on the parent session state.
-   * Only reusable child sessions belong in this managed list.
+   * Only temporary owned tasks/calls belong in this managed list.
    */
   async addChild(
     parentSessionId: string,
@@ -1163,6 +1211,9 @@ export class SessionManager {
     }
     const state = this.sessionStates[parentSessionId]
     if (!state) return
+    if (delegationOwner(this.sessionStates[childSessionId]) !== parentSessionId) {
+      throw new Error('Only owned temporary tasks/calls may be tracked as children')
+    }
     const children = state.children ?? []
     if (!children.includes(childSessionId)) {
       children.push(childSessionId)
@@ -1190,7 +1241,7 @@ export class SessionManager {
     > = []
     for (const childId of state.children) {
       const childState = this.sessionStates[childId]
-      if (!childState || childState.mode !== 'session') continue
+      if (!childState || delegationOwner(childState) !== parentSessionId) continue
       results.push({
         sessionId: childId,
         agentType: childState.agentType ?? 'sub',
@@ -1201,6 +1252,35 @@ export class SessionManager {
   }
 
   // ── Session config ─────────────────────────────────────────────────
+
+  async updateTopicMetadata(sessionId: string, topic: TopicMetadata): Promise<void> {
+    const next = parseTopicMetadata(topic)
+    const previous = this.topicUpdates.get(sessionId) ?? Promise.resolve()
+    const update = previous.catch(() => {}).then(() => this.replaceTopicMetadata(sessionId, next))
+    this.topicUpdates.set(sessionId, update)
+    try { await update }
+    finally { if (this.topicUpdates.get(sessionId) === update) this.topicUpdates.delete(sessionId) }
+  }
+
+  private async replaceTopicMetadata(sessionId: string, next: TopicMetadata): Promise<void> {
+    if (this.stopped) throw new Error('Session manager stopped')
+    const release = this.acquireFolderAccess()
+    try {
+      const state = this.sessionStates[sessionId]
+      if (!state) throw new Error('session_not_found')
+      if (state.mode !== 'session' || state.sessionKind === 'orchestrator' || state.agentType === 'orchestrator'
+        || state.sessionId === 'web:orchestrator' || state.automation) {
+        throw new Error('Only independent topic sessions have editable topic metadata')
+      }
+      if (this.deleting.has(sessionId)) throw new Error('Session is being deleted')
+      if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+      this.assertFolderAccess(sessionId)
+      await this.store.saveState(sessionId, { ...state, topic: next, sessionKind: 'topic' })
+      state.topic = next
+      state.sessionKind = 'topic'
+      this.invalidateSystemPrompts()
+    } finally { release() }
+  }
 
   getSessionConfig(sessionId: string): SessionConfig {
     const state = this.sessionStates[sessionId]
@@ -1261,6 +1341,7 @@ export class SessionManager {
    * @returns The list of session IDs that were deleted.
    */
   async deleteSession(sessionId: string): Promise<string[]> {
+    await this.stateCreations.get(sessionId)?.catch(() => {})
     const deleted: string[] = []
     await this._deleteSessionRecursive(sessionId, deleted)
     return deleted
@@ -1292,11 +1373,12 @@ export class SessionManager {
     const state = this.sessionStates[sessionId]
     if (!state || this.deleting.has(sessionId)) return
     this.deleting.add(sessionId)
+    await this.topicUpdates.get(sessionId)?.catch(() => {})
 
     // Cascade: delete children first
     if (state.children?.length) {
       for (const childId of [...state.children]) {
-        await this._deleteSessionRecursive(childId, deleted)
+        if (delegationOwner(this.sessionStates[childId]) === sessionId) await this._deleteSessionRecursive(childId, deleted)
       }
     }
     await this.stopOwnedChildren(sessionId)
@@ -1305,7 +1387,7 @@ export class SessionManager {
     // or resume a provider call after their decision recipient is deleted.
     for (const [id, child] of Object.entries(this.sessions)) {
       const request = this.yields.get(id)
-      if (request?.recipient.kind === 'parent' && request.recipient.sessionId === sessionId) child.cancel()
+      if (delegationOwner(this.sessionStates[id]) && request?.recipient.kind === 'parent' && request.recipient.sessionId === sessionId) child.cancel()
     }
 
     // Stop active session if running
@@ -1318,7 +1400,9 @@ export class SessionManager {
     this.yields.cancelSession(sessionId, 'Session deleted.')
 
     // Delete all physical segment logs (segment 0 through segmentIndex)
-    for (let i = 0; i <= state.segmentIndex; i++) {
+    const retainedHistory = Object.values(this.sessionStates).some(other =>
+      other.sessionId !== sessionId && other.parent?.id === sessionId && other.parent?.index !== undefined)
+    for (let i = 0; !retainedHistory && i <= state.segmentIndex; i++) {
       try {
         await this.store.deleteSessionLog(newPhysicalSessionId(sessionId, i))
       } catch { /* segment may not exist */ }
@@ -1388,8 +1472,9 @@ export class SessionManager {
     const window = model ? this.deps.getKnownContextWindow?.(model) : null
     return {
       ...(state.projectId ? { projectId: state.projectId } : {}),
+      ...parseTopicSessionFields(state),
       sessionId,
-      name: await this.getFirstUserMessage(sessionId),
+      name: state.topic?.title ?? await this.getFirstUserMessage(sessionId),
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
@@ -1434,7 +1519,8 @@ export class SessionManager {
   }
 
   listSessions(): Array<
-    { projectId?: string; sessionId: string; segmentIndex: number; lastActivityAt?: string; folderId?: string }
+    Pick<SessionState, 'projectId' | 'sessionId' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'topic' | 'createdBySessionId'
+      | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'executionStatus'>
   > {
     return Object.values(this.sessionStates).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
@@ -1442,6 +1528,12 @@ export class SessionManager {
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,
       folderId: s.folderId,
+      initiativeId: s.initiativeId,
+      automation: s.automation,
+      agentType: s.agentType,
+      mode: s.mode,
+      executionStatus: s.executionStatus,
+      ...parseTopicSessionFields(s),
     }))
   }
 
@@ -1554,8 +1646,11 @@ export class SessionManager {
     }
 
     // For inactive / historical sessions, filter using behavior
-    const policy = behaviorOverride ?? (sessionId && this.sessionStates[sessionId]
-      ? this.resolveAgentTypeTools(this.sessionStates[sessionId].agentType) : {})
+    const state = sessionId ? this.sessionStates[sessionId] : undefined
+    const coordinator = state?.sessionKind === 'orchestrator' || state?.agentType === 'orchestrator'
+    const policy = coordinator
+      ? this.resolveAgentTypeTools(state?.agentType, state?.sessionKind)
+      : behaviorOverride ?? (state ? this.resolveAgentTypeTools(state.agentType, state.sessionKind) : {})
     const scoped = new SessionTools(this.deps.tools, this.workspace, policy.allowedTools, policy.blockedTools)
     if (sessionId) scoped.setExecutionScope(this.sessionStates[sessionId]?.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
     const allDefs = scoped.getDefinitions()
@@ -1637,6 +1732,7 @@ export class SessionManager {
     const { systemPrompt, sections } = await this.deps.context.buildSystemPromptDetails(promptCtx)
     const { allowedTools, blockedTools } = this.resolveAgentTypeTools(
       agentTypeName,
+      state?.sessionKind,
     )
     const tools = this.getToolDefinitions(sessionId, {
       allowedTools,
@@ -1648,7 +1744,7 @@ export class SessionManager {
 
   // ── Private helpers ────────────────────────────────────────────────
 
-  private resolveAgentTypeTools(agentTypeName?: string): {
+  private resolveAgentTypeTools(agentTypeName?: string, sessionKind?: SessionState['sessionKind']): {
     agentType: AgentTypeDefinition
     allowedTools?: string[]
     blockedTools?: string[]
@@ -1656,6 +1752,14 @@ export class SessionManager {
     const name = agentTypeName ?? 'general'
     const resolved = this.deps.agentTypes.resolve(name) ??
       this.deps.agentTypes.resolve('general')!
+
+    if (name === 'orchestrator' || sessionKind === 'orchestrator') {
+      const allowedTools = ['read', 'search', 'topic', 'message', 'initiative']
+      return {
+        agentType: { ...resolved, allowedTools, blockedTools: undefined },
+        allowedTools,
+      }
+    }
 
     if (resolved.allowedTools?.length) {
       return { agentType: resolved, allowedTools: resolved.allowedTools }
@@ -1686,10 +1790,26 @@ export class SessionManager {
   private async getOrCreateState(
     sessionId: string,
   ): Promise<SessionState> {
+    return this.withStateCreation(sessionId, () => this.createMissingState(sessionId))
+  }
+
+  private async withStateCreation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.stateCreations.get(sessionId) ?? Promise.resolve()
+    const pending = previous.catch(() => {}).then(() => {
+      if (this.deleting.has(sessionId)) throw new Error('Session is being deleted')
+      return operation()
+    })
+    this.stateCreations.set(sessionId, pending)
+    try { return await pending }
+    finally { if (this.stateCreations.get(sessionId) === pending) this.stateCreations.delete(sessionId) }
+  }
+
+  private async createMissingState(sessionId: string): Promise<SessionState> {
     const address = channelAddressFromSessionId(sessionId)
     if (this.deps.projectId && address && address.projectId !== this.deps.projectId) throw new Error('Bot session project mismatch')
     const existing = this.sessionStates[sessionId]
     if (existing) return existing
+    if (sessionId === 'web:orchestrator') throw new Error('The Project orchestrator must be created through its canonical configuration')
 
     const ts = new Date().toISOString()
     const physicalSessionId = newPhysicalSessionId(sessionId, 0)
@@ -1702,13 +1822,17 @@ export class SessionManager {
 
     const state: SessionState = {
       ownershipVersion: 2,
+      ...(this.deps.projectId ? { projectId: this.deps.projectId } : {}),
       sessionId,
       segmentIndex: 0,
       mode: 'session',
+      sessionKind: 'topic',
+      parentSessionId: null,
       executionStatus: 'pending',
       automationVersion: 1,
     }
-    await this.saveState(sessionId, state)
+    await this.store.saveState(sessionId, state)
+    this.sessionStates[sessionId] = state
 
     return state
   }
@@ -1720,7 +1844,7 @@ export class SessionManager {
     const behavior = state.config ?? {}
 
     const { agentType: resolvedAgentType, allowedTools, blockedTools } = this
-      .resolveAgentTypeTools(state.agentType)
+      .resolveAgentTypeTools(state.agentType, state.sessionKind)
 
     const promptCtx: SessionPromptContext = {
       projectId: this.deps.projectId,
@@ -1774,7 +1898,9 @@ export class SessionManager {
     if (state.preloadTools && Object.keys(state.preloadTools).length > 0) {
       for (const [toolName, toolArgs] of Object.entries(state.preloadTools)) {
         try {
-          const importTool = sessionTools.get('import_tool') as ImportTool
+          const importTool = sessionTools.has('invoke_tool')
+            ? this.deps.toolLoader ?? sessionTools.get('import_tool') as ImportTool | undefined
+            : undefined
           if (importTool) {
             const imported = await importTool.importSource({
               source: `v:tools/${toolName}`,

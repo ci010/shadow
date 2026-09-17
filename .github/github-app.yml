@@ -1,6 +1,6 @@
 scripts:
   - name: Electron
-    command: pnpm desktop:dev
+    command: npx --yes pnpm@12.3.1 desktop:dev
   - name: dev
     command: pnpm dev
   - name: start

@@ -4,6 +4,7 @@ import type { LearnedSkillMeta, Skill, SkillMeta } from './loader.ts'
 import { readFileIfExists } from '../utils/paths.ts'
 import { parseFrontmatter } from '../utils/frontmatter.ts'
 import { getArch, getOs } from '../utils/runtime.ts'
+import { SkillToolDeclarationsSchema } from './tool-declarations.ts'
 
 /**
  * Scan a directory of skill folders into a `name → Skill` map.
@@ -113,6 +114,7 @@ export function parseSkillFile(
     return undefined
   }
 
+  const tools = fm.tools === undefined ? undefined : SkillToolDeclarationsSchema.safeParse(fm.tools)
   const meta: SkillMeta = {
     name: str(fm.name) || fallbackName,
     description: str(fm.description),
@@ -121,6 +123,9 @@ export function parseSkillFile(
     admin: fm.admin === true,
     category: str(metadata.category || fm.category) || undefined,
     core: fm.core === true,
+    ...(tools?.success ? { tools: tools.data } : tools ? {
+      toolsError: tools.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+    } : {}),
   }
 
   // Learned skill fields can be at top level or nested under metadata

@@ -180,7 +180,8 @@ const nhm = new NodeHtmlMarkdown({
 export class ReadTool implements Tool {
   private readCache = new Map<string, ReadCacheEntry>()
   readonly name = 'read'
-  readonly readonly = true
+  readonly readonly = (args: Record<string, unknown>) =>
+    typeof args.path !== 'string' || !/^v:skills[\\/][^\\/]+[\\/]?$/.test(args.path)
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +

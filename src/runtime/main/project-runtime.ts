@@ -11,6 +11,10 @@ import { guidelineProvider } from '../../agent/context/guideline.ts'
 import { initiativeProvider } from '../../agent/context/initiative.ts'
 import { memoryProvider } from '../../agent/context/memory-provider.ts'
 import { projectProvider } from '../../agent/context/project.ts'
+import { topicProvider } from '../../agent/context/topic.ts'
+import { TopicService } from '../../sessions/topics.ts'
+import { topicsPlugin } from '../../sessions/topic-routes.ts'
+import { TopicTool } from '../../tools/topic.ts'
 import { runtimeIdentityProvider } from '../../agent/context/runtime.ts'
 import { workspaceProvider } from '../../agent/context/workspace.ts'
 import { IdentityManager } from '../../agent/identity.ts'
@@ -50,6 +54,7 @@ import { WriteTool } from '../../tools/filesystem.ts'
 import type { LoadableEntry, McpLoadable } from '../../tools/load-tool.ts'
 import { InvokeTool } from '../../tools/invoke-tool.ts'
 import { ImportTool } from '../../tools/load-tool.ts'
+import { createMcpConfigHandler } from '../../mcp/virtual-config.ts'
 import { MemoryLinkCheckHook } from '../../tools/hooks/memory-link-checker.ts'
 import { WorkingSetHook } from '../../tools/hooks/working-set.ts'
 import { ConventionTool } from '../../tools/convention.ts'
@@ -97,6 +102,7 @@ import { parseModelSpec } from '../../providers/aggregated.ts'
 import { MODEL_CONTEXT_WINDOWS, resolveContextWindow } from '../../providers/model-registry.ts'
 import { providerPlugin } from '../../providers/routes.ts'
 import { sessionsApiPlugin } from '../../sessions/routes.ts'
+import { sessionDiagnosisPlugin } from '../../sessions/diagnosis-routes.ts'
 import { registerEvalBridgeRoute } from '../../script-runtime/bridge.ts'
 import { SearchTool } from '../../tools/search.ts'
 import {
@@ -218,6 +224,7 @@ export async function createProjectRuntime(
       workspace,
       selfCodeRoot,
       config.tools.restrictToWorkspace,
+      vfs,
     ),
   )
   tools.register(new PlanWriteTool(workspace))
@@ -390,12 +397,14 @@ export async function createProjectRuntime(
     sharedConn: chromeDevToolsEntry,
   })
 
-  loadable.set('initiative', new InitiativeTool({
+  const initiativeTool = new InitiativeTool({
     query: (sql, actor, signal) => initiatives.query(sql, actor, signal),
-  }, project.id, INITIATIVE_SCHEMA_PROMPT))
-  const importTool = new ImportTool(loadable, workspace, chromeManager)
-  tools.register(new SearchTool(workspace, webSearchTool, vfs, importTool))
-  tools.register(importTool)
+  }, project.id, INITIATIVE_SCHEMA_PROMPT)
+  loadable.set('initiative', initiativeTool)
+  tools.register(initiativeTool)
+  const skills = new SkillsManager(workspace)
+  const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name))
+  tools.register(new SearchTool(workspace, webSearchTool, vfs, importTool, skills, () => topics))
   tools.register(new InvokeTool(importTool))
 
   tools.register(new BackgroundTaskTool(backgroundTasks))
@@ -427,7 +436,6 @@ export async function createProjectRuntime(
   tools.register(new ConventionTool(memory,
     id => sessions.getSessionState(id)?.initiativeId,
     id => sessions.assertInitiativeAccess(id)))
-  const skills = new SkillsManager(workspace)
   const agentTypes = new AgentTypesManager(workspace)
   cleanup.push(() => skills.stopWatching())
   cleanup.push(() => agentTypes.stopWatching())
@@ -471,6 +479,7 @@ export async function createProjectRuntime(
     bus,
     provider,
     tools,
+    toolLoader: importTool,
     identity,
     context,
     quickModel,
@@ -545,9 +554,9 @@ export async function createProjectRuntime(
   await io.start()
   cleanup.push(() => io.shutdown())
   registerIoRoutes(app, io, dependencies.authorize)
-  loadable.set('io_capabilities', new IoCapabilitiesTool(io, project.id))
-  loadable.set('io_run', new IoRunTool(io, project.id))
-  loadable.set('io_surface', new IoSurfaceTool(io, project.id))
+  importTool.registerBuiltin('io_capabilities', new IoCapabilitiesTool(io, project.id))
+  importTool.registerBuiltin('io_run', new IoRunTool(io, project.id))
+  importTool.registerBuiltin('io_surface', new IoSurfaceTool(io, project.id))
 
   const initiatives = new InitiativeStore(workspace, {
     isSessionKnown: id => sessions.getSessionState(id) !== null,
@@ -560,6 +569,17 @@ export async function createProjectRuntime(
   })
   cleanup.push(() => initiatives.close())
   initiatives.migrateLegacyMarkdown()
+  const topics = new TopicService({
+    projectId: project.id,
+    sessions,
+    folders: folderRegistry,
+    listStates: async () => (await sessions.listSessions())
+      .flatMap(entry => { const state = sessions.getSessionState(entry.sessionId); return state ? [state] : [] }),
+    firstMessage: id => sessions.getFirstUserMessage(id),
+    resolveAgent: name => agentTypes.resolve(name),
+    changed: id => realtime.invalidateSessions(id),
+  })
+  tools.register(new TopicTool(topics))
 
   context.register(guidelineProvider())
   context.register(
@@ -584,6 +604,7 @@ export async function createProjectRuntime(
     workdirCapabilityLookup,
   })
   context.register(projectProvider(projectFolderDiscovery))
+  context.register(topicProvider(id => sessions.getSessionState(id)))
   context.register(initiativeProvider(initiatives))
   context.register(memoryProvider(
     memory,
@@ -623,12 +644,19 @@ export async function createProjectRuntime(
   const bgVfs = createBgTasksHandler(backgroundTasks)
   vfs.mount('v:bg', 'background task status and output', bgVfs.read, bgVfs.list)
 
-  const skillsVfs = createSkillsHandler(skills)
+  const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context))
   vfs.mount(
     'v:skills',
     'read skill bodies and category listings',
     skillsVfs.read,
   )
+
+  const mcpConfigVfs = createMcpConfigHandler({
+    projectId: project.id,
+    configStore,
+    isReservedName: name => name === 'import_tool' || name === 'install_tool' || importTool.isBuiltinName(name) || tools.has(name),
+  })
+  vfs.mount('v:config', 'Project MCP configuration: mcp.json', mcpConfigVfs.read, undefined, mcpConfigVfs.write)
 
   const memoryVfs = createMemoryHandler(workspace)
   vfs.mount(
@@ -679,6 +707,7 @@ export async function createProjectRuntime(
       (parentId) => sessions.getSessionState(parentId)?.children,
       deliverInput,
       (source, target) => sessions.canSendSessionMessage(source, target),
+      (initiativeId, itemId) => initiatives.assertWorkReference(initiativeId, itemId),
     ),
   )
   tools.register(new YieldTool(sessions.yields))
@@ -709,7 +738,7 @@ export async function createProjectRuntime(
   cronService.setHandler(async (job, signal) => { await cronDispatcher.dispatch(job, signal) })
   cronService.setOnChanged(() => realtime.invalidateSessions())
   registerAutomationRoutes(app, cronService, sessions, project.id)
-  loadable.set('cron', new CronTool(cronService, sessions, name => !!agentTypes.resolve(name)))
+  importTool.registerBuiltin('cron', new CronTool(cronService, sessions, name => !!agentTypes.resolve(name)))
   tools.register(new EventSubscribeTool(events))
   // Clean up event subscriptions linked to one-shot cron jobs when they are
   // auto-removed after firing (prevents orphaned subscriptions in `list`).
@@ -744,8 +773,9 @@ export async function createProjectRuntime(
       try {
         await mcpManager.load(newConfig.mcp.servers)
       } catch (cause) {
-        try { await mcpManager.load(activeConfig.mcp.servers) }
-        catch (rollback) { throw new AggregateError([cause, rollback], 'MCP update and rollback failed') }
+        try {
+          await mcpManager.load(activeConfig.mcp.servers)
+        } catch (rollback) { throw new AggregateError([cause, rollback], 'Tool catalog update and rollback failed') }
         throw cause
       }
       learning.update(newConfig.learning)
@@ -809,7 +839,18 @@ export async function createProjectRuntime(
   for (const plugin of [
     otelPlugin(otelStore),
     agentTypesPlugin(sessions, agentTypes),
+    sessionDiagnosisPlugin({
+      projectId: project.id,
+      getState: id => sessions.getSessionState(id),
+      readRecords: id => sessionStore.readSessionLog(id),
+      querySpans: query => otelStore.querySessionSpans(query),
+      captures: id => sessions.getPromptCaptures(id),
+    }, {
+      authorize: dependencies.authorize,
+      assertAccess: id => sessions.assertFolderAccess(id),
+    }),
     sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize }),
+    topicsPlugin(topics, dependencies.authorize),
     backgroundTasksPlugin(backgroundTasks, id => !!sessions.getSessionState(id)),
     remoteSessionPlugin({
       sessions,

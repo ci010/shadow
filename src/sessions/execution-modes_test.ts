@@ -26,6 +26,8 @@ import { ExecTool } from '../tools/shell.ts'
 import { CommandHandlerManager } from '../tools/shell-commands/command-handler.ts'
 import { defaultManagedShell } from '../execution/processes/shells.ts'
 import type { ManagedProcessStatus } from '../execution/processes/manager.ts'
+import { managedSessionWorkdirRef, resolveSessionLocations } from './locality.ts'
+import { parseTopicMetadata } from './topic-contract.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const question = { question: 'Choose a path', options: ['A', 'B', 'C'], default_option: 'A' }
@@ -129,6 +131,229 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: concurrent explicit and implicit creation cannot replace admitted state or history`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await assert.rejects(f.sessions.deliver('web:orchestrator', input('Implicit coordinator')), /canonical configuration/)
+        assert.equal(await store.countSessionLog('web_orchestrator-0'), 0)
+        for (const id of ['web:race', 'web:orchestrator']) {
+          const entered = Promise.withResolvers<void>()
+          const release = Promise.withResolvers<void>()
+          const originalCreate = store.createSessionLog.bind(store)
+          let creates = 0
+          store.createSessionLog = async (physicalId, events) => {
+            creates++
+            entered.resolve()
+            await release.promise
+            await originalCreate(physicalId, events)
+          }
+          const fields = {
+            mode: 'session' as const,
+            sessionKind: id === 'web:orchestrator' ? 'orchestrator' as const : 'topic' as const,
+            agentType: id === 'web:orchestrator' ? 'orchestrator' : 'general',
+            topic: { title: 'Original brief', goal: 'Original goal', scope: '' },
+          }
+          const creation = f.sessions.buildSession(id, undefined, fields)
+          await entered.promise
+          const duplicate = assert.rejects(f.sessions.buildSession(id, undefined, {
+            ...fields, topic: { ...fields.topic, title: 'Conflicting brief' },
+          }), /existing session/)
+          const implicit = f.sessions.deliver(id, input('Admitted user message'))
+          await delay(1)
+          try {
+            assert.equal(creates, 1)
+            assert.equal(f.sessions.getSessionState(id), null)
+          } finally { release.resolve() }
+          await Promise.all([creation, duplicate, implicit])
+          assert.equal(creates, 1)
+          store.createSessionLog = originalCreate
+          assert.equal((await store.getState(id))?.topic?.title, 'Original brief')
+          const request = await f.next(id)
+          request.resolve(done('Preserved reply'))
+          await waitFor(() => f.facts.some(fact => fact.sessionId === id))
+          const history = await f.sessions.getHistory(id)
+          await assert.rejects(f.sessions.buildSession(id, undefined, fields), /existing session/)
+          assert.deepEqual(await f.sessions.getHistory(id), history)
+        }
+        const save = store.saveState.bind(store)
+        store.saveState = async (id, state) => {
+          if (id === 'web:failed-create') throw new Error('Synthetic write failure')
+          await save(id, state)
+        }
+        await assert.rejects(f.sessions.buildSession('web:failed-create'), /Synthetic write failure/)
+        assert.equal(f.sessions.getSessionState('web:failed-create'), null)
+        store.saveState = save
+        await f.sessions.buildSession('web:failed-create')
+        assert.equal(f.sessions.getSessionState('web:failed-create')?.mode, 'session')
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: coordinator capabilities remain pinned despite custom role overrides`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const deps = (f.sessions as any).deps as SessionManagerDeps
+      const resolve = deps.agentTypes.resolve.bind(deps.agentTypes)
+      deps.agentTypes.resolve = name => {
+        const role = resolve(name)
+        return name === 'orchestrator' && role ? { ...role, allowedTools: ['exec', 'invoke_tool', 'subagent'] } : role
+      }
+      for (const name of ['search', 'topic', 'initiative']) {
+        f.tools.register({ name, description: name, optIn: name === 'initiative',
+          parameters: { type: 'object', properties: {} }, execute: async () => name })
+      }
+      const allowed = ['initiative', 'message', 'read', 'search', 'topic']
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })
+        assert.deepEqual(f.sessions.getToolDefinitions('web:orchestrator').map(tool => tool.name).sort(), allowed)
+        assert.deepEqual(f.sessions.getToolDefinitions('web:orchestrator', { allowedTools: ['exec'] }).map(tool => tool.name).sort(), allowed)
+        assert.throws(() => f.sessions.assertCanCreateChild('web:orchestrator', 'task'), /role does not permit/)
+        await f.sessions.deliver('web:orchestrator', input('Coordinate this Project'))
+        const request = await f.next('web:orchestrator')
+        assert.deepEqual(request.names.sort(), allowed)
+        request.resolve(invoke('exec', { command: 'not actually executed' }, 'denied'))
+        const resumed = await f.next('web:orchestrator')
+        assert.match(String(resumed.messages.find(message => message.tool_call_id === 'denied')?.content), /not available|not found|not allowed|Unknown tool/i)
+        resumed.resolve(done('Coordinated'))
+        await waitFor(() => f.facts.some(fact => fact.sessionId === 'web:orchestrator'))
+        await f.sessions.stop()
+        await f.sessions.start()
+        assert.deepEqual(f.sessions.getToolDefinitions('web:orchestrator').map(tool => tool.name).sort(), allowed)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: topic metadata validates, replaces, persists and canonical coordinator cannot be aliased`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const topic = { title: 'Topic', goal: 'Finish a goal', scope: '', nonGoals: 'Unrelated work' }
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })
+        for (const fields of [{ agentType: 'orchestrator' }, { sessionKind: 'orchestrator' as const }]) {
+          await assert.rejects(f.sessions.buildSession('web:alias', undefined, fields), /orchestrator/)
+        }
+        await f.sessions.buildSession('web:topic', undefined, {
+          mode: 'session', parentSessionId: null, sessionKind: 'topic', topic, createdBySessionId: 'web:orchestrator',
+          topicRequestHash: 'a'.repeat(64),
+        })
+        for (const invalid of [null, [], {}, { ...topic, title: ' ' }, { ...topic, goal: '' },
+          { ...topic, title: 'x'.repeat(201) }, { ...topic, scope: 'x'.repeat(8001) },
+          { ...topic, nonGoals: 1 }, { ...topic, unexpected: true }]) {
+          assert.throws(() => parseTopicMetadata(invalid))
+          await assert.rejects(f.sessions.updateTopicMetadata('web:topic', invalid as any))
+        }
+        await assert.rejects(f.sessions.updateTopicMetadata('web:orchestrator', topic), /editable/)
+        await assert.rejects(f.sessions.buildSession('web:foreign', undefined, { topic, createdBySessionId: 'web:missing' }), /project/)
+        await assert.rejects(store.saveState('web:invalid', { sessionId: 'web:invalid', segmentIndex: 0, topic: { ...topic, goal: '' } }))
+        const replacement = { title: 'Replacement', goal: 'New goal', scope: 'Bounded' }
+        await Promise.all([
+          f.sessions.updateTopicMetadata('web:topic', { ...replacement, title: 'Previous replacement' }),
+          f.sessions.updateTopicMetadata('web:topic', replacement),
+        ])
+        assert.deepEqual(f.sessions.listSessions().find(s => s.sessionId === 'web:topic')?.topic, replacement)
+        assert.deepEqual((await f.sessions.getSessionDetails('web:topic'))?.topic, replacement)
+        assert.equal((await f.sessions.getSessionDetails('web:topic'))?.name, replacement.title)
+        assert.deepEqual((await store.listSessions()).find(s => s.sessionId === 'web:topic')?.topic, replacement)
+        await f.sessions.stop()
+        await f.sessions.start()
+        assert.deepEqual(f.sessions.getSessionState('web:topic')?.topic, replacement)
+        assert.equal(f.sessions.getSessionState('web:topic')?.createdBySessionId, 'web:orchestrator')
+        assert.equal(f.sessions.getSessionState('web:topic')?.topicRequestHash, 'a'.repeat(64))
+        assert.equal(f.sessions.getDelegationOwner('web:topic'), undefined)
+        await f.sessions.deleteSession('web:orchestrator')
+        assert.equal(f.sessions.getSessionState('web:topic')?.sessionKind, 'topic')
+        const entered = Promise.withResolvers<void>()
+        const release = Promise.withResolvers<void>()
+        const originalSave = store.saveState.bind(store)
+        store.saveState = async (id, state) => {
+          if (state.topic?.title === 'Slow replacement') { entered.resolve(); await release.promise }
+          await originalSave(id, state)
+        }
+        const update = f.sessions.updateTopicMetadata('web:topic', { ...replacement, title: 'Slow replacement' })
+        await entered.promise
+        const deletion = f.sessions.deleteSession('web:topic')
+        release.resolve()
+        await Promise.all([update, deletion])
+        assert.equal(await store.getState('web:topic'), null)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: legacy long-lived children become independent without moving workdir or losing fork history`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const physical = 'web_root-0'
+      const records = [
+        { previous_physical_id: null, timestamp: new Date().toISOString() },
+        { role: 'user', content: 'Inherited history sentinel', timestamp: new Date().toISOString() },
+        { role: 'assistant', content: 'Historical answer', timestamp: new Date().toISOString() },
+      ]
+      await store.createSessionLog(physical, records)
+      await store.saveState('web:root', { sessionId: 'web:root', segmentIndex: 0, mode: 'session', children: ['web:legacy', 'web:fork', 'web:remote'] })
+      await store.saveState('web:legacy', {
+        sessionId: 'web:legacy', segmentIndex: 0, agentType: 'sub', parentSessionId: 'web:root',
+        parent: { id: 'web:root', physicalId: physical }, reportTo: 'web:root', workspaceRoot: 'web:root',
+      })
+      await store.saveState('web:fork', {
+        sessionId: 'web:fork', segmentIndex: 0, mode: 'session',
+        parent: { id: 'web:root', physicalId: physical, index: 3 }, workspaceRoot: 'web:root',
+      })
+      const remote = { version: 1 as const, nodeId: 'remote', capabilityId: 'opaque', displayPathSnapshot: 'C:\\never-use-on-main' }
+      await store.saveState('web:remote', {
+        sessionId: 'web:remote', segmentIndex: 0, mode: 'session',
+        parentSessionId: 'web:root', workdir: remote, workspaceRoot: 'web:root',
+      })
+      try {
+        await f.sessions.start()
+        const legacy = f.sessions.getSessionState('web:legacy')!
+        assert.equal(legacy.parentSessionId, null)
+        assert.equal(legacy.createdBySessionId, 'web:root')
+        assert.equal(legacy.reportTo, undefined)
+        assert.deepEqual(legacy.workdir, managedSessionWorkdirRef('web:root'))
+        const before = resolveSessionLocations(workspace, legacy)
+        assert.equal(before.workdir.available, true)
+        assert.equal(f.sessions.getDelegationOwner('web:legacy'), undefined)
+        assert.deepEqual(await f.sessions.getChildren('web:root'), [])
+        assert.deepEqual(f.sessions.getSessionState('web:remote')?.workdir, remote)
+        assert.equal(resolveSessionLocations(workspace, f.sessions.getSessionState('web:remote')!).workdir.available, false)
+        const logs = []
+        for await (const record of store.readSessionLog(physical)) logs.push(record)
+        assert.deepEqual(logs, records)
+        assert.match(JSON.stringify((await f.sessions.getHistory('web:fork')).messages), /Inherited history sentinel/)
+        await f.sessions.deliver('web:legacy', {
+          ...input('Direct user conversation'),
+          source: { kind: 'user', sender: { channel: 'web', chatId: 'legacy', senderId: 'user', messageId: 'user-input' } },
+        })
+        const pending = await f.next('web:legacy')
+        assert.deepEqual(await f.sessions.deleteSession('web:root'), ['web:root'])
+        assert.equal(pending.signal.aborted, false)
+        assert.deepEqual(resolveSessionLocations(workspace, legacy), before)
+        assert.match(JSON.stringify((await f.sessions.getHistory('web:fork')).messages), /Inherited history sentinel/)
+        pending.resolve(done('Independent answer'))
+        await waitFor(() => f.facts.some(fact => fact.sessionId === 'web:legacy'))
+        assert.equal(f.reports.length, 0)
+        await f.sessions.stop()
+        const saved = await store.getState('web:legacy')
+        await f.sessions.start()
+        assert.deepEqual(await store.getState('web:legacy'), saved)
+        assert.deepEqual(resolveSessionLocations(workspace, f.sessions.getSessionState('web:legacy')!), before)
+        assert.equal(f.sessions.canReceiveSessionMessage('web:legacy'), true)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: Initiative delegation inherits context, validates explicit scope and survives restart`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -138,22 +363,22 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         await f.sessions.buildSession('web:root', undefined, { initiativeId: 'cleanup' })
         const context = sourceContext(workspace, f)
-        const inherited = JSON.parse(await f.subagent.execute({ description: 'Inherited', mode: 'session' }, context))
+        const inherited = JSON.parse(await f.subagent.execute({ description: 'Inherited', mode: 'task', task: 'Work' }, context))
         assert.equal(f.sessions.getSessionState(inherited.sessionId)?.initiativeId, 'cleanup')
         const ids: string[] = []
         for (const field of ['initiative_id', 'initiative_name', 'project_name']) {
           const child = JSON.parse(await f.subagent.execute({
-            description: 'Explicit', mode: 'session', [field]: 'second',
+            description: 'Explicit', mode: 'task', task: 'Work', [field]: 'second',
           }, context))
           ids.push(child.sessionId)
           assert.equal(f.sessions.getSessionState(child.sessionId)?.initiativeId, 'second')
           assert.equal(f.sessions.getSessionState(child.sessionId)?.folderId, undefined)
         }
         await assert.rejects(f.subagent.execute({
-          description: 'Wrong Project', mode: 'session', initiative_id: 'missing',
+          description: 'Wrong Project', mode: 'task', task: 'Work', initiative_id: 'missing',
         }, context), /does not belong/)
         await assert.rejects(f.subagent.execute({
-          description: 'Conflict', mode: 'session', initiative_id: 'cleanup', project_name: 'second',
+          description: 'Conflict', mode: 'task', task: 'Work', initiative_id: 'cleanup', project_name: 'second',
         }, context), /Conflicting/)
         await f.sessions.stop()
         await f.sessions.start()
@@ -163,7 +388,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: two-mode schema, role independence, optional initial session task and frozen legacy modes`, async () => {
+  test(`${Store.name}: temporary delegation schema and independent persistent topics`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -175,11 +400,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.buildSession('web:root')
         const context = sourceContext(workspace, f)
         const schema = f.sessions.getToolDefinitions('web:root').find(tool => tool.name === 'subagent')!.parameters as typeof f.subagent.parameters
-        assert.deepEqual(schema.properties.mode.enum, ['session', 'task'])
+        assert.deepEqual(schema.properties.mode.enum, ['task', 'call'])
         assert.match(await f.subagent.execute({ description: 'missing', mode: 'task' }, context), /task is required/)
-        assert.match(await f.subagent.execute({ description: 'invalid', mode: 'unsupported', task: 'x' }, context), /mode must be session, task, or call/)
-        const reusable = JSON.parse(await f.subagent.execute({ description: 'Reusable verifier', agent_type: 'verify', mode: 'session' }, context))
-        assert.equal(reusable.mode, 'session')
+        assert.match(await f.subagent.execute({ description: 'invalid', mode: 'unsupported', task: 'x' }, context), /mode must be task or call/)
+        assert.match(await f.subagent.execute({ description: 'Reusable verifier', agent_type: 'verify', mode: 'session' }, context), /topic creation/)
+        await f.sessions.buildSession('web:topic', undefined, { mode: 'session', agentType: 'verify', parentSessionId: null, createdBySessionId: 'web:root' })
+        const reusable = { sessionId: 'web:topic' }
         assert.equal(f.requests.length, 0)
         assert.equal(f.sessions.canReceiveSessionMessage(reusable.sessionId), true)
         for (const content of ['first', 'second']) {
@@ -187,11 +413,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           ;(await f.next(reusable.sessionId)).resolve(done(content))
           await waitFor(() => f.facts.some(fact => fact.sessionId === reusable.sessionId && fact.content === content))
         }
-        const initial = JSON.parse(await f.subagent.execute({
-          description: 'Session with first task', mode: 'session', task: 'Atomic initial task',
-        }, context))
-        assert.match(JSON.stringify((await f.next(initial.sessionId)).messages), /Atomic initial task/)
-        assert.equal((await f.sessions.getChildren('web:root')).length, 2)
+        assert.equal((await f.sessions.getChildren('web:root')).length, 0)
+        assert.equal(f.reports.length, 0)
         await f.sessions.stop()
         await f.sessions.start()
         assert.equal(f.sessions.getSessionState(reusable.sessionId)?.mode, 'session')
@@ -200,7 +423,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: root omitted mode uses only an allowed role preference; explicit choices never downgrade`, async () => {
+  test(`${Store.name}: root omitted mode always uses task, independent of role preferences`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -209,16 +432,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
         const context = sourceContext(workspace, f)
-        const reusable = JSON.parse(await f.subagent.execute({ description: 'Default reusable' }, context))
-        assert.equal(reusable.mode, 'session')
+        const reusable = JSON.parse(await f.subagent.execute({ description: 'Default task', task: 'Work' }, context))
+        assert.equal(reusable.mode, 'task')
         const task = JSON.parse(await f.subagent.execute({ description: 'Preferred task', agent_type: 'verify', task: 'Work' }, context))
         assert.equal(task.mode, 'task')
         const types = (f.sessions as any).deps.agentTypes
         const original = types.resolve
         types.resolve = (name: string) => ({ ...original(name), ...(name === 'verify' ? { defaultMode: 'call' } : {}) })
-        const before = f.sessions.listSessions().length
-        await assert.rejects(f.subagent.execute({ description: 'Disallowed preference', agent_type: 'verify', task: 'Work' }, context), /not allowed/)
-        assert.equal(f.sessions.listSessions().length, before)
+        const preferred = JSON.parse(await f.subagent.execute({ description: 'Ignored preference', agent_type: 'verify', task: 'Work' }, context))
+        assert.equal(preferred.mode, 'task')
         const explicit = JSON.parse(await f.subagent.execute({ description: 'Explicit task', agent_type: 'verify', mode: 'task', task: 'Work' }, context))
         assert.equal(explicit.mode, 'task')
         assert.equal(f.sessions.getSessionState(task.sessionId)?.mode, 'task')
@@ -379,17 +601,17 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
-        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', agentType: 'sub', parentSessionId: 'web:root' })
+        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', agentType: 'general', parentSessionId: null })
         await f.sessions.buildSession('virtual:task', { id: 'web:root' }, { mode: 'task', parentSessionId: 'web:root' })
         await f.sessions.buildSession('virtual:leaf', { id: 'virtual:task' }, { mode: 'call', parentSessionId: 'virtual:task' })
         await f.sessions.buildSession('web:fork', { id: 'web:sub', index: 0 })
         await f.sessions.buildSession('web:empty-fork', { id: 'web:sub' })
         assert.equal(f.sessions.getDelegationOwner('web:fork'), undefined)
-        assert.deepEqual(f.sessions.getAllowedSubagentModes('web:empty-fork'), ['session', 'task'])
+        assert.deepEqual(f.sessions.getAllowedSubagentModes('web:empty-fork'), ['task', 'call'])
         f.tools.register({ name: 'bridge', description: '', parameters: { type: 'object', properties: {} },
           execute: (args, context) => f.subagent.execute(args, context) })
         const rows = [
-          ['web:root', ['session', 'task']], ['web:sub', ['task', 'call']],
+          ['web:root', ['task', 'call']], ['web:sub', ['task', 'call']],
           ['virtual:task', ['call']], ['virtual:leaf', []],
         ] as const
         for (const [owner, allowed] of rows) {
@@ -398,7 +620,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           if (allowed.length) {
             const parameters = definition!.parameters as typeof f.subagent.parameters
             assert.deepEqual(parameters.properties.mode.enum, allowed)
-            assert.equal(parameters.required?.includes('mode') ?? false, owner !== 'web:root')
+            assert.equal(parameters.required?.includes('mode') ?? false, owner === 'virtual:task')
           }
           else assert.equal(definition, undefined)
           for (const mode of ['session', 'task', 'call'] as const) {
@@ -406,8 +628,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             const context = { ...sourceContext(workspace, f), sessionId: owner }
             if (!(allowed as readonly string[]).includes(mode)) {
               await assert.rejects(f.sessions.buildSession(id, { id: owner }, { mode, parentSessionId: owner }), /not allowed|Leaf calls/)
-              await assert.rejects(f.subagent.execute({ mode, task: 'Work', description: id }, context), /not allowed|Leaf calls/)
-              assert.match(await f.tools.execute('bridge', { mode, task: 'Work', description: id }, context), /not allowed|Leaf calls/)
+              if (mode === 'session') assert.match(await f.subagent.execute({ mode, task: 'Work', description: id }, context), /topic creation/)
+              else await assert.rejects(f.subagent.execute({ mode, task: 'Work', description: id }, context), /not allowed|Leaf calls/)
+              assert.match(await f.tools.execute('bridge', { mode, task: 'Work', description: id }, context), /not allowed|Leaf calls|topic creation/)
             } else {
               await f.sessions.buildSession(id, { id: owner }, { mode, parentSessionId: owner })
               assert.equal(f.sessions.getSessionState(id)?.mode, mode)
@@ -415,7 +638,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             }
           }
         }
-        for (const owner of ['web:sub', 'virtual:task']) {
+        for (const owner of ['virtual:task']) {
           const context = { ...sourceContext(workspace, f), sessionId: owner }
           const before = f.sessions.listSessions().length
           assert.match(await f.subagent.execute({ description: 'Omitted mode', task: 'Work', agent_type: 'verify' }, context), /mode is required/)
@@ -431,7 +654,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           { ...sourceContext(workspace, f), sessionId: 'web:no-delegation' }), /role does not permit/)
         await f.sessions.stop()
         await f.sessions.start()
-        assert.deepEqual(f.sessions.getAllowedSubagentModes('web:fork'), ['session', 'task'])
+        assert.deepEqual(f.sessions.getAllowedSubagentModes('web:fork'), ['task', 'call'])
         assert.equal(f.sessions.getSessionState('web:empty-fork')?.parentSessionId, null)
       } finally { await f.sessions.stop(); store.close?.() }
     })
@@ -455,7 +678,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           await f.sessions.start()
           await f.sessions.buildSession('web:root')
           await f.sessions.buildSession('web:worker', { id: 'web:root' }, {
-            mode, parentSessionId: 'web:root', model: 'worker-model', reportTo: 'web:root',
+            mode, parentSessionId: mode === 'session' ? null : 'web:root', model: 'worker-model', reportTo: mode === 'session' ? undefined : 'web:root',
           })
           const physical = SessionManager.currentPhysicalId(f.sessions.getSessionState('web:worker')!)
           await store.appendMessages(physical, [{ role: 'user', timestamp: new Date().toISOString(),
@@ -520,7 +743,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
-        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: 'web:root' })
+        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'task', parentSessionId: 'web:root' })
         await f.sessions.deliver('web:sub', input('Do work'))
         ;(await f.next('web:sub')).resolve(invoke('subagent', { mode: 'call', description: 'Leaf', task: 'Work' }, 'leaf'))
         await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call'))
@@ -567,7 +790,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
-        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: 'web:root' })
+        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null })
         const controller = new AbortController()
         const context = { ...sourceContext(workspace, f), sessionId: 'web:sub', signal: controller.signal, toolCallId: 'stable', toolCallName: 'subagent' }
         const args = { mode: 'call', task: 'Work', description: 'Cancelled leaf' }
@@ -608,7 +831,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         try {
           await f.sessions.start()
           await f.sessions.buildSession('web:root')
-          await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: 'web:root' })
+          await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null })
           await f.sessions.deliver('web:sub', input('Work'))
           ;(await f.next('web:sub')).resolve(invoke('subagent', { mode: 'call', description: 'Leaf', task: 'Work' }, 'leaf'))
           await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call'))
@@ -665,7 +888,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
-        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: 'web:root' })
+        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null })
         await f.sessions.deliver('web:sub', input('Work'))
         ;(await f.next('web:sub')).resolve(invoke('subagent', { mode: 'call', task: 'Work', description: 'Exec leaf' }))
         await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call'))
@@ -698,7 +921,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
-        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: 'web:root', agentType: 'limited' })
+        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null, agentType: 'limited' })
         const context = { ...sourceContext(workspace, f), sessionId: 'web:sub',
           tools: new SessionTools(f.tools, workspace, ['subagent', 'read']) }
         const args = { mode: 'call', task: 'Work', description: 'Intersection', agent_type: 'general' }
@@ -741,7 +964,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
-        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: 'web:root' })
+        await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null })
         const work = f.subagent.execute({ mode: 'call', task: 'Bounded work', description: 'Deadline' },
           { ...sourceContext(workspace, f), sessionId: 'web:sub' })
         const receipt = JSON.parse(await work)

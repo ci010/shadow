@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
-import { ITEM_ACTIVITY_VIEW, SCHEMA, TABLE_COLUMNS } from './schema.ts'
+import { HANDOFF_VIEW, ITEM_ACTIVITY_VIEW, SCHEMA, TABLE_COLUMNS } from './schema.ts'
 import { parseSql, type Statement, type Value } from './sql.ts'
 
 export type InitiativeRow = Record<string, string | number | null>
@@ -11,7 +11,7 @@ export interface InitiativeQueryResult {
   changes: number
 }
 export interface InitiativeStoreOptions {
-  /** Return true for a live session, false for a known inactive session. Unknown must return undefined. */
+  /** Informative only, never releases work. True is live, false inactive, undefined unknown. */
   isSessionActive?: (sessionId: string) => boolean | undefined
   /** If supplied, new owner/assignee targets must belong to this Project runtime. */
   isSessionKnown?: (sessionId: string) => boolean
@@ -53,13 +53,15 @@ export class InitiativeStore {
     try {
       this.#db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL;')
       const version = this.#db.prepare('PRAGMA user_version').get() as { user_version: number }
-      if (![0, 1, 2].includes(version.user_version)) throw new Error('Unsupported initiative database version')
+      if (![0, 1, 2, 3].includes(version.user_version)) throw new Error('Unsupported initiative database version')
       if (version.user_version === 0) {
         const tables = this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
         if (tables.length) throw new Error('Unrecognized initiative database schema')
-        this.#db.exec(`BEGIN IMMEDIATE; ${SCHEMA} ${ITEM_ACTIVITY_VIEW} PRAGMA user_version=2; COMMIT;`)
-      } else if (version.user_version === 1) {
-        this.#db.exec(`BEGIN IMMEDIATE; ${ITEM_ACTIVITY_VIEW} PRAGMA user_version=2; COMMIT;`)
+        this.#db.exec(`BEGIN IMMEDIATE; ${SCHEMA} ${ITEM_ACTIVITY_VIEW} PRAGMA user_version=3; COMMIT;`)
+      } else if (version.user_version < 3) {
+        this.#db.exec(`BEGIN IMMEDIATE; DROP VIEW IF EXISTS initiative_item_activity;
+          DROP VIEW IF EXISTS initiative_handoffs; ${HANDOFF_VIEW} ${ITEM_ACTIVITY_VIEW}
+          PRAGMA user_version=3; COMMIT;`)
       }
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
@@ -108,6 +110,19 @@ export class InitiativeStore {
     }, signal)
   }
 
+  /** Validates coordination metadata without granting ownership or changing work facts. */
+  assertWorkReference(initiativeId: string, itemId?: string): void {
+    this.#slug(initiativeId)
+    if (itemId !== undefined) this.#slug(itemId)
+    this.#transaction('', () => {
+      if (!this.#one('initiatives', initiativeId)) throw new Error(`Unknown initiative in this Project: ${initiativeId}`)
+      if (itemId === undefined) return
+      const item = this.#one('initiative_items', itemId)
+      if (!item) throw new Error(`Unknown initiative item in this Project: ${itemId}`)
+      if (item.initiative_id !== initiativeId) throw new Error(`Initiative item "${itemId}" does not belong to initiative "${initiativeId}"`)
+    }, undefined, true)
+  }
+
   getSummary(initiativeId: string, sessionId?: string): string | null {
     this.#slug(initiativeId)
     if (sessionId !== undefined) this.#sessionId(sessionId)
@@ -131,19 +146,21 @@ export class InitiativeStore {
           SELECT * FROM initiative_item_activity WHERE initiative_id=? AND assignee_session_id=?
           AND status IN ('pending','in_progress','blocked') ORDER BY id LIMIT 11
         `, [initiative.id!, actorSessionId])
-        const handoffItems = this.#all('SELECT * FROM initiative_item_activity WHERE initiative_id=? AND needs_handoff=1 ORDER BY id LIMIT 11', [initiative.id!])
-        const handoff = initiative.owner_session_id === null || this.#inactive(String(initiative.owner_session_id))
+        const attentionItems = this.#all('SELECT * FROM initiative_item_activity WHERE initiative_id=? AND needs_attention=1 ORDER BY id LIMIT 11', [initiative.id!])
+        const ownerActivity = this.#activity(initiative.owner_session_id as string | null)
+        const needsAttention = initiative.owner_session_id === null || ownerActivity === 'inactive'
         return this.#truncate([
           `# Initiative: ${this.#truncate(String(initiative.title), 300)} (${initiative.id})`,
-          `Status: active${handoff ? ' — needs-handoff' : ''}; owner: ${initiative.owner_session_id ?? '(unowned)'}`,
+          `Status: active${needsAttention ? ' — needs_attention' : ''}; owner: ${initiative.owner_session_id ?? '(unowned)'}; activity: ${ownerActivity}`,
+          'Recorded ownership and assignments persist regardless of activity; only explicit release/handoff changes them.',
           `Goal: ${this.#truncate(String(initiative.goal), 1000)}`,
-          ...(handoffItems.length ? [
-            '## Items needing handoff',
-            ...handoffItems.slice(0, 10).map((item) => `- ${item.id}: [${item.status}] assignee ${item.assignee_session_id} — inactive; needs-handoff`),
-            ...(handoffItems.length > 10 ? ['[More stopped assignments omitted; query initiative_item_activity.]'] : []),
+          ...(attentionItems.length ? [
+            '## Items needing attention (assignments retained)',
+            ...attentionItems.slice(0, 10).map((item) => `- ${item.id}: [${item.status}] assignee ${item.assignee_session_id} — inactive; needs_attention (not claimable)`),
+            ...(attentionItems.length > 10 ? ['[More inactive assignments omitted; query initiative_item_activity.]'] : []),
           ] : []),
           '## Your assigned work',
-          ...assigned.slice(0, 10).map((item) => `- ${item.id}: [${item.status}] ${this.#truncate(String(item.title), 300)} (activity: ${item.assignee_activity}${item.needs_handoff ? '; needs-handoff' : ''})${item.blocked_reason ? ` — ${this.#truncate(String(item.blocked_reason), 300)}` : ''}`),
+          ...assigned.slice(0, 10).map((item) => `- ${item.id}: [${item.status}] ${this.#truncate(String(item.title), 300)} (activity: ${item.assignee_activity}${item.needs_attention ? '; needs_attention; assignment retained' : ''})${item.blocked_reason ? ` — ${this.#truncate(String(item.blocked_reason), 300)}` : ''}`),
           ...(assigned.length === 0 ? ['(No open items assigned to you.)'] : []),
           ...(assigned.length > 10 ? ['[More assigned items omitted; query initiative_session_todos.]'] : []),
           '## Context',
@@ -163,13 +180,15 @@ export class InitiativeStore {
     if (!initiative) return null
     const items = this.#all('SELECT * FROM initiative_item_activity WHERE initiative_id=? ORDER BY id LIMIT 101', [initiativeId])
     const entries = this.#all('SELECT * FROM initiative_entries WHERE initiative_id=? ORDER BY created_at DESC, id DESC LIMIT 11', [initiativeId])
-    const handoff = initiative.status === 'active' && (initiative.owner_session_id === null || this.#inactive(String(initiative.owner_session_id)))
+    const ownerActivity = this.#activity(initiative.owner_session_id as string | null)
+    const needsAttention = initiative.status === 'active' && (initiative.owner_session_id === null || ownerActivity === 'inactive')
     const lines = [
       `# Initiative: ${initiative.title} (${initiative.id})`,
-      `Status: ${initiative.status}${handoff ? ' — needs-handoff' : ''}`,
-      `Owner session: ${initiative.owner_session_id ?? '(unowned)'}`,
+      `Status: ${initiative.status}${needsAttention ? ' — needs_attention' : ''}`,
+      `Owner session: ${initiative.owner_session_id ?? '(unowned)'}; activity: ${ownerActivity}`,
+      'Recorded ownership and assignments persist regardless of activity; only explicit release/handoff changes them.',
       `Goal: ${initiative.goal}`, '', '## Context', String(initiative.context), '', '## Work items',
-      ...items.slice(0, 100).map((item) => `- ${item.id}: [${item.status}] ${item.title} (assignee: ${item.assignee_session_id ?? 'none'}; activity: ${item.assignee_activity}${item.needs_handoff ? '; needs-handoff' : ''}${item.assignee_session_id === sessionId ? '; you' : ''})${item.blocked_reason ? ` — ${item.blocked_reason}` : ''}`),
+      ...items.slice(0, 100).map((item) => `- ${item.id}: [${item.status}] ${item.title} (assignee: ${item.assignee_session_id ?? 'none'}; activity: ${item.assignee_activity}${item.needs_attention ? '; needs_attention; assignment retained' : ''}${item.assignee_session_id === sessionId ? '; you' : ''})${item.blocked_reason ? ` — ${item.blocked_reason}` : ''}`),
       ...(items.length > 100 ? ['[More items omitted; query initiative_items.]'] : []),
       '', '## Recent entries',
       ...entries.slice(0, 10).reverse().map((entry) => `[${entry.created_at}] ${entry.kind} (${entry.author_session_id}): ${entry.content}`),
@@ -256,14 +275,14 @@ export class InitiativeStore {
     })
   }
 
-  #transaction<T>(actor: string, operation: () => T, signal?: AbortSignal): T {
+  #transaction<T>(actor: string, operation: () => T, signal?: AbortSignal, readOnly = false): T {
     if (this.#closed) throw new Error('InitiativeStore is closed')
     if (this.#busy) throw new Error('Reentrant InitiativeStore access is not supported')
     signal?.throwIfAborted()
     this.#busy = true
     this.#actor = actor
     try {
-      this.#db.exec('BEGIN IMMEDIATE')
+      this.#db.exec(readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE')
       try {
         const result = operation()
         this.#db.exec('COMMIT')
@@ -395,9 +414,9 @@ export class InitiativeStore {
     }
     if (before.owner_session_id === this.#actor) return
     if (changingOwner && after.owner_session_id === this.#actor &&
-      (before.owner_session_id === null || this.#inactive(String(before.owner_session_id))) &&
+      before.owner_session_id === null &&
       Object.keys(fields).every((key) => key === 'owner_session_id')) return
-    throw new Error('Only the owner may edit this initiative; inactive ownership requires an explicit guarded claim')
+    throw new Error('Only the owner may edit or release this initiative; recorded ownership persists regardless of activity')
   }
 
   #authorizeItem(parent: InitiativeRow, before: InitiativeRow, after: InitiativeRow, fields: InitiativeRow, statement: Statement): void {
@@ -405,8 +424,8 @@ export class InitiativeStore {
     if (changingAssignee) {
       this.#assignmentTarget(after.assignee_session_id)
       this.#claimGuard(statement, 'assignee_session_id')
-      if (before.assignee_session_id !== null && before.assignee_session_id !== this.#actor && !this.#inactive(String(before.assignee_session_id))) {
-        throw new Error('Cannot take over an active or unknown assignment')
+      if (before.assignee_session_id !== null && before.assignee_session_id !== this.#actor) {
+        throw new Error('Cannot take over a recorded assignment; only the current assignee may release it')
       }
       if (parent.owner_session_id !== this.#actor && after.assignee_session_id !== this.#actor && !(before.assignee_session_id === this.#actor && after.assignee_session_id === null)) {
         throw new Error('Only the initiative owner may delegate assignments')
@@ -414,8 +433,8 @@ export class InitiativeStore {
     }
     if (parent.owner_session_id === this.#actor) {
       if (before.assignee_session_id !== null && before.assignee_session_id !== this.#actor &&
-        !this.#inactive(String(before.assignee_session_id)) && Object.keys(fields).some((key) => ['status', 'blocked_reason'].includes(key))) {
-        throw new Error('Only the active assignee may change item execution status')
+        Object.keys(fields).some((key) => ['status', 'blocked_reason'].includes(key))) {
+        throw new Error('Only the current assignee may change item execution status')
       }
       return
     }

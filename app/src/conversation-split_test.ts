@@ -5,7 +5,7 @@ import { groupFolderSessions, parseSessionGraph, sessionNavigationParent, visibl
 import { ownedExecutions } from './subagent-executions.ts'
 
 const session = (sessionId: string, parentSessionId: string | null = null): SidebarSession => ({
-  sessionId, parentSessionId, label: sessionId, isDirectChat: true, isCurrent: true, depth: 0,
+  sessionId, parentSessionId, mode: parentSessionId ? 'task' : 'session', label: sessionId, isDirectChat: !parentSessionId, isCurrent: true, depth: 0,
 })
 const sessions = [session('main'), session('child', 'main'), session('nested', 'child'), session('other'), session('other-child', 'other')]
 
@@ -24,7 +24,7 @@ test('missing and cyclic lineage does not open an unrelated or recursive pane', 
   assert.equal(childConversationTarget([session('a', 'b'), session('b', 'a')], 'b', 'a'), null)
 })
 
-test('actual null-owner reusable fork wire retains side-pane and nested tree ancestry without agent ownership', () => {
+test('reusable forks remain independent roots while task and call inspection retains ownership', () => {
   const graph = {
     sessions: [
       { sessionId: 'web:chat-root', mode: 'session', parentSessionId: null, current: 'root-new' },
@@ -46,9 +46,9 @@ test('actual null-owner reusable fork wire retains side-pane and nested tree anc
   }
   const sessions = parseSessionGraph(graph)
   assert.equal(sessions.find(item => item.sessionId === 'web:chat-fork')?.parentSessionId, null)
-  assert.equal(sessionNavigationParent(sessions.find(item => item.sessionId === 'web:chat-fork')), 'web:chat-root')
-  assert.deepEqual(childConversationTarget(sessions, 'web:chat-fork', 'web:chat-root'), { primaryId: 'web:chat-root', childId: 'web:chat-fork' })
-  assert.deepEqual(childConversationTarget(sessions, 'web:chat-nested-fork', 'web:chat-fork'), { primaryId: 'web:chat-fork', childId: 'web:chat-nested-fork' })
+  assert.equal(sessionNavigationParent(sessions.find(item => item.sessionId === 'web:chat-fork')), null)
+  assert.equal(childConversationTarget(sessions, 'web:chat-fork', 'web:chat-root'), null)
+  assert.equal(childConversationTarget(sessions, 'web:chat-nested-fork', 'web:chat-fork'), null)
   assert.deepEqual(childConversationTarget(sessions, 'call', 'web:chat-fork'), { primaryId: 'web:chat-fork', childId: 'call' })
   assert.equal(childConversationTarget(sessions, 'unowned-call', 'web:chat-root'), null)
   assert.deepEqual(ownedExecutions(sessions, 'web:chat-root'), [])
@@ -56,9 +56,9 @@ test('actual null-owner reusable fork wire retains side-pane and nested tree anc
   assert.deepEqual(ownedExecutions(sessions, 'task').map(item => item.sessionId), ['call'])
   const rows = groupFolderSessions([], sessions).chats
   assert.deepEqual(rows.slice(0, 3).map(item => [item.sessionId, item.depth, item.parentSessionId]), [
-    ['web:chat-root', 0, null], ['web:chat-fork', 1, null], ['web:chat-nested-fork', 2, null],
+    ['web:chat-root', 0, null], ['web:chat-fork', 0, null], ['web:chat-nested-fork', 0, null],
   ])
-  assert.equal(visibleSessions(rows, new Set(['web:chat-root'])).some(item => item.sessionId === 'web:chat-fork'), false)
+  assert.equal(visibleSessions(rows, new Set(['web:chat-root'])).some(item => item.sessionId === 'web:chat-fork'), true)
   assert.deepEqual(parseSessionGraph(structuredClone(graph)), sessions, 'Refresh preserves stable IDs and both distinct relations')
 })
 

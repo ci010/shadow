@@ -17,7 +17,33 @@ function context(): ExecutionContext {
     signal: new AbortController().signal,
     tools: new SessionTools(new Tools('.'), '.'),
   }
+
 }
+
+test('peer work messages validate references and distinguish admission from ownership transfer', async () => {
+  const bus = new Bus()
+  const inputs: SessionInput[] = []
+  const checks: [string, string | undefined][] = []
+  const tool = new MessageTool(bus, () => true, () => undefined, () => [], async (sessionId, input) => {
+    inputs.push(input)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  }, () => true, (initiativeId, itemId) => {
+    if (initiativeId !== 'work' || itemId !== 'item') throw new Error('Work reference belongs to another Project or Initiative')
+    checks.push([initiativeId, itemId])
+  })
+  const receipt = await tool.execute({
+    sessionId: 'web:target', content: 'Please review this boundary.', intent: 'handoff', initiativeId: 'work', itemId: 'item',
+  }, context())
+  assert.deepEqual(checks, [['work', 'item']])
+  assert(inputs[0].source.kind === 'session')
+  assert.deepEqual(inputs[0].source.coordination, { intent: 'handoff', initiativeId: 'work', itemId: 'item' })
+  assert.equal(inputs[0].source.sessionId, 'web:source')
+  assert.match(receipt, /admission only.*ownership is unchanged/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', itemId: 'item' }, context()), /requires initiativeId/)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', intent: 'assign' }, context()))
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'bad', initiativeId: 'foreign', itemId: 'item' }, context()), /another Project/)
+  assert.equal(inputs.length, 1)
+})
 
 test('message tool awaits acceptance before displaying one session-origin message', async () => {
   const bus = new Bus()

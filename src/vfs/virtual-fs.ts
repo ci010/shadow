@@ -25,17 +25,34 @@ export type VirtualFsListHandler = (
   context: ExecutionContext,
 ) => Promise<VirtualEntry[]> | VirtualEntry[]
 
+export interface VirtualWriteRequest {
+  content: string
+  match?: string
+  replaceAll?: boolean
+}
+
+export type VirtualFsWriteHandler = (
+  subpath: string,
+  request: VirtualWriteRequest,
+  context: ExecutionContext,
+) => Promise<string> | string
+
+export function isVirtualPath(path: string): boolean {
+  return /^v:/i.test(path.replace(/\\/g, '/').replace(/^\/+/, ''))
+}
+
 /** A registered virtual mount with its handlers. */
 interface VirtualMount {
   description: string
   read: VirtualFsHandler
   list?: VirtualFsListHandler
+  write?: VirtualFsWriteHandler
 }
 
 /**
- * Virtual filesystem overlay for tools (read, glob, grep).
+ * Virtual filesystem overlay for tools (read, write, glob, grep).
  *
- * Maps dot-prefixed path prefixes to programmatic handlers so that reading,
+ * Maps virtual path prefixes to programmatic handlers so that reading,
  * globbing, or grepping certain paths (e.g. `v:sessions/`, `v:bg/`) returns
  * dynamically generated content instead of hitting the real filesystem.
  *
@@ -51,8 +68,9 @@ export class VirtualFs {
     description: string,
     read: VirtualFsHandler,
     list?: VirtualFsListHandler,
+    write?: VirtualFsWriteHandler,
   ): void {
-    this.mounts.set(prefix, { description, read, list })
+    this.mounts.set(prefix, { description, read, list, write })
   }
 
   /** All registered mount prefixes with descriptions. */
@@ -63,7 +81,7 @@ export class VirtualFs {
   /**
    * Try to resolve a workspace-relative path against registered mounts.
    * Returns the handler result if matched, or `null` to fall through to the
-   * real filesystem.
+   * real filesystem. Unknown `v:` paths fail instead of falling through.
    */
   resolve(
     relativePath: string,
@@ -71,10 +89,32 @@ export class VirtualFs {
   ): Promise<string> | null {
     const { prefix, subpath } = this.parse(relativePath)
     const mount = prefix ? this.mounts.get(prefix) : undefined
-    if (!mount) return null
+    if (!mount) {
+      if (isVirtualPath(relativePath)) throw new Error('Unknown virtual filesystem path.')
+      return null
+    }
 
     const result = mount.read(subpath, context)
     return result instanceof Promise ? result : Promise.resolve(result)
+  }
+
+  /** Virtual writes never fall through to the host filesystem. */
+  write(
+    relativePath: string,
+    request: VirtualWriteRequest,
+    context: ExecutionContext,
+  ): Promise<string> | null {
+    const { prefix, subpath } = this.parse(relativePath)
+    const mount = this.mounts.get(prefix)
+    if (!mount) {
+      if (isVirtualPath(relativePath)) throw new Error('Unknown virtual filesystem path.')
+      return null
+    }
+    if (!mount.write) throw new Error('Virtual filesystem path is read-only.')
+    if (context.remoteWorkdir) throw new Error('Virtual configuration writes require a local workdir.')
+    if (context.tools.executionMode === 'call') throw new Error('Virtual configuration writes are unavailable in call mode.')
+    context.signal.throwIfAborted()
+    return Promise.resolve(mount.write(subpath, request, context))
   }
 
   /**

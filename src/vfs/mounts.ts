@@ -4,7 +4,8 @@ import type {
   BackgroundTaskManager,
   BackgroundTaskSummary,
 } from '../agent/background-task.ts'
-import type { SkillsManager } from '../skills/loader.ts'
+import type { Skill, SkillsManager } from '../skills/loader.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import type { EventService } from '../events/service.ts'
 import type { EventSubscription } from '../events/types.ts'
 import type { VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
@@ -243,12 +244,15 @@ export function createBgTasksHandler(backgroundTasks: BackgroundTaskManager): {
 
 // ── Skills ───────────────────────────────────────────────────────────────
 
-export function createSkillsHandler(skills: SkillsManager): {
+export function createSkillsHandler(
+  skills: SkillsManager,
+  registerTools?: (skill: Skill, context: ExecutionContext) => Promise<string[]>,
+): {
   read: VirtualFsHandler
 } {
-  const read: VirtualFsHandler = async (subpath) => {
+  const read: VirtualFsHandler = async (subpath, context) => {
     if (!subpath) {
-      const names = skills.skillNames()
+      const names = skills.availableSkills(context.admin).map(skill => skill.meta.name)
       if (names.length === 0) return 'No skills loaded.'
       return names.map((n) => `- ${n}`).join('\n')
     }
@@ -257,14 +261,26 @@ export function createSkillsHandler(skills: SkillsManager): {
     const name = slashIdx >= 0 ? subpath.slice(0, slashIdx) : subpath
     const rest = slashIdx >= 0 ? subpath.slice(slashIdx + 1) : ''
 
-    const skillBody = skills.getSkillBody(name)
+    const skill = skills.getSkill(name, context.admin)
+    const skillBody = skill?.body
     if (skillBody !== undefined) {
       if (rest) {
         const resource = await skills.getSkillResource(name, rest)
         return resource ?? `Resource not found: ${rest} in skill "${name}"`
       }
       let content = skillBody
+      if (skill) {
+        if (skill.meta.toolsError) throw new Error(`Invalid tools in skill "${name}": ${skill.meta.toolsError}`)
+        if (Object.keys(skill.meta.tools ?? {}).length && !registerTools) {
+          throw new Error(`Skill "${name}" declares tools, but skill tool registration is not configured`)
+        }
+        const registered = await registerTools?.(skill, context) ?? []
+        if (registered.length) {
+          content += `\n\nRegistered for this session: ${registered.join(', ')}. Call with invoke_tool({name, args}); no separate loading step is needed. Modules run lazily. After sleep, read this skill again.`
+        }
+      }
       const related = skills.getLearnedSkills().filter((s) => {
+        if (s.meta.admin && !context.admin) return false
         const relatedNames = s.learnedMeta?.related?.split(',').map((n) =>
           n.trim()
         )
@@ -279,7 +295,7 @@ export function createSkillsHandler(skills: SkillsManager): {
       return content
     }
 
-    const detail = skills.getCategoryDetail(name)
+    const detail = skills.getCategoryDetail(name, context.admin)
     if (detail) return detail
 
     return `Unknown skill or category: ${name}`

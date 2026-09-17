@@ -314,10 +314,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         },
       })
       await sessions.buildSession('web:reflection-fork', { id: 'cron:opaque-learning-run' }, {
-        parentSessionId: 'cron:opaque-learning-run',
+        parentSessionId: null,
       })
+      await mkdir(sessionWorkspacePath(home, 'web:reflection-fork'), { recursive: true })
 
-      await sessions.addChild('web:a', 'web:fork')
+      await assert.rejects(sessions.addChild('web:a', 'web:fork'), /temporary/)
       await sessions.setSessionConfig('web:a', { temperature: 0.2 })
       const saved = JSON.parse(JSON.stringify(sessions.getSessionState('web:a')))
       await sessions.stop()
@@ -332,11 +333,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       equal(sessions.listSessions().find((s) => s.sessionId === 'web:a')?.folderId, 'a')
       const app = new Hono()
       sessionsApiPlugin(sessions)(app)
-      for (const id of ['cron:opaque-learning-run', 'web:reflection-fork']) {
+      for (const id of ['cron:opaque-learning-run']) {
         const response = await app.request(`/api/sessions/${encodeURIComponent(id)}/files`)
         equal(response.status, 200)
         deepEqual((await response.json()).workdir, { kind: 'local', displayPath: home, scope: 'home' })
       }
+      const forkFiles = await app.request('/api/sessions/web%3Areflection-fork/files')
+      equal(forkFiles.status, 200)
+      deepEqual((await forkFiles.json()).workdir, {
+        kind: 'local', displayPath: sessionWorkspacePath(home, 'web:reflection-fork'),
+      })
       for (const [id, path] of [
         ['web:a', folders.a], ['web:b', folders.b], ['web:fork', folders.a],
         ['web:nested', folders.a], ['web:legacy', legacy.workdir.path], ['web:managed-child', legacy.workdir.path],
@@ -379,7 +385,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         deepEqual(compactedState?.workdir, localFolderWorkdirRef('a'))
         equal(compactedState?.folderId, 'a')
         equal(compactedState?.initiativeId, 'unrelated-planning-notes')
-        deepEqual(compactedState?.children, ['web:fork'])
+        equal(compactedState?.children, undefined)
         equal(compactedState?.description, 'Folder a')
         equal(compactedState?.config?.temperature, 0.2)
         equal((await store.readFirstRecord('web_a-1'))?.summary_context, 'Compacted folder fixture')

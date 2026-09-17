@@ -15,6 +15,7 @@ import { parseSessionRecovery } from './session-store.ts'
 import { parseAutomationSessionRef } from '../cron/contracts.ts'
 import { normalizeInitiativeMetadata, parseInitiativeId, InitiativeMetadataError } from './initiative-metadata.ts'
 import { validateOwnership, OwnershipValidationError } from '../projects/ownership.ts'
+import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
 
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 50
@@ -31,6 +32,10 @@ interface SessionPrototypeV1 {
 }
 
 const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
+  'sessionKind',
+  'topic',
+  'createdBySessionId',
+  'topicRequestHash',
   'ownershipVersion',
   'automation',
   'automationVersion',
@@ -81,7 +86,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   value = normalizeInitiativeMetadata(validateOwnership(value))
   if (!isRecord(value)) return null
 
-  const metadata: SessionMetadata = { ownershipVersion: 2 }
+  const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value) }
   if (value.automation !== undefined) metadata.automation = parseAutomationSessionRef(value.automation)
   if (value.automationVersion === 1) metadata.automationVersion = 1
   if (value.recovery !== undefined) metadata.recovery = parseSessionRecovery(value.recovery)
@@ -187,15 +192,17 @@ export class SqliteSessionStore implements SessionStore {
   private stmtCountLog: ReturnType<Database['prepare']>
   private stmtReadFirstLog: ReturnType<Database['prepare']>
 
-  constructor(sessionsDir: string) {
+  constructor(sessionsDir: string, options: { readOnly?: boolean } = {}) {
     const dbPath = join(sessionsDir, 'sessions.db')
     const dir = dirname(dbPath)
-    if (dir && dir !== '.') mkdirSync(dir, { recursive: true })
+    if (!options.readOnly && dir && dir !== '.') mkdirSync(dir, { recursive: true })
 
-    this.db = new Database(dbPath)
-    this.db.exec('PRAGMA journal_mode = WAL')
-    this.db.exec('PRAGMA synchronous = NORMAL')
-    this.initSchema()
+    this.db = new Database(dbPath, { readOnly: options.readOnly ?? false })
+    if (!options.readOnly) {
+      this.db.exec('PRAGMA journal_mode = WAL')
+      this.db.exec('PRAGMA synchronous = NORMAL')
+      this.initSchema()
+    }
 
     // ── Prepared statements ──
     this.stmtGetState = this.db.prepare(
@@ -310,7 +317,7 @@ export class SqliteSessionStore implements SessionStore {
           throw new OwnershipValidationError('Unsupported session prototype version or metadata')
         }
       } catch (error) {
-        if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError) throw error
+        if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError) throw error
         throw new OwnershipValidationError('Invalid session prototype metadata')
       }
     }
@@ -343,6 +350,7 @@ export class SqliteSessionStore implements SessionStore {
       version: PROTOTYPE_VERSION,
       metadata: {
         ...this.prototypeMetadataExtras.get(sessionKey),
+        ...parseTopicSessionFields(state),
         ownershipVersion: 2,
         projectId: state.projectId,
         config: state.config,
@@ -386,6 +394,9 @@ export class SqliteSessionStore implements SessionStore {
         segmentIndex: number
         lastActivityAt?: string
         folderId?: string
+        sessionKind?: SessionState['sessionKind']
+        topic?: SessionState['topic']
+        createdBySessionId?: string
       }
     >
   > {
@@ -401,6 +412,7 @@ export class SqliteSessionStore implements SessionStore {
       segmentIndex: r.segment_count ?? 0,
       lastActivityAt: r.last_activity_at ?? undefined,
       folderId: this.parseRow(r).folderId,
+      ...parseTopicSessionFields(this.parseRow(r)),
     }))
   }
 

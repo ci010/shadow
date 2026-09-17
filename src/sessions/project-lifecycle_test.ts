@@ -25,7 +25,7 @@ const input = (id: string): SessionMessageInput => ({
 })
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: busy admission is rejected, idle history moves, descendants and cached sessions lose access after restart`, async t => {
+  test(`${Store.name}: folder dependents lose access but independent managed topics retain their directory`, async t => {
     const { root, workspace, folders } = await folderFixture(t)
     const catalog = new ProjectCatalog(join(root, 'host'))
     await catalog.init()
@@ -89,12 +89,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const moved = await registry.changeProject(folder.id, target.id)
       assert(moved)
       assert.equal(invalidated, 1)
-      for (const id of ['web:root', 'web:child', 'web:workspace-child']) {
+      for (const id of ['web:root', 'web:child']) {
         assert.throws(() => sessions.assertFolderAccess(id), { code: 'folder_access_revoked' })
         await assert.rejects(sessions.deliver(id, input(`revoked-${id}`)), { code: 'folder_access_revoked' })
       }
       await assert.rejects(sessions.buildSession('web:new-child', { id: 'web:root' }), { code: 'folder_access_revoked' })
       sessions.assertFolderAccess('web:scratch')
+      sessions.assertFolderAccess('web:workspace-child')
       assert.deepEqual(await history(), historyBefore)
       assert.deepEqual(await records(), persistedBefore)
       assert.deepEqual(await store.getState('web:root'), stateBefore)
@@ -122,7 +123,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       sessions = create()
       await sessions.start()
       assert.throws(() => sessions.assertFolderAccess('web:root'), { code: 'folder_access_revoked' })
-      assert.throws(() => sessions.assertFolderAccess('web:workspace-child'), { code: 'folder_access_revoked' })
+      sessions.assertFolderAccess('web:workspace-child')
       assert.deepEqual(await history(), historyBefore)
       assert.deepEqual(await records(), persistedBefore)
       const returned = await catalog.changeFolderProject(target.id, moved.id, 'default')
@@ -131,7 +132,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       sessions.assertFolderAccess('web:fresh')
       assert.throws(() => sessions.assertFolderAccess('web:root'), { code: 'folder_access_revoked' })
       await sessions.deleteSession('web:root')
-      assert.throws(() => sessions.assertFolderAccess('web:workspace-child'), { code: 'folder_access_revoked' })
+      sessions.assertFolderAccess('web:workspace-child')
     } finally {
       answer.resolve({ content: 'Cleanup', toolCalls: [] })
       unregister()

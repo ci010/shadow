@@ -183,7 +183,7 @@ test('session route parameters retain encoded bot components without a second de
   assert(seen.every(key => key === id))
 })
 
-test('learning automation browsing uses Home for legacy and fresh runs and descendants without changing execution cwd', async t => {
+test('coordinator and learning automation browsing use Home without changing execution cwd', async t => {
   const { workspace, root } = await folderFixture(t)
   execFileSync('git', ['init', '--quiet', workspace])
   await writeFile(join(workspace, 'home.txt'), 'from Home\n')
@@ -196,6 +196,11 @@ test('learning automation browsing uses Home for legacy and fresh runs and desce
   await writeFile(join(folder, 'folder.txt'), 'from effective folder\n')
   const folderWorkdir = { version: 1 as const, nodeId: 'local', capabilityId: 'fixture-folder' }
   const states: Record<string, SessionState> = {
+    'web:orchestrator': { sessionId: 'web:orchestrator', segmentIndex: 0, sessionKind: 'orchestrator', mode: 'session', parentSessionId: null },
+    'web:coordinator-topic': {
+      sessionId: 'web:coordinator-topic', segmentIndex: 0, mode: 'session', sessionKind: 'topic',
+      parentSessionId: null, createdBySessionId: 'web:orchestrator', parent: { id: 'web:orchestrator' },
+    },
     'web:legacy-child': { sessionId: 'web:legacy-child', segmentIndex: 0, parent: { id: 'heartbeat:reflector-1750000000000' } },
     'web:task-child': { sessionId: 'web:task-child', segmentIndex: 0, parentSessionId: 'cron:fresh-encapsulator' },
     'web:chat-grandchild': { sessionId: 'web:chat-grandchild', segmentIndex: 0, parentSessionId: 'web:task-child' },
@@ -212,7 +217,7 @@ test('learning automation browsing uses Home for legacy and fresh runs and desce
     },
     'web:generic-child': { sessionId: 'web:generic-child', segmentIndex: 0, parentSessionId: 'cron:generic', workdir: folderWorkdir },
   }
-  const homeIds = ['web:legacy-child', 'web:task-child', 'web:chat-grandchild']
+  const homeIds = ['web:orchestrator', 'web:legacy-child', 'web:task-child', 'web:chat-grandchild']
   for (const job of Object.values(LEARNING_AUTOMATIONS)) {
     const legacyId = `heartbeat:${job.agentType}-1750000000000`
     const freshId = `cron:fresh-${job.agentType}`
@@ -262,7 +267,7 @@ test('learning automation browsing uses Home for legacy and fresh runs and desce
     assert(execution.available && execution.locality === 'local')
     assertNotEquals(execution.path, workspace)
   }
-  for (const id of ['web:chat-normal', 'heartbeat:reflector-fixture', 'web:cycle', 'heartbeat:reflector-missing']) {
+  for (const id of ['web:coordinator-topic', 'web:chat-normal', 'heartbeat:reflector-fixture', 'web:cycle', 'heartbeat:reflector-missing']) {
     assertEquals((await app.request(`/api/sessions/${encodeURIComponent(id)}/preview?path=home.txt`)).status, 404)
   }
   for (const id of ['cron:generic', 'web:generic-child']) {

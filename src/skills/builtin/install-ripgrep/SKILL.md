@@ -50,11 +50,14 @@ sudo port install ripgrep
 
 ### Activate for this session
 
-After installing, load the tools into the current session — no restart needed:
+After installing, use the built-in search paths — no tool registration or
+explicit import is needed:
 
 ```
-import_tool(source="v:tools/glob")
-import_tool(source="v:tools/grep")
+search({ space: "glob:", query: "**/*.ts" })
+search({ space: "grep:", query: "TODO" })
 ```
 
 Verify with `rg --version` if unsure whether the install succeeded.
+MCP configuration and skill tool declarations do not install host executables
+such as ripgrep. No additional tool installation or import step is required.

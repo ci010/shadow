@@ -56,11 +56,12 @@ function fixture(t: TestContext) {
     createElement: () => ({}), createText: () => ({}), createComment: () => ({}), insert() {}, remove() {},
     setText() {}, setElementText() {}, patchProp() {}, parentNode: () => null, nextSibling: () => null,
   })
-  function mount(projectId: string) {
-    const props = Vue.reactive({ apiBase: `http://fixture/projects/${projectId}`, projectId, managed: true, sessionId: root, visible: true })
+  function mount(projectId: string, sessionId = root) {
+    const navigation: string[] = []
+    const props = Vue.reactive({ apiBase: `http://fixture/projects/${projectId}`, projectId, managed: true, sessionId, visible: true })
     let instance: Vue.ComponentPublicInstance | null = null
     const app = renderer.createApp(Vue.defineComponent({
-      setup: () => () => Vue.h(module.exports.default, { ...props, ref: (value: Vue.ComponentPublicInstance | null) => { instance = value } }),
+      setup: () => () => Vue.h(module.exports.default, { ...props, onNavigate: (id: string) => navigation.push(id), ref: (value: Vue.ComponentPublicInstance | null) => { instance = value } }),
     }))
     app.mount({})
     let mounted = true
@@ -71,7 +72,7 @@ function fixture(t: TestContext) {
       name: 'subagent', arguments: { mode: 'task', description: 'Delegated task' },
     } }]
     state().inputText = 'Keep this exact unsent draft'
-    return { props, state, unmount }
+    return { props, state, unmount, navigation }
   }
   const invalidate = (projectId: string) => {
     for (const subscription of subscriptions) if (!subscription.closed && subscription.projectId === projectId) subscription.observer.reset('subscription')
@@ -136,4 +137,28 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   b.props.visible = false
   await Vue.nextTick()
   assert.ok(f.subscriptions.every(subscription => subscription.closed))
+})
+
+test('coordinator uses the ordinary writable chat and SSE-discovered topics navigate independently', async t => {
+  const f = fixture(t)
+  const a = f.mount('a', 'web:orchestrator')
+  const b = f.mount('b', 'web:orchestrator')
+  assert.equal(f.requests.length, 0, 'Mounting a coordinator does not ensure or send a turn')
+  assert.equal(a.state().isDirectChat, true)
+  f.invalidate('a')
+  await settle()
+  f.requests[0]!.finish({ nodes: [], sessions: [
+    { sessionId: 'web:orchestrator', sessionKind: 'orchestrator', mode: 'session', parentSessionId: null },
+    { sessionId: 'web:chat-topic', sessionKind: 'topic', mode: 'session', parentSessionId: null,
+      createdBySessionId: 'web:orchestrator', topic: { title: 'Installer', goal: 'Ship', scope: 'Windows' } },
+  ] })
+  await settle()
+  f.requests[1]!.finish({ stages: {} })
+  await settle()
+  assert.equal(a.state().allSessions[1].label, 'Installer')
+  assert.equal(b.state().allSessions.length, 0, 'Same coordinator ID never shares Project graph state')
+  a.state().requestSession('web:chat-topic')
+  assert.deepEqual(a.navigation, ['web:chat-topic'])
+  assert.equal(a.state().inputText, 'Keep this exact unsent draft')
+  assert.equal(f.requests.some(request => /orchestrator$/.test(request.path)), false)
 })

@@ -3,6 +3,9 @@ import type { Tool, ToolParameters } from './tool.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'
 import type { ImportTool } from './load-tool.ts'
 import { detectRipgrep, GlobTool, GrepTool, installRipgrep } from './ripgrep.ts'
+import type { SkillsManager } from '../skills/loader.ts'
+import { searchSkills } from '../skills/search.ts'
+import type { TopicService } from '../sessions/topics.ts'
 
 /**
  * Parse a space like "grep:*.ts" into { scheme, qualifier }.
@@ -21,23 +24,24 @@ function parseSpace(space: string): { scheme: string; qualifier: string } {
  */
 export class SearchTool implements Tool {
   readonly name = 'search'
+  readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) =>
-    typeof args.space === 'string' && ['glob', 'grep', 'web'].includes(parseSpace(args.space).scheme)
-  readonly description = 'Search files, the web, or available tools via the `space` scheme. tools: returns exact tool names, descriptions and complete parameter schemas for invoke_tool; no separate import is needed. Tool discovery may connect MCP servers but never executes their tools.'
+    typeof args.space === 'string' && ['glob', 'grep', 'web', 'skills', 'sessions'].includes(parseSpace(args.space).scheme)
+  readonly description = 'Search files, the web, skills, Project topic sessions, or available tools via the `space` scheme. sessions: discovers peer topic goals, scope, folders and Initiative references. skills: returns skill summaries and read paths without activating tools; read a skill to register its declared tools in this session. tools: returns exact names and complete parameter schemas for invoke_tool. Tool discovery may connect MCP servers but never executes their tools.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       query: {
         type: 'string',
-        description: 'Glob pattern, regex, or keywords depending on space. For tools:, empty, whitespace or omitted query lists tools; otherwise searches names and descriptions.',
+        description: 'Glob pattern, regex, or keywords depending on space. For tools: and skills:, empty or omitted query lists entries. Skill search matches name, description, category and instructions.',
       },
       space: {
         type: 'string',
         description:
-          'grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. tools:[source] — tool contracts (e.g. tools:mail); tools: searches configured sources and active tools. Browser/factory sources require explicit selection.',
+          'grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. sessions: — Project peer topic discovery (no activation). skills:[category] — skill discovery without activation. tools:[source] — tool contracts (e.g. tools:mail); tools: searches configured sources and active tools. Browser/factory sources require explicit selection.',
       },
-      limit: { type: 'integer', default: 3, description: 'tools: only. Maximum complete tool contracts per page (1-10); default 3.' },
-      offset: { type: 'integer', default: 0, description: 'tools: only. Nonnegative result offset; use nextOffset to continue listing or searching.' },
+      limit: { type: 'integer', description: 'Maximum entries per page: tools: 1-10 (default 3), skills: and sessions: 1-20 (default 5).' },
+      offset: { type: 'integer', default: 0, description: 'tools:, skills: and sessions: only. Nonnegative result offset; use nextOffset to continue listing or searching.' },
     },
     required: ['space'],
   }
@@ -53,6 +57,8 @@ export class SearchTool implements Tool {
     private webSearchTool?: Tool,
     virtualFs?: VirtualFs,
     private importer?: ImportTool,
+    private skills?: SkillsManager,
+    private topics?: () => TopicService,
   ) {
     this.workspace = workspace
     this.glob = new GlobTool(workspace, virtualFs)
@@ -84,6 +90,18 @@ export class SearchTool implements Tool {
   ): Promise<string> {
     if (typeof args.space !== 'string') return 'Error: space must be a string.'
     const { scheme, qualifier } = parseSpace(args.space)
+    if (scheme === 'sessions') {
+      if (!this.topics) return 'Error: Project topic discovery is not configured.'
+      if (qualifier) return 'Error: sessions: searches only the current Project; qualifiers are not supported.'
+      const topics = this.topics()
+      topics.assertActor(context.projectId, context.sessionId)
+      return JSON.stringify(await topics.search({ query: args.query, limit: args.limit, offset: args.offset }))
+    }
+    if (context.remoteWorkdir) return 'Error: only sessions: discovery is supported by search with a remote workdir.'
+    if (scheme === 'skills') {
+      if (!this.skills) return 'Error: skill discovery is not configured for this search tool'
+      return searchSkills(this.skills, { ...args, category: qualifier }, context.admin)
+    }
     if (scheme === 'tools') {
       if (!this.importer) return 'Error: tool discovery is not configured for this search tool.'
       return this.importer.searchTools({
@@ -151,7 +169,7 @@ export class SearchTool implements Tool {
       }
 
       default:
-        return `Unknown search space: "${scheme}". Use grep:, glob:, web:, or tools:.`
+        return `Unknown search space: "${scheme}". Use grep:, glob:, web:, tools:, or skills:.`
     }
   }
 

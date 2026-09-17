@@ -1,9 +1,8 @@
 import { apiUrl } from './api-url.ts'
-
-const DIRECT_WEB_SESSION_PREFIX = 'web:chat-'
+import { isDirectConversation } from './project-coordination.ts'
 
 export function chatIdForMediaSession(sessionId: string): string | null {
-  if (!sessionId.startsWith(DIRECT_WEB_SESSION_PREFIX)) return null
+  if (!isDirectConversation(sessionId)) return null
   return sessionId.slice('web:'.length)
 }
 

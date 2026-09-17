@@ -5,6 +5,7 @@ import type { WorkdirRefV1 } from './locality.ts'
 import type { YieldPolicy } from './yield-contract.ts'
 import type { ExecutionMode } from './execution-mode.ts'
 import type { AutomationSessionRef } from '../cron/contracts.ts'
+import type { TopicMetadata } from './topic-contract.ts'
 
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
@@ -52,6 +53,12 @@ export interface SessionParent {
 }
 
 export interface SessionState {
+  sessionKind?: 'topic' | 'orchestrator'
+  topic?: TopicMetadata
+  /** Creation provenance only; never lifecycle or directory ownership. */
+  createdBySessionId?: string
+  /** Immutable original creation request fingerprint for durable idempotency. */
+  topicRequestHash?: string
   /** Persisted v2: projectId is the runtime owner, folderId the directory resource. */
   ownershipVersion?: 2
   automation?: AutomationSessionRef
@@ -86,10 +93,11 @@ export interface SessionState {
   parent?: SessionParent
   /**
    * Logical session id whose per-session working directory this session shares.
-   * Set for subagents so they read/write the same `cwd` (and its `alignment/`,
+   * Set for temporary subagents so they read/write the same `cwd` (and its `alignment/`,
    * `tmp/`, etc.) as the agent that spawned them. Inherited through the spawn
    * chain so nested subagents all resolve to the root spawner's folder.
-   * Undefined for top-level sessions — they own their own folder (keyed by id).
+   * Also retained on migrated topics to preserve their historical data location;
+   * it never conveys lifecycle ownership. New topics own their own directory.
    */
   workspaceRoot?: string
   /** Node-bound capability selecting the session's effective working directory. */
@@ -108,7 +116,7 @@ export interface SessionState {
   description?: string
   /** Session IDs of child (subagent) sessions spawned from this session. */
   children?: string[]
-  /** Tools to preload (via import_tool) when the session starts. Maps tool name → extra args. */
+  /** Legacy session-only preloads restored through the internal loader; never installs configuration. */
   preloadTools?: Record<string, string[]>
 }
 
@@ -161,6 +169,9 @@ export interface SessionStore {
         segmentIndex: number
         lastActivityAt?: string
         folderId?: string
+        sessionKind?: SessionState['sessionKind']
+        topic?: TopicMetadata
+        createdBySessionId?: string
       }
     >
   >

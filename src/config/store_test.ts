@@ -25,7 +25,7 @@ test('saving model defaults retains startup-only environment settings without wr
   })
 })
 
-test('configuration loads once, returns isolated snapshots and restores internal writes after restart', async () => {
+test('configuration snapshots are isolated and external edits block writes until restart', async () => {
   await withTempWorkspace(async root => {
     const configPath = join(root, 'config.json')
     await writeFile(configPath, JSON.stringify({ agent: { model: 'first@copilot' } }))
@@ -34,9 +34,26 @@ test('configuration loads once, returns isolated snapshots and restores internal
     snapshot.agent = { model: 'mutated-copy' }
     await writeFile(configPath, JSON.stringify({ agent: { model: 'external-edit' } }))
     assert.deepEqual((await store.read()).agent, { model: 'first@copilot' })
-    await store.update(raw => ({ ...raw, agent: { ...(raw.agent as object), reasoningEffort: 'high' } }))
+    await assert.rejects(store.update(raw => ({ ...raw, agent: { ...(raw.agent as object), reasoningEffort: 'high' } })), /changed on disk/)
+    assert.deepEqual(JSON.parse(await readFile(configPath, 'utf8')).agent, { model: 'external-edit' })
     const restored = new ConfigStore({ configPath })
-    assert.deepEqual((await restored.read()).agent, { model: 'first@copilot', reasoningEffort: 'high' })
+    await restored.update(raw => ({ ...raw, agent: { ...(raw.agent as object), reasoningEffort: 'high' } }))
+    assert.deepEqual((await new ConfigStore({ configPath }).read()).agent, { model: 'external-edit', reasoningEffort: 'high' })
+  })
+})
+
+test('failed activation does not overwrite an external edit made while activating', async () => {
+  await withTempWorkspace(async root => {
+    const configPath = join(root, 'config.json')
+    await writeFile(configPath, '{}')
+    const external = '{"agent":{"model":"external"}}'
+    const store = new ConfigStore({ configPath, onChanged: async () => {
+      await writeFile(configPath, external)
+      throw new Error('synthetic activation failure')
+    } })
+    await assert.rejects(store.update(() => ({ agent: { model: 'attempted' } })), /external edit was preserved/)
+    assert.equal(await readFile(configPath, 'utf8'), external)
+    assert.deepEqual(await store.read(), {})
   })
 })
 

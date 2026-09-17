@@ -4,7 +4,14 @@ import type { Bus } from '../bus/bus.ts'
 import type { ExecutionContext } from './context.ts'
 import type { SessionParent } from '../sessions/session-store.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
-import { sessionReplyAddress, type DeliverInput } from '../sessions/input.ts'
+import { sessionReplyAddress, type DeliverInput, type SessionInputSource } from '../sessions/input.ts'
+import { z } from 'zod'
+
+const coordinationSchema = z.object({
+  intent: z.enum(['request', 'question', 'progress', 'handoff', 'acknowledgement']).default('request'),
+  initiativeId: z.string().trim().min(1).max(128).optional(),
+  itemId: z.string().trim().min(1).max(128).optional(),
+}).refine(value => !value.itemId || !!value.initiativeId, 'itemId requires initiativeId.')
 
 /**
  * Tool that lets the agent send a message to another session.
@@ -14,7 +21,8 @@ import { sessionReplyAddress, type DeliverInput } from '../sessions/input.ts'
  */
 export class MessageTool implements Tool {
   readonly name = 'message'
-  readonly description = 'Send a message to another session (subagent or common session).'
+  readonly supportsRemoteWorkdir = true
+  readonly description = 'Send a request, question, progress report or explicit handoff context to a peer session in this Project. A receipt confirms delivery admission, not agreement, completion or transfer of Initiative assignment. Sleeping topic sessions can receive messages; temporary executions cannot be reused.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -29,6 +37,9 @@ export class MessageTool implements Tool {
         description:
           'If true, the message is recorded in history but does not trigger a response from the target agent.',
       },
+      intent: { type: 'string', enum: ['request', 'question', 'progress', 'handoff', 'acknowledgement'], description: 'Purpose of this communication; handoff does not mutate work ownership.' },
+      initiativeId: { type: 'string', description: 'Optional existing Initiative in this Project.' },
+      itemId: { type: 'string', description: 'Optional existing work item in initiativeId.' },
     },
     required: ['content', 'sessionId'],
   }
@@ -40,6 +51,7 @@ export class MessageTool implements Tool {
     private getChildSessions: (parentSessionId: string) => string[] | undefined,
     private deliver: DeliverInput,
     private canSendSessionMessage?: (sourceId: string, targetId: string) => boolean,
+    private assertWorkReference?: (initiativeId: string, itemId?: string) => void,
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -53,6 +65,7 @@ export class MessageTool implements Tool {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
+    context.signal.throwIfAborted()
     const denied = context.tools?.executionDenial?.('message', args)
     if (denied) return denied
     const rawContent = String(args.content ?? '')
@@ -90,6 +103,14 @@ export class MessageTool implements Tool {
       return `Error: task execution "${targetSessionId}" does not accept messages; create a new execution.`
     }
 
+    let coordination: SessionInputSource['coordination']
+    if (args.intent !== undefined || args.initiativeId !== undefined || args.itemId !== undefined) {
+      coordination = coordinationSchema.parse({ intent: args.intent, initiativeId: args.initiativeId, itemId: args.itemId })
+      if (coordination.initiativeId) {
+        if (!this.assertWorkReference) throw new Error('Work-reference validation is not configured.')
+        this.assertWorkReference(coordination.initiativeId, coordination.itemId)
+      }
+    }
     const { text, media } = parseMediaFromContent(rawContent)
     const silent = args.silent === true
 
@@ -102,6 +123,7 @@ export class MessageTool implements Tool {
         sessionId: currentSessionId,
         inputId: context.messageId,
         senderName: context.senderName ?? 'Agent',
+        ...(coordination ? { coordination } : {}),
       },
       policy: silent ? 'silent' : 'queue',
       content: text,
@@ -119,6 +141,6 @@ export class MessageTool implements Tool {
     }
     this.bus.emit('message.outbound', outbound)
 
-    return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}`
+    return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}. Receipt confirms admission only; work ownership is unchanged.`
   }
 }

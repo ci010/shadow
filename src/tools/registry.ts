@@ -282,6 +282,7 @@ export class SessionTools extends Tools {
 
   /** Check if a tool name passes the allow/block policy. */
   private isToolAllowed(name: string): boolean {
+    if (name === 'topic' && this.scope && this.scope.mode !== 'session') return false
     if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
     if (this.allowed) return this.allowed.has(name)
@@ -344,13 +345,13 @@ export class SessionTools extends Tools {
   get dynamicSignal(): AbortSignal { return this.dynamicLifetime.signal }
 
   /** Register a tool for the current session only. */
-  registerDynamic(tool: Tool, connectionKey?: string): void {
+  registerDynamic(tool: Tool, connectionKey?: string, resource?: { active: boolean }): void {
     this.dynamicResources.delete(tool.name)
     if (connectionKey !== undefined) {
       const connection = this.mcpConns.get(connectionKey)
       if (!connection) throw new Error(`Missing MCP connection "${connectionKey}"`)
       this.dynamicResources.set(tool.name, connection.resource)
-    }
+    } else if (resource) this.dynamicResources.set(tool.name, resource)
     this.register(tool) // writes into this.tools (the dynamic layer)
   }
 
@@ -456,7 +457,7 @@ export class SessionTools extends Tools {
       this.scope.blocked?.(reason)
       return `Blocked: ${reason} Partial work and side effects are not rolled back.`
     }
-    if (name === 'subagent' && this.scope && !this.scope.modes.includes('session') && args.mode === undefined) {
+    if (name === 'subagent' && this.scope && !this.scope.modes.includes('task') && args.mode === undefined) {
       return `Error: mode is required in this scope; choose ${this.scope.modes.join(', ')}.`
     }
 
@@ -539,23 +540,21 @@ export class SessionTools extends Tools {
       ? { ...def, function: { ...def.function,
         description: scope.modes.includes('call')
           ? `${scope.modes.includes('task') ? 'Start an asynchronous task, or invoke' : 'Invoke'} a blocking bounded leaf call directly. Available modes: ${scope.modes.join(', ')}.`
-          : 'Create an asynchronous reusable session or one-time task. Available modes: session, task.',
+          : 'Create an asynchronous bounded task. Durable conversations use the topic tool.',
         parameters: {
         ...def.function.parameters,
-        required: scope.modes.includes('session') ? def.function.parameters.required
-          : [...new Set([...(def.function.parameters.required ?? []), 'mode', 'task'])],
+        required: [...new Set([...(def.function.parameters.required ?? []), 'task',
+          ...(scope.modes.includes('task') ? [] : ['mode'])])],
         properties: {
           ...Object.fromEntries(Object.entries(def.function.parameters.properties)
             .filter(([name]) => name !== 'report_to' || scope.modes.includes('task'))),
           mode: { ...def.function.parameters.properties.mode, enum: [...scope.modes],
-            description: scope.modes.includes('session')
-              ? 'Session/task return an admitted ID immediately. Omission uses the selected role default only when allowed.'
-              : `Required. ${scope.modes.includes('task') ? 'Task returns an admitted ID immediately. ' : ''}Call waits for the final result and cannot yield, message, or delegate.`,
+            description: scope.modes.includes('task')
+              ? 'Omission defaults to task, which returns an admitted ID immediately. Call waits for its final result.'
+              : 'Required. Call waits for the final result and cannot yield, message, or delegate.',
           },
           task: { ...def.function.parameters.properties.task,
-            description: scope.modes.includes('session')
-              ? 'Initial work. Required for task; optional for session.'
-              : 'Required initial work: a bounded assignment with an expected result.',
+            description: 'Required initial work: a bounded assignment with an expected result.',
           },
           agent_type: { ...def.function.parameters.properties.agent_type,
             description: `Agent role from Runtime's available types. ${scope.modes.includes('call')

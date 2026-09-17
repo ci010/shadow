@@ -139,7 +139,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal(sessions.getSessionState('web:missing'), null)
         deepEqual(await readdir(join(workspace, 'sessions'), { recursive: true }), before)
         deepEqual(await (await app.request('/api/sessions/web:one/details')).json(), {
-          sessionId: 'web:one', name: 'Actual question',
+          sessionId: 'web:one', sessionKind: 'topic', name: 'Actual question',
           workdir: { kind: 'local', displayPath: sessionWorkspacePath(workspace, 'web:owner'), nodeId: 'local', available: true, availability: 'available' },
           usage, usageScope: 'latest-call',
           context: { usedTokens: 120, windowTokens: 8000 },

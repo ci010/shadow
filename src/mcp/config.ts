@@ -47,3 +47,28 @@ export function parseMcpServerConfig(name: string, input: unknown): McpServerCon
   const { type, transport, name: _name, ...options } = config
   return { name, transport: transport ?? type ?? 'stdio', ...options }
 }
+
+/** Shared parser for MCP files and inline installation documents. */
+export function parseMcpConfigDocument(
+  input: unknown,
+  options: { name?: string; defaultName?: string; server?: string } = {},
+): McpServerConfig[] {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('MCP config must be an object')
+  if ('mcpServers' in input) {
+    if (options.name !== undefined) throw new TypeError('name cannot rename an mcpServers map; use its keys and optional server selection')
+    if (!input.mcpServers || typeof input.mcpServers !== 'object' || Array.isArray(input.mcpServers)) {
+      throw new TypeError('mcpServers must be an object')
+    }
+    const entries = Object.entries(input.mcpServers)
+    if (!entries.length) throw new TypeError('mcpServers is empty')
+    if (options.server !== undefined && !entries.some(([name]) => name === options.server)) {
+      throw new TypeError('Selected MCP server does not exist in this config')
+    }
+    return entries.filter(([name]) => options.server === undefined || name === options.server)
+      .map(([name, config]) => parseMcpServerConfig(name, config))
+  }
+  const name = options.name ?? ('name' in input && typeof input.name === 'string' ? input.name : options.defaultName)
+  if (!name) throw new TypeError('name is required for a single inline MCP config')
+  if (options.server !== undefined && options.server !== name) throw new TypeError('Selected MCP server does not match this config')
+  return [parseMcpServerConfig(name, input)]
+}

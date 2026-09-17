@@ -1,13 +1,19 @@
 <template>
   <FoldersSidebar :api-base="scope" grouped :project-name="project.name"
     :selected-automation-id="selectedProjectId === project.id ? selectedAutomationId : undefined"
-    :folder-revision="folderRevision"
+    :folder-revision="(folderRevision ?? 0) + liveFolderRevision"
     :sessions="sessions" :active-session-id="selectedProjectId === project.id ? selectedSessionId : ''"
     :draft-folder-id="selectedProjectId === project.id ? draftFolderId : undefined"
     :collapsed="collapsed" :stages="stages" :sessions-loading="loading" :sessions-error="error"
     :remote-folders="remoteFolders" @select="$emit('select', $event)" @delete="deleteSession"
     @toggle="toggle" @reload="refresh" @scratch="$emit('draft')" @remote="$emit('draft', undefined, true)" @draft="$emit('draft', $event)"
     @manage="(folder, action) => $emit('manage', folder, action)" @automation="$emit('automation', $event)">
+    <template #project-entry>
+      <ProjectCoordinator :api-base="apiBase" :project-id="project.id" :project-name="project.name"
+        :selected="selectedProjectId === project.id && selectedSessionId === ORCHESTRATOR_SESSION_ID"
+        :navigation-key="navigationKey" :pending-project-id="pendingCoordinatorProjectId"
+        @opening="$emit('coordinator-opening')" @open="$emit('select', $event)" />
+    </template>
     <template #project-actions>
       <button v-if="runtimeState === 'failed'" class="project-settings retry-runtime" :disabled="retrying" :aria-label="`Retry ${project.name} startup`" title="Retry project startup" @click="retryRuntime"><span class="i-lucide-refresh-cw w-3.5 h-3.5" aria-hidden="true" /></button>
       <RouterLink class="project-settings" :aria-label="`${project.name} settings`" :title="`${project.name} settings`"
@@ -22,6 +28,8 @@
 <script setup lang="ts">
 import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import FoldersSidebar from './FoldersSidebar.vue'
+import ProjectCoordinator from './ProjectCoordinator.vue'
+import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
 import { projectBase } from '../api-url.ts'
@@ -34,15 +42,18 @@ import { HomeTreeCacheKey } from '../home-tree-cache.ts'
 
 const props = defineProps<{
   apiBase: string; project: ProjectRecord; selectedProjectId: string; selectedSessionId: string
+  navigationKey: string
+  pendingCoordinatorProjectId?: string
   draftFolderId?: string; remoteFolders: boolean
   folderRevision?: number
   selectedAutomationId?: string
 }>()
-const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; 'session-automation': [sessionId: string, jobId?: string] }>()
+const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; 'session-automation': [sessionId: string, jobId?: string]; 'coordinator-opening': [] }>()
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const livePool = useLiveClientPool()
 const homeCache = inject(HomeTreeCacheKey, undefined)
 const sessions = ref<SidebarSession[]>([])
+const liveFolderRevision = ref(0)
 const stages = ref<Record<string, string>>({})
 const collapsed = reactive(new Set<string>())
 const loading = ref(true)
@@ -79,6 +90,7 @@ async function refresh() {
   clearTimeout(timer)
   if (controller) { dirty = true; return }
   if (disposed || !active) return
+  if (dirty) liveFolderRevision.value++
   dirty = false
   const current = new AbortController()
   controller = current

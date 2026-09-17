@@ -49,6 +49,16 @@ test('rendered trace: five-minute window, panning, inline content and non-native
           }
           if (path === '/__trace/advance') { end += 60_000; json({ ok: true }); return }
           if (path.startsWith('/__trace/model-')) { modelState = path.slice('/__trace/model-'.length); json({ ok: true }); return }
+          if (path === '/api/sessions/fixture/diagnosis') {
+            json({
+              schemaVersion: 1, kind: 'shadow-session-diagnosis',
+              session: { sessionId: 'fixture', physicalId: 'segment' },
+              history: { records: [{ id: 'segment:record:0', content: 'Synthetic exported evidence' }], hasMore: true },
+              trace: { hasMore: false },
+              privacy: { truncatedPaths: [], reviewRequiredBeforeSharing: true },
+            })
+            return
+          }
           if (path === '/api/sessions/fixture') {
             json({ currentPhysicalId: 'segment', messages: [
               { role: 'user', content: 'Old input', timestamp: new Date(start).toISOString() },

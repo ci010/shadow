@@ -29,6 +29,8 @@
         <div class="session-info">
           <strong class="session-info-title">{{ session.label }}</strong>
           <p v-if="session.description" class="session-info-description">{{ session.description }}</p>
+          <p v-if="session.topic?.goal" class="session-info-description"><strong>Goal:</strong> {{ session.topic.goal }}</p>
+          <p v-if="session.topic?.scope" class="session-info-description"><strong>Scope:</strong> {{ session.topic.scope }}</p>
           <p class="session-info-id">{{ session.sessionId }}</p>
           <p>{{ sessionActivity(stages[session.sessionId]).label }}<span v-if="!session.isDirectChat"> · Read-only</span></p>
           <button class="session-info-open" @click="$emit('select', session.sessionId); close()">Open conversation</button>

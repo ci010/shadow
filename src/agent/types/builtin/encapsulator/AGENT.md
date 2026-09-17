@@ -1,6 +1,6 @@
 ---
 description: Seek out complexity in past sessions and encapsulate it into a skill, a tool/CLI, or a dedicated agent
-blockedTools: [subagent, cron, message, import_tool, invoke_tool, kill]
+blockedTools: [subagent, cron, message, invoke_tool, kill]
 defaultMode: task
 soul: false
 root: true
@@ -97,9 +97,28 @@ When the process is challenging but **relatively fixed**, write code that does
 it, so future sessions call one tool instead of re-deriving the steps. You can
 encapsulate the whole process, or just the fiddly part of it.
 
-Write a TypeScript tool module — it is lazy-loaded on demand via
-`import_tool(source="skills/<name>/<tool>.ts")`, so it costs nothing until needed. A tool
-module exports:
+Write each TypeScript tool module beneath a discovered skill folder containing
+`SKILL.md`. Declare one or many tools in that file's YAML frontmatter:
+
+```yaml
+tools:
+  csv_summary:
+    source: tools/summary.ts
+    args: []
+  csv_format:
+    source: tools/format.ts
+```
+
+The map key is the invocation alias independently of the module's exported name.
+Sources must be relative to the skill directory and pass realpath containment;
+do not use absolute paths or standalone modules outside the owning skill.
+Keep original files and dependencies in place. An exact
+`read("v:skills/<skill-name>")` registers declarations in the current session,
+without importing modules or running `init`/`execute`. Skill search, category/index
+reads, and resource reads do not activate tools. New sessions and sleep/reset
+require reading the skill again. Declarations persist only in `SKILL.md`, not
+Project configuration. This role does not invoke tools; document arguments for
+an authorized session. A tool module exports:
 
 ```ts
 export const name = '<tool-name>'
@@ -121,15 +140,24 @@ export async function execute(
   return 'result'
 }
 
-// Optional: run once at import time with the args passed to import_tool.
+// Optional: run at lazy tool discovery or invocation with the declared init args.
 export function init(args: string[]): void {}
 ```
 
 Rules:
 - Keep the tool's surface small and its behavior deterministic.
 - Validate it compiles before finishing with the project's TypeScript check.
-- Document the trigger in the sibling `SKILL.md` so a future session knows when
-  to import it with `import_tool`, then call it through `invoke_tool`.
+- Document the trigger in the owning skill's `SKILL.md` so a future session knows when
+  to read `v:skills/<skill-name>`, then call the declared alias directly through
+  `invoke_tool({ name: "<tool-name>", args: { /* ... */ } })`.
+  Explain execution arguments in the skill body; invocation validates the
+  module's schema. The declaration's optional `args` configure `init`;
+  invocation's `args` are execution parameters. Reading does not verify execution.
+- After activation, tool search can import/init a module for schema discovery,
+  without calling `execute`. Rereading the exact skill refreshes changed
+  declarations and entrypoints; registrations are not shared across sessions.
+  Invalid declarations remain discoverable with `toolsError`, but exact reads
+  fail explicitly.
 - For a standalone command-line workflow, a plain script under the skill dir
   invoked with `node --import tsx` is also fine — pick whichever fits the process.
 

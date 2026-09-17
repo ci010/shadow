@@ -29,7 +29,7 @@ test('role and mode are independent; only delegated executions leave the convers
   const sessions = parseSessionGraph(graph())
   const groups = groupFolderSessions([], sessions)
   assert.deepEqual(groups.chats.map(item => [item.sessionId, item.depth]), [
-    ['web:chat-root', 0], ['web:chat-persistent', 1], ['reusable-in-task', 1],
+    ['web:chat-root', 0], ['web:chat-persistent', 0], ['reusable-in-task', 0],
   ])
   assert.deepEqual(groups.automations[0].sessions.map(item => item.sessionId), ['heartbeat:reflector-123', 'reflection-task'])
   assert.equal(sessions.find(item => item.sessionId === 'reusable-in-task')?.parentSessionId, 'web:chat-task', 'Grouping never mutates diagnostic lineage')

@@ -10,6 +10,7 @@ import { useModelSelection, type ModelSelection } from './model-selection.ts'
 import * as modelSelectionModule from './model-selection.ts'
 import type { BotInstanceStatus } from './bot-settings.ts'
 import * as projectsModule from './projects.ts'
+import { parseSessionGraph } from './folders-sidebar.ts'
 
 function mountScript(t: TestContext, filename: string, props: Record<string, unknown>, probe?: Component, mocks: Record<string, unknown> = {}) {
   const url = new URL(`./components/${filename}`, import.meta.url)
@@ -40,6 +41,62 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
 }
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const config = (model: string) => ({ agent: { model, workspace: 'C:\\synthetic', temperature: .7 }, learning: {} })
+
+test('Project session invalidation also refreshes its folder catalog for agent-registered folders', async t => {
+  let invalidate: (() => void) | undefined
+  t.mock.method(globalThis, 'fetch', async (url: URL) => Response.json(url.pathname.endsWith('/graph')
+    ? { sessions: [], nodes: [] } : { stages: {} }))
+  const state = mountScript(t, 'ProjectGroup.vue', {
+    apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '' },
+    navigationKey: '/projects/a/chat/web:orchestrator', selectedProjectId: 'a',
+    selectedSessionId: 'web:orchestrator', remoteFolders: true,
+  }, undefined, {
+    '../composables/useLiveClient.ts': {
+      useLiveClientPool: () => ({ client: () => ({ subscribe: (topic: { projectId: string }, observer: { reset: () => void }) => {
+        assert.equal(topic.projectId, 'a')
+        invalidate = observer.reset
+        return { close() {} }
+      } }) }),
+    },
+  })
+  await settle()
+  assert.equal(state().liveFolderRevision, 0)
+  assert.ok(invalidate)
+  invalidate()
+  invalidate()
+  await new Promise(resolve => setTimeout(resolve, 300))
+  assert.equal(state().liveFolderRevision, 1, 'Coalesced session events invalidate the owning folder catalog once')
+})
+
+test('folder catalog revision cancels stale lists and moves an agent-created topic into its new folder', async t => {
+  const requests: Array<{ signal?: AbortSignal | null; finish: (value: unknown) => void }> = []
+  t.mock.method(globalThis, 'fetch', (url: URL, init?: RequestInit) => new Promise<Response>(resolve => {
+    assert.match(new URL(url).pathname, /^\/projects\/a\/api\/folders$/)
+    requests.push({ signal: init?.signal, finish: value => resolve(Response.json(value)) })
+  }))
+  const props = reactive({
+    apiBase: 'http://fixture/projects/a/', grouped: true, projectName: 'A', folderRevision: 0,
+    sessions: parseSessionGraph({ sessions: [{ sessionId: 'web:chat-generated', folderId: 'agent-folder', sessionKind: 'topic',
+      topic: { title: 'Installer', goal: 'Ship', scope: 'Windows' } }], nodes: [] }),
+    activeSessionId: 'web:chat-generated', collapsed: new Set<string>(), stages: {}, sessionsLoading: false, sessionsError: '',
+  })
+  const state = mountScript(t, 'FoldersSidebar.vue', props, undefined, { vue: { ...Vue, onMounted: () => {} } })
+  const stale = state().loadFolders()
+  assert.equal(requests.length, 1)
+  assert.equal(state().groups.chats.length, 1)
+  props.folderRevision++
+  await nextTick()
+  assert.equal(requests[0]!.signal?.aborted, true)
+  assert.equal(requests.length, 2)
+  requests[1]!.finish({ folders: [{ id: 'agent-folder', name: 'Agent registered', path: 'C:\\synthetic\\folder', createdAt: '' }] })
+  await settle()
+  assert.equal(state().groups.chats.length, 0)
+  assert.equal(state().groups.folders[0].sessions[0].label, 'Installer')
+  requests[0]!.finish({ folders: [] })
+  await stale
+  await settle()
+  assert.equal(state().groups.folders[0].folder.id, 'agent-folder', 'A stale list cannot erase the new registration')
+})
 
 function mountAgents(t: TestContext, agentName = 'plan') {
   const route = reactive({
@@ -225,6 +282,7 @@ test('run ownership is canonicalized only from a known graph row and reidentifie
   const events: Array<[string, string | undefined]> = []
   const props = reactive({
     apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '2026-09-16' },
+    navigationKey: '/projects/a/chat/cron:run',
     selectedProjectId: 'a', selectedSessionId: 'cron:run', selectedAutomationId: undefined as string | undefined, remoteFolders: false,
     onSessionAutomation: (sessionId: string, jobId?: string) => events.push([sessionId, jobId]),
   })
@@ -440,6 +498,7 @@ test('a failed project exposes a real retry and refreshes only its own conversat
   })
   const state = mountScript(t, 'ProjectGroup.vue', {
     apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '2026-09-14' },
+    navigationKey: '/projects/b/chat/web:chat-b',
     selectedProjectId: 'b', selectedSessionId: 'web:chat-b', remoteFolders: true,
   })
   await settle()

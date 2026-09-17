@@ -20,16 +20,18 @@ export class OtelStore {
   private insertSessionSpan: ReturnType<Database['prepare']>
   private liveSpans = new Map<string, () => OtlpSpan>()
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: { readOnly?: boolean } = {}) {
     const dir = dirname(dbPath)
-    if (dir && dir !== '.') {
+    if (!options.readOnly && dir && dir !== '.') {
       mkdirSync(dir, { recursive: true })
     }
-    this.db = new Database(dbPath)
-    this.db.exec('PRAGMA journal_mode = WAL')
-    this.db.exec('PRAGMA synchronous = NORMAL')
-    this.initSchema()
-    this.initSessionTraceIndex()
+    this.db = new Database(dbPath, { readOnly: options.readOnly ?? false })
+    if (!options.readOnly) {
+      this.db.exec('PRAGMA journal_mode = WAL')
+      this.db.exec('PRAGMA synchronous = NORMAL')
+      this.initSchema()
+      this.initSessionTraceIndex()
+    }
     this.insertSessionSpan = this.db.prepare(`
       INSERT OR IGNORE INTO otel_session_span_index (
         trace_id, span_id, row_id, parent_span_id, session_id,

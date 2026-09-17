@@ -1,6 +1,7 @@
 import { apiUrl, projectBase, sessionKey, type SessionRef } from './api-url.ts'
 import { isRecord, parseSessionGraph, type SidebarSession } from './folders-sidebar.ts'
 import { parseSessionStages } from './session-activity.ts'
+import { ORCHESTRATOR_SESSION_ID } from './project-coordination.ts'
 
 export interface ProjectRecord {
   id: string
@@ -71,6 +72,17 @@ export function createProjectsClient(base: string, request: typeof fetch = fetch
       return project
     },
   }
+}
+
+export async function ensureProjectOrchestrator(base: string, projectId: string, signal: AbortSignal,
+  request: typeof fetch = fetch): Promise<string> {
+  const value = await projectJson(projectBase(base, projectId), '/api/orchestrator',
+    { method: 'POST', body: '{}', signal }, request)
+  if (!isRecord(value) || value.projectId !== projectId
+    || value.sessionId !== ORCHESTRATOR_SESSION_ID || value.chatId !== 'orchestrator') {
+    throw new Error('Main returned a different Project coordinator. Refresh and retry.')
+  }
+  return value.sessionId
 }
 
 export function projectChatLocation(ref: SessionRef) {

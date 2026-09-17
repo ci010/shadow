@@ -59,7 +59,13 @@ function buildSenderTag(msg: SessionMessageInput): string {
     : msg.source.kind === 'user'
     ? ` chat="${msg.source.sender.isGroup ? 'group' : 'direct'}"`
     : ''
-  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin} />`
+  const coordination = msg.source.kind === 'session' ? msg.source.coordination : undefined
+  const work = coordination
+    ? ` intent="${escapeAttr(coordination.intent)}"` +
+      (coordination.initiativeId ? ` initiative-id="${escapeAttr(coordination.initiativeId)}"` : '') +
+      (coordination.itemId ? ` item-id="${escapeAttr(coordination.itemId)}"` : '')
+    : ''
+  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work} />`
 }
 
 /**

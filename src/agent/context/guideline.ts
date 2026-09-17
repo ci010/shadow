@@ -27,9 +27,9 @@ export function guidelineProvider(): SystemPromptProvider {
 export function executionModeGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
   const hasDelegationParent = !!ctx.parentSessionId
-  const modes = isToolAllowed(ctx.agent, 'subagent')
+  const modes = ctx.agent.name !== 'orchestrator' && isToolAllowed(ctx.agent, 'subagent')
     ? allowedSubagentModes(mode, hasDelegationParent) : []
-  const decision = isToolAllowed(ctx.agent, 'yield')
+  const decision = ctx.agent.name !== 'orchestrator' && isToolAllowed(ctx.agent, 'yield')
     ? 'Use yield for blockers or decisions requiring input.'
     : 'Report blockers or missing input explicitly; do not invent an answer.'
   if (mode === 'call') {
@@ -41,6 +41,7 @@ orchestration habit. Keep role tool constraints and the current environment cont
 The caller is waiting for your final response as the original tool result.
 This is a leaf call: you cannot yield, message other sessions, create subagents, or schedule
 deferred coordination. These limits override role coordination instructions.
+Do not create/manage durable topics or register folders.
 For missing facts, authorization or consequential decisions, return a blocked result immediately;
 the caller decides or yields before issuing a new call. Do not invent answers or blindly retry
 side effects. Report ordinary execution failures as failures.
@@ -60,6 +61,7 @@ effects are not rolled back.`
     return `## Execution Contract: Task
 
 Complete this one-time task in your own context; make routine decisions yourself.
+Do not create/manage durable topics or register folders.
 ${decision} Your final response ends the task and is reported
 automatically; do not send a duplicate completion message. No follow-up assignments or promises.
 ${modes.length
@@ -70,8 +72,10 @@ ${modes.length
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
-When delegated, report the current task's result; do not send a duplicate completion message.
-This is a ${hasDelegationParent ? 'sub-session' : 'root session'}. Allowed delegation modes:
+Durable topics are root peers, not reusable children of their creator or coordinator.
+The Project coordinator routes work; it is not your structural parent. Provenance and
+context ancestry do not transfer responsibility or confer delegation ownership.
+Allowed delegation modes:
 ${modes.join(', ') || 'none'}. Role tool restrictions still apply.
 ${decision}`
 }

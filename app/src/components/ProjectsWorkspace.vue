@@ -37,6 +37,8 @@
       <div v-show="!isRail" id="project-groups" class="project-groups">
         <ProjectGroup v-for="project in projects" :key="project.id" :api-base="apiBase" :project="project"
           :data-project-id="project.id" :folder-revision="folderRevision"
+          :navigation-key="`${route.fullPath}:${visible}`"
+          :pending-coordinator-project-id="pendingCoordinatorProjectId" @coordinator-opening="pendingCoordinatorProjectId = project.id"
           :selected-project-id="selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
           :draft-folder-id="selected?.folder?.id" :remote-folders="installation.mode === 'main'"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
@@ -102,6 +104,7 @@ const projects = ref<ProjectRecord[]>([])
 const registry = createConversationResources()
 const resources = shallowRef<ConversationResource[]>([])
 const selected = shallowRef<ConversationResource>()
+const pendingCoordinatorProjectId = ref('')
 const { automation, syncAutomationRoute, showAutomation, openAutomationRun, identifyAutomation } = useAutomationNavigation({
   route, router, selected,
   openSession: session => publish(registry.session(session)),

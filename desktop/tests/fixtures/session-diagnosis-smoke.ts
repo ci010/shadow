@@ -102,6 +102,15 @@ async function main() {
     assert.match(await inspector(), /Tool call JSON/)
     await click('.lane-bar.model')
     assert.match(await inspector(), /Final model return/)
+    const download = new Promise<string>(resolve => {
+      window.webContents.session.once('will-download', (event, item) => {
+        event.preventDefault()
+        resolve(item.getFilename())
+      })
+    })
+    await execute(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Export for agent').click()`)
+    await wait(`document.body.innerText.includes('Exported a partial snapshot')`)
+    assert.equal(await Promise.race([download, delay(5000).then(() => 'download-timeout')]), 'diagnosis-segment.json')
     console.log('TRACE_RENDERED_SMOKE_OK')
   } finally {
     window.destroy()

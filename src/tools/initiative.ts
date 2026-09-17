@@ -7,6 +7,7 @@ export interface InitiativeDatabase {
 
 export class InitiativeTool implements Tool {
   readonly name = 'initiative'
+  readonly optIn = true
   readonly supportsRemoteWorkdir = true
   readonly parameters: ToolParameters = {
     type: 'object',

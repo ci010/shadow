@@ -39,7 +39,7 @@ function deviceInventoryPrompt(inventory: NodeInventoryResponse): string {
 export function channelCapabilityPrompt(
   channel: string,
   capabilities: ChannelCapabilities,
-  canCreateSession: boolean,
+  _canCreateSession: boolean,
   canYield: boolean,
   canMessage: boolean,
 ): string {
@@ -52,9 +52,7 @@ export function channelCapabilityPrompt(
     `- Output updates: ${capabilities.updates}. The adapter handles formatting, uploads, splitting and delivery limits; do not write raw API/card JSON.`,
     '- Normal replies are sent automatically.',
     ...(canMessage ? ['- The message tool communicates with other agent sessions, not arbitrary platform recipients.'] : []),
-    canCreateSession && capabilities.threads !== 'none'
-      ? `- Reusable subagent sessions can get a ${capabilities.threads} thread/topic. The runtime creates and binds it; do not create another one yourself.`
-      : '- No new native thread/topic is available in this scope. Reusable subagents, when permitted, remain internal conversations.',
+    '- No new native thread/topic is created by subagent. Durable Project topics are web-visible root peers; temporary task/call executions remain internal.',
     '- Tasks report completion to their configured recipient; calls return through their originating tool call. Neither creates a native thread.',
     '- Platform conversations do not grant delegation permissions. A public thread/topic is not a private workspace.',
     ...(canYield ? [
@@ -120,7 +118,8 @@ export function runtimeIdentityProvider(
       const remote = ctx.workdir && ctx.workdir.nodeId !== LOCAL_NODE_ID ? ctx.workdir : undefined
       const defaultShell = ctx.defaultExecShell ?? defaultManagedShell()
       const detectedShells = remote ? [] : await availableExecShells()
-      const delegationModes = isToolAllowed(ctx.agent, 'subagent')
+      const coordinator = ctx.agent.name === 'orchestrator'
+      const delegationModes = !coordinator && isToolAllowed(ctx.agent, 'subagent')
         ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId)
         : []
       const capabilities = await deps.getChannelCapabilities?.(ctx.channel, ctx.chatId, ctx.channelAddress) ?? unavailableCapabilities()
@@ -173,9 +172,15 @@ export function runtimeIdentityProvider(
             : conversation === 'unknown' ? 'Unknown; replies may be visible to others.'
             : 'Direct conversation; normal assistant behavior.'}`,
           `- **Self-code (src/) writes**: ${
-            ctx.admin ? 'ALLOWED' : 'NOT ALLOWED'
+            ctx.admin && !coordinator ? 'ALLOWED' : 'NOT ALLOWED'
           }`,
       )
+      if (coordinator) {
+        lines.push('- **Coordinator cap**: read/search/topic/message/initiative only. No invoke_tool, exec, write, or subagent.')
+      }
+      if ((ctx.mode ?? ctx.agent.defaultMode) === 'session') {
+        lines.push('- Durable topics are root peers. The pinned web:orchestrator routes work, not structural parentage; creator provenance and context ancestry do not confer ownership.')
+      }
 
       if (sharedAudience) {
         lines.push(
@@ -212,8 +217,8 @@ export function runtimeIdentityProvider(
       }
 
       lines.push('', channelCapabilityPrompt(
-        ctx.channel, capabilities, delegationModes.includes('session'),
-        (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'yield'),
+        ctx.channel, capabilities, false,
+        !coordinator && (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'yield'),
         (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'message'),
       ))
 
@@ -233,24 +238,26 @@ export function runtimeIdentityProvider(
         if (skillsSummary) lines.push(skillsSummary, '')
       }
 
-      // Agent types summary — only show to types that can spawn subagents
+      // Topics can select expertise without granting delegation.
       const canSpawn = delegationModes.length > 0
-      if (canSpawn) {
+      const canCreateTopic = (ctx.mode ?? ctx.agent.defaultMode) === 'session' &&
+        isToolAllowed(ctx.agent, 'topic')
+      if (canSpawn || canCreateTopic) {
         const agentTypesSummary = deps.getAgentTypesSummary()
         if (agentTypesSummary) lines.push(agentTypesSummary, '')
+      }
 
-        // Active subagents spawned by this session
-        if (deps.getActiveSubagents) {
-          const active = await deps.getActiveSubagents(ctx.sessionId)
-          if (active.length > 0) {
-            lines.push('## Managed Subagents', '')
-            for (const sub of active) {
-              lines.push(
-                `- \`${sub.sessionId}\` (${sub.agentType}) — "${sub.description}"`,
-              )
-            }
-            lines.push('')
+      // Active temporary executions belong only to their delegation owner.
+      if (canSpawn && deps.getActiveSubagents) {
+        const active = await deps.getActiveSubagents(ctx.sessionId)
+        if (active.length > 0) {
+          lines.push('## Managed Subagents', '')
+          for (const sub of active) {
+            lines.push(
+              `- \`${sub.sessionId}\` (${sub.agentType}) — "${sub.description}"`,
+            )
           }
+          lines.push('')
         }
       }
 

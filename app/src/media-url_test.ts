@@ -2,6 +2,12 @@ import { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import { buildMediaUrl, chatIdForMediaSession } from './media-url.ts'
 
+test('Project coordination media uses the canonical chat and stays Project-scoped', () => {
+  assertEquals(chatIdForMediaSession('web:orchestrator'), 'orchestrator')
+  assertEquals(buildMediaUrl('http://fixture/projects/a/', 'web:orchestrator', 'outputs/diagram.png'),
+    'http://fixture/projects/a/api/media?chatId=orchestrator&path=outputs%2Fdiagram.png')
+})
+
 test('media URL maps and encodes the direct web chat identity and path', () => {
   assertEquals(chatIdForMediaSession('web:chat-a/b ?'), 'chat-a/b ?')
   assertEquals(

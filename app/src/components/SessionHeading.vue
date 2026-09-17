@@ -1,5 +1,5 @@
 <template>
-  <header class="session-heading">
+  <header class="session-heading" :class="{ 'has-topic': topic || coordinator }">
     <ComposerPopover label="Session details" :title="`${name} · ${folder}`" :width="360" @opened="loadDetails">
       <template #trigger>
         <span class="heading-name">{{ name }}</span>
@@ -41,6 +41,15 @@
         </div>
       </template>
     </ComposerPopover>
+    <p v-if="coordinator" class="coordination-description">Coordinate this Project here. Topics are independent conversations in the sidebar, not tasks or child chats.</p>
+    <details v-else-if="topic" class="topic-metadata">
+      <summary>{{ topic.goal || 'Topic details' }}</summary>
+      <dl>
+        <dt>Goal</dt><dd>{{ topic.goal }}</dd>
+        <dt>Scope</dt><dd>{{ topic.scope }}</dd>
+        <template v-if="topic.nonGoals"><dt>Out of scope</dt><dd>{{ topic.nonGoals }}</dd></template>
+      </dl>
+    </details>
   </header>
 </template>
 
@@ -50,14 +59,17 @@ import { computed, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import { chatContextName } from '../chat-draft.ts'
 import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
+import { ORCHESTRATOR_SESSION_ID, type TopicMetadata } from '../project-coordination.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; physicalId: string | null; revision: number; active: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean }>()
 const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']] }>()
 const details = ref<SessionDetails | null>(null)
 const loading = ref(false)
 const error = ref('')
-const name = computed(() => [props.projectName, details.value?.name?.trim() || props.name || 'Conversation'].filter(Boolean).join(' / '))
-const folder = computed(() => details.value?.workdir.kind === 'remote'
+const coordinator = computed(() => props.sessionId === ORCHESTRATOR_SESSION_ID || details.value?.sessionKind === 'orchestrator')
+const topic = computed(() => details.value?.topic ?? props.topic)
+const name = computed(() => [props.projectName, coordinator.value ? 'Project coordination' : topic.value?.title || details.value?.name?.trim() || props.name || 'Conversation'].filter(Boolean).join(' / '))
+const folder = computed(() => coordinator.value ? 'Project-wide · No folder' : details.value?.workdir.kind === 'remote'
   ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || 'Remote device'} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : 'Remote folder')}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
   : details.value?.workdir.displayPath
   ? chatContextName(details.value.workdir.displayPath)
@@ -106,6 +118,11 @@ onUnmounted(cancel)
 
 <style scoped>
 .session-heading { display: flex; flex: 0 0 auto; align-items: center; min-width: 0; min-height: 52px; padding: 4px 16px; color: var(--c-text); }
+.session-heading.has-topic { flex-wrap: wrap; }
+.coordination-description, .topic-metadata { flex-basis: 100%; margin: 0 8px 8px; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.topic-metadata summary { cursor: pointer; max-height: 3em; overflow: hidden; }
+.topic-metadata dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; max-height: 180px; overflow: auto; }
+.topic-metadata dd { margin: 0; white-space: pre-wrap; user-select: text; }
 .session-heading :deep(.composer-control) { min-height: 36px; gap: 10px; max-width: 100%; padding: 7px 8px; text-align: left; }
 .heading-name { min-width: 0; max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 14px; font-weight: 600; }
 .heading-folder { min-width: min(80px, 25vw); max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 13px; }

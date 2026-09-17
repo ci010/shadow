@@ -73,8 +73,8 @@ test('MCP contracts remain inline without generic safety or blanket group restri
     /invoke_tool\(\{ name, args \}\)/,
     /Invalid arguments return the current contract without execution/,
     /Do not guess another tool ID after failure/,
-    /Skills are optional guidance, not required for MCP/,
-    /live search\/import schemas override copied examples/,
+    /Skills are optional guidance for MCP/,
+    /live search schemas override copied examples/,
     /Rediscover the exact tool if compaction removed its schema/,
     /Agent tool restrictions still apply/,
     /mcp_error.*phase, server\/source, sanitized reason.*HTTP\/RPC\/OS codes.*retryability/,
@@ -82,7 +82,7 @@ test('MCP contracts remain inline without generic safety or blanket group restri
     /retry at most once; never loop unchanged requests/,
     /needsUserAction.*report server, phase, sanitized reason\/code, attempts, and specific help needed/,
     /Never ask for credentials in chat or disable access\/TLS controls/,
-    /Import failure does not authorize installation, credential changes or new permissions/,
+    /Lazy-load failure does not authorize configuration, credential changes or new permissions/,
     /toolExecution: "unknown".*inspect the outcome before any retry/,
   ]
   for (const agent of await getBuiltinAgentTypes()) {
@@ -127,6 +127,6 @@ test('general root direct guideline stays within its character budget', async ()
   builder.register(guidelineProvider())
   const prompt = (await builder.buildSystemPrompt(makeContext(general, false)))
     .replace(/\r\n/g, '\n')
-  // At least 20% below the pre-simplification 11,494-character fixture.
-  assert(prompt.length <= 9195, `guideline grew to ${prompt.length} characters`)
+  // Includes revisioned MCP, skill activation, and peer-topic coordination contracts.
+  assert(prompt.length <= 14500, `guideline grew to ${prompt.length} characters`)
 })

@@ -17,13 +17,17 @@ function context(initiativeId?: string): SessionPromptContext & { initiativeId?:
 test('initiative provider uses the explicit linkage and warns that prompt state is a snapshot', async () => {
   const calls: string[] = []
   const store: InitiativeContextStore = {
-    getSummary(id, actor) { calls.push(`${id}:${actor}`); return 'Item one: needs handoff' },
+    getSummary(id, actor) { calls.push(`${id}:${actor}`); return 'Item one: needs_attention; assignment retained' },
     getSessionSummary() { throw new Error('Must not broaden explicit context') },
   }
   const result = await initiativeProvider(store).getPromptSection(context('cleanup'))
   assert.deepEqual(calls, ['cleanup:web:actor'])
-  assert.match(result ?? '', /Item one: needs handoff/)
+  assert.match(result ?? '', /Item one: needs_attention; assignment retained/)
   assert.match(result ?? '', /snapshot/)
+  assert.match(result ?? '', /sleep, idle, recovery, restart, stopped or unknown sessions do not release work/)
+  assert.match(result ?? '', /only explicitly unowned\/unassigned work/)
+  assert.match(result ?? '', /Messages, requests and handoff notes are coordination, not assignment changes/)
+  assert.match(result ?? '', /common folders do not imply work ownership/)
 })
 
 test('unlinked sessions receive only their participation summary, not every visible initiative', async () => {

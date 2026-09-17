@@ -1,7 +1,11 @@
 import { isRecord } from './folders-sidebar.ts'
+import { parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
 
 export interface SessionDetails {
   sessionId: string
+  sessionKind?: 'topic' | 'orchestrator'
+  topic?: TopicMetadata
+  createdBySessionId?: string
   name: string | null
   workdir: { kind: 'local' | 'remote'; displayPath: string | null; nodeId?: string; nodeName?: string; displayName?: string; available?: boolean }
   usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null
@@ -39,8 +43,13 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
   }
   if (value.workdir.available !== undefined && typeof value.workdir.available !== 'boolean') throw invalid()
   if (windowTokens === 0) throw invalid()
+  if (value.sessionKind !== undefined && value.sessionKind !== 'topic' && value.sessionKind !== 'orchestrator') throw invalid()
+  if (value.createdBySessionId !== undefined && typeof value.createdBySessionId !== 'string') throw invalid()
   return {
     sessionId,
+    ...(value.sessionKind !== undefined ? { sessionKind: value.sessionKind as SessionDetails['sessionKind'] } : {}),
+    ...(value.topic !== undefined ? { topic: parseTopicMetadata(value.topic) } : {}),
+    ...(typeof value.createdBySessionId === 'string' ? { createdBySessionId: value.createdBySessionId } : {}),
     name: value.name,
     workdir: { kind: value.workdir.kind === 'remote' ? 'remote' : 'local', displayPath: value.workdir.displayPath,
       ...(typeof value.workdir.nodeId === 'string' ? { nodeId: value.workdir.nodeId } : {}),

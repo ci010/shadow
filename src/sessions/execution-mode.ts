@@ -15,9 +15,9 @@ export function parseExecutionMode(value: unknown): ExecutionMode {
 
 export function allowedSubagentModes(
   mode: ExecutionMode,
-  hasDelegationParent: boolean,
+  _hasDelegationParent: boolean,
 ): readonly ExecutionMode[] {
   if (mode === 'call') return []
   if (mode === 'task') return ['call']
-  return hasDelegationParent ? ['task', 'call'] : ['session', 'task']
+  return ['task', 'call']
 }

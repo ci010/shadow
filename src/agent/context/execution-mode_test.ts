@@ -86,8 +86,8 @@ test('compact call guidance preserves machine-readable outcomes and bounded exec
   }
 })
 
-test('delegation capabilities narrow by structural role, not agent type or context ancestry', async () => {
-  assert.deepEqual(allowedSubagentModes('session', false), ['session', 'task'])
+test('durable peers delegate task/call independently of context ancestry', async () => {
+  assert.deepEqual(allowedSubagentModes('session', false), ['task', 'call'])
   assert.deepEqual(allowedSubagentModes('session', true), ['task', 'call'])
   for (const parent of [false, true]) {
     assert.deepEqual(allowedSubagentModes('task', parent), ['call'])
@@ -100,8 +100,10 @@ test('delegation capabilities narrow by structural role, not agent type or conte
   }
   const root = await guidelineProvider().getPromptSection(context)
   const child = await guidelineProvider().getPromptSection({ ...context, parentSessionId: 'fixture:root' })
-  assert(root?.includes('This is a root session. Allowed delegation modes:\nsession, task'))
-  assert(child?.includes('This is a sub-session. Allowed delegation modes:\ntask, call'))
+  assert(root?.includes('Allowed delegation modes:\ntask, call'))
+  assert(child?.includes('Allowed delegation modes:\ntask, call'))
+  assert(root?.includes('Durable topics are root peers'))
+  assert(child?.includes('context ancestry do not transfer responsibility'))
   assert.equal(general.root, true)
 })
 
@@ -114,9 +116,10 @@ test('prompt guides expose only current delegation modes and permitted coordinat
   }
   const provider = guidelineProvider()
   const root = (await provider.getPromptSection(ctx))!
-  assert.match(root, /mode: "session"/)
+  assert.doesNotMatch(root, /mode: "session"/)
   assert.match(root, /mode: "task"/)
-  assert.doesNotMatch(root, /mode: "call"|blocking call|leaf call|120-second/)
+  assert.match(root, /mode: "call"/)
+  assert.match(root, /Omitted `mode` defaults to `task`, independent of the selected role default/)
   assert.match(root, /request goes to the human/)
 
   const sub = (await provider.getPromptSection({ ...ctx, parentSessionId: 'fixture:root' }))!
@@ -128,6 +131,8 @@ test('prompt guides expose only current delegation modes and permitted coordinat
   const task = (await provider.getPromptSection({ ...ctx, mode: 'task', parentSessionId: 'fixture:root' }))!
   assert.doesNotMatch(task, /mode: "session"|mode: "task"|Asynchronous creation|`report_to` redirects/)
   assert.match(task, /mode: "call"/)
+  assert.match(task, /Specify `mode: "call"` explicitly/)
+  assert.match(task, /Do not create\/manage durable topics or register folders/)
 
   const call = (await provider.getPromptSection({ ...ctx, mode: 'call' }))!
   assert.doesNotMatch(call, /### Delegation|### Decisions|### Messaging|fire-and-forget|process keeps running|timeout_ms: 0/)
@@ -145,6 +150,27 @@ test('prompt guides expose only current delegation modes and permitted coordinat
     ...ctx, mode: 'task', agent: { ...general, allowedTools: ['read', 'search'] },
   }))!
   assert.doesNotMatch(restricted, /### Decisions|Use yield|### Shell|### Delegation|You may create/)
+})
+
+test('coordinator guidance cannot advertise worker tools even with broad role metadata', async () => {
+  const context: SessionPromptContext = {
+    behavior: {}, sessionId: 'web:orchestrator', channel: 'web', chatId: 'orchestrator',
+    agent: {
+      name: 'orchestrator', description: '', prompt: '', defaultMode: 'session', source: 'builtin',
+    },
+  }
+  const prompt = (await guidelineProvider().getPromptSection(context))!
+  assert.match(prompt, /### Project Topics/)
+  assert.match(prompt, /### Coordinator Capability Boundary/)
+  assert.match(prompt, /Allowed delegation modes:\nnone/)
+  assert.doesNotMatch(prompt, /### Shell|### Delegation|### Decisions/)
+  assert.match(prompt, /initialMessageStatus.*accepted.*not_requested.*not_replayed/)
+  assert.match(prompt, /receipt confirms admission, not acceptance, completion, or ownership transfer/)
+  for (const mode of ['task', 'call'] as const) {
+    const oneShot = (await guidelineProvider().getPromptSection({ ...context, mode }))!
+    assert.doesNotMatch(oneShot, /### Project Topics/)
+    assert.match(oneShot, /Do not create\/manage durable topics or register folders/)
+  }
 })
 
 test('compact coordination guidance retains decision and completion routing protocols', async () => {

@@ -16,6 +16,7 @@
         </template></HoverInfo>
       </div>
     </header>
+    <slot name="project-entry" />
     <div v-show="!grouped || groupExpanded" :id="domId('folders-navigation')" class="folders-scroll" :aria-busy="loading || sessionsLoading">
       <p v-if="loading" class="sidebar-note" :class="{ 'rail-note': isRail }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading folders…</span></p>
       <div v-if="error && !isRail" class="sidebar-error" role="alert">
@@ -95,6 +96,7 @@ import { isWorkingStage } from '../session-activity.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
 import { automationSessionOwners, groupFolderSessions, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
+import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 
 const props = defineProps<{
   apiBase: string
@@ -174,7 +176,7 @@ function observeSidebar() {
   measureSidebar()
 }
 
-watch(() => activeAutomation.value ? undefined : props.activeSessionId
+watch(() => activeAutomation.value || props.activeSessionId === ORCHESTRATOR_SESSION_ID ? undefined : props.activeSessionId
   ? props.sessions.find(session => session.sessionId === props.activeSessionId)?.folderId
   : props.draftFolderId, id => {
   selectedFolderId.value = id ?? ''
@@ -218,7 +220,7 @@ function selectFolder(id: string) {
   expandedFolders.add(id)
 }
 function selectConversation(id: string) {
-  selectedFolderId.value = automationSessionOwners(props.sessions).has(id)
+  selectedFolderId.value = id === ORCHESTRATOR_SESSION_ID || automationSessionOwners(props.sessions).has(id)
     ? '' : props.sessions.find(session => session.sessionId === id)?.folderId ?? ''
   emit('select', id)
 }

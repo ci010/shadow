@@ -135,7 +135,8 @@ function sessionFileBase(
     visited.add(ancestor)
     const ancestorState = sessions.getSessionState(ancestor)
     if (!ancestorState) break
-    if (isLearningAutomationSession(ancestorState)) {
+    if ((ancestor === key && ancestorState.sessionKind === 'orchestrator') ||
+      isLearningAutomationSession(ancestorState)) {
       // This is a browsing root, not a change to the agent's execution workdir.
       return { ...base, path: resolve(sessions.workspace), scope: 'home' }
     }
@@ -243,6 +244,10 @@ export function sessionsApiPlugin(
         const execution = {
           mode: state?.mode ?? 'session',
           agentType: state?.agentType ?? 'general',
+          sessionKind: state?.sessionKind,
+          topic: state?.topic,
+          createdBySessionId: state?.createdBySessionId,
+          initiativeId: state?.initiativeId,
           parentSessionId: delegationOwner(state) ?? null,
           waitingForCall: !!sessions.isWaitingForCall?.(session.sessionId),
           executionId: state?.executionId,
@@ -255,7 +260,7 @@ export function sessionsApiPlugin(
           ...session,
           ...execution,
           automation: state ? resolveAutomationSession(state) : undefined,
-          title: execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined,
+          title: state?.topic?.title ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??

@@ -511,18 +511,63 @@ not restored. Unrelated scheduled activity is unchanged.
 separate per-execution contract: `session` is reusable, `task` is a fresh
 one-assignment worker with asynchronous completion, and `call` is a bounded
 invocation inheriting a caller-context snapshot and returning its final result
-through the original blocking tool call. Session/task return after admission,
+through the original blocking tool call. Task creation returns after admission,
 not model completion; their caller can work independently or finish its turn.
 There is no independently configurable
 `ephemeral` execution flag. Agent definitions provide `defaultMode`, not a fixed
-lifetime. Mode is stored with execution state rather than inferred repeatedly
+lifetime. `subagent` accepts only task/call, defaulting omission to task regardless
+of role default; durable topics use a separate creation surface. Mode is stored with execution state rather than inferred repeatedly
 from a role that can be edited later.
 
 The delegation capability matrix is enforced at runtime as well as described in
-the prompt: root reusable session → session/task; reusable sub-session → task/call;
-task → call; call → none. Role tool restrictions can narrow this further. Structural
-delegation ownership identifies a sub-session; neither the agent type's visibility
-flag nor context-only fork ancestry establishes coordination authority.
+the prompt: durable root/topic → task/call; task → explicit call; call → none.
+Role tool restrictions can narrow this further. The Project coordinator cannot
+delegate. Structural delegation ownership applies to temporary executions, not
+topic provenance; neither the agent type's visibility flag nor context-only fork
+ancestry establishes coordination authority.
+
+### Project coordination and topic peers
+
+Each Project has exactly one `web:orchestrator`, pinned as the default UI routing
+entry. Its built-in role and canonical runtime guard permit only
+read/search/topic/message/initiative, excluding invoke_tool/exec/write/subagent.
+It routes to reusable topics and lets users continue there, rather than owning
+their session hierarchy. Ensuring its existence never automatically runs an LLM.
+
+Durable topics are `web:chat-UUID` root peers. Project-scoped
+`search({space: "sessions:", query, limit: 5, offset: 0})` returns their
+title/goal/scope/nonGoals, folderId, initiativeId, createdBySessionId, and status;
+page size is bounded at 20. Prefer reuse before creating a new topic.
+Topic create/search/update receipts return `conversationUrl` in
+`/projects/<encodedProjectId>/chat/<encodedLogicalSessionId>` form. Coordinator
+handoffs link the topic title to that returned URL, making the peer conversation
+directly accessible rather than merely reporting an ID.
+Remote-workdir sessions may use `sessions:` search and typed Project messaging
+as control-plane operations. This does not enable other remote search spaces,
+which remain explicitly rejected.
+`topic` creation requires title, goal, and scope; optional nonGoals, folderId,
+agentType, initiativeId, initialMessage, and requestId refine it. Kickoff admission
+is optional and never transfers an Initiative assignment. Idempotent requestId
+retries do not replay kickoff; initialMessageStatus distinguishes accepted,
+not_requested, and not_replayed.
+
+Topic update takes sessionId and the full title/goal/scope/nonGoals brief; only
+self/coordinator or authorized UI may update it. `register_folder` with path
+uses the existing Project registry for an existing Main-local folder. List with
+`read("v:project/folders")`; never translate a remote topic's display path into
+a Main filesystem path. Task/call executions cannot create/manage durable topics
+or register folders.
+
+Authorized routes expose GET/POST `/projects/:projectId/api/topics`, PATCH
+`/projects/:projectId/api/topics/:key`, and POST
+`/projects/:projectId/api/orchestrator`. Topic brief metadata is projected into
+session detail/graph results separately from delegation ownership.
+
+JSONL and SQLite migration flatten old reusable structural children without
+losing context parents or changing effective workdirs. `createdBySessionId`
+preserves provenance. `workspaceRoot` remains an owner-ID compatibility reference
+for managed-session data/workdir locality, not structural/dependency ownership.
+Graph parentage comes from delegation ownership, not a historical context parent.
 
 - `Session` owns an inbox, active turn, abort controller, steering queue,
   compaction, and inactivity timer. Different logical sessions can operate
@@ -574,19 +619,23 @@ boundary. The Main sidebar also offers Open remote folder, which opens the
 existing remote-capability draft picker rather than registering a Main-local
 path. Git worktree/branch management is not implemented.
 
-`subagent` accepts the initial `task` directly. It is optional for reusable
-sessions and required for task/call execution. Session mode still supports
-creation followed by `message`. Tasks/calls start their assignment as part of
+`subagent` requires the initial `task` for task/call execution. Legacy
+`mode: "session"` fails explicitly with guidance to use topic creation.
+Tasks/calls start their assignment as part of
 creation and do not accept later message-tool assignments. Child sessions inherit
 the spawner's workdir ownership, not an isolated git worktree.
 
-For asynchronous session/task execution, persisted `reportTo` routing consumes
+For asynchronous task execution, persisted `reportTo` routing consumes
 real turn facts and sends `subagent-complete` or `subagent-failed` to the callback.
 UI command responses, tool projections, and `outbound.done` cannot produce a
 spurious completion report. Calls have no `report_to`: the original tool invocation
 awaits their final result and no separate completion event is emitted to the caller.
 The message tool enforces execution/ownership boundaries as well as waiting for
-target acceptance before displaying its sent projection.
+target admission before displaying its sent projection. Optional message intent
+is request/question/progress/handoff/acknowledgement. Project-validated
+initiativeId/itemId references appear in the first trusted sender envelope as
+context only. Receipt is not acceptance of responsibility, completion, or an
+ownership transfer; use explicit guarded Initiative release/handoff/claim.
 
 Call context is a snapshot, not a live shared message array. Internal tool calls
 and intermediate responses stay in the child trace. Calls are blocking leaves:
@@ -595,7 +644,8 @@ information/permission returns as a blocker, including partial work and side
 effects, so the caller can decide or yield before another invocation. No yield
 decision continuation or asynchronous one-shot child-receipt lifecycle is needed.
 Caller cancellation stops its call, and cancellation/errors preserve paired tool
-history. Ordinary session/task yield still uses actual-parent delivery. Persisted
+history. Durable topics yield to the human; temporary tasks yield to their
+delegation owner, not a topic creator or historical context parent. Persisted
 trace does not imply a blocked in-memory call survives a backend restart.
 
 Call receipts retain their structured `completed`, `blocked`, `failed`, or
@@ -617,7 +667,7 @@ rules do not constitute an OS sandbox or roll back external side effects.
 The session graph exposes mode, role, structural parent, execution status, and the
 optional native `parentToolCallId`. Both JSONL and SQLite preserve this correlation
 field; older records can still be matched through their tool admission receipts.
-The UI keeps reusable conversations in its tree and displays delegated one-shot
+The UI pins the coordinator and lists durable topic peers, while displaying delegated one-shot
 tasks/calls as inspectable execution cards at their originating native tool calls,
 not in a separate footer. Outbound tool events retain their IDs so parallel
 results cannot overwrite or cross-pair. Executions without a matching native call
@@ -652,11 +702,12 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
 1. **Guideline:** selected agent prompt plus tool guides and the execution
    contract. There is no generic Safety checklist. Delegation,
    decision, messaging, and shell guidance is scoped by execution mode, structural
-   ownership, and role tool permissions. Root sessions receive session/task
-   instructions, reusable sub-sessions task/call, and tasks call only, further
+   ownership, and role tool permissions. Root/topic sessions receive task/call
+   instructions, and tasks explicit call only, further
    narrowed by the role. Leaf calls receive no coordination-tool usage guide or
    background-execution advice. Tool descriptions and parameter schemas use the
-   same scope, rather than advertising unavailable modes. The general role owns
+   same scope, rather than advertising unavailable modes. The coordinator's
+   hard capability cap excludes delegation and worker tools. The general role owns
    work strategy, the scoped Tools Guide owns invocation instructions, and the
    execution contract owns the current lifecycle and completion format.
 2. **Workspace:** Home, effective local workdir or remote/unavailable capability,
@@ -664,11 +715,16 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
    guidance, and `SOUL.md` according to agent-type policy.
 3. **Runtime/identity:** platform and shell information, channel/user/admin
    metadata, role and conversation audience, identity lookup, skill summaries,
-   available types and subagents.
+   selectable agent types for either subagent or durable-topic creation, and
+   active temporary executions only for their delegation owner. Topic-only
+   coordinators see expertise/templates without gaining subagent capabilities.
 4. **Initiative:** bounded shared-work context associated with the session,
    including its responsibility, dependencies, and actual execution activity.
 5. **Memory:** conventions, keyword index, recent/related events, working set,
    and session memory.
+
+The dedicated topic context provider supplies the durable topic brief separately
+from Initiative responsibility and runtime delegation ownership.
 
 MCP recovery and execution protocols remain inline, not deferred to optional
 skills. Conversation guidance depends on actual audience context: direct and
@@ -810,10 +866,12 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `read` | Local text/directories, supported media/URLs, VFS; bounded remote UTF-8 read path |
 | `write` | Create/overwrite, append, or match-and-replace edit; local checks and remote workdir path |
 | `search` | Unified glob/grep/web/tools search; targeted contracts and paginated empty-query tool listing |
+| `v:config/mcp.json` via `read`/`write` | Revision-checked, atomic Project MCP configuration without connecting |
 | `invoke_tool` | Lazy connections and current-schema argument validation |
 | `exec` | Managed local shell processes and inline script/tool-bridge execution |
 | `kill`, `continuation`, `v:bg` | Cancel background work, attach continuation text, and inspect task status/output |
-| `message`, `subagent` | Authorized session messaging and role-independent session/task/call execution |
+| `topic` | Project peer-topic creation/full-brief updates and Main-local folder registration |
+| `message`, `subagent` | Authorized session messaging and temporary task/call execution |
 | `yield` | Three-option decision requests, actual-parent routing, correlated answers and configurable waiting |
 | `plan_write`, `update_convention`, `log` | Planning documents, scoped constraints, structured knowledge logging |
 | `event_subscribe` | Subscribe to normalized system events |
@@ -829,7 +887,8 @@ append-only audit trail. Runtime-stamped creators/authors cannot be supplied by
 the model. Coordinating owners and item assignees are logical session IDs, not
 physical history segments.
 
-The lazy [`initiative`](../src/tools/initiative.ts) tool accepts only `query`;
+The [`initiative`](../src/tools/initiative.ts) tool accepts only `query`;
+the coordinator receives it directly rather than through forbidden dynamic invocation.
 Project scope and the acting session come from dispatch context. A closed SQL
 parser permits bounded, parameterized single-table queries and transactional
 mutation batches, not arbitrary SQLite. There are no joins, CTEs, subqueries,
@@ -842,8 +901,17 @@ limits.
 An explicit `initiativeId` survives delegation, compaction, and storage reload.
 Absent that link, prompt summaries show only work the session created, owns, or
 is assigned. Runtime activity is separate from recorded task status; an
-inactive owner or assignee needs explicit handoff, not automatic completion or
-reassignment. Session todos are a query view of shared items. `plan_write`
+inactive owner or assignee retains responsibility across sleep/recovery and needs
+explicit guarded release/handoff/claim, not automatic completion, stealing, or
+reassignment. Topic creation and message admission do not transfer work.
+Inactive or unknown ownership is never claimable merely because its session
+is unavailable. Schema version 3 adds `needs_attention`; deprecated
+`needs_handoff` is an attention-only compatibility signal, not a claim/recovery
+authorization. Ownership belonging to an already-deleted session remains recorded
+as needing attention. No privileged recovery API/UI is added by this work;
+normal owners/assignees must explicitly handoff or release while they still exist.
+Deleting a session does not release its work.
+Session todos are a query view of shared items. `plan_write`
 remains a planning-document tool, not another authoritative task list.
 Here active means a live, accepting session without pending recovery, not proof
 that a model turn is currently running.
@@ -915,13 +983,16 @@ mode rather than rewriting the previously read contents.
 - `v:sessions`: conversation history;
 - `v:bg`: background status/output;
 - `v:skills`: skill bodies/categories/resources;
+- `v:config/mcp.json`: revisioned Project MCP configuration with redacted secrets;
 - `v:tools`: dynamic tool and MCP source discovery without starting servers or
   revealing commands, environment values, URLs, or authentication headers;
 - `v:memory`: shared file-backed knowledge;
 - `v:events`: event subscriptions.
 
-`v:tools/<name>` is an import source handled by `ImportTool`, not an ordinary
-filesystem directory. `v:memory` writes are mapped to Home's memory directory
+`v:tools/<name>` identifies a virtual catalog source for the internal lazy
+loader, not an ordinary filesystem directory. Models
+select it through `search({ space: "tools:<name>", query })` or invoke a known
+tool ID. `v:memory` writes are mapped to Home's memory directory
 by path helpers.
 
 ### Skills
@@ -934,10 +1005,39 @@ platform/architecture, category/core presentation, and admin visibility.
 These filters are not an execution sandbox for scripts referenced by a skill.
 Skills are optional workflow guidance, not an MCP admission requirement. A server
 does not need a corresponding skill; a workflow may use several servers, and
-several skills may guide use of the same server. Live import results, rather than
+several skills may guide use of the same server. Live discovery results, rather than
 copied skill examples, are authoritative for tool schemas.
+TypeScript tools require an owning skill's frontmatter `tools` map. One skill
+can declare many aliases, such as
+`csv_summary: { source: "tools/summary.ts", args: [] }` and
+`csv_format: { source: "tools/format.ts" }`. Sources must be relative to the
+skill directory and pass realpath containment checks; absolute paths and
+standalone external modules are not accepted.
 
-### Dynamic imports and MCP
+`search({ space: "skills:", query: "CSV", limit: 5, offset: 0 })` returns names,
+descriptions, and read paths, optionally filtered with `skills:<category>`.
+Search, index/category reads, and bundled resource reads never activate tools.
+Only an exact `read("v:skills/csv-utils")` registers that skill's declarations
+in the current session. This does not import modules or execute `init`/`execute`.
+The skill body documents arguments, so an agent can invoke a declared alias
+directly after reading, without a separate preparation step; invocation
+lazy-loads the module and validates its schema.
+
+Declarations persist only in `SKILL.md`; there is no Project persistence of
+skill-tool registrations. New sessions and sleep/reset require another exact
+skill read. Files and dependencies remain in their original locations. Optional
+declaration `args` are passed to `init(args)` at lazy tool discovery or invocation,
+not at read time. After activation, `search({space: "tools:<alias>", query: ""})`
+can import/init the module to obtain its current schema, but never calls
+`execute`. Skill search never activates tools. Rereading the exact skill refreshes
+changed entrypoints and declarations; registrations are not shared across
+sessions. Invalid frontmatter tools remain discoverable with `toolsError`,
+while an exact skill read fails explicitly.
+Modules expose metadata/parameters and `execute(args, callTool)`, optionally
+`init`, and can compose existing tools. Loading executes trusted host code,
+not sandboxed data.
+
+### Project MCP configuration and lazy loading
 
 [`search-tools.ts`](../src/tools/search-tools.ts) ranks names and descriptions
 lexically, returning complete schemas only for the top matches (default 3,
@@ -950,17 +1050,39 @@ failed. Built-in browser/factory initialization requires explicit source selecti
 Active session tools are also searchable. It does not introduce a persisted index,
 an embedding provider or a second tool registry.
 
-`import_tool` accepts a registered virtual source, a TypeScript tool module, or
-a JSON MCP configuration. A script module exposes metadata/parameters and
-`execute(args, callTool)`, optionally `init`; it can compose existing tools.
-Importing such a module executes trusted host code, not sandboxed data.
-JSON imports accept both `type` and `transport` with consistent validation.
-An `mcpServers` record imports all entries unless `server` selects one; the selected
-set is validated before connecting. Extra CLI arguments apply only to stdio.
-Multi-server connection failures are reported per server, without undoing successful
-imports. Re-imports reuse unchanged session connections; changing a connection
-releases the old one. Imports within a session are serialized, and sleep cancels
-pending imports so they cannot repopulate a reset session.
+MCP configuration is persistent **current Project** state. Agents use existing
+`read`/`write` tools on `v:config/mcp.json`, not application configuration or
+source files. The document is `{ revision, mcpServers }`, with an opaque revision
+returned by the read. Reads redact secrets as placeholders; unchanged placeholders
+preserve stored values. Writes retain that revision and validate the whole
+document before atomic `ProjectConfigStore` persistence. Stale revisions are
+rejected with a reread instruction, rather than overwriting concurrent edits.
+Whole-document `write({path, content})` includes the revision explicitly.
+Exact edits use `write({path, match, content, flag?})`, with `flag: "g"` for
+global replacement. They operate on a remembered redacted read snapshot scoped
+to both logical and physical session, require a prior read, and retain its
+revision for checking inside the configuration update. Missing snapshots require
+a reread, not a silent edit against current configuration.
+
+Each `mcpServers` key names a server. Stdio entries use `{ command, args, env, ... }`;
+HTTP entries use `{ type: "streamable-http", url, headers, ... }`. Add or edit
+entries for configuration, remove keys for removal, and submit several changes
+in one document for an atomic batch. The dedicated `mcp-config` skill documents
+the read/edit workflow and secret handling. No extra installation tool or
+explicit model-visible import tool is exposed.
+
+Saving updates the catalog only: it does not handshake, connect, or call MCP
+tools. Atomic persistence is not live connectivity verification. Connections
+are established later through discovery/invocation and failures remain per-source.
+
+The internal lazy loader remains responsible for session connections and
+modules. Unchanged connections are reused; changed configuration invalidates old
+connections. Loads within a session are serialized, and sleep cancels pending
+loads so they cannot repopulate a reset session. Sleep clears live session state,
+not Project MCP configuration. Skill declarations must be activated again by
+reading the skill. Legacy internal preload restoration is session-only
+and never writes persistent configuration. See the
+[configuration examples](../README.md#configure-project-mcp-servers).
 
 User-authored TypeScript uses Node's `registerHooks` and
 `stripTypeScriptTypes` in transform mode, rather than requiring packaged `tsx`.
@@ -995,7 +1117,7 @@ unlabelled secret emitted by an arbitrary server.
 
 Cleanup failures are reported alongside the primary failure, not instead of it.
 Listing failures no longer trigger a hidden reconnect/retry. The agent receives
-the diagnostic through explicit or implicit import and can attempt bounded
+the diagnostic through lazy discovery or invocation and can attempt bounded
 recovery; its tool guidance asks it to explain the server, phase, sanitized cause
 and required help to the user when needed. The existing conversation/tool-result
 projection is reused; there is no new automatic notification or credential repair
@@ -1014,9 +1136,11 @@ Complete tool contracts bypass generic result truncation; other search spaces
 retain their existing result limits. File/web searches retain parallel-read
 scheduling, while tool discovery is conservatively serialized because it can
 connect subprocesses and update session imports.
-Known IDs can be invoked directly with current-schema validation. Explicit
-`import_tool` remains compatible for whole-source, JSON/script and custom-argument
-imports; skills are optional guidance around these paths.
+Known MCP IDs can be invoked directly with current-schema validation. Skill
+aliases can be invoked directly after the exact owning skill read. There is no
+explicit model-visible import step. Saving configuration does not
+prove a live connection works; targeted MCP search verifies discovery, and tool
+execution is a separate operation with its own possible side effects.
 
 Chrome DevTools is split into common and full lazy entries sharing a connection.
 `ChromeManager` allocates session-specific debugging ports/profiles and releases
@@ -1159,11 +1283,10 @@ thread creation checks capabilities again at execution. A platform name or an
 `update`/`createThread` method alone does not enable that feature. Progressive
 output also respects the adapter's declared update support.
 
-Only reusable `session` children request native threads. `task` and `call`
-children remain internal executions; unsupported external reusable children use
-virtual addresses, never fabricated platform chat IDs. Existing browser child
-sessions remain browser-addressable. Platform thread/topic placement is separate
-from logical delegation ownership and does not change its depth limits.
+Subagent task/call executions remain internal and never create native threads.
+Durable Project topics are web-visible root peers, not platform threads created
+by subagent. Existing platform conversation routing remains separate from
+delegation ownership and never widens tool permissions.
 
 Discord checks the destination and permissions before creating a public thread.
 Feishu keeps root message IDs as compatible routing handles, but only treats

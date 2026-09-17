@@ -11,9 +11,14 @@ import { ExecTool } from './shell.ts'
 import { SearchTool } from './search.ts'
 import { ImportTool, type LoadableEntry } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
+import { SkillsManager } from '../skills/loader.ts'
 import { BackgroundTaskTool, ContinuationTool } from './background.ts'
 import { LogTool } from './log.ts'
 import { MessageTool } from './message.ts'
+import { TopicTool } from './topic.ts'
+import { InitiativeTool } from './initiative.ts'
+import { INITIATIVE_SCHEMA_PROMPT } from '../initiatives/schema.ts'
+import type { TopicService } from '../sessions/topics.ts'
 import { EventSubscribeTool } from './event-subscribe.ts'
 import { SubagentTool } from './subagent.ts'
 import { YieldTool } from './yield.ts'
@@ -43,9 +48,9 @@ import type { ChannelManager } from '../channels/manager.ts'
  * Heavy collaborators (SessionManager, ChannelManager) are stubbed because only
  * construction — not execution — is exercised here.
  *
- * Lazy / opt-in tools (MCP servers, chrome-devtools, initiative, cron, web_search)
- * are not registered in the base — they are loaded on demand. Opt-in tools that
- * ARE registered (plan_write, log) stay hidden unless an agent type
+ * Lazy tools (MCP servers, chrome-devtools, cron, web_search)
+ * are loaded on demand. Opt-in tools registered in the base
+ * (plan_write, log, initiative) stay hidden unless an agent type
  * whitelists them.
  *
  * Regenerate snapshots after an intentional change with:
@@ -57,7 +62,7 @@ const stub = <T>(): T => ({} as unknown as T)
 
 /**
  * Build a base tool registry mirroring the always-on tools registered in
- * `src/index.ts`, in the same registration order.
+ * `src/runtime/main/project-runtime.ts`, in the same registration order.
  */
 function buildBaseTools(): Tools {
   const bus = new Bus()
@@ -84,12 +89,13 @@ function buildBaseTools(): Tools {
     ),
   )
   const importer = new ImportTool(new Map<string, LoadableEntry>(), WORKSPACE)
-  tools.register(new SearchTool(WORKSPACE, undefined, undefined, importer))
-  tools.register(importer)
+  tools.register(new InitiativeTool({ query: () => [] }, 'fixture', INITIATIVE_SCHEMA_PROMPT))
+  tools.register(new SearchTool(WORKSPACE, undefined, undefined, importer, new SkillsManager(WORKSPACE)))
   tools.register(new InvokeTool(importer))
   tools.register(new BackgroundTaskTool(backgroundTasks))
   tools.register(new ContinuationTool(backgroundTasks))
   tools.register(new LogTool(WORKSPACE))
+  tools.register(new TopicTool(stub<TopicService>()))
   tools.register(
     new MessageTool(bus, () => true, () => undefined, () => undefined, deliver),
   )
@@ -145,6 +151,7 @@ test('scoped tool descriptions match the modes advertised to the model', () => {
     const modes = allowedSubagentModes(mode, parent)
     tools.setExecutionScope(mode, modes)
     const definitions = tools.getDefinitions()
+    assert.equal(definitions.some(def => def.function.name === 'topic'), mode === 'session')
     const subagent = definitions.find(def => def.function.name === 'subagent')?.function
     if (!modes.length) {
       assert.equal(subagent, undefined)
@@ -161,11 +168,11 @@ test('scoped tool descriptions match the modes advertised to the model', () => {
       assert.doesNotMatch(JSON.stringify(subagent), /\bcall\b|blocking|leaf/)
     } else {
       assert.match(subagent.description, /blocking bounded leaf call/)
-      assert(subagent.parameters.required?.includes('mode'))
+      assert.equal(subagent.parameters.required?.includes('mode') ?? false, !modes.includes('task'))
       assert(subagent.parameters.required?.includes('task'))
       assert.doesNotMatch(subagent.parameters.properties.task.description!, /optional/)
     }
     if (mode === 'task') assert(!('report_to' in subagent.parameters.properties))
   }
-  assert.deepEqual(base.get('subagent')!.parameters.properties.mode.enum, ['session', 'task', 'call'])
+  assert.deepEqual(base.get('subagent')!.parameters.properties.mode.enum, ['task', 'call'])
 })

@@ -74,15 +74,15 @@ test('append cron remains an ordinary chat while an opaque fresh run uses its ex
   assert.deepEqual(groups.automations[0].sessions.map(session => session.sessionId), ['opaque-run-id'])
 })
 
-test('fresh run descendants cross folder boundaries without changing associations or full text', () => {
+test('fresh run executions cross folder boundaries without changing associations or full text', () => {
   const title = '完整标题 https://example.invalid/' + '很长的内容\n'.repeat(300)
   const description = 'Original description\n'.repeat(100)
   const sessions = parseSessionGraph({
     sessions: [
       { sessionId: 'web:chat-regular', folderId: folder.id },
-      { sessionId: 'web:chat-grandchild', folderId: 'missing-folder', title, description },
+      { sessionId: 'web:chat-grandchild', mode: 'call', folderId: 'missing-folder', title, description },
       { sessionId: 'heartbeat:reflector-1789000000000', folderId: folder.id, automation },
-      { sessionId: 'web:chat-child', folderId: 'folder-b' },
+      { sessionId: 'web:chat-child', mode: 'task', folderId: 'folder-b' },
     ],
     nodes: [
       { physicalId: 'reflection', logicalId: 'heartbeat:reflector-1789000000000' },
@@ -111,10 +111,10 @@ test('fresh run descendants cross folder boundaries without changing association
 test('explicit orphan ownership and malformed cycles retain every session exactly once', () => {
   const sessions = parseSessionGraph({
     sessions: [
-      { sessionId: 'web:chat-cycle-child', folderId: folder.id },
+      { sessionId: 'web:chat-cycle-child', mode: 'task', folderId: folder.id },
       { sessionId: 'heartbeat:soul-reflector-1789000000001', automation },
       { sessionId: 'web:chat-orphan', automation: { ...automation, runId: 'orphan-run' } },
-      { sessionId: 'web:chat-orphan-child' },
+      { sessionId: 'web:chat-orphan-child', mode: 'call' },
       { sessionId: 'web:chat-unrelated-orphan' },
       { sessionId: 'heartbeat:encapsulator-1789000000002' },
     ],
@@ -148,7 +148,7 @@ test('explicit orphan ownership and malformed cycles retain every session exactl
 test('fresh task roots stay grouped even when one-shot; invalid associations fail explicitly', () => {
   const graph = { sessions: [
     { sessionId: 'cron:new', mode: 'task', automation },
-    { sessionId: 'child', parentSessionId: 'cron:new', mode: 'session' },
+    { sessionId: 'child', parentSessionId: 'cron:new', mode: 'call' },
     { sessionId: 'cron:reused', mode: 'session' },
   ], nodes: [] }
   const groups = groupFolderSessions([], parseSessionGraph(graph))
@@ -159,7 +159,7 @@ test('fresh task roots stay grouped even when one-shot; invalid associations fai
   }
 })
 
-test('physical parent lineage, logical compaction, label, model and collapse interaction survive grouping', () => {
+test('historical parent lineage cannot nest or collapse ordinary chats; compaction and labels survive', () => {
   const config = { model: 'provider/model', thinking: { type: 'enabled' }, reasoningEffort: 'low' }
   const sessions = parseSessionGraph({
     sessions: [
@@ -180,13 +180,13 @@ test('physical parent lineage, logical compaction, label, model and collapse int
   })
   const groups = groupFolderSessions([folder], sessions)
   assert.deepEqual(groups.folders[0].sessions.map(session => [session.sessionId, session.depth]), [
-    ['web:chat-root', 0], ['web:chat-child', 1], ['web:chat-grandchild', 2],
+    ['web:chat-child', 0], ['web:chat-root', 0], ['web:chat-grandchild', 0],
   ])
-  assert.equal(groups.folders[0].sessions[0].label, 'Root title')
-  assert.deepEqual(groups.folders[0].sessions[0].config, config)
-  assert.equal(groups.folders[0].sessions[0].isCurrent, true)
-  assert.deepEqual(visibleSessions(groups.folders[0].sessions, new Set(['web:chat-root'])).map(session => session.sessionId), ['web:chat-root'])
-  assert.deepEqual(groups.chats.map(session => session.depth), [0, 1])
+  assert.equal(groups.folders[0].sessions[1].label, 'Root title')
+  assert.deepEqual(groups.folders[0].sessions[1].config, config)
+  assert.equal(groups.folders[0].sessions[1].isCurrent, true)
+  assert.deepEqual(visibleSessions(groups.folders[0].sessions, new Set(['web:chat-root'])).map(session => session.sessionId), ['web:chat-child', 'web:chat-root', 'web:chat-grandchild'])
+  assert.deepEqual(groups.chats.map(session => session.depth), [0, 0])
 })
 
 test('cross-folder parents do not hide or reassign sessions; invalid cycles remain bounded', () => {

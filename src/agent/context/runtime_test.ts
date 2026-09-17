@@ -281,14 +281,14 @@ test('audience lookup uses the exact bot address and current configuration on ev
   assert.match(restored, /Unknown; replies may be visible to others/)
   assert.match(restored, /relevant and restrained/)
 })
-test('runtime advertises only mode-and-role permitted delegation', async () => {
+test('runtime advertises only mode-and-role permitted delegation', async t => {
   const provider = runtimeIdentityProvider({
     identity: new IdentityManager('.'),
     getSkillsSummary: () => '',
     getAgentTypesSummary: () => '<available_agent_types>Fixture roles</available_agent_types>',
   })
 
-  test('runtime uses destination capabilities without granting delegation or raw platform tools', async () => {
+  await t.test('runtime uses destination capabilities without granting delegation or raw platform tools', async () => {
     let capabilities: ChannelCapabilities = {
       ...unavailableCapabilities(), conversation: 'group', format: 'card',
       tables: true, codeBlocks: true, outboundMedia: ['image', 'file'],
@@ -304,7 +304,8 @@ test('runtime advertises only mode-and-role permitted delegation', async () => {
       agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
     }
     const root = await provider.getPromptSection(ctx)
-    assert.match(root!, /Reusable subagent sessions can get a topic/)
+    assert.match(root!, /No new native thread\/topic is created by subagent/)
+    assert.match(root!, /Durable Project topics are web-visible root peers/)
     assert.match(root!, /native choices with text fallback/)
     assert.match(root!, /Output updates: replace/)
     assert.match(root!, /message tool communicates with other agent sessions/)
@@ -326,7 +327,7 @@ test('runtime advertises only mode-and-role permitted delegation', async () => {
     agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', root: true, source: 'builtin' },
   }
   const cases: Array<{ mode: ExecutionMode; parentSessionId?: string; expected: string }> = [
-    { mode: 'session', expected: 'session, task' },
+    { mode: 'session', expected: 'task, call' },
     { mode: 'session', parentSessionId: 'test:root', expected: 'task, call' },
     { mode: 'task', parentSessionId: 'test:root', expected: 'call' },
     { mode: 'call', parentSessionId: 'test:task', expected: 'none' },
@@ -339,6 +340,52 @@ test('runtime advertises only mode-and-role permitted delegation', async () => {
   const restricted = await provider.getPromptSection({
     ...context, mode: 'task', agent: { ...context.agent, allowedTools: ['read'] },
   })
+
+  await t.test('coordinator runtime cap suppresses worker delegation and decisions', async () => {
+    let activeLookups = 0
+    const provider = runtimeIdentityProvider({
+      identity: new IdentityManager('.'),
+      getSkillsSummary: () => '',
+      getAgentTypesSummary: () => 'Worker role catalog',
+      getActiveSubagents: async () => {
+        activeLookups++
+        return [{ sessionId: 'fixture:child', agentType: 'general', description: 'Temporary work' }]
+      },
+    })
+    const prompt = (await provider.getPromptSection({
+      behavior: {}, sessionId: 'web:orchestrator', channel: 'web', chatId: 'orchestrator',
+      admin: true,
+      agent: { name: 'orchestrator', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
+    }))!
+    assert.match(prompt, /Allowed Delegation Modes\*\*: none/)
+    assert.match(prompt, /Coordinator cap.*read\/search\/topic\/message\/initiative only/)
+    assert.match(prompt, /Self-code \(src\/\) writes\*\*: NOT ALLOWED/)
+    assert.match(prompt, /Worker role catalog/)
+    assert.doesNotMatch(prompt, /Ask decisions with yield|Managed Subagents|fixture:child/)
+    assert.equal(activeLookups, 0)
+    assert.match(prompt, /creator provenance and context ancestry do not confer ownership/)
+  })
   assert(restricted?.includes('**Allowed Delegation Modes**: none'))
   assert(!restricted?.includes('Fixture roles'))
+})
+
+test('topic-only sessions see role templates without child execution listings', async () => {
+  const provider = runtimeIdentityProvider({
+    identity: new IdentityManager('.'),
+    getSkillsSummary: () => '',
+    getAgentTypesSummary: () => 'Selectable topic roles',
+    getActiveSubagents: async () => { throw new Error('Topic permission is not delegation ownership') },
+  })
+  const ctx: SessionPromptContext = {
+    behavior: {}, sessionId: 'web:topic', channel: 'web', chatId: 'topic',
+    agent: {
+      name: 'router', description: '', prompt: '', defaultMode: 'session', source: 'builtin',
+      allowedTools: ['read', 'search', 'topic'],
+    },
+  }
+  assert.match((await provider.getPromptSection(ctx))!, /Selectable topic roles/)
+  for (const mode of ['task', 'call'] as const) {
+    assert.doesNotMatch((await provider.getPromptSection({ ...ctx, mode }))!,
+      /Selectable topic roles|Managed Subagents/)
+  }
 })

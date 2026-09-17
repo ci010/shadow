@@ -1,6 +1,6 @@
 ---
 description: Refine SOUL.md from interaction patterns
-blockedTools: [subagent, cron, message, import_tool, invoke_tool, kill]
+blockedTools: [subagent, cron, message, invoke_tool, kill]
 root: true
 defaultMode: task
 skills: false

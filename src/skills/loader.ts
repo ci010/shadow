@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 import { getBuiltinSkills } from './builtins.ts'
 import { SkillsWatcher } from './watcher.ts'
+import type { SkillToolDeclarations } from './tool-declarations.ts'
 
 /**
  * Skill metadata parsed from YAML frontmatter.
@@ -20,6 +21,10 @@ export interface SkillMeta {
   category?: string
   /** When true, skill is listed inline in prompt instead of grouped by category. */
   core?: boolean
+  /** Session-local tool declarations activated only by explicitly reading this skill. */
+  tools?: SkillToolDeclarations
+  /** Invalid declarations leave the instructions discoverable, but block activation. */
+  toolsError?: string
 }
 
 /**
@@ -142,6 +147,15 @@ export class SkillsManager {
     return [...merged.values()]
   }
 
+  availableSkills(admin = false): Skill[] {
+    return this.allSkills().filter(skill => !skill.meta.admin || admin)
+  }
+
+  getSkill(name: string, admin = false): Skill | undefined {
+    const skill = this.resolveSkill(name)
+    return skill && (!skill.meta.admin || admin) ? skill : undefined
+  }
+
   // ── Level 1: Metadata (always in context) ─────────────────────────────
 
   /**
@@ -206,7 +220,7 @@ export class SkillsManager {
       '## Skills',
       '',
       'Skills are reusable capabilities — they describe *how* to do something (format, conventions, workflows).',
-      'Skills are loaded via `read("v:skills/<name>")`, not via `import_tool`. Unlike tools, skills don\'t execute — they inform.',
+      'Find skills with search({space:"skills:", query:"..."}). Search and category listings never activate tools. Explicit read("v:skills/<name>") loads instructions and registers that skill\'s frontmatter tools for this session only; invoke_tool loads the module lazily and validates its arguments. No install/import step is required. Sleep clears registrations: read the skill again. TypeScript entrypoints stay inside their owning skill directory. To configure MCP, read("v:skills/mcp-config") and edit the Project virtual config with read/write.',
       '- read("v:skills/<name>") to load a skill body',
       '- read("v:skills/<category>") to read skills in a category',
       '- read("v:skills/<name>/<path>") for bundled resources',
@@ -222,6 +236,10 @@ export class SkillsManager {
    */
   getSkillBody(name: string): string | undefined {
     return this.resolveSkill(name)?.body
+  }
+
+  getSkillDirectory(name: string): string | undefined {
+    return this.resolveSkill(name)?.dirPath
   }
 
   // ── Level 3: Bundled resources (on-demand) ────────────────────────────
@@ -252,9 +270,9 @@ export class SkillsManager {
    * Return all skill names + descriptions for a given category.
    * Used by virtual fs mount so the agent can `read("v:skills/browser")`.
    */
-  getCategoryDetail(category: string): string | undefined {
+  getCategoryDetail(category: string, admin = false): string | undefined {
     const catSkills = this.allSkills()
-      .filter((s) => s.meta.category === category && !s.isLearned)
+      .filter((s) => s.meta.category === category && !s.isLearned && (!s.meta.admin || admin))
 
     if (catSkills.length === 0) return undefined
 

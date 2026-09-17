@@ -53,6 +53,34 @@ test('independent Project Home databases cannot observe or modify one another', 
   assert.throws(() => a.store.migrateLegacy(join(b.home, 'projects')), /this Project/)
 })
 
+test('work reference validation is Project-local, read-only and checks the item parent', (t) => {
+  const f = fixture(t), other = fixture(t)
+  f.create(); f.create('second'); f.item('work')
+  other.create('foreign'); other.item('foreign-work', 'foreign')
+  const before = f.rows('SELECT * FROM initiatives')
+  const items = f.rows('SELECT * FROM initiative_items')
+  const entries = f.rows('SELECT * FROM initiative_entries')
+  f.store.assertWorkReference('build')
+  f.store.assertWorkReference('build', 'work')
+  assert.throws(() => f.store.assertWorkReference('foreign'), /Unknown initiative in this Project: foreign/)
+  assert.throws(() => f.store.assertWorkReference('build', 'foreign-work'), /Unknown initiative item in this Project: foreign-work/)
+  assert.throws(() => f.store.assertWorkReference('second', 'work'), /does not belong to initiative "second"/)
+  assert.throws(() => f.store.assertWorkReference('../build'), /slug/)
+  assert.throws(() => f.store.assertWorkReference('build', ''), /slug/)
+  assert.deepEqual(f.rows('SELECT * FROM initiatives'), before)
+  assert.deepEqual(f.rows('SELECT * FROM initiative_items'), items)
+  assert.deepEqual(f.rows('SELECT * FROM initiative_entries'), entries)
+  const writer = new DatabaseSync(join(f.home, 'initiatives.sqlite'))
+  try {
+    writer.exec('BEGIN IMMEDIATE')
+    f.store.assertWorkReference('build', 'work')
+  } finally { writer.exec('ROLLBACK'); writer.close() }
+  f.query("UPDATE initiatives SET status='cancelled' WHERE id='build'")
+  f.store.assertWorkReference('build', 'work')
+  f.store.close()
+  assert.throws(() => f.store.assertWorkReference('build'), /closed/)
+})
+
 test('session summaries include only explicit owner, creator, or assignee relationships', (t) => {
   const f = fixture(t)
   f.create('created'); f.create('assigned'); f.create('unrelated')
@@ -178,33 +206,130 @@ test('conditional claims are atomic across separate database connections', (t) =
   assert.equal(f.rows('SELECT assignee_session_id FROM initiative_items')[0]!.assignee_session_id, 'worker-a')
   assert.equal(f.rows('SELECT id FROM initiative_session_todos', 'worker-a')[0]!.id, 'work')
   assert.deepEqual(f.rows('SELECT id FROM initiative_session_todos', 'worker-b'), [])
-  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker-a'", 'worker-b'), /active or unknown/)
-  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker-a'", 'owner'), /active or unknown/)
-  assert.throws(() => f.query("UPDATE initiative_items SET status='done' WHERE id='work'", 'owner'), /active assignee/)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker-a'", 'worker-b'), /recorded assignment/)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker-a'", 'owner'), /recorded assignment/)
+  assert.throws(() => f.query("UPDATE initiative_items SET status='done' WHERE id='work'", 'owner'), /current assignee/)
   assert.equal(f.query("UPDATE initiative_items SET status='done' WHERE id='work'", 'worker-a').changes, 1)
 })
 
-test('explicit owner handoff, inactive claims, and unknown lifecycle fail closed', (t) => {
+test('inactive owners can explicitly hand off and assignees release work but cannot be displaced', (t) => {
   const activity = new Map<string, boolean>()
   const f = fixture(t, (id) => activity.get(id))
   f.create(); f.item('work')
   assert.deepEqual(f.rows('SELECT * FROM initiative_handoffs'), [])
   assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='owner'", 'taker'), /owner/)
   activity.set('owner', false)
-  assert.equal(f.rows('SELECT id,needs_handoff FROM initiative_handoffs')[0]!.needs_handoff, 1)
-  assert.match(f.store.getSummary('build')!, /needs-handoff/)
+  assert.deepEqual(f.rows('SELECT id,owner_activity,needs_attention,needs_handoff FROM initiative_handoffs'), [
+    { id: 'build', owner_activity: 'inactive', needs_attention: 1, needs_handoff: 1 },
+  ])
+  assert.match(f.store.getSummary('build')!, /needs_attention/)
   assert.equal(f.rows('SELECT status,owner_session_id FROM initiatives')[0]!.status, 'active')
   assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build'", 'taker'), /WHERE guard/)
   assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id(),goal='smuggled' WHERE id='build' AND revision=1", 'taker'), /owner/)
-  assert.equal(f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='owner'", 'taker').changes, 1)
+  assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='owner'", 'taker'), /owner/)
+  assert.equal(f.query("UPDATE initiatives SET owner_session_id='taker' WHERE id='build' AND owner_session_id='owner'").changes, 1)
   assert.deepEqual(f.rows('SELECT * FROM initiative_handoffs'), [])
   f.query("UPDATE initiatives SET owner_session_id='new-owner' WHERE id='build' AND owner_session_id='taker'", 'taker')
   f.query("UPDATE initiative_items SET assignee_session_id='worker' WHERE id='work' AND assignee_session_id IS NULL", 'new-owner')
-  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker'", 'taker'), /unknown/)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker'", 'taker'), /recorded assignment/)
   activity.set('worker', false)
-  assert.equal(f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker'", 'taker').changes, 1)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker'", 'taker'), /recorded assignment/)
+  f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND assignee_session_id='worker'", 'worker')
+  assert.equal(f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id IS NULL", 'taker').changes, 1)
   f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND assignee_session_id='taker'", 'taker')
   assert.equal(f.rows('SELECT assignee_session_id FROM initiative_items')[0]!.assignee_session_id, null)
+})
+
+test('sleep, idle, recovery and unknown runtime activity never authorize takeover or owner status edits', (t) => {
+  let activity: boolean | undefined = true
+  const f = fixture(t, () => activity)
+  f.create(); f.item('work')
+  f.query("UPDATE initiative_items SET assignee_session_id='worker',status='in_progress' WHERE id='work' AND assignee_session_id IS NULL")
+  const initiatives = f.rows('SELECT * FROM initiatives')
+  const items = f.rows('SELECT * FROM initiative_items')
+  const entries = f.rows('SELECT * FROM initiative_entries')
+  for (const state of [false, undefined, true, false, undefined]) {
+    activity = state
+    for (const actor of ['coordinator', 'worker']) {
+      assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND revision=1", actor), /owner/)
+      assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=NULL WHERE id='build' AND owner_session_id='owner'", actor), /owner/)
+    }
+    for (const actor of ['owner', 'coordinator']) {
+      assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND revision=2", actor), /recorded assignment/)
+      assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND assignee_session_id='worker'", actor), /current assignee/)
+      assert.throws(() => f.query("UPDATE initiative_items SET status='done' WHERE id='work'", actor), /assignee/)
+      assert.throws(() => f.query("UPDATE initiative_items SET status='blocked',blocked_reason='Stopped' WHERE id='work'", actor), /assignee/)
+    }
+  }
+  assert.deepEqual(f.rows('SELECT * FROM initiatives'), initiatives)
+  assert.deepEqual(f.rows('SELECT * FROM initiative_items'), items)
+  assert.deepEqual(f.rows('SELECT * FROM initiative_entries'), entries)
+  f.store.close()
+  for (const isSessionActive of [undefined, () => false, () => undefined]) {
+    const reopened = new InitiativeStore(f.home, { isSessionActive })
+    try {
+      assert.throws(() => reopened.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='owner'", 'coordinator'), /owner/)
+      assert.throws(() => reopened.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker'", 'owner'), /recorded assignment/)
+      assert.deepEqual(reopened.query('SELECT * FROM initiative_items', 'worker').results[0]!.rows, items)
+      assert.deepEqual(reopened.query('SELECT * FROM initiatives', 'worker').results[0]!.rows, initiatives)
+    } finally { reopened.close() }
+  }
+})
+
+test('explicit release, claim and owner handoff require guards and roll back together with audit', (t) => {
+  const f = fixture(t, () => { throw new Error('Activity must not authorize work changes') })
+  f.create(); f.item('work')
+  f.query("UPDATE initiative_items SET assignee_session_id='worker' WHERE id='work' AND assignee_session_id IS NULL")
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work'", 'worker'), /WHERE guard/)
+  assert.throws(() => f.query("UPDATE initiatives SET owner_session_id='next' WHERE id='build'"), /WHERE guard/)
+  assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=NULL WHERE id='build'"), /WHERE guard/)
+  assert.equal(f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND revision=1", 'worker').changes, 0)
+  assert.equal(f.query("UPDATE initiatives SET owner_session_id='next' WHERE id='build' AND owner_session_id='stale'").changes, 0)
+  const before = f.rows('SELECT * FROM initiative_entries')
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND assignee_session_id='worker'; UPDATE initiatives SET goal='forbidden' WHERE id='build'", 'worker'), /owner/)
+  assert.deepEqual(f.rows('SELECT * FROM initiative_entries'), before)
+  assert.equal(f.rows('SELECT assignee_session_id FROM initiative_items')[0]!.assignee_session_id, 'worker')
+  f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND revision=2", 'worker')
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work'", 'peer'), /WHERE guard/)
+  assert.equal(f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id IS NULL", 'peer').changes, 1)
+  f.query("UPDATE initiatives SET owner_session_id='next' WHERE id='build' AND revision=1")
+  assert.throws(() => f.query("UPDATE initiatives SET goal='former owner' WHERE id='build'"), /owner/)
+  f.query("UPDATE initiatives SET owner_session_id=NULL WHERE id='build' AND owner_session_id='next'", 'next')
+  assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id(),goal='smuggled' WHERE id='build' AND owner_session_id IS NULL", 'peer'), /owner/)
+  assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build'", 'peer'), /WHERE guard/)
+  assert.equal(f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id IS NULL", 'peer').changes, 1)
+  assert.equal(f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id IS NULL", 'next').changes, 0)
+  assert.equal(f.rows('SELECT owner_session_id FROM initiatives')[0]!.owner_session_id, 'peer')
+  const updates = f.rows("SELECT content FROM initiative_entries WHERE kind='audit'").map((entry) => JSON.parse(String(entry.content)))
+  assert.ok(updates.some((entry) => entry.before?.assignee_session_id === 'worker' && entry.after.assignee_session_id === null))
+  assert.ok(updates.some((entry) => entry.before?.owner_session_id === 'owner' && entry.after.owner_session_id === 'next'))
+})
+
+test('inactive assignees retain content and status rights but cannot edit structure or delegate', (t) => {
+  const f = fixture(t, () => false)
+  f.create(); f.item('work'); f.item('dependency')
+  f.query("UPDATE initiative_items SET assignee_session_id='worker' WHERE id='work' AND assignee_session_id IS NULL")
+  f.query("UPDATE initiative_items SET title='Revised work',status='blocked',blocked_reason='Waiting' WHERE id='work'", 'worker')
+  assert.throws(() => f.query("UPDATE initiative_items SET status='done' WHERE id='work'", 'worker'), /blocked_reason/)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id='peer' WHERE id='work' AND assignee_session_id='worker'", 'worker'), /delegate/)
+  assert.throws(() => f.query("INSERT INTO initiative_item_deps (item_id,depends_on_item_id) VALUES ('work','dependency')", 'worker'), /owner/)
+  assert.throws(() => f.query("UPDATE initiatives SET context='unauthorized' WHERE id='build'", 'worker'), /owner/)
+  f.query("UPDATE initiative_items SET status='done',blocked_reason=NULL WHERE id='work'", 'worker')
+  assert.equal(f.rows("SELECT title FROM initiative_items WHERE id='work'")[0]!.title, 'Revised work')
+})
+
+test('handoff notes are coordination history, not ownership or assignment changes', (t) => {
+  const f = fixture(t, () => false)
+  f.create(); f.item('work')
+  f.query("UPDATE initiative_items SET assignee_session_id='worker' WHERE id='work' AND assignee_session_id IS NULL")
+  const initiatives = f.rows('SELECT * FROM initiatives')
+  const items = f.rows('SELECT * FROM initiative_items')
+  f.query("INSERT INTO initiative_entries (initiative_id,item_id,kind,content) VALUES ('build','work','handoff','Please take this work, coordinator.')", 'worker')
+  f.query("INSERT INTO initiative_entries (initiative_id,kind,content) VALUES ('build','handoff','I request coordinator assistance.')")
+  assert.deepEqual(f.rows('SELECT * FROM initiatives'), initiatives)
+  assert.deepEqual(f.rows('SELECT * FROM initiative_items'), items)
+  assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='owner'", 'coordinator'), /owner/)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='work' AND assignee_session_id='worker'", 'coordinator'), /recorded assignment/)
 })
 
 test('new assignment and ownership targets must belong to the current Project when configured', (t) => {
@@ -220,12 +345,12 @@ test('new assignment and ownership targets must belong to the current Project wh
   assert.equal(f.query("UPDATE initiatives SET owner_session_id='new-owner' WHERE id='build' AND owner_session_id='owner'").changes, 1)
   known.delete('worker')
   known.delete('new-owner')
-  assert.equal(f.rows("SELECT assignee_activity,needs_handoff FROM initiative_item_activity WHERE id='work'")[0]!.needs_handoff, 1)
-  assert.match(f.store.getSummary('build')!, /needs-handoff/)
+  assert.equal(f.rows("SELECT assignee_activity,needs_attention FROM initiative_item_activity WHERE id='work'")[0]!.needs_attention, 1)
+  assert.match(f.store.getSummary('build')!, /needs_attention/)
   assert.equal(f.rows('SELECT owner_session_id FROM initiatives')[0]!.owner_session_id, 'new-owner')
-  f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='new-owner'")
-  f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND assignee_session_id='worker'")
-  assert.equal(f.rows('SELECT assignee_session_id FROM initiative_items')[0]!.assignee_session_id, null)
+  assert.throws(() => f.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='new-owner'"), /owner/)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=NULL WHERE id='work' AND assignee_session_id='worker'", 'new-owner'), /current assignee/)
+  assert.equal(f.rows('SELECT assignee_session_id FROM initiative_items')[0]!.assignee_session_id, 'worker')
   writeLegacy(f.home, 'legacy-known-check', legacy('legacy-known-check'))
   assert.deepEqual(f.store.migrateLegacyMarkdown(), { imported: 1, skipped: 0 })
   assert.equal(f.rows("SELECT owner_session_id FROM initiatives WHERE id='legacy-known-check'")[0]!.owner_session_id, null)
@@ -242,17 +367,18 @@ test('item activity exposes stopped assignees under a live coordinator without m
   const before = f.rows('SELECT * FROM initiative_items')
   const auditCount = f.rows('SELECT * FROM initiative_entries').length
   activity.set('worker', false)
-  assert.deepEqual(f.rows("SELECT assignee_activity,needs_handoff FROM initiative_item_activity WHERE id='work'"), [{ assignee_activity: 'inactive', needs_handoff: 1 }])
+  assert.deepEqual(f.rows("SELECT assignee_activity,needs_attention,needs_handoff FROM initiative_item_activity WHERE id='work'"), [{ assignee_activity: 'inactive', needs_attention: 1, needs_handoff: 1 }])
   assert.deepEqual(f.rows("SELECT assignee_activity,needs_handoff FROM initiative_item_activity WHERE id='unknown-work'"), [{ assignee_activity: 'unknown', needs_handoff: 0 }])
   assert.deepEqual(f.rows("SELECT assignee_activity,needs_handoff FROM initiative_item_activity WHERE id='unassigned-work'"), [{ assignee_activity: 'unassigned', needs_handoff: 0 }])
   assert.deepEqual(f.rows('SELECT * FROM initiative_handoffs'), [])
-  assert.match(f.store.getSummary('build')!, /assignee: worker; activity: inactive; needs-handoff/)
-  assert.match(f.store.getSessionSummary('owner')!, /assignee worker — inactive; needs-handoff/)
-  assert.match(f.store.getSessionSummary('worker')!, /activity: inactive; needs-handoff/)
+  assert.match(f.store.getSummary('build')!, /assignee: worker; activity: inactive; needs_attention; assignment retained/)
+  assert.match(f.store.getSessionSummary('owner')!, /assignee worker — inactive; needs_attention \(not claimable\)/)
+  assert.match(f.store.getSessionSummary('worker')!, /activity: inactive; needs_attention; assignment retained/)
+  assert.doesNotMatch(f.store.getSummary('build')!, /needs-handoff/)
   assert.match(f.store.getSessionSummary('unknown')!, /activity: unknown/)
   assert.deepEqual(f.rows('SELECT * FROM initiative_items'), before)
   assert.equal(f.rows('SELECT * FROM initiative_entries').length, auditCount)
-  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='unknown-work' AND assignee_session_id='unknown'", 'taker'), /active or unknown/)
+  assert.throws(() => f.query("UPDATE initiative_items SET assignee_session_id=actor_session_id() WHERE id='unknown-work' AND assignee_session_id='unknown'", 'taker'), /recorded assignment/)
   assert.throws(() => f.query("UPDATE initiative_item_activity SET assignee_session_id=actor_session_id() WHERE id='work'"), /read-only/)
   f.query("UPDATE initiative_items SET status='done' WHERE id='work'", 'worker')
   assert.equal(f.rows("SELECT needs_handoff FROM initiative_item_activity WHERE id='work'")[0]!.needs_handoff, 0)
@@ -277,15 +403,37 @@ test('completing initiatives requires terminal items and satisfied dependencies 
   assert.equal(f.rows("SELECT status FROM initiatives WHERE id='cancelled-work'")[0]!.status, 'completed')
 })
 
-test('version-one databases gain the read-only item activity view on reopen', (t) => {
+for (const version of [1, 2]) test(`version-${version} databases gain attention views without releasing assignments`, (t) => {
   const f = fixture(t)
-  f.create(); f.item('work'); f.store.close()
+  f.create(); f.item('work')
+  f.query("UPDATE initiative_items SET assignee_session_id='worker' WHERE id='work' AND assignee_session_id IS NULL")
+  const initiatives = f.rows('SELECT * FROM initiatives')
+  const items = f.rows('SELECT * FROM initiative_items')
+  const entries = f.rows('SELECT * FROM initiative_entries')
+  f.store.close()
   const db = new DatabaseSync(join(f.home, 'initiatives.sqlite'))
-  db.exec('DROP VIEW initiative_item_activity; PRAGMA user_version=1')
+  db.exec(`DROP VIEW initiative_item_activity; DROP VIEW initiative_handoffs;
+    CREATE VIEW initiative_handoffs AS SELECT p.*, 1 AS needs_handoff FROM initiatives p
+      WHERE p.status='active' AND (p.owner_session_id IS NULL OR session_is_inactive(p.owner_session_id)=1);
+    ${version === 2 ? `CREATE VIEW initiative_item_activity AS SELECT i.*,
+      session_activity(i.assignee_session_id) AS assignee_activity,
+      CASE WHEN i.status IN ('pending','in_progress','blocked') AND session_activity(i.assignee_session_id)='inactive'
+      THEN 1 ELSE 0 END AS needs_handoff FROM initiative_items i;` : ''}
+    PRAGMA user_version=${version}`)
   db.close()
-  const reopened = new InitiativeStore(f.home)
+  const reopened = new InitiativeStore(f.home, { isSessionActive: () => false })
   try {
-    assert.deepEqual(reopened.query('SELECT id,assignee_activity FROM initiative_item_activity', 'owner').results[0]!.rows, [{ id: 'work', assignee_activity: 'unassigned' }])
+    const rows = (sql: string) => reopened.query(sql, 'owner').results[0]!.rows
+    assert.deepEqual(rows('SELECT id,assignee_activity,needs_attention,needs_handoff FROM initiative_item_activity'), [
+      { id: 'work', assignee_activity: 'inactive', needs_attention: 1, needs_handoff: 1 },
+    ])
+    assert.deepEqual(rows('SELECT owner_activity,needs_attention,needs_handoff FROM initiative_handoffs'), [
+      { owner_activity: 'inactive', needs_attention: 1, needs_handoff: 1 },
+    ])
+    assert.deepEqual(rows('SELECT * FROM initiatives'), initiatives)
+    assert.deepEqual(rows('SELECT * FROM initiative_items'), items)
+    assert.deepEqual(rows('SELECT * FROM initiative_entries'), entries)
+    assert.throws(() => reopened.query("UPDATE initiatives SET owner_session_id=actor_session_id() WHERE id='build' AND owner_session_id='owner'", 'peer'), /owner/)
   } finally { reopened.close() }
 })
 
@@ -375,8 +523,8 @@ test('legacy migration preserves originals, imports context/history, is idempote
   const reopened = new InitiativeStore(f.home)
   try {
     assert.deepEqual(reopened.migrateLegacyMarkdown(), { imported: 0, skipped: 2 })
-    assert.match(reopened.getSummary('legacy')!, /needs-handoff/)
-    assert.doesNotMatch(reopened.getSummary('finished')!, /needs-handoff/)
+    assert.match(reopened.getSummary('legacy')!, /needs_attention/)
+    assert.doesNotMatch(reopened.getSummary('finished')!, /needs_attention/)
     writeFileSync(file, legacy('legacy') + 'Edited old truth')
     assert.throws(() => reopened.migrateLegacyMarkdown(), /archive changed/)
   } finally { reopened.close() }

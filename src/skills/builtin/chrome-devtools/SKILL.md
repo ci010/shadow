@@ -34,20 +34,23 @@ the source is explicitly selected.
 Chrome is auto-detected and launched with remote debugging enabled; no manual
 setup is required.
 
-## Explicit Import
+## Existing catalog entry
 
-Use `import_tool` to obtain authoritative schemas or configure the connection:
+The managed browser is already in the catalog; do not install it or overwrite
+its built-in name. To obtain authoritative schemas, select its source:
 
 ```
-import_tool(source="v:tools/chrome-devtools")
+search({ space: "tools:chrome-devtools", query: "" })
 ```
 
-The result lists every imported tool's full name and JSON Schema. Then call it
-through `invoke_tool`.
+Results contain exact names and JSON Schemas; paginate with `nextOffset` when
+needed, then call through `invoke_tool`. For external MCP configuration, read
+`v:skills/mcp-config` and use `v:config/mcp.json`; saving configuration does not
+verify a live connection. Reading this browser guidance does not execute tools.
 
 ## How auto-launch works
 
-When Chrome DevTools is imported automatically or explicitly:
+When Chrome DevTools is lazy-loaded through targeted search, invocation, or preload:
 
 1. The system detects the Chrome/Edge/Brave executable automatically
 2. A remote debugging port is allocated (starting from 9222)
@@ -102,6 +105,9 @@ Benefits:
 - **Parallel browsing**: spawn multiple subagents — each gets its own Chrome
   instance and port automatically
 
+Preloads use the internal session-only loader; they never persist installed
+configuration in the Project.
+
 For simple tasks (take a screenshot, read a page), loading directly is fine.
 
 ## Parallel browser sessions
@@ -116,13 +122,11 @@ If auto-launch fails, read the returned error. Common fixes:
 
 1. **Browser not found**: Set `tools.chrome.executablePath` in
    the Project's configuration to the correct browser path, or ask the user.
-2. **Port conflict**: The system auto-allocates ports, but if you need a
-   specific port, pass it explicitly:
-   ```
-  import_tool(source="v:tools/chrome-devtools", args=["--remote-debugging-port=9223"])
-   ```
+2. **Port conflict**: The system auto-allocates ports. Report the sanitized
+   conflict and let the managed lifecycle allocate a free port; do not use
+   external MCP configuration to replace the built-in browser or attach an existing browser.
 3. **Project connection/config errors**: Remove external endpoint,
-   auto-connect, profile, and launch flags from the import and the Project's
+   auto-connect, profile, and launch flags from preload arguments and the Project's
    `.chrome-devtools.json`. Only a managed `--remote-debugging-port` and the
    reviewed category/telemetry switches listed in `references/mcp-args.md` are
    accepted. Occupied ports are rejected, never attached.

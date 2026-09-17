@@ -1,4 +1,4 @@
-import { dirname, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { appendFile, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { isNotFoundError, isWindows } from '../utils/runtime.ts'
@@ -11,6 +11,7 @@ import {
 import { executeRemoteFilesystemText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
 import { formatWriteResult, MAX_WRITE_REGIONS, type ReplacementResult } from './write-result.ts'
 import { countLineChanges, MAX_LINE_DIFF_CHARS } from './line-changes.ts'
+import { isVirtualPath, type VirtualFs } from '../vfs/virtual-fs.ts'
 
 export { ReadTool } from './read.ts'
 
@@ -245,9 +246,11 @@ export class WriteTool implements Tool {
     private workspace: string,
     private selfCodeRoot?: string,
     private restrictToWorkspace: boolean = false,
+    private virtualFs?: VirtualFs,
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
+    if (isVirtualPath(String(args.path))) return `📝 ${String(args.path)}`
     const filePath = this.resolve(String(args.path))
     const icon = args.match ? '✏️' : '📝'
     return `${icon} ${displayPath(filePath, this.workspace)}`
@@ -258,6 +261,21 @@ export class WriteTool implements Tool {
     context: ExecutionContext,
   ): Promise<string> {
     context.signal.throwIfAborted()
+    const rawPath = String(args.path)
+    const virtualPath = isAbsolute(rawPath) ? relative(this.workspace, rawPath) : rawPath
+    if (isVirtualPath(virtualPath)) {
+      if (!this.virtualFs) return 'Error: unknown virtual filesystem path.'
+      const flags = typeof args.flag === 'string' ? args.flag : ''
+      if (/[^g]/.test(flags)) return 'Error: virtual writes support overwrite or exact edit only; append is unsupported.'
+      if (args.mode !== undefined || args.old_str !== undefined || args.new_str !== undefined || args.replace_all !== undefined) {
+        return 'Error: use content for overwrite, or match/content and optional flag "g" for exact virtual edits.'
+      }
+      return await this.virtualFs.write(virtualPath, {
+        content: String(args.content),
+        match: args.match != null ? String(args.match) : undefined,
+        replaceAll: flags.includes('g'),
+      }, context) ?? 'Error: unknown virtual filesystem path.'
+    }
     if (context.remoteWorkdir) {
       return await this.writeRemote(args, context)
     }
