@@ -10,13 +10,13 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
 import { redactMcpText } from '../mcp/errors.ts'
 
-const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'event_subscribe', 'cron', 'continuation', 'kill', 'initiative'])
+const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'event_subscribe', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'authoring_change'])
+const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'authoring_change', 'skill_read'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +

@@ -7,6 +7,7 @@
       <RouterLink :to="{ name: 'settings', params: { section: 'providers' } }">App providers</RouterLink>
     </div>
     <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
+      :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
       :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId"
       @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" />
   </div>
@@ -19,12 +20,14 @@ import { createProjectSettingsClient, configReasoning } from '../project-setting
 import type { ReasoningSettings } from '../session-settings.ts'
 import { provideModelSelection } from '../model-selection.ts'
 import type { FolderRecord } from '../folders-client.ts'
+import type { KnowledgeTabRequest } from '../file-workbench.ts'
 
 const props = defineProps<{
   apiBase: string; projectId: string; projectName: string; sessionId: string
   initialFolder?: FolderRecord; openRemote?: boolean; visible: boolean; childSessionId?: string
+  knowledgeRequest?: KnowledgeTabRequest
 }>()
-defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string] }>()
+defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string] }>()
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})

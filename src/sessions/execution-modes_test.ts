@@ -205,11 +205,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const role = resolve(name)
         return name === 'orchestrator' && role ? { ...role, allowedTools: ['exec', 'invoke_tool', 'subagent'] } : role
       }
-      for (const name of ['search', 'topic', 'initiative', 'project_config']) {
+      for (const name of ['search', 'topic', 'initiative', 'project_config', 'skill_read', 'skill_save']) {
         f.tools.register({ name, description: name, optIn: name === 'initiative',
           parameters: { type: 'object', properties: {} }, execute: async () => name })
       }
-      const allowed = ['initiative', 'message', 'project_config', 'read', 'search', 'topic']
+      const allowed = ['initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic']
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })
@@ -1157,7 +1157,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 
 test('leaf coordination tools remain denied through direct registry, dynamic invocation and invoke gateway', async () => {
   const base = new Tools('.')
-  const denied = ['subagent', 'yield', 'message', 'cron', 'event_subscribe', 'continuation', 'kill']
+  const denied = ['subagent', 'yield', 'message', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'event_subscribe', 'continuation', 'kill']
   let executions = 0
   for (const name of denied) base.register({ name, description: '', parameters: { type: 'object', properties: {} },
     execute: async () => { executions++; return 'Unexpected execution' } })

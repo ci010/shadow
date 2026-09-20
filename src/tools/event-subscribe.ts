@@ -50,7 +50,7 @@ export class EventSubscribeTool implements Tool {
     'Manage event subscriptions, event sources, and emit custom events. ' +
     'Events are signals that wake a session; declare urgency to control how they arrive ' +
     '(steering=interrupt now, queue=after current turn, debounce=coalesce a burst, silent=record only). ' +
-    'Read v:events for subscriptions and v:events/sources for registered sources. Use the cron tool to schedule periodic events.'
+    'Read v:events for subscriptions and v:events/sources for registered sources. Discover tools:cron and use cron_add to schedule periodic events.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

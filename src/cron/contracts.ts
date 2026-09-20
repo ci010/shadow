@@ -1,5 +1,5 @@
 /** Renderer-safe scheduling and persisted run contracts. */
-export type CronContextMode = 'origin' | 'isolated' | 'fresh'
+export type CronContextMode = 'existing' | 'fresh'
 export interface AutomationConfigSnapshot {
   source: 'cron' | 'learning'
   schedule: string

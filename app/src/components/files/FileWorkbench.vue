@@ -26,6 +26,15 @@
             </button>
           </div>
           <div ref="documentTabs" class="document-tabs">
+          <div v-if="tabs.knowledge" class="document-tab" :class="{ selected: tabs.selected === KNOWLEDGE_TAB_KEY }"
+            @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, KNOWLEDGE_TAB_KEY)" @contextmenu.prevent.stop="openTabMenu($event, KNOWLEDGE_TAB_KEY)">
+            <button :id="tabId(KNOWLEDGE_TAB_KEY)" role="tab" :aria-selected="tabs.selected === KNOWLEDGE_TAB_KEY"
+              :tabindex="tabs.selected === KNOWLEDGE_TAB_KEY ? 0 : -1" :aria-controls="panelId(KNOWLEDGE_TAB_KEY)"
+              @click="selectTab(KNOWLEDGE_TAB_KEY)" @keydown="tabKey($event, KNOWLEDGE_TAB_KEY)">
+              <span class="document-icon i-lucide-book-open" aria-hidden="true" /><span>Knowledge</span>
+            </button>
+            <button class="document-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY)"><span class="i-lucide-x" aria-hidden="true" /></button>
+          </div>
           <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))" @contextmenu.prevent.stop="openTabMenu($event, fileTabKey(file))">
             <HoverInfo :text="`${file.path}${file.view === 'diff' ? '\nChanges from HEAD' : ''}`" v-slot="{ triggerProps }">
             <button v-bind="triggerProps" :id="tabId(fileTabKey(file))" role="tab" :aria-selected="tabs.selected === fileTabKey(file)" :tabindex="tabs.selected === fileTabKey(file) ? 0 : -1" :aria-controls="panelId(fileTabKey(file))" :aria-label="`${file.path}${file.view === 'diff' ? ' changes' : ''}`" @click="selectTab(fileTabKey(file))" @keydown="tabKey($event, fileTabKey(file))">
@@ -38,9 +47,9 @@
           </div>
           <Teleport to="body">
             <div v-if="tabMenu" class="document-menu-backdrop" @pointerdown.self="dismissTabMenu(true)" @contextmenu.prevent.self="dismissTabMenu(true)">
-              <div ref="menuElement" class="document-menu" role="menu" aria-label="File tab actions" :style="menuPosition" @keydown="menuKey">
+              <div ref="menuElement" class="document-menu" role="menu" aria-label="Document tab actions" :style="menuPosition" @keydown="menuKey">
                 <button type="button" role="menuitem" @click="runTabAction('close')">Close</button>
-                <button type="button" role="menuitem" :disabled="tabs.files.length < 2" @click="runTabAction('others')">Close others</button>
+                <button type="button" role="menuitem" :disabled="documentTabKeys(tabs).length < 3" @click="runTabAction('others')">Close others</button>
                 <button type="button" role="menuitem" @click="runTabAction('all')"><span>Close all</span><span class="document-menu-shortcut">Ctrl+Shift+W</span></button>
               </div>
             </div>
@@ -52,6 +61,11 @@
       <div class="workbench-content" :class="{ 'draft-document': draft && tabs.selected === '' }">
         <div v-show="tabs.selected === ''" :id="panelId('')" class="conversation-document" role="tabpanel" :aria-labelledby="tabId('')">
           <slot />
+        </div>
+        <div v-if="tabs.knowledge && knowledgeEnabled" v-show="tabs.selected === KNOWLEDGE_TAB_KEY"
+          :id="panelId(KNOWLEDGE_TAB_KEY)" class="knowledge-document" role="tabpanel" :aria-labelledby="tabId(KNOWLEDGE_TAB_KEY)">
+          <KnowledgeView :api-base="apiBase" :project-id="projectId ?? ''" :entry-id="tabs.knowledge.entryId"
+            :active="active && tabs.selected === KNOWLEDGE_TAB_KEY" @select="selectKnowledgeEntry" />
         </div>
         <div v-for="file in tabs.files" v-show="tabs.selected === fileTabKey(file)" :id="panelId(fileTabKey(file))" :key="`${contextKey}:${fileTabKey(file)}`" class="file-document" role="tabpanel" :aria-labelledby="tabId(fileTabKey(file))">
           <FileDiffPreview v-if="(sessionId || folderId) && file.view === 'diff'" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
@@ -76,14 +90,15 @@ import FileTree from './FileTree.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
 import FileDiffPreview from './FileDiffPreview.vue'
 import HoverInfo from '../HoverInfo.vue'
+import KnowledgeView from '../KnowledgeView.vue'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
-import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type OpenFile } from '../../file-workbench.ts'
+import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, KNOWLEDGE_TAB_KEY, nextDocumentTab, openFileTab, openKnowledgeTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile } from '../../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false })
-const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false })
+const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
 const documentTabs = ref<HTMLElement>()
@@ -114,6 +129,9 @@ function selectTab(path: string) {
   tabs.value = { ...tabs.value, selected: path }
 }
 defineExpose({ showConversation: () => selectTab('') })
+function selectKnowledgeEntry(entryId: string) {
+  if (tabs.value.knowledge) tabs.value = { ...tabs.value, knowledge: { entryId } }
+}
 function openFile(file: OpenFile) {
   tabs.value = openFileTab(tabs.value, file)
   if (!wide.value) { preference.value = false; remoteExpanded.value = false }
@@ -133,7 +151,7 @@ function dismissTabMenu(restoreFocus = false) {
   if (restoreFocus && key !== undefined) document.getElementById(tabId(key))?.focus({ preventScroll: true })
 }
 async function openTabMenu(event: MouseEvent | KeyboardEvent, key: string) {
-  if (!props.active || !props.keyboardActive || !tabs.value.files.some(file => fileTabKey(file) === key)) return
+  if (!props.active || !props.keyboardActive || !key || !documentTabKeys(tabs.value).includes(key)) return
   const anchor = document.getElementById(tabId(key))?.getBoundingClientRect()
   if (!anchor) return
   const x = event instanceof MouseEvent && event.button === 2 ? event.clientX : anchor.left
@@ -197,7 +215,7 @@ function tabKey(event: KeyboardEvent, path: string) {
     return
   }
   if (event.key === 'Delete' && path) { event.preventDefault(); closeFile(path); return }
-  const next = nextDocumentTab(['', ...tabs.value.files.map(fileTabKey)], path, event.key)
+  const next = nextDocumentTab(documentTabKeys(tabs.value), path, event.key)
   if (next === undefined) return
   event.preventDefault()
   selectTab(next)
@@ -216,7 +234,7 @@ function shortcutContext() {
     active: props.active,
     keyboardActive: props.keyboardActive,
     visible: !!root.value?.getClientRects().length,
-    explorerEnabled: props.explorerEnabled,
+    explorerEnabled: props.explorerEnabled || !!tabs.value.knowledge,
     overlayOpen,
     composing,
   }
@@ -286,8 +304,19 @@ watch(() => props.contextKey, (key, previous) => {
   if (previous !== undefined) cachedTabs.set(previous, tabs.value)
   tabs.value = cachedTabs.get(key) ?? { files: [], selected: '' }
 })
+watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], () => {
+  if (!props.knowledgeEnabled) {
+    tabs.value = closeFileTab(tabs.value, KNOWLEDGE_TAB_KEY)
+  } else if (props.knowledgeRequest) {
+    tabs.value = openKnowledgeTab(tabs.value, props.knowledgeRequest.entryId)
+  } else if (tabs.value.selected === KNOWLEDGE_TAB_KEY) {
+    selectTab('')
+  }
+}, { immediate: true })
 watch(() => props.active && props.keyboardActive, active => { if (!active) dismissTabMenu() })
 watch(() => tabs.value.selected === '', value => emit('conversation-visible', value), { immediate: true, flush: 'sync' })
+watch(() => [tabs.value.selected === KNOWLEDGE_TAB_KEY, tabs.value.knowledge?.entryId] as const,
+  ([active, entryId]) => emit('knowledge-navigation', active, entryId), { immediate: true })
 onMounted(() => {
   // Check overlays before a target's Tab handler can dismiss them.
   document.addEventListener('keydown', documentKey, true)
@@ -341,7 +370,7 @@ onUnmounted(() => {
 .document-close { margin-right: 4px; }
 button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.conversation-document, .file-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.conversation-document, .file-document, .knowledge-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .workbench-explorer.drawer { position: absolute; inset: calc(41px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .explorer-backdrop { position: absolute; inset: calc(41px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }
 @media (max-width: 700px) {

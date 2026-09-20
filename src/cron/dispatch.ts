@@ -13,9 +13,10 @@ export class CronDispatcher {
   async dispatch(job: CronJob, signal: AbortSignal, task = job.task ?? '', onAccepted?: (sessionId: string) => void): Promise<string> {
     signal.throwIfAborted()
     const mode = cronContextMode(job)
-    if (mode !== 'fresh') {
-      const target = mode === 'isolated' ? `cron:${job.id}`
-        : job.target?.sessionId ?? `${job.channel ?? 'cron'}:${job.chatId ?? job.id}`
+    if (mode === 'existing') {
+      const target = job.target?.sessionId
+      if (!target) throw new Error('Existing-session cron requires a target session.')
+      this.sessions.assertCanScheduleSession(job.originSessionId ?? target, target)
       await this.deliverEvent(job, target, signal)
       return target
     }

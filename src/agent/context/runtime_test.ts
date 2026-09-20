@@ -10,6 +10,23 @@ import { getBuiltinAgentTypes } from '../types/builtins.ts'
 import { ContextBuilder } from './builder.ts'
 import { guidelineProvider } from './guideline.ts'
 
+test('Skill disclosure receives the logical session and current admin visibility', async () => {
+  const requests: Array<[boolean, string | undefined]> = []
+  const provider = runtimeIdentityProvider({
+    identity: new IdentityManager('.test-data\\unused-runtime-identity'),
+    getSkillsSummary: (admin, session) => { requests.push([admin, session]); return 'Recent Skill hints' },
+    getAgentTypesSummary: () => '',
+  })
+  const ctx: SessionPromptContext = {
+    behavior: {}, sessionId: 'web:one', channel: 'web', chatId: 'one',
+    agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
+  }
+  assert.match((await provider.getPromptSection(ctx))!, /Recent Skill hints/)
+  await provider.getPromptSection({ ...ctx, sessionId: 'web:two', admin: true })
+  await provider.getPromptSection({ ...ctx, agent: { ...ctx.agent, skills: false } })
+  assert.deepEqual(requests, [[false, 'web:one'], [true, 'web:two']])
+})
+
 test('runtime capability prompts carry the exact org bot address for identical platform conversations', async t => {
   const bots: string[] = []
   const identity = new IdentityManager('.test-data\\unused-runtime-identity')

@@ -71,7 +71,7 @@ test('automation inventory rejects wrong modes, types, duplicate identities and 
   for (const value of [
     {}, { automations: null }, { automations: [null] }, { automations: [automation(), automation()] },
     ...[
-      { source: 'reflector' }, { session: 'origin' }, { session: 'isolated' }, { enabled: 'true' },
+      { source: 'reflector' }, { session: 'existing' }, { enabled: 'true' },
       { id: '..' }, { name: '' }, { schedule: null }, { task: {} }, { agentType: 4 },
     ].map(change => ({ automations: [{ ...automation(), ...change }] })),
   ]) await assert.rejects(fetchAutomations(base, signal(), response(value)), /invalid automation data/)

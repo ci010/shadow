@@ -1,12 +1,14 @@
 import { projectResourceKey } from './projects.ts'
 import type { FolderRecord } from './folders-client.ts'
 import type { SessionRef } from './api-url.ts'
+import type { KnowledgeTabRequest } from './file-workbench.ts'
 
 export interface ConversationResource extends SessionRef {
   key: string
   folder?: FolderRecord
   openRemote?: boolean
   childSessionId?: string
+  knowledgeRequest?: KnowledgeTabRequest
 }
 
 /** A resource keeps its key while the first send gives its draft a session ID. */

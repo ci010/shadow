@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
+import { documentTabKeys, KNOWLEDGE_TAB_KEY, openKnowledgeTab } from './file-workbench.ts'
 
 const file = (path: string) => ({ path, entry: { name: path.split('/').at(-1)!, ext: '.md', type: 'file' as const, size: 12, mtime: null } })
 test('opening files retains existing tabs, deduplicates by full path and selects without replacing state', () => {
@@ -52,6 +53,33 @@ const available = {
   active: true, keyboardActive: true, visible: true, explorerEnabled: true,
   overlayOpen: false, composing: false,
 }
+
+test('Knowledge shares document navigation and closing without impersonating a file or discarding other tabs', () => {
+  const initial = openFileTab({ files: [], selected: '' }, file('notes.md'))
+  const opened = openKnowledgeTab(initial, 'memory/wiki.md')
+  assert.deepEqual(documentTabKeys(opened), ['', KNOWLEDGE_TAB_KEY, 'notes.md'])
+  const reopened = openKnowledgeTab(opened)
+  assert.equal(reopened.files, initial.files)
+  assert.equal(reopened.knowledge?.entryId, 'memory/wiki.md')
+  assert.equal(documentTabKeys(reopened).length, 3)
+  const source = openFileTab(reopened, file('other.md'))
+  assert.equal(source.knowledge?.entryId, 'memory/wiki.md')
+  assert.equal(closeFileTab(source, KNOWLEDGE_TAB_KEY).selected, 'other.md')
+  assert.equal(closeFileTab(opened, KNOWLEDGE_TAB_KEY).selected, '')
+  assert.equal(closeFileTab(opened, KNOWLEDGE_TAB_KEY).knowledge, undefined)
+  assert.deepEqual(closeOtherFileTabs(source, KNOWLEDGE_TAB_KEY), {
+    files: [], knowledge: { entryId: 'memory/wiki.md' }, selected: KNOWLEDGE_TAB_KEY,
+  })
+  assert.equal(closeOtherFileTabs(source, 'notes.md').knowledge, undefined)
+  assert.deepEqual(closeAllFileTabs(opened), { files: [], selected: '' })
+  const knowledgeOnly = openKnowledgeTab({ files: [], selected: '' })
+  assert.equal(selectedFileToClose(knowledgeOnly, available), KNOWLEDGE_TAB_KEY)
+  assert.equal(canCloseAllDocuments(knowledgeOnly, available), true)
+  assert.equal(cycleDocumentTab(knowledgeOnly, 1, available), '')
+  assert.equal(cycleDocumentTab({ ...knowledgeOnly, selected: '' }, -1, available), KNOWLEDGE_TAB_KEY)
+  assert.equal(selectedFileToClose(knowledgeOnly, { ...available, active: false }), undefined)
+  assert.equal(initial.knowledge, undefined)
+})
 
 test('bulk close preserves Conversation and isolates source/diff keys and original state', () => {
   const source = file('a.md')

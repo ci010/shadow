@@ -1071,12 +1071,33 @@ by path helpers.
 
 ### Skills
 
-Skills are `SKILL.md` instruction documents, not running code. Metadata and
-category summaries are disclosed first; full bodies and bundled resources are
+Skills are `SKILL.md` instruction documents, not running code. A bounded selection
+of metadata is disclosed first; full bodies and bundled resources are
 read via `v:skills` when needed. Built-ins live in `src/skills/builtin`;
 workspace skills can shadow them and are watched for changes. Metadata supports
 platform/architecture, category/core presentation, and admin visibility.
 These filters are not an execution sandbox for scripts referenced by a skill.
+`SkillDisclosure` limits the entire metadata summary to 1,200 estimated tokens:
+capped core hints, session LRU, then Project recency/cold fallback. Learned Skills
+participate; admin filtering happens before ranking. Successful exact reads and
+saves record use, not discovery or prompt rebuilding. Recency is memory-only,
+bounded per Project/session, and never removes files or active tools. Search
+continues to expose the complete permitted catalog.
+
+`SkillEditStore` and `skill_read`/`skill_save` provide ordinary shared Skill
+editing, including bundled tool sources, to durable local web topics and the
+coordinator. The coordinator receives only scoped Skill access, not generic
+write/exec. Raw editing reads do not register tools. Session-local read
+baselines detect stale saves without model-provided revisions. The save path
+validates the complete candidate, rejects unsafe paths/symlinks and invalid
+declarations, stages files, and swaps directories with rollback on ordinary
+commit failures. This is not crash-recovery infrastructure or an OS sandbox.
+There is no retained backup/history, Git repository, or bounded-session pinning.
+Built-in-only entries cannot be edited through this API. Existing Bot
+authoring/publication is unchanged and remains a separate resource system.
+Watcher scans discard reads racing direct manager mutations; exact Skill reads
+also reload current instructions instead of waiting for the watcher debounce.
+
 Skills are optional workflow guidance, not an MCP admission requirement. A server
 does not need a corresponding skill; a workflow may use several servers, and
 several skills may guide use of the same server. Indexed MCP schemas can be stale;
@@ -1174,8 +1195,13 @@ skill-tool registrations. New sessions and sleep/reset require another exact
 skill read. Source files remain in their original locations.
 After activation, `search({space: "tools:<alias>", query: ""})`
 reads schema metadata without executing source. Skill search never activates
-tools. Rereading the exact skill refreshes
-changed entrypoints and declarations; registrations are not shared across
+tools. Registration captures a whole-package content fingerprint and executable
+text. Imports and pre/post execution checks reject changed instructions,
+declarations, code or resources with an explicit reread requirement. A fresh
+exact read updates only that session; no historical package is preserved.
+These checks are not execution isolation and cannot undo side effects of edits
+racing a running script. Rereading the exact skill refreshes
+changed bundles; registrations are not shared across
 sessions. Invalid frontmatter tools remain discoverable with `toolsError`,
 while an exact skill read fails explicitly.
 Metadata belongs exclusively to `SKILL.md`; `init`, `execute`, `callTool`,
@@ -1395,12 +1421,23 @@ processes from these records. Session-bound tasks use turn facts rather than UI
 `done`. Callback delivery errors are reported separately from the real task result.
 
 `CronService` persists user definitions in `.cron/jobs.json` and schedules them
-only while the backend is running. The `cron` tool exposes `origin` (append to
-the creating session), `isolated` (append to a fixed `cron:<job-id>` session),
-and `fresh` (an independent context per run). Learning registers managed fresh
+only while the backend is running. `cron_add`, `cron_list` and `cron_remove`
+are separate dynamically loaded tools, discoverable individually or via the
+`cron` catalog source. No action-dispatch tool is exposed and no scheduling
+tools are added to the base prompt. `cron_add` exposes `existing` (append to
+an explicit `targetSessionId`, defaulting to the creating session) and `fresh`
+(an independent context per run). Existing jobs require durable source/target
+sessions in the current Project and messaging permission for a peer target.
+`SessionManager.assertCanScheduleSession` checks access at creation and each
+dispatch; missing targets are never implicitly recreated. Events carry creator
+session provenance, not user/admin authority. The target retains its own agent,
+tools, workdir and history. Dedicated recurring conversations are ordinary topics
+created before scheduling, not a separate cron mode. The former `origin` and
+`isolated` modes/boolean are rejected without migration.
+Learning registers managed fresh
 jobs on this same scheduler; learning configuration remains its durable source.
 [`CronDispatcher`](../src/cron/dispatch.ts) delivers normalized events for append
-modes and calls `SessionManager.startSession` for fresh runs. It does not create
+mode and calls `SessionManager.startSession` for fresh runs. It does not create
 a second provider/tool loop. Fresh runs retain validated project/workdir
 references without parent transcript inheritance, and persist explicit
 automation/run identity plus configuration snapshots in both session stores.
@@ -1412,7 +1449,7 @@ shorthand schedules. Weekdays use standard cron numbering (`0`/`7` = Sunday,
 without executing or overwriting them. Existing schedules must be backed up
 and recreated after review, not automatically converted.
 Fresh dispatch waits for the actual execution lifecycle, so overlap protection
-covers that run. Append modes retain event-admission behavior: acceptance is
+covers that run. Existing mode retains event-admission behavior: acceptance is
 not completion of the resulting agent turn. There is no claim of
 exactly-once execution, cross-machine leader election, or missed-tick replay.
 

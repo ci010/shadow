@@ -128,6 +128,48 @@ Remote folder listings, UTF-8 text previews, and Git inspection use the owning
 Child. Raw/static remote media remains unsupported (`501`), as does remote
 cloning. These additions do not complete distributed release hardening.
 
+### Knowledge: memory, wiki and skills
+
+Use the book icon beside a project to open **Knowledge** beside **Conversation**
+in the existing document tab bar, not a separate page. Switch between knowledge,
+conversation and file tabs without discarding the conversation or its draft.
+Close Knowledge with its close button, middle-click or Ctrl+W; closing the tab
+does not delete knowledge. Existing Knowledge links open the same workspace tab.
+Browse that project's memory files, wiki pages and effective skills. Search
+titles, paths and descriptions, inspect content and source, and follow incoming
+and outgoing references. The relationship graph shows explicit Markdown links,
+event `refs` and learned-skill associations, including missing targets; it does
+not infer semantic relationships. Category/search filters retain direct graph
+neighbors, and focus mode shows one entry's immediate relationships.
+
+Management requires Main administrator access. Built-in skills are read-only.
+Deletion requires confirmation with incoming references and a content revision
+check. It removes only the selected file, not referring entries: dangling
+references remain visible. A daily JSONL log is deleted as an entire file, not
+one event. Skill deletion removes its `SKILL.md` and updates discovery while
+retaining bundled resources; a same-name built-in becomes available again.
+Already loaded session instructions and conversation history are not erased,
+and future agent learning can recreate deleted knowledge. Refresh to pick up
+changes made by agents or other windows. Knowledge lives in the owning Project
+Home, never in a session's remote workdir.
+
+**Link health** runs a separate deterministic scan once per day, with an overdue
+check after startup, and offers **Scan now** in Knowledge. It shares CronService's
+project-scoped scheduling and shutdown, but creates no agent session, calls no
+model, and is independent of the three learning pipelines. The most recent
+report is persisted per Project; restarting Main does not reset its daily due
+time. Failed scheduled scans retry at most once a minute and surface an error.
+
+Catalog absence is not proof of a dead link. Reports distinguish confirmed
+missing local targets, unavailable/unsafe-to-inspect targets, and existing files
+outside the browsable catalog. External URLs are not probed. Scans never rewrite
+content. **Preview Wiki repair** shows the original and proposed contents for
+one Wiki file; **Confirm repair** replaces eligible missing links with their
+label text. Source/report revisions and target absence are rechecked before the
+write. Session memories, event-history refs, skills, built-ins, unavailable
+targets and ambiguous links remain review-only. No page is deleted or recreated,
+and no replacement target is guessed. Refresh or scan again after a conflict.
+
 ### Initiatives: shared work, not another folder
 
 The former `project` tool is now `initiative`: Project-local SQLite records for
@@ -1644,6 +1686,42 @@ explicitly. See the `mcp-config` skill for both write forms.
 
 ### Discover skills and activate script tools
 
+Ordinary learning edits the shared Project Skill space directly; it does not
+need an authoring Change, approval or publication. Discover `skill_read` and
+`skill_save` with `search({space: "tools:", query: "skill"})`, then invoke them.
+The Project coordinator has these scoped tools directly, without general
+filesystem write or script-execution access.
+
+```ts
+invoke_tool({ name: "skill_read", args: { name: "csv-utils" } })
+invoke_tool({ name: "skill_save", args: {
+  name: "csv-utils",
+  files: { "SKILL.md": "...complete updated content...", "tools/summary.ts": "...complete source..." }
+} })
+```
+
+`skill_read` returns raw SKILL.md plus the file listing, or a named text resource
+with `path`; `offset`/`limit` page long files without activating tools. The host
+remembers the read baseline internally. Save new Skills directly; read existing
+ones first. One save merges all supplied file edits, with `null` deleting a
+resource, and validates the complete result before replacing the package.
+Stale edits fail and must be reread/merged. Built-ins are read-only through this
+API; adapt them with a different Project Skill name. There is **no automatic
+backup, Git history or rollback**. Temporary transaction files are not history.
+Packages are bounded to 256 regular files, 512 entries, 8 MiB total and 16 path
+components; unsafe paths, symlinks/junctions and hard-linked files are rejected.
+These package checks also apply when activating or invoking declared scripts.
+Saving grants no execution permissions and does not deploy or pin resources
+for Bots or fresh cron sessions; existing Bot publication stays separate.
+The scoped edit tools currently require a durable local web topic/coordinator.
+
+System-prompt Skill hints have a **1,200 estimated-token budget**, combining
+capped core hints, this session's recently used Skills and Project recency.
+Learned Skills are eligible. Only successful exact Skill reads and saves
+promote usage; passive search/listing does not. Recency is in memory and resets
+on restart. Omitted Skills remain searchable and readable; nothing is deleted,
+and already activated tools are not evicted by this disclosure budget.
+
 JavaScript/erasable TypeScript tools must belong to a discovered skill folder containing `SKILL.md`.
 One skill declares one or many tools in its YAML frontmatter:
 
@@ -1702,7 +1780,12 @@ the declared parameter schema. After activation,
 source. Invocation uses the shared child/VM engine with controlled imports;
 host `exec` uses the same engine with host policy, not the tool import policy.
 Neither policy nor the process boundary is an OS sandbox.
-Rereading the exact skill refreshes changed declarations and entrypoints.
+Rereading the exact skill refreshes changed instructions, declarations,
+entrypoints and resources. Registration captures the current package content
+fingerprint and executable text. Later imports and invocation validate that
+fingerprint; changes require a fresh read instead of silently switching code.
+This is change detection, not an execution snapshot: concurrent external edits
+during execution may already have side effects before the post-execution check.
 Registrations are not shared across sessions. Invalid tool declarations remain
 discoverable with `toolsError`, but the exact skill read fails explicitly.
 
@@ -1730,13 +1813,26 @@ for session lifetime and execution boundaries.
 
 ## Scheduled conversations
 
-The `cron` tool supports three context modes:
+Scheduling uses three dynamic tools: `cron_add`, `cron_list`, and `cron_remove`.
+Discover them with `search({space: "tools:cron", query: ""})`, then call the
+selected tool through `invoke_tool`; there is no `action` parameter.
+`cron_add` requires `schedule` and `task` and supports two context modes:
 
 | `session` | Execution context | Sidebar |
 | --- | --- | --- |
-| `origin` (default) | Append events to the creating conversation | Ordinary conversation |
-| `isolated` | Reuse the dedicated `cron:<job-id>` conversation across ticks | Ordinary conversation |
+| `existing` (default) | Append events to `targetSessionId`, or the current conversation when omitted | Ordinary conversation |
 | `fresh` | Start an independent context for every run | One entry under Automations, with run history |
+
+Existing jobs require durable source and target sessions in the same Project.
+Scheduling another session requires permission to message it; access is checked
+both when saving and before each tick. The target keeps its own agent, tools,
+workdir and history, not the creator's configuration. Missing targets are errors,
+not an instruction to create a new session. To give recurring work a dedicated
+conversation, create a topic first and schedule its returned session ID.
+`urgency` (`queue`, `steering`, `debounce`, `silent`) applies only to existing
+jobs; `debounce_ms` requires `urgency: "debounce"`.
+`cron_list` takes no arguments; `cron_remove` requires the job `id` and leaves
+session history intact. All three remain dynamically loaded, not base tools.
 
 Fresh jobs accept a readable `name` and an optional `agentType`. They retain the
 origin's project/effective workdir reference, not its conversation transcript.
@@ -1761,9 +1857,11 @@ The Node scheduler uses standard cron weekdays: `0` (or `7`) is Sunday,
 Cron storage now has the shape `{ "version": 1, "jobs": [...] }`. Startup
 rejects the old unversioned array in `<workspace>/.cron/jobs.json` without
 executing or overwriting it. Before upgrading an existing workspace, move that
-file to a backup, then recreate the schedules with the cron tool after confirming
+file to a backup, then recreate the schedules with `cron_add` after confirming
 their weekdays and timezone. Do not simply wrap the old array in the new format.
 There is no automatic conversion or Deno scheduling compatibility layer.
+The former `origin`/`isolated` modes and `isolated` boolean are no longer
+accepted; no migration for those definitions is provided.
 
 ## Gateway and trust boundary
 

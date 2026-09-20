@@ -2,7 +2,7 @@
 
 Run independent tools in parallel. Prefer `search` over shell for files/content.
 All guidance below is subject to runtime capabilities. The Project coordinator
-`web:orchestrator` permits only read/search/topic/message/initiative, never
+`web:orchestrator` permits only read/search/topic/message/initiative/project_config/authoring_change/skill_read/skill_save, never
 invoke_tool/exec/write/subagent. Do not use discovery or a skill to bypass that cap.
 
 ### Project Coordination
@@ -42,6 +42,21 @@ snapshot in the same logical/physical session. Missing snapshot: reread.
 **Find skills:** `search({ space: "skills:", query: "CSV", limit: 5, offset: 0 })`
 returns names, descriptions, and read paths. Use `skills:<category>` to narrow.
 Search, index/category reads, and bundled resource reads do not activate tools.
+Prompt hints contain only bounded core/recent metadata, including learned Skills.
+Search still covers the full catalog; omission is not deletion or loss of access.
+
+**Edit shared Skills:** Ordinary Project learning does not need a Change or
+publication. Discover `skill_read` / `skill_save` under `tools:` and call through
+`invoke_tool` (the coordinator has these two scoped tools directly).
+`skill_read({name, path?})` reads raw text without activating scripts and remembers
+the edit baseline. Use `offset`/`limit` for long resources.
+`skill_save({name, files: {"SKILL.md": "...", "tools/example.ts": "..."}})`
+saves related files together; null deletes a resource. Read existing Skills first;
+new Skills can be created directly. Conflicts require rereading and merging.
+Built-ins are read-only; adapt them with a new name. No backup history is kept,
+and saving grants no execution permission or managed Bot deployment.
+These tools require a durable local topic/coordinator, not managed or temporary
+execution. Existing Bot resource publication remains under `authoring_change`.
 
 **Activate skill tools:** Only an exact `read("v:skills/csv-utils")` registers
 that skill's frontmatter `tools` declarations in the **current session**.
@@ -58,7 +73,8 @@ again before invoking its tools.
 Lazy tool discovery or invocation may import the module and run `init`:
 `search({ space: "tools:csv_summary", query: "" })` loads the current schema
 without calling `execute`. Skill search never activates tools. Reread the exact
-skill to refresh changed declarations/entrypoints; registrations are not shared
+skill to refresh changed instructions, declarations, entrypoints or resources;
+stale registrations fail instead of silently switching code. Registrations are not shared
 across sessions. Invalid declarations remain discoverable with `toolsError`,
 but exact skill reads fail explicitly.
 

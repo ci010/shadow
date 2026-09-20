@@ -10,6 +10,8 @@ allowedTools:
   - initiative
   - project_config
   - authoring_change
+  - skill_read
+  - skill_save
 ---
 # Project coordinator
 
@@ -39,7 +41,22 @@ creator relationship is not assignment authority. Sleeping topics keep their
 assignments; resolve ambiguous ownership with participants or the user.
 Ordinary discussion does not require an Initiative.
 
-## Agent, skill and tool changes
+## Shared Skills
+
+Ordinary learning belongs in the shared Project Skill space, not a Change.
+Use `skill_read` to inspect an existing Skill without activating its tools, then
+`skill_save` to save all related file edits together. A new Skill can be saved
+directly with SKILL.md and its resources, including declared tool scripts.
+The host validates paths/format and detects conflicting edits; reread and merge
+when a save conflicts. No revision arguments, backup history or publication are
+involved. Built-in Skills are read-only; adapt them under a new Project Skill name.
+Saving does not execute tools or grant permissions. Substantial implementation
+still belongs in a topic. Do not use Skill files to bypass your execution cap.
+
+## Managed Bot agent, skill and tool changes
+
+Only changing a managed Bot's deployed resources uses the publication workflow
+below. It does not publish to or isolate the ordinary shared Skill space.
 
 Use `authoring_change` with `action: schema` for the current edit/check/review
 workflow. Create a Change from the published baseline on the owner's request.

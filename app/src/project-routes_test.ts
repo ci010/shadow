@@ -35,6 +35,7 @@ for (const protocol of ['http:', 'file:'] as const) {
       '/projects/owner%20one/chat/web%3Achat-same?automation=daily&child=task%3Aone#message-2',
       '/projects/other/chat/web%3Achat-same',
       '/projects/owner%20one/settings/bots',
+      '/projects/owner%20one/chat/web%3Achat-same?panel=knowledge&entry=memory%2Ftopics%2Fexample.md',
       '/projects/owner%20one/agents/reviewer',
       '/projects/owner%20one/logs',
       '/projects/owner%20one/spans',
@@ -47,6 +48,18 @@ for (const protocol of ['http:', 'file:'] as const) {
       assert.equal(router.currentRoute.value.hash, expected.hash)
       assert.equal(router.currentRoute.value.redirectedFrom, undefined)
     }
+  })
+  test(`${protocol} old Knowledge links open the conversation document tab`, async () => {
+    const router = applicationRouter(protocol)
+    await router.push('/projects/owner%20one/knowledge?entry=memory%2Ftopics%2Fexample.md#graph')
+    assert.equal(router.currentRoute.value.name, 'chat')
+    assert.equal(router.currentRoute.value.params.projectId, 'owner one')
+    assert.deepEqual(router.currentRoute.value.query, { panel: 'knowledge', entry: 'memory/topics/example.md' })
+    assert.equal(router.currentRoute.value.hash, '#graph')
+    await router.push('/knowledge?entry=builtin%3Askills%2Fnode')
+    assert.equal(router.currentRoute.value.name, 'chat')
+    assert.equal(router.currentRoute.value.params.projectId, 'default')
+    assert.deepEqual(router.currentRoute.value.query, { panel: 'knowledge', entry: 'builtin:skills/node' })
   })
 }
 

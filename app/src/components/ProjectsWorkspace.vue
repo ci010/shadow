@@ -42,6 +42,7 @@
           :selected-project-id="selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
           :draft-folder-id="selected?.folder?.id" :remote-folders="installation.mode === 'main'"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
+          @knowledge="openKnowledge(project.id)"
           @deleted="deleted(project.id, $event)" @manage="(folder, action) => manageFolder(project, folder, action)"
           @automation="showAutomation(project.id, $event)" @session-automation="(session, job) => identifyAutomation(project.id, session, job)" />
       </div>
@@ -65,6 +66,7 @@
         :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
         :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
         :child-session-id="resource.childSessionId"
+        :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" />
     </div>
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
@@ -185,13 +187,16 @@ function syncRoute() {
   }
   const automationId = syncAutomationRoute(projectId)
   const sessionId = typeof route.params.sessionId === 'string' ? route.params.sessionId : ''
+  let resource: ConversationResource
   if (sessionId) {
-    const resource = registry.session({ projectId, sessionId })
+    resource = registry.session({ projectId, sessionId })
     resource.childSessionId = typeof route.query.child === 'string' ? route.query.child : undefined
-    publish(resource)
   }
-  else if (automationId) { selected.value = undefined; sidebarOpen.value = false }
-  else if (selected.value?.projectId !== projectId || selected.value.sessionId) publish(registry.draft(projectId))
+  else if (automationId) { selected.value = undefined; sidebarOpen.value = false; return }
+  else resource = selected.value?.projectId === projectId && !selected.value.sessionId ? selected.value : registry.draft(projectId)
+  resource.knowledgeRequest = route.query.panel === 'knowledge'
+    ? { entryId: typeof route.query.entry === 'string' ? route.query.entry : undefined } : undefined
+  publish(resource)
 }
 async function refresh() {
   request?.abort()
@@ -246,12 +251,35 @@ function selectSession(projectId: string, sessionId: string) {
   }
   navigate(projectId, sessionId)
 }
+function openKnowledge(projectId: string) {
+  if (!installation.value.uiScopes.includes('main:admin')) return
+  automation.value = undefined
+  const resource = selected.value?.projectId === projectId ? selected.value
+    : registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
+  publish(resource)
+  void router.push({ ...projectChatLocation(resource), query: { panel: 'knowledge' } })
+}
+function knowledgeNavigation(resource: ConversationResource, active: boolean, entryId?: string) {
+  if (!props.visible || selected.value?.key !== resource.key || route.name !== 'chat'
+    || route.params.projectId !== resource.projectId || (route.params.sessionId || '') !== resource.sessionId) return
+  const query = { ...route.query }
+  if (active) {
+    query.panel = 'knowledge'
+    if (entryId) query.entry = entryId
+    else delete query.entry
+  } else {
+    if (query.panel !== 'knowledge') return
+    delete query.panel
+    delete query.entry
+  }
+  if (query.panel !== route.query.panel || query.entry !== route.query.entry) void router.replace({ query })
+}
 function prepared(key: string, sessionId: string) {
   const resource = registry.prepared(key, sessionId)
   resources.value = [...registry.resources]
   // A delayed upload/prepare in A must not navigate away from B.
   if (selected.value?.key === key && props.visible && route.name === 'chat') {
-    void router.replace({ ...projectChatLocation(resource), query: resource.childSessionId ? { child: resource.childSessionId } : {} })
+    void router.replace({ ...projectChatLocation(resource), query: { ...route.query, child: resource.childSessionId } })
   }
 }
 function deleted(projectId: string, sessionId: string) {

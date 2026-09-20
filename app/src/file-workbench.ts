@@ -12,13 +12,29 @@ export function fileTabKey(file: OpenFile): string {
 
 export interface FileTabs {
   files: OpenFile[]
+  knowledge?: KnowledgeTabRequest
   /** Empty key identifies the permanent conversation tab. */
   selected: string
+}
+
+export interface KnowledgeTabRequest {
+  entryId?: string
+}
+
+export const KNOWLEDGE_TAB_KEY = '\0knowledge'
+
+export function documentTabKeys(state: FileTabs): string[] {
+  return ['', ...(state.knowledge ? [KNOWLEDGE_TAB_KEY] : []), ...state.files.map(fileTabKey)]
+}
+
+export function openKnowledgeTab(state: FileTabs, entryId?: string): FileTabs {
+  return { ...state, knowledge: { entryId: entryId ?? state.knowledge?.entryId ?? '' }, selected: KNOWLEDGE_TAB_KEY }
 }
 
 export function openFileTab(state: FileTabs, file: OpenFile): FileTabs {
   if (file.entry.type !== 'file') return state
   return {
+    ...state,
     files: state.files.some(existing => fileTabKey(existing) === fileTabKey(file))
       ? state.files : [...state.files, file],
     selected: fileTabKey(file),
@@ -26,19 +42,24 @@ export function openFileTab(state: FileTabs, file: OpenFile): FileTabs {
 }
 
 export function closeFileTab(state: FileTabs, path: string): FileTabs {
+  if (path === KNOWLEDGE_TAB_KEY && state.knowledge) {
+    const { knowledge, ...remaining } = state
+    return { ...remaining, selected: state.selected === path ? '' : state.selected }
+  }
   const index = state.files.findIndex(file => fileTabKey(file) === path)
   if (index < 0) return state
   const files = state.files.filter(file => fileTabKey(file) !== path)
   const neighbour = files[Math.min(index, files.length - 1)]
-  return { files, selected: state.selected === path
-    ? (neighbour ? fileTabKey(neighbour) : '') : state.selected }
+  return { ...state, files, selected: state.selected === path
+    ? (neighbour ? fileTabKey(neighbour) : state.knowledge ? KNOWLEDGE_TAB_KEY : '') : state.selected }
 }
 
 export function closeAllFileTabs(state: FileTabs): FileTabs {
-  return state.files.length ? { files: [], selected: '' } : state
+  return state.files.length || state.knowledge ? { files: [], selected: '' } : state
 }
 
 export function closeOtherFileTabs(state: FileTabs, keep: string): FileTabs {
+  if (keep === KNOWLEDGE_TAB_KEY && state.knowledge) return { files: [], knowledge: state.knowledge, selected: keep }
   const file = state.files.find(file => fileTabKey(file) === keep)
   return file ? { files: [file], selected: keep } : state
 }
@@ -105,17 +126,17 @@ function canHandleDocumentShortcut(context: DocumentShortcutContext): boolean {
 }
 
 export function canCloseAllDocuments(state: FileTabs, context: DocumentShortcutContext): boolean {
-  return state.files.length > 0 && canHandleDocumentShortcut(context)
+  return documentTabKeys(state).length > 1 && canHandleDocumentShortcut(context)
 }
 
 export function selectedFileToClose(state: FileTabs, context: DocumentShortcutContext): string | undefined {
-  if (canHandleDocumentShortcut(context) && state.selected && state.files.some(file => fileTabKey(file) === state.selected)) {
+  if (canHandleDocumentShortcut(context) && state.selected && documentTabKeys(state).includes(state.selected)) {
     return state.selected
   }
 }
 
 export function cycleDocumentTab(state: FileTabs, direction: DocumentTabDirection, context: DocumentShortcutContext): string | undefined {
-  if (!canHandleDocumentShortcut(context) || state.files.length === 0) return
-  return nextDocumentTab(['', ...state.files.map(fileTabKey)], state.selected,
+  if (!canHandleDocumentShortcut(context) || documentTabKeys(state).length === 1) return
+  return nextDocumentTab(documentTabKeys(state), state.selected,
     direction === 1 ? 'ArrowRight' : 'ArrowLeft')
 }

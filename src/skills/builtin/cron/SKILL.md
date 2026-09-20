@@ -7,31 +7,32 @@ metadata:
 
 # Cron Scheduling
 
-Use `search(query="cron", space="tools:cron")` when you need the current
-contract, then invoke `cron` directly. No separate import is required; arguments
-are validated before execution. Do not invoke an add/remove operation merely to
-discover its schema.
+Use `search(query="", space="tools:cron")` to discover the scheduling tools.
+Invoke `cron_add`, `cron_list`, or `cron_remove` through `invoke_tool`.
+No separate import or `action` argument is required. Arguments are validated
+before execution. Discovery never adds or removes a job.
 
 ## Tool Contract
 
-Use `invoke_tool` with `name: "cron"` and an `args` object:
+Use `invoke_tool({name: "cron_add", args: {...}})` to schedule a task:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `action` | string | yes | `add`, `list`, or `remove` |
-| `id` | string | remove | Job ID |
-| `schedule` | string | add | Cron expression or `every 5m` interval |
-| `task` | string | add | Prompt delivered when the job fires |
-| `session` | string | no | `origin` (default) or `isolated` |
+| `schedule` | string | yes | Cron expression or `every 5m` interval |
+| `task` | string | yes | Prompt delivered when the job fires |
+| `session` | string | no | `existing` (default) or `fresh` |
+| `targetSessionId` | string | no | Existing durable session in this Project; existing mode only, defaults to current session |
+| `name` | string | no | Readable job name; defaults to the task |
+| `agentType` | string | no | Agent type for fresh runs, default `general` |
 | `once` | boolean | no | Delete after first run |
-| `urgency` | string | no | `steering`, `queue`, `debounce`, or `silent`; origin sessions only |
+| `urgency` | string | no | `steering`, `queue`, `debounce`, or `silent`; existing mode only |
 | `debounce_ms` | number | no | Debounce duration when `urgency` is `debounce` |
 
-## Actions
+## List and Remove
 
-- `add` — schedule a new job
-- `list` — list all scheduled jobs
-- `remove` — remove a job by ID (ID is returned when you add a job)
+- `invoke_tool({name: "cron_list", args: {}})` lists scheduled jobs in this Project.
+- `invoke_tool({name: "cron_remove", args: {id: "<job ID>"}})` removes a job,
+  retaining session history. Use an ID returned by `cron_add` or `cron_list`.
 
 ## Schedule Formats
 
@@ -43,9 +44,8 @@ Use `invoke_tool` with `name: "cron"` and an `args` object:
 
 ```json
 {
-  "name": "cron",
+  "name": "cron_add",
   "args": {
-    "action": "add",
     "schedule": "0 9 * * 1-5",
     "task": "Time for standup!",
     "once": true
@@ -57,13 +57,30 @@ Use `invoke_tool` with `name: "cron"` and an `args` object:
 
 When a job fires it can run in one of two places, controlled by `session`:
 
-- `origin` (default) — delivers an event into the session that created the job,
-  waking up the original conversation.
-- `isolated` — runs in a dedicated `cron:<id>` session, keeping recurring work
-  out of the originating conversation.
+- `existing` (default) — delivers an event to `targetSessionId`, or the current
+  session when omitted. It keeps that conversation's history and configuration.
+- `fresh` — starts a new independent session for every run, using `agentType`
+  (default `general`). It inherits the creator's workdir reference, not its
+  conversation. Runs appear under Automations.
+
+For recurring work in its own long-lived conversation, create a topic first,
+then use its returned session ID as `targetSessionId`. Source and target must
+be durable sessions in this Project; scheduling a peer requires messaging
+permission. The target executes with its own tools and permissions. Access is
+rechecked on each tick; a missing target is not automatically recreated.
+Do not pass `targetSessionId`, `urgency` or `debounce_ms` for fresh runs.
+The former `origin`/`isolated` modes and `isolated` boolean are not supported.
 
 ```json
-{ "action": "add", "schedule": "every 1h", "task": "Sweep the inbox", "session": "isolated" }
+{
+  "name": "cron_add",
+  "args": {
+    "schedule": "every 1h",
+    "task": "Sweep the inbox",
+    "session": "existing",
+    "targetSessionId": "<session ID returned by topic>"
+  }
+}
 ```
 
 ## Examples
@@ -71,4 +88,5 @@ When a job fires it can run in one of two places, controlled by `session`:
 - Morning briefing: `schedule="0 9 * * *"` task="Give me a morning briefing"
 - Hourly check: `schedule="every 1h"` task="Check for new issues"
 - One-shot reminder: `schedule="0 14 * * *"` task="Remind about meeting" once="true"
-- Background sweep: `schedule="every 30m"` task="Process pending items" session="isolated"
+- Background sweep with retained context: `schedule="every 30m"` task="Process pending items" session="existing" targetSessionId="<existing topic ID>"
+- Independent check: `schedule="every 1h"` task="Check service health" session="fresh" name="Service health"

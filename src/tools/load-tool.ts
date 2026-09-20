@@ -1,5 +1,5 @@
-import { basename, isAbsolute, resolve } from 'node:path'
-import { readFile, stat as nodeStat } from 'node:fs/promises'
+import { basename, isAbsolute, relative, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { McpToolAdapter, mcpToolContract } from '../mcp/adapter.ts'
 import { McpConnection } from '../mcp/client.ts'
@@ -18,6 +18,8 @@ import { getProjectScope } from '../projects/scope.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { SkillToolDeclarationsSchema, resolveSkillToolSource, type SkillToolDeclaration, type SkillDirectoryResolver } from '../skills/tool-declarations.ts'
 import type { Skill } from '../skills/loader.ts'
+import { readSkillDirectory } from '../skills/edit-store.ts'
+import { parseSkillFile } from '../skills/parse.ts'
 import { SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
 
@@ -60,6 +62,7 @@ export type LoadableEntry = Tool | McpLoadable | FactoryLoadable | ScriptLoadabl
 interface ScriptLoadable {
   script: SkillToolDeclaration & { skill: string; admin?: boolean }
   sourceVersion: string
+  code: string
   resource: { active: boolean }
 }
 
@@ -115,6 +118,7 @@ class ScriptToolAdapter implements Tool {
         code: this.code, args, signal: binding.signal, cwd: context.cwd, filename: this.declaration.source,
         entry: 'run', policy: { kind: 'restricted', imports }, callModule: binding.call,
       })
+      await this.validate(context)
       return typeof result === 'string' ? result : JSON.stringify(result, null, 2)
     } finally {
       await binding.cleanup()
@@ -300,6 +304,13 @@ export class ImportTool implements Tool {
     if (this.projectId && context.projectId !== this.projectId) throw new Error('Skill tool Project binding mismatch')
     const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
     return this.withImports(context.tools, signal, async () => {
+      const snapshot = Object.keys(declarations).length ? readSkillDirectory(skill.dirPath) : undefined
+      if (snapshot) {
+        const parsed = parseSkillFile(snapshot.files['SKILL.md'].toString('utf8'), basename(skill.dirPath))
+        if (!isDeepStrictEqual(parsed.meta, skill.meta) || parsed.body !== skill.body) {
+          throw new Error('Skill changed while reading; read the skill again before invoking its tools')
+        }
+      }
       const current = this.skillTools.get(context.tools) ?? new Map<string, ScriptLoadable>()
       const next = new Map<string, ScriptLoadable>()
       for (const [name, declaration] of Object.entries(declarations)) {
@@ -314,13 +325,17 @@ export class ImportTool implements Tool {
           throw new Error(`Skill tool "${name}" conflicts with an existing tool; choose another frontmatter alias`)
         }
         const source = await resolveSkillToolSource(skill.meta.name, declaration.source, this.getSkillDirectory)
-        const info = await nodeStat(source, { bigint: true })
-        const sourceVersion = `${info.mtimeNs}:${info.ctimeNs}:${info.size}`
+        const sourceVersion = snapshot!.revision
+        const code = snapshot!.files[relative(skill.dirPath, source).replaceAll('\\', '/')]?.toString('utf8')
+        if (code === undefined) throw new Error('Skill source changed while reading; read the skill again')
         const script = { ...declaration, source, skill: skill.meta.name, admin: skill.meta.admin }
-        next.set(name, previous && previous.sourceVersion === sourceVersion && isDeepStrictEqual(previous.script, script)
-          ? previous : { script, sourceVersion, resource: { active: true } })
+        next.set(name, previous?.resource.active && previous.sourceVersion === sourceVersion && isDeepStrictEqual(previous.script, script)
+          ? previous : { script, sourceVersion, code, resource: { active: true } })
       }
       signal.throwIfAborted()
+      if (snapshot && readSkillDirectory(skill.dirPath).revision !== snapshot.revision) {
+        throw new Error('Skill changed while reading; read the skill again before invoking its tools')
+      }
       for (const [name, entry] of current) {
         if (entry.script.skill === skill.meta.name && next.get(name) !== entry) {
           entry.resource.active = false
@@ -737,14 +752,16 @@ export class ImportTool implements Tool {
 
     if (isScriptLoadable(entry)) {
       await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
+      this.assertCurrentSkill(entry)
       if (tools.hasDynamic(name)) return tools.activeDynamicTools().filter(tool => tool.name === name)
       if (extraArgs.length) return 'Error: skill scripts do not accept import-time arguments; pass arguments to invoke_tool.'
-      return this.loadScript(entry.script, tools, options, name, entry.resource, async context => {
+      return this.loadScript(entry.script, entry.code, tools, options, name, entry.resource, async context => {
         if (!entry.resource.active) throw new Error('Skill tool registration expired; read the skill again')
         if (entry.script.admin && !context.admin) throw new Error('This skill requires an admin session')
         if (context.remoteWorkdir) throw new Error('Skill scripts require a local workdir')
         if (this.projectId && context.projectId !== this.projectId) throw new Error('Skill tool Project binding mismatch')
         await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
+        this.assertCurrentSkill(entry)
       })
     }
 
@@ -1012,21 +1029,25 @@ export class ImportTool implements Tool {
     return tools
   }
 
+  private assertCurrentSkill(entry: ScriptLoadable): void {
+    if (!entry.resource.active) throw new Error('Skill tool registration expired; read the skill again')
+    const directory = this.getSkillDirectory(entry.script.skill)
+    if (!directory) throw new Error(`Skill "${entry.script.skill}" was not found; read the skill again`)
+    if (readSkillDirectory(directory).revision !== entry.sourceVersion) {
+      entry.resource.active = false
+      throw new Error(`Skill "${entry.script.skill}" changed; read the skill again before invoking its tools`)
+    }
+  }
+
   private async loadScript(
     declaration: SkillToolDeclaration,
+    code: string,
     sessionTools: SessionTools,
     options: ImportOptions,
     registeredName: string,
     resource: { active: boolean },
     validate: (context: ExecutionContext) => Promise<void>,
   ): Promise<Tool[] | string> {
-    options.signal.throwIfAborted()
-    let code: string
-    try {
-      code = await readFile(declaration.source, 'utf8')
-    } catch (err) {
-      return `Error reading tool source: ${err instanceof Error ? err.message : String(err)}`
-    }
     options.signal.throwIfAborted()
     if (!resource.active) return `Error: skill tool "${registeredName}" changed while loading; read the skill again`
     const tool = new ScriptToolAdapter(registeredName, declaration, code, validate)

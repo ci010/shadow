@@ -24,6 +24,7 @@ test('gateway and Vite distinguish scoped backend calls from project browser pag
     '/projects/default/chat/web%3Aone', '/projects/org-a/settings/bots',
     '/projects/org-a/agents/general', '/projects/org-a/spans',
     '/projects/org-a/logs',
+    '/projects/org-a/knowledge',
   ]) {
     assert(!isBackendPath(path))
     assert(!proxy.test(path))
@@ -58,6 +59,7 @@ test('production org deep links serve the SPA with root assets without swallowin
       '/projects', '/projects/default/chat/web%3Asession.with.dots',
       '/projects/default/settings/bots', '/projects/default/agents/general',
       '/projects/default/logs', '/projects/missing/settings/general',
+      '/projects/default/knowledge',
     ]) {
       const response = await app.request(path)
       assert.equal(response.status, 200, path)

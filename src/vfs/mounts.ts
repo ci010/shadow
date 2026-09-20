@@ -5,6 +5,7 @@ import type {
   BackgroundTaskSummary,
 } from '../agent/background-task.ts'
 import type { Skill, SkillsManager } from '../skills/loader.ts'
+import { loadSingleSkill } from '../skills/parse.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { EventService } from '../events/service.ts'
 import type { EventSubscription } from '../events/types.ts'
@@ -261,7 +262,9 @@ export function createSkillsHandler(
     const name = slashIdx >= 0 ? subpath.slice(0, slashIdx) : subpath
     const rest = slashIdx >= 0 ? subpath.slice(slashIdx + 1) : ''
 
-    const skill = skills.getSkill(name, context.admin)
+    const cached = skills.getSkill(name, context.admin)
+    const skill = cached && !rest ? await loadSingleSkill(cached.dirPath, name) : cached
+    if (skill?.meta.admin && !context.admin) return `Unknown skill or category: ${name}`
     const skillBody = skill?.body
     if (skillBody !== undefined) {
       if (rest) {
@@ -292,6 +295,7 @@ export function createSkillsHandler(
           content += `\n--- ${s.meta.name} ---\n${s.body}\n`
         }
       }
+      skills.markSkillUsed(name, context.sessionId)
       return content
     }
 

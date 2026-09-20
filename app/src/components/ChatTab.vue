@@ -28,10 +28,12 @@
     />
 
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
+      :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
+      @knowledge-navigation="knowledgeNavigation"
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
     <!-- Chat area -->
@@ -359,6 +361,7 @@ import ComposerPopover from './ComposerPopover.vue'
 import SlashCommandMenu from './SlashCommandMenu.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
 import FileWorkbench from './files/FileWorkbench.vue'
+import type { KnowledgeTabRequest } from '../file-workbench.ts'
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import SelectionMenu from './SelectionMenu.vue'
 import { insertQuote } from '../selection-actions.ts'
@@ -455,6 +458,7 @@ const props = withDefaults(defineProps<{
   enableChildPane?: boolean
   keyboardActive?: boolean
   visible?: boolean
+  knowledgeRequest?: KnowledgeTabRequest
 }>(), { embedded: false, enableChildPane: false, keyboardActive: true, visible: true })
 const activated = ref(true)
 const paneActive = computed(() => props.visible && activated.value)
@@ -468,6 +472,7 @@ const emit = defineEmits<{
   deleted: [id: string]
   navigate: [id: string]
   prepared: [id: string]
+  'knowledge-navigation': [active: boolean, entryId?: string]
 }>()
 const paneId = useId()
 const domId = (id: string) => props.embedded || props.managed ? `${paneId}-${id}` : id
@@ -960,7 +965,12 @@ type ConversationPanel = 'conversation' | 'diagnosis'
 const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
-const composerVisible = computed(() => !conversationDocumentVisible.value || activePanel.value === 'conversation')
+const knowledgeDocumentVisible = ref(false)
+const composerVisible = computed(() => !knowledgeDocumentVisible.value && (!conversationDocumentVisible.value || activePanel.value === 'conversation'))
+function knowledgeNavigation(active: boolean, entryId?: string) {
+  knowledgeDocumentVisible.value = active
+  emit('knowledge-navigation', active, entryId)
+}
 const canQuoteSelection = computed(() => (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value && !submissionBusy.value)
 function switchPanel(panel: ConversationPanel): void {
   activePanel.value = panel

@@ -469,7 +469,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "event_subscribe",
-      "description": "Manage event subscriptions, event sources, and emit custom events. Events are signals that wake a session; declare urgency to control how they arrive (steering=interrupt now, queue=after current turn, debounce=coalesce a burst, silent=record only). Read v:events for subscriptions and v:events/sources for registered sources. Use the cron tool to schedule periodic events.",
+      "description": "Manage event subscriptions, event sources, and emit custom events. Events are signals that wake a session; declare urgency to control how they arrive (steering=interrupt now, queue=after current turn, debounce=coalesce a burst, silent=record only). Read v:events for subscriptions and v:events/sources for registered sources. Discover tools:cron and use cron_add to schedule periodic events.",
       "parameters": {
         "type": "object",
         "properties": {

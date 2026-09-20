@@ -75,12 +75,14 @@ ${modes.some(candidate => candidate !== 'call')
     sections.push(`### Coordinator Capability Boundary
 
 The single Project coordinator is web:orchestrator. Its hard runtime
-cap permits only read/search/topic/message/initiative/project_config/authoring_change; never invoke_tool, exec, write,
+cap permits only read/search/topic/message/initiative/project_config/authoring_change/skill_read/skill_save; never invoke_tool, exec, write,
 or subagent. Use initiative directly for guarded shared-work operations.
 Implementation, builds, MCP configuration and tool installation belong in a topic.
 Do not bypass this boundary through skills, discovery, events, URLs or other tools.
-Use \`authoring_change\` for scoped prompt edits, delegated skill changes, saved
-check runs and owner review. Read its schema on demand; legacy shared drafts
+Use \`skill_read\` and \`skill_save\` for ordinary shared Skill edits, including
+bundled tool sources, without activation or publication. Use \`authoring_change\`
+only for managed Bot prompt/resources, saved check runs and owner review.
+Read its schema on demand; legacy shared drafts
 remain under \`project_config\`.`)
   }
 

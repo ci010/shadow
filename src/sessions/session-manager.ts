@@ -478,6 +478,29 @@ export class SessionManager {
     return this.canReceiveSessionMessage(targetId)
   }
 
+  assertCanScheduleSession(sourceId: string, targetId: string): void {
+    const source = this.sessionStates[sourceId]
+    const target = this.sessionStates[targetId]
+    if (!source || !target) throw new Error('Cron source and target sessions must already exist.')
+    if (this.deps.projectId && (source.projectId !== this.deps.projectId || target.projectId !== this.deps.projectId)) {
+      throw new Error('Cron source and target must belong to this Project.')
+    }
+    if (source.mode !== 'session' || target.mode !== 'session') {
+      throw new Error('Existing-session cron requires durable source and target sessions, not task/call executions.')
+    }
+    if (!this.canSendSessionMessage(sourceId, targetId)) throw new Error('Cron target does not accept messages from this session.')
+    const policy = this.deps.conversationPolicies?.resolve(sourceId)
+    const agent = policy ? { ...policy.agent, allowedTools: policy.agent.allowedTools ?? [] }
+      : this.resolveAgentTypeTools(source.agentType, source.sessionKind).agentType
+    if (sourceId !== targetId && !isToolAllowed(agent, 'message')) {
+      throw new Error('Scheduling another session requires permission to message it.')
+    }
+    this.assertFolderAccess(sourceId)
+    this.assertFolderAccess(targetId)
+    this.assertHistoryWritable(sourceId)
+    this.assertHistoryWritable(targetId)
+  }
+
   async startChild(sessionId: string, task: string, context: ExecutionContext): Promise<DeliveryReceipt> {
     if (this.deps.projectId && context.projectId !== this.deps.projectId) throw new Error('Child context belongs to another project')
     const state = this.sessionStates[sessionId]
@@ -1931,7 +1954,7 @@ export class SessionManager {
       this.deps.agentTypes.resolve('general')!
 
     if (name === 'orchestrator' || sessionKind === 'orchestrator') {
-      const allowedTools = ['read', 'search', 'topic', 'message', 'initiative', 'project_config', 'authoring_change']
+      const allowedTools = ['read', 'search', 'topic', 'message', 'initiative', 'project_config', 'authoring_change', 'skill_read', 'skill_save']
       return {
         agentType: { ...resolved, allowedTools, blockedTools: undefined },
         allowedTools,

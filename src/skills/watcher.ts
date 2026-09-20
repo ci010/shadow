@@ -93,12 +93,10 @@ export class SkillsWatcher {
 
       for (const name of affectedSkills) {
         const skillDir = join(workspaceDir, name)
-        const skill = await loadSingleSkill(skillDir, name)
-        if (skill) {
-          this.skills.setSkill(skill.meta.name, skill)
-        } else {
-          this.skills.removeSkill(name)
-        }
+        await this.stableRead(() => loadSingleSkill(skillDir, name), skill => {
+          if (skill) this.skills.setSkill(skill.meta.name, skill)
+          else this.skills.removeSkill(name)
+        })
       }
 
       console.info(
@@ -114,8 +112,7 @@ export class SkillsWatcher {
   private async reloadSkills(): Promise<void> {
     try {
       const { workspaceDir } = this.skills.loadPaths()
-      const skills = await scanSkillsDirectory(workspaceDir)
-      this.skills.replaceSkills(skills)
+      await this.stableRead(() => scanSkillsDirectory(workspaceDir), skills => this.skills.replaceSkills(skills))
       // Load category descriptions
       const categories = await this.loadCategories()
       this.skills.replaceCategories(categories)
@@ -123,6 +120,18 @@ export class SkillsWatcher {
     } catch (err) {
       console.error('[skills-watcher] Failed to reload skills', err)
     }
+  }
+
+  private async stableRead<T>(read: () => Promise<T>, accept: (result: T) => void): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const generation = this.skills.mutationGeneration
+      const result = await read()
+      if (generation === this.skills.mutationGeneration) {
+        accept(result)
+        return
+      }
+    }
+    throw new Error('Skill scan conflicted repeatedly with direct saves; retry after edits finish')
   }
 
   /**

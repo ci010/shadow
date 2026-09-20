@@ -57,10 +57,15 @@ import { FolderService } from '../../folders/routes.ts'
 import { ProjectFolderDiscovery } from '../../folders/discovery.ts'
 import { folderAccessMiddleware } from '../../folders/access.ts'
 import { SkillsManager } from '../../skills/loader.ts'
+import { registerKnowledgeRoutes } from '../../knowledge/routes.ts'
+import { KnowledgeMaintenanceService } from '../../knowledge/maintenance.ts'
+import { scheduleKnowledgeMaintenance } from './knowledge-maintenance.ts'
 import { BackgroundTaskTool, ContinuationTool } from '../../tools/background.ts'
 import { CommandHandlerManager } from '../../tools/shell-commands/command-handler.ts'
 import { createUserLinkCommandHandler } from '../../tools/shell-commands/userlink.ts'
-import { CronTool } from '../../tools/cron.ts'
+import { registerCronTools } from '../../tools/cron.ts'
+import { SkillEditing, SkillReadTool, SkillSaveTool } from '../../tools/skill-edit.ts'
+import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
 import { EventSubscribeTool } from '../../tools/event-subscribe.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
@@ -367,6 +372,10 @@ export async function createProjectRuntime(
   loadable.set('initiative', initiativeTool)
   tools.register(initiativeTool)
   const skills = new SkillsManager(workspace)
+  const knowledgeMaintenance = new KnowledgeMaintenanceService(workspace, skills)
+  await knowledgeMaintenance.init()
+  cleanup.push(() => knowledgeMaintenance.stop())
+  registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance })
   const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name))
   tools.register(new SearchTool(workspace, webSearchTool, vfs, importTool, skills, () => topics))
   tools.register(new InvokeTool(importTool))
@@ -586,7 +595,7 @@ export async function createProjectRuntime(
     projectId: project.id,
     identity,
     getProjectNodeInventory: id => id === project.id ? sessions.getNodeInventory() : undefined,
-    getSkillsSummary: (admin) => skills.getMetadataSummary(admin) || '',
+    getSkillsSummary: (admin, sessionId) => skills.getMetadataSummary(admin, sessionId) || '',
     getAgentTypesSummary: () => agentTypes.getAgentTypesSummary(),
     getChannelCapabilities: (channel, chatId, address) => channels.getCapabilities(channel, chatId, address),
     isTrustedConversation: (channel, chatId, address) => channels.isTrustedConversation(channel, chatId, address),
@@ -781,6 +790,13 @@ export async function createProjectRuntime(
       sessions.evaluateAuthoringScenario({ prompt, tools, input, signal, llmOverrides }),
   }
   const changeTool = authoringChangeTool(changeManagement)
+  const skillEditing = new SkillEditing({
+    projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: canAuthor,
+  })
+  for (const tool of [new SkillReadTool(skillEditing), new SkillSaveTool(skillEditing)]) {
+    tools.register(tool)
+    importTool.registerBuiltin(tool.name, tool)
+  }
   tools.register(changeTool)
   importTool.registerBuiltin(changeTool.name, changeTool)
   const authoringVfs = createAuthoringHandler(changeManagement)
@@ -809,6 +825,8 @@ export async function createProjectRuntime(
 
   // ── Cron service ──────────────────────────────────────────────────
   const cronService = new CronService(workspace, config.cron.timezone)
+  const knowledgeSchedule = scheduleKnowledgeMaintenance(cronService, knowledgeMaintenance)
+  cleanup.push(() => knowledgeSchedule.stop())
   const cronDispatcher = new CronDispatcher(sessions, async (job, targetSessionId, signal) => {
     signal.throwIfAborted()
     const event = isCronEventPayload(job.event) ? job.event : {
@@ -822,6 +840,10 @@ export async function createProjectRuntime(
       source: event.source ?? 'cron',
       content: event.content,
       targetSessionId,
+      origin: job.originSessionId ? {
+        sessionId: job.originSessionId, inputId: job.id,
+        source: { kind: 'session', sessionId: job.originSessionId },
+      } : undefined,
       delivery: event.delivery,
       meta: {
         ...(event.meta ?? {}),
@@ -833,7 +855,7 @@ export async function createProjectRuntime(
   cronService.setHandler(async (job, signal) => { await cronDispatcher.dispatch(job, signal) })
   cronService.setOnChanged(() => realtime.invalidateSessions())
   registerAutomationRoutes(app, cronService, sessions, project.id)
-  importTool.registerBuiltin('cron', new CronTool(cronService, sessions, name => !!agentTypes.resolve(name)))
+  registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
   tools.register(new EventSubscribeTool(events))
   // Clean up event subscriptions linked to one-shot cron jobs when they are
   // auto-removed after firing (prevents orphaned subscriptions in `list`).
@@ -989,6 +1011,8 @@ export async function createProjectRuntime(
       stopPublicationReviews,
       () => probeRequests.stop(),
       () => io.shutdown(),
+      () => knowledgeSchedule.stop(),
+      () => knowledgeMaintenance.stop(),
       () => cronService.stop(),
       () => stopLearning,
       () => folders.dispose(),
@@ -1030,6 +1054,7 @@ export async function createProjectRuntime(
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
   })
   await ready
+  void knowledgeSchedule.start().catch(error => console.error('[knowledge] Scheduled scan failed', error))
   resumeApprovedPublications()
   publicationRetryTimer = setInterval(resumeApprovedPublications, 2000)
   publicationRetryTimer.unref()

@@ -1,8 +1,10 @@
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 import { getBuiltinSkills } from './builtins.ts'
 import { SkillsWatcher } from './watcher.ts'
+import { SkillDisclosure } from './disclosure.ts'
 import type { SkillToolDeclarations } from './tool-declarations.ts'
 
 /**
@@ -80,9 +82,12 @@ export class SkillsManager {
   private skills = new Map<string, Skill>()
   /** Built-in skills bundled with the app under `src/skills/builtin/` (immutable). */
   private builtins = new Map<string, Skill>()
+  private removedDirectories = new Set<string>()
+  private generation = 0
   private categories = new Map<string, CategoryInfo>()
   private workspaceDir: string
   private watcher: SkillsWatcher
+  private readonly disclosure = new SkillDisclosure()
 
   constructor(workspace: string) {
     this.workspaceDir = workspacePath(workspace, 'skills')
@@ -111,15 +116,54 @@ export class SkillsManager {
   }
 
   replaceSkills(skills: Map<string, Skill>): void {
-    this.skills = skills
+    this.skills = new Map([...skills].filter(([, skill]) => this.acceptSkill(skill)))
+    this.generation++
   }
 
   setSkill(name: string, skill: Skill): void {
+    if (!this.acceptSkill(skill)) return
     this.skills.set(name, skill)
+    this.generation++
+  }
+
+  /** Lets asynchronous scans discard reads that raced a direct save or deletion. */
+  get mutationGeneration(): number { return this.generation }
+
+  private acceptSkill(skill: Skill): boolean {
+    const directory = resolve(skill.dirPath)
+    if (!this.removedDirectories.has(directory)) return true
+    // A watcher read started before deletion must not resurrect its stale body.
+    if (!existsSync(join(directory, 'SKILL.md'))) return false
+    this.removedDirectories.delete(directory)
+    return true
+  }
+
+  /** Invalidate by directory, including skills whose frontmatter name differs. */
+  forgetSkillDirectory(directory: string): void {
+    this.generation++
+    const resolved = resolve(directory)
+    this.removedDirectories.add(resolved)
+    for (const [name, skill] of this.skills) {
+      if (resolve(skill.dirPath) === resolved) this.skills.delete(name)
+    }
+  }
+
+  /** Effective skills with authoritative provenance; workspace overrides win. */
+  availableSkillSources(admin = false): Array<{
+    skill: Skill
+    source: 'project' | 'builtin'
+    shadowsBuiltin: boolean
+  }> {
+    return this.availableSkills(admin).map(skill => ({
+      skill,
+      source: this.skills.get(skill.meta.name) === skill ? 'project' : 'builtin',
+      shadowsBuiltin: this.skills.get(skill.meta.name) === skill && this.builtins.has(skill.meta.name),
+    }))
   }
 
   removeSkill(name: string): void {
     this.skills.delete(name)
+    this.generation++
   }
 
   replaceCategories(categories: Map<string, CategoryInfo>): void {
@@ -159,74 +203,17 @@ export class SkillsManager {
   // ── Level 1: Metadata (always in context) ─────────────────────────────
 
   /**
-   * Get compact metadata summaries for all discovered skills.
-   * Learned skills are marked with a [learned] indicator.
+   * Get bounded core/recent metadata hints, with full catalog discovery guidance.
+   * Passive disclosure does not record usage.
    */
-  getMetadataSummary(admin?: boolean): string {
-    const entries = this.allSkills()
-      .filter((s) => !s.meta.admin || admin)
-    if (entries.length === 0) return ''
+  getMetadataSummary(admin?: boolean, sessionId?: string): string {
+    return this.disclosure.summary(this.availableSkills(admin), sessionId)
+  }
 
-    const skills = entries.filter((s) => !s.isLearned)
-
-    const shortDesc = (desc: string): string => {
-      const firstSentence = desc.match(/^.+?[.!?。！？](?=\s|$)/)
-      return firstSentence ? firstSentence[0] : desc.slice(0, 120)
-    }
-
-    // Partition: core, categorized non-core, uncategorized non-core
-    const coreSkills = skills.filter((s) => s.meta.core)
-    const nonCore = skills.filter((s) => !s.meta.core)
-    const categorized = nonCore.filter((s) => s.meta.category)
-    const uncategorized = nonCore.filter((s) => !s.meta.category)
-
-    // Group categorized by category name
-    const byCategory = new Map<string, Skill[]>()
-    for (const s of categorized) {
-      const cat = s.meta.category!
-      if (!byCategory.has(cat)) byCategory.set(cat, [])
-      byCategory.get(cat)!.push(s)
-    }
-
-    const lines: string[] = []
-
-    // Core skills inline
-    for (const s of coreSkills) {
-      lines.push(
-        `  <skill name="${s.meta.name}">${shortDesc(s.meta.description)}</skill>`,
-      )
-    }
-
-    // Category groups
-    for (const [catName, catSkills] of byCategory) {
-      const catInfo = this.categories.get(catName)
-      const catDesc = catInfo?.description ?? catName
-      const skillNames = catSkills.map((s) => s.meta.name).join(', ')
-      lines.push(
-        `  <category name="${catName}" count="${catSkills.length}" skills="${skillNames}">${catDesc}</category>`,
-      )
-    }
-
-    // Uncategorized fallback — listed inline
-    for (const s of uncategorized) {
-      lines.push(
-        `  <skill name="${s.meta.name}">${shortDesc(s.meta.description)}</skill>`,
-      )
-    }
-
-    if (lines.length === 0) return ''
-
-    const usage = [
-      '## Skills',
-      '',
-      'Skills are reusable capabilities — they describe *how* to do something (format, conventions, workflows).',
-      'Find skills with search({space:"skills:", query:"..."}). Search and category listings never activate tools. Explicit read("v:skills/<name>") loads instructions and registers that skill\'s frontmatter tools for this session only; invoke_tool loads the module lazily and validates its arguments. No install/import step is required. Sleep clears registrations: read the skill again. TypeScript entrypoints stay inside their owning skill directory. To configure MCP, read("v:skills/mcp-config") and edit the Project virtual config with read/write.',
-      '- read("v:skills/<name>") to load a skill body',
-      '- read("v:skills/<category>") to read skills in a category',
-      '- read("v:skills/<name>/<path>") for bundled resources',
-    ].join('\n')
-
-    return `${usage}\n<available_skills>\n${lines.join('\n')}\n</available_skills>`
+  /** Record only successful explicit exact skill reads/saves, never discovery. */
+  markSkillUsed(name: string, sessionId?: string): void {
+    const skill = this.resolveSkill(name)
+    if (skill) this.disclosure.markSkillUsed(skill, sessionId)
   }
 
   // ── Level 2: Full body (on-demand) ────────────────────────────────────

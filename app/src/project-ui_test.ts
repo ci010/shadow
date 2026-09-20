@@ -403,6 +403,61 @@ test('automation overview creates no draft and run navigation retains project-qu
   assert.equal(route.query.automation, undefined)
 })
 
+test('Knowledge opens in the owning conversation, preserves drafts and cannot navigate from a hidden resource', async t => {
+  const route = reactive({
+    name: 'chat', fullPath: '/projects/a/chat', params: { projectId: 'a', sessionId: '' },
+    query: {} as Record<string, string | undefined>,
+  })
+  type Location = { params?: { projectId?: string; sessionId?: string }; query?: Record<string, string | undefined> }
+  const navigate = async (location: Location) => {
+    route.params = { ...route.params, ...location.params, sessionId: location.params ? location.params.sessionId ?? '' : route.params.sessionId }
+    route.query = location.query ?? {}
+    route.fullPath = JSON.stringify([route.params, route.query])
+    await nextTick()
+  }
+  const state = mountScript(t, 'ProjectsWorkspace.vue', { apiBase: 'http://fixture', visible: true }, undefined, {
+    vue: { ...Vue, onMounted: () => {} },
+    'vue-router': { useRoute: () => route, useRouter: () => ({ push: navigate, replace: navigate }) },
+    '../composables/useInstallationContext.ts': { useInstallationContext: () => ref({ mode: 'main', uiScopes: ['main:admin'] }) },
+    '../projects.ts': {
+      ...projectsModule,
+      createProjectsClient: () => ({ list: async () => ['a', 'b'].map(id => ({ id, name: id, createdAt: '' })) }),
+    },
+  })
+  await state().refresh()
+  const draft = state().selected
+  state().openKnowledge('a')
+  await nextTick()
+  assert.equal(state().selected, draft)
+  assert.equal(state().resources.length, 1)
+  assert.equal(route.query.panel, 'knowledge')
+  assert.deepEqual(draft.knowledgeRequest, { entryId: undefined })
+  state().knowledgeNavigation(draft, true, 'memory/topics/a.md')
+  await nextTick()
+  assert.equal(draft.knowledgeRequest.entryId, 'memory/topics/a.md')
+  state().prepared(draft.key, 'web:new')
+  await nextTick()
+  assert.equal(state().selected, draft)
+  assert.equal(route.params.sessionId, 'web:new')
+  assert.equal(route.query.panel, 'knowledge', 'Delayed draft preparation preserves the selected document')
+  state().openKnowledge('b')
+  await nextTick()
+  const other = state().selected
+  assert.notEqual(other.key, draft.key)
+  assert.equal(other.projectId, 'b')
+  state().knowledgeNavigation(draft, false)
+  await nextTick()
+  assert.equal(route.query.panel, 'knowledge', 'Hidden tabs cannot clear the current project route')
+  state().knowledgeNavigation(other, false)
+  await nextTick()
+  assert.equal(route.query.panel, undefined)
+  assert.equal(other.knowledgeRequest, undefined)
+  state().openKnowledge('a')
+  await nextTick()
+  assert.equal(state().selected, draft, 'Reopen uses the existing conversation, not another draft')
+  assert.equal(state().resources.length, 2)
+})
+
 test('run ownership is canonicalized only from a known graph row and reidentified after route metadata changes', async t => {
   const association = { jobId: 'daily', name: 'Daily review', runId: 'run', startedAt: '2026-09-16T00:00:00Z', contextMode: 'fresh' }
   t.mock.method(globalThis, 'fetch', async (input: URL) => Response.json(input.pathname.endsWith('/graph')

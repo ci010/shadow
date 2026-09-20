@@ -15,6 +15,10 @@
         @opening="$emit('coordinator-opening')" @open="$emit('select', $event)" />
     </template>
     <template #project-actions>
+      <button v-if="canManageKnowledge" class="project-settings" :aria-label="`${project.name} knowledge`" :title="`${project.name} knowledge`"
+        @click="$emit('knowledge')">
+        <span class="i-lucide-book-open w-3.5 h-3.5" aria-hidden="true" />
+      </button>
       <button v-if="runtimeState === 'failed'" class="project-settings retry-runtime" :disabled="retrying" :aria-label="`Retry ${project.name} startup`" title="Retry project startup" @click="retryRuntime"><span class="i-lucide-refresh-cw w-3.5 h-3.5" aria-hidden="true" /></button>
       <RouterLink class="project-settings" :aria-label="`${project.name} settings`" :title="`${project.name} settings`"
         :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }">
@@ -41,6 +45,7 @@ import type { LiveSubscription } from '../live-client.ts'
 import { HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { createBotSettingsClient } from '../bot-settings.ts'
 import type { SidebarBot } from '../bot-sidebar.ts'
+import { useInstallationContext } from '../composables/useInstallationContext.ts'
 
 const props = defineProps<{
   apiBase: string; project: ProjectRecord; selectedProjectId: string; selectedSessionId: string
@@ -50,8 +55,10 @@ const props = defineProps<{
   folderRevision?: number
   selectedAutomationId?: string
 }>()
-const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; 'session-automation': [sessionId: string, jobId?: string]; 'coordinator-opening': [] }>()
+const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; 'session-automation': [sessionId: string, jobId?: string]; 'coordinator-opening': [] }>()
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
+const installation = useInstallationContext()
+const canManageKnowledge = computed(() => installation.value.uiScopes.includes('main:admin'))
 const livePool = useLiveClientPool()
 const homeCache = inject(HomeTreeCacheKey, undefined)
 const sessions = ref<SidebarSession[]>([])

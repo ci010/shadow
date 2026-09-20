@@ -2,6 +2,7 @@
   <div ref="workspace" class="conversation-workspace" :class="{ 'has-child': childId, 'is-split': split, 'is-resizing': !!drag }" :style="split ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLIT_HANDLE_WIDTH}px ${childWidth}px` } : undefined">
     <div v-show="!childId || wide" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
       <ChatTab ref="primary" :api-base="apiBase" enable-child-pane :child-session-id="childId"
+        :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
         :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote"
         :visible="visible && route.name === 'chat' && (!childId || wide)" :keyboard-active="visible && (!childId || wide) && activePane === 'primary'"
         @open-child="openChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
@@ -28,9 +29,10 @@ import { useRoute, useRouter } from 'vue-router'
 import ChatTab from './ChatTab.vue'
 import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_HANDLE_WIDTH, SPLIT_MIN_WIDTH } from '../conversation-split.ts'
 import type { FolderRecord } from '../folders-client.ts'
+import type { KnowledgeTabRequest } from '../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string }>(), { visible: true })
-const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string] }>()
+const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest }>(), { visible: true })
+const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string] }>()
 const route = useRoute()
 const router = useRouter()
 const workspace = ref<HTMLElement>()

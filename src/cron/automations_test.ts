@@ -4,8 +4,11 @@ import { join } from 'node:path'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
-import { Tools } from '../tools/registry.ts'
-import { CronTool } from '../tools/cron.ts'
+import { SessionTools, Tools } from '../tools/registry.ts'
+import { CronAddTool, CronListTool, registerCronTools } from '../tools/cron.ts'
+import { ImportTool } from '../tools/load-tool.ts'
+import { InvokeTool } from '../tools/invoke-tool.ts'
+import { SearchTool } from '../tools/search.ts'
 import { LearningService } from '../agent/learning/service.ts'
 import { createProjectScope } from '../projects/scope.ts'
 import { createLearnCommand } from '../slash-commands/handlers/learn.ts'
@@ -56,8 +59,9 @@ function fixture(workspace: string, store: SessionStore, settings: { remoteOnlin
     ownsWorkdir: (ref: { capabilityId: string }) => ref.capabilityId !== 'foreign',
     workdirCapabilityLookup: () => ({ node: settings.remoteOnline === false ? 'offline' : 'online', capability: { kind: 'workdir', online: true } }),
     remoteExecutor: { execute: () => { throw new Error('Unexpected remote tool execution') } },
-    agentTypes: { resolve: (name: string) => ['general', 'reflector', 'encapsulator', 'soul-reflector'].includes(name)
-      ? { name, description: '', prompt: '', source: 'builtin', defaultMode: 'session' } : undefined },
+    agentTypes: { resolve: (name: string) => ['general', 'reader', 'reflector', 'encapsulator', 'soul-reflector'].includes(name)
+      ? { name, description: '', prompt: '', source: 'builtin', defaultMode: 'session',
+        ...(name === 'reader' ? { allowedTools: ['read'] } : {}) } : undefined },
     handoffManager: { shouldHandoff: () => false },
     context: { buildSystemPrompt: async (ctx: unknown) => JSON.stringify(ctx) },
     getLlmRuntimeConfig: () => ({ model: 'fixture', contextWindow: 128000, temperature: 0 }),
@@ -79,7 +83,7 @@ function fixture(workspace: string, store: SessionStore, settings: { remoteOnlin
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: repeated origin/isolated/fresh ticks preserve context and persist immutable run metadata`, async () => {
+  test(`${Store.name}: existing self/peer and fresh ticks preserve context and persist immutable run metadata`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -91,22 +95,29 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.manager.buildSession('web:origin', undefined, { folderId: 'folder-a', initiativeId: 'work', workdir })
         await f.manager.deliver('web:origin', input('PARENT TRANSCRIPT SENTINEL'))
         await until(() => f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
-        const tool = new CronTool(f.cron, f.manager, name => name === 'general')
+        await f.manager.buildSession('web:peer', undefined, { agentType: 'reader' })
+        const tool = new CronAddTool(f.cron, f.manager, name => name === 'general')
         const ctx = { sessionId: 'web:origin', signal: new AbortController().signal } as ExecutionContext
-        for (const mode of ['origin', 'isolated', 'fresh'] as const) {
-          assert.match(await tool.execute({ action: 'add', schedule: 'every 1h', task: `task-${mode}`, session: mode, name: 'Useful name' }, ctx), /Created job/)
+        for (const options of [{}, { session: 'existing', targetSessionId: 'web:peer' }, { session: 'fresh' }]) {
+          assert.match(await tool.execute({
+            schedule: 'every 1h', task: `task-${options.session ?? 'existing'}`, name: 'Useful name', ...options,
+          }, ctx), /Created job/)
         }
         const jobs = f.cron.listJobs()
+        assert.deepEqual(jobs.map(cronContextMode), ['existing', 'existing', 'fresh'])
+        assert(jobs.every(job => job.originSessionId === 'web:origin'))
+        assert(jobs.every(job => !Object.hasOwn(job, 'isolated')))
+        assert.match(await new CronListTool(f.cron).execute({}, ctx), /web:peer \(existing\)/)
         for (let run = 0; run < 2; run++) {
           for (const job of jobs) {
             await f.cron.runNow(job.id)
             if (job.session !== 'fresh') {
-              const target = job.session === 'origin' ? 'web:origin' : `cron:${job.id}`
+              const target = job.target!.sessionId
               await until(() => f.manager.getSessionState(target)?.executionStatus === 'completed')
             }
           }
         }
-        assert.deepEqual(f.events, ['web:origin', `cron:${jobs[1].id}`, 'web:origin', `cron:${jobs[1].id}`])
+        assert.deepEqual(f.events, ['web:origin', 'web:peer', 'web:origin', 'web:peer'])
         const fresh = f.manager.listSessions().map(row => f.manager.getSessionState(row.sessionId)!).filter(s => s.automation)
         assert.equal(fresh.length, 2)
         assert.notEqual(fresh[0].automation!.runId, fresh[1].automation!.runId)
@@ -126,8 +137,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.deepEqual(JSON.parse(String(request.messages[0].content)).workdir, workdir)
           assert.deepEqual((await store.getState(state.sessionId))!.automation, state.automation)
         }
-        const isolatedRequests = f.requests.filter(r => r.sessionId === `cron:${jobs[1].id}`)
-        assert(isolatedRequests[1].messages.some(m => m.role === 'assistant'))
+        const peerRequests = f.requests.filter(r => r.sessionId === 'web:peer')
+        assert(peerRequests[1].messages.some(m => m.role === 'assistant'))
+        assert.equal(JSON.stringify(peerRequests).includes('PARENT TRANSCRIPT SENTINEL'), false)
+        const peerPrompt = JSON.parse(String(peerRequests[0].messages[0].content))
+        assert.equal(peerPrompt.agent.name, 'reader')
+        assert.deepEqual(peerPrompt.agent.allowedTools, ['read'])
+        assert.equal(peerPrompt.workdir, undefined)
+        assert.equal(f.manager.getSessionState('web:peer')!.automation, undefined)
         jobs[2].task = 'Mutated client copy'
         assert.equal(f.cron.listJobs()[2].task, 'task-fresh')
         const graph = await (await f.app.request('/api/sessions/graph')).json()
@@ -138,7 +155,136 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.manager.start()
         await f.cron.start()
         assert.deepEqual(f.manager.getSessionState(fresh[0].sessionId)!.automation, fresh[0].automation)
+        assert.equal(f.cron.listJobs()[1].target!.sessionId, 'web:peer')
         assert.equal(f.cron.listJobs()[2].session, 'fresh')
+        await f.cron.runNow(jobs[1].id)
+        await until(() => f.manager.getSessionState('web:peer')?.executionStatus === 'completed')
+        assert.equal(f.requests.filter(r => r.sessionId === 'web:peer').length, 3)
+      } finally { await f.cron.stop(); await f.manager.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: split cron tools are dynamically discoverable and validate only their own arguments`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const base = new Tools(workspace)
+      const importer = new ImportTool(new Map(), workspace)
+      registerCronTools(importer, f.cron, f.manager, name => name === 'general')
+      base.register(new InvokeTool(importer))
+      base.register(new SearchTool(workspace, undefined, undefined, importer))
+      const tools = new SessionTools(base, workspace)
+      const ctx = { tools, sessionId: 'web:source', projectId: 'org-a', signal: new AbortController().signal } as ExecutionContext
+      const invoke = (name: string, args: Record<string, unknown>) => tools.execute('invoke_tool', { name, args }, ctx)
+      try {
+        await f.manager.start()
+        await f.cron.start()
+        await f.manager.buildSession('web:source')
+        await f.manager.buildSession('web:target')
+        const names = ['cron_add', 'cron_list', 'cron_remove']
+        assert.deepEqual(tools.activeDynamicTools(), [])
+        assert.equal(await invoke('cron_list', {}), 'No scheduled jobs.')
+        for (const space of ['tools:', 'tools:cron']) {
+          const result = JSON.parse(await tools.execute('search', { space, query: 'cron', limit: 10 }, ctx))
+          assert.deepEqual(result.tools.map((tool: { name: string }) => tool.name).sort(), names)
+          assert(result.tools.every((tool: { parameters: { properties: object } }) => !Object.hasOwn(tool.parameters.properties, 'action')))
+          assert.deepEqual(result.errors, [])
+        }
+        assert(!tools.getDefinitions().some(tool => tool.function.name.startsWith('cron')))
+        assert.equal(f.cron.listJobs().length, 0)
+        for (const [name, args] of [
+          ['cron_add', {}],
+          ['cron_add', { action: 'add', schedule: 'every 1h', task: 'tick' }],
+          ['cron_add', { schedule: 'every 1h', task: 'tick', session: 'isolated' }],
+          ['cron_list', { schedule: 'every 1h' }],
+          ['cron_remove', {}],
+          ['cron_remove', { id: 'any', task: 'tick' }],
+        ] as const) assert.match(await invoke(name, args), /invalid arguments/)
+        assert.equal(f.cron.listJobs().length, 0)
+        const args = { schedule: 'every 1h', task: 'tick', targetSessionId: 'web:target' }
+        assert.match(await invoke('cron_add', args), /Created job/)
+        const job = f.cron.listJobs()[0]
+        assert.match(await invoke('cron_list', {}), new RegExp(job.id))
+        tools.resetDynamic()
+        assert.equal(await invoke('cron_remove', { id: job.id }), `Removed job ${job.id}`)
+        assert(f.manager.getSessionState('web:target'))
+        assert.equal(await invoke('cron_list', {}), 'No scheduled jobs.')
+        assert.match(await invoke('cron', { action: 'add', ...args }), /^Error:/)
+        assert.equal(f.cron.listJobs().length, 0)
+
+        assert.match(await invoke('cron_add', { ...args, once: true }), /Created job/)
+        await f.cron.runNow(f.cron.listJobs()[0].id)
+        await until(() => f.manager.getSessionState('web:target')?.executionStatus === 'completed')
+        assert.equal(f.cron.listJobs().length, 0)
+        assert(f.manager.getSessionState('web:target'))
+        await f.cron.flush()
+        assert.deepEqual(JSON.parse(await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')).jobs, [])
+      } finally { tools.resetDynamic(); await f.cron.stop(); await f.manager.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: existing targets are authorized before saving and rechecked before each tick`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.manager.start()
+        await f.cron.start()
+        await f.manager.buildSession('web:source')
+        await f.manager.buildSession('web:target')
+        await f.manager.buildSession('web:reader', undefined, { agentType: 'reader' })
+        await f.manager.buildSession('cron:task', undefined, { mode: 'task' })
+        const tool = new CronAddTool(f.cron, f.manager, name => name === 'general')
+        const ctx = { sessionId: 'web:source', projectId: 'org-a', signal: new AbortController().signal } as ExecutionContext
+        const add = { schedule: 'every 1h', task: 'tick', targetSessionId: 'web:target' }
+        await assert.rejects(tool.execute({ ...add, targetSessionId: 'web:missing' }, ctx), /must already exist/)
+        assert.equal(f.manager.getSessionState('web:missing'), null)
+        await assert.rejects(tool.execute({ ...add, targetSessionId: 'cron:task' }, ctx), /durable/)
+        await assert.rejects(tool.execute(add, { ...ctx, sessionId: 'cron:task' }), /durable/)
+        await assert.rejects(tool.execute(add, { ...ctx, sessionId: 'web:reader' }), /permission to message/)
+        assert.match(await tool.execute(add, { ...ctx, projectId: 'other' }), /another Project/)
+        const target = f.manager.getSessionState('web:target')!
+        target.projectId = 'other'
+        await assert.rejects(tool.execute(add, ctx), /this Project/)
+        target.projectId = 'org-a'
+        for (const args of [
+          { urgency: 'invalid' }, { debounce_ms: 10 }, { urgency: 'debounce', debounce_ms: 0 },
+          { urgency: 'debounce', debounce_ms: Infinity },
+          { session: 'fresh', targetSessionId: undefined, urgency: 'silent' },
+          { session: 'fresh', targetSessionId: undefined, debounce_ms: 10 },
+        ]) assert.match(await tool.execute({ ...add, ...args }, ctx), /^Error:/)
+        assert.equal(f.cron.listJobs().length, 0)
+
+        for (const urgency of ['queue', 'steering', 'debounce', 'silent']) {
+          assert.match(await tool.execute({ ...add, urgency, ...(urgency === 'debounce' ? { debounce_ms: 42 } : {}) }, ctx), /Created job/)
+        }
+        assert.deepEqual(f.cron.listJobs().map(job => job.event?.delivery), [
+          { urgency: 'queue' }, { urgency: 'steering' }, { urgency: 'debounce', debounceMs: 42 }, { urgency: 'silent' },
+        ])
+        const job = f.cron.listJobs()[0]
+        const source = f.manager.getSessionState('web:source')!
+        source.agentType = 'reader'
+        await assert.rejects(f.dispatcher.dispatch(job, ctx.signal), /permission to message/)
+        source.agentType = 'general'
+        target.projectId = 'other'
+        await assert.rejects(f.dispatcher.dispatch(job, ctx.signal), /this Project/)
+        target.projectId = 'org-a'
+        target.mode = 'task'
+        await assert.rejects(f.dispatcher.dispatch(job, ctx.signal), /durable/)
+        target.mode = 'session'
+        assert.deepEqual(f.events, [])
+        await f.dispatcher.dispatch(job, ctx.signal)
+        await until(() => target.executionStatus === 'completed')
+        assert.deepEqual(f.events, ['web:target'])
+        await f.manager.deleteSession('web:target')
+        await assert.rejects(f.dispatcher.dispatch(job, ctx.signal), /must already exist/)
+        assert.equal(f.manager.getSessionState('web:target'), null)
+        await f.manager.buildSession('web:target')
+        await f.manager.deleteSession('web:source')
+        await assert.rejects(f.dispatcher.dispatch(job, ctx.signal), /must already exist/)
+        assert.equal(f.events.length, 1)
       } finally { await f.cron.stop(); await f.manager.stop(); store.close?.() }
     })
   })
@@ -172,7 +318,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.manager.buildSession('heartbeat:reflector-1750000000001', undefined, { agentType: 'reflector' })
         assert.equal(resolveAutomationSession(f.manager.getSessionState('heartbeat:reflector-1750000000001')!), undefined)
         const jobId = f.cron.addJob({ schedule: 'every 1h', name: 'Scheduled job', task: 'work', session: 'fresh' })
-        f.cron.addJob({ schedule: 'every 1h', task: 'not listed', session: 'origin' })
+        f.cron.addJob({ schedule: 'every 1h', task: 'not listed', session: 'existing', target: { sessionId: 'web:not-legacy' } })
         const neverRun = f.cron.addJob({ schedule: 'every 1h', name: 'No runs yet', task: 'new', session: 'fresh', enabled: false })
         for (let i = 0; i < 3; i++) await f.cron.runNow(jobId)
         const all = await (await f.app.request(`/api/automations/${jobId}/runs`)).json()
@@ -240,40 +386,48 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.manager.buildSession('web:origin', undefined, {
           folderId: 'folder-a', workdir: { version: 1, nodeId: 'remote-a', capabilityId: 'folder-a', displayPathSnapshot: workspace },
         })
-        const tool = new CronTool(f.cron, f.manager, name => name === 'general')
+        const tool = new CronAddTool(f.cron, f.manager, name => name === 'general')
         const ctx = { sessionId: 'web:origin' } as ExecutionContext
-        assert.match(await tool.execute({ action: 'add', schedule: 'every 1h', task: 'offline', session: 'fresh' }, ctx), /Created job/)
+        assert.match(await tool.execute({ schedule: 'every 1h', task: 'offline', session: 'fresh' }, ctx), /Created job/)
         const job = f.cron.listJobs()[0]
         await f.cron.runNow(job.id)
         const runs = await (await f.app.request(`/api/automations/${job.id}/runs`)).json()
         assert.equal(runs.runs[0].status, 'failed')
         assert.equal(f.requests.length, 0)
         assert.equal(f.manager.getSessionState(runs.runs[0].sessionId)!.workdir!.nodeId, 'remote-a')
-        assert.match(await tool.execute({ action: 'add', schedule: 'every 1h', task: 'foreign', session: 'fresh' },
+        assert.match(await tool.execute({ schedule: 'every 1h', task: 'foreign', session: 'fresh' },
           { sessionId: 'foreign:origin' } as ExecutionContext), /originating session is unavailable/)
       } finally { await f.cron.stop(); await f.manager.stop(); store.close?.() }
     })
   })
 }
 
-test('version1 isolated compatibility and invalid fresh enums/config are validated before persistence', async () => {
+test('invalid modes and incompatible arguments are rejected before persistence', async () => {
   await withTempWorkspace(async workspace => {
     await mkdir(join(workspace, '.cron'))
     await writeFile(join(workspace, '.cron', 'jobs.json'), JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [
-      { id: 'old-isolated', isolated: true, schedule: 'every 1h', task: 'old', createdAt: '2026-01-01T00:00:00Z' },
-      { id: 'old-origin', isolated: false, schedule: 'every 1h', task: 'old', createdAt: '2026-01-01T00:00:00Z', target: { sessionId: 'web:origin' } },
     ] }))
     const cron = new CronService(workspace)
     try {
       await cron.start()
-      assert.deepEqual(cron.listJobs().map(cronContextMode), ['isolated', 'origin'])
+      assert.deepEqual(cron.listJobs(), [])
       assert.throws(() => cron.addJob({ schedule: 'every 1h', session: 'typo' as 'fresh' }), /Invalid cron job/)
-      assert.throws(() => cron.addJob({ schedule: 'invalid schedule' }))
-      const tool = new CronTool(cron)
+      assert.throws(() => cron.addJob({ schedule: 'every 1h', session: 'existing' }), /Invalid cron job/)
+      assert.throws(() => cron.addJob({ schedule: 'every 1h', session: 'fresh', target: { sessionId: 'web:origin' } }), /Invalid cron job/)
+      assert.throws(() => cron.addJob({ schedule: 'invalid schedule', session: 'fresh' }))
+      const tool = new CronAddTool(cron, undefined, name => name === 'general')
       const ctx = { sessionId: 'web:origin' } as ExecutionContext
-      assert.match(await tool.execute({ action: 'add', schedule: 'every 1h', task: 'x', session: 'typo' }, ctx), /session must/)
-      assert.match(await tool.execute({ action: 'add', schedule: 'every 1h', task: 'x', session: 'fresh', agentType: 'missing' }, ctx), /unknown agent type/)
-      assert.equal(JSON.parse(await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')).jobs.length, 2)
+      for (const session of ['typo', 'origin', 'isolated']) {
+        assert.match(await tool.execute({ schedule: 'every 1h', task: 'x', session }, ctx), /session must/)
+      }
+      const add = { schedule: 'every 1h', task: 'x' }
+      assert.match(await tool.execute({ ...add, isolated: true }, ctx), /isolated is not supported/)
+      assert.match(await tool.execute({ ...add, targetSessionId: ' ' }, ctx), /targetSessionId must/)
+      assert.match(await tool.execute({ ...add, session: 'fresh', targetSessionId: 'web:peer' }, ctx), /only for existing/)
+      assert.match(await tool.execute({ ...add, agentType: 'general' }, ctx), /only for fresh/)
+      assert.match(await tool.execute(add, ctx), /scheduling is unavailable/)
+      assert.match(await tool.execute({ schedule: 'every 1h', task: 'x', session: 'fresh', agentType: 'missing' }, ctx), /unknown agent type/)
+      assert.equal(JSON.parse(await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')).jobs.length, 0)
     } finally { await cron.stop() }
   })
 })

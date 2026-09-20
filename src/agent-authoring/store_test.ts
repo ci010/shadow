@@ -143,14 +143,16 @@ test('publishSnapshot rejects modified source, stale bases, invalid resources an
   assert.deepEqual(store.snapshot(), candidate)
 })
 
-test('authored tools cannot shadow the authoring_change management tool', t => {
+test('authored tools cannot shadow management or scheduling tools', t => {
   const { store } = fixture(t)
-  const resource = bundle()
-  resource.files['agents/helper/AGENT.md'] = agent({ allowedTools: ['authoring_change'] })
-  resource.files['skills/catalog/SKILL.md'] = skill().replace('"lookup":', '"authoring_change":')
-  const validation = store.validate(store.candidate(resource))
-  assert.equal(validation.valid, false)
-  assert.match(validation.errors.join('\n'), /reserved tool alias: authoring_change/)
+  for (const name of ['authoring_change', 'cron_add', 'cron_list', 'cron_remove', 'skill_read', 'skill_save']) {
+    const resource = bundle()
+    resource.files['agents/helper/AGENT.md'] = agent({ allowedTools: [name] })
+    resource.files['skills/catalog/SKILL.md'] = skill().replace('"lookup":', `"${name}":`)
+    const validation = store.validate(store.candidate(resource))
+    assert.equal(validation.valid, false)
+    assert.match(validation.errors.join('\n'), new RegExp(`reserved tool alias: ${name}`))
+  }
 })
 
 test('restart retains draft, immutable history and rollback without discarding edits', async t => {

@@ -66,6 +66,9 @@ test('invalid cron stores fail without discarding the original data', async (t) 
     JSON.stringify({ version: 2, jobs: [mondayJob] }),
     JSON.stringify({ version: 1, jobs: [mondayJob] }),
     JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [{ ...mondayJob, schedule: 1 }] }),
+    JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [{ ...mondayJob, session: 'origin' }] }),
+    JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [{ ...mondayJob, session: 'isolated' }] }),
+    JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [{ ...mondayJob, isolated: false }] }),
     JSON.stringify({ version: 1, ownershipVersion: 2, jobs: [mondayJob, mondayJob] }),
   ]
   for (const raw of stores) {
@@ -91,7 +94,7 @@ test('new cron jobs persist the format version and can be reloaded', async (t) =
     const reloaded = new CronService(workspace)
     try {
       await service.start()
-      const id = service.addJob({ schedule: '0 9 * * SUN', task: 'Sunday task' })
+      const id = service.addJob({ schedule: '0 9 * * SUN', task: 'Sunday task', target: { sessionId: 'web:test' } })
       await t.waitFor(async () => {
         const raw = await readFile(join(workspace, '.cron', 'jobs.json'), 'utf8')
         assert.deepEqual(JSON.parse(raw), { version: 1, ownershipVersion: 2, jobs: service.listJobs() })
@@ -158,7 +161,7 @@ test('same-name cron jobs bind runtime scope and stopping one drains only its ow
       await scheduled[0].trigger()
       await scheduled[1].trigger()
       assert.deepEqual(calls, [1, 2])
-      services[1].addJob({ schedule: '0 10 * * MON', task: 'B only' })
+      services[1].addJob({ schedule: '0 10 * * MON', task: 'B only', target: { sessionId: 'web:test' } })
       await services[1].stop()
       const a = JSON.parse(await readFile(join(homes[0], '.cron', 'jobs.json'), 'utf8'))
       const b = JSON.parse(await readFile(join(homes[1], '.cron', 'jobs.json'), 'utf8'))

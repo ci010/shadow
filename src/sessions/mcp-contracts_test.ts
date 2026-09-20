@@ -24,6 +24,8 @@ import { WriteTool } from '../tools/filesystem.ts'
 import { ConfigSchema } from '../config/schema.ts'
 import { ProjectConfigStore } from '../projects/config-store.ts'
 import { createMcpConfigHandler } from '../mcp/virtual-config.ts'
+import { createProjectScope } from '../projects/scope.ts'
+import { EvalBridgeRuntime } from '../script-runtime/bridge.ts'
 
 class ContractSession extends BaseSession {
   run(context: ExecutionContext) {
@@ -132,16 +134,13 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const skills = new SkillsManager(home)
     const dir = join(home, 'skills', 'echo')
     await mkdir(dir, { recursive: true })
-    const manifest = '---\nname: echo\ndescription: Echo helper\ntools:\n  echo_tool:\n    source: echo.ts\n---\nCall echo_tool with empty args.'
+    const manifest = '---\nname: echo\ndescription: Echo helper\ntools:\n  echo_tool:\n    source: echo.ts\n    description: Echo helper\n    parameters: {type: object, properties: {}}\n    imports: [node:fs]\n---\nCall echo_tool with empty args.'
     await writeFile(join(dir, 'SKILL.md'), manifest)
     const marker = join(home, 'loaded')
     await writeFile(join(dir, 'echo.ts'), `
 import { writeFileSync } from 'node:fs'
 writeFileSync(${JSON.stringify(marker)}, 'loaded')
-export const name = 'echo'
-export const description = 'Echo helper'
-export const parameters = {type:'object',properties:{}}
-export async function execute() {return 'skill-case-complete'}
+export async function run() {return 'skill-case-complete'}
 `)
     skills.setSkill('echo', { ...parseSkillFile(manifest, 'echo'), dirPath: dir })
     const loader = new ImportTool(new Map(), home, undefined, name => skills.getSkillDirectory(name))
@@ -191,6 +190,7 @@ export async function execute() {return 'skill-case-complete'}
     await store.createSessionLog(session.physicalSessionId, [])
     assert.equal(await session.run({
       projectId: 'fixture', tools, signal: new AbortController().signal,
+      evalBridge: new EvalBridgeRuntime({ projectId: 'fixture', scope: createProjectScope('fixture') }),
       channel: 'test', chatId: 'skill-case', sessionId: session.id,
       physicalSessionId: session.physicalSessionId, senderId: 'synthetic', messageId: 'synthetic',
     }), 'done')

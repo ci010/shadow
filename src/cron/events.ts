@@ -16,7 +16,7 @@ export interface CronEventPayload {
 export function isCronEventTarget(value: unknown): value is CronEventTarget {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
-  return typeof v.sessionId === 'string' && v.sessionId.length > 0
+  return typeof v.sessionId === 'string' && v.sessionId.trim().length > 0
 }
 
 export function isCronEventPayload(value: unknown): value is CronEventPayload {

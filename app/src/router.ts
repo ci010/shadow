@@ -12,6 +12,10 @@ const routes: RouteRecordRaw[] = [
   { path: '/chat/:sessionId?', redirect: to => ({ name: 'chat', params: { projectId: 'default', sessionId: to.params.sessionId }, query: to.query }) },
   { path: '/projects/:projectId/chat/:sessionId?', name: 'chat', component: ProjectsWorkspace },
   { path: '/projects', name: 'projects', component: ProjectsWorkspace },
+  { path: '/knowledge', redirect: '/projects/default/knowledge' },
+  { path: '/projects/:projectId/knowledge', name: 'knowledge', redirect: to => ({
+    name: 'chat', params: { projectId: to.params.projectId }, query: { ...to.query, panel: 'knowledge' }, hash: to.hash,
+  }) },
   { path: '/projects/:projectId/settings/:section(general|models|bots|learning)?', name: 'project-settings', component: ProjectSettings },
   { path: '/workspaces', redirect: '/nodes' },
   { path: '/nodes', name: 'nodes', component: NodesView },

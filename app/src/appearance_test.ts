@@ -55,6 +55,17 @@ test('file source content remains intrinsic-height with composer-sized trailing 
   assert.match(preview, /scroll-padding-bottom: calc\(var\(--composer-height, 0px\) \+ 48px\);/)
 })
 
+test('Knowledge Markdown uses the full detail width without changing shared prose limits', async () => {
+  const knowledge = await readFile(new URL('./components/KnowledgeView.vue', import.meta.url), 'utf8')
+  const preview = knowledge.match(/class="([^"]*\bknowledge-preview\b[^"]*)"/)
+  assert.ok(preview)
+  const uno = await createGenerator(config)
+  const { css } = await uno.generate(preview[1])
+  assert.match(css, /\.max-w-none\s*\{max-width:none;/)
+  assert.match(css, /:is\(\.prose\)\s*\{[^}]*max-width:65ch;/)
+  assert.match(knowledge, /\.knowledge-preview\s*\{[^}]*overflow: auto;/)
+})
+
 test('all shape tokens and existing Uno corner utilities resolve to square corners', async () => {
   const names = ['sm', 'control', 'surface', 'overlay', 'pill', 'circle']
   for (const name of names) assert.match(styles, new RegExp(`--radius-${name}:\\s*0px;`))

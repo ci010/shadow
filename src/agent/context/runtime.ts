@@ -80,7 +80,7 @@ async function getIdentity(
 export interface RuntimeProviderDeps {
   projectId?: string
   identity: IdentityManager
-  getSkillsSummary: (admin: boolean) => string
+  getSkillsSummary: (admin: boolean, sessionId?: string) => string
   getAgentTypesSummary: () => string
   getNodeInventory?: () => NodeInventoryResponse | undefined
   /** Host must filter to folders bound to this project before returning. */
@@ -234,7 +234,7 @@ export function runtimeIdentityProvider(
 
       // Skills summary
       if (!coordinator && ctx.agent.skills !== false) {
-        const skillsSummary = deps.getSkillsSummary(ctx.admin ?? false)
+        const skillsSummary = deps.getSkillsSummary(ctx.admin ?? false, ctx.sessionId)
         if (skillsSummary) lines.push(skillsSummary, '')
       }
 
