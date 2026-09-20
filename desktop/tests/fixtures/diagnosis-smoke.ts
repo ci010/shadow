@@ -210,6 +210,8 @@ const server = createServer(async (request, response) => {
     const json = (data: unknown, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)) }
     if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
     if (path === '/api/automations') return json({ automations: [] })
+    if (path === '/api/agent-resources/publication-requests') return json({ request: null })
+    if (path === '/api/agent-resources/probe-requests') return json({ requests: [] })
     const background = path.match(/^\/api\/sessions\/([^/]+)\/background-tasks$/)
     if (background) return json({ sessionId: decodeURIComponent(background[1]), total: 0, tasks: [] })
     const gitRoute = path.match(/^\/api\/(sessions|folders)\/([^/]+)\/git\/(status|diff)$/)
@@ -337,7 +339,7 @@ const server = createServer(async (request, response) => {
     if (path === '/api/sessions/stages') {
       sessionStageRequests++
       return json({
-        stages: { [idA]: live ? 'llm' : 'idle', [idB]: 'idle', [idChild]: 'idle', [idAgent]: agentWorking ? 'llm' : 'idle',
+        stages: { [idA]: live ? 'llm' : 'idle', [idB]: 'idle', [idChild]: 'idle', [idAgent]: messageSourceMode ? 'waiting' : agentWorking ? 'llm' : 'idle',
           ...Object.fromEntries([...realtime.activeRequests.keys()].map(id => [id, 'llm'])) },
         activeRequestIds: Object.fromEntries(realtime.activeRequests),
       })
@@ -889,6 +891,25 @@ async function main(): Promise<void> {
       await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
       assert.equal(await evaluate(`document.querySelectorAll('.chat-user').length`), 2, 'Only human input uses user bubbles')
       assert.equal(await evaluate(`document.querySelectorAll('.history-marker').length`), 2, 'Handoffs are not human history markers')
+      for (const ordinal of [0, 1]) {
+        await evaluate(`document.querySelectorAll('.history-marker')[${ordinal}].click()`)
+        await waitFor(`(() => {
+          const pane = document.querySelector('.primary-conversation');
+          const container = pane.querySelector('.chat-messages');
+          const target = pane.querySelectorAll('.chat-user')[${ordinal}];
+          return Math.abs(target.getBoundingClientRect().top - container.getBoundingClientRect().top) < 32;
+        })()`).catch(async cause => {
+          const geometry = await evaluate(`(() => {
+            const container = document.querySelector('.chat-messages');
+            return { scrollTop: container.scrollTop, height: container.clientHeight, scrollHeight: container.scrollHeight,
+              top: container.getBoundingClientRect().top,
+              targets: Array.from(container.querySelectorAll('.chat-user')).map(row => ({ index: row.dataset.msgIdx, top: row.getBoundingClientRect().top })),
+              markers: Array.from(document.querySelectorAll('.history-marker')).map(row => ({ current: row.getAttribute('aria-current'), label: row.getAttribute('aria-label') })) };
+          })()`)
+          throw new Error(`History jump geometry: ${JSON.stringify(geometry)}`, { cause })
+        })
+      }
+      await evaluate(`document.querySelector('.chat-session').scrollIntoView({ block: 'center' })`)
       assert.equal(await evaluate(`document.querySelector('.resend-btn')`), null, 'A handoff cannot be resent as human input')
       assert.match(await evaluate<string>(`document.querySelector('.chat-session').getAttribute('aria-label')`), /Session handoff from web:orchestrator/)
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.chat-session')).alignSelf`), 'flex-start')
@@ -910,6 +931,32 @@ async function main(): Promise<void> {
       await captureSource(`message-source-trace-${width}.png`)
       console.log(`LAYOUT_SOURCE ${JSON.stringify({ width, humanMessages: 2, sessionMessages: 1, rawEvidence: true })}`)
     }
+    window.setContentSize(1400, 1000)
+    await showSessionView(false)
+    await waitFor(`!!document.querySelector('.folder-session-row.needs-reply .session-activity.waiting')`)
+    assert.match(await evaluate<string>(`document.querySelector('.folder-session-row.needs-reply').textContent`), /Needs reply/)
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.folder-session-row.needs-reply')).boxShadow !== 'none'`), true)
+    const progress = {
+      role: 'user', name: 'Peer', timestamp: timestamp(12000),
+      content: [
+        { type: 'text', text: `<sender id="${idB}" name="Peer" source="session" intent="progress" />` },
+        { type: 'text', text: '**First live progress** before history refresh.' },
+      ],
+    }
+    // Keep history unchanged until the live-only presentation has been asserted.
+    realtime.publisher.chat(idA, { event: 'session_message', message: progress })
+    await waitFor(`Array.from(document.querySelectorAll('.chat-session')).some(row => row.textContent.includes('First live progress'))`)
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll('.chat-assistant')).some(row => row.textContent.includes('First live progress'))`), false)
+    assert.equal(await evaluate(`document.querySelector('.chat-session:last-of-type .chat-content strong')?.textContent`), 'First live progress')
+    assert.equal(await evaluate(`document.querySelectorAll('.history-marker').length`), 2)
+    realtime.history(idA).push(progress)
+    window.webContents.reload()
+    await waitFor(`Array.from(document.querySelectorAll('.chat-session')).some(row => row.textContent.includes('First live progress'))`)
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll('.chat-session')).filter(row => row.textContent.includes('First live progress')).length`), 1)
+    await evaluate(`Array.from(document.querySelectorAll('button.chat-session-source')).find(button => button.textContent.includes(${JSON.stringify(idB)})).click()`)
+    await waitFor(`Array.from(document.querySelectorAll('.chat-user')).some(row => row.textContent.includes('Only the second session.'))`)
+    assert.equal(await evaluate(`!!document.querySelector('.composer-input textarea')?.getClientRects().length`), true, 'The source heading opens the destination conversation with its composer')
+    assert.equal(sentMessages.length, 0, 'Navigation does not send a message')
     assert.deepEqual(unexpected, [])
     console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, mode: 'message-source' })}`)
     return

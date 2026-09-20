@@ -4,7 +4,8 @@ import type { Bus } from '../bus/bus.ts'
 import type { ExecutionContext } from './context.ts'
 import type { SessionParent } from '../sessions/session-store.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
-import { sessionReplyAddress, type DeliverInput, type SessionInputSource } from '../sessions/input.ts'
+import { sessionReplyAddress, type DeliverInput, type SessionInputSource, type SessionMessageInput } from '../sessions/input.ts'
+import { buildSenderTag } from '../agent/message-builder.ts'
 import { z } from 'zod'
 
 const coordinationSchema = z.object({
@@ -114,7 +115,7 @@ export class MessageTool implements Tool {
     const { text, media } = parseMediaFromContent(rawContent)
     const silent = args.silent === true
 
-    await this.deliver(targetSessionId, {
+    const input: SessionMessageInput = {
       kind: 'message',
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -128,7 +129,8 @@ export class MessageTool implements Tool {
       policy: silent ? 'silent' : 'queue',
       content: text,
       media,
-    })
+    }
+    await this.deliver(targetSessionId, input)
 
     const outbound: OutboundMessage = {
       event: 'response',
@@ -138,6 +140,11 @@ export class MessageTool implements Tool {
       done: false,
       content: text,
       media,
+      sessionMessage: {
+        role: 'user', name: input.source.kind === 'session' ? input.source.senderName : undefined,
+        timestamp: input.timestamp,
+        content: [{ type: 'text', text: buildSenderTag(input) }, { type: 'text', text }],
+      },
     }
     this.bus.emit('message.outbound', outbound)
 

@@ -68,7 +68,7 @@ function fixture(t: TestContext) {
     const unmount = () => { if (mounted) { mounted = false; app.unmount() } }
     t.after(unmount)
     const state = () => { assert.ok(instance); return Reflect.get(instance.$, 'setupState') }
-    state().messages = [{ role: 'assistant', event: 'tool_call', toolCallId: 'spawn', toolCall: {
+    state().messages = [{ role: 'assistant', content: '', event: 'tool_call', toolCallId: 'spawn', toolCall: {
       name: 'subagent', arguments: { mode: 'task', description: 'Delegated task' },
     } }]
     state().inputText = 'Keep this exact unsent draft'
@@ -161,4 +161,95 @@ test('coordinator uses the ordinary writable chat and SSE-discovered topics navi
   assert.deepEqual(a.navigation, ['web:chat-topic'])
   assert.equal(a.state().inputText, 'Keep this exact unsent draft')
   assert.equal(f.requests.some(request => /orchestrator$/.test(request.path)), false)
+})
+
+test('live peer messages render like persisted history without becoming human prompts or assistant output', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  for (const intent of ['progress', 'request', 'question', 'handoff', 'acknowledgement']) {
+    const message = {
+      role: 'user', timestamp: '2026-09-20T00:00:00Z',
+      content: [
+        { type: 'text', text: `<sender id="web:peer" name="A &amp; B" source="session" intent="${intent}" />` },
+        { type: 'text', text: '**Initial** peer message' },
+      ],
+    }
+    const payload = { event: 'session_message', message, media: ['media:fixture.png'] }
+    const state = view.state()
+    assert.equal(state.isStreamPayload(payload), true)
+    state.messages = []
+    const stream = { accumulated: 'Existing assistant output', timestamp: '2026-09-19T23:59:00Z' }
+    assert.equal(state.applyStreamPayload(payload, stream), false)
+    const [assistant, peer] = state.messages
+    assert.equal(assistant.content, 'Existing assistant output')
+    assert.equal(peer.role, 'user')
+    assert.equal(peer.content, '**Initial** peer message')
+    assert.deepEqual(peer.sessionSource, { id: 'web:peer', name: 'A & B', intent })
+    assert.equal(peer.isSystemEvent, undefined)
+    assert.deepEqual(peer.media, ['media:fixture.png'])
+    assert.deepEqual(state.historyMarkers, [])
+    assert.equal(state.canResend, false)
+    assert.equal(stream.accumulated, '')
+    const restored = state.collapseHistory([message])[0]
+    assert.equal(restored.content, peer.content)
+    assert.deepEqual(restored.sessionSource, peer.sessionSource)
+    assert.equal(restored.timestamp, peer.timestamp)
+  }
+  assert.equal(view.state().isStreamPayload({ event: 'session_message', message: { role: 'assistant', content: 'Not an envelope' } }), false)
+})
+
+test('history navigation cancels queued bottom jumps and resumes following only after returning to the bottom', async t => {
+  const state = fixture(t).mount('a').state()
+  const container = { scrollTop: 1500, scrollHeight: 2000, clientHeight: 500 }
+  state.messagesContainer = container
+  state.scrollToBottom()
+  state.browseHistory()
+  state.trackHistoryScroll()
+  await Vue.nextTick()
+  assert.equal(container.scrollTop, 1500, 'The initial bottom position cannot cancel a smooth history jump')
+  container.scrollTop = 100
+  state.trackHistoryScroll()
+  state.scrollToBottom()
+  await Vue.nextTick()
+  assert.equal(container.scrollTop, 100, 'New output and refreshed history must not pull the reader away')
+  container.scrollTop = 1500
+  state.trackHistoryScroll()
+  state.scrollToBottom()
+  await Vue.nextTick()
+  assert.equal(container.scrollTop, 2000)
+})
+
+test('composer file drops preserve drafts, deduplicate mixed batches and reject remote or read-only attachments', t => {
+  const f = fixture(t)
+  const state = f.mount('a').state()
+  state.currentWorkdir = { kind: 'local', displayPath: 'C:\\synthetic' }
+  const files = [
+    new File(['notes'], 'notes.txt', { type: 'text/plain', lastModified: 1 }),
+    new File(['image'], 'photo.png', { type: 'image/png', lastModified: 2 }),
+  ]
+  let prevented = 0
+  const event = { dataTransfer: { types: ['Files'], files, dropEffect: 'none' },
+    preventDefault: () => { prevented++ }, stopPropagation: () => {} }
+  state.handleAttachmentDragOver(event)
+  assert.equal(state.attachmentDropTarget, true)
+  assert.equal(event.dataTransfer.dropEffect, 'copy')
+  state.handleAttachmentDrop(event)
+  state.handleAttachmentDrop(event)
+  assert.equal(prevented, 3)
+  assert.equal(state.attachmentDropTarget, false)
+  assert.deepEqual(state.pendingAttachments.map((item: { file: File; kind: string }) => [item.file.name, item.kind]),
+    [['notes.txt', 'file'], ['photo.png', 'image']])
+  assert.equal(state.inputText, 'Keep this exact unsent draft')
+  assert.equal(f.requests.length, 0, 'A drop must not upload or send')
+  state.clearPendingAttachments()
+  for (const mode of ['remote', 'readonly']) {
+    state.currentWorkdir = { kind: mode === 'remote' ? 'remote' : 'local', displayPath: 'C:\\synthetic' }
+    state.selectedMode = mode === 'readonly' ? 'task' : 'session'
+    state.handleAttachmentDragOver(event)
+    assert.equal(state.attachmentDropTarget, false)
+    assert.equal(event.dataTransfer.dropEffect, 'none')
+    state.handleAttachmentDrop(event)
+    assert.equal(state.pendingAttachments.length, 0)
+    assert.match(state.composerError, mode === 'remote' ? /remote workspaces/ : /cannot receive file attachments/)
+  }
 })

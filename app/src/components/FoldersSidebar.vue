@@ -37,7 +37,7 @@
           @toggle="toggleFolder(group.folder.id)" @select="selectFolder(group.folder.id)"
           @contextmenu.prevent="grouped && openFolderActions(group.folder, $event)">
           <template #icon><span v-if="isRail" class="folder-initial">{{ railInitial(group.folder.name) }}</span><span v-else :class="group.folder.kind === 'remote' ? 'i-lucide-monitor' : expandedFolders.has(group.folder.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
-          <template #meta><SessionActivity v-if="folderWorkingStage(group.sessions)" :stage="folderWorkingStage(group.sessions)" compact :title="undefined" /></template>
+          <template #meta><SessionActivity v-if="folderWorkingStage(group.sessions)" :stage="folderWorkingStage(group.sessions)" compact :icon-only="isRail" :title="undefined" /></template>
           <template #actions>
             <HoverInfo :text="`New conversation in ${group.folder.name}`"><template #default="{ triggerProps }"><button class="folder-action-button folder-add" v-bind="triggerProps" :aria-label="`New conversation in ${group.folder.name}`" @click="startFolderDraft(group.folder)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
             <button v-if="grouped" class="folder-action-button folder-add folder-actions" :aria-label="`Folder actions for ${group.folder.name}`"
@@ -65,7 +65,7 @@
         <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading conversations…</span></p>
         <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">Retry conversations</button></div>
         <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Conversations unavailable. Retry conversations" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
-        <FolderSessionList :sessions="chatGroups.chats" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+        <FolderSessionList :sessions="chatGroups.chats" :depth="1" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
       </section>
       <section v-for="bot in chatGroups.bots" :key="bot.id" class="bot-conversations" :data-bot-id="bot.id">
         <TreeRow :label="bot.label" :title="`${bot.label}\n${bot.connection.label}\n${bot.platform}\n${bot.id}`"
@@ -75,7 +75,7 @@
           @select="toggleBot(bot.id)">
           <template #icon><span class="i-lucide-bot" /></template>
           <template #meta>
-            <SessionActivity v-if="folderWorkingStage(bot.sessions)" :stage="folderWorkingStage(bot.sessions)" compact :title="undefined" />
+            <SessionActivity v-if="folderWorkingStage(bot.sessions)" :stage="folderWorkingStage(bot.sessions)" compact :icon-only="isRail" :title="undefined" />
             <span class="bot-connection" :data-state="bot.connection.state" :title="bot.connection.label" aria-hidden="true">
               <span :class="bot.connection.icon" />
             </span>
@@ -115,7 +115,7 @@ import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'
 import AutomationSidebar from './AutomationSidebar.vue'
 import { railInitial } from '../folder-rail.ts'
-import { isWorkingStage } from '../session-activity.ts'
+import { prominentWorkingStage } from '../session-activity.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
 import { automationSessionOwners, groupFolderSessions, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
@@ -200,7 +200,7 @@ const sidebarWidth = computed(() => clampSidebarWidth(preferredWidth.value ?? (c
 let resizeObserver: ResizeObserver | undefined
 let listRequest: AbortController | undefined
 let active = true
-const folderWorkingStage = (sessions: SidebarSession[]) => sessions.map(session => props.stages[session.sessionId]).find(isWorkingStage)
+const folderWorkingStage = (sessions: SidebarSession[]) => prominentWorkingStage(sessions.map(session => props.stages[session.sessionId]))
 
 function measureSidebar() {
   desktop.value = window.innerWidth > 700

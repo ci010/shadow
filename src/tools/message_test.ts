@@ -71,6 +71,13 @@ test('message tool awaits acceptance before displaying one session-origin messag
   assert.equal(displayed[0].chatId, 'target')
   assert.equal(displayed[0].content, 'task')
   assert.equal(displayed[0].done, false)
+  assert.deepEqual(displayed[0].sessionMessage, {
+    role: 'user', name: 'Agent', timestamp: delivered.timestamp,
+    content: [
+      { type: 'text', text: '<sender id="web:source" name="Agent" source="session" />' },
+      { type: 'text', text: 'task' },
+    ],
+  })
 })
 
 test('message projection carries the target bot address rather than the source or a platform-only address', async () => {

@@ -48,6 +48,10 @@ test('image annotations attach original or marked pixels without changing source
   await runFixture(t, 'image-annotation-smoke')
 })
 
+test('composer file drops attach mixed types and send file-only messages on desktop and mobile', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'image-annotation-smoke', ['--file-attachments'])
+})
+
 test('model menu combines model and effort without changing conversation drafts', { timeout: 150_000 }, async (t) => {
   await runFixture(t, 'model-menu-smoke')
 })

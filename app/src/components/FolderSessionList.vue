@@ -5,13 +5,13 @@
       :key="session.sessionId"
       as="li"
       class="folder-session-row"
-      :class="{ active: isSelected(session), working: isWorking(session) }"
+      :class="{ active: isSelected(session), working: isWorking(session), 'needs-reply': activityStage(session) === 'waiting' }"
       :depth="Math.min(session.depth, 6) + depth"
       :selected="isSelected(session)"
       :icon-only="rail"
       :info-disabled="!showInfo"
       :label="session.label"
-      :ariaLabel="`${session.label}${session.isDirectChat ? '' : ' (read-only)'}`"
+      :ariaLabel="`${session.label}${activityStage(session) === 'waiting' ? ' (needs reply)' : ''}${session.isDirectChat ? '' : ' (read-only)'}`"
       :current="activeSessionId === session.sessionId ? 'page' : undefined"
       :title="[session.label, session.sessionId, session.description, session.parentSessionId ? `Parent: ${session.parentSessionId}` : session.contextParentSessionId ? `Forked from: ${session.contextParentSessionId}` : ''].filter(Boolean).join('\n')"
       separate-toggle
@@ -23,7 +23,7 @@
       @select="$emit('select', session.sessionId)"
     >
       <template #icon><span :class="session.isDirectChat ? 'i-lucide-message-square' : 'i-lucide-bot'" /></template>
-      <template #meta><SessionActivity :stage="activityStage(session)" compact :title="undefined" /></template>
+      <template #meta><SessionActivity :stage="activityStage(session)" compact :icon-only="rail" :title="undefined" /></template>
       <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="`Delete conversation ${session.label}`" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">
@@ -52,7 +52,7 @@ import SessionActivity from './SessionActivity.vue'
 import TreeRow from './TreeRow.vue'
 import HoverInfo from './HoverInfo.vue'
 import { rootSessionFamilies } from '../folder-rail.ts'
-import { isWorkingStage, sessionActivity } from '../session-activity.ts'
+import { isWorkingStage, prominentWorkingStage, sessionActivity } from '../session-activity.ts'
 const props = withDefaults(defineProps<{
   sessions: SidebarSession[]
   activeSessionId: string
@@ -74,13 +74,15 @@ function isSelected(session: SidebarSession) {
   return props.rail ? family(session).some(item => item.sessionId === props.activeSessionId) : session.sessionId === props.activeSessionId
 }
 function activityStage(session: SidebarSession) {
-  return props.rail ? family(session).map(item => props.stages[item.sessionId]).find(isWorkingStage) ?? props.stages[session.sessionId] : props.stages[session.sessionId]
+  return props.rail ? prominentWorkingStage(family(session).map(item => props.stages[item.sessionId])) ?? props.stages[session.sessionId] : props.stages[session.sessionId]
 }
 function isWorking(session: SidebarSession) { return isWorkingStage(activityStage(session)) }
 </script>
 
 <style scoped>
 .folder-session-list { list-style: none; padding: 0; margin: 0; }
+.folder-session-row.needs-reply { box-shadow: inset 3px 0 var(--c-warn); background: var(--c-warn-bg); }
+.folder-session-row.needs-reply.active { background: var(--c-selection-bg); }
 .session-delete { border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
 .session-delete { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 28px; color: var(--c-text-secondary); opacity: 0; }
 .folder-session-row:hover .session-delete, .folder-session-row:focus-within .session-delete { opacity: 1; }

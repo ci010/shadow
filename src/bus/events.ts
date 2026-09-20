@@ -100,6 +100,8 @@ export interface OutboundMessage {
   toolCall?: { name: string; arguments: Record<string, unknown> }
   toolCallId?: string
   toolName?: string
+  /** Recorded author envelope for a peer message, not assistant response text. */
+  sessionMessage?: import('../providers/provider.ts').ChatMessage
   /** Structured decision, separate from ordinary progressive response output. */
   yieldRequest?: import('../sessions/yield-contract.ts').YieldRequest
   /**

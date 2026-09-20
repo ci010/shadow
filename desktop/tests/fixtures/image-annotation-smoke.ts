@@ -67,6 +67,8 @@ const server = createServer(async (request, response) => {
     if (path === '/api/provider/setup') return json({ ready: true, provider: 'custom', model: 'synthetic-model', authMode: 'none', hasApiKey: false })
     if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
     if (path === '/api/automations') return json({ automations: [] })
+    if (path === '/api/agent-resources/publication-requests') return json({ request: null })
+    if (path === '/api/agent-resources/probe-requests') return json({ requests: [] })
     if (path === '/api/provider/configured') return json({ providers: [{ provider: 'custom', model: 'synthetic-model', selected: true, authMode: 'none', hasApiKey: false }] })
     if (path === '/api/folders') return json({ folders: [] })
     if (path === '/api/config') return json({ agent: { model: 'synthetic-model', workspace: sourceDirectory, temperature: 0.7 } })
@@ -121,7 +123,7 @@ const server = createServer(async (request, response) => {
       const form = await new Response(new Uint8Array(Buffer.concat(chunks)), { headers: { 'Content-Type': String(request.headers['content-type']) } }).formData()
       const file = form.get('file')
       assert.ok(file instanceof File)
-      const path = `C:\\synthetic\\uploads\\marked-${uploads.length + 1}.png`
+      const path = `C:\\synthetic\\uploads\\attachment-${uploads.length + 1}-${file.name}`
       uploads.push({ name: file.name, chatId: String(form.get('chatId')), bytes: Buffer.from(await file.arrayBuffer()), path })
       return json({ path })
     }
@@ -682,6 +684,10 @@ async function main(): Promise<void> {
   await window.loadURL(`${origin}/chat/${encodeURIComponent(sessionId)}`)
   window.webContents.debugger.attach('1.3')
   await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+  if (process.argv.includes('--file-attachments')) {
+    await fileDropRegression()
+    return
+  }
   await treeIdentityRegression()
   await jsonScrollRegression()
   phase = 'opening image'
@@ -849,6 +855,54 @@ async function main(): Promise<void> {
   assert.deepEqual(requests.filter(item => item.method !== 'GET').map(item => `${item.method} ${item.path}`), ['POST /api/chat/upload', 'POST /api/chat/send'], 'No source mutations, eager uploads, or extra session creation')
   assert.deepEqual(errors, [], 'Native client and server must have no fixture or production errors')
   console.log('LAYOUT_RESULT ' + JSON.stringify({ ok: true, fixture: 'image-annotation', rawRequests, uploads: uploads.length, sends: sends.length }))
+}
+
+async function fileDropRegression(): Promise<void> {
+  await waitFor(`!!document.querySelector('.tree-row[data-path="${fileName}"]')`)
+  for (const viewport of [1400, 390]) {
+    phase = `file attachments at ${viewport}px`
+    window!.setContentSize(viewport, 1000)
+    const mixed = viewport === 1400
+    const before = uploads.length
+    const sent = sends.length
+    const count = mixed ? 3 : 2
+    const over = await evaluate<boolean>(`(() => {
+      const data = new DataTransfer();
+      ${mixed ? `data.items.add(new File([new Uint8Array(${JSON.stringify([...original])})], 'photo.png', { type: 'image/png', lastModified: 42 }));` : ''}
+      data.items.add(new File(['Dropped document'], 'document.txt', { type: 'text/plain', lastModified: 42 }));
+      data.items.add(new File([new Uint8Array([0, 1, 255])], 'unknown.custom', { lastModified: 42 }));
+      window.fixtureFileDrop = data;
+      const event = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: data });
+      document.querySelector('.composer-box').dispatchEvent(event);
+      return event.defaultPrevented;
+    })()`)
+    assert.equal(over, true)
+    await waitFor(`document.querySelector('.composer-hint').textContent === 'Drop files to attach'`)
+    await evaluate(`(() => {
+      const composer = document.querySelector('.composer-box');
+      for (let i = 0; i < 2; i++) composer.dispatchEvent(new DragEvent('drop', {
+        bubbles: true, cancelable: true, dataTransfer: window.fixtureFileDrop,
+      }));
+    })()`)
+    await waitFor(`document.querySelectorAll('.attachment-chip').length === ${count} && !document.querySelector('.composer-send').disabled`)
+    assert.equal(await evaluate(`document.querySelectorAll('.attachment-thumb').length`), mixed ? 1 : 0)
+    assert.equal(await evaluate(`document.querySelector('.composer-input textarea').value`), '')
+    assert.equal(uploads.length, before, 'Dropping and repeating a drop do not upload')
+    await click('.composer-send')
+    await waitRequest(() => sends.length === sent + 1, 'file-only send')
+    const batch = uploads.slice(before)
+    assert.equal(batch.length, count)
+    const names = [...(mixed ? ['photo.png'] : []), 'document.txt', 'unknown.custom']
+    assert.deepEqual(sends[sent].media, names.map(name => batch.find(upload => upload.name === name)!.path))
+    assert.equal(sends[sent].content, '')
+    assert.equal(batch.find(upload => upload.name === 'document.txt')!.bytes.toString(), 'Dropped document')
+    assert.deepEqual([...batch.find(upload => upload.name === 'unknown.custom')!.bytes], [0, 1, 255])
+    if (mixed) assert.deepEqual(batch.find(upload => upload.name === 'photo.png')!.bytes, original)
+    finishSend!()
+    await waitFor(`document.querySelectorAll('.attachment-chip').length === 0 && !document.querySelector('.composer-stop')`)
+  }
+  assert.deepEqual(errors, [])
+  console.log('LAYOUT_RESULT ' + JSON.stringify({ ok: true, fixture: 'file-attachments', uploads: uploads.length, sends: sends.length }))
 }
 main().catch(error => {
   console.error(error)
