@@ -1,4 +1,5 @@
 <template>
+  <div class="knowledge-scroll">
   <section class="knowledge" aria-label="Project knowledge">
     <header class="heading">
       <div><h1>Knowledge</h1><p>Memory, wiki and skills for this project. References are explicit links, not inferred relationships.</p></div>
@@ -75,6 +76,7 @@
         :incoming="knowledgeRelations(catalog, deletion.id).incoming" @close="deletion = undefined" @deleted="deleted" />
     </template>
   </section>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -194,7 +196,8 @@ onUnmounted(() => { catalogRequest?.abort(); detailRequest?.abort() })
 </script>
 
 <style scoped>
-.knowledge { flex: 1; min-height: 0; width: 100%; max-width: 1600px; box-sizing: border-box; overflow: auto; padding: 20px; margin: 0 auto; color: var(--c-text); }
+.knowledge-scroll { flex: 1; min-height: 0; min-width: 0; width: 100%; overflow: auto; }
+.knowledge { width: 100%; max-width: 1600px; box-sizing: border-box; padding: 20px; margin: 0 auto; color: var(--c-text); }
 .heading, .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 h1 { font-size: 22px; margin: 0; }
 h2 { font-size: 18px; margin: 0 0 6px; }

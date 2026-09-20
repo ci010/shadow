@@ -6,9 +6,103 @@ import { fileURLToPath } from 'node:url'
 import { createConnection } from 'node:net'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { networkInterfaces } from 'node:os'
+import { Hono } from 'hono'
+import WS from 'ws'
 import { createServer } from 'vite'
 import config, { desktopBackendRouting } from '../vite.config.ts'
 import unoConfig from '../unocss.config.ts'
+import { BrowserAuth } from '../../src/gateway/web-auth.ts'
+import { GatewayClientAddressRegistry, registerGatewayRoutes, serveGateway } from '../../src/gateway/server.ts'
+import { upgradeGatewayWebSocket } from '../../src/gateway/websocket.ts'
+
+for (const desktop of [false, true]) {
+  test(`LAN Vite preserves PIN, pairing, API and WebSocket authentication (${desktop ? 'desktop' : 'standalone'})`, async t => {
+    const credential = 'synthetic-lan-management-credential'
+    const pin = 'synthetic-lan-pin'
+    const clientAddresses = new GatewayClientAddressRegistry()
+    const auth = new BrowserAuth({
+      clientAddresses, launchCredential: credential,
+      pinHash: createHash('sha256').update(pin).digest('hex'),
+    })
+    t.after(() => auth.close())
+    const app = new Hono()
+    registerGatewayRoutes(app, [auth.plugin(), gateway => {
+      gateway.post('/projects/default/api/private', c => c.json({ authenticated: auth.authorize(c.req.raw) }))
+      gateway.get('/api/socket', c => upgradeGatewayWebSocket(app, c, socket => socket.send('authenticated')))
+      gateway.post('/local/v1/shutdown', c => c.json({ stopping: true }))
+    }], { browserAuth: auth, clientAddresses, launchCredential: credential, allowedOrigins: [] })
+    const backend = serveGateway(app, { host: '127.0.0.1', port: 0, clientAddresses })
+    await backend.ready
+    t.after(() => backend.shutdown())
+    const target = `http://127.0.0.1:${backend.addr.port}`
+    const messages = new EventEmitter()
+    const routing = desktopBackendRouting(desktop, messages)
+    const vite = await createServer({
+      root: fileURLToPath(new URL('..', import.meta.url)),
+      configFile: false, envFile: false, logLevel: 'silent',
+      optimizeDeps: { noDiscovery: true, include: [] },
+      plugins: [routing.plugin],
+      server: {
+        host: config.server!.host, port: 0, strictPort: false, watch: null,
+        proxy: desktop ? routing.proxy : Object.fromEntries(Object.entries(routing.proxy).map(([path, options]) => [
+          path, { ...options, target },
+        ])),
+      },
+    })
+    t.after(() => vite.close())
+    await vite.listen()
+    messages.emit('message', { type: 'shadow:runtime-ready', apiBase: target })
+    const address = vite.httpServer?.address()
+    assert.ok(address && typeof address !== 'string')
+    assert.equal(address.address, process.env.VITE_DEV_HOST ?? '0.0.0.0')
+    const lan = Object.values(networkInterfaces()).flat()
+      .find(value => value?.family === 'IPv4' && !value.internal)?.address
+    const host = process.env.VITE_DEV_HOST === '127.0.0.1' ? '127.0.0.1' : lan ?? '127.0.0.1'
+    const base = `http://${host}:${address.port}`
+    const request = (path: string, init: RequestInit = {}) =>
+      fetch(new URL(path, base), { ...init, signal: AbortSignal.timeout(5000) })
+    const login = (body: object, headers: Record<string, string> = {}) => request('/api/web-auth/pair', {
+      method: 'POST', headers: { origin: base, 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    })
+    assert.equal((await (await request('/api/web-auth/session')).json()).authenticated, false)
+    assert.equal((await request('/projects/default/api/private', { method: 'POST', headers: { origin: base } })).status, 401)
+    for (const headers of [
+      { origin: 'http://evil.invalid' }, { origin: 'null' }, { 'sec-fetch-site': 'cross-site' },
+    ]) assert.equal((await login({ pin }, headers)).status, 403)
+    assert.equal((await request('/api/web-auth/pair', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin }),
+    })).status, 403, 'Missing Origin must not be synthesized by the proxy')
+    assert.equal((await login({ pin: 'wrong-pin' })).status, 401)
+
+    const offer = await fetch(`${target}/local/v1/web-pairing`, {
+      method: 'POST', headers: { authorization: `Bearer ${credential}` },
+    })
+    assert.equal(offer.status, 200)
+    const code = (await offer.json()).code
+    for (const body of [{ pin }, { code }]) {
+      const paired = await login(body)
+      assert.equal(paired.status, 200)
+      const cookie = paired.headers.get('set-cookie')?.split(';')[0]
+      assert.ok(cookie)
+      const headers = { cookie, origin: base }
+      assert.deepEqual(await (await request('/projects/default/api/private', { method: 'POST', headers })).json(),
+        { authenticated: true })
+      assert.equal((await request('/api/web-auth/session', { headers })).status, 200)
+      assert.equal((await request('/local/v1/shutdown', { method: 'POST', headers })).status, 401)
+      const socket = new WS(base.replace('http:', 'ws:') + '/api/socket', { headers, handshakeTimeout: 5000 })
+      try {
+        const message = await once(socket, 'message', { signal: AbortSignal.timeout(5000) })
+        assert.equal(String(message[0]), 'authenticated')
+      } finally { socket.terminate() }
+      assert.equal((await request('/api/web-auth/session', { method: 'DELETE', headers })).status, 200)
+      assert.equal((await request('/projects/default/api/private', { method: 'POST', headers })).status, 401)
+    }
+    assert.equal((await login({ code })).status, 401, 'Pairing codes remain single-use')
+  })
+}
 
 test('Vite never serves a local PIN file through filesystem or raw module URLs', async t => {
   const root = await mkdtemp(resolve('.shadow-test-vite-pin-'))

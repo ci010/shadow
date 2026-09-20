@@ -38,11 +38,12 @@ function working(id: string) {
 </script>
 
 <style scoped>
-.automations-sidebar { margin-top: 20px; min-width: 0; }
-h3 { margin: 0 8px 6px; color: var(--c-text-secondary); font-size: 12px; font-weight: 500; }
-.automation-entry { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 36px; border: 0; padding: 6px 8px; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.automations-sidebar { margin-top: var(--sidebar-section-gap); min-width: 0; }
+.automations-sidebar:first-child { margin-top: 0; }
+h3 { margin: 0 0 var(--sidebar-heading-gap); padding-inline: calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)) var(--sidebar-row-inset); color: var(--c-text-secondary); font-size: 12px; line-height: 20px; font-weight: 500; }
+.automation-entry { display: flex; align-items: center; gap: var(--sidebar-icon-gap); width: 100%; min-width: 0; min-height: var(--sidebar-row-height); border: 0; border-radius: var(--radius-control); padding: 2px var(--sidebar-row-inset) 2px calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
 .automation-entry:hover { background: var(--c-bg-muted); }
-.automation-entry.selected { background: var(--c-selection-bg); }
+.automation-entry.selected { background: var(--c-selection-bg); color: var(--c-primary); }
 .automation-entry:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .automation-icon { width: 16px; height: 16px; flex-shrink: 0; }
 .automation-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -50,6 +51,5 @@ h3 { margin: 0 8px 6px; color: var(--c-text-secondary); font-size: 12px; font-we
 .automations-error, .automations-note { margin: 6px 8px; color: var(--c-text-secondary); font-size: 13px; }
 .automations-error p { margin: 0 0 6px; overflow-wrap: anywhere; }
 .automations-error button { min-height: 32px; padding: 4px 8px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
-.automation-entry.is-rail { width: 44px; min-height: 44px; padding: 8px; justify-content: center; }
-@media (max-width: 700px) { .automation-entry { min-height: 44px; } }
+.automation-entry.is-rail { width: 44px; min-height: 44px; margin-inline: auto; padding: 8px; justify-content: center; }
 </style>

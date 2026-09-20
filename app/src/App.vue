@@ -1,7 +1,9 @@
 <template>
-  <DesktopFrame>
+  <DesktopFrame :mobile="mobile.enabled.value" :style="mobile.enabled.value ? { '--mobile-viewport-height': `${mobile.viewportHeight.value}px` } : undefined">
+    <template #mobile-header><MobileChrome :title="mobilePageTitle" /></template>
     <template #navigation>
-        <nav class="tab-nav" aria-label="Main navigation">
+      <Teleport :to="mobile.navigationTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.navigationTarget.value">
+        <nav class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }" aria-label="Main navigation">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
             <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
@@ -11,8 +13,10 @@
             </router-link>
           </template>
         </nav>
+      </Teleport>
     </template>
     <template #actions>
+      <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
           <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
           <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">Sign out</button>
           <button class="theme-toggle" @click="toggleTheme" :title="isDark ? 'Switch to light' : 'Switch to dark'" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'">
@@ -20,9 +24,11 @@
             <span v-if="isDark" class="i-lucide-sun w-3.5 h-3.5" aria-hidden="true" />
             <!-- Moon icon (shown in light mode) -->
             <span v-else class="i-lucide-moon w-3.5 h-3.5" aria-hidden="true" />
+            <span v-if="mobile.enabled.value">{{ isDark ? 'Light theme' : 'Dark theme' }}</span>
           </button>
+      </Teleport>
     </template>
-    <div class="app-shell">
+    <div class="app-shell" :inert="mobile.enabled.value && mobile.menuOpen.value">
     <div class="mouse-glow-layer" aria-hidden="true"><div ref="glowEl" class="mouse-glow" /></div>
 
     <main class="app-main">
@@ -74,6 +80,8 @@ import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
 import DesktopFrame from './DesktopFrame.vue'
+import MobileChrome from './components/MobileChrome.vue'
+import { provideMobileChrome } from './composables/useMobileChrome.ts'
 import DesktopBrowserAccess from './components/DesktopBrowserAccess.vue'
 import IoHost from './components/io/IoHost.vue'
 import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
@@ -83,6 +91,10 @@ import { useLiveClientPool } from './composables/useLiveClient.ts'
 import type { LiveStatus } from './live-client.ts'
 
 const route = useRoute()
+const mobile = provideMobileChrome()
+const mobilePageTitles: Record<string, string> = { chat: 'Chat', projects: 'Projects', nodes: 'Nodes', settings: 'Settings', 'project-settings': 'Project settings', agents: 'Agents', spans: 'Spans', logs: 'Logs' }
+const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
+watch(() => route.fullPath, () => { mobile.menuOpen.value = false })
 const ioBridge = createIoBridge()
 provide(ioBridgeKey, ioBridge)
 const router = useRouter()
@@ -377,9 +389,14 @@ onUnmounted(() => {
 }
 
 .tab.active {
-  color: var(--c-text);
-  border-bottom-color: var(--c-text);
+  color: var(--c-primary);
+  border-bottom-color: var(--c-blue);
 }
+.tab-nav.mobile-app-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; overflow: visible; }
+.mobile-app-nav .tab { min-height: 44px; padding: 8px; font-size: 13px; text-transform: none; letter-spacing: 0; border: 0; text-align: left; transform: none; transition: none; }
+.mobile-app-nav .tab.active { background: var(--c-selection-bg); }
+.mobile-app-nav .tab:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.mobile-app-nav .tab-group-label { display: none; }
 
 @media (max-width: 760px) {
   @media (max-width: 1100px) { .tab-group-label { display: none; } .tab { padding-inline: 7px; font-size: 10px; } }
@@ -418,6 +435,9 @@ onUnmounted(() => {
 
 .theme-toggle:active {
   transform: translateY(0) scale(0.95);
+}
+@media (max-width: 700px) {
+  .mobile-global-actions .theme-toggle, .mobile-global-actions .tab { width: auto; min-height: 44px; height: auto; gap: 8px; padding: 8px 12px; font-size: 13px; transform: none; }
 }
 
 .system-bar-api {

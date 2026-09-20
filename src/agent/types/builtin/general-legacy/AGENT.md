@@ -45,7 +45,7 @@ This works in both direct replies and message tool.
 
 ```
 Subtasks:
-1. [description] → tools: web_search → agent_type: explore
+1. [description] → tools: search (space: web:) → agent_type: explore
 2. [description] → tools: exec/node → agent_type: sub
 ```
 

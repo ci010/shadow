@@ -44,3 +44,38 @@ test('only file and web search remain parallel reads; tool discovery keeps impor
   ])
   assert.equal(base.isReadonly('search'), false)
 })
+
+test('web search reports missing providers and request failures without local setup instructions', async () => {
+  const tools = new SessionTools(new Tools('.'), '.')
+  const context = { tools, signal: new AbortController().signal } as ExecutionContext
+  assert.equal(
+    await new SearchTool('.').execute({ space: 'web:', query: 'docs' }, context),
+    'Error: web search is not configured for this search tool.',
+  )
+  const web: Tool = {
+    name: 'web', description: '', parameters: { type: 'object', properties: {} },
+    execute: async () => { throw new Error('Synthetic network failure') },
+  }
+  assert.equal(
+    await new SearchTool('.', web).execute({ space: 'web:', query: 'docs' }, context),
+    'Web search failed: Synthetic network failure\n\n' +
+      'Check network access to the search provider and its service status, API credentials, and usage limits.',
+  )
+})
+
+test('web search preserves cancellation rather than suggesting provider repairs', async () => {
+  const controller = new AbortController()
+  const tools = new SessionTools(new Tools('.'), '.')
+  const context = { tools, signal: controller.signal } as ExecutionContext
+  const web: Tool = {
+    name: 'web', description: '', parameters: { type: 'object', properties: {} },
+    execute: async () => {
+      controller.abort()
+      throw controller.signal.reason
+    },
+  }
+  await assert.rejects(
+    new SearchTool('.', web).execute({ space: 'web:', query: 'docs' }, context),
+    { name: 'AbortError' },
+  )
+})

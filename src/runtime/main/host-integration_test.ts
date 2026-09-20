@@ -13,6 +13,7 @@ import { projectPaths, type ProjectRecord } from '../../projects/contracts.ts'
 import type { FolderRecord } from '../../folders/contracts.ts'
 import type { BotInstanceStatus } from '../../channels/setup-contract.ts'
 import type { AutomationSummary } from '../../cron/contracts.ts'
+import type { WebSearchStatus } from '../../config/web-search.ts'
 
 test('real Main concurrently isolates Project folders, Home prompts, defaults, bots and restart state', { timeout: 90_000 }, async () => {
   await withTempWorkspace(async root => {
@@ -94,6 +95,27 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal(created.runtime.state, 'ready')
       const a = '/projects/default'
       const b = `/projects/${created.project.id}`
+      assert.equal((await fetch(base + '/api/app/web-search')).status, 401)
+      assert.equal((await fetch(base + '/api/app/web-search', { method: 'PATCH', body: '{}' })).status, 401)
+      const searchStatus = await json<WebSearchStatus>('/api/app/web-search', 'PATCH', {
+        provider: 'exa', apiKeys: {
+          firecrawl: 'synthetic-search-firecrawl', brave: 'synthetic-search-brave',
+          exa: 'synthetic-search-exa', tavily: 'synthetic-search-tavily',
+        },
+      })
+      assert.equal(searchStatus.effectiveProvider, 'exa')
+      assert.equal(searchStatus.ready, true)
+      assert.doesNotMatch(JSON.stringify(searchStatus), /synthetic-search-/)
+      for (const [prefix, id] of [[a, 'default'], [b, created.project.id]]) {
+        const config = await json<{ tools: Record<string, unknown> }>(prefix + '/api/config')
+        assert.equal(config.tools.webSearchProvider, 'exa')
+        assert.equal(config.tools.exaApiKey, '__SHADOW_REDACTED__')
+        assert.equal((await request(prefix + '/api/config', 'PATCH', {
+          ...config, tools: { ...config.tools, webSearchProvider: 'brave' },
+        })).status, 400)
+        assert.doesNotMatch(await readFile(projectPaths(`${home}.projects`, id).configPath, 'utf8'), /synthetic-search-|ApiKey|webSearchProvider/)
+      }
+      assert.equal(JSON.parse(await readFile(configPath, 'utf8')).tools.exaApiKey, 'synthetic-search-exa')
       for (const project of [a, b]) {
         const pending = project + '/api/agent-resources/credential-requests'
         assert.equal((await fetch(base + pending)).status, 401)
@@ -259,6 +281,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal((await json<{ projects: ProjectRecord[] }>('/api/projects')).projects.length, 2)
       assert.equal((await json<{ model: string }>(a + '/api/config/model-defaults')).model, 'org-a@openai')
       assert.equal((await json<{ model: string }>(b + '/api/config/model-defaults')).model, 'app-choice@openai')
+      assert.deepEqual(await json('/api/app/web-search'), searchStatus)
       await json('/api/app/model-defaults', 'PATCH', { model: null, reasoningEffort: null })
       assert.equal((await json<{ model: string }>(b + '/api/config/model-defaults')).model, 'gpt-6-astra@copilot')
       assert.equal((await json<{ model: string }>(a + '/api/config/model-defaults')).model, 'org-a@openai')

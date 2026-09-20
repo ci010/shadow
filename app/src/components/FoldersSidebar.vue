@@ -341,33 +341,33 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 </script>
 
 <style scoped>
-.folders-sidebar { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; box-sizing: border-box; border-right: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
+.folders-sidebar { --tree-row-height: var(--sidebar-row-height); --tree-row-inset: var(--sidebar-row-inset); --tree-indent: var(--sidebar-indent); --tree-gap: var(--sidebar-heading-gap); --tree-icon-gap: var(--sidebar-icon-gap); --tree-disclosure: var(--sidebar-disclosure); position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; box-sizing: border-box; border-right: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
 .folders-sidebar.is-grouped { width: 100%; flex: 0 0 auto; border-right: 0; }
-.is-grouped .folders-scroll { overflow: visible; flex: none; padding-bottom: 12px; }
-.is-grouped .folders-header { min-height: 48px; padding: 8px 10px; gap: 4px; }
+.is-grouped .folders-scroll { overflow: visible; scrollbar-gutter: auto; flex: none; padding-bottom: 0; }
+.is-grouped .folders-header { min-height: var(--sidebar-project-height); padding: 0 calc(var(--sidebar-gutter) + var(--sidebar-row-inset)); gap: var(--sidebar-heading-gap); }
 .is-grouped .folders-header h2 { flex: 1; min-width: 0; }
-.project-toggle { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); cursor: pointer; }
+.project-toggle { display: grid; place-items: center; flex-shrink: 0; width: var(--sidebar-disclosure); height: var(--sidebar-row-height); padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .project-toggle:hover { background: var(--c-bg-muted); }
 .project-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .org-expanded { transform: rotate(90deg); }
-.folders-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 60px; padding: 12px 16px 8px 20px; }
-.folders-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.folders-header-actions { display: flex; align-items: center; gap: 4px; }
-.folder-action-button { display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-control); color: var(--c-text-secondary); background: transparent; font-size: 21px; line-height: 1; }
+.folders-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 48px; padding: 8px 12px; }
+.folders-header h2 { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; }
+.folders-header-actions { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
+.folder-action-button { display: grid; place-items: center; flex: 0 0 var(--sidebar-action-size); width: var(--sidebar-action-size); height: var(--sidebar-action-size); padding: 0; border: 0; border-radius: var(--radius-control); color: var(--c-text-secondary); background: transparent; font-size: 21px; line-height: 1; }
 .folder-action-button:hover { color: var(--c-text); background: var(--c-bg-muted); }
 .folder-action-button:disabled { opacity: .5; cursor: wait; }
-.folders-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; padding: 4px 10px 16px; }
-.folder-group { margin-bottom: 4px; }
+.folders-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; padding: var(--sidebar-heading-gap) var(--sidebar-gutter) var(--sidebar-section-gap); }
+.folders-scroll:empty { padding-block: 0; }
 .folder-add { opacity: 0; }
 .folder-folder-row:hover .folder-add, .folder-folder-row:focus-within .folder-add { opacity: 1; }
-.legacy-chats { margin-top: 20px; }
-.bot-conversations { margin-top: 12px; }
+.legacy-chats { margin-top: var(--sidebar-section-gap); }
+.legacy-chats:first-child { margin-top: 0; }
 .bot-connection { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-inline-start: 6px; flex-shrink: 0; color: var(--c-text-secondary); }
 .bot-connection > span { width: 13px; height: 13px; }
-.bot-connection[data-state="connected"] { color: var(--c-git-added); }
-.bot-connection[data-state="connecting"], .bot-connection[data-state="restart-required"], .bot-connection[data-state="running"] { color: var(--c-warn); }
+.bot-connection[data-state="connected"] { color: var(--c-success); }
+.bot-connection[data-state="restart-required"] { color: var(--c-warn); }
 .bot-connection[data-state="error"] { color: var(--c-error); }
-.legacy-chats h3 { margin: 0 12px 8px; font-size: 12px; font-weight: 500; color: var(--c-text-secondary); }
+.legacy-chats h3 { margin: 0 0 var(--sidebar-heading-gap); padding-inline: calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)) var(--sidebar-row-inset); font-size: 12px; line-height: 20px; font-weight: 500; color: var(--c-text-secondary); }
 .sidebar-note { margin: 8px 12px 16px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; }
 .sidebar-error { margin: 12px; color: var(--c-error); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .sidebar-error p { margin: 0 0 4px; }

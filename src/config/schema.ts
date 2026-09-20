@@ -3,6 +3,7 @@ import { parseMcpServerConfig } from '../mcp/config.ts'
 import { MAX_YIELD_TIMEOUT_MS } from '../sessions/yield-contract.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 import { DEFAULT_AGENT_MODEL } from './defaults.ts'
+import { WebSearchSelectionSchema } from './web-search.ts'
 
 // ── Provider configs ────────────────────────────────────────────────────────
 
@@ -208,6 +209,9 @@ export const ToolsSchema = z.object({
   restrictToWorkspace: z.boolean().default(false),
   braveApiKey: z.string().optional(),
   firecrawlApiKey: z.string().optional(),
+  exaApiKey: z.string().optional(),
+  tavilyApiKey: z.string().optional(),
+  webSearchProvider: WebSearchSelectionSchema.optional(),
   windows: WindowsToolSchema.optional(),
   chrome: ChromeToolSchema.optional(),
 })

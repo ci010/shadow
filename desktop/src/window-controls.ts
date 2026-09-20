@@ -2,6 +2,10 @@ import type { BrowserWindowConstructorOptions, WebPreferences } from 'electron'
 import { join } from 'node:path'
 import { IPC_CHANNELS, type DesktopWindowState } from './ipc-contract.js'
 
+export function desktopIconPath(): string {
+  return join(import.meta.dirname, '..', 'assets', 'icon.ico')
+}
+
 export function secureWebPreferences(preloadPath: string): WebPreferences {
   return {
     preload: preloadPath,
@@ -19,7 +23,7 @@ export function framelessWindowOptions(preloadPath: string): BrowserWindowConstr
     minHeight: 600,
     show: false,
     frame: false,
-    icon: join(import.meta.dirname, '..', 'assets', 'icon.ico'),
+    icon: desktopIconPath(),
     webPreferences: secureWebPreferences(preloadPath),
   }
 }

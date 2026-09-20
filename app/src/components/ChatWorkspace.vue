@@ -16,6 +16,7 @@
         <template #pane-actions>
           <button class="close-child" :aria-label="wide ? 'Close child conversation' : 'Back to main conversation'" :title="wide ? 'Close child conversation' : 'Back to main conversation'" @click="closeChild">
             <span class="w-4 h-4" :class="wide ? 'i-lucide-panel-right-close' : 'i-lucide-arrow-left'" aria-hidden="true" />
+            <span class="close-child-label">Back to main conversation</span>
           </button>
         </template>
       </ChatTab>
@@ -143,4 +144,6 @@ onUnmounted(deactivate)
 .close-child { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; margin-right: 10px; padding: 0; border: 0; border-radius: var(--radius-control); color: var(--c-text-secondary); background: transparent; cursor: pointer; }
 .close-child:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .close-child:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.close-child-label { display: none; }
+@media (max-width: 700px) { .close-child-label { display: inline; } }
 </style>

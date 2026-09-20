@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Hono } from 'hono'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { ProjectCatalog } from '../projects/catalog.ts'
@@ -9,6 +9,39 @@ import { registerProjectGateway } from '../projects/gateway.ts'
 import { GatewayClientAddressRegistry } from './server.ts'
 import { uiPlugin } from './ui.ts'
 import { isBackendPath, isProjectPagePath, SCOPED_BACKEND_PATTERN } from './route-kind.ts'
+
+test('PWA resources have browser-compatible MIME and update policy without SPA fallbacks', async () => {
+  await withTempWorkspace(async root => {
+    const dist = join(root, 'dist')
+    await mkdir(join(dist, 'pwa'), { recursive: true })
+    await writeFile(join(dist, 'index.html'), '<link rel="manifest" href="./manifest.webmanifest"><link rel="apple-touch-icon" href="./pwa/apple-touch-icon.png">')
+    for (const path of ['manifest.webmanifest', 'sw.js', 'pwa/icon-192.png', 'pwa/icon-512.png', 'pwa/apple-touch-icon.png']) {
+      await writeFile(join(dist, path), await readFile(new URL(`../../app/public/${path}`, import.meta.url)))
+    }
+    const app = new Hono()
+    uiPlugin(dist)(app)
+    const manifest = await app.request('/manifest.webmanifest')
+    assert.equal(manifest.headers.get('content-type'), 'application/manifest+json; charset=utf-8')
+    assert.equal(manifest.headers.get('cache-control'), 'no-cache')
+    assert.equal((await manifest.json()).start_url, '/')
+    const worker = await app.request('/sw.js')
+    assert.match(worker.headers.get('content-type') ?? '', /javascript/)
+    assert.equal(worker.headers.get('cache-control'), 'no-cache')
+    for (const path of ['/pwa/icon-192.png', '/pwa/icon-512.png', '/pwa/apple-touch-icon.png']) {
+      const response = await app.request(path)
+      assert.equal(response.status, 200)
+      assert.equal(response.headers.get('content-type'), 'image/png')
+    }
+    assert.match(await (await app.request('/projects/default/chat/web%3Aone')).text(), /href="\/manifest.webmanifest"/)
+    assert.equal((await app.request('/pwa/missing.png')).status, 404)
+    const missing = join(root, 'missing')
+    await mkdir(missing)
+    await writeFile(join(missing, 'index.html'), '<html>App shell</html>')
+    const oldBuild = new Hono()
+    uiPlugin(missing)(oldBuild)
+    for (const path of ['/sw.js', '/manifest.webmanifest']) assert.equal((await oldBuild.request(path)).status, 404)
+  })
+})
 
 test('gateway and Vite distinguish scoped backend calls from project browser pages', () => {
   const proxy = new RegExp(SCOPED_BACKEND_PATTERN)

@@ -11,6 +11,7 @@
     }
   },
   "tools": {
+    "webSearchProvider": "auto",
     "restrictToWorkspace": true,
     "yield": {
       "timeoutMs": null

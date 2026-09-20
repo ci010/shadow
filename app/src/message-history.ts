@@ -1,4 +1,5 @@
-import type { SessionMessageSource } from './message-author.ts'
+import { sessionMessageTitle, type SessionMessageSource } from './message-author.ts'
+import { eventPresentation, eventSourceSession, type ChatEventMeta } from './chat-events.ts'
 
 export interface HistoryMessage {
   role: string
@@ -8,12 +9,18 @@ export interface HistoryMessage {
   isSystemEvent?: boolean
   isSummary?: boolean
   sessionSource?: SessionMessageSource
+  senderName?: string
+  eventMeta?: ChatEventMeta
 }
 
-export interface UserMessageMarker {
+export interface MessageHistoryMarker {
   index: number
   preview: string
   timestamp?: string
+  kind: 'user' | 'session' | 'event'
+  label: string
+  source: string
+  sourceId?: string
 }
 
 export function isUserMessage(message: HistoryMessage): boolean {
@@ -35,11 +42,37 @@ export function messageTime(timestamp?: string, locale?: string): { dateTime?: s
   }
 }
 
-export function userMessageMarkers(messages: readonly HistoryMessage[]): UserMessageMarker[] {
+export function messageHistoryMarkers(
+  messages: readonly HistoryMessage[],
+  sessions: readonly { sessionId: string; label: string }[] = [],
+): MessageHistoryMarker[] {
+  const names = new Map(sessions.map(session => [session.sessionId, session.label]))
   return messages.flatMap((message, index) => {
-    if (!isUserMessage(message)) return []
+    if (message.role !== 'user' || message.isSummary || message.event) return []
+    let kind: MessageHistoryMarker['kind']
+    let label: string
+    let source: string
+    let sourceId: string | undefined
+    if (message.isSystemEvent) {
+      if (!message.eventMeta) return []
+      sourceId = eventSourceSession(message.eventMeta)
+      const presentation = eventPresentation(message.eventMeta)
+      if (!sourceId && !presentation.completion) return []
+      kind = 'event'
+      label = presentation.title
+      source = (sourceId && names.get(sourceId)) || message.eventMeta.source || sourceId || 'Unknown session'
+    } else if (message.sessionSource) {
+      sourceId = message.sessionSource.id
+      kind = 'session'
+      label = sessionMessageTitle(message.sessionSource)
+      source = (sourceId && names.get(sourceId)) || message.sessionSource.name || sourceId || 'Unknown session'
+    } else {
+      kind = 'user'
+      label = 'User message'
+      source = message.senderName || 'User'
+    }
     const text = message.content.replace(/\s+/g, ' ').trim()
-    return [{ index, preview: text || 'Attachment', timestamp: message.timestamp }]
+    return [{ index, preview: text || (kind === 'event' ? label : 'Attachment'), timestamp: message.timestamp, kind, label, source, sourceId }]
   })
 }
 

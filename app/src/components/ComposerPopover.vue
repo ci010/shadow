@@ -2,7 +2,10 @@
   <button ref="trigger" class="composer-control" :class="{ active: open }" :disabled="disabled" :aria-disabled="disabled || busy" :aria-busy="busy" :aria-label="label" :title="title ?? label" aria-haspopup="dialog" :aria-expanded="open" @click="toggle" @keydown.down.prevent="show">
     <slot name="trigger" />
   </button>
-  <Teleport to="body">
+  <MobileSheet v-if="sheetLayout && open" :open="open" :label="label" @update:open="close(true)">
+    <slot :close="() => close(true)" />
+  </MobileSheet>
+  <Teleport v-if="!sheetLayout" to="body">
     <div v-if="open" class="composer-popover-backdrop" @pointerdown.self="close(false)">
       <div ref="panel" class="composer-popover" role="dialog" tabindex="-1" :aria-label="label" :style="position" @keydown="keydown">
         <slot :close="() => close(true)" />
@@ -12,10 +15,14 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import MobileSheet from './MobileSheet.vue'
+import { useMobileChrome } from '../composables/useMobileChrome.ts'
 
-const props = withDefaults(defineProps<{ label: string; title?: string; disabled?: boolean; busy?: boolean; width?: number }>(), { width: 340 })
+const props = withDefaults(defineProps<{ label: string; title?: string; disabled?: boolean; busy?: boolean; width?: number; sheet?: boolean }>(), { width: 340 })
 const emit = defineEmits<{ opened: []; closed: [] }>()
+const mobile = useMobileChrome()
+const sheetLayout = computed(() => props.sheet || !!mobile?.enabled.value)
 const open = ref(false)
 const trigger = ref<HTMLButtonElement>()
 const panel = ref<HTMLElement>()
@@ -36,7 +43,7 @@ async function show() {
   }
   open.value = true
   emit('opened')
-  window.addEventListener('resize', dismiss)
+  window.addEventListener('resize', dismissOnResize)
   await nextTick()
   const target = panel.value?.querySelector<HTMLElement>('input, button:not(:disabled)') ?? panel.value
   target?.focus({ preventScroll: true })
@@ -45,10 +52,11 @@ function close(restoreFocus = true) {
   if (!open.value) return
   open.value = false
   emit('closed')
-  window.removeEventListener('resize', dismiss)
+  window.removeEventListener('resize', dismissOnResize)
   if (restoreFocus) trigger.value?.focus({ preventScroll: true })
 }
 function dismiss() { close(false) }
+function dismissOnResize() { if (!sheetLayout.value) dismiss() }
 function toggle() { if (open.value) close(); else void show() }
 function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return }

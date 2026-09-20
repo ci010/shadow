@@ -2,6 +2,7 @@ import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { randomUUID } from 'node:crypto'
 import { resolveConfigPath } from './loader.ts'
 import { ChannelsSchema, ConfigSchema, type Config } from './schema.ts'
+import { WEB_SEARCH_KEY_FIELDS } from './web-search.ts'
 
 export const REDACTED_SECRET = '__SHADOW_REDACTED__'
 type RawConfig = Record<string, unknown>
@@ -141,7 +142,7 @@ export class ConfigStore {
     }
     const beforeTools = isRecord(previous.tools) ? previous.tools : {}
     const afterTools = isRecord(raw.tools) ? raw.tools : {}
-    for (const key of ['braveApiKey', 'firecrawlApiKey'] as const) {
+    for (const key of WEB_SEARCH_KEY_FIELDS) {
       if (beforeTools[key] === undefined && afterTools[key] === undefined && active?.tools[key] !== undefined) {
         parsed.tools[key] = active.tools[key]
       }

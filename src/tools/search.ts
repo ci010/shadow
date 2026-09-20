@@ -143,17 +143,7 @@ export class SearchTool implements Tool {
 
       case 'web': {
         if (!this.webSearchTool) {
-          return (
-            'Web search is not available — no SearXNG instance was detected at startup.\n\n' +
-            'To fix this, check the following in order:\n' +
-            '1. Is Docker running? Run: docker info\n' +
-            '   - If Docker is not installed, read skill "docker-install" → read("v:skills/docker-install")\n' +
-            '   - If Docker is installed but not running, start it (e.g. `docker` daemon, Docker Desktop, or `colima start`)\n' +
-            '2. Is the SearXNG container running? Run: docker container list\n' +
-            '   - If not listed, start it: docker container start searxng\n' +
-            '   - If it doesn\'t exist, install it → read("v:skills/searxng") for instructions\n' +
-            '3. After SearXNG is running, retry the search.'
-          )
+          return 'Error: web search is not configured for this search tool.'
         }
         const webQuery = qualifier
           ? `${query} site:${qualifier}`
@@ -161,14 +151,11 @@ export class SearchTool implements Tool {
         try {
           return await this.webSearchTool.execute({ query: webQuery }, context)
         } catch (err) {
+          context.signal.throwIfAborted()
           const msg = err instanceof Error ? err.message : String(err)
           return (
             `Web search failed: ${msg}\n\n` +
-            'SearXNG may have stopped or become unreachable.\n' +
-            'To fix: check if the SearXNG container is running → docker container list\n' +
-            '  - If stopped: docker container start searxng\n' +
-            '  - If missing: read("v:skills/searxng") for install instructions\n' +
-            '  - If Docker is not running: start Docker first'
+            'Check network access to the search provider and its service status, API credentials, and usage limits.'
           )
         }
       }

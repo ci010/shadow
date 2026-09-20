@@ -1,5 +1,6 @@
 import type { ImageSource } from './image-context.ts'
 import { apiUrl } from './api-url.ts'
+import { createUuid } from './uuid.ts'
 
 export interface PendingChatAttachment {
   key: string
@@ -28,7 +29,7 @@ export function updateImageAttachment(
   }
   if (file && !isImageAttachment(file)) throw new Error('Only an image can be added from the image preview.')
   const next: PendingChatAttachment | undefined = file ? {
-    key: previous?.key ?? (options.createId ?? (() => crypto.randomUUID()))(),
+    key: previous?.key ?? (options.createId ?? createUuid)(),
     sourceKey,
     ...(options.source ? { source: { ...options.source } } : {}),
     file,
@@ -137,7 +138,7 @@ export function appendChatAttachments(
   } = {},
 ): PendingChatAttachment[] {
   const createObjectUrl = options.createObjectUrl ?? (file => URL.createObjectURL(file))
-  const createId = options.createId ?? (() => crypto.randomUUID())
+  const createId = options.createId ?? createUuid
   const seen = new Set(existing.map(attachment => attachmentSignature(attachment.file)))
   const next = [...existing]
   for (const file of files) {

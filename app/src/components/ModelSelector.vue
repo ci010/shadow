@@ -126,10 +126,11 @@ function chooseEffort(patch: ReasoningSettings, close: () => void) {
 .model-menu-back:hover { color: var(--c-blue); }
 .model-menu-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 9px 12px; font-size: 13px; font-weight: 600; }
 .model-scope { color: var(--c-text-secondary); font-size: 11px; font-weight: 400; }
-.model-search { flex-shrink: 0; box-sizing: border-box; width: calc(100% - 8px); margin: 0 4px 8px; padding: 9px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }
+.model-search { flex-shrink: 0; box-sizing: border-box; width: calc(100% - 8px); margin: 0 4px 8px; padding: 9px 10px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 13px; }
 .model-options { overflow-y: auto; min-height: 0; max-height: 280px; }
 .model-option { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px; padding: 9px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; cursor: pointer; }
-.model-option:hover, .model-option[aria-pressed="true"] { background: var(--c-bg-muted); }
+.model-option:hover { background: var(--c-bg-muted); }
+.model-option[aria-pressed="true"] { background: var(--c-selection-bg); color: var(--c-primary); }
 .model-option-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; font-size: 13px; overflow-wrap: anywhere; }
 .model-option small { color: var(--c-text-secondary); font-size: 11px; }
 .model-check { flex-shrink: 0; width: 16px; height: 16px; }

@@ -2,6 +2,7 @@ import type { CloneOperation, FolderRecord } from '../../src/folders/contracts.t
 import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
 import { parseWorkdirIdentity } from '../../src/execution/workdir-identity.ts'
+import { createUuid } from './uuid.ts'
 
 export type { CloneOperation, FolderRecord }
 
@@ -156,7 +157,7 @@ export function createCloneController(
     const timer = setTimeout(callback, delay)
     return () => clearTimeout(timer)
   },
-  createId: () => string = () => crypto.randomUUID(),
+  createId: () => string = createUuid,
 ) {
   let view: CloneView = { state: 'idle' }
   let activeId: string | undefined

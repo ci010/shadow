@@ -1,5 +1,6 @@
 export interface ProjectSidebarPreferences {
   width: number
+  /** Retains the stored key: legacy icon rails now restore as fully hidden. */
   collapsed: boolean
 }
 

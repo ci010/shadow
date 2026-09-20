@@ -4,6 +4,8 @@ import UnoCSS from 'unocss/vite'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import type { EventEmitter } from 'node:events'
+import type { ClientRequest, IncomingMessage } from 'node:http'
+import { TLSSocket } from 'node:tls'
 import { SCOPED_BACKEND_PATTERN } from '../src/gateway/route-kind.ts'
 import { parseRuntimeEndpointMessage } from '../desktop/src/control/runtime-endpoint.ts'
 
@@ -26,6 +28,16 @@ export function desktopBackendRouting(
     changeOrigin: true,
     ws: path !== '/v1',
     configure(server) {
+      const forwardBrowserOrigin = (proxyRequest: ClientRequest, request: IncomingMessage) => {
+        const protocol = request.socket instanceof TLSSocket ? 'https:' : 'http:'
+        // Only translate same-origin browser requests alongside changeOrigin's Host rewrite.
+        // Missing, null and cross-origin values must still reach the backend's origin checks.
+        if (request.headers.origin !== `${protocol}//${request.headers.host}`) return
+        const backendProtocol = enabled ? target.protocol : new URL(API_TARGET).protocol
+        proxyRequest.setHeader('Origin', new URL(`${backendProtocol}//${proxyRequest.getHeader('host')}`).origin)
+      }
+      server.on('proxyReq', forwardBrowserOrigin)
+      server.on('proxyReqWs', forwardBrowserOrigin)
       if (!enabled) return
       const web = server.web
       const ws = server.ws
@@ -80,7 +92,7 @@ export default defineConfig({
     configFile: fileURLToPath(new URL('./unocss.config.ts', import.meta.url)),
   })],
   server: {
-    host: true,
+    host: process.env.VITE_DEV_HOST ?? '0.0.0.0',
     port: 5273,
     strictPort: true,
     proxy: routing.proxy,

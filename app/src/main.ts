@@ -17,6 +17,15 @@ import {
 	type ShadowDesktopApi,
 } from './desktop-bootstrap.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
+import { registerBrowserPwa } from './pwa.ts'
+
+void registerBrowserPwa({
+	production: import.meta.env.PROD,
+	desktop: !!window.shadowDesktop,
+	secureContext: window.isSecureContext,
+	protocol: window.location.protocol,
+	serviceWorker: import.meta.env.PROD && !window.shadowDesktop ? navigator.serviceWorker : undefined,
+}).catch(error => console.error('[pwa] Could not enable the installed web app.', error))
 
 const apiBase = import.meta.env.VITE_API_BASE?.trim() || globalThis.location.origin
 

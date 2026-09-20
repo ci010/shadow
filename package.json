@@ -16,7 +16,6 @@
     "dev:app": "pnpm --filter @shadow/app dev",
     "dev:docker": "node --env-file-if-exists=.env --import tsx --inspect=0.0.0.0:9229 --watch src/index.ts",
     "dev:docker:compose": "docker compose up --build",
-    "dev:searxng": "docker compose -f docker-compose.searxng.yml up -d",
     "start": "node --env-file-if-exists=.env --import tsx src/index.ts",
     "build": "node --import tsx build.ts",
     "build:app": "pnpm --filter @shadow/app build",

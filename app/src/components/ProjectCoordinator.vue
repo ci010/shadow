@@ -3,7 +3,7 @@
     <button type="button" class="coordinator-entry" :class="{ selected }" :aria-disabled="loading"
       :aria-label="`Open Project coordination in ${projectName}`" :aria-current="selected ? 'page' : undefined"
       :aria-busy="loading" @click="open">
-      <span>{{ projectName }}</span>
+      <span :title="projectName">{{ projectName }}</span>
     </button>
     <span v-if="error" class="coordinator-error" role="alert">{{ error }} <button type="button" class="text-action" @click="open">Retry</button></span>
   </span>
@@ -52,9 +52,11 @@ onUnmounted(cancel)
 
 <style scoped>
 .project-coordinator { display: block; min-width: 0; }
-.coordinator-entry { display: block; width: 100%; min-height: 28px; padding: 4px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; font: inherit; font-size: 13px; overflow-wrap: anywhere; cursor: pointer; }
-.coordinator-entry:hover, .coordinator-entry.selected { background: var(--c-bg-muted); color: var(--c-text); }
-.coordinator-entry.selected { border-color: var(--c-border); }
+.coordinator-entry { display: flex; align-items: center; width: 100%; min-width: 0; min-height: var(--sidebar-row-height); padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; }
+.coordinator-entry > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coordinator-entry:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.coordinator-entry.selected { color: var(--c-primary); }
+.coordinator-entry.selected > span { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .coordinator-entry[aria-busy="true"] { cursor: progress; }
 .coordinator-entry:focus-visible, .text-action:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .coordinator-error { display: block; margin: 6px 4px; color: var(--c-error); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }

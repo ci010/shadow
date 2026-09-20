@@ -8,6 +8,7 @@
 | [Windows release verification](release.md) | Build gates, verified downloads, package identity and installation acceptance boundaries |
 | [Contributor guide](../AGENTS.md) | Repository conventions and change boundaries |
 | [Architecture](architecture.md) | Features, project ownership/storage/routing, execution flow, persistence, and known limitations |
+| [Visual design system](../DESIGN.md) | Quiet Workbench light/dark color roles, message hierarchy, components, and implementation guardrails |
 | [Shared live transport](realtime-protocol.md) | Multiplexed SSE, topic ownership, replay/reset, reconnect recovery, and resource limits |
 | [Frontend I/O](io.md) | Browser capture panels, adhoc backend connection protocol, controls, and verification limits |
 | [Conversation agent authoring](agent-authoring.md) | Independent Changes, delegated resource edits, saved checks, owner-reviewed probes/publication and legacy drafts |

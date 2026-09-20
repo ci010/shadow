@@ -1,3 +1,5 @@
+import { createUuid } from './uuid.ts'
+
 export interface ImageSource {
   path: string
   modified: boolean
@@ -42,7 +44,7 @@ const references = new Map<string, ImageReference>()
 
 /** Transfer only an in-memory image owned by this renderer, never an arbitrary URL. */
 export function startImageReferenceDrag(data: Pick<DataTransfer, 'setData' | 'effectAllowed'>, reference: ImageReference): () => void {
-  const token = crypto.randomUUID()
+  const token = createUuid()
   data.setData(IMAGE_REFERENCE_MIME, token)
   data.effectAllowed = 'copy'
   references.set(token, reference)

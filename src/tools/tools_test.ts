@@ -48,7 +48,7 @@ import type { ChannelManager } from '../channels/manager.ts'
  * Heavy collaborators (SessionManager, ChannelManager) are stubbed because only
  * construction — not execution — is exercised here.
  *
- * Lazy tools (MCP servers, chrome-devtools, cron, web_search)
+ * Lazy tools (MCP servers and chrome-devtools)
  * are loaded on demand. Opt-in tools registered in the base
  * (plan_write, log, initiative) stay hidden unless an agent type
  * whitelists them.

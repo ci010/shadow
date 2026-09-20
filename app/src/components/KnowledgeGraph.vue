@@ -18,7 +18,7 @@
           :aria-label="`${node.title}${node.kind === 'missing' ? ' (unresolved reference)' : ''}`" :aria-pressed="node.id === selectedId"
           @click="$emit('select', node.id)" @keydown.enter.prevent="$emit('select', node.id)" @keydown.space.prevent="$emit('select', node.id)">
           <title>{{ node.id }}</title>
-          <rect width="240" height="52" rx="8" />
+          <rect width="240" height="52" />
           <text x="12" y="22">{{ short(node.title, 29) }}</text>
           <text x="12" y="40" class="node-kind">{{ node.kind === 'missing' ? 'Unresolved / outside catalog' : node.kind }}</text>
         </g>
@@ -65,7 +65,7 @@ svg { display: block; color: var(--c-text-muted); }
 .edge { fill: none; stroke: var(--c-text-muted); stroke-width: 1.2; opacity: .45; }
 .edge.highlighted { stroke: var(--c-blue); stroke-width: 2; opacity: 1; }
 .node { cursor: pointer; }
-.node rect { fill: var(--c-bg-card); stroke: var(--c-border); }
+.node rect { rx: var(--radius-surface); fill: var(--c-bg-card); stroke: var(--c-border); }
 .node text { fill: var(--c-text); font-size: 12px; }
 .node .node-kind { fill: var(--c-text-muted); font-size: 10px; }
 .node.memory rect { stroke: var(--c-blue); }

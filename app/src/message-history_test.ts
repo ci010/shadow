@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatMessageTime, messageTime, resendableUserMessage, userMessageMarkers } from './message-history.ts'
+import { formatMessageTime, messageTime, resendableUserMessage, messageHistoryMarkers } from './message-history.ts'
+import { parseLiveSessionMessage } from './chat-events.ts'
 
 test('resend targets only a trailing human message and preserves its attachments', () => {
   assert.equal(resendableUserMessage([]), undefined)
@@ -29,16 +30,20 @@ test('I/O and background notifications never become resend prompts or fallback c
   ]), undefined)
 })
 
-test('session messages never appear in the human history navigator', () => {
-  assert.deepEqual(userMessageMarkers([
+test('session messages appear alongside human turns with distinct attribution', () => {
+  assert.deepEqual(messageHistoryMarkers([
     { role: 'user', content: 'Human request' },
     { role: 'user', content: 'Delegated task', sessionSource: { id: 'web:orchestrator', intent: 'handoff' } },
-    { role: 'user', content: 'Human follow-up' },
-  ]).map(marker => marker.index), [0, 2])
+    { role: 'user', content: 'Human follow-up', senderName: 'Alice' },
+  ], [{ sessionId: 'web:orchestrator', label: 'Coordinator' }]).map(({ index, kind, source, sourceId, label }) => ({ index, kind, source, sourceId, label })), [
+    { index: 0, kind: 'user', source: 'User', sourceId: undefined, label: 'User message' },
+    { index: 1, kind: 'session', source: 'Coordinator', sourceId: 'web:orchestrator', label: 'Session handoff' },
+    { index: 2, kind: 'user', source: 'Alice', sourceId: undefined, label: 'User message' },
+  ])
 })
 
-test('history rail includes only real user turns, preserving rendered message indexes and timestamps', () => {
-  assert.deepEqual(userMessageMarkers([
+test('history rail excludes tools, summaries and unrelated system events while preserving indexes and times', () => {
+  assert.deepEqual(messageHistoryMarkers([
     { role: 'user', content: 'First\n question', timestamp: '2026-09-10T02:00:00Z' },
     { role: 'assistant', content: 'Response' },
     { role: 'user', content: 'Scheduled event', isSystemEvent: true },
@@ -46,17 +51,52 @@ test('history rail includes only real user turns, preserving rendered message in
     { role: 'tool', content: 'Tool result' },
     { role: 'user', content: 'Tool metadata', event: 'tool_result' },
     { role: 'user', content: 'Second question' },
-  ]), [
+  ]).map(({ index, preview, timestamp }) => ({ index, preview, timestamp })), [
     { index: 0, preview: 'First question', timestamp: '2026-09-10T02:00:00Z' },
     { index: 6, preview: 'Second question', timestamp: undefined },
   ])
 })
 
 test('empty and media-only histories have honest previews without fabricated dates', () => {
-  assert.deepEqual(userMessageMarkers([]), [])
-  assert.equal(userMessageMarkers([{ role: 'user', content: '' }])[0].preview, 'Attachment')
+  assert.deepEqual(messageHistoryMarkers([]), [])
+  assert.equal(messageHistoryMarkers([{ role: 'user', content: '' }])[0].preview, 'Attachment')
   assert.equal(formatMessageTime(), 'Time unavailable')
   assert.equal(formatMessageTime('not a timestamp'), 'Time unavailable')
+})
+
+test('session events and live sender envelopes are navigable without becoming resendable', () => {
+  const messages = [
+    '<sender source="session" id="web:review" name="Reviewer" intent="progress"/>Checking changes',
+    '<event type="subagent-complete" source="Worker" source-session-id="task:worker"/>Finished\n review',
+    '<event type="message" source="Reviewer" sourceSessionId="web:review"/>A question',
+    '<event type="subagent-failed" source="Legacy worker"/>',
+    '<event type="heartbeat" source="scheduler"/>Wake up',
+  ].map(content => {
+    const parsed = parseLiveSessionMessage({ role: 'user', content, timestamp: '2026-09-20T01:00:00Z' })
+    assert(parsed)
+    return parsed
+  })
+  const markers = messageHistoryMarkers(messages)
+  assert.deepEqual(markers.map(marker => marker.index), [0, 1, 2, 3])
+  assert.deepEqual(markers.map(marker => marker.source), ['Reviewer', 'Worker', 'Reviewer', 'Legacy worker'])
+  assert.deepEqual(markers.map(marker => marker.label), ['Session progress', 'Agent completed', 'message', 'Agent failed'])
+  assert.equal(markers[1].preview, 'Finished review')
+  assert.equal(markers[3].preview, 'Agent failed')
+  assert.equal(markers[1].sourceId, 'task:worker')
+  assert.equal(markers[2].sourceId, 'web:review')
+  assert(markers.every(marker => marker.timestamp === '2026-09-20T01:00:00Z'))
+  for (const message of messages) assert.equal(resendableUserMessage([message]), undefined)
+})
+
+test('unlisted sessions retain recorded names or IDs and missing identity is explicit', () => {
+  const markers = messageHistoryMarkers([
+    { role: 'user', content: 'Named', sessionSource: { id: 'web:missing', name: 'Archived topic' } },
+    { role: 'user', content: 'Unnamed', sessionSource: { id: 'web:missing' } },
+    { role: 'user', content: 'Legacy', sessionSource: {} },
+    { role: 'user', content: 'Done', isSystemEvent: true, eventMeta: { type: 'subagent-complete', source: 'Worker', attrs: { executionId: 'task:old' } } },
+  ])
+  assert.deepEqual(markers.map(marker => marker.source), ['Archived topic', 'web:missing', 'Unknown session', 'Worker'])
+  assert.equal(markers[3].sourceId, 'task:old')
 })
 
 test('hover times use local calendar days for Today, Yesterday and older dates', () => {

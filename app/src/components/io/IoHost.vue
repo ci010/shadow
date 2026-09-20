@@ -13,6 +13,7 @@
 import { computed, onBeforeUnmount, onMounted, triggerRef, watch } from 'vue'
 import { parseIoDefinition, type IoRun } from '../../../../src/io/contracts.ts'
 import { apiUrl } from '../../api-url.ts'
+import { createUuid } from '../../uuid.ts'
 import { parseSessionDetails } from '../../session-details.ts'
 import { liveProjectId, useLiveClientPool } from '../../composables/useLiveClient.ts'
 import type { LiveSubscription } from '../../live-client.ts'
@@ -72,7 +73,7 @@ async function client(base: string) {
   if (pending) return pending.promise
   const controller = new AbortController()
   const registration = (async () => {
-    const clientId = crypto.randomUUID()
+    const clientId = createUuid()
     const result = await ioRequest<{ clientToken: string }>(base, '/clients', { id: clientId, name: 'Local capture client', capabilities },
       AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
     controller.signal.throwIfAborted()

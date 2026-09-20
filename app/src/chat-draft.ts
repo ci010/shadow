@@ -1,4 +1,5 @@
 import type { FolderRecord, FoldersClient } from './folders-client.ts'
+import { createUuid } from './uuid.ts'
 
 export interface ChatContextItem {
   kind: 'file' | 'folder'
@@ -9,7 +10,7 @@ export interface ChatContextItem {
 export function createChatDraft(
   client: Pick<FoldersClient, 'createSession'>,
   folder?: FolderRecord,
-  createId: () => string = () => `chat-${crypto.randomUUID()}`,
+  createId: () => string = () => `chat-${createUuid()}`,
 ) {
   return {
     folder,

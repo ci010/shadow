@@ -68,7 +68,6 @@ interface ConsumeWaiter {
 interface OnHandler {
   id: string
   topic: string
-  // deno-lint-ignore no-explicit-any
   handler: (payload: any) => void
 }
 
@@ -76,22 +75,17 @@ interface OnHandler {
 interface PollHandler {
   id: string
   topic: string
-  // deno-lint-ignore no-explicit-any
   handler: (data: any) => void
   timer: ReturnType<typeof setInterval>
 
   // Buffer mode (default) — mutually exclusive with agg
-  // deno-lint-ignore no-explicit-any
   buffer: any[] | null
 
   // Aggregate mode — present when caller supplies init/reduce
   agg: {
-    // deno-lint-ignore no-explicit-any
     acc: any
     dirty: boolean
-    // deno-lint-ignore no-explicit-any
     init: () => any
-    // deno-lint-ignore no-explicit-any
     reduce: (acc: any, event: any) => any
   } | null
 }
@@ -102,7 +96,6 @@ export class Bus {
   private onHandlers = new Map<string, OnHandler>()
   private pollHandlers = new Map<string, PollHandler>()
   private consumeWaiters = new Map<string, ConsumeWaiter[]>()
-  // deno-lint-ignore no-explicit-any
   private consumeBuffers = new Map<string, any[]>()
   private readonly onError: NonNullable<BusOptions['onError']>
 
@@ -187,7 +180,6 @@ export class Bus {
       init?: () => TAcc
       reduce?: (acc: TAcc, event: PayloadFor<T>) => TAcc
     },
-    // deno-lint-ignore no-explicit-any
     handler: (data: any) => void,
   ): string {
     const id = crypto.randomUUID()

@@ -12,6 +12,10 @@ const sourceDirectory = dirname(fileURLToPath(import.meta.url))
 const repository = resolve(sourceDirectory, '..', '..')
 const require = createRequire(import.meta.url)
 
+test('external Markdown links open in the system browser without navigating Electron', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'external-links-smoke')
+})
+
 test('branding assets decode in the built renderer and native desktop window', { timeout: 150_000 }, async (t) => {
   await runFixture(t, 'branding-smoke')
 })

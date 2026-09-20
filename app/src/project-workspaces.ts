@@ -1,4 +1,5 @@
 import { projectResourceKey } from './projects.ts'
+import { createUuid } from './uuid.ts'
 import type { FolderRecord } from './folders-client.ts'
 import type { SessionRef } from './api-url.ts'
 import type { KnowledgeTabRequest } from './file-workbench.ts'
@@ -29,7 +30,7 @@ export function createConversationResources() {
       const existing = resources.find(item => item.key === key && !item.sessionId)
       if (existing) return existing
       // Previously sent drafts stay mounted; the next draft receives another stable key.
-      const item = { key: resources.some(item => item.key === key) ? `${key}:${crypto.randomUUID()}` : key,
+      const item = { key: resources.some(item => item.key === key) ? `${key}:${createUuid()}` : key,
         projectId, sessionId: '', folder, openRemote }
       resources.push(item)
       return item

@@ -2,6 +2,7 @@ import { createChatDraft, deferChatSession } from './chat-draft.ts'
 import { capabilityAvailability, type NodeInventoryEntry } from './node-inventory.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
+import { createUuid } from './uuid.ts'
 import type { FolderRecord, FoldersClient } from './folders-client.ts'
 
 export interface RemoteConversationTarget {
@@ -52,7 +53,7 @@ export function createFolderChatDraft(client: Pick<FoldersClient, 'createSession
     nodeName: folder.workdir.nodeId, displayName: folder.workdir.displayName ?? folder.name,
     displayPath: folder.workdir.displayPathSnapshot ?? folder.path, available: false,
   }
-  const requestId = crypto.randomUUID()
+  const requestId = createUuid()
   return {
     folder, remote,
     ...deferChatSession(async signal => (await client.createSession(folder.id, signal, requestId)).sessionId),
@@ -60,7 +61,7 @@ export function createFolderChatDraft(client: Pick<FoldersClient, 'createSession
 }
 
 export function createRemoteChatDraft(apiBase: string, target: RemoteChatTarget, request: typeof fetch = fetch,
-  createRequestId: () => string = () => crypto.randomUUID()) {
+  createRequestId: () => string = createUuid) {
   const selection = { ...target }
   const requestId = createRequestId()
   return {

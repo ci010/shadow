@@ -58,6 +58,14 @@ export function parseToolCall(message: ToolActivityMessage): { name: string; arg
   return { name: message.toolName || match?.[1] || message.content || 'Tool', args: {}, raw: match?.[2] ?? '' }
 }
 
+export function resolveToolCall(message: ToolActivityMessage): ReturnType<typeof parseToolCall> {
+  const call = parseToolCall(message)
+  if (call.name === 'invoke_tool' && typeof call.args.name === 'string' && isRecord(call.args.args)) {
+    return { name: call.args.name, args: call.args.args, raw: call.raw }
+  }
+  return call
+}
+
 export function parseLineChanges(result: string): LineChanges | undefined {
   const lines = result.split('\n', 3)
   if (!/^Success: (?:write|edit|append) /.test(lines[0])
@@ -70,12 +78,8 @@ export function parseLineChanges(result: string): LineChanges | undefined {
 }
 
 function activity(message: ToolActivityMessage, index: number, result?: ToolActivityMessage): ToolActivity {
-  const call = parseToolCall(message)
-  let { name, args } = call
-  if (name === 'invoke_tool' && typeof args.name === 'string' && isRecord(args.args)) {
-    name = args.name
-    args = args.args
-  }
+  const call = resolveToolCall(message)
+  const { name, args } = call
   const path = typeof args.path === 'string' ? args.path : ''
   const basename = path.split(/[\\/]/).filter(Boolean).at(-1) || path
   const write = name === 'write'

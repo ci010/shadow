@@ -19,9 +19,6 @@ dist/
 .vscode/
 .idea/
 
-# Historical Deno dependency cache
-deno.lock
-
 # Runtime data
 workspace/
 bot.config.json

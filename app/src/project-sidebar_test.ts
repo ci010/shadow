@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { DEFAULT_PROJECT_SIDEBAR, parseProjectSidebarPreferences, projectSidebarStorageKey, restoreProjectSidebarPreferences } from './project-sidebar.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from './sidebar-resize.ts'
 
-test('project sidebar restores width and rail independently and rejects malformed saved values', () => {
+test('project sidebar restores width and hidden preference, including legacy rail records', () => {
   assert.deepEqual(parseProjectSidebarPreferences(null), DEFAULT_PROJECT_SIDEBAR)
   assert.deepEqual(parseProjectSidebarPreferences('{"width":356,"collapsed":true}'), { width: 356, collapsed: true })
   for (const raw of ['{', 'null', '[]', '{"width":"300","collapsed":true}', '{"width":300}', '{"width":1e999,"collapsed":false}']) {
@@ -13,7 +13,7 @@ test('project sidebar restores width and rail independently and rejects malforme
   assert.equal(parseProjectSidebarPreferences('{"width":-1,"collapsed":false}').width, 200)
 })
 
-test('project sidebar preserves the preferred width across narrow layouts and rail toggles', () => {
+test('project sidebar preserves the preferred width across narrow layouts and pin toggles', () => {
   const saved = parseProjectSidebarPreferences('{"width":400,"collapsed":true}')
   assert.equal(clampSidebarWidth(saved.width, sidebarWidthBounds(650, 200, 440)), 290)
   saved.collapsed = false

@@ -10,10 +10,6 @@
 #   open http://localhost:14500 in your Windows browser to see and
 #   control Chrome inside the container.
 #
-# SearXNG search:
-#   Available at http://localhost:8888 from Windows.
-#   The bot auto-detects it via the "searxng" hostname on the shared network.
-
 services:
   bot:
     build:
@@ -24,10 +20,8 @@ services:
         # in your shell before running compose if direct egress is unavailable.
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,searxng}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     container_name: shadow-bot-dev
-    depends_on:
-      - searxng
     ports:
       - '3123:3123'
       - '9229:9229'
@@ -36,7 +30,6 @@ services:
       - .env
     environment:
       CHROME_PATH: /usr/bin/google-chrome-stable
-      SEARXNG_URL: http://searxng:8080
       # Published port 3123 is an explicit remote-development opt-in.
       GATEWAY_HOST: 0.0.0.0
       # DISPLAY is set by docker-entrypoint.sh (xpra :100)
@@ -44,7 +37,7 @@ services:
       # without a proxy instead of forcing all traffic through a host port.
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,searxng}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     shm_size: 1g
     volumes:
       # ── Root workspace config (read-only) ──
@@ -74,24 +67,8 @@ services:
         limits:
           memory: 4G
 
-  searxng:
-    image: docker.io/searxng/searxng:latest
-    container_name: searxng
-    entrypoint: ['/bin/sh', '/usr/local/bin/searxng-entrypoint.sh']
-    ports:
-      - '8888:8080'
-    volumes:
-      - ./scripts/searxng-entrypoint.sh:/usr/local/bin/searxng-entrypoint.sh:ro
-      - ./searxng:/etc/searxng
-      - searxng-data:/var/cache/searxng
-    environment:
-      - SEARXNG_BASE_URL=http://localhost:8888/
-    restart: unless-stopped
-
 volumes:
   bot-root-nm:
     driver: local
   app-pkg-nm:
-    driver: local
-  searxng-data:
     driver: local

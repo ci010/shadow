@@ -113,7 +113,7 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
 .background-detail { flex: 1; min-width: 0; }
 .background-title { display: block; color: var(--c-text); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .background-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; font-size: 12px; }
-.running-dot { width: 6px; height: 6px; margin-top: 6px; background: var(--c-teal); flex-shrink: 0; }
+.running-dot { width: 6px; height: 6px; margin-top: 6px; background: var(--c-text-secondary); flex-shrink: 0; }
 .background-error { display: flex; align-items: center; gap: 10px; padding: 6px 10px; overflow-wrap: anywhere; }
 .background-error > span { flex: 1; min-width: 0; }
 .background-retry { flex-shrink: 0; min-height: 32px; padding: 4px 8px; border: 1px solid var(--c-border); background: var(--c-bg-soft); color: var(--c-text); font: inherit; cursor: pointer; }

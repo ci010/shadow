@@ -1,4 +1,5 @@
 import { apiUrl } from './api-url.ts'
+import { createUuid } from './uuid.ts'
 
 export interface ProviderSetupStatus {
   provider: string
@@ -195,7 +196,7 @@ export function createDeviceLoginController(
     const timer = setTimeout(callback, delay)
     return () => clearTimeout(timer)
   },
-  createId: () => string = () => crypto.randomUUID(),
+  createId: () => string = createUuid,
 ) {
   let generation = 0
   let view: LoginView = { state: 'idle' }

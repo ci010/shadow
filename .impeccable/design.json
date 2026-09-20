@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-20T15:36:13.939Z",
+  "title": "Design System: Shadow",
+  "extensions": {
+    "colorMeta": {
+      "light-bg": { "role": "neutral", "displayName": "Paper canvas" },
+      "dark-bg": { "role": "neutral", "displayName": "Graphite canvas" },
+      "light-primary": { "role": "primary", "displayName": "Workbench blue — readable light-theme ink" },
+      "dark-primary": { "role": "primary", "displayName": "Workbench blue — readable dark-theme ink" },
+      "light-primary-bg": { "role": "primary", "displayName": "Workbench blue — light-theme filled action" },
+      "dark-primary-bg": { "role": "primary", "displayName": "Workbench blue — dark-theme filled action" },
+      "light-success": { "role": "semantic", "displayName": "Success green — light" },
+      "dark-success": { "role": "semantic", "displayName": "Success green — dark" },
+      "light-warn": { "role": "semantic", "displayName": "Attention amber — light" },
+      "dark-warn": { "role": "semantic", "displayName": "Attention amber — dark" },
+      "light-error": { "role": "semantic", "displayName": "Failure red — light" },
+      "dark-error": { "role": "semantic", "displayName": "Failure red — dark" },
+      "light-info": { "role": "semantic", "displayName": "Information blue — light" },
+      "dark-info": { "role": "semantic", "displayName": "Information blue — dark" }
+    },
+    "typographyMeta": {
+      "draft-title": { "displayName": "Draft heading", "purpose": "Existing conversation draft heading, not a global display scale." },
+      "project-title": { "displayName": "Project heading", "purpose": "Compact sidebar heading." },
+      "navigation": { "displayName": "Navigation label", "purpose": "Tree and coordinator rows." },
+      "button": { "displayName": "Shared button", "purpose": "Global button primitives; local component overrides remain local." },
+      "conversation": { "displayName": "Conversation text", "purpose": "Chat bubble text; shared Markdown retains its 65ch measure." },
+      "composer": { "displayName": "Composer input", "purpose": "Editable conversation input." },
+      "mobile-input": { "displayName": "Phone input", "purpose": "16px phone input and sheet fields without focus-triggered text zoom." },
+      "mobile-title": { "displayName": "Phone view title", "purpose": "Truncating current-view title in the single phone header." },
+      "offline-title": { "displayName": "Disconnected app title", "purpose": "System-font title in the network-independent PWA fallback." },
+      "activity": { "displayName": "Activity label", "purpose": "Session state with words as well as color." },
+      "tool-payload": { "displayName": "Tool payload", "purpose": "Monospace arguments and results." }
+    },
+    "shadows": [
+      { "name": "composer-popover", "value": "0 12px 36px var(--c-shadow)", "purpose": "Structural depth for ComposerPopover; not a message-card shadow." },
+      { "name": "floating-sidebar", "value": "8px 0 24px var(--c-shadow-soft)", "purpose": "Existing overlay sidebar separation." }
+    ],
+    "motion": [
+      { "name": "composer-border", "value": "border-color .15s ease", "purpose": "Composer focus boundary transition." },
+      { "name": "mobile-drawer", "value": ".18s cubic-bezier(.22, 1, .36, 1)", "purpose": "Drawer release/button settling, disabled for reduced motion; held gestures track directly without transition lag." },
+      { "name": "activity-spin", "value": ".8s linear infinite", "purpose": "Existing spinner rotation; disabled for reduced-motion preference." },
+      { "name": "fade-and-slide", "value": ".3s ease both", "purpose": "Existing global entrance helpers, not a new universal duration scale." }
+    ],
+    "breakpoints": [
+      { "name": "narrow", "value": "700px" },
+      { "name": "coarse-pointer-density", "value": "(pointer: coarse)" }
+    ],
+    "sources": [
+      "app/src/styles.css",
+      "app/unocss.config.ts",
+      "app/src/components/ChatTab.vue",
+      "app/src/components/TreeRow.vue",
+      "app/src/components/ProjectCoordinator.vue",
+      "app/src/components/ProjectsWorkspace.vue",
+      "app/src/components/FoldersSidebar.vue",
+      "app/src/components/ComposerPopover.vue",
+      "app/src/components/MessageAction.vue",
+      "app/src/components/ExecutionMessage.vue",
+      "app/src/components/SessionActivity.vue",
+      "app/src/components/ToolActivityGroup.vue",
+      "app/src/components/SessionDiagnosis.vue",
+      "app/src/components/BackgroundTasks.vue",
+      "app/src/components/MessageHistoryRail.vue",
+      "app/src/components/AutomationSidebar.vue",
+      "app/src/components/ModelSelector.vue",
+      "app/src/components/MobileChrome.vue",
+      "app/src/components/MobileSheet.vue",
+      "app/src/composables/useMobileChrome.ts",
+      "app/src/components/files/FileWorkbench.vue",
+      "app/public/manifest.webmanifest",
+      "app/public/sw.js"
+    ],
+    "scope": "Live CSS variables are required by previews. Examples are visual excerpts without Vue behavior. Frontmatter owns primitives; no graph/category, syntax or legacy opacity redesign is asserted."
+  },
+  "components": [
+    {
+      "name": "Single phone header",
+      "kind": "nav",
+      "refersTo": "mobile-header",
+      "description": "Phone-only single header. Drawer, view switcher and contextual actions use the existing application state; this excerpt shows their resting appearance.",
+      "html": "<header class=\"ds-phone-header\"><button class=\"ds-phone-icon\" aria-label=\"Open navigation\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M4 6h16M4 12h16M4 18h16\"/></svg></button><button class=\"ds-phone-title\" aria-label=\"Switch view\"><span>Current conversation</span><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m6 9 6 6 6-6\"/></svg></button><button class=\"ds-phone-icon\" aria-label=\"Conversation and document actions\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"12\" r=\"1.5\"/><circle cx=\"12\" cy=\"12\" r=\"1.5\"/><circle cx=\"19\" cy=\"12\" r=\"1.5\"/></svg></button></header>",
+      "css": ".ds-phone-header { display: flex; align-items: center; gap: 4px; min-height: 56px; padding: 0 8px 0 4px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); } .ds-phone-header button { min-height: 44px; border: 0; padding: 0 4px; background: transparent; color: inherit; cursor: pointer; } .ds-phone-icon { display: grid; place-items: center; flex: 0 0 44px; } .ds-phone-title { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; font: 600 15px/1.5 Inter, system-ui, sans-serif; text-align: left; } .ds-phone-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-phone-title svg { flex-shrink: 0; } .ds-phone-header button:hover { background: var(--c-bg-muted); } .ds-phone-header button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }"
+    },
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Shared filled action, with separate readable ink and fill roles in dark mode.",
+      "html": "<button class=\"ds-primary\" type=\"button\">Save changes</button>",
+      "css": ".ds-primary { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); font: 500 13px/1.4 Inter, system-ui, sans-serif; cursor: pointer; } .ds-primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); } .ds-primary:active:not(:disabled) { background: var(--c-primary-bg); } .ds-primary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; } .ds-primary:disabled { opacity: .5; cursor: not-allowed; } @media (max-width: 700px), (pointer: coarse) { .ds-primary { min-height: 44px; } }"
+    },
+    {
+      "name": "Neutral button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Shared neutral action; muted hover and selected active surface.",
+      "html": "<button class=\"ds-secondary\" type=\"button\">Cancel</button>",
+      "css": ".ds-secondary { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: 500 13px/1.4 Inter, system-ui, sans-serif; cursor: pointer; } .ds-secondary:hover:not(:disabled) { background: var(--c-bg-muted); } .ds-secondary:active:not(:disabled) { background: var(--c-selection-bg); } .ds-secondary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; } .ds-secondary:disabled { opacity: .5; cursor: not-allowed; } @media (max-width: 700px), (pointer: coarse) { .ds-secondary { min-height: 44px; } }"
+    },
+    {
+      "name": "Ghost button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Shared low-emphasis action; no accent until focus.",
+      "html": "<button class=\"ds-ghost\" type=\"button\">Details</button>",
+      "css": ".ds-ghost { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 14px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: 500 13px/1.4 Inter, system-ui, sans-serif; cursor: pointer; } .ds-ghost:hover:not(:disabled), .ds-ghost:active:not(:disabled) { background: var(--c-bg-muted); } .ds-ghost:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; } .ds-ghost:disabled { opacity: .5; cursor: not-allowed; } @media (max-width: 700px), (pointer: coarse) { .ds-ghost { min-height: 44px; } }"
+    },
+    {
+      "name": "Composer input",
+      "kind": "input",
+      "refersTo": "composer",
+      "description": "Observed composer boundary and textarea, omitting application-only toolbar behavior.",
+      "html": "<div class=\"ds-composer\"><textarea class=\"ds-composer-input\" aria-label=\"Message\" placeholder=\"Message\"></textarea></div>",
+      "css": ".ds-composer { min-width: 0; padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; } .ds-composer:focus-within { border-color: var(--c-blue); } .ds-composer-input { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 78px; max-height: min(240px, 28dvh); overflow-y: auto; resize: none; padding: 3px 4px 10px; border: 0; outline: 0; background: transparent; color: var(--c-text); font: 14px/1.6 Inter, system-ui, sans-serif; } .ds-composer-input::placeholder { color: var(--c-text-secondary); }"
+    },
+    {
+      "name": "Selected project coordination",
+      "kind": "nav",
+      "refersTo": "navigation-selected",
+      "description": "Heading-level coordinator entry: neutral hover, blue selected text and a fine title underline without a filled block.",
+      "html": "<nav class=\"ds-navigation\" aria-label=\"Project coordination\"><button class=\"ds-coordinator\" type=\"button\"><span>Project A</span></button><button class=\"ds-coordinator ds-selected\" type=\"button\" aria-current=\"page\"><span>Project B</span></button></nav>",
+      "css": ".ds-navigation { display: grid; min-width: 0; } .ds-coordinator { display: flex; align-items: center; width: 100%; min-width: 0; min-height: var(--sidebar-row-height); padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; font: 13px/20px Inter, system-ui, sans-serif; cursor: pointer; } .ds-coordinator > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-coordinator:hover { background: var(--c-bg-muted); color: var(--c-text); } .ds-coordinator.ds-selected { color: var(--c-primary); } .ds-coordinator.ds-selected > span { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; } .ds-coordinator:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }"
+    },
+    {
+      "name": "Context chip",
+      "kind": "chip",
+      "refersTo": "context-chip",
+      "description": "Neutral attached-context label with an explicit removable control.",
+      "html": "<span class=\"ds-context\"><span class=\"ds-context-label\">Selected context</span><button class=\"ds-context-remove\" type=\"button\" aria-label=\"Remove context\">×</button></span>",
+      "css": ".ds-context { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 5px 4px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-soft); color: var(--c-text-secondary); font: 12px Inter, system-ui, sans-serif; } .ds-context-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-context-remove { flex-shrink: 0; padding: 0 3px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: 17px Inter, system-ui, sans-serif; cursor: pointer; } .ds-context-remove:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }"
+    },
+    {
+      "name": "Neutral conversation bubbles",
+      "kind": "card",
+      "refersTo": "conversation-card",
+      "description": "Desktop content-fitting user and assistant surfaces with a shared 80% cap; no decorative hover or shadow. Phone assistant cards use the column and user bubbles cap at 92%, within 8px outer gutters.",
+      "html": "<div class=\"ds-conversation\"><div class=\"ds-bubble ds-user\">Please review the changes.</div><div class=\"ds-bubble ds-assistant\">I will inspect the changes and report what I find.</div></div>",
+      "css": ".ds-conversation { display: flex; flex-direction: column; gap: .5rem; min-width: 0; } .ds-bubble { width: fit-content; max-width: var(--conversation-item-max-width); padding: .5rem .75rem; border: 1px solid var(--c-chat-border); border-radius: var(--radius-surface); color: var(--c-text); font: .8rem/1.5 Inter, system-ui, sans-serif; overflow-wrap: anywhere; } .ds-user { align-self: flex-end; background: var(--c-chat-user-bg); } .ds-assistant { align-self: flex-start; background: var(--c-chat-assistant-bg); }"
+    },
+    {
+      "name": "Message action",
+      "kind": "card",
+      "refersTo": "message-action",
+      "description": "A neutral action card; recipient navigation has hover/focus, while queued delivery is not green completion.",
+      "html": "<article class=\"ds-message\"><div class=\"ds-message-header\"><span class=\"ds-message-title\">Message</span><button class=\"ds-recipient\" type=\"button\">Reviewer</button><span class=\"ds-message-status\" role=\"status\">Queued</span></div><div class=\"ds-message-content\">Please review the changes.</div><p class=\"ds-message-note\">Queued for a response; receipt does not mean the work is complete.</p></article>",
+      "css": ".ds-message { width: fit-content; min-width: 0; max-width: var(--conversation-item-max-width); margin-block: 8px; padding: 12px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-surface); background: var(--c-chat-action-bg); color: var(--c-text); font: 13px Inter, system-ui, sans-serif; } .ds-message-header { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; } .ds-message-title, .ds-message-status { color: var(--c-text-secondary); font-size: 12px; } .ds-message-status { margin-left: auto; } .ds-recipient { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; min-height: 32px; padding: 4px 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; text-align: left; cursor: pointer; } .ds-recipient:hover { background: var(--c-bg-muted); text-decoration: underline; } .ds-recipient:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; } .ds-message-content { margin-block: 8px; white-space: pre-wrap; overflow-wrap: anywhere; } .ds-message-note { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }"
+    },
+    {
+      "name": "Session activity states",
+      "kind": "custom",
+      "refersTo": "session-activity",
+      "description": "Existing state palette: routine idle neutral, completed green, failed red, and human attention amber. Static labels are not controls.",
+      "html": "<div class=\"ds-states\"><span class=\"ds-activity\"><span class=\"ds-symbol\" aria-hidden=\"true\"><span class=\"ds-dot ds-idle-dot\"></span></span><span class=\"ds-activity-label\">Idle</span></span><span class=\"ds-activity ds-completed\"><span class=\"ds-symbol\" aria-hidden=\"true\"><span class=\"ds-dot\"></span></span><span class=\"ds-activity-label\">Completed</span></span><span class=\"ds-activity ds-failed\"><span class=\"ds-symbol\" aria-hidden=\"true\"><span class=\"ds-dot\"></span></span><span class=\"ds-activity-label\">Failed</span></span><span class=\"ds-activity ds-waiting\"><span class=\"ds-activity-label\">Needs reply</span></span></div>",
+      "css": ".ds-states { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; } .ds-activity { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; color: var(--c-text-secondary); font: 12px/1.5 Inter, system-ui, sans-serif; vertical-align: middle; } .ds-completed { color: var(--c-success); } .ds-failed { color: var(--c-error); } .ds-waiting { gap: 4px; padding: 2px 5px; background: var(--c-warn-bg); border: 1px solid var(--c-warn); border-radius: var(--radius-control); color: var(--c-warn); } .ds-symbol { display: grid; place-items: center; width: 16px; height: 16px; } .ds-dot { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: var(--radius-circle); } .ds-idle-dot { background: currentColor; } .ds-activity-label { font-weight: 500; white-space: nowrap; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Quiet Workbench / 安静的工作台",
+    "overview": "Keep the existing workbench layout and square-edged controls. Paper in light mode and graphite in dark mode create a restrained, neutral setting for reading conversations, inspecting work, and choosing the next action. Hierarchy comes from spacing, clear text, and small changes in surface tone, not a collection of colored panels.\n\nColor has a job: blue identifies interaction, selection, and information needing attention; green communicates success, connection, or completion; amber requests human attention or warns; red identifies failure or destructive action. Routine thinking, tool execution, idle state, trace information, and peer origin remain neutral. Controls are precise and restrained rather than ornamental.",
+    "keyCharacteristics": [
+      "Neutral reading surfaces with clear, grayscale text.",
+      "Square corners and compact, grouped navigation.",
+      "Flat conversation cards; structural shadows for overlays.",
+      "Semantic color for meaningful state, not sender identity."
+    ],
+    "rules": [
+      { "name": "The Color Has a Job Rule", "body": "Routine activity and identity stay neutral; semantic color must describe an action, selection, or meaningful state.", "section": "colors" },
+      { "name": "The Readable Metadata Rule", "body": "Reduce visual emphasis with neutral hierarchy and placement before adding opacity to text.", "section": "typography" },
+      { "name": "The Flat Conversation Rule", "body": "Separate ordinary message roles with neutral tone, alignment, and quiet borders, not ambient card shadows.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use shared CSS variables and inherited chat aliases in both themes.",
+      "Do reserve blue for interaction, selection, and information needing attention.",
+      "Do reserve green for success, connection, or completion; amber for human attention or warnings; red for failures or destructive actions.",
+      "Do preserve neutral source labels, routine tool activity, thinking, idle state, and static trace information.",
+      "Do retain the sidebar rhythm, square corners, content-fitting message cards, and the shared prose measure.",
+      "Do verify actual foreground/background pairs and focus states when adding or changing a component."
+    ],
+    "donts": [
+      "Don't replace neutral reading surfaces with colored sender or tool-type panels.",
+      "Don't use dark-mode primary link ink as a filled button background behind white text.",
+      "Don't add shadows to ordinary chat bubbles or round controls because a token is named pill or circle.",
+      "Don't treat muted/faint text or decorative border tokens as interchangeable with disabled content or input boundaries.",
+      "Don't repurpose Git, syntax, graph-category, or legacy specialty colors as general interaction/status tokens.",
+      "Don't infer app-wide accessibility certification or a complete legacy-style migration from focused palette tests."
+    ]
+  }
+}

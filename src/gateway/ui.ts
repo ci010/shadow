@@ -11,6 +11,7 @@ const MIME: Record<string, string> = {
   '.js': 'application/javascript; charset=utf-8',
   '.mjs': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -86,7 +87,7 @@ export function uiPlugin(distDir: string): GatewayPlugin {
 
       // SPA fallback: unknown route \u2192 index.html
       if (!body) {
-        if (path.startsWith('/assets/')) return c.notFound()
+        if (path.startsWith('/assets/') || path.startsWith('/pwa/') || path === '/manifest.webmanifest' || path === '/sw.js') return c.notFound()
         body = await readFile(join(root, 'index.html'))
         ext = '.html'
         entryPage = true
@@ -100,7 +101,10 @@ export function uiPlugin(distDir: string): GatewayPlugin {
         : body as BodyInit
       return new Response(responseBody, {
         status: 200,
-        headers: { 'Content-Type': MIME[ext] ?? 'application/octet-stream' },
+        headers: {
+          'Content-Type': MIME[ext] ?? 'application/octet-stream',
+          ...(path === '/sw.js' || path === '/manifest.webmanifest' ? { 'Cache-Control': 'no-cache' } : {}),
+        },
       })
     })
   }

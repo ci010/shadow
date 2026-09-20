@@ -1,212 +1,5 @@
 import type { Tool, ToolParameters } from './tool.ts'
-import { env } from 'node:process'
-
-// ── SearXNG detection ────────────────────────────────────────────────────────
-
-const SEARXNG_PROBE_PORTS = [8888, 8080, 8081, 80]
-const SEARXNG_PROBE_HOSTS = ['localhost', 'searxng']
-const SEARXNG_PROBE_TIMEOUT_MS = 2_000
-
-function normalizeSearXNGBase(base: string): string {
-  return base.trim().replace(/\/+$/, '')
-}
-
-async function probeSearXNGBase(base: string, signal?: AbortSignal): Promise<string | null> {
-  const probeSignal = () => signal
-    ? AbortSignal.any([signal, AbortSignal.timeout(SEARXNG_PROBE_TIMEOUT_MS)])
-    : AbortSignal.timeout(SEARXNG_PROBE_TIMEOUT_MS)
-  signal?.throwIfAborted()
-  try {
-    const res = await fetch(`${base}/search?q=test&format=json`, {
-      signal: probeSignal(),
-    })
-    try {
-      if (res.ok || res.status === 429) {
-        const ct = res.headers.get('content-type') ?? ''
-        if (ct.includes('json') || (await res.text()).includes('searxng')) {
-          return base
-        }
-      }
-    } finally {
-      if (!res.bodyUsed) await res.body?.cancel()
-    }
-  } catch {
-    signal?.throwIfAborted()
-    // JSON output may be disabled or slower than the probe timeout.
-  }
-
-  try {
-    const htmlRes = await fetch(`${base}/`, {
-      signal: probeSignal(),
-    })
-    if (htmlRes.ok) {
-      const body = await htmlRes.text()
-      if (body.toLowerCase().includes('searxng')) {
-        return base
-      }
-    } else await htmlRes.body?.cancel()
-  } catch {
-    signal?.throwIfAborted()
-    // host not reachable or timed out
-  }
-
-  return null
-}
-
-/**
- * Probe a single host:port to check if SearXNG is running there.
- * The bot container already sets NO_PROXY for localhost and the compose
- * service name, so normal fetch is sufficient here.
- */
-async function probeSearXNG(
-  host: string,
-  port: number,
-  signal?: AbortSignal,
-): Promise<string | null> {
-  return await probeSearXNGBase(`http://${host}:${port}`, signal)
-}
-
-/**
- * Probe common hosts/ports to detect a running SearXNG instance.
- * Checks both localhost (native) and 'searxng' (Docker compose service name).
- * All probes run in parallel for fast detection.
- * Returns the base URL (e.g. "http://searxng:8080") or null if not found.
- */
-export async function detectSearXNG(signal?: AbortSignal): Promise<string | null> {
-  signal?.throwIfAborted()
-  const explicitBase = env.SEARXNG_URL
-  if (explicitBase?.trim()) {
-    const normalizedBase = normalizeSearXNGBase(explicitBase)
-    const detected = await probeSearXNGBase(normalizedBase, signal)
-    if (detected) return detected
-  }
-
-  const probes: Promise<string | null>[] = []
-  for (const host of SEARXNG_PROBE_HOSTS) {
-    for (const port of SEARXNG_PROBE_PORTS) {
-      probes.push(probeSearXNG(host, port, signal))
-    }
-  }
-  const results = await Promise.all(probes)
-  return results.find((r) => r !== null) ?? null
-}
-
-// ── web_search (SearXNG) ─────────────────────────────────────────────────────
-
-interface SearXNGResult {
-  title: string
-  url: string
-  content?: string
-  publishedDate?: string | null
-  pubdate?: string | null
-  engines?: string[]
-  template?: string
-  iframe_src?: string
-}
-
-interface SearXNGResponse {
-  results?: SearXNGResult[]
-  answers?: string[]
-  infoboxes?: Array<
-    {
-      infobox: string
-      content?: string
-      urls?: Array<{ title: string; url: string }>
-    }
-  >
-  suggestions?: string[]
-}
-
-function serializeSearXNGResponse(
-  data: SearXNGResponse,
-  count: number,
-): string {
-  const parts: string[] = []
-
-  // Direct answers (highest signal)
-  const answers = data.answers?.filter(Boolean) ?? []
-  if (answers.length > 0) {
-    parts.push(`DIRECT ANSWERS:\n${answers.map((a) => `  • ${a}`).join('\n')}`)
-  }
-
-  // Infoboxes
-  for (const box of data.infoboxes ?? []) {
-    const lines = [`INFOBOX: ${box.infobox}`]
-    if (box.content) lines.push(box.content)
-    if (box.urls?.length) {
-      lines.push(
-        '  See also: ' +
-          box.urls.map((u) => `${u.title} — ${u.url}`).join(', '),
-      )
-    }
-    parts.push(lines.join('\n'))
-  }
-
-  // Web results
-  const results = (data.results ?? []).slice(0, count)
-  if (results.length === 0 && parts.length === 0) return 'No results found.'
-
-  const resultLines = results.map((r, i) => {
-    const lines = [`${i + 1}. ${r.title}`, `   URL: ${r.url}`]
-    if (r.content) lines.push(`   ${r.content}`)
-    const date = r.publishedDate ?? r.pubdate
-    if (date) lines.push(`   Published: ${date.slice(0, 10)}`)
-    if (r.engines?.length) lines.push(`   Sources: ${r.engines.join(', ')}`)
-    return lines.join('\n')
-  })
-  if (resultLines.length > 0) parts.push(resultLines.join('\n\n'))
-
-  // Related suggestions
-  const suggestions = data.suggestions?.slice(0, 5) ?? []
-  if (suggestions.length > 0) {
-    parts.push(`RELATED: ${suggestions.join(' | ')}`)
-  }
-
-  return parts.join('\n\n---\n\n')
-}
-
-export class SearXNGSearchTool implements Tool {
-  readonly name = 'web_search'
-  readonly readonly = true
-  readonly description =
-    'Search the web using a local SearXNG instance and return results.'
-  readonly parameters: ToolParameters = {
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: 'Search query' },
-      count: { type: 'string', description: 'Number of results (default 5)' },
-    },
-    required: ['query'],
-  }
-
-  constructor(private baseUrl: string) {}
-
-  async execute(args: Record<string, unknown>): Promise<string> {
-    const query = String(args.query)
-    const count = Number(args.count ?? 5)
-    const url = `${this.baseUrl}/search?q=${
-      encodeURIComponent(query)
-    }&format=json`
-
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!res.ok) {
-      if (res.status === 403) {
-        return 'Error: SearXNG JSON output is disabled. Enable `json` in `search.formats`.'
-      }
-      return `Error: SearXNG returned ${res.status}`
-    }
-
-    const data = (await res.json()) as SearXNGResponse
-    return serializeSearXNGResponse(data, count)
-  }
-
-  getChatTextDisplay(args: Record<string, unknown>): string {
-    return `🔍 ${String(args.query)}`
-  }
-}
+import type { ExecutionContext } from './context.ts'
 
 // ── web_search (Brave Search API) ───────────────────────────────────────────
 
@@ -226,7 +19,8 @@ export class WebSearchTool implements Tool {
 
   constructor(private apiKey: string) {}
 
-  async execute(args: Record<string, unknown>): Promise<string> {
+  async execute(args: Record<string, unknown>, context?: ExecutionContext): Promise<string> {
+    context?.signal.throwIfAborted()
     const query = String(args.query)
     const count = Number(args.count ?? 5)
     const url = `https://api.search.brave.com/res/v1/web/search?q=${
@@ -238,6 +32,7 @@ export class WebSearchTool implements Tool {
         'X-Subscription-Token': this.apiKey,
         Accept: 'application/json',
       },
+      signal: context?.signal,
     })
     if (!res.ok) return `Error: Brave search returned ${res.status}`
 
@@ -304,7 +99,8 @@ export class FirecrawlSearchTool implements Tool {
     this.baseUrl = baseUrl.replace(/\/+$/, '')
   }
 
-  async execute(args: Record<string, unknown>): Promise<string> {
+  async execute(args: Record<string, unknown>, context?: ExecutionContext): Promise<string> {
+    context?.signal.throwIfAborted()
     const query = String(args.query)
     const count = Number(args.count ?? 5)
 
@@ -323,7 +119,9 @@ export class FirecrawlSearchTool implements Tool {
         limit: count,
         sources: [{ type: 'web' }],
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: context
+        ? AbortSignal.any([context.signal, AbortSignal.timeout(60_000)])
+        : AbortSignal.timeout(60_000),
     })
 
     if (!res.ok) {

@@ -123,11 +123,7 @@ import { providerPlugin } from '../../providers/routes.ts'
 import { sessionsApiPlugin } from '../../sessions/routes.ts'
 import { sessionDiagnosisPlugin } from '../../sessions/diagnosis-routes.ts'
 import { SearchTool } from '../../tools/search.ts'
-import { createWebSearchTool } from '../../tools/web-provider.ts'
-import {
-  detectSearXNG,
-  SearXNGSearchTool,
-} from '../../tools/web.ts'
+import { createLiveWebSearchTool } from '../../tools/web-provider.ts'
 import { StartupTimings } from '../startup-timings.ts'
 import { ChromeManager } from '../../browser/chrome-manager.ts'
 import { cleanupTempFiles, workspacePath } from '../../utils/paths.ts'
@@ -322,26 +318,11 @@ export async function createProjectRuntime(
 
   // Web search provider for the `search` tool's `web:` scheme.
   // Not registered as a standalone tool — only wired into SearchTool below.
-  // Firecrawl takes precedence over Brave when both keys are configured.
-  const webSearchTool = createWebSearchTool(config.tools)
+  // Resolve shared App credentials at execution time so active Projects see updates.
+  const webSearchTool = createLiveWebSearchTool(() => activeConfig.tools)
 
   const loadable = new Map<string, LoadableEntry>()
   loadable.set('agent_tool_test', agentToolTest)
-  const searxngFactory = async () => {
-    const base = await detectSearXNG()
-    if (!base) {
-      throw new Error(
-        'No reachable SearXNG instance found on localhost or the docker-compose host `searxng`.',
-      )
-    }
-    return new SearXNGSearchTool(base)
-  }
-
-  // Explicit SearXNG discovery remains available independently of provider selection.
-  loadable.set('web_search', {
-    factory: searxngFactory,
-  })
-
   // Chrome config getter that re-reads from the config file so edits take effect
   // without a process restart (e.g. user sets tools.chrome.executablePath).
   const chromeConfigGetter = (): {

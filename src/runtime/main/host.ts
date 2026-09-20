@@ -19,6 +19,7 @@ import { createProjectScope } from '../../projects/scope.ts'
 import { ProjectCatalog } from '../../projects/catalog.ts'
 import { AppProviderConfigStore, ProjectConfigStore } from '../../projects/config-store.ts'
 import { appModelDefaultsPlugin } from '../../config/model-routes.ts'
+import { appWebSearchPlugin } from '../../config/web-search-routes.ts'
 import { projectPaths, projectBasePath } from '../../projects/contracts.ts'
 import { registerProjectGateway } from '../../projects/gateway.ts'
 import type { ProjectRuntime, ProjectRuntimeFactory } from '../../projects/runtime.ts'
@@ -178,7 +179,7 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [browserAuth.plugin(), ...mainCluster.plugins, localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), providerPlugin(() => provider, () => providerSetup.status())], {
+  registerGatewayRoutes(app, [browserAuth.plugin(), ...mainCluster.plugins, localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
     launchCredential, browserAuth, clientAddresses, launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
   })
   registerRealtimeRoute(app, realtimeHub, authorize)

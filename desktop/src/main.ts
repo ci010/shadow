@@ -9,6 +9,7 @@ import {
   Menu,
   session,
   shell,
+  Tray,
   type WebContents,
 } from 'electron'
 import {
@@ -42,10 +43,8 @@ import {
   type RendererTarget,
   resolveRendererTarget,
 } from './renderer-target.js'
-import {
-  createNavigationPolicy,
-  isAllowedExternalUrl,
-} from './security-policy.js'
+import { isAllowedExternalUrl } from './security-policy.js'
+import { installNavigationPolicy } from './navigation.js'
 import {
   createProductionRuntimeHost,
   registerRuntimeHostQuitLifecycle,
@@ -53,7 +52,8 @@ import {
 import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from './runtime-authorization.js'
 import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
-import { framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
+import { desktopIconPath, framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
+import { installTrayMenu } from './tray.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
 import { installChatContextPickers } from './chat-context.js'
 import { installDocumentTabShortcuts } from './document-tabs.js'
@@ -70,16 +70,19 @@ import { installWebPairing } from './web-pairing.js'
 export { secureWebPreferences } from './window-controls.js'
 
 let mainWindow: BrowserWindow | null = null
+let mainTray: Tray | null = null
 
 export function enforceNavigationPolicy(
   webContents: WebContents,
   target: RendererTarget,
 ): void {
-  const policy = createNavigationPolicy(target)
-  webContents.on('will-navigate', (event, url) => {
-    if (!policy.isAllowed(url)) event.preventDefault()
+  installNavigationPolicy(webContents, target, (url) => shell.openExternal(url), () => {
+    console.error('[desktop] Failed to open an external link in the system browser.')
+    dialog.showErrorBox(
+      'Unable to open link',
+      'The system browser could not be opened. Copy the link and open it manually.',
+    )
   })
-  webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 }
 
 export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
@@ -324,6 +327,12 @@ async function start(): Promise<void> {
     ...(developmentUrl ? { developmentUrl } : {}),
   })
   mainWindow = createMainWindow(target)
+  mainTray = new Tray(desktopIconPath())
+  const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit())
+  app.once('will-quit', () => {
+    disposeTray()
+    mainTray = null
+  })
   installWebPairing(ipcMain, mainWindow, () => activityAuthorization)
   taskbarActivity = new TaskbarActivity(mainWindow)
   taskbarActivity.setAuthorization(activityAuthorization)

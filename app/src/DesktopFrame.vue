@@ -1,6 +1,6 @@
 <template>
-  <div class="desktop-frame" :class="{ 'native-desktop': controls }">
-    <header class="desktop-title-bar" aria-label="Shadow">
+  <div class="desktop-frame" :class="{ 'native-desktop': controls, 'mobile-frame': mobile }">
+    <header v-show="!mobile" class="desktop-title-bar" aria-label="Shadow">
       <img class="desktop-brand" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
       <span class="desktop-window-title">Shadow</span>
       <div v-if="$slots.navigation" class="chrome-navigation"><slot name="navigation" /></div>
@@ -20,6 +20,7 @@
         </button>
       </div>
     </header>
+    <header v-if="mobile" class="mobile-title-bar" aria-label="Mobile navigation"><slot name="mobile-header" /></header>
     <div class="desktop-content"><slot /></div>
   </div>
 </template>
@@ -29,6 +30,7 @@ import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { observeDesktopWindow } from './desktop-window.ts'
 import shadowLogo from './assets/shadow-logo.png'
 
+defineProps<{ mobile?: boolean }>()
 const controls = window.shadowDesktop?.windowControls
 const maximized = ref(false)
 const error = ref('')
@@ -52,7 +54,9 @@ onBeforeUnmount(() => unsubscribe?.())
 
 <style scoped>
 .desktop-frame { --desktop-title-height: 44px; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.desktop-frame.mobile-frame { height: var(--mobile-viewport-height, 100dvh); }
 .desktop-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.mobile-title-bar { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-height: 56px; padding: env(safe-area-inset-top, 0px) max(8px, env(safe-area-inset-right, 0px)) 0 max(4px, env(safe-area-inset-left, 0px)); box-sizing: content-box; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
 .desktop-title-bar { flex: 0 0 var(--desktop-title-height); min-width: 0; display: flex; align-items: center; gap: 10px; padding-left: 12px; background: var(--c-bg-card, #f7f9f7); color: var(--c-text, #18211d); border-bottom: 1px solid var(--c-border, #d8ddd9); z-index: 100; user-select: none; }
 .native-desktop .desktop-title-bar { -webkit-app-region: drag; }
 .desktop-brand { display: block; width: 24px; height: 24px; object-fit: contain; }
@@ -63,7 +67,7 @@ onBeforeUnmount(() => unsubscribe?.())
 .chrome-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; -webkit-app-region: no-drag; }
 .window-controls { display: flex; align-self: stretch; flex-shrink: 0; -webkit-app-region: no-drag; }
 .window-controls button { width: 46px; display: grid; place-items: center; border: 0; border-radius: 0; background: transparent; color: inherit; cursor: pointer; -webkit-app-region: no-drag; }
-.window-controls button:hover { background: var(--c-bg-soft, #e5eae7); }.window-controls button:focus-visible { outline: 2px solid #147a57; outline-offset: -3px; }
+.window-controls button:hover { background: var(--c-bg-muted); }.window-controls button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -3px; }
 .window-controls .window-close:hover { background: #c42b1c; color: white; }
 svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
 .window-error { color: var(--c-error, #c42b1c); font-size: 11px; -webkit-app-region: no-drag; }

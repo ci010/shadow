@@ -85,7 +85,6 @@ export function activeSpan<T>(
  *   async doWork() { ... }  // span has 'channel' and 'chat.id' attributes
  * }
  */
-// deno-lint-ignore no-explicit-any
 export function Span<This extends object, Args extends any[], Return>(
   name: string,
   options?: SpanOptions | ((...args: Args) => SpanOptions),

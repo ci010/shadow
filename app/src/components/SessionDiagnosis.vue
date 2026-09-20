@@ -525,8 +525,8 @@ onUnmounted(stop)
 .diagnosis-views button.selected, .event-filters button.selected { background: var(--c-bg-muted); color: var(--c-text); }
 .view-count { font-size: 10px; color: var(--c-text-muted); }
 .diagnosis-status { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--c-text-secondary); font-size: 11px; }
-.diagnosis-status.working { color: var(--c-blue); }
-.diagnosis-status i, .span-dot { width: 6px; height: 6px; border-radius: var(--radius-circle); background: var(--c-blue); }
+.diagnosis-status.working { color: var(--c-text-secondary); }
+.diagnosis-status i, .span-dot { width: 6px; height: 6px; border-radius: var(--radius-circle); background: var(--c-text-secondary); }
 .diagnosis-status i, .span-dot.running { animation: trace-pulse 1.6s ease-in-out infinite; }
 .diagnosis-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 24px; overscroll-behavior: contain; }
 .trace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -586,13 +586,8 @@ h3 { font-size: 14px; font-weight: 550; }
 .trace-event-header { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 6px; text-align: left; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; cursor: pointer; }
 .trace-event-header:hover, .trace-event.expanded { background: var(--c-bg-soft); }
 .event-chevron { font-size: 12px; width: 8px; flex-shrink: 0; }
-.event-kind { flex: 0 0 auto; display: inline-block; color: #7d91b5; background: color-mix(in srgb, #7d91b5 12%, transparent); font: 600 9px ui-monospace, monospace; letter-spacing: .045em; padding: 4px 6px; border-radius: var(--radius-sm); }
-.event-kind.USER { color: #8a84c9; background: color-mix(in srgb, #8a84c9 12%, transparent); }
-.event-kind.SESSION { color: var(--c-teal); background: color-mix(in srgb, var(--c-teal) 12%, transparent); }
+.event-kind { flex: 0 0 auto; display: inline-block; color: var(--c-text-secondary); background: var(--c-bg-muted); font: 600 9px ui-monospace, monospace; letter-spacing: .045em; padding: 4px 6px; border-radius: var(--radius-sm); }
 .event-origin { max-width: 25%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--c-text-secondary); }
-.event-kind.ASSISTANT { color: #5e96c5; background: color-mix(in srgb, #5e96c5 12%, transparent); }
-.event-kind.TOOL { color: #b99552; background: color-mix(in srgb, #b99552 12%, transparent); }
-.event-kind.CONTEXT { color: #5eaa93; background: color-mix(in srgb, #5eaa93 12%, transparent); }
 .event-name { max-width: 25%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 11px; font-weight: 500; }
 .event-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .event-time, .event-duration { font-size: 10px; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--c-text-secondary); }

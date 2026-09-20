@@ -19,13 +19,12 @@ const activity = computed(() => sessionActivity(props.stage))
 
 <style scoped>
 .session-activity { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; vertical-align: middle; }
-.session-activity.llm { color: var(--c-blue); }
-.session-activity.tool { color: var(--c-warning, #d49a35); }
-.session-activity.idle { color: var(--c-success); }
+.session-activity.completed { color: var(--c-success); }
+.session-activity.failed { color: var(--c-error); }
 .session-activity.waiting { color: var(--c-warn); }
 .session-activity.waiting.compact { gap: 4px; padding: 2px 5px; background: var(--c-warn-bg); border: 1px solid var(--c-warn); border-radius: var(--radius-control); }
 .attention-icon { width: 16px; height: 16px; }
-.session-activity.inactive, .session-activity.unknown { opacity: .5; }
+.session-activity.inactive, .session-activity.unknown { color: var(--c-text-muted); }
 .activity-symbol { position: relative; display: grid; place-items: center; width: 16px; height: 16px; }
 .activity-spinner { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-bottom-color: transparent; border-radius: 50%; animation: activity-spin .8s linear infinite; }
 .activity-dot { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: var(--radius-circle); }

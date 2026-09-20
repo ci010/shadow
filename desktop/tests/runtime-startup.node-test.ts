@@ -42,7 +42,6 @@ test('real Electron Node backend repeatedly becomes ready within the desktop bud
   }
   for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP']) environment[name] = directory
   environment.GITHUB_COPILOT_TOKEN_DIR = join(directory, 'empty-auth')
-  environment.SEARXNG_URL = 'http://192.0.2.1:8888'
   const logPath = startupLogPath(join(directory, 'user-data'))
   const log = new StartupDiagnosticsLog(logPath)
   const durations: number[] = []
@@ -80,7 +79,6 @@ test('real Electron Node backend repeatedly becomes ready within the desktop bud
         assert.equal(status.state, 'ready')
       }
     } finally { await supervisor.stop() }
-    assert.doesNotMatch(logs.join('\n'), /SearXNG eager load|Selected .*provider/)
     assert.equal(supervisor.status.phase, 'stopped')
     const phases = records.filter(record => record.event === 'backend-phase')
     assert.ok(phases.some(record => record.backend?.component === 'host' && record.backend.phase === 'projects'

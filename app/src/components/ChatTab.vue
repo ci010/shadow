@@ -2,7 +2,7 @@
   <div
     ref="paneRoot"
     class="chat-workspace"
-    :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId, 'is-embedded': embedded, 'is-managed': managed }"
+    :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId, 'is-embedded': embedded, 'is-managed': managed, 'mobile-chat': mobileLayout }"
   >
     <button v-if="!embedded && !managed" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Folders</button>
     <button v-if="!embedded && !managed && mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close folders" @click="mobileSidebarOpen = false" />
@@ -27,7 +27,7 @@
       @draft="createNewWebChat"
     />
 
-    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
+    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? activeSessionName : 'New conversation'" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
@@ -36,6 +36,18 @@
       @knowledge-navigation="knowledgeNavigation"
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
+    <template #mobile-actions="{ close }">
+      <template v-if="activeSessionId">
+        <button @click="close(); showMobileSessionDetails()">Session details</button>
+        <button v-if="installation.uiScopes.includes('chat:write')" @click="close(); renameMobileSession()">Rename session</button>
+        <button @click="close(); workbench?.showConversation(); switchPanel(activePanel === 'diagnosis' ? 'conversation' : 'diagnosis')">{{ activePanel === 'diagnosis' ? 'Back to conversation' : 'Diagnosis' }}</button>
+        <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">Back to owning execution</button>
+        <details v-if="historyMarkers.length && conversationDocumentVisible && activePanel === 'conversation'" class="mobile-history">
+          <summary>Message history</summary>
+          <MessageHistoryRail list :entries="historyMarkers" :container="messagesContainer" :active="visible && route.name === 'chat'" @navigate="browseHistory(); close()" />
+        </details>
+      </template>
+    </template>
     <!-- Chat area -->
     <div class="chat-panel" :class="{ 'is-draft': !activeSessionId }">
       <div v-if="!activeSessionId" class="draft-heading">
@@ -56,11 +68,11 @@
         <p v-else class="draft-scratch">From scratch &middot; No folder selected</p>
       </div>
       <template v-else>
-        <div class="conversation-heading-row">
+        <div v-show="!mobileLayout" class="conversation-heading-row">
           <button v-if="embedded && executionParent" class="btn btn-sm" aria-label="Back to owning execution" @click="inspectExecution(executionParent.sessionId)">
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
-          <SessionHeading :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
+          <SessionHeading ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
             :name="activeSessionName" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :can-rename="installation.uiScopes.includes('chat:write')" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
@@ -76,11 +88,12 @@
           :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
 
         <!-- Messages -->
-        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history">
-        <div ref="messagesContainer" class="chat-messages" @click="openConversationLink" @scroll="trackHistoryScroll">
+        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history" :aria-busy="loadingHistory">
+        <div ref="messagesContainer" class="chat-messages" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <div class="chat-message-list">
-          <div v-if="loadingHistory" class="text-sm text-ink/50">Loading history...</div>
-          <div v-else-if="messages.length === 0 && !composerError" class="text-sm text-ink/40 select-none">{{ isExecution ? 'No execution trace yet.' : 'No messages yet. Send one below.' }}</div>
+          <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
+            :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
+          <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? 'No execution trace yet.' : 'No messages yet. Send one below.' }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
@@ -102,12 +115,17 @@
               @inspect="inspectExecution" @interact="clearSelection">
               <div v-if="inlineExecutions.entries.get(idx)!.output" class="prose" v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
             </ExecutionMessage>
+            <MessageAction v-else-if="messageActions.entries.has(idx)" :message="messageActions.entries.get(idx)!"
+              :running="streaming && !viewingPhysicalId" @inspect="inspectExecution" @interact="clearSelection">
+              <div class="prose" v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
+            </MessageAction>
             <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!"
               :running="streaming && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
               @interact="clearSelection" />
             <template v-else-if="msg.event === 'tool_call' || msg.event === 'tool_result'" />
             <!-- System event (not a user message) -->
             <ConversationEvent v-else-if="msg.role === 'user' && msg.isSystemEvent && msg.eventMeta"
+              :data-msg-idx="idx"
               :meta="msg.eventMeta" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
               @inspect="inspectExecution" @interact="clearSelection">
               <div v-if="msg.content" class="prose" v-html="renderMarkdown(msg.content)" />
@@ -121,7 +139,7 @@
               class="chat-bubble"
               :data-msg-idx="idx"
               :class="[
-                msg.sessionSource ? 'chat-session' : msg.role === 'user' ? 'chat-user' : 'chat-assistant',
+                msg.sessionSource ? 'chat-user chat-session' : msg.role === 'user' ? 'chat-user' : 'chat-assistant',
               ]"
               role="article"
               :aria-label="msg.sessionSource ? `${sessionMessageTitle(msg.sessionSource)} from ${msg.sessionSource.id || msg.sessionSource.name || 'unknown session'}` : msg.role === 'user' ? (msg.senderName ? `Message from ${msg.senderName}` : 'User message') : 'Assistant message'"
@@ -152,7 +170,7 @@
               >
                 <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Retry</button>
               </div>
-              <MessageAttachments :paths="msg.attachmentBody.paths" :api-base="apiBase" :session-id="activeSessionId" />
+              <MessageAttachments :paths="msg.attachmentBody.paths" :api-base="apiBase" :session-id="activeSessionId" @preview="openImagePreview" />
               <div class="chat-footer">
               <div v-if="msg.usage" class="usage-info">
                 <span class="usage-badge">{{ msg.usage.promptTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.prompt.toLocaleString() }})</span> prompt</span>
@@ -185,7 +203,7 @@
           </div>
           </div>
         </div>
-        <MessageHistoryRail :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
+        <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
         </div>
       </template>
     </div>
@@ -243,7 +261,10 @@
           <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" aria-label="Attached files">
             <span v-for="attachment in pendingAttachments" :key="attachment.key" class="context-chip attachment-chip" :class="{ 'attachment-reference': attachment.sourceKey }" :title="attachment.source?.path ?? attachment.file.name">
-              <img v-if="attachment.previewUrl" :src="attachment.previewUrl" class="attachment-thumb" :alt="attachment.file.name">
+              <button v-if="attachment.previewUrl" type="button" class="attachment-preview" aria-haspopup="dialog" :aria-label="`View image: ${attachment.file.name}`"
+                @click="openImagePreview({ src: attachment.previewUrl, name: attachment.file.name, trigger: $event.currentTarget as HTMLButtonElement })">
+                <img :src="attachment.previewUrl" class="attachment-thumb" :alt="attachment.file.name">
+              </button>
               <span v-else class="context-icon i-lucide-paperclip" aria-hidden="true" />
               <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">Image reference</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
               <button :disabled="submissionBusy" :aria-label="`Remove ${attachment.file.name}`" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
@@ -260,7 +281,7 @@
             <textarea
               ref="chatInput"
               v-model="inputText"
-              :placeholder="remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
+              :placeholder="mobileLayout ? 'Message...' : remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
               aria-label="Message"
               role="combobox"
               aria-autocomplete="list"
@@ -268,7 +289,7 @@
               :aria-expanded="slashMenu?.open ?? false"
               :aria-controls="slashMenu?.open ? slashMenu.listId : undefined"
               :aria-activedescendant="slashMenu?.activeId"
-              rows="3"
+              :rows="mobileLayout ? 1 : 3"
               :disabled="submissionBusy"
               @keydown="handleKeyDown"
               @input="autoResize(); updateComposerSelection()"
@@ -284,10 +305,10 @@
           </div>
           <div class="composer-toolbar">
             <div class="composer-controls">
-              <ComposerPopover label="Add attachments or context" :title="composerPopoverTitle" :disabled="!canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
+              <ComposerPopover ref="composerOptions" :label="mobileLayout ? 'Message options' : 'Add attachments or context'" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
-                  <button class="context-action" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
+                  <button class="context-action" :disabled="!canOpenComposerPopover" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
                     <span class="context-icon i-lucide-file-plus" aria-hidden="true" />
                     Add file
                   </button>
@@ -299,10 +320,17 @@
                     <span class="context-icon i-lucide-image-plus" aria-hidden="true" />
                     Upload image / file
                   </button>
+                  <div v-if="mobileLayout" class="mobile-message-settings">
+                    <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
+                    <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
+                      :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
+                      :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
+                    <button v-if="requestBusy" class="context-action" :disabled="!canSend" @click="close(); sendMessage()">Send guidance to running agent</button>
+                  </div>
                 </template>
               </ComposerPopover>
-              <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
-              <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
+              <ModelSelector v-if="!mobileLayout" :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
+              <ExecutionLocationSelector v-if="!mobileLayout && !activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
                 :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
@@ -310,21 +338,21 @@
             <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending message...' : awaitingCall ? 'Call running · Enter to send guidance' : requestBusy ? 'Enter to send guidance · Shift+Enter for a new line' : imageEditsBusy.size ? 'Preparing marked image...' : attachmentDropTarget ? 'Drop files to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : 'Enter to send · Shift+Enter for a new line' }}</span>
             <button
               v-if="requestBusy"
-              class="composer-stop"
+              class="composer-send composer-stop"
               :disabled="currentRequest?.state.stopping || !installation.uiScopes.includes('chat:write')"
               :aria-busy="currentRequest?.state.stopping || undefined"
               aria-label="Stop current request"
-              title="Stop current request; queued messages are kept"
+              :title="currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : 'Stop current request; queued messages are kept'"
               @click="stopCurrentRequest()"
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
-              {{ currentRequest?.state.stopping ? 'Stopping...' : 'Stop request' }}
             </button>
             <button
+              v-else
               class="composer-send"
               :disabled="!canSend"
               aria-label="Send message"
-              :title="submissionBusy ? 'Sending message...' : requestBusy ? 'Send guidance to the running agent' : 'Send message'"
+              :title="submissionBusy ? 'Sending message...' : 'Send message'"
               @click="sendMessage()"
             >
               <span class="i-lucide-arrow-up w-5 h-5" aria-hidden="true" />
@@ -332,6 +360,8 @@
             </div>
           </div>
           </div>
+          <p v-if="mobileLayout && (preparingSend || submittingMessage || imageEditsBusy.size || savingSettings || pickingContext)"
+            class="mobile-composer-note" role="status">{{ preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending...' : imageEditsBusy.size ? 'Preparing image...' : savingSettings ? 'Saving settings...' : 'Choosing context...' }}</p>
           <p v-if="composerError" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="currentRequest?.state.error" class="composer-error" role="alert">{{ currentRequest.state.error }}</p>
           <p v-if="stageError && requestBusy" class="composer-error" role="status">{{ stageError }}</p>
@@ -345,6 +375,7 @@
       :active="visible && keyboardActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
       :can-quote="canQuoteSelection" @quote="quoteSelection" />
     <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
+    <ImageViewer v-if="imagePreview" :image="imagePreview" @close="imagePreview = undefined" />
   </div>
 </template>
 
@@ -355,6 +386,8 @@ import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import katex from 'katex'
 import MessageAttachments from './MessageAttachments.vue'
+import ImageViewer from './ImageViewer.vue'
+import { imagePreviewFromEvent, imagePreviewMarkup, type ImagePreview } from '../image-viewer.ts'
 import { messageAttachments } from '../message-attachments.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
@@ -377,6 +410,9 @@ import CredentialRequest from './CredentialRequest.vue'
 import PublicationRequest from './PublicationRequest.vue'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
 import ExecutionMessage from './ExecutionMessage.vue'
+import ConversationSkeleton from './ConversationSkeleton.vue'
+import MessageAction from './MessageAction.vue'
+import { inlineMessageActions } from '../message-actions.ts'
 import ConversationEvent from './ConversationEvent.vue'
 import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
@@ -398,7 +434,7 @@ import type { SessionDetails } from '../session-details.ts'
 import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import { isUserMessage, resendableUserMessage, userMessageMarkers } from '../message-history.ts'
+import { isUserMessage, resendableUserMessage, messageHistoryMarkers } from '../message-history.ts'
 import CommandResult from './CommandResult.vue'
 import { mergeCommandResults } from '../command-results.ts'
 import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-commands/receipt.ts'
@@ -417,11 +453,19 @@ import ConversationSummary from './ConversationSummary.vue'
 import { groupToolActivity } from '../tool-activity.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
 import { conversationLinkSession, isDirectConversation } from '../project-coordination.ts'
+import { useMobileChrome } from '../composables/useMobileChrome.ts'
 
 const route = useRoute()
+const mobile = useMobileChrome()
+const mobileLayout = computed(() => !!mobile?.enabled.value)
+const sessionHeading = ref<InstanceType<typeof SessionHeading>>()
+async function showMobileSessionDetails() { await nextTick(); await sessionHeading.value?.showDetails() }
+async function renameMobileSession() { await nextTick(); await sessionHeading.value?.startRename() }
 const router = useRouter()
 
 function openConversationLink(event: MouseEvent) {
+  const image = imagePreviewFromEvent(event)
+  if (image) { event.preventDefault(); openImagePreview(image); return }
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
   const anchor = event.target instanceof Element ? event.target.closest('a') : null
   const id = anchor && conversationLinkSession(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
@@ -1022,7 +1066,10 @@ const unlinkedExecutions = computed(() => {
   const linked = new Set([...inlineExecutions.value.entries.values()].map(execution => execution.sessionId))
   return ownedExecutions(allSessions.value, activeSessionId.value).filter(execution => !linked.has(execution.sessionId))
 })
-const toolActivity = computed(() => groupToolActivity(displayMessages.value, inlineExecutions.value.excluded))
+const messageActions = computed(() => inlineMessageActions(displayMessages.value, allSessions.value))
+const toolActivity = computed(() => groupToolActivity(displayMessages.value, new Set([
+  ...inlineExecutions.value.excluded, ...messageActions.value.excluded,
+])))
 const allSessions = ref<SidebarSession[]>([])
 const sessionsLoading = ref(false)
 const sessionsError = ref('')
@@ -1034,6 +1081,20 @@ const expandedThinking = reactive(new Set<number>())
 // ── Segment navigation state ─────────────────────────────────────────────────
 const previousPhysicalId = ref<string | null>(null)
 const viewingPhysicalId = ref<string | null>(null)
+const imagePreview = shallowRef<ImagePreview>()
+function openImagePreview(image: ImagePreview) { clearSelection(); imagePreview.value = image }
+function previewImageKeydown(event: KeyboardEvent) {
+  const image = imagePreviewFromEvent(event)
+  if (!image) return
+  event.preventDefault()
+  event.stopPropagation()
+  openImagePreview(image)
+}
+watch([() => props.apiBase, () => props.projectId, () => props.sessionId, activeSessionId, viewingPhysicalId, paneActive, conversationDocumentVisible, activePanel, () => route.fullPath],
+  () => { imagePreview.value = undefined })
+watch(() => pendingAttachments.value.map(item => item.previewUrl), (urls, previous) => {
+  if (imagePreview.value && previous.includes(imagePreview.value.src) && !urls.includes(imagePreview.value.src)) imagePreview.value = undefined
+})
 const physicalIdStack = ref<string[]>([])
 const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation(
   () => paneActive.value && conversationDocumentVisible.value && activePanel.value === 'conversation' &&
@@ -1322,6 +1383,11 @@ function toggleCollapse(sessionId: string): void {
 }
 
 const executionLocationSelector = ref<InstanceType<typeof ExecutionLocationSelector>>()
+const composerOptions = ref<InstanceType<typeof ComposerPopover>>()
+async function chooseRemoteExecution() {
+  if (mobileLayout.value) { await composerOptions.value?.show(); await nextTick() }
+  await executionLocationSelector.value?.openRemote()
+}
 
 function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePicker = false): void {
   resetConversation()
@@ -1340,7 +1406,7 @@ function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePic
     await nextTick()
     autoResize()
     if (props.visible && props.keyboardActive) {
-      if (openRemotePicker) await executionLocationSelector.value?.openRemote()
+      if (openRemotePicker) await chooseRemoteExecution()
       else chatInput.value?.focus({ preventScroll: true })
     }
   })
@@ -1731,6 +1797,7 @@ async function goBackToCurrentSegment(): Promise<void> {
 
 function handleKeyDown(e: KeyboardEvent): void {
   if (slashMenu.value?.handleKeyDown(e)) return
+  if (mobileLayout.value && !e.ctrlKey && !e.metaKey) return
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault()
     void sendMessage()
@@ -2186,10 +2253,10 @@ function renderMarkdown(text: string): string {
   // Restore rendered math blocks
   html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)])
 
-  return DOMPurify.sanitize(html, {
+  return imagePreviewMarkup(DOMPurify.sanitize(html, {
     ADD_TAGS: [...KATEX_TAGS, 'img'],
     ADD_ATTR: [...KATEX_ATTRS, 'target', 'rel', 'src', 'alt', 'loading', 'class'],
-  })
+  }))
 }
 
 function clearSelection(): void {
@@ -2263,7 +2330,7 @@ onMounted(async () => {
       selectSession(props.sessionId, false)
     } else if (props.openRemote) {
       await nextTick()
-      if (props.visible) await executionLocationSelector.value?.openRemote()
+      if (props.visible) await chooseRemoteExecution()
     }
     return
   }
@@ -2323,7 +2390,7 @@ watch(composerDock, element => {
 }, { flush: 'post' })
 const resendCandidate = computed(() => resendableUserMessage(messages.value))
 const canResend = computed(() => !requestBusy.value && !currentRecovery.value && !!resendCandidate.value)
-const historyMarkers = computed(() => userMessageMarkers(messages.value))
+const historyMarkers = computed(() => messageHistoryMarkers(messages.value, allSessions.value))
 
 function resendLastMessage() {
   const message = resendCandidate.value
@@ -2390,8 +2457,8 @@ function resendLastMessage() {
 .draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
-.chat-working { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--c-blue) 22%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 5%, var(--c-bg-card)); color: var(--c-blue); }
-.chat-working.tool { border-color: color-mix(in srgb, var(--c-warning, #d49a35) 28%, var(--c-border)); background: color-mix(in srgb, var(--c-warning, #d49a35) 6%, var(--c-bg-card)); color: var(--c-warning, #d49a35); }
+.chat-working { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 0; padding: 11px 14px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-surface); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
+.chat-working.waiting { border-color: var(--c-warn); background: var(--c-warn-bg); color: var(--c-warn); }
 .chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
 .execution-summary { flex-wrap: wrap; border-color: var(--c-border); background: var(--c-bg-soft); }
 .execution-summary .chat-working-detail { display: block; white-space: normal; }
@@ -2402,8 +2469,8 @@ function resendLastMessage() {
 @keyframes working-wave { 0%, 100% { transform: scaleY(.35); opacity: .45; } 50% { transform: scaleY(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .working-wave i { animation: none; } }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: 860px; margin: 12px auto 16px; }
-.composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); transition: border-color .15s ease; }
-.composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-text-secondary); }
+.composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
+.composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-blue); }
 .composer-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .composer-input { display: flex; min-width: 0; }
 .composer-input textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 78px; max-height: min(240px, 28dvh); overflow-y: auto; resize: none; padding: 3px 4px 10px; border: 0; outline: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; line-height: 1.6; }
@@ -2412,16 +2479,13 @@ function resendLastMessage() {
 .composer-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: calc(100% - 42px); }
 .composer-send { margin-left: auto; flex-shrink: 0; }
 .composer-box.attachment-drop-target { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
+.composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .composer-send:disabled { opacity: .35; cursor: not-allowed; }
 .composer-send:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
-.composer-stop { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 10px; border: 1px solid var(--c-border); border-radius: 16px; color: var(--c-text); background: var(--c-bg); cursor: pointer; flex-shrink: 0; white-space: nowrap; }
 .composer-stop:disabled { opacity: .65; cursor: not-allowed; }
-.composer-stop:hover:not(:disabled) { border-color: var(--c-border-hover); }
-.composer-stop:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.resume-bar { display: flex; align-items: center; gap: 16px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--c-border-hover); border-radius: 12px; background: var(--c-bg); color: var(--c-text); }
+.resume-bar { display: flex; align-items: center; gap: 16px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--c-border-hover); border-radius: var(--radius-surface); background: var(--c-bg); color: var(--c-text); }
 .resume-bar p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; }
-.resume-button { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; min-height: 36px; padding: 8px 12px; border: 0; border-radius: 8px; background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
+.resume-button { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; min-height: 36px; padding: 8px 12px; border: 0; border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .resume-button:disabled { opacity: .5; cursor: not-allowed; }
 .resume-button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .composer-send:focus-visible, .context-action:focus-visible, .context-chip button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
@@ -2439,6 +2503,9 @@ function resendLastMessage() {
 .context-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .context-icon { flex-shrink: 0; width: 17px; height: 17px; }
 .context-chip button { flex-shrink: 0; padding: 0 3px; border: 0; background: transparent; color: var(--c-text-secondary); font-size: 17px; cursor: pointer; }
+.context-chip .attachment-preview { display: grid; place-items: center; width: auto; min-height: 0; padding: 0; cursor: zoom-in; }
+.prose :deep([data-image-preview]) { cursor: zoom-in; }
+.prose :deep([data-image-preview]:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .context-action { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .context-action:hover { background: var(--c-bg-muted); }
 .context-action:disabled { opacity: .5; cursor: not-allowed; }
@@ -2462,9 +2529,6 @@ function resendLastMessage() {
   .chat-working-detail { display: none; }
   .chat-composer { width: calc(100% - 24px); margin-bottom: 12px; }
   .composer-controls { gap: 0; }
-  .composer-submit:has(.composer-stop) { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
-  .composer-submit:has(.composer-stop) .composer-hint { flex-basis: 100%; }
-  .composer-submit:has(.composer-stop) .composer-send { margin-left: 0; }
 }
 .retry-row {
   margin-top: 0.5rem;
@@ -2516,10 +2580,10 @@ function resendLastMessage() {
 
 .thinking-block {
   margin-bottom: 0.4rem;
-  border: 1px solid color-mix(in srgb, var(--c-warn) 30%, var(--c-border));
+  border: 1px solid var(--c-chat-border);
   border-radius: var(--radius-control);
   padding: 0.25rem 0.5rem;
-  background: var(--c-warning-bg, rgba(245, 158, 11, 0.08));
+  background: var(--c-chat-action-bg);
 }
 
 .thinking-header {
@@ -2532,7 +2596,7 @@ function resendLastMessage() {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--c-warning, #f59e0b);
+  color: var(--c-text-secondary);
 }
 
 .thinking-icon {
@@ -2576,7 +2640,28 @@ function resendLastMessage() {
   margin-inline: auto;
 }
 
-.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card)) {
+.mobile-chat { --conversation-item-max-width: 100%; }
+.mobile-chat .chat-messages { scrollbar-gutter: auto; }
+.mobile-chat .chat-message-list { width: auto; margin-inline: max(8px, env(safe-area-inset-left, 0px)) max(8px, env(safe-area-inset-right, 0px)); }
+.mobile-chat .chat-bubble { box-sizing: border-box; max-width: 100%; }
+.mobile-chat .chat-user { max-width: 92%; }
+.mobile-chat .chat-working, .mobile-chat .chat-composer { width: calc(100% - max(8px, env(safe-area-inset-left, 0px)) - max(8px, env(safe-area-inset-right, 0px))); }
+.mobile-chat .chat-composer { margin: 8px auto max(8px, env(safe-area-inset-bottom, 0px)); }
+.mobile-history summary { min-height: 44px; box-sizing: border-box; padding: 12px 10px; font-size: 14px; cursor: pointer; }
+.mobile-history summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.mobile-chat .composer-box { position: relative; padding: 8px 52px; }
+.mobile-chat .composer-input textarea { min-height: 44px; max-height: min(200px, 28dvh); padding: 10px 0; font-size: 16px; line-height: 1.5; }
+.mobile-chat .composer-toolbar { position: absolute; bottom: 8px; left: 8px; right: 8px; margin: 0; pointer-events: none; }
+.mobile-chat .composer-controls, .mobile-chat .composer-submit { pointer-events: auto; flex: 0 0 44px; max-width: 44px; }
+.mobile-chat .composer-send, .mobile-chat .composer-controls :deep(> .composer-control) { width: 44px; height: 44px; min-height: 44px; padding: 0; justify-content: center; }
+.mobile-chat .composer-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.mobile-chat .composer-context { margin-inline: -44px; }
+.mobile-message-settings { display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--c-border); }
+.mobile-composer-note { margin: 4px 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
+.mobile-message-settings :deep(.composer-control), .mobile-message-settings .context-action { width: 100%; min-height: 44px; justify-content: flex-start; font-size: 14px; }
+.conversation-empty { color: var(--c-text-secondary); font-size: 14px; user-select: none; }
+
+.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card, .message-action)) {
   min-width: 0;
   max-width: var(--conversation-item-max-width);
   align-self: flex-start;
@@ -2592,29 +2677,28 @@ function resendLastMessage() {
   border-radius: var(--radius-surface);
   font-size: 0.8rem;
   line-height: 1.5;
-  border: 1px solid var(--c-border);
-  box-shadow: 0 1px 3px var(--c-shadow-soft);
+  border: 1px solid var(--c-chat-border);
 }
 
 .chat-user {
   align-self: flex-end;
-  background: var(--c-bg-muted);
+  background: var(--c-chat-user-bg);
   color: var(--c-text);
-  border-color: var(--c-border-soft);
+  border-color: var(--c-chat-border);
 }
 
 .chat-assistant {
   align-self: flex-start;
-  background: var(--c-bg-card);
+  background: var(--c-chat-assistant-bg);
   color: var(--c-text);
 }
 
-.chat-session { align-self: flex-start; background: var(--c-bg-soft); color: var(--c-text); box-shadow: none; border-style: dashed; }
+.chat-session { box-shadow: none; border-style: dashed; }
 .chat-session-source { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; text-align: left; }
 button.chat-session-source { cursor: pointer; }
 button.chat-session-source:hover { color: var(--c-text); text-decoration: underline; }
 button.chat-session-source:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
-.chat-session-source strong { font-weight: 600; color: var(--c-teal); }
+.chat-session-source strong { font-weight: 600; color: var(--c-text-secondary); }
 .chat-session-source > span { min-width: 0; overflow-wrap: anywhere; }
 
 /* ── Segment navigation bar ──────────────────────────────── */

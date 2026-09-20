@@ -1,5 +1,7 @@
 <template>
   <header class="session-heading" :class="{ 'has-topic': topic || coordinator }">
+    <MobileSheet v-if="mobileLayout" :open="editing" label="Rename session" @update:open="cancelRename"><div ref="mobileRenameTarget" /></MobileSheet>
+    <Teleport :to="mobileRenameTarget || 'body'" :disabled="!mobileLayout || !mobileRenameTarget">
     <form v-if="editing" class="session-rename" aria-label="Rename session" :aria-busy="saving" @submit.prevent="saveName" @keydown.esc.prevent.stop="cancelRename">
       <label class="rename-field">
         <span>Session name</span>
@@ -12,7 +14,8 @@
       </div>
       <p v-if="renameError" class="details-error" role="alert">{{ renameError }}</p>
     </form>
-    <ComposerPopover v-else label="Session details" :title="`${name} · ${folder}`" :width="360" @opened="loadDetails">
+    </Teleport>
+    <ComposerPopover v-if="!editing" ref="detailsPopover" label="Session details" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="360" @opened="loadDetails">
       <template #trigger>
         <span class="heading-name">{{ name }}</span>
         <span class="heading-separator" aria-hidden="true">&middot;</span>
@@ -21,6 +24,14 @@
       </template>
       <template #default>
         <div class="session-details">
+          <template v-if="mobileLayout">
+            <p v-if="coordinator" class="details-note">Coordinate this Project here. Topics are independent conversations in the sidebar, not tasks or child chats.</p>
+            <dl v-else-if="topic" class="details-identity">
+              <dt>Goal</dt><dd>{{ topic.goal }}</dd>
+              <dt>Scope</dt><dd>{{ topic.scope }}</dd>
+              <template v-if="topic.nonGoals"><dt>Out of scope</dt><dd>{{ topic.nonGoals }}</dd></template>
+            </dl>
+          </template>
           <p v-if="loading" class="details-note" role="status">Loading session details...</p>
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>
           <dl class="details-identity">
@@ -72,12 +83,19 @@ import { apiUrl } from '../api-url.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from '../../../src/sessions/session-name.ts'
 import ComposerPopover from './ComposerPopover.vue'
+import MobileSheet from './MobileSheet.vue'
+import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { chatContextName } from '../chat-draft.ts'
 import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
 import { ORCHESTRATOR_SESSION_ID, type TopicMetadata } from '../project-coordination.ts'
 
 const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
 const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']]; renamed: [name: string] }>()
+const mobile = useMobileChrome()
+const mobileLayout = computed(() => !!mobile?.enabled.value)
+const mobileRenameTarget = ref<HTMLElement>()
+const detailsPopover = ref<InstanceType<typeof ComposerPopover>>()
+defineExpose({ showDetails: () => detailsPopover.value?.show(), startRename })
 const details = ref<SessionDetails | null>(null)
 const loading = ref(false)
 const error = ref('')
@@ -106,7 +124,7 @@ function cancelRename() {
   if (saving.value) return
   editing.value = false
   renameError.value = ''
-  void nextTick(() => renameButton.value?.focus())
+  if (!mobileLayout.value) void nextTick(() => renameButton.value?.focus())
 }
 async function saveName() {
   if (saving.value || !editing.value || !props.canRename || !props.active) return
@@ -131,7 +149,7 @@ async function saveName() {
     if (details.value) details.value = { ...details.value, name: nextName }
     emit('renamed', nextName)
     editing.value = false
-    void nextTick(() => renameButton.value?.focus())
+    if (!mobileLayout.value) void nextTick(() => renameButton.value?.focus())
     void loadDetails()
   } catch (cause) {
     if (!controller.signal.aborted) renameError.value = cause instanceof Error ? cause.message : 'Could not save the session name. Retry.'
@@ -199,7 +217,7 @@ onUnmounted(() => { cancel(); stopRename() })
 .session-heading.has-topic { flex-wrap: wrap; }
 .session-rename { display: flex; flex: 1; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; padding: 6px 0; }
 .rename-field { display: flex; flex: 1 1 180px; min-width: 0; flex-direction: column; gap: 4px; font-size: 12px; }
-.rename-field input { width: 100%; box-sizing: border-box; min-width: 0; padding: 6px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 14px; }
+.rename-field input { width: 100%; box-sizing: border-box; min-width: 0; padding: 6px 8px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 14px; }
 .rename-actions { display: flex; gap: 6px; }
 .session-rename .details-error { flex-basis: 100%; margin: 0; font-size: 12px; }
 .rename-button { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }

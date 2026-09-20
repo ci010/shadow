@@ -26,7 +26,6 @@ import { ProviderHttpError, TokenLimitExceededError } from './provider.ts'
  */
 function sanitizeOutboundMessages(messages: ChatMessage[]): unknown[] {
   return messages.map((msg) => {
-    // deno-lint-ignore no-explicit-any
     const { reasoning_text: _rt, provider_state: _ps, usage: _u, timestamp: _ts, ...rest } = msg as any
     return rest
   })
@@ -141,7 +140,6 @@ export async function openaiChat(params: {
         )
       }
 
-      // deno-lint-ignore no-explicit-any
       const json = (await res.json()) as any
 
       const contentParts: string[] = []
@@ -167,7 +165,6 @@ export async function openaiChat(params: {
           reasoningText = text
         }
         if (choice.message?.tool_calls) {
-          // deno-lint-ignore no-explicit-any
           for (const tc of choice.message.tool_calls as any[]) {
             allToolCalls.push({
               id: tc.id,
@@ -260,7 +257,6 @@ export class OpenAICompatibleProvider implements LLMProvider {
         )
         return [this.defaultModel]
       }
-      // deno-lint-ignore no-explicit-any
       const json = (await res.json()) as any
       const data: { id: string }[] = json.data ?? []
       const ids = data.map((m) => m.id).sort()

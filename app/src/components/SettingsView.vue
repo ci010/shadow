@@ -1,6 +1,6 @@
 <template>
   <div class="settings-view">
-    <header class="settings-heading"><h1>App settings</h1><p>Provider connections and App model defaults are shared. Projects and conversations can override these defaults.</p></header>
+    <header class="settings-heading"><h1>App settings</h1><p>Provider connections and web search settings are shared across Projects. Model defaults can be overridden by Projects and conversations.</p></header>
     <p v-if="!available" role="status">Settings are managed by Main administrators.</p>
     <div v-else class="settings-layout">
       <nav class="settings-navigation" aria-label="Settings sections">
@@ -11,6 +11,7 @@
       </nav>
       <div class="settings-section">
         <ModelDefaultsForm v-if="section === 'models'" :api-base="apiBase" scope="app" />
+        <WebSearchSettings v-if="section === 'web-search'" :api-base="apiBase" />
         <ProvidersView v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
           @configured="$emit('configured')" @retry="$emit('retry')" @close="$emit('close')" />
       </div>
@@ -24,6 +25,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import type { ProviderSetupStatus } from '../provider-setup.ts'
 import ProvidersView from './ProvidersView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
+import WebSearchSettings from './WebSearchSettings.vue'
 
 const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean }>()
 defineEmits<{ configured: []; retry: []; close: [] }>()
@@ -31,8 +33,9 @@ const route = useRoute()
 const sections = [
   { id: 'providers', label: 'Providers', icon: 'i-lucide-cpu' },
   { id: 'models', label: 'Models', icon: 'i-lucide-sliders-horizontal' },
+  { id: 'web-search', label: 'Web search', icon: 'i-lucide-search' },
 ]
-const section = computed(() => route.params.section === 'models' ? 'models' : 'providers')
+const section = computed(() => sections.find(item => item.id === route.params.section)?.id ?? 'providers')
 </script>
 
 <style scoped>
@@ -52,7 +55,7 @@ const section = computed(() => route.params.section === 'models' ? 'models' : 'p
   .settings-view { padding: 20px 16px 32px; }
   .settings-heading { margin-bottom: 20px; }
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
-  .settings-navigation { flex-direction: row; border-bottom: 1px solid var(--c-border); }
-  .settings-navigation a { flex: 1; min-height: 44px; }
+  .settings-navigation { flex-direction: row; flex-wrap: wrap; border-bottom: 1px solid var(--c-border); }
+  .settings-navigation a { flex: 1 0 auto; min-height: 44px; }
 }
 </style>

@@ -504,7 +504,10 @@ visible-only polling, project lists have a 20-second reconciliation
 fallback, and provider configuration uses ordinary bounded HTTP reads.
 
 `app/src/chat-request-control.ts` manages composer Stop state across preparation,
-admission, streaming and cancellation. The renderer waits for its shared chat
+admission, streaming and cancellation. The Send button becomes Stop in the same
+position while a request is busy, remains disabled while cancellation is pending,
+and returns to Send when the request finishes. Enter can still send guidance
+during active work. The renderer waits for its shared chat
 subscription, then submits `/api/chat/send` with `stream:false` and reads the
 short JSON `{requestId,chatId}` acknowledgement. It does not keep a per-request
 SSE response open or automatically retry an uncertain admission. Omitting
@@ -701,6 +704,14 @@ is request/question/progress/handoff/acknowledgement. Project-validated
 initiativeId/itemId references appear in the first trusted sender envelope as
 context only. Receipt is not acceptance of responsibility, completion, or an
 ownership transfer; use explicit guarded Initiative release/handoff/claim.
+
+The conversation's right-hand message history rail includes human turns, incoming
+session messages, and session-sourced events (including execution completions).
+Previews identify the sender and message type, retaining the source session ID
+when a display name is available. Selecting a marker scrolls to that message or
+event in the current conversation; it does not switch to the source session.
+These navigation entries do not make session messages or events resendable as
+human prompts.
 
 Call context is a snapshot, not a live shared message array. Internal tool calls
 and intermediate responses stay in the child trace. Calls are blocking leaves:
@@ -1381,13 +1392,21 @@ never kills external targets. Browser/host tests are synthetic, not actual brows
 end-to-end coverage. Browser/Windows automation still depends on optional external
 tools/services; configuration fields alone do not establish native automation availability.
 
-Web search preference in composition is configured Firecrawl, then Brave, then
-reachable SearXNG; a keyless Firecrawl path is the fallback. Configured providers
-skip SearXNG detection. Otherwise the first `web:` search probes SearXNG with
-the turn's abort signal and remembers the selected provider for that Project
-runtime. Explicit lazy `web_search` discovery can still find SearXNG later.
-No search probe blocks runtime startup. Service reachability, rate limits,
-and provider behavior remain external dependencies.
+Web search service selection and Firecrawl, Brave, Exa and Tavily credentials
+belong to App configuration. `/api/app/web-search` exposes credential presence,
+not values, and saves through the shared configuration store. Projects inherit
+these fields and cannot override them or persist inherited keys. Legacy
+Project-local search fields are ignored with a warning, not automatically
+promoted to App credentials. Existing legacy keys may remain in old files.
+The runtime resolves the active App selection for each search, so saved changes
+reach running Projects without replacing their tool registry. Automatic mode
+prefers configured Firecrawl, Brave, Exa, then Tavily, finally keyless Firecrawl;
+explicit selection does not switch services when a request fails or a key is
+missing. The unified `search` tool's `web:` scheme is the entry point;
+there is no separate loadable `web_search` tool or local search service.
+Provider selection does not perform network probes, and requests observe the
+turn's abort signal. Service reachability, rate limits, and provider behavior
+remain external dependencies.
 
 ## Events, background work, and cron
 
@@ -1638,11 +1657,63 @@ for a quiet action, and `btn btn-sm` for compact controls. Low-specificity
 defaults cover theme, focus and disabled states while preserving component-owned
 icon buttons, navigation rows and other specialized controls.
 
+The [visual design system](../DESIGN.md) records the implemented Quiet Workbench
+palette. Shared light/dark tokens separate neutral surfaces, readable text,
+blue interaction/selection, and success/attention/error states. Conversation
+surface aliases distinguish incoming input, assistant content, and supporting
+tool actions without assigning a status color to a sender identity. Ordinary
+thinking, tool activity and ready states stay neutral; completed, failed and
+needs-reply states retain explicit text and semantic colors.
+
+Sidebar spacing is defined by the `--sidebar-*` tokens in `app/src/styles.css`:
+32px navigation rows, 36px project headers, 16px nesting, 4px heading-to-list
+spacing, 12px between projects, and 16px before separate sections. Narrow or
+coarse-pointer layouts use 44px rows and action controls. Project, folder, bot,
+and automation labels share explicit alignment columns; long names truncate
+instead of changing row height. `FoldersSidebar` supplies these dimensions to
+`TreeRow` through scoped variables, leaving the file workbench's tree density
+independent.
+
+Project navigation has pinned and hidden states, not a persistent initials rail.
+When hidden, the content toolbar shows the current project and opens the full
+navigation as a temporary overlay without resizing the work area. Selecting a
+conversation, folder draft, knowledge view, or automation closes the overlay;
+Escape and outside clicks dismiss it, and keyboard focus returns to the trigger.
+Desktop users can pin it again at their saved width. The tree stays mounted to
+retain disclosure and scroll state. Mobile always uses the overlay without
+changing the desktop preference. Existing sidebar `collapsed` preferences now
+mean fully hidden; the storage key and preferred width remain compatible.
+
+On phone-width browser views (700px and below), `MobileChrome` replaces the four
+stacked navigation rows with one 56px header. Existing global navigation and the
+project sidebar are teleported into a shared drawer; the active `FileWorkbench`
+owns the header's view picker and contextual actions. Hidden cached conversations
+cannot retain header ownership. Desktop Electron chrome and desktop pane layout
+are unchanged. Session details, rename, diagnosis, Knowledge, files and child
+return remain reachable through sheets rather than extra persistent bars.
+
+The drawer supports rightward swipes from anywhere in the viewport's left half
+and leftward swipes inside the open drawer. Once horizontal intent is established,
+its position and backdrop track the held finger; a 64px threshold commits the
+change on release, otherwise it settles back. Vertical scrolling, multi-touch,
+editing controls and code surfaces do not initiate it; browser-owned
+history gestures may take precedence. The hamburger remains the reliable entry.
+The mobile composer exposes plus/options and send/stop around a single-row
+16px textarea; options retain attachments, model settings, execution location
+and guidance for a running agent. Plain Enter inserts a newline on phones.
+The frame follows the visual viewport to accommodate keyboard resizing and uses
+safe-area insets. Hardware/browser-specific keyboard and gesture behavior still
+requires real-phone validation.
+Phone messages use 8px safe-area-aware gutters rather than the desktop 112px
+column allowance. Assistant/action rows can fill the column; user bubbles retain
+a 92% cap. The history rail becomes a touch-sized list in contextual actions,
+reusing the same markers and scroll navigation instead of covering message text.
+
 Message presentation distinguishes human input from session-to-session handoffs
 and background events using recorded source envelopes, independently of the
-model protocol's `user` role. Delegated messages are left-aligned and labelled
-with their source session; they are excluded from human-message navigation and
-resend actions. Trace provides a separate `SESSION` filter and keeps the original
+model protocol's `user` role. Incoming session messages are right-aligned like
+human input, with a dashed border and a labelled source-session link; they remain
+excluded from human resend actions. Trace provides a separate `SESSION` filter and keeps the original
 envelope available as raw evidence. Missing legacy provenance is not inferred
 from a sender name or session-like ID; these labels do not grant permissions.
 The web channel preserves the same sender envelope on live peer-message
@@ -1654,6 +1725,13 @@ returns to the bottom or sends another message. Sidebar yields show a highlighte
 badge; folded folder, bot, automation and conversation-family indicators
 prioritize those waits over running work, without treating blocking calls as
 requests for a reply.
+Initial conversation-history loading uses a pulsing message skeleton, paused
+for inactive panes or hidden documents and static with reduced-motion preferences.
+Outgoing `message` calls (including `invoke_tool` wrappers) render separately from
+generic tool groups with their content, a recipient-session navigation control,
+and paired receipt details. Queued, silently recorded, failed and unconfirmed
+results remain distinct; queue admission is not recipient completion. Historical
+calls without a result do not claim delivery.
 Conversation rows share the same base indentation under folders, **Chats**, and
 bot groups; nested session lineage adds indentation relative to that base.
 The composer accepts dropped files (including mixed image/document batches) as
@@ -1662,6 +1740,15 @@ Only images receive thumbnails; dropping does not upload until Send. Image-previ
 drags retain their source metadata, clipboard paste remains image-specific, and
 local attachments remain unavailable for remote workspaces. Directory drops are
 rejected explicitly rather than creating empty file attachments.
+
+Chat image attachments, Markdown images, and pending image thumbnails open the
+shared `ImageViewer` native modal dialog instead of navigating away. Images fit
+the viewport by default; actual-size mode provides a scrollable view of large
+screenshots. The dialog preserves authenticated attachment URLs and downloads,
+reports loading failures with Retry, and restores focus without scrolling on
+close. Markdown image affordances are added after sanitization and support
+Enter/Space. Switching conversation, history segment, or active pane dismisses
+the preview; background message updates do not.
 
 Installation context and route policy distinguish Main/Child and UI scope.
 These client-side policies are presentation rules, not server authorization.
@@ -1739,6 +1826,13 @@ handling, directory selection, bootstrap IPC, and backend host. Web preferences
 enable context isolation and sandboxing and disable renderer Node integration.
 `preload.ts` exposes a narrow setup/runtime API, not arbitrary filesystem or
 process execution.
+
+`desktop/src/navigation.ts` keeps navigation within the configured renderer.
+External HTTP/HTTPS links, including Markdown's `target="_blank"` links, open
+through the system browser without creating another Electron window. Other
+protocols remain blocked, internal routes remain in-app, and browser-launch
+failures produce a desktop error dialog. This does not change browser-hosted
+Markdown behavior or grant local-file access.
 
 The shared renderer shows minimize/maximize/close only when the native window
 capability exists. A normal browser bootstraps its own backend session and has no

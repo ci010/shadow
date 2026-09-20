@@ -80,6 +80,53 @@ function fixture(t: TestContext) {
   return { mount, invalidate, requests, subscriptions }
 }
 
+test('chat keeps outgoing message actions outside generic tools and routes recipient navigation through the current pane', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  view.state().messages = [
+    { role: 'assistant', event: 'tool_call', content: '', toolCallId: 'message-1',
+      toolCall: { name: 'message', arguments: { sessionId: 'web:peer', content: 'Review this' } } },
+    { role: 'tool', event: 'tool_result', toolCallId: 'message-1', content: 'Message sent to web:peer. Queued.' },
+    { role: 'assistant', event: 'tool_call', content: '', toolCallId: 'read-1',
+      toolCall: { name: 'read', arguments: { path: 'file.ts' } } },
+  ]
+  await Vue.nextTick()
+  assert.equal(view.state().messageActions.entries.get(0).sessionId, 'web:peer')
+  assert.equal(view.state().messageActions.entries.get(0).status, 'queued')
+  assert.deepEqual([...view.state().toolActivity.keys()], [2])
+  view.state().inspectExecution('web:peer')
+  assert.deepEqual(view.navigation, ['web:peer'])
+  assert.equal(view.state().inputText, 'Keep this exact unsent draft')
+})
+
+test('image preview survives message updates but closes when its conversation or pane is no longer visible', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  const image = { src: 'https://example.invalid/image.png', name: 'Screenshot' }
+  view.state().openImagePreview(image)
+  view.state().messages = [...view.state().messages, { role: 'assistant', content: 'More content' }]
+  await Vue.nextTick()
+  assert.equal(view.state().imagePreview.src, image.src)
+  view.props.visible = false
+  await Vue.nextTick()
+  assert.equal(view.state().imagePreview, undefined)
+  view.props.visible = true
+  await Vue.nextTick()
+  view.state().openImagePreview(image)
+  view.state().viewingPhysicalId = 'older-segment'
+  await Vue.nextTick()
+  assert.equal(view.state().imagePreview, undefined)
+  view.state().openImagePreview(image)
+  view.state().activePanel = 'diagnosis'
+  await Vue.nextTick()
+  assert.equal(view.state().imagePreview, undefined)
+  view.state().openImagePreview(image)
+  view.props.sessionId = task
+  await Vue.nextTick()
+  assert.equal(view.state().imagePreview, undefined)
+  assert.equal(view.state().inputText, 'Keep this exact unsent draft')
+})
+
 test('sessions invalidation refreshes mounted chat graph and metadata-only call waits without reloading or crossing projects', async t => {
   const f = fixture(t)
   const a = f.mount('a')
@@ -219,7 +266,7 @@ test('history navigation cancels queued bottom jumps and resumes following only 
   assert.equal(container.scrollTop, 2000)
 })
 
-test('composer file drops preserve drafts, deduplicate mixed batches and reject remote or read-only attachments', t => {
+test('composer file drops preserve drafts, deduplicate mixed batches and reject remote or read-only attachments', async t => {
   const f = fixture(t)
   const state = f.mount('a').state()
   state.currentWorkdir = { kind: 'local', displayPath: 'C:\\synthetic' }
@@ -241,7 +288,12 @@ test('composer file drops preserve drafts, deduplicate mixed batches and reject 
     [['notes.txt', 'file'], ['photo.png', 'image']])
   assert.equal(state.inputText, 'Keep this exact unsent draft')
   assert.equal(f.requests.length, 0, 'A drop must not upload or send')
+  await Vue.nextTick()
+  const image = state.pendingAttachments[1]
+  state.openImagePreview({src: image.previewUrl, name: image.file.name})
   state.clearPendingAttachments()
+  await Vue.nextTick()
+  assert.equal(state.imagePreview, undefined, 'Removing draft attachments closes previews before their blob URLs can remain stale')
   for (const mode of ['remote', 'readonly']) {
     state.currentWorkdir = { kind: mode === 'remote' ? 'remote' : 'local', displayPath: 'C:\\synthetic' }
     state.selectedMode = mode === 'readonly' ? 'task' : 'session'

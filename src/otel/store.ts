@@ -619,7 +619,6 @@ interface OtlpMetric {
   summary?: { dataPoints?: DataPoint[] }
 }
 
-// deno-lint-ignore no-explicit-any
 type DataPoint = Record<string, any>
 
 export interface QueryOpts {

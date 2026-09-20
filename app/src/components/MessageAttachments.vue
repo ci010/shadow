@@ -1,9 +1,11 @@
 <template>
   <div v-if="paths.length" class="message-attachments" aria-label="Attachments">
     <div v-for="item in items" :key="item.path" class="message-attachment" :class="`attachment-${item.kind}`">
-      <a v-if="item.kind === 'image' && item.url && !failed.has(item.path)" :href="item.url" target="_blank" rel="noopener noreferrer" class="attachment-image-link" :aria-label="`Open ${item.name}`">
+      <button v-if="item.kind === 'image' && item.url && !failed.has(item.path)" type="button" class="attachment-image-link"
+        aria-haspopup="dialog" :aria-label="`View image: ${item.name}`"
+        @click="$emit('preview', { src: item.url, name: item.name, downloadUrl: item.downloadUrl ?? undefined, trigger: $event.currentTarget as HTMLButtonElement })">
         <img :src="item.url" :alt="item.name" loading="lazy" class="attachment-image" @error="failed.add(item.path)">
-      </a>
+      </button>
       <video v-else-if="item.kind === 'video' && item.url && !failed.has(item.path)"
         :src="item.url" controls playsinline preload="none" :aria-label="item.name" @error="failed.add(item.path)" />
       <audio v-else-if="item.kind === 'audio' && item.url && !failed.has(item.path)"
@@ -28,8 +30,10 @@
 import { computed, reactive } from 'vue'
 import { buildMediaUrl } from '../media-url.ts'
 import { attachmentExtension, attachmentKind, attachmentName } from '../message-attachments.ts'
+import type { ImagePreview } from '../image-viewer.ts'
 
 const props = defineProps<{ paths: string[]; apiBase: string; sessionId: string }>()
+defineEmits<{ preview: [image: ImagePreview] }>()
 const failed = reactive(new Set<string>())
 const items = computed(() => props.paths.map(path => ({
   path, name: attachmentName(path), kind: attachmentKind(path), extension: attachmentExtension(path),
@@ -42,7 +46,7 @@ const items = computed(() => props.paths.map(path => ({
 .message-attachments { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; min-width: 0; }
 .message-attachment { max-width: 100%; width: 420px; overflow: hidden; }
 .attachment-image { width: auto; max-width: 100%; max-height: 320px; display: block; object-fit: contain; }
-.attachment-image-link { display: block; width: fit-content; max-width: 100%; }
+.attachment-image-link { display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
 video { display: block; width: 100%; max-height: 360px; aspect-ratio: 16 / 9; background: #000; }
 audio { display: block; width: 100%; }
 .attachment-details { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--c-border); background: var(--c-bg-soft); }

@@ -18,7 +18,6 @@ function convertMessages(
   messages: ChatMessage[],
 ): { system: string; converted: any[] } {
   let system = ''
-  // deno-lint-ignore no-explicit-any
   const converted: any[] = []
 
   for (const msg of messages) {
@@ -32,7 +31,6 @@ function convertMessages(
     }
     if (msg.role === 'assistant') {
       if (msg.tool_calls && msg.tool_calls.length > 0) {
-        // deno-lint-ignore no-explicit-any
         const content: any[] = []
         if (msg.content) content.push({ type: 'text', text: msg.content })
         for (const tc of msg.tool_calls) {
@@ -66,7 +64,6 @@ function convertMessages(
   return { system, converted }
 }
 
-// deno-lint-ignore no-explicit-any
 function convertTools(tools: ToolDefinition[]): any[] {
   return tools.map((t) => ({
     name: t.function.name,
@@ -97,7 +94,6 @@ export class AnthropicProvider implements LLMProvider {
       `Calling Anthropic: model=${model}, msgs=${converted.length}, tools=${tools.length}`,
     )
 
-    // deno-lint-ignore no-explicit-any
     const body: Record<string, any> = {
       model,
       max_tokens: options.maxTokens ?? 8192,
@@ -124,7 +120,6 @@ export class AnthropicProvider implements LLMProvider {
       throw new Error(`Anthropic chat failed: ${res.status} ${text}`)
     }
 
-    // deno-lint-ignore no-explicit-any
     const json = (await res.json()) as any
 
     let content: string | null = null

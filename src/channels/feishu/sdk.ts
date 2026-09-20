@@ -614,7 +614,6 @@ interface WsHeader {
   key: string
   value: string
 }
-// deno-lint-ignore no-explicit-any
 interface WsFrame {
   seqId: number // field 1: SeqID (required for ACK correlation)
   logId: number // field 2: LogID (required)
@@ -678,7 +677,6 @@ function decodeFrame(buf: Uint8Array): WsFrame {
   let service = 0
   let type = 0
   const headers: WsHeader[] = []
-  // deno-lint-ignore no-explicit-any
   let payload: Uint8Array<any> = new Uint8Array(0)
 
   while (offset < buf.length) {
@@ -700,7 +698,6 @@ function decodeFrame(buf: Uint8Array): WsFrame {
       const [bytes, nx] = readBytes(buf, offset)
       offset = nx
       if (fieldNum === 5) headers.push(decodeHeader(bytes))
-      // deno-lint-ignore no-explicit-any
       else if (fieldNum === 8) payload = bytes as Uint8Array<any>
       // fields 6, 7, 9 are read and discarded
     } else {

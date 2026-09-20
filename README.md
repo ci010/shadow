@@ -219,8 +219,7 @@ permissions, limits, and migration errors.
 ## Requirements
 
 Use **Node.js 24.15 or newer** and **pnpm 12.3.1** (pinned in `packageManager`
-for availability on the configured Microsoft npm proxy). Deno is not needed to
-develop, build, or run Shadow.
+for availability on the configured Microsoft npm proxy).
 
 ```sh
 npm install --global pnpm@12.3.1
@@ -336,14 +335,41 @@ grant access to service readiness/shutdown, pairing-code issuance, or device
 enrollment controls. Management credentials stay outside the renderer, browser
 storage and URLs. Keep pairing codes private until used.
 
-This is local loopback browser access, not an Internet-facing login system or
-multi-user authorization. PIN login grants the same application administrator
+The backend remains loopback-only by default. Development Vite also makes browser
+access available on a trusted LAN as described below; this is not an
+Internet-facing login system or multi-user authorization. PIN login grants the same application administrator
 access as pairing, not service management/device-enrollment credentials.
 PIN and code attempts share the same throttle (20 attempts per minute).
 An ordinary local backend without a launch credential or `.pin`
 retains its existing unprotected behavior. Closing Electron still stops an
 Electron-owned sidecar; a separately started Node backend or Windows service
 continues independently.
+
+### Install the web app (PWA)
+
+Build with `pnpm build:app` and open the browser UI from a **trusted HTTPS**
+origin, or from `http://localhost` / `http://127.0.0.1` on the same device.
+Use the browser's **Install app / Add to Home Screen** action. On iPhone/iPad,
+open Shadow in Safari and choose **Share → Add to Home Screen**. Browser support
+and installation prompts vary; installation opens Shadow in a standalone window
+with the same logo as Electron.
+
+A phone visiting `http://192.168.x.x:...` is **not** a secure context: Chromium
+does not provide full PWA installation/service-worker support there. Use a
+properly trusted HTTPS entry point while preserving the existing authentication
+and trusted-network restrictions; do not expose an unauthenticated gateway or
+bypass certificate warnings. Adding the app does not change those restrictions
+or keep an Electron-owned backend alive.
+
+The manifest, 192/512px icons and Apple touch icon are public installation assets,
+not authenticated application data. The 512px icon is the exact shared desktop
+logo at `app/src/assets/shadow-logo.png`; smaller variants derive from that source.
+The service worker registers only in production secure browser contexts, never
+in Electron or Vite development. It does not cache application pages, API
+responses or conversations. If a controlled app page cannot reach the network,
+it shows a connection/retry page, not an offline conversation. Existing browser
+login, expiry and backend-restart behavior still applies; iOS may require login
+again in the installed app's separate browser context.
 
 ## Electron
 
@@ -387,6 +413,36 @@ This is maintained by Electron main, including while the window is minimized;
 it clears when all turns stop. Desktop main-process changes require restarting
 `pnpm desktop:dev`; renderer hot reload alone does not apply them.
 
+`pnpm dev`, `pnpm dev:app`, and `pnpm desktop:dev` expose Vite on `0.0.0.0:5273`
+by default. On another device on the same trusted LAN, open
+`http://<this-computer-LAN-IP>:5273` (or the `VITE_DEV_PORT` selected by the
+combined development scripts). The backend and Node inspector still listen on
+loopback; Vite proxies browser API/WebSocket requests to the backend. Browser
+authentication is unchanged: use an administrator PIN or, with Electron, generate
+a one-use code with **Connect browser** and enter it at the LAN address.
+The copied pairing URL is still a loopback URL; use the LAN address instead.
+
+Set `VITE_DEV_HOST=127.0.0.1` before launching to restrict Vite to this computer
+again. Restart the development command after changing the listen address.
+Windows Firewall may need to allow the Vite port on the private network; the
+scripts do not change firewall rules. Only use this on a trusted LAN, never
+port-forward it to the Internet: Vite serves development source, HTTP is
+unencrypted, and a standalone backend without a PIN or launch credential still
+has no browser authentication.
+
+Frontend IDs use the shared `createUuid()` helper: native `crypto.randomUUID()`
+when available, otherwise UUID v4 generated with `crypto.getRandomValues()`.
+This supports HTTP LAN access without weakening randomness or changing ID
+formats. Camera, microphone, and screen capture still require a secure browser
+context (HTTPS with a trusted certificate, or localhost).
+
+The desktop also has a system tray icon. Click it or choose **显示 Shadow** to
+restore and focus the main window. **打开开发者工具** opens that window's DevTools
+in a separate window, in both development and packaged builds. **退出** uses the
+normal shutdown path, stopping an Electron-owned backend without stopping an
+attached Windows service. Closing the main window still exits the application;
+it does not hide to the tray.
+
 Desktop development uses a separate profile at `.tmp/desktop-dev/user-data` in
 the worktree, rather than the installed application's profile. An absolute
 `SHADOW_DESKTOP_USER_DATA` path can override it. In packaged applications, the
@@ -396,8 +452,28 @@ Main directories are preserved. Development instead defaults Main to
 `.tmp/desktop-dev/data` to avoid using personal data during smoke tests. The
 absolute `SHADOW_DESKTOP_DEV_MAIN_DIRECTORY` override applies only to development.
 
-Startup no longer probes optional web-search services: SearXNG discovery runs on
-the first search when no Firecrawl/Brave key is configured. Up to three Projects
+Configure web search in **App settings → Web search**. Firecrawl, Brave, Exa,
+and Tavily API keys and the selected service are App-level settings shared by
+all Projects, not Project overrides. Automatic mode uses the first configured
+key in that order, or keyless Firecrawl when none is configured. Explicit
+selection never falls back to another service; Brave, Exa and Tavily require a
+key. Saving applies to subsequent searches in active and future Projects without
+a restart. Saved keys are not returned to the UI; blank fields keep existing
+keys and **Remove key** clears them on save.
+
+These settings persist in the App configuration under `tools.webSearchProvider`
+(`auto`, `firecrawl`, `brave`, `exa`, `tavily`) and `tools.firecrawlApiKey`,
+`tools.braveApiKey`, `tools.exaApiKey`, `tools.tavilyApiKey`. The corresponding
+`FIRECRAWL_API_KEY`, `BRAVE_API_KEY`, `EXA_API_KEY`, and `TAVILY_API_KEY`
+environment variables override file credentials at startup; environment-only
+keys are not copied to disk by unrelated saves. Clearing a key in the UI does
+not remove an environment variable, which can restore it on restart. Legacy
+Project-local search settings are ignored (and warned about), not promoted to
+App settings; move any needed keys to App settings explicitly.
+
+Search requires no local service or Docker and only contacts the selected
+provider when requested. There is no automatic failover, and external service
+availability and usage limits still apply. Up to three Projects
 initialize concurrently, after persisted workdir ownership has been checked.
 The desktop still verifies authenticated local readiness; it does not mark
 unfinished Project services ready or wait for QQ/Discord network connections.
@@ -1577,7 +1653,7 @@ Packaging uses `pnpm deploy --prod --node-linker hoisted` to include a portable
 backend without development-tree symlinks; only built modules, runtime dependencies,
 and assets are copied, never the local workspace
 or credentials. Electron runs the backend module in a separate process using its own Node runtime
-(`ELECTRON_RUN_AS_NODE=1`), not a Deno-compiled executable. The renderer is
+(`ELECTRON_RUN_AS_NODE=1`). The renderer is
 sandboxed with Node integration disabled; a narrow preload bridge handles setup,
 and the main process owns backend startup, authorization, and shutdown. The
 distributed setup/Child flows remain WIP.
@@ -1604,8 +1680,7 @@ performed by the build or automatically by ordinary desktop startup.
 | `pnpm desktop:dev` / `pnpm desktop` | Desktop development / Windows installer |
 | `pnpm web:pair --connection <absolute-path>` | Issue a short-lived code for a browser session on a protected local backend |
 | `pnpm migrate:sessions <directory>` | Explicit JSONL-to-SQLite history migration; retains source files |
-| `pnpm dev:searxng` | Optional SearXNG service |
-| `pnpm dev:docker:compose` | Development container with Chrome/Xpra and SearXNG |
+| `pnpm dev:docker:compose` | Development container with Chrome/Xpra |
 
 Tests support targeted execution with
 `pnpm exec node --import tsx --test src/runtime/backend-cli_test.ts`.

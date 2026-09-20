@@ -687,9 +687,8 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
   border-radius: var(--radius-sm);
 }
 
-.sev-trace { background: var(--c-indigo-bg); color: var(--c-indigo); }
-.sev-debug { background: var(--c-info-bg); color: var(--c-info); }
-.sev-info { background: var(--c-success-bg); color: var(--c-teal); }
+.sev-trace, .sev-debug { background: var(--c-bg-muted); color: var(--c-text-muted); }
+.sev-info { background: var(--c-bg-muted); color: var(--c-text-secondary); }
 .sev-warn { background: var(--c-warn-bg); color: var(--c-warn); }
 .sev-error { background: var(--c-error-bg); color: var(--c-error); }
 

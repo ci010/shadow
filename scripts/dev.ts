@@ -7,7 +7,7 @@ const children = [
     'src/index.ts',
   ], { env: { VITE_DEV_URL: `http://127.0.0.1:${port}` } }),
   startNode([
-    'node_modules/vite/bin/vite.js', '--host', '127.0.0.1',
+    'node_modules/vite/bin/vite.js', '--host', process.env.VITE_DEV_HOST ?? '0.0.0.0',
     '--port', port, '--strictPort',
   ], { cwd: 'app' }),
 ]

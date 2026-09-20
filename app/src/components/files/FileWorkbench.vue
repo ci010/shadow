@@ -1,5 +1,33 @@
 <template>
-  <div ref="root" class="file-workbench" :class="{ 'explorer-docked': expanded && wide }" :style="{ '--explorer-width': `${explorerWidth}px` }">
+  <div ref="root" class="file-workbench" :class="{ 'explorer-docked': expanded && wide, 'mobile-workbench': mobileLayout }" :style="{ '--explorer-width': `${explorerWidth}px` }">
+    <Teleport v-if="mobileHeader.visible.value && mobileHeader.chrome?.headerTarget.value" :to="mobileHeader.chrome.headerTarget.value">
+      <button ref="mobileTitleButton" class="mobile-document-title" type="button" aria-label="Switch view" aria-haspopup="dialog" :aria-expanded="viewsOpen" @click="viewsOpen = true">
+        <span>{{ selectedTitle }}</span><span class="i-lucide-chevron-down" aria-hidden="true" />
+      </button>
+      <button ref="mobileActionsButton" class="mobile-document-more" type="button" aria-label="Conversation and document actions" aria-haspopup="dialog" :aria-expanded="actionsOpen" @click="actionsOpen = true">
+        <span class="i-lucide-ellipsis w-5 h-5" aria-hidden="true" />
+      </button>
+    </Teleport>
+    <MobileSheet v-if="mobileLayout" :open="viewsOpen" label="Open views" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
+      <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span class="i-lucide-messages-square" aria-hidden="true" /><span>{{ conversationTitle || 'Conversation' }}</span></button></div>
+      <div v-if="knowledgeEnabled" class="mobile-view-row">
+        <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>Knowledge</span></button>
+        <button v-if="tabs.knowledge" class="mobile-view-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+      </div>
+      <div v-for="file in tabs.files" :key="fileTabKey(file)" class="mobile-view-row">
+        <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : 'i-lucide-file'" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span></button>
+        <button class="mobile-view-close" :aria-label="`Close ${file.path}`" @click="closeFile(fileTabKey(file), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+      </div>
+    </MobileSheet>
+    <MobileSheet v-if="mobileLayout" :open="actionsOpen" label="Conversation and document actions" :return-focus="mobileActionsButton" @update:open="actionsOpen = $event">
+      <div class="mobile-workbench-actions">
+        <slot name="actions" />
+        <button v-if="explorerAvailable" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />Browse files</button>
+        <button v-if="tabs.selected" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />Close current document</button>
+        <button v-if="tabs.files.length > 1 || tabs.knowledge" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">Close all documents</button>
+        <slot name="mobile-actions" :close="closeMobileActions" />
+      </div>
+    </MobileSheet>
     <button v-if="expanded && !wide" class="explorer-backdrop" aria-label="Dismiss files" @click="collapseExplorer" />
     <aside v-if="explorerAvailable" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" aria-label="File explorer" @keydown.esc.stop.prevent="collapseExplorer">
       <FileTree :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded"
@@ -13,7 +41,7 @@
         label="Resize files" :controls="`${id}-explorer`" @update:model-value="preferredWidth = $event" />
     </aside>
     <div class="workbench-editor">
-      <div class="document-toolbar">
+      <div v-show="!mobileLayout" class="document-toolbar">
         <HoverInfo v-if="explorerAvailable" text="Toggle files" v-slot="{ triggerProps }">
         <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" aria-label="Toggle files" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
           <span class="i-lucide-panel-left" aria-hidden="true" />
@@ -91,16 +119,24 @@ import FilePreviewModal from './FilePreviewModal.vue'
 import FileDiffPreview from './FileDiffPreview.vue'
 import HoverInfo from '../HoverInfo.vue'
 import KnowledgeView from '../KnowledgeView.vue'
+import MobileSheet from '../MobileSheet.vue'
+import { useMobileHeader } from '../../composables/useMobileChrome.ts'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
 import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, KNOWLEDGE_TAB_KEY, nextDocumentTab, openFileTab, openKnowledgeTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile } from '../../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false })
 const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
+const mobileHeader = useMobileHeader(() => props.active)
+const mobileLayout = computed(() => !!mobileHeader.chrome?.enabled.value)
+const mobileTitleButton = ref<HTMLButtonElement>()
+const mobileActionsButton = ref<HTMLButtonElement>()
+const viewsOpen = ref(false)
+const actionsOpen = ref(false)
 const documentTabs = ref<HTMLElement>()
 const explorerButton = ref<HTMLButtonElement>()
 const width = ref(0)
@@ -113,6 +149,26 @@ const remoteExpanded = ref(false)
 const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.folderId))
 const expanded = computed(() => explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? wide.value)))
 const tabs = ref<FileTabs>({ files: [], selected: '' })
+const selectedTitle = computed(() => tabs.value.selected === KNOWLEDGE_TAB_KEY ? 'Knowledge'
+  : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
+    ?? props.conversationTitle ?? 'Conversation')
+function closeMobileActions() { actionsOpen.value = false }
+function chooseMobileView(key: string) { selectTab(key); viewsOpen.value = false }
+function chooseMobileKnowledge() {
+  tabs.value = openKnowledgeTab(tabs.value, tabs.value.knowledge?.entryId)
+  viewsOpen.value = false
+}
+async function showMobileFiles() {
+  actionsOpen.value = false
+  if (props.remote) remoteExpanded.value = true
+  else preference.value = true
+  await nextTick()
+  root.value?.querySelector<HTMLElement>('.workbench-explorer button')?.focus()
+}
+watch(() => [mobileHeader.visible.value, props.contextKey], () => {
+  viewsOpen.value = false
+  actionsOpen.value = false
+})
 const gitActive = computed(() => explorerAvailable.value && props.active && (expanded.value || tabs.value.files.some(file => file.view === 'diff' && fileTabKey(file) === tabs.value.selected)))
 const { status: gitStatus, loading: gitLoading, error: gitError, offline: gitOffline, revision: gitRevision, refresh: refreshGit } = useWorkdirGit(
   () => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId }), gitActive)
@@ -137,13 +193,13 @@ function openFile(file: OpenFile) {
   if (!wide.value) { preference.value = false; remoteExpanded.value = false }
   void nextTick(() => {
     const tab = document.getElementById(tabId(fileTabKey(file)))
-    tab?.focus({ preventScroll: true })
+    ;(mobileLayout.value ? mobileTitleButton.value : tab)?.focus({ preventScroll: true })
     tab?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   })
 }
 function closeFile(path: string, focusSelected = true) {
   tabs.value = closeFileTab(tabs.value, path)
-  if (focusSelected) void nextTick(() => document.getElementById(tabId(tabs.value.selected))?.focus({ preventScroll: true }))
+  if (focusSelected) void nextTick(() => (mobileLayout.value ? mobileTitleButton.value : document.getElementById(tabId(tabs.value.selected)))?.focus({ preventScroll: true }))
 }
 function dismissTabMenu(restoreFocus = false) {
   const key = tabMenu.value?.key
@@ -289,7 +345,7 @@ function compositionEnd() { composing = false }
 function collapseExplorer() {
   if (props.remote) remoteExpanded.value = false
   else preference.value = false
-  explorerButton.value?.focus({ preventScroll: true })
+  ;(mobileLayout.value ? mobileActionsButton.value : explorerButton.value)?.focus({ preventScroll: true })
 }
 function toggleExplorer() {
   if (props.remote) remoteExpanded.value = !expanded.value
@@ -344,6 +400,20 @@ onUnmounted(() => {
 
 <style scoped>
 .file-workbench { display: flex; position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; height: 100%; }
+.mobile-document-title { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; min-height: 44px; border: 0; padding: 0 4px; background: transparent; color: var(--c-text); font: inherit; font-size: 15px; font-weight: 600; line-height: 1.5; text-align: left; }
+.mobile-document-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-document-title > span:last-child { flex-shrink: 0; }
+.mobile-document-more { display: grid; place-items: center; flex: 0 0 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--c-text); }
+.mobile-document-title:focus-visible, .mobile-document-more:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.mobile-view-row { display: flex; min-width: 0; }
+.mobile-view-row button, .mobile-workbench-actions :deep(button) { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; min-height: 44px; padding: 10px 12px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; text-align: left; }
+.mobile-view-row button > span:first-child { flex-shrink: 0; }
+.mobile-view-row button > span:last-child { overflow-wrap: anywhere; }
+.mobile-view-row button[aria-current="page"] { background: var(--c-selection-bg); color: var(--c-primary); }
+.mobile-view-row .mobile-view-close { flex: 0 0 44px; justify-content: center; padding: 0; }
+.mobile-workbench-actions { display: flex; flex-direction: column; }
+.mobile-view-row button:focus-visible, .mobile-workbench-actions :deep(button:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.mobile-workbench .workbench-explorer.drawer, .mobile-workbench .explorer-backdrop { top: 0; }
 .workbench-explorer { position: relative; display: flex; flex: 0 0 var(--explorer-width, 220px); min-width: 0; min-height: 0; box-sizing: border-box; border-right: 1px solid var(--c-border); background: var(--c-bg-card); }
 .workbench-editor { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .workbench-content { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }

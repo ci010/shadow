@@ -160,6 +160,14 @@ function overlayEnv(raw: Record<string, unknown>): void {
     raw.tools = tools
   }
 
+  for (const [variable, field] of [['EXA_API_KEY', 'exaApiKey'], ['TAVILY_API_KEY', 'tavilyApiKey']] as const) {
+    if (env[variable]) {
+      const tools = (raw.tools ?? {}) as Record<string, unknown>
+      tools[field] = env[variable]
+      raw.tools = tools
+    }
+  }
+
   if (env.EXEC_TOOL_DEFAULT_SHELL) {
     const tools = (raw.tools ?? {}) as Record<string, unknown>
     const execTool = (tools.exec ?? {}) as Record<string, unknown>

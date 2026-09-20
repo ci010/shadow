@@ -57,12 +57,14 @@ function selectRow(event: MouseEvent, close: () => void) {
 </script>
 
 <style scoped>
-.tree-item { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 34px; padding: 0 6px 0 calc(var(--tree-depth) * 12px + 6px); border-radius: var(--radius-control); color: var(--c-text); }
+.tree-item { display: flex; align-items: center; gap: var(--tree-gap, 6px); min-width: 0; min-height: var(--tree-row-height, 34px); padding: 0 var(--tree-row-inset, 6px) 0 calc(var(--tree-depth) * var(--tree-indent, 12px) + var(--tree-row-inset, 6px)); border-radius: var(--radius-control); color: var(--c-text); }
 .tree-item:hover { background: var(--c-bg-muted); }
-.tree-item.selected { background: var(--c-selection-bg); }
+.tree-item.selected { background: var(--c-selection-bg); color: var(--c-primary); }
+.tree-item.selected .tree-icon { color: var(--c-primary); }
 .tree-item:has(.tree-select:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.tree-select { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; min-height: 34px; padding: 2px 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; font-size: 13px; cursor: pointer; user-select: none; outline: none; }
-.tree-toggle, .tree-toggle-spacer { display: grid; place-items: center; flex: 0 0 20px; width: 20px; height: 28px; }
+.tree-select { display: flex; align-items: center; gap: var(--tree-icon-gap, 6px); flex: 1; min-width: 0; min-height: var(--tree-row-height, 34px); padding: 2px 0; border: 0; background: transparent; color: inherit; text-align: left; font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; user-select: none; outline: none; }
+.tree-toggle, .tree-toggle-spacer { display: grid; place-items: center; flex: 0 0 var(--tree-disclosure, 20px); width: var(--tree-disclosure, 20px); height: var(--tree-row-height, 28px); }
+.tree-select > .tree-toggle-spacer { height: calc(var(--tree-row-height, 32px) - 4px); margin-inline-end: calc(var(--tree-gap, 6px) - var(--tree-icon-gap, 6px)); }
 .tree-toggle { padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
 .tree-toggle:hover { background: var(--c-bg-soft); }
 .tree-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }

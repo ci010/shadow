@@ -216,11 +216,13 @@ test('unprotected local development retains access and trusted Vite origin suppo
   const headers = { cookie: cookie(await dev.pair(await dev.code(), { origin: 'http://127.0.0.1:5273' })), origin: 'http://127.0.0.1:5273' }
   assert.equal((await dev.request('/api/private', { headers, method: 'POST' })).status, 200)
   for (const path of ['/', '/assets/app.js', '/projects/default/chat/web%3Atest', '/settings', '/nodes',
-    '/workspaces', '/providers', '/approvals', '/settings/channels', '/settings/models/', '/settings/providers']) {
+    '/workspaces', '/providers', '/approvals', '/settings/channels', '/settings/models/', '/settings/providers',
+    '/manifest.webmanifest', '/sw.js', '/pwa/icon-192.png', '/pwa/icon-512.png', '/pwa/apple-touch-icon.png']) {
     assert(isPublicWebShell(new Request(origin + path)), path)
   }
   for (const path of ['/api/private', '/projects/default/api/private', '/local/v1/readiness', '/pair/v1/offers',
-    '/health', '/@fs/private', '/settings/unknown', '/projects/default/settings/unknown', '/projects/unknown']) {
+    '/health', '/@fs/private', '/settings/unknown', '/projects/default/settings/unknown', '/projects/unknown',
+    '/pwa/private.json', '/pwa/api/secret', '/projects/default/sw.js']) {
     assert(!isPublicWebShell(new Request(origin + path)), path)
   }
   assert(isPublicWebShell(new Request(origin + '/@vite/client'), true))

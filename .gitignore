@@ -14,9 +14,6 @@ desktop/backend/
 desktop/service/ShadowService.exe
 desktop/release-manifest.v1.json
 
-# Historical Deno lock (not used by the Node workspace)
-deno.lock
-
 # IDE
 .vscode/settings.json
 

@@ -302,7 +302,7 @@ async function runViewport(origin: string, width: number, height: number) {
     await waitFor(window, `!document.querySelector('.child-conversation')`)
     assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea').value`), 'Keep this exact unsent draft')
 
-    if (width <= 700) await click(window, '.projects-mobile-toggle')
+    if (width <= 700) await click(window, '.projects-toggle')
     await click(window, '.folders-sidebar .session-select[aria-label="Quoted side chat"]')
     await waitFor(window, `document.querySelector('.child-conversation .chat-content')?.textContent.includes('Side chat quotation source.') && !!document.querySelector('.child-conversation textarea') && !document.querySelector('.child-conversation .chat-messages')?.textContent.includes('Loading history')`)
     assert.equal(await evaluate(window, `document.querySelector('.primary-conversation textarea') === window.modeRefs.input && window.modeRefs.input.value === 'Keep this exact unsent draft'`), true, 'Context-only fork must retain its original primary pane and draft')
@@ -332,7 +332,7 @@ async function runViewport(origin: string, width: number, height: number) {
     await click(window, '.close-child')
     await waitFor(window, `!document.querySelector('.child-conversation')`)
 
-    if (width <= 700) await click(window, '.projects-mobile-toggle')
+    if (width <= 700) await click(window, '.projects-toggle')
     await click(window, '.folders-sidebar .session-select[aria-label="Reusable explorer"]')
     await waitFor(window, `!!document.querySelector('.child-conversation textarea')`)
     await evaluate(window, `(() => {

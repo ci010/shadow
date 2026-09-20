@@ -391,7 +391,7 @@ async function runFolders(window: BrowserWindow, width: number, desktop: boolean
   const group = (path: string) => `${folder(path)}?.closest('.folder-group')`
   const showSidebar = async () => {
     await evaluate(window, `(() => {
-      if (!document.querySelector('.projects-sidebar').getBoundingClientRect().width) document.querySelector('.projects-mobile-toggle').click();
+      if (!document.querySelector('.projects-sidebar').getBoundingClientRect().width) document.querySelector('.projects-toggle').click();
       document.querySelector('.project-groups').scrollTop = 0;
     })()`)
     await waitFor(window, `document.querySelector('.projects-sidebar')?.getBoundingClientRect().width > 0`)

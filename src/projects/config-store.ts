@@ -7,6 +7,8 @@ import { parseModelSpec } from '../providers/aggregated.ts'
 import { detectProvider } from '../providers/factory.ts'
 import { McpToolIndex } from '../mcp/tool-index.ts'
 import { MODEL_DEFAULT_FIELDS, modelDefaultsState, modelFields, patchModelDefaults, type ModelDefaultsPatch } from '../config/model-defaults.ts'
+import { WEB_SEARCH_FIELDS, WEB_SEARCH_KEYS, WEB_SEARCH_PROVIDERS, WebSearchPatchSchema,
+  sharedWebSearchConfig, withoutWebSearchConfig, type WebSearchPatch } from '../config/web-search.ts'
 
 type Raw = Record<string, unknown>
 const record = (value: unknown): value is Raw => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -37,6 +39,19 @@ export interface ProjectConfigOptions {
 
 /** Provider setup may probe a model, but cannot select an project's defaults. */
 export class AppProviderConfigStore extends ConfigStore {
+  updateWebSearch(patch: WebSearchPatch, signal?: AbortSignal): Promise<Config> {
+    const parsed = WebSearchPatchSchema.parse(patch)
+    return super.update(raw => {
+      const tools = { ...(record(raw.tools) ? raw.tools : {}) }
+      if (parsed.provider !== undefined) tools.webSearchProvider = parsed.provider
+      for (const provider of WEB_SEARCH_PROVIDERS) {
+        const key = parsed.apiKeys?.[provider]
+        if (key !== undefined) tools[WEB_SEARCH_KEYS[provider]] = key ?? ''
+      }
+      return { ...raw, tools }
+    }, signal)
+  }
+
   async modelDefaults() {
     const raw = await this.read()
     return modelDefaultsState(record(raw.agent) ? raw.agent : {}, ConfigSchema.parse(raw).agent)
@@ -102,7 +117,10 @@ export class ProjectConfigStore extends ConfigStore {
     const agent = ConfigSchema.shape.agent.parse({
       ...localAgent, ...modelFields(shared.agent), ...modelFields(ownedAgent), workspace: this.scope.home,
     })
-    return { ...config, channels, agent, providers: shared.providers }
+    const tools = ConfigSchema.shape.tools.parse({
+      ...withoutWebSearchConfig(config.tools), ...sharedWebSearchConfig(shared.tools),
+    })
+    return { ...config, channels, agent, providers: shared.providers, tools }
   }
 
   async init(legacy?: Config, serializedLegacy?: Raw): Promise<Config> {
@@ -116,6 +134,7 @@ export class ProjectConfigStore extends ConfigStore {
       const { providers: _providers, ...raw } = serializedLegacy ?? rawConfig(initial)
       if (legacy && !serializedLegacy) raw.channels = {}
       raw.mcp = rawConfig(initial).mcp
+      if (record(raw.tools)) raw.tools = withoutWebSearchConfig(raw.tools)
       const parsedModel = parseModelSpec(initial.agent.model)
       const legacyQuickModel = legacy?.providers[parsedModel.provider ?? detectProvider(parsedModel.model)]?.quickModel
       raw.agent = legacy
@@ -125,6 +144,10 @@ export class ProjectConfigStore extends ConfigStore {
     }
     const raw = await this.#inner.read()
     if ('providers' in raw) throw new Error('Project configuration must not contain shared providers')
+    const legacyTools = record(raw.tools) ? raw.tools : {}
+    if (WEB_SEARCH_FIELDS.some(field => field in legacyTools)) {
+      console.warn('[projects] Legacy Project web search settings are ignored. Configure web search in App settings.')
+    }
     const parsed = withProjectLearning(ConfigSchema.parse(raw), raw)
     this.#ownedAgent = record(raw.agent) ? structuredClone(raw.agent) : {}
     this.#config = this.#merge(parsed)
@@ -173,6 +196,17 @@ export class ProjectConfigStore extends ConfigStore {
         throw new TypeError('Project Home cannot be changed through configuration')
       }
       const { providers: _providers, ...owned } = next
+      if (record(owned.tools)) {
+        const previousTools = record(previous.tools) ? previous.tools : {}
+        const redactedTools = redactConfig(previousTools) as Raw
+        for (const field of WEB_SEARCH_FIELDS) {
+          if (field in owned.tools && !isDeepStrictEqual(owned.tools[field], previousTools[field])
+            && !isDeepStrictEqual(owned.tools[field], redactedTools[field])) {
+            throw new TypeError('Shared web search settings must be changed through App settings')
+          }
+        }
+        owned.tools = withoutWebSearchConfig(owned.tools)
+      }
       if (record(owned.agent) && record(previous.agent)) {
         const agent = { ...owned.agent }
         for (const key of MODEL_DEFAULT_FIELDS) {

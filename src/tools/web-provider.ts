@@ -1,32 +1,49 @@
-import type { Config } from '../config/schema.ts'
+import { resolveWebSearchProvider, type WebSearchConfig } from '../config/web-search.ts'
+import type { ExecutionContext } from './context.ts'
 import type { Tool } from './tool.ts'
-import { detectSearXNG, FirecrawlSearchTool, SearXNGSearchTool, WebSearchTool } from './web.ts'
+import { ExaSearchTool } from './exa.ts'
+import { TavilySearchTool } from './tavily.ts'
+import { FirecrawlSearchTool, WebSearchTool } from './web.ts'
+import { webSearchParameters } from './web-search-json.ts'
 
-/** Resolve optional local search only when used, never on the startup path. */
 export function createWebSearchTool(
-  config: Pick<Config['tools'], 'firecrawlApiKey' | 'braveApiKey'>,
-  detect: typeof detectSearXNG = detectSearXNG,
+  config: WebSearchConfig,
 ): Tool {
-  if (config.firecrawlApiKey) return new FirecrawlSearchTool(config.firecrawlApiKey)
-  if (config.braveApiKey) return new WebSearchTool(config.braveApiKey)
-  const fallback = new FirecrawlSearchTool()
-  let selected: Tool | undefined
+  const provider = resolveWebSearchProvider(config)
+  if (provider === 'firecrawl') return new FirecrawlSearchTool(config.firecrawlApiKey?.trim() || undefined)
+  const key = {
+    brave: config.braveApiKey,
+    exa: config.exaApiKey,
+    tavily: config.tavilyApiKey,
+  }[provider]?.trim()
+  if (!key) {
+    const name = { brave: 'Brave', exa: 'Exa', tavily: 'Tavily' }[provider]
+    return {
+      name: 'web_search',
+      readonly: true,
+      description: 'Search the web using the selected search provider.',
+      parameters: webSearchParameters,
+      async execute(_args, context) {
+        context?.signal.throwIfAborted()
+        return `Error: ${name} search requires an API key. Configure it in web search settings.`
+      },
+      getChatTextDisplay: args => `🕵️ ${String(args.query)}`,
+    }
+  }
+  if (provider === 'brave') return new WebSearchTool(key)
+  if (provider === 'exa') return new ExaSearchTool(key)
+  return new TavilySearchTool(key)
+}
+
+export function createLiveWebSearchTool(getConfig: () => WebSearchConfig): Tool {
   return {
-    name: fallback.name,
-    description: fallback.description,
-    parameters: fallback.parameters,
+    name: 'web_search',
     readonly: true,
-    async execute(args, context) {
-      context.signal.throwIfAborted()
-      if (!selected) {
-        const base = await detect(context.signal)
-        context.signal.throwIfAborted()
-        if (!selected) {
-          selected = base ? new SearXNGSearchTool(base) : fallback
-          console.info(`[search] Selected ${base ? 'local SearXNG' : 'keyless Firecrawl'} provider`)
-        }
-      }
-      return selected.execute(args, context)
+    description: 'Search the web using the configured search provider and return results.',
+    parameters: webSearchParameters,
+    execute(args: Record<string, unknown>, context: ExecutionContext) {
+      return createWebSearchTool(getConfig()).execute(args, context)
     },
+    getChatTextDisplay: args => `🕵️ ${String(args.query)}`,
   }
 }

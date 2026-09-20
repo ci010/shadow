@@ -28,7 +28,7 @@ function inspect() {
 </script>
 
 <style scoped>
-.execution-card { min-width: 0; margin: 12px 0; border: 1px solid var(--c-border); background: var(--c-bg-soft); }
+.execution-card { min-width: 0; margin: 12px 0; border: 1px solid var(--c-chat-border); background: var(--c-chat-action-bg); }
 .execution-inspect { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 12px; border: 0; border-radius: 0; background: transparent; color: var(--c-text); font: inherit; text-align: left; cursor: pointer; }
 .execution-inspect:hover:not(:disabled) { background: var(--c-bg-muted); }
 .execution-inspect:disabled { cursor: default; }

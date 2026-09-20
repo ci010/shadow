@@ -42,6 +42,70 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const config = (model: string) => ({ agent: { model, workspace: 'C:\\synthetic', temperature: .7 }, learning: {} })
 
+test('App web search form retains failed edits, clears saved secrets and prevents duplicate saves', async t => {
+  const requests: Array<{ url: string; init?: RequestInit; finish: (value: unknown, status?: number) => void }> = []
+  t.mock.method(globalThis, 'fetch', (url: unknown, init?: RequestInit) => new Promise<Response>(resolve => {
+    requests.push({ url: String(url), init, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
+  }))
+  const state = mountScript(t, 'WebSearchSettings.vue', { apiBase: 'http://fixture' })
+  const initial = {
+    provider: 'auto', effectiveProvider: 'firecrawl', ready: true,
+    keys: { firecrawl: true, brave: false, exa: false, tavily: false },
+  }
+  requests[0].finish(initial)
+  await settle()
+  assert.equal(state().dirty, false)
+  state().provider = 'exa'
+  state().keys.exa.value = 'synthetic-new-key'
+  state().keys.firecrawl.remove = true
+  const failed = state().save()
+  await state().save()
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].url, 'http://fixture/api/app/web-search')
+  assert.deepEqual(JSON.parse(String(requests[1].init?.body)), {
+    provider: 'exa', apiKeys: { firecrawl: null, exa: 'synthetic-new-key' },
+  })
+  requests[1].finish({ error: 'synthetic-private-error' }, 500)
+  await failed
+  assert.equal(state().keys.exa.value, 'synthetic-new-key')
+  assert.equal(state().keys.firecrawl.remove, true)
+  assert.match(state().error, /Reload/)
+  assert.doesNotMatch(state().error, /synthetic-private/)
+  const saved = state().save()
+  requests[2].finish({
+    provider: 'exa', effectiveProvider: 'exa', ready: true,
+    keys: { firecrawl: false, brave: false, exa: true, tavily: false },
+  })
+  await saved
+  assert.equal(state().keys.exa.value, '')
+  assert.equal(state().keys.firecrawl.remove, false)
+  assert.equal(state().dirty, false)
+  assert.match(state().notice, /all Projects/)
+})
+
+test('App web search form discards stale responses when Main changes', async t => {
+  const requests: Array<{ init?: RequestInit; finish: (value: unknown) => void }> = []
+  t.mock.method(globalThis, 'fetch', (_url: unknown, init?: RequestInit) => new Promise<Response>(resolve => {
+    requests.push({ init, finish: value => resolve(Response.json(value)) })
+  }))
+  const props = reactive({ apiBase: 'http://first' })
+  const state = mountScript(t, 'WebSearchSettings.vue', props)
+  props.apiBase = 'http://second'
+  await nextTick()
+  assert.equal(requests[0].init?.signal?.aborted, true)
+  requests[1].finish({
+    provider: 'tavily', effectiveProvider: 'tavily', ready: true,
+    keys: { firecrawl: false, brave: false, exa: false, tavily: true },
+  })
+  await settle()
+  requests[0].finish({
+    provider: 'auto', effectiveProvider: 'firecrawl', ready: true,
+    keys: { firecrawl: false, brave: false, exa: false, tavily: false },
+  })
+  await settle()
+  assert.equal(state().provider, 'tavily')
+})
+
 test('session heading rename trims and saves, retains failed edits, and cancels stale requests', async t => {
   const requests: Array<{ url: string; init?: RequestInit; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: unknown, init?: RequestInit) => new Promise<Response>(resolve => {

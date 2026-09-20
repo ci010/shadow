@@ -20,7 +20,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('rendered SNS attachments play video lazily and download files through the authenticated Web endpoint', {
+test('chat images open an accessible viewer while media playback and authenticated downloads remain intact', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -51,15 +51,30 @@ test('rendered SNS attachments play video lazily and download files through the 
       load(id) {
         if (id !== '\0media-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import { createApp, h, ref } from 'vue';
+          import DOMPurify from 'dompurify';
+          import { marked } from 'marked';
           import Attachments from '/src/components/MessageAttachments.vue';
+          import ImageViewer from '/src/components/ImageViewer.vue';
+          import { imagePreviewFromEvent, imagePreviewMarkup } from '/src/image-viewer.ts';
           import { messageAttachments } from '/src/message-attachments.ts';
           const body = messageAttachments('Attachments from SNS\\n[file: uploads/clip.webm]\\n[file: uploads/logs.zip]', ['uploads/photo.png']);
+          const preview = ref();
+          const markdown = ref('');
+          const openImage = image => preview.value = image;
+          const fromEvent = event => {
+            const image = imagePreviewFromEvent(event);
+            if (image) { event.preventDefault(); openImage(image); }
+          };
+          window.__imageFixture = {openImage, close:() => preview.value = undefined,
+            markdown:text => markdown.value = imagePreviewMarkup(DOMPurify.sanitize(marked.parse(text)))};
           createApp({ render: () => h('main', {style:'max-width:540px;padding:16px;margin:0 auto;box-sizing:border-box'}, [
             h('p', body.text),
-            h(Attachments, { apiBase: location.origin, sessionId: ${JSON.stringify(sessionId)}, paths: body.paths }),
+            h(Attachments, { apiBase: location.origin, sessionId: ${JSON.stringify(sessionId)}, paths: body.paths, onPreview:openImage }),
             h(Attachments, { apiBase: location.origin, sessionId: ${JSON.stringify(sessionId)},
-              paths: ['uploads/' + 'long-filename-'.repeat(14) + '.zip'] })
+              paths: ['uploads/' + 'long-filename-'.repeat(14) + '.zip'] }),
+            h('div', {class:'fixture-markdown', innerHTML:markdown.value, onClick:fromEvent, onKeydown:fromEvent}),
+            preview.value ? h(ImageViewer, {image:preview.value, onClose:() => preview.value = undefined}) : null,
           ]) }).mount('#app');`
       },
       configureServer(server) {

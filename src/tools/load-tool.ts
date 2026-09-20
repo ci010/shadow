@@ -72,7 +72,7 @@ function isScriptLoadable(entry: LoadableEntry): entry is ScriptLoadable {
 
 /**
  * A factory that creates tool(s) on demand — used when a tool needs
- * runtime detection at load time (e.g. SearXNG base URL probing).
+ * initialization at load time rather than runtime startup.
  */
 export interface FactoryLoadable {
   factory: () => Promise<Tool | Tool[]>

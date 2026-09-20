@@ -206,7 +206,7 @@ onUnmounted(() => { disposed = true; stop(); lifetime.abort() })
 </script>
 
 <style scoped>
-.project-settings { display: grid; place-items: center; width: 28px; height: 28px; color: var(--c-text-secondary); }
+.project-settings { display: grid; place-items: center; flex-shrink: 0; width: var(--sidebar-action-size); height: var(--sidebar-action-size); padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); }
 .project-settings:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .project-settings:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .retry-runtime { padding: 0; border: 0; background: transparent; color: var(--c-error); }
