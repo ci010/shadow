@@ -1,3 +1,0 @@
-- Use websocket for all live update
-  - Latest message might wrongly add to wrong session (e.g. user open another session, but previous session SSE reach the client, the message will go wrong place)
-  - The llm stage display is not real-time enough, polling wont work for current 
