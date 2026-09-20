@@ -5,6 +5,7 @@ export interface WebAuthStatus {
   required: boolean
   authenticated: boolean
   expiresAt?: string
+  pinAvailable?: boolean
 }
 
 export type WebAuthView = 'checking' | 'pairing' | 'authenticated' | 'error'
@@ -13,6 +14,7 @@ function parseStatus(value: unknown): WebAuthStatus {
   if (!value || typeof value !== 'object') throw new Error('Shadow returned an invalid browser session. Retry when the server is ready.')
   const status = value as Partial<WebAuthStatus>
   if (status.version !== 1 || typeof status.required !== 'boolean' || typeof status.authenticated !== 'boolean'
+    || (status.pinAvailable !== undefined && typeof status.pinAvailable !== 'boolean')
     || (!status.required && !status.authenticated)
     || (status.expiresAt !== undefined && (typeof status.expiresAt !== 'string' || !Number.isFinite(Date.parse(status.expiresAt))))) {
     throw new Error('Shadow returned an invalid browser session. Retry when the server is ready.')
@@ -63,7 +65,7 @@ export function createBrowserSession(apiBase: string, options: {
     }
   }
 
-  async function perform(action: 'check' | 'pair' | 'logout', code?: string): Promise<void> {
+  async function perform(action: 'check' | 'pair' | 'logout', code?: string, usePin = false): Promise<void> {
     if (disposed || (action === 'check' && busy.value)) return
     current?.abort()
     const controller = new AbortController()
@@ -83,16 +85,16 @@ export function createBrowserSession(apiBase: string, options: {
         credentials: 'same-origin',
         cache: 'no-store',
         signal: controller.signal,
-        ...(action === 'pair' ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) } : {}),
+        ...(action === 'pair' ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(usePin ? { pin: code } : { code }) } : {}),
       })
       if (!response.ok) {
         if (action === 'check' && response.status === 401) {
           if (ownGeneration === generation && !disposed) accept({ version: 1, required: true, authenticated: false })
           return
         }
-        if (action === 'pair' && response.status === 401) throw new Error('That pairing code is invalid or expired. Generate a new code in the trusted Shadow CLI.')
+        if (action === 'pair' && response.status === 401) throw new Error(usePin ? 'That PIN is incorrect. Check it and try again.' : 'That pairing code is invalid or expired. Generate a new code in the trusted Shadow CLI.')
         if (action === 'pair' && response.status === 429) throw new Error('Too many pairing attempts. Wait a moment before trying again.')
-        if (action === 'pair' && response.status === 400) throw new Error('The pairing code could not be accepted. Check the code and try again.')
+        if (action === 'pair' && response.status === 400) throw new Error(usePin ? 'The PIN could not be accepted. Check it and try again.' : 'The pairing code could not be accepted. Check the code and try again.')
         throw new Error(`Shadow could not ${action === 'logout' ? 'sign out' : 'verify this browser'} (HTTP ${response.status}). Retry when the server is ready.`)
       }
       const next = parseStatus(await response.json())
@@ -121,6 +123,7 @@ export function createBrowserSession(apiBase: string, options: {
     busy: readonly(busy),
     refresh: () => perform('check'),
     pair: (code: string) => perform('pair', code.trim()),
+    loginWithPin: (pin: string) => perform('pair', pin.trim(), true),
     logout: () => perform('logout'),
     retry: () => perform(retryAction),
     listen(target: Window, document: Document) {

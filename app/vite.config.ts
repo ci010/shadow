@@ -1,7 +1,8 @@
-import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
+import { defineConfig, normalizePath, type Plugin, type ProxyOptions } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 import type { EventEmitter } from 'node:events'
 import { SCOPED_BACKEND_PATTERN } from '../src/gateway/route-kind.ts'
 import { parseRuntimeEndpointMessage } from '../desktop/src/control/runtime-endpoint.ts'
@@ -83,5 +84,9 @@ export default defineConfig({
     port: 5273,
     strictPort: true,
     proxy: routing.proxy,
+    fs: {
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.pin',
+        ...(process.env.SHADOW_BROWSER_PIN_FILE ? [normalizePath(resolve(process.env.SHADOW_BROWSER_PIN_FILE))] : [])],
+    },
   },
 })

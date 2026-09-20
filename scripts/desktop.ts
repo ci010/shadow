@@ -2,6 +2,7 @@ import { type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 import { manageChildren, runPnpm } from './processes.ts'
 import { forwardDesktopEndpoint } from './desktop-endpoint.ts'
 import { createReleaseManifest, sourceFingerprint } from './release-manifest.ts'
@@ -42,7 +43,8 @@ if (mode === 'build') {
   ], {
     cwd: 'app',
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-    env: { ...process.env, SHADOW_DESKTOP_DEV_IPC: '1' },
+    env: { ...process.env, SHADOW_DESKTOP_DEV_IPC: '1',
+      SHADOW_BROWSER_PIN_FILE: resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin') },
     shell: false,
   })
   const children: ChildProcess[] = [vite]
@@ -55,7 +57,10 @@ if (mode === 'build') {
     await Promise.race([waitForRenderer(url), startupFailure])
     const require = createRequire(new URL('../desktop/package.json', import.meta.url))
     const executable: string = require('electron')
-    const environment: NodeJS.ProcessEnv = { ...process.env, VITE_DEV_URL: url, SHADOW_DESKTOP_DEV_IPC: '1' }
+    const environment: NodeJS.ProcessEnv = {
+      ...process.env, VITE_DEV_URL: url, SHADOW_DESKTOP_DEV_IPC: '1',
+      SHADOW_BROWSER_PIN_FILE: resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin'),
+    }
     delete environment.ELECTRON_RUN_AS_NODE
     const electron = spawn(executable, ['.'], {
       cwd: 'desktop',

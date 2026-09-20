@@ -294,6 +294,22 @@ A Node process or the [Windows service](docs/release.md#opt-in-headless-windows-
 can own the backend while a normal browser opens its loopback gateway URL.
 Only Electron shows the native minimize, maximize and close controls.
 
+For temporary local administrator access, place a shared PIN in `.pin` in the
+backend process's working directory (the repository root for development).
+`desktop:dev` explicitly forwards the repository-root path despite launching
+Electron from `desktop`. Set `SHADOW_BROWSER_PIN_FILE` to select another file
+when launching a backend from elsewhere; this variable is a path, not the PIN.
+Use a private, hard-to-guess value of 4–128 characters on one line. The root
+`.pin` is Git-ignored; never put it in URLs, frontend configuration, or logs.
+Restart the backend after creating, changing or removing the file. Main reads
+it at startup and keeps only its hash in memory; an invalid/unreadable file
+fails startup rather than disabling authentication. With this file present,
+the browser login defaults to **Administrator PIN**, even when no launch
+credential is configured. The same PIN can sign in multiple local browsers
+and be reused after expiry or backend restart. Browser sessions still expire
+after twelve hours; the PIN itself does not expire. One-use pairing remains
+available when a launch credential is configured.
+
 When the gateway has a launch credential, its frontend shell opens a browser
 pairing screen instead of requiring the management credential in the browser.
 In Electron's Main window, click the browser icon beside the theme button
@@ -321,7 +337,10 @@ enrollment controls. Management credentials stay outside the renderer, browser
 storage and URLs. Keep pairing codes private until used.
 
 This is local loopback browser access, not an Internet-facing login system or
-multi-user authorization. An ordinary local backend without a launch credential
+multi-user authorization. PIN login grants the same application administrator
+access as pairing, not service management/device-enrollment credentials.
+PIN and code attempts share the same throttle (20 attempts per minute).
+An ordinary local backend without a launch credential or `.pin`
 retains its existing unprotected behavior. Closing Electron still stops an
 Electron-owned sidecar; a separately started Node backend or Windows service
 continues independently.

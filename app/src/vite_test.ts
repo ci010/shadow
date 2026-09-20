@@ -4,9 +4,32 @@ import { EventEmitter, once } from 'node:events'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createConnection } from 'node:net'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { resolve, join } from 'node:path'
 import { createServer } from 'vite'
 import config, { desktopBackendRouting } from '../vite.config.ts'
 import unoConfig from '../unocss.config.ts'
+
+test('Vite never serves a local PIN file through filesystem or raw module URLs', async t => {
+  const root = await mkdtemp(resolve('.shadow-test-vite-pin-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const file = join(root, '.pin')
+  await writeFile(file, 'synthetic-private-pin')
+  const vite = await createServer({
+    root, configFile: false, envFile: false, logLevel: 'silent',
+    optimizeDeps: { noDiscovery: true, include: [] },
+    server: { host: '127.0.0.1', port: 0, strictPort: false, watch: null, fs: config.server!.fs },
+  })
+  t.after(() => vite.close())
+  await vite.listen()
+  const base = vite.resolvedUrls?.local[0]
+  assert(base)
+  for (const path of ['/.pin', '/.pin?raw', `/@fs/${file.replaceAll('\\', '/')}`, `/@fs/${file.replaceAll('\\', '/')}?raw`]) {
+    const response = await fetch(new URL(path, base))
+    assert.notEqual(response.status, 200)
+    assert.doesNotMatch(await response.text(), /synthetic-private-pin/)
+  }
+})
 
 test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes page', async (t) => {
   const backend = createHttpServer((request, response) => {

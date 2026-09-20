@@ -133,6 +133,34 @@ test('unreachable bootstrap renders explicit retry rather than pairing or applic
   assert.equal(calls, 2)
 })
 
+test('PIN-enabled browser login masks and clears the PIN and offers the existing pairing flow', async t => {
+  let requestBody: string | undefined
+  const session = createBrowserSession('http://fixture', { fetch: async (_url, init) => {
+    requestBody = init?.body as string | undefined
+    return init?.method === 'POST'
+      ? Response.json({ error: 'invalid_pin' }, { status: 401 })
+      : Response.json({ version: 1, required: true, authenticated: false, pinAvailable: true })
+  } })
+  t.after(() => session.dispose())
+  await session.refresh()
+  const view = mount(t, './BrowserAuth.vue', { session })
+  assert.match(view.text(), /Administrator PIN/)
+  const input = view.nodes().find(node => node.tag === 'input')!
+  assert.equal(input.props.type, 'password')
+  ;(input.props['onUpdate:modelValue'] as (value: string) => void)('synthetic-pin')
+  await nextTick()
+  const form = view.nodes().find(node => node.tag === 'form')!
+  await (form.props.onSubmit as (event: { preventDefault(): void }) => Promise<void>)({ preventDefault() {} })
+  await nextTick()
+  assert.equal(requestBody, '{"pin":"synthetic-pin"}')
+  assert.equal(input.value, '')
+  assert.match(view.text(), /PIN is incorrect/)
+  assert.doesNotMatch(view.text(), /synthetic-pin/)
+  await view.click('Use a one-use pairing code instead')
+  assert.equal(input.props.type, 'text')
+  assert.match(view.text(), /Generate a short-lived/)
+})
+
 test('browser and incomplete desktop bridges never get window controls or a draggable titlebar', async t => {
   for (const bridge of [undefined, { bootstrap: {} }]) {
     await t.test(bridge ? 'bridge without capability' : 'ordinary browser', t => {

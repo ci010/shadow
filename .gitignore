@@ -4,6 +4,7 @@ node_modules/
 # Environment
 .env
 .env.local
+/.pin
 
 # Build outputs
 build/

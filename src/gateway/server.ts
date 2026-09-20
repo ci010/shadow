@@ -215,14 +215,14 @@ function registerGatewayRoutes(
     )
     const browserSession = opts.browserAuth?.session(c.req.raw)
     if (
-      c.req.method !== 'OPTIONS' && launchCredential &&
+      c.req.method !== 'OPTIONS' && (launchCredential || opts.browserAuth?.required) &&
       !launchCredentialExempt &&
       !opts.browserAuth?.isPublicRequest(c.req.raw) &&
       !browserSession &&
-      !await validateLaunchCredential(
+      !(launchCredential && await validateLaunchCredential(
         c.req.header('Authorization'),
         launchCredential,
-      )
+      ))
     ) {
       return c.json({ error: 'unauthorized' }, 401, {
         'WWW-Authenticate': 'Bearer',

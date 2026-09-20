@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import process from 'node:process'
+import { resolve } from 'node:path'
 import { loadConfig } from '../../config/loader.ts'
 import { getOs } from '../../utils/runtime.ts'
 import {
@@ -12,13 +13,23 @@ import { startProductionChildRuntime } from '../production-child.ts'
 import { startMainRuntime } from './start.ts'
 import { resolveServiceEnvironment } from '../service-mode.ts'
 import { runWebPair } from '../web-pairing-cli.ts'
+import { loadBrowserPinHash } from '../../gateway/browser-pin.ts'
+import type { MainRuntimeOptions } from './contracts.ts'
+import type { Config } from '../../config/schema.ts'
+
+async function startLocalMainRuntime(config: Config, options: MainRuntimeOptions) {
+  const browserPinHash = await loadBrowserPinHash(resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin'))
+  return startMainRuntime(config, {
+    ...options, gateway: { ...options.gateway, ...(browserPinHash ? { browserPinHash } : {}) },
+  })
+}
 
 export async function runBackendCli(
   hooks: BackendProcessHooks = nodeProcessHooks,
 ): Promise<void> {
   const { configPath } = parseBackendCliArguments(hooks.argv)
   const config = await loadConfig(configPath)
-  const runtime = await startMainRuntime(config, { configPath, localNodeId: 'local' })
+  const runtime = await startLocalMainRuntime(config, { configPath, localNodeId: 'local' })
   const detachSignals = attachBackendSignalHandlers(runtime, hooks, {
     includeSigterm: getOs() !== 'windows',
   })
@@ -48,7 +59,7 @@ export async function runRootProcessEntry(
   })
   return runProcessEntry(hooks.argv, {
     loadConfig,
-    startMainRuntime,
+    startMainRuntime: startLocalMainRuntime,
     startChildRuntime: (config, paths, context) => {
       if (
         context.loopbackPort !== undefined &&

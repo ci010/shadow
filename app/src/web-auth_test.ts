@@ -6,6 +6,29 @@ const paired = { version: 1, required: true, authenticated: true, expiresAt: '20
 const unpaired = { version: 1, required: true, authenticated: false }
 const now = () => Date.parse('2026-09-18T12:00:00Z')
 
+test('PIN login sends only an explicit PIN body and preserves the existing browser session lifecycle', async t => {
+  const calls: RequestInit[] = []
+  let attempts = 0
+  const session = createBrowserSession('http://fixture', { now, fetch: async (_url, init) => {
+    calls.push(init!)
+    if (init?.method !== 'POST') return Response.json({ ...unpaired, pinAvailable: true })
+    return ++attempts === 1 ? new Response('', { status: 401 }) : Response.json({ ...paired, pinAvailable: true })
+  } })
+  t.after(() => session.dispose())
+  await session.refresh()
+  assert.equal(session.status.value?.pinAvailable, true)
+  await session.loginWithPin('wrong')
+  assert.match(session.error.value, /PIN is incorrect/)
+  assert.equal(session.view.value, 'pairing')
+  await session.loginWithPin('  fixture-Pin-8371  ')
+  assert.equal(calls.at(-1)?.body, JSON.stringify({ pin: 'fixture-Pin-8371' }))
+  assert.equal(session.view.value, 'authenticated')
+  assert.equal(session.error.value, '')
+  await session.logout()
+  assert.equal(session.view.value, 'pairing')
+  assert.equal(calls.at(-1)?.method, 'DELETE')
+})
+
 test('protected app only mounts after verified session; pairing and revocation preserve route and clean up', async t => {
   const calls: Array<{ url: string; init?: RequestInit }> = []
   const responses = [unpaired, paired, paired, unpaired, paired, unpaired]
@@ -48,6 +71,7 @@ test('legacy local sessions remain compatible but 404, network errors and malfor
     () => Response.json({ authenticated: true }),
     () => Response.json({ version: 1, required: false, authenticated: false }),
     () => Response.json({ ...paired, expiresAt: 'not-a-date' }),
+    () => Response.json({ ...paired, pinAvailable: 'yes' }),
     () => new Response('<html>SPA fallback</html>'),
   ]) {
     const session = createBrowserSession('http://fixture', { now, fetch: async () => response() })

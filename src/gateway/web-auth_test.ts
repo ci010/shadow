@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { Hono } from 'hono'
 import WS from 'ws'
@@ -11,11 +12,12 @@ import { RealtimeHub, registerRealtimeRoute } from '../realtime/hub.ts'
 const origin = 'http://127.0.0.1:43123'
 const credential = 'fixture-management-credential'
 
-function fixture(options: { protected?: boolean; developmentUrl?: string } = {}) {
+function fixture(options: { protected?: boolean; developmentUrl?: string; pin?: string } = {}) {
   let now = Date.now()
   const clientAddresses = new GatewayClientAddressRegistry()
   const launchCredential = options.protected === false ? undefined : credential
-  const auth = new BrowserAuth({ clientAddresses, launchCredential, developmentUrl: options.developmentUrl, now: () => now })
+  const auth = new BrowserAuth({ clientAddresses, launchCredential, developmentUrl: options.developmentUrl, now: () => now,
+    ...(options.pin ? { pinHash: createHash('sha256').update(options.pin).digest('hex') } : {}) })
   const app = new Hono()
   registerGatewayRoutes(app, [auth.plugin(), gateway => {
     gateway.get('/', c => c.html('<html>Pair this browser</html>'))
@@ -47,8 +49,62 @@ function fixture(options: { protected?: boolean; developmentUrl?: string } = {})
       method: 'POST', headers: { origin, 'content-type': 'application/json', ...headers }, body: JSON.stringify({ code: value }),
     })
   }
-  return { app, auth, clientAddresses, request, code, pair, advance: (ms: number) => { now += ms } }
+  async function pin(value: string, headers: Record<string, string> = {}) {
+    return request('/api/web-auth/pair', {
+      method: 'POST', headers: { origin, 'content-type': 'application/json', ...headers }, body: JSON.stringify({ pin: value }),
+    })
+  }
+  return { app, auth, clientAddresses, request, code, pair, pin, advance: (ms: number) => { now += ms } }
 }
+
+test('reusable PIN admits admin browser sessions, including without a launch credential, but never management access', async t => {
+  for (const protectedGateway of [true, false]) {
+    const f = fixture({ protected: protectedGateway, pin: 'fixture-Pin-8726' })
+    t.after(() => f.auth.close())
+    assert.deepEqual(await (await f.request('/api/web-auth/session')).json(), {
+      version: 1, required: true, authenticated: false, pinAvailable: true,
+    })
+    assert.equal((await f.request('/api/private')).status, 401)
+    assert.equal((await f.pin('wrong')).status, 401)
+    assert.equal((await f.pin('FIXTURE-PIN-8726')).status, 401, 'PINs are not normalized like pairing codes')
+    const login = await f.pin('fixture-Pin-8726')
+    assert.equal(login.status, 200)
+    const status = await login.json()
+    assert.equal(status.pinAvailable, true)
+    assert.equal(status.authenticated, true)
+    const headers = { cookie: cookie(login), origin }
+    assert.equal((await f.request('/api/private', { headers })).status, 200)
+    assert.deepEqual(await (await f.request('/projects/default/api/private', { headers })).json(), { ok: true })
+    assert.equal((await f.request('/local/v1/readiness', { headers })).status, 401)
+    assert.equal((await f.request('/local/v1/shutdown', { method: 'POST', headers })).status, 401)
+    assert.equal((await f.pin('fixture-Pin-8726')).status, 200, 'Same PIN works in another browser')
+    f.advance(12 * 60 * 60_000)
+    assert.equal((await f.request('/api/private', { headers })).status, 401)
+    assert.equal((await f.pin('fixture-Pin-8726')).status, 200, 'No new pairing code after expiry')
+    if (protectedGateway) assert.equal((await f.pair(await f.code())).status, 200, 'Existing one-use flow remains available')
+  }
+})
+
+test('PIN login shares rate limits and origin checks and never accepts PIN as a bearer credential', async t => {
+  const f = fixture({ pin: 'fixture-pin-1234' })
+  t.after(() => f.auth.close())
+  assert.equal((await f.pin('fixture-pin-1234', { origin: 'http://evil.invalid' })).status, 403)
+  assert.equal((await f.pin('fixture-pin-1234', { 'sec-fetch-site': 'cross-site' })).status, 403)
+  assert.equal((await f.request('/api/private', { headers: { authorization: 'Bearer fixture-pin-1234' } })).status, 401)
+  assert.equal((await f.request('/api/web-auth/pair', {
+    method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ pin: 'fixture-pin-1234' }),
+  }, '192.0.2.1')).status, 403)
+  for (let i = 0; i < 20; i++) assert.equal((await f.pin('wrong')).status, 401)
+  assert.equal((await f.pin('fixture-pin-1234')).status, 429)
+  assert.equal((await f.pair(await f.code())).status, 429, 'Cannot evade throttling by switching modes')
+  f.advance(60_000)
+  assert.equal((await f.pin('fixture-pin-1234')).status, 200)
+  for (const body of [{ pin: 1234 }, { pin: 'fixture-pin-1234', code: 'anything' }]) {
+    assert.equal((await f.request('/api/web-auth/pair', {
+      method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })).status, 400)
+  }
+})
 
 function cookie(response: Response): string {
   const header = response.headers.get('set-cookie')

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { bodyLimit } from 'hono/body-limit'
 import type { GatewayPlugin } from './types.ts'
 import { type GatewayClientAddressRegistry, isLoopbackGatewayRequest, validateLaunchCredential } from './server.ts'
@@ -22,6 +22,7 @@ export interface BrowserSessionStatus {
   required: boolean
   authenticated: boolean
   expiresAt?: string
+  pinAvailable?: boolean
 }
 
 function hash(value: string): string {
@@ -66,12 +67,16 @@ export class BrowserAuth {
 
   constructor(private readonly options: {
     launchCredential?: string
+    pinHash?: string
     clientAddresses: GatewayClientAddressRegistry
     developmentUrl?: string
     now?: () => number
   }) {
+    if (options.pinHash !== undefined && !/^[a-f0-9]{64}$/.test(options.pinHash)) throw new TypeError('Invalid browser PIN hash')
     this.developmentOrigin = options.developmentUrl ? new URL(options.developmentUrl).origin : undefined
   }
+
+  get required(): boolean { return !!(this.options.launchCredential || this.options.pinHash) }
 
   private now(): number { return this.options.now?.() ?? Date.now() }
 
@@ -116,8 +121,9 @@ export class BrowserAuth {
   status(request: Request): BrowserSessionStatus {
     const session = this.session(request)
     return {
-      version: 1, required: !!this.options.launchCredential,
-      authenticated: !this.options.launchCredential || !!session,
+      version: 1, required: this.required,
+      authenticated: !this.required || !!session,
+      ...(this.options.pinHash ? { pinAvailable: true } : {}),
       ...(session ? { expiresAt: new Date(session.expiresAt).toISOString() } : {}),
     }
   }
@@ -190,7 +196,7 @@ export class BrowserAuth {
         })
       }, async c => {
         if (!this.browserOrigin(c.req.raw, true)) return c.json({ error: 'origin_not_allowed' }, 403)
-        if (!this.options.launchCredential) return c.json({ error: 'pairing_not_required' }, 409)
+        if (!this.required) return c.json({ error: 'pairing_not_required' }, 409)
         const now = this.now()
         if (now - this.attemptWindow >= 60_000) { this.attemptWindow = now; this.attempts = 0 }
         if (++this.attempts > MAX_ATTEMPTS) {
@@ -206,18 +212,26 @@ export class BrowserAuth {
           if (!(error instanceof SyntaxError)) throw error
           return c.json({ error: 'invalid_request' }, 400)
         }
-        if (!body || typeof body !== 'object' || Array.isArray(body)
-          || Object.keys(body).length !== 1 || !('code' in body) || typeof body.code !== 'string') {
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1) {
           return c.json({ error: 'invalid_request' }, 400)
         }
-        const code = body.code.replace(/[\s-]/g, '').toUpperCase()
         this.prune()
-        const key = hash(code)
-        if (!/^[A-F0-9]{24}$/.test(code) || !this.codes.has(key)) {
-          return c.json({ error: 'invalid_pairing_code' }, 401)
+        let codeKey: string | undefined
+        if ('pin' in body && typeof body.pin === 'string') {
+          if (!this.options.pinHash || !timingSafeEqual(Buffer.from(hash(body.pin.trim()), 'hex'), Buffer.from(this.options.pinHash, 'hex'))) {
+            return c.json({ error: 'invalid_pin' }, 401)
+          }
+        } else if ('code' in body && typeof body.code === 'string') {
+          const code = body.code.replace(/[\s-]/g, '').toUpperCase()
+          codeKey = hash(code)
+          if (!/^[A-F0-9]{24}$/.test(code) || !this.codes.has(codeKey)) {
+            return c.json({ error: 'invalid_pairing_code' }, 401)
+          }
+        } else {
+          return c.json({ error: 'invalid_request' }, 400)
         }
         if (this.sessions.size >= MAX_SESSIONS) return c.json({ error: 'pairing_capacity_reached' }, 503)
-        this.codes.delete(key)
+        if (codeKey) this.codes.delete(codeKey)
         this.revoke(c.req.raw)
         const token = randomBytes(32).toString('base64url')
         const expiresAt = now + SESSION_TTL
@@ -230,7 +244,8 @@ export class BrowserAuth {
         timer.unref()
         this.sessions.set(sessionKey, { origin: new URL(c.req.url).origin, expiresAt, controller, timer })
         c.header('Set-Cookie', this.cookie(c.req.raw, token, SESSION_TTL / 1000))
-        return c.json({ version: 1, required: true, authenticated: true, expiresAt: new Date(expiresAt).toISOString() })
+        return c.json({ version: 1, required: true, authenticated: true, expiresAt: new Date(expiresAt).toISOString(),
+          ...(this.options.pinHash ? { pinAvailable: true } : {}) })
       })
     }
   }
