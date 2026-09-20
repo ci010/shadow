@@ -1,4 +1,5 @@
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 
 /**
@@ -34,9 +35,13 @@ export function safeSessionId(sessionId: string): string {
 /**
  * Generate a physical session ID from a logical session ID and a sequence index.
  */
-export function newPhysicalSessionId(sessionId: string, index: number): string {
+export function newPhysicalSessionId(sessionId: string, index: number, version: 1 | 2 = 2): string {
   const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_')
     .slice(0, 48)
+  if (version === 2) {
+    const digest = createHash('sha256').update(sessionId).digest('hex')
+    return `${safe}-v2-${digest}-${index}`
+  }
   return `${safe}-${index}`
 }
 

@@ -50,6 +50,11 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const config = ConfigSchema.parse(rawConfig)
       const configPath = join(root, 'fixture.config.json')
       await writeFile(configPath, JSON.stringify(rawConfig))
+      const uiRoot = join(root, 'ui')
+      await mkdir(join(uiRoot, 'assets'), { recursive: true })
+      await writeFile(join(uiRoot, 'index.html'), '<html>Browser pairing fixture</html>')
+      await writeFile(join(uiRoot, 'assets', 'fixture.js'), 'export const fixture = true')
+      process.env.UI_DIST_DIR = uiRoot
       const credential = randomUUID()
       const options = { configPath, localNodeId: 'fixture-main', gateway: { host: '127.0.0.1', port, launchCredential: credential } }
       const base = `http://127.0.0.1:${port}`
@@ -69,6 +74,19 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       await runtime.ready
       assert.equal((await fetch(base + '/api/projects')).status, 401)
       assert.equal((await fetch(base + '/api/live?topics=[]')).status, 401)
+      assert.equal((await fetch(base + '/')).status, 200)
+      assert.equal((await fetch(base + '/projects/default/chat')).status, 200)
+      assert.equal((await fetch(base + '/assets/fixture.js')).status, 200)
+      assert.deepEqual(await (await fetch(base + '/api/web-auth/session')).json(), { version: 1, required: true, authenticated: false })
+      const offer = await json<{ code: string; url: string }>('/local/v1/web-pairing', 'POST')
+      assert.equal(offer.url, base + '/')
+      const paired = await fetch(base + '/api/web-auth/pair', {
+        method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ code: offer.code }),
+      })
+      assert.equal(paired.status, 200)
+      const browserHeaders = { origin: base, cookie: paired.headers.get('set-cookie')!.split(';')[0]!, 'content-type': 'application/json' }
+      assert.equal((await fetch(base + '/api/projects', { headers: browserHeaders })).status, 200)
+      assert.equal((await fetch(base + '/local/v1/readiness', { headers: browserHeaders })).status, 401)
       const initial = await json<{ projects: ProjectRecord[] }>('/api/projects')
       assert.deepEqual(initial.projects.map(org => org.id), ['default'])
       const created = await json<{ project: ProjectRecord; runtime: { state: string } }>(
@@ -76,6 +94,34 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal(created.runtime.state, 'ready')
       const a = '/projects/default'
       const b = `/projects/${created.project.id}`
+      for (const project of [a, b]) {
+        const pending = project + '/api/agent-resources/credential-requests'
+        assert.equal((await fetch(base + pending)).status, 401)
+        const metadata = await request(pending)
+        assert.equal(metadata.headers.get('cache-control'), 'no-store')
+        assert.deepEqual(await metadata.json(), { request: null })
+        assert.equal((await request(`${pending}/${randomUUID()}`, 'POST', { value: 'synthetic-stale-value' })).status, 409)
+        assert.deepEqual(await json(project + '/api/agent-resources/credentials'), { names: [] })
+        const publication = project + '/api/agent-resources/publication-requests'
+        assert.equal((await fetch(base + publication)).status, 401)
+        const review = await request(publication)
+        assert.equal(review.headers.get('cache-control'), 'no-store')
+        assert.deepEqual(await review.json(), { request: null, requests: [] })
+        const decision = { revision: `sha256:${'a'.repeat(64)}`, baseRevision: `sha256:${'b'.repeat(64)}` }
+        for (const method of ['POST', 'DELETE']) {
+          assert.equal((await request(`${publication}/${randomUUID()}`, method, decision)).status, 409)
+          assert.equal((await fetch(base + `${publication}/${randomUUID()}`, { method })).status, 401)
+        }
+        const probes = project + '/api/agent-resources/probe-requests'
+        assert.equal((await fetch(base + probes)).status, 401)
+        const probeReviews = await request(probes)
+        assert.equal(probeReviews.headers.get('cache-control'), 'no-store')
+        assert.deepEqual(await probeReviews.json(), { requests: [] })
+        for (const method of ['POST', 'DELETE']) {
+          assert.equal((await request(`${probes}/${randomUUID()}`, method, { revision: decision.revision })).status, 409)
+          assert.equal((await fetch(base + `${probes}/${randomUUID()}`, { method })).status, 401)
+        }
+      }
       assert.equal((await fetch(base + '/api/app/model-defaults')).status, 401)
       await json('/api/app/model-defaults', 'PATCH', { model: 'app-choice@openai', reasoningEffort: 'medium' })
       const before = await json<{ model: string }>(b + '/api/config/model-defaults')
@@ -92,6 +138,10 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const sessionB = await json<{ sessionId: string }>(b + `/api/folders/${folderB.id}/sessions`, 'POST', {})
       const aSession = a + `/api/sessions/${encodeURIComponent(sessionA.sessionId)}`
       const bSession = b + `/api/sessions/${encodeURIComponent(sessionB.sessionId)}`
+      assert.equal((await fetch(base + aSession + '/context', { headers: browserHeaders })).status, 200)
+      assert.equal((await fetch(base + b + '/api/config/model-defaults', {
+        method: 'PATCH', headers: browserHeaders, body: JSON.stringify({ model: null }),
+      })).status, 200)
       assert.equal((await fetch(base + aSession + '/background-tasks')).status, 401)
       assert.deepEqual(await json(aSession + '/background-tasks'), { sessionId: sessionA.sessionId, total: 0, tasks: [] })
       assert.deepEqual(await json(bSession + '/background-tasks'), { sessionId: sessionB.sessionId, total: 0, tasks: [] })
@@ -204,6 +254,8 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       await runtime.finished
       runtime = await startMainRuntime(ConfigSchema.parse(JSON.parse(await readFile(configPath, 'utf8'))), options)
       await runtime.ready
+      assert.equal((await fetch(base + '/api/projects', { headers: browserHeaders })).status, 401)
+      assert.deepEqual(await (await fetch(base + '/api/web-auth/session')).json(), { version: 1, required: true, authenticated: false })
       assert.equal((await json<{ projects: ProjectRecord[] }>('/api/projects')).projects.length, 2)
       assert.equal((await json<{ model: string }>(a + '/api/config/model-defaults')).model, 'org-a@openai')
       assert.equal((await json<{ model: string }>(b + '/api/config/model-defaults')).model, 'app-choice@openai')

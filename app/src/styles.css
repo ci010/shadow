@@ -237,6 +237,92 @@ input:not([type]), textarea {
   cursor: text;
 }
 
+/* Low-specificity defaults keep component-owned controls in control of their layout. */
+:where(button) {
+  appearance: none;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-control);
+  background: var(--c-bg-card);
+  color: var(--c-text);
+  font: inherit;
+}
+
+:where(button):disabled {
+  cursor: not-allowed;
+}
+
+:where(button:focus-visible, .btn:focus-visible) {
+  outline: 2px solid var(--c-blue);
+  outline-offset: 2px;
+}
+
+:where(.btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 7px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-control);
+  background: var(--c-bg-card);
+  color: var(--c-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: center;
+  text-decoration: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:where(.btn:hover:not(:disabled)) {
+  background: var(--c-bg-muted);
+}
+
+:where(.btn:active:not(:disabled)) {
+  background: var(--c-selection-bg);
+}
+
+:where(.btn:disabled) {
+  opacity: .5;
+}
+
+:where(.btn.primary) {
+  background: var(--c-primary-bg);
+  color: var(--c-text-on-primary);
+}
+
+:where(.btn.primary:hover:not(:disabled)) {
+  background: var(--c-primary-bg-hover);
+}
+
+:where(.btn.primary:active:not(:disabled)) {
+  background: var(--c-primary-bg);
+}
+
+:where(.btn.ghost) {
+  background: transparent;
+}
+
+:where(.btn.ghost:hover:not(:disabled), .btn.ghost:active:not(:disabled)) {
+  background: var(--c-bg-muted);
+}
+
+:where(.btn.btn-sm) {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 700px), (pointer: coarse) {
+  :where(.btn) {
+    min-height: 44px;
+  }
+}
+
 .mono {
   font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }

@@ -25,9 +25,10 @@ export function memoryProvider(
       const events = await memory.readEvents(ctx.sessionId, {
         currentInitiative: ctx.initiativeId,
         initiativeOf,
+        since: ctx.contextResetAt,
       })
-      const workingSet = await memory.readWorkingSet(ctx.sessionId)
-      const sessionMemory = await memory.readSessionMemory(ctx.sessionId)
+      const workingSet = await memory.readWorkingSet(ctx.sessionId, 50, ctx.contextResetAt)
+      const sessionMemory = await memory.readSessionMemory(ctx.sessionId, 200, ctx.contextResetAt)
 
       const sections = [
         conventions,

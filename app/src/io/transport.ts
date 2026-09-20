@@ -30,6 +30,13 @@ export function encodeBytes(bytes: Uint8Array): string {
   return btoa(text)
 }
 
+export class IoRequestError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message)
+    this.name = 'IoRequestError'
+  }
+}
+
 export async function ioRequest<T>(base: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(apiUrl(base, `/api/io${path}`), {
     method: body === undefined ? 'GET' : 'POST',
@@ -39,7 +46,10 @@ export async function ioRequest<T>(base: string, path: string, body?: unknown, s
   })
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
-    throw new Error(typeof data.message === 'string' ? data.message : typeof data.error === 'string' ? data.error : `I/O request failed (${response.status})`)
+    throw new IoRequestError(
+      typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : `I/O request failed (${response.status})`,
+      response.status, typeof data?.error === 'string' ? data.error : undefined,
+    )
   }
   return response.json() as Promise<T>
 }

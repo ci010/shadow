@@ -9,6 +9,17 @@ import type { TopicMetadata } from './topic-contract.ts'
 
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
+export class ContextResetMetadataError extends Error {}
+
+export function parseContextResetAt(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))
+    || new Date(value).toISOString() !== value) {
+    throw new ContextResetMetadataError('Invalid session context reset timestamp')
+  }
+  return value
+}
+
 export interface SessionRecovery {
   id: string
   reason: 'stopped' | 'interrupted' | 'failed'
@@ -53,6 +64,8 @@ export interface SessionParent {
 }
 
 export interface SessionState {
+  /** User-selected display name, independent of identity and topic instructions. */
+  name?: string
   sessionKind?: 'topic' | 'orchestrator'
   topic?: TopicMetadata
   /** Creation provenance only; never lifecycle or directory ownership. */
@@ -81,8 +94,12 @@ export interface SessionState {
   completionReported?: boolean
   /** Logical session key (e.g. "discord:123") */
   sessionId: string
-  /** 0-based index of the current physical session segment (incremented on each compaction). */
+  /** V2 hashes the complete logical ID. Absent retains legacy physical log addresses. */
+  physicalIdVersion?: 2
+  /** 0-based index of the current segment (incremented on compaction or explicit clear). */
   segmentIndex: number
+  /** Excludes pre-clear transient memory from automatic prompt injection; files remain intact. */
+  contextResetAt?: string
   /** ISO timestamp of the last user/assistant exchange. */
   lastActivityAt?: string
   /** Token count from the last known LLM response for this session. */
@@ -166,6 +183,7 @@ export interface SessionStore {
     Array<
       {
         sessionId: string
+        name?: string
         segmentIndex: number
         lastActivityAt?: string
         folderId?: string

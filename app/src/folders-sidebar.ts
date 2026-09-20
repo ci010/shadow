@@ -3,6 +3,7 @@ import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-con
 import { parseAutomationSessionRef, type AutomationSessionRef } from '../../src/cron/contracts.ts'
 import { isExecutionStatus, persistentConversations, type ExecutionStatus } from './subagent-executions.ts'
 import { isDirectConversation, ORCHESTRATOR_SESSION_ID, parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
+import { channelAddressFromSessionId, type ChannelAddress } from '../../src/bus/events.ts'
 
 export const FOLDER_ACTIONS = [
   { id: 'open', label: 'Open folder' },
@@ -14,6 +15,8 @@ export const FOLDER_ACTIONS = [
 export interface SidebarSession {
   automation?: AutomationSessionRef
   sessionId: string
+  projectId?: string
+  channelAddress?: ChannelAddress
   sessionKind?: 'topic' | 'orchestrator'
   topic?: TopicMetadata
   createdBySessionId?: string
@@ -91,10 +94,12 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
   const sessionIds = new Set<string>()
   return flattenSessions(value.sessions.map((session: unknown) => {
     if (!isRecord(session) || typeof session.sessionId !== 'string' || !session.sessionId.trim() || sessionIds.has(session.sessionId)
+      || (session.projectId !== undefined && (typeof session.projectId !== 'string' || !session.projectId))
       || (projectId !== undefined && session.projectId !== undefined && session.projectId !== projectId)
       || (projectId !== undefined && session.parentProjectId !== undefined && session.parentProjectId !== projectId)
       || (session.folderId !== undefined && typeof session.folderId !== 'string')
       || (session.title !== undefined && typeof session.title !== 'string')
+      || (session.name !== undefined && (typeof session.name !== 'string' || !session.name.trim()))
       || (session.sessionKind !== undefined && session.sessionKind !== 'topic' && session.sessionKind !== 'orchestrator')
       || (session.createdBySessionId !== undefined && typeof session.createdBySessionId !== 'string')
       || (session.mode !== undefined && session.mode !== 'session' && session.mode !== 'task' && session.mode !== 'call')
@@ -104,6 +109,11 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       || (session.waitingForCall !== undefined && typeof session.waitingForCall !== 'boolean')
       || (session.parentToolCallId !== undefined && (typeof session.parentToolCallId !== 'string' || !session.parentToolCallId))
       || (session.description !== undefined && typeof session.description !== 'string')) throw invalid()
+    let channelAddress: ChannelAddress | undefined
+    try { channelAddress = channelAddressFromSessionId(session.sessionId) }
+    catch { throw invalid() }
+    if (channelAddress && (projectId !== undefined && channelAddress.projectId !== projectId
+      || session.projectId !== undefined && channelAddress.projectId !== session.projectId)) throw invalid()
     let automation: AutomationSessionRef | undefined
     if (session.automation !== undefined) {
       const value = session.automation
@@ -121,12 +131,14 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
     const config = isRecord(session.config) ? session.config : undefined
     return {
       sessionId: session.sessionId,
+      projectId: session.projectId as string | undefined,
+      channelAddress,
       sessionKind: session.sessionKind as SidebarSession['sessionKind'],
       topic,
       createdBySessionId: session.createdBySessionId as string | undefined,
       automation,
-      label: session.sessionId === ORCHESTRATOR_SESSION_ID ? 'Project coordination'
-        : topic?.title || (typeof session.title === 'string' && session.title ? session.title : (direct ? session.sessionId.replace('web:', '') : session.sessionId)),
+      label: typeof session.name === 'string' ? session.name : session.sessionId === ORCHESTRATOR_SESSION_ID ? 'Project coordination'
+        : topic?.title || (typeof session.title === 'string' && session.title ? session.title : channelAddress?.conversationId || (direct ? session.sessionId.replace('web:', '') : session.sessionId)),
       description: session.description as string | undefined,
       folderId: session.folderId as string | undefined,
       isDirectChat: direct,

@@ -85,7 +85,7 @@ export interface McpConfigHandlerOptions {
   isReservedName: (name: string) => boolean
 }
 
-/** Editable Project configuration, not a connection or server-health endpoint. */
+/** Revisioned Project configuration; changed MCP contracts are indexed before commit. */
 export function createMcpConfigHandler(options: McpConfigHandlerOptions): {
   read: VirtualFsHandler
   write: VirtualFsWriteHandler
@@ -182,7 +182,7 @@ export function createMcpConfigHandler(options: McpConfigHandlerOptions): {
       if (context.signal.aborted) throw error
       throw new Error(failureMessage(error, sensitive))
     }
-    return `Success: MCP config saved; catalog updated. Revision: ${savedRevision}. Read v:config/mcp.json before further edits. No MCP connection or verification was performed.`
+    return `Success: MCP config saved; catalog updated; tool indexes ready. Revision: ${savedRevision}. Read v:config/mcp.json before further edits. Missing indexes were discovered before saving; discovery connections were closed. No MCP tools were executed.`
   }
   return { read, write }
 }

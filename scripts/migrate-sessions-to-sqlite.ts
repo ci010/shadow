@@ -25,6 +25,8 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import process from 'node:process'
 import { validateOwnership } from '../src/projects/ownership.ts'
 import { normalizeInitiativeMetadata } from '../src/sessions/initiative-metadata.ts'
+import { parsePhysicalIdVersion } from '../src/sessions/session-identity.ts'
+import { parseContextResetAt } from '../src/sessions/session-store.ts'
 
 const PROTOTYPE_VERSION = 1
 
@@ -90,6 +92,8 @@ function metadataPrototype(
   state: Record<string, unknown>,
   excludedFields: Set<string>,
 ): string {
+  parsePhysicalIdVersion(state.physicalIdVersion)
+  parseContextResetAt(state.contextResetAt)
   return JSON.stringify({
     version: PROTOTYPE_VERSION,
     metadata: normalizeInitiativeMetadata(validateOwnership(Object.fromEntries(

@@ -22,7 +22,7 @@ const coordinationSchema = z.object({
 export class MessageTool implements Tool {
   readonly name = 'message'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Send a request, question, progress report or explicit handoff context to a peer session in this Project. A receipt confirms delivery admission, not agreement, completion or transfer of Initiative assignment. Sleeping topic sessions can receive messages; temporary executions cannot be reused.'
+  readonly description = 'Send to a peer session in this Project. By default, queues a response after any active turn without interrupting it. Use this for tasks, required context and unblocking information. silent:true only archives: it neither updates the active turn nor wakes the recipient. A receipt confirms admission, not completion or transfer of Initiative assignment. Sleeping topics can receive messages; temporary executions cannot be reused.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -35,9 +35,9 @@ export class MessageTool implements Tool {
       silent: {
         type: 'boolean',
         description:
-          'If true, the message is recorded in history but does not trigger a response from the target agent.',
+          'Default false: queue a response without interrupting active work. True only archives for a future turn; it does not update active context or wake an idle recipient. Never use true for required task materials, corrections, questions or instructions to continue.',
       },
-      intent: { type: 'string', enum: ['request', 'question', 'progress', 'handoff', 'acknowledgement'], description: 'Purpose of this communication; handoff does not mutate work ownership.' },
+      intent: { type: 'string', enum: ['request', 'question', 'progress', 'handoff', 'acknowledgement'], description: 'Descriptive purpose only; does not control scheduling. Use request for actionable follow-ups and required materials; progress for status reports. handoff does not mutate work ownership.' },
       initiativeId: { type: 'string', description: 'Optional existing Initiative in this Project.' },
       itemId: { type: 'string', description: 'Optional existing work item in initiativeId.' },
     },
@@ -141,6 +141,9 @@ export class MessageTool implements Tool {
     }
     this.bus.emit('message.outbound', outbound)
 
-    return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}. Receipt confirms admission only; work ownership is unchanged.`
+    const scheduling = silent
+      ? 'Recorded only: not injected into the active turn and will not wake the recipient. A later non-silent message is required for processing; send a non-silent request if this needs action.'
+      : 'Queued for a response after any active turn, without interrupting it.'
+    return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}. ${scheduling} Receipt confirms admission only; work ownership is unchanged.`
   }
 }

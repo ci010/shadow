@@ -28,8 +28,8 @@ test('unified yield tool asks human by default and returns a JSON answer receipt
   assert.equal(tool.name, 'yield')
   assert.equal(tool.readonly, false)
   const schema = tool.parameters.properties.options as Record<string, unknown>
-  assert.equal(schema.minItems, 3)
-  assert.equal(schema.maxItems, 3)
+  assert.equal(schema.minItems, 2)
+  assert.equal(schema.maxItems, 2)
   assert.equal(schema.uniqueItems, true)
   assert.equal(tool.parameters.additionalProperties, false)
   const waiting = tool.execute(question, context('root'))
@@ -71,7 +71,7 @@ test('tool never impersonates user, reportTo or another parent', async () => {
 test('tool validates action-specific inputs and forbids model overrides of routing or timeout', async () => {
   const { tool, yields } = fixture()
   for (const args of [
-    {}, { action: 'invalid' }, { action: null }, { ...question, options: ['A', 'B'] },
+    {}, { action: 'invalid' }, { action: null }, { ...question, options: ['A'] },
     { ...question, options: [, 'B', 'C'] },
     { ...question, options: ['A', 'B', 'B'] }, { ...question, default_option: 'b' },
     { ...question, timeoutMs: 1 }, { ...question, timeout: 1 }, { ...question, recipient: 'root' },
@@ -82,6 +82,17 @@ test('tool validates action-specific inputs and forbids model overrides of routi
     { action: 'answer', request_id: 'id', option: 'A', recipient: 'parent' },
   ]) await assert.rejects(tool.execute(args, context('root')), invalid)
   assert.equal(yields.get('root'), null)
+})
+
+test('binary decisions wait for an explicit authorized answer without an artificial third option', async () => {
+  const { tool, yields } = fixture()
+  const waiting = tool.execute({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' }, context('root'))
+  const request = yields.get('root')!
+  assert.deepEqual(request.options, ['Yes', 'No'])
+  await assert.rejects(tool.execute({ action: 'answer', request_id: request.id, option: 'Yes' }, context('root')),
+    error => error instanceof YieldError && error.code === 'forbidden')
+  yields.answerUser('root', request.id, 'No')
+  assert.equal(JSON.parse(await waiting).option, 'No')
 })
 
 test('abort propagates for ask and prevents an aborted parent from answering', async () => {

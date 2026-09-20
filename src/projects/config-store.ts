@@ -5,6 +5,7 @@ import { ConfigSchema, type Config } from '../config/schema.ts'
 import { ConfigStore, redactConfig, writePrivateFile } from '../config/store.ts'
 import { parseModelSpec } from '../providers/aggregated.ts'
 import { detectProvider } from '../providers/factory.ts'
+import { McpToolIndex } from '../mcp/tool-index.ts'
 import { MODEL_DEFAULT_FIELDS, modelDefaultsState, modelFields, patchModelDefaults, type ModelDefaultsPatch } from '../config/model-defaults.ts'
 
 type Raw = Record<string, unknown>
@@ -62,9 +63,20 @@ export class ProjectConfigStore extends ConfigStore {
   #inner: ConfigStore
   constructor(private readonly scope: ProjectConfigOptions) {
     super()
+    const mcpIndex = new McpToolIndex(scope.home)
     this.#inner = new ConfigStore({
       configPath: scope.configPath,
       getConfig: () => this.current(),
+      beforeCommit: async (config, _raw, signal) => {
+        for (let offset = 0; offset < config.mcp.servers.length; offset += 3) {
+          signal?.throwIfAborted()
+          const results = await Promise.allSettled(config.mcp.servers.slice(offset, offset + 3)
+            .map(server => mcpIndex.ensure(server, signal)))
+          signal?.throwIfAborted()
+          const failed = results.find(result => result.status === 'rejected')
+          if (failed?.status === 'rejected') throw failed.reason
+        }
+      },
       onChanged: async (config, raw) => {
         const ownedAgent = record(raw.agent) ? raw.agent : {}
         const merged = this.#merge(withProjectLearning(config, raw), ownedAgent)

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { ServiceConnection } from '../service/connection.js'
 import { ServiceAttachmentSupervisor } from '../service/supervisor.js'
+import { StartupDiagnosticsLog, startupLogPath } from './startup-diagnostics.js'
 import {
   createAuthenticatedShutdownRequest,
   createSidecarReadinessProbe,
@@ -115,9 +116,11 @@ export class RuntimeHost {
     }
     this.launchRequest = request
     this.supervisor ??= this.options.supervisorFactory(options.role)
-    this.startPromise = this.supervisor.start(request).then((status) => {
+    const supervisor = this.supervisor
+    this.startPromise = supervisor.start(request).then(async (status) => {
       if (this.stopping) throw new Error('Runtime host stopped during startup')
       if (status.phase !== 'ready') {
+        await supervisor.stop()
         this.clearFailedStart(request)
         return status
       }
@@ -130,7 +133,8 @@ export class RuntimeHost {
         launchToken: request.launchToken,
       })
       return { ...status, apiBase }
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
+      await supervisor.stop()
       this.clearFailedStart(request)
       throw error
     }).finally(() => {
@@ -196,11 +200,13 @@ export function createProductionRuntimeHost(
     })
   }
   const authenticatedShutdownRequest = createAuthenticatedShutdownRequest()
+  const diagnostics = new StartupDiagnosticsLog(startupLogPath(paths.userDataPath))
   return new RuntimeHost({
     paths,
     supervisorFactory: (role) =>
       new NodeSidecarSupervisor({
         readinessProbe: createSidecarReadinessProbe({ expectedRole: role }),
+        diagnosticSink: (entry) => diagnostics.write(entry),
         authenticatedShutdownRequest,
         environment: {
           ...process.env,

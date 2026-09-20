@@ -3,6 +3,9 @@ import { getBuiltinAgentTypes } from './builtins.ts'
 import { AgentTypeRegistry } from './registry.ts'
 import type { AgentTypeDefinition } from './types.ts'
 import { AgentTypesWatcher } from './watcher.ts'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { parseAgentFile } from './parse.ts'
 
 export type { AgentTypeDefinition } from './types.ts'
 
@@ -64,6 +67,20 @@ export class AgentTypesManager {
 
   resolve(name: string): AgentTypeDefinition | undefined {
     return this.registry.resolve(name)
+  }
+
+  async refresh(name: string): Promise<void> {
+    const current = this.resolve(name)
+    if (!current?.dirPath) throw new Error(`Agent "${name}" has no reloadable definition.`)
+    const definition = parseAgentFile(
+      await readFile(join(current.dirPath, 'AGENT.md'), 'utf8'),
+      name,
+      current.dirPath,
+    )
+    if (definition.name !== name) throw new Error(`Agent "${name}" was renamed; reload the agent configuration first.`)
+    definition.source = current.source
+    if (definition.source === 'builtin') this.registry.registerBuiltin(definition)
+    else this.registry.setWorkspaceType(name, definition)
   }
 
   allNames(): string[] {

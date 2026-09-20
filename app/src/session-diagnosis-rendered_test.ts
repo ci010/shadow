@@ -9,12 +9,13 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import UnoCSS from 'unocss/vite'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('rendered trace: five-minute window, panning, inline content and non-native metadata', {
+test('rendered diagnosis: cold-load context layout, timing, metadata and lazy syntax highlighting', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron rendered smoke requires a display server.' : false,
 }, async t => {
@@ -26,10 +27,38 @@ test('rendered trace: five-minute window, panning, inline content and non-native
   let modelState = 'recorded'
   const toolCall = { id: 'call-1', type: 'function', function: { name: 'read', arguments: '{"path":"fixture.txt","nested":{"value":42}}' } }
   const server = await createServer({
-    configFile: false, root: resolve(root, 'app'), logLevel: 'error', plugins: [vue(), {
+    configFile: false, root: resolve(root, 'app'), logLevel: 'error', plugins: [vue(),
+      UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-trace',
-      resolveId(id) { if (id === '/trace-fixture.ts') return '\0trace-fixture' },
+      resolveId(id) {
+        if (id === '/trace-fixture.ts') return '\0trace-fixture'
+        if (id === '/tool-details-fixture.ts') return '\0tool-details-fixture'
+        if (id === '/context-fixture.ts') return '\0context-fixture'
+      },
       load(id) {
+        if (id === '\0context-fixture') return `import 'uno.css';
+          import { createApp, h } from 'vue';
+          import '/src/styles.css';
+          const { default: Diagnosis } = await import('/src/components/SessionDiagnosis.vue');
+          const paragraph = 'Coordinate this synthetic project using its registered resources and independent conversations. ';
+          createApp({ render: () => h(Diagnosis, { apiBase: location.origin, sessionId: 'context-fixture',
+            physicalId: null, active: false, canReadTrace: false, working: false,
+            systemPrompt: '# Project coordinator\\n\\n' + paragraph.repeat(16) + '\\n\\n\`\`\`text\\n' + 'long-token-'.repeat(80) + '\\n\`\`\`',
+            compactionSummary: '# Earlier context\\n\\nRetained synthetic summary.',
+            tools: [{ name: 'read', description: 'Read project resources', parameters: { properties: { path: { type: 'string' } } } }]
+          }) }).mount('#app');`
+        if (id === '\0tool-details-fixture') return `import { createApp, h, reactive } from 'vue';
+          import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
+          import '/src/styles.css';
+          const batch = reactive({ end: 2, files: 0, incomplete: false, entries: [
+            { index: 0, name: 'read', title: 'Read fixture', summary: '', icon: 'read', failed: false,
+              arguments: '{\\n  "path": "fixture.json",\\n  "count": 42\\n}',
+              result: '{"ok":true,"html":"<img src=x onerror=alert(1)>"}' },
+            { index: 1, name: 'message', title: 'Send fixture', summary: '', icon: 'tool', failed: false,
+              arguments: '{"content":"hello"}', result: '' }
+          ] });
+          window.updateToolResult = source => { batch.entries[0].result = source; };
+          createApp({ render: () => h(ToolActivityGroup, { batch }) }).mount('#app');`
         if (id !== '\0trace-fixture') return
         return `import { createApp, h } from 'vue';
           import Diagnosis from '/src/components/SessionDiagnosis.vue';
@@ -42,6 +71,16 @@ test('rendered trace: five-minute window, panning, inline content and non-native
         server.middlewares.use((request, response, next) => {
           const path = new URL(request.url!, 'http://127.0.0.1').pathname
           const json = (value: unknown) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)) }
+          if (path === '/__context') {
+            response.setHeader('Content-Type', 'text/html')
+            response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="app"></div><script type="module" src="/context-fixture.ts"></script></body></html>')
+            return
+          }
+          if (path === '/__tool-details') {
+            response.setHeader('Content-Type', 'text/html')
+            response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="app"></div><script type="module" src="/tool-details-fixture.ts"></script></body></html>')
+            return
+          }
           if (path === '/__trace') {
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="app"></div><script type="module" src="/trace-fixture.ts"></script></body></html>')
@@ -67,6 +106,10 @@ test('rendered trace: five-minute window, panning, inline content and non-native
               { role: 'assistant', content: '', timestamp: new Date(end - 50_000).toISOString(), tool_calls: [toolCall] },
               { role: 'tool', tool_call_id: 'call-1', content: 'Synthetic tool result' },
               { role: 'assistant', content: 'Final model return', timestamp: new Date(end).toISOString() },
+              { role: 'user', name: 'admin', content: [
+                { type: 'text', text: '<sender id="web:orchestrator" name="admin" source="session" intent="handoff" />' },
+                { type: 'text', text: 'Delegated inspection from coordinator.' },
+              ] },
             ] })
             return
           }

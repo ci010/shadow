@@ -1,61 +1,73 @@
 <template>
-  <ComposerPopover ref="popover" :label="remoteOnly ? 'Open remote folder' : 'Execution location'" :title="label" :disabled="disabled" :width="360" @opened="refresh" @closed="closed">
+  <ComposerPopover ref="popover" label="Execution location" :title="label" :disabled="disabled" :width="360" @opened="refresh" @closed="closed">
     <template #trigger>
-      <span :class="selected ? 'i-lucide-monitor' : 'i-lucide-laptop'" aria-hidden="true" />
+      <span :class="folder ? 'i-lucide-folder' : selected ? 'i-lucide-monitor' : 'i-lucide-laptop'" aria-hidden="true" />
       <span class="location-label">{{ label }}</span>
       <span class="i-lucide-chevron-down" aria-hidden="true" />
     </template>
     <template #default="{ close }">
-      <div class="location-header"><strong>{{ remoteOnly ? 'Open remote folder' : 'Execution location' }}</strong><button class="location-refresh" :disabled="loading" @click="refresh">Refresh</button></div>
-      <button v-if="!remoteOnly" class="location-option" :aria-pressed="!selected" @click="emit('select', undefined); close()">
-        <span class="i-lucide-laptop" aria-hidden="true" /><span><strong>This computer</strong><small>{{ localLabel || 'Managed conversation folder' }}</small></span>
-        <span v-if="!selected" class="i-lucide-check" aria-hidden="true" />
+      <div class="location-header"><strong>Execution location</strong><button class="location-refresh" :disabled="loading" @click="refresh">Refresh</button></div>
+      <button class="location-option" :aria-pressed="!folder && !selected" @click="emit('select', undefined); close()">
+        <span class="i-lucide-laptop" aria-hidden="true" /><span><strong>This computer</strong><small>Managed conversation folder</small></span>
+        <span v-if="!folder && !selected" class="i-lucide-check" aria-hidden="true" />
       </button>
-      <p v-if="loading" class="location-note" role="status">Loading connected devices...</p>
+      <p v-if="loading" class="location-note" role="status">Loading execution locations...</p>
       <p v-if="error" class="location-error" role="alert">{{ error }}</p>
-      <template v-for="node in nodes" :key="node.nodeId">
-        <div class="location-device"><strong>{{ node.displayName }}</strong><span>{{ node.connection === 'connected' ? 'Connected' : node.connection === 'revoked' ? 'Revoked' : 'Offline' }}</span></div>
-        <button v-for="target in targets.filter(item => item.nodeId === node.nodeId)" :key="target.capabilityId"
+      <template v-if="folderTargets.length">
+        <div class="location-device"><strong>Project folders</strong></div>
+        <button v-for="target in folderTargets" :key="target.folder.id"
           class="location-option" :disabled="!target.available || loading || !!error"
-          :aria-label="`${target.nodeName}: ${target.displayName}`"
-          :aria-pressed="selected?.nodeId === target.nodeId && selected?.capabilityId === target.capabilityId"
-          @click="emit('select', target); close()">
+          :aria-label="target.folder.name" :aria-pressed="folder?.id === target.folder.id"
+          @click="emit('select', { kind: 'folder', folder: target.folder }); close()">
           <span class="i-lucide-folder" aria-hidden="true" />
-          <span><strong>{{ target.displayName }}</strong><small>{{ target.displayPath || 'Authorized remote workspace' }}</small></span>
-          <span v-if="selected?.nodeId === target.nodeId && selected?.capabilityId === target.capabilityId" class="i-lucide-check" aria-hidden="true" />
+          <span><strong>{{ target.folder.name }}</strong><small>{{ target.detail }}</small><small v-if="target.unavailableReason">{{ target.unavailableReason }}</small></span>
+          <span v-if="folder?.id === target.folder.id" class="i-lucide-check" aria-hidden="true" />
         </button>
-        <p v-if="!targets.some(item => item.nodeId === node.nodeId)" class="location-note">No workspaces available on this device.</p>
       </template>
-      <p v-if="!loading && !error && !nodes.length" class="location-note">No Child devices registered. Connect a device before choosing a remote workspace.</p>
-      <p class="location-note">The conversation is created when you send. Paired devices run supported operations without additional approval.</p>
+      <template v-if="targets.length">
+        <div class="location-device"><strong>Remote devices</strong><span>From scratch</span></div>
+        <button v-for="target in targets" :key="target.nodeId"
+          class="location-option" :disabled="!target.available || loading || !!error"
+          :aria-label="`Start from scratch on ${target.nodeName}`"
+          :aria-pressed="!folder && selected?.nodeId === target.nodeId && !selected?.capabilityId"
+          @click="emit('select', { kind: 'node', node: target }); close()">
+          <span class="i-lucide-monitor" aria-hidden="true" />
+          <span><strong>{{ target.nodeName }}</strong><small>{{ target.unavailableReason || 'New managed conversation folder' }}</small></span>
+          <span v-if="!folder && selected?.nodeId === target.nodeId && !selected?.capabilityId" class="i-lucide-check" aria-hidden="true" />
+        </button>
+      </template>
+      <p class="location-note">Conversations and managed folders are created on first send.</p>
     </template>
   </ComposerPopover>
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import { fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
-import { remoteConversationTargets, type RemoteConversationTarget } from '../remote-conversations.ts'
+import { remoteNodeTargets, type RemoteChatTarget } from '../remote-conversations.ts'
+import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
+import { projectFolderTargets, type ExecutionLocation } from '../execution-locations.ts'
 
-const props = defineProps<{ apiBase: string; selected?: RemoteConversationTarget; localLabel?: string; disabled?: boolean }>()
-const emit = defineEmits<{ select: [target: RemoteConversationTarget | undefined] }>()
+const props = defineProps<{ apiBase: string; projectId: string; folder?: FolderRecord; selected?: RemoteChatTarget; disabled?: boolean }>()
+const emit = defineEmits<{ select: [target: ExecutionLocation | undefined] }>()
 const popover = ref<InstanceType<typeof ComposerPopover>>()
-const remoteOnly = ref(false)
-const label = computed(() => props.selected ? `${props.selected.nodeName} · ${props.selected.displayName}` : 'This computer')
+const label = computed(() => props.folder?.name ?? (props.selected ? `${props.selected.nodeName} · ${props.selected.displayName}` : 'This computer'))
 const nodes = ref<NodeInventoryEntry[]>([])
-const targets = computed(() => remoteConversationTargets(nodes.value))
+const folders = ref<FolderRecord[]>([])
+const folderTargets = computed(() => projectFolderTargets(props.projectId, folders.value, nodes.value))
+const targets = computed(() => remoteNodeTargets(nodes.value))
 const loading = ref(false)
 const error = ref('')
 let request: AbortController | undefined
+let opened = false
 async function openRemote() {
   if (props.disabled) return
-  remoteOnly.value = true
   await popover.value?.show()
 }
 function closed() {
+  opened = false
   cancel()
-  remoteOnly.value = false
 }
 function cancel() {
   request?.abort()
@@ -64,22 +76,40 @@ function cancel() {
 }
 async function refresh() {
   cancel()
+  opened = true
   const controller = new AbortController()
   request = controller
   loading.value = true
   error.value = ''
   try {
-    const result = await fetchNodeInventory(props.apiBase, 'main', AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
-    if (!controller.signal.aborted) nodes.value = result.nodes.filter(node => node.role === 'child')
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+    const [result, projectFolders] = await Promise.all([
+      fetchNodeInventory(props.apiBase, 'main', signal),
+      createFoldersClient(props.apiBase).list(signal),
+    ])
+    if (!controller.signal.aborted && request === controller) {
+      nodes.value = [...result.nodes]
+      folders.value = projectFolders
+    }
   } catch (cause) {
     if (!controller.signal.aborted) {
       nodes.value = []
-      error.value = cause instanceof Error ? cause.message : 'Could not load devices. Retry.'
+      folders.value = []
+      error.value = cause instanceof Error ? cause.message : 'Could not load execution locations. Retry.'
+      controller.abort()
     }
   } finally {
     if (request === controller) { request = undefined; loading.value = false }
   }
 }
+watch(() => [props.apiBase, props.projectId], () => {
+  cancel()
+  nodes.value = []
+  folders.value = []
+  error.value = ''
+  if (opened) void refresh()
+}, { flush: 'sync' })
+onDeactivated(closed)
 onUnmounted(cancel)
 defineExpose({ openRemote })
 </script>

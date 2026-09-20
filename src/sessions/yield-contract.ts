@@ -1,4 +1,5 @@
 export const MAX_YIELD_TIMEOUT_MS = 2_147_483_647
+export const MAX_YIELD_CUSTOM_TEXT_LENGTH = 4000
 
 export interface YieldPolicy {
   timeoutMs: number | null
@@ -6,7 +7,7 @@ export interface YieldPolicy {
 
 export interface YieldQuestion {
   question: string
-  options: [string, string, string]
+  options: [string, string] | [string, string, string]
   defaultOption: string
 }
 
@@ -23,6 +24,14 @@ export interface YieldAnswer {
   option: string
   answeredBy: 'user' | 'parent' | 'timeout'
   answeredAt: string
+  custom?: true
+}
+
+export function parseYieldCustomText(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) {
+    throw new TypeError(`Enter a response of 1 to ${MAX_YIELD_CUSTOM_TEXT_LENGTH} characters.`)
+  }
+  return value.trim()
 }
 
 export function parseYieldPolicy(value: unknown): YieldPolicy {
@@ -36,13 +45,14 @@ export function parseYieldPolicy(value: unknown): YieldPolicy {
 
 export function parseYieldQuestion(value: unknown): YieldQuestion {
   if (!isRecord(value) || typeof value.question !== 'string' || !value.question.trim() || value.question.length > 4000
-    || !Array.isArray(value.options) || value.options.length !== 3
+    || !Array.isArray(value.options) || (value.options.length !== 2 && value.options.length !== 3)
     || !Array.from(value.options).every((item): item is string => typeof item === 'string' && !!item.trim() && item.length <= 500)
-    || new Set(value.options.map(item => item.trim())).size !== 3
+    || new Set(value.options.map(item => item.trim())).size !== value.options.length
     || typeof value.defaultOption !== 'string' || !value.options.includes(value.defaultOption)) {
-    throw new TypeError('Yield requires a question, exactly three distinct non-empty options, and a defaultOption matching one option.')
+    throw new TypeError('Yield requires a question, two or three distinct non-empty options, and a defaultOption matching one option.')
   }
-  return { question: value.question, options: [value.options[0], value.options[1], value.options[2]], defaultOption: value.defaultOption }
+  return { question: value.question, options: value.options.length === 2
+    ? [value.options[0], value.options[1]] : [value.options[0], value.options[1], value.options[2]], defaultOption: value.defaultOption }
 }
 
 export function parseYieldRequest(value: unknown, sessionId: string): YieldRequest {

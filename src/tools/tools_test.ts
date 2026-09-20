@@ -121,6 +121,16 @@ test('tools — base tool definitions as sent to the LLM API are pinned', (t) =>
   t.assert.snapshot(payload)
 })
 
+test('an explicit empty tool allowlist denies base and dynamically imported tools', () => {
+  const base = buildBaseTools()
+  const tools = new SessionTools(base, WORKSPACE, [])
+  assert.deepEqual(tools.getDefinitions(), [])
+  assert.equal(tools.has('read'), false)
+  assert.equal(tools.has('exec'), false)
+  assert.equal(tools.canUseDynamic('arbitrary_tool'), false)
+  assert.deepEqual(tools.snapshot().getDefinitions(), [])
+})
+
 test('tools — tool surface per agent type', async (t) => {
   // For each built-in agent type, apply its allow/block policy (plus opt-in
   // hiding) and pin the resulting reachable tool names. Sorted by name so the

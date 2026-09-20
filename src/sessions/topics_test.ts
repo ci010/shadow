@@ -178,6 +178,13 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.equal((await app.request('/api/topics?limit=NaN', { headers })).status, 400)
     assert.equal((await app.request('/api/topics', { method: 'POST', headers, body: '{"projectId":"other"}' })).status, 400)
     assert.equal((await app.request('/api/topics', { method: 'POST', headers, body: '{' })).status, 400)
+    const trustedRequest = new Request('http://127.0.0.1/api/topics', {
+      method: 'POST', headers, body: '{"projectId":"other"}',
+    })
+    const trustedApp = new Hono()
+    topicsPlugin(service, req => req === trustedRequest)(trustedApp)
+    assert.equal((await trustedApp.request(trustedRequest)).status, 400,
+      'Authorize the trusted request before the body limiter can clone it')
     const list = await app.request('/api/topics?query=MCP', { headers })
     assert.equal((await list.json()).totalMatches, 1)
 

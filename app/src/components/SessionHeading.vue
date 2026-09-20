@@ -1,6 +1,18 @@
 <template>
   <header class="session-heading" :class="{ 'has-topic': topic || coordinator }">
-    <ComposerPopover label="Session details" :title="`${name} · ${folder}`" :width="360" @opened="loadDetails">
+    <form v-if="editing" class="session-rename" aria-label="Rename session" :aria-busy="saving" @submit.prevent="saveName" @keydown.esc.prevent.stop="cancelRename">
+      <label class="rename-field">
+        <span>Session name</span>
+        <input ref="nameInput" v-model="draftName" :maxlength="SESSION_NAME_MAX_LENGTH" :disabled="saving"
+          required aria-label="Session name" :aria-invalid="!!renameError" autocomplete="off">
+      </label>
+      <div class="rename-actions">
+        <button class="btn btn-sm" type="submit" :disabled="saving || !draftName.trim()">{{ saving ? 'Saving...' : 'Save' }}</button>
+        <button class="btn btn-sm" type="button" :disabled="saving" @click="cancelRename">Cancel</button>
+      </div>
+      <p v-if="renameError" class="details-error" role="alert">{{ renameError }}</p>
+    </form>
+    <ComposerPopover v-else label="Session details" :title="`${name} · ${folder}`" :width="360" @opened="loadDetails">
       <template #trigger>
         <span class="heading-name">{{ name }}</span>
         <span class="heading-separator" aria-hidden="true">&middot;</span>
@@ -41,6 +53,8 @@
         </div>
       </template>
     </ComposerPopover>
+    <button v-if="canRename && !editing" ref="renameButton" type="button" class="rename-button" aria-label="Rename session"
+      title="Rename session" @click="startRename"><span class="i-lucide-pencil w-3.5 h-3.5" aria-hidden="true" /></button>
     <p v-if="coordinator" class="coordination-description">Coordinate this Project here. Topics are independent conversations in the sidebar, not tasks or child chats.</p>
     <details v-else-if="topic" class="topic-metadata">
       <summary>{{ topic.goal || 'Topic details' }}</summary>
@@ -55,20 +69,76 @@
 
 <script setup lang="ts">
 import { apiUrl } from '../api-url.ts'
-import { computed, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { parseSessionName, SESSION_NAME_MAX_LENGTH } from '../../../src/sessions/session-name.ts'
 import ComposerPopover from './ComposerPopover.vue'
 import { chatContextName } from '../chat-draft.ts'
 import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
 import { ORCHESTRATOR_SESSION_ID, type TopicMetadata } from '../project-coordination.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean }>()
-const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']] }>()
+const props = defineProps<{ apiBase: string; sessionId: string; name: string; projectName?: string; topic?: TopicMetadata; physicalId: string | null; revision: number; active: boolean; canRename?: boolean }>()
+const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']]; renamed: [name: string] }>()
 const details = ref<SessionDetails | null>(null)
 const loading = ref(false)
 const error = ref('')
 const coordinator = computed(() => props.sessionId === ORCHESTRATOR_SESSION_ID || details.value?.sessionKind === 'orchestrator')
 const topic = computed(() => details.value?.topic ?? props.topic)
-const name = computed(() => [props.projectName, coordinator.value ? 'Project coordination' : topic.value?.title || details.value?.name?.trim() || props.name || 'Conversation'].filter(Boolean).join(' / '))
+const sessionName = computed(() => details.value?.name?.trim() || (coordinator.value ? 'Project coordination' : props.name || topic.value?.title || 'Conversation'))
+const name = computed(() => [props.projectName, sessionName.value].filter(Boolean).join(' / '))
+const editing = ref(false)
+const saving = ref(false)
+const draftName = ref('')
+const renameError = ref('')
+const nameInput = ref<HTMLInputElement>()
+const renameButton = ref<HTMLButtonElement>()
+let renameRequest: AbortController | undefined
+
+async function startRename() {
+  if (!props.canRename || !props.active) return
+  draftName.value = sessionName.value
+  renameError.value = ''
+  editing.value = true
+  await nextTick()
+  nameInput.value?.focus()
+  nameInput.value?.select()
+}
+function cancelRename() {
+  if (saving.value) return
+  editing.value = false
+  renameError.value = ''
+  void nextTick(() => renameButton.value?.focus())
+}
+async function saveName() {
+  if (saving.value || !editing.value || !props.canRename || !props.active) return
+  renameError.value = ''
+  let nextName: string
+  try { nextName = parseSessionName(draftName.value) }
+  catch (cause) { renameError.value = cause instanceof Error ? cause.message : 'Enter a valid session name.'; return }
+  const controller = new AbortController()
+  renameRequest = controller
+  saving.value = true
+  // A pending details read must not restore the pre-rename name.
+  cancel()
+  try {
+    const response = await fetch(apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.sessionId)}/name`), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nextName }),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+    })
+    if (!response.ok) throw new Error(`Could not save the session name (${response.status}). Retry.`)
+    const result = await response.json()
+    if (!result || result.sessionId !== props.sessionId || result.name !== nextName) throw new Error('Could not confirm the saved name. Retry.')
+    if (controller.signal.aborted) return
+    if (details.value) details.value = { ...details.value, name: nextName }
+    emit('renamed', nextName)
+    editing.value = false
+    void nextTick(() => renameButton.value?.focus())
+    void loadDetails()
+  } catch (cause) {
+    if (!controller.signal.aborted) renameError.value = cause instanceof Error ? cause.message : 'Could not save the session name. Retry.'
+  } finally {
+    if (renameRequest === controller) { renameRequest = undefined; saving.value = false }
+  }
+}
 const folder = computed(() => coordinator.value ? 'Project-wide · No folder' : details.value?.workdir.kind === 'remote'
   ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || 'Remote device'} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : 'Remote folder')}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
   : details.value?.workdir.displayPath
@@ -104,21 +174,37 @@ function cancel() {
   request = undefined
   loading.value = false
 }
-watch(() => [props.apiBase, props.sessionId, props.physicalId, props.revision, props.active] as const, (next, previous) => {
+watch(() => [props.apiBase, props.sessionId, props.physicalId, props.revision, props.active, props.name] as const, (next, previous) => {
   cancel()
+  if (!props.active || previous && (next[0] !== previous[0] || next[1] !== previous[1])) stopRename()
   if (!previous || next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]) {
     details.value = null
     error.value = ''
   }
-  if (props.active) void loadDetails()
+  if (props.active && !saving.value) void loadDetails()
 }, { immediate: true })
-onDeactivated(cancel)
-onUnmounted(cancel)
+function stopRename() {
+  renameRequest?.abort()
+  renameRequest = undefined
+  saving.value = false
+  editing.value = false
+  renameError.value = ''
+}
+onDeactivated(() => { cancel(); stopRename() })
+onUnmounted(() => { cancel(); stopRename() })
 </script>
 
 <style scoped>
 .session-heading { display: flex; flex: 0 0 auto; align-items: center; min-width: 0; min-height: 52px; padding: 4px 16px; color: var(--c-text); }
 .session-heading.has-topic { flex-wrap: wrap; }
+.session-rename { display: flex; flex: 1; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; padding: 6px 0; }
+.rename-field { display: flex; flex: 1 1 180px; min-width: 0; flex-direction: column; gap: 4px; font-size: 12px; }
+.rename-field input { width: 100%; box-sizing: border-box; min-width: 0; padding: 6px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-card); color: var(--c-text); font: inherit; font-size: 14px; }
+.rename-actions { display: flex; gap: 6px; }
+.session-rename .details-error { flex-basis: 100%; margin: 0; font-size: 12px; }
+.rename-button { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
+.rename-button:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.rename-button:focus-visible, .rename-field input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .coordination-description, .topic-metadata { flex-basis: 100%; margin: 0 8px 8px; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .topic-metadata summary { cursor: pointer; max-height: 3em; overflow: hidden; }
 .topic-metadata dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; max-height: 180px; overflow: auto; }

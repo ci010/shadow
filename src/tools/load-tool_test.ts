@@ -20,7 +20,6 @@ function entry(chromeManager?: ChromeManager): McpLoadable {
 function catalog(browser: McpLoadable): Map<string, LoadableEntry> {
   return new Map([
     ['chrome-devtools', browser],
-    ['chrome-devtools-full', { config: browser.config, sharedConn: browser, configPath: browser.configPath }],
   ])
 }
 
@@ -52,11 +51,9 @@ test('scoped built-in Chrome rejects all unowned connection/launch forms from ev
         }
         const importer = new ImportTool(catalog(browser), home, manager)
         const tools = new SessionTools(new Tools(home), home)
-        for (const name of ['chrome-devtools', 'chrome-devtools-full']) {
-          assert.match(await importer.importSource({
-            source: `v:tools/${name}`, args: source === 'caller' ? args : [],
-          }, tools), /^Error loading project Chrome:/)
-        }
+        assert.match(await importer.importSource({
+          source: 'v:tools/chrome-devtools', args: source === 'caller' ? args : [],
+        }, tools), /^Error loading project Chrome:/)
       }
     }
     assert.equal(allocate.mock.callCount(), 0)
@@ -66,7 +63,7 @@ test('scoped built-in Chrome rejects all unowned connection/launch forms from ev
     const importer = new ImportTool(catalog(browser), home, manager)
     for (const malformed of ['{', '{}', '{"args":[null]}', 'null']) {
       await writeFile(browser.configPath, malformed)
-      assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools-full' },
+      assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools' },
         new SessionTools(new Tools(home), home)), /^Error loading project Chrome config:/)
     }
     assert.equal(allocate.mock.callCount(), 0)
@@ -75,7 +72,7 @@ test('scoped built-in Chrome rejects all unowned connection/launch forms from ev
   })
 })
 
-test('built-in Chrome requires an exact project manager even through shared aliases and cached auto-imports', async (t) => {
+test('built-in Chrome requires an exact project manager even through cached auto-imports', async (t) => {
   const scope = createProjectScope('a')
   const otherScope = createProjectScope('b')
   const manager = new ChromeManager('unused', () => ({ basePort: 9222 }), {
@@ -86,7 +83,7 @@ test('built-in Chrome requires an exact project manager even through shared alia
     for (const browser of [entry(), entry(manager)]) {
       const importer = scope.run(() => new ImportTool(catalog(browser), 'unused'))
       const tools = new SessionTools(new Tools('unused'), 'unused')
-      assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools-full' }, tools), /requires its own runtime-managed browser/)
+      assert.match(await importer.importSource({ source: 'v:tools/chrome-devtools' }, tools), /requires its own runtime-managed browser/)
       assert.match((await importer.importForInvocation('chrome-devtools__take_snapshot', tools))!, /requires its own runtime-managed browser/)
     }
     const importer = otherScope.run(() => new ImportTool(catalog(entry(manager)), 'unused', manager))
@@ -111,7 +108,7 @@ test('built-in Chrome requires an exact project manager even through shared alia
   }
 })
 
-test('managed imports allocate distinct browsers per org and session, reuse aliases, and release only the resetting session', async (t) => {
+test('managed imports allocate distinct browsers per org and session, reuse connections, and release only the resetting session', async (t) => {
   await withTempWorkspace(async (home) => {
     const live = new Map<number, number>()
     const launches: Array<{ port: number; profile: string }> = []
@@ -156,17 +153,17 @@ test('managed imports allocate distinct browsers per org and session, reuse alia
       for (const result of results) assert.match(result, /^Loaded 1 tool/)
       assert.equal(new Set(launches.map((launch) => launch.port)).size, 3)
       assert.equal(new Set(launches.map((launch) => launch.profile)).size, 3)
-      assert.match(await importers[0].importSource({ source: 'v:tools/chrome-devtools-full' }, sessions[0]), /^Loaded 1 tool/)
+      assert.match(await importers[0].importSource({ source: 'v:tools/chrome-devtools' }, sessions[0]), /^Loaded 1 tool/)
       assert.equal(launches.length, 3)
       assert.equal(connect.mock.callCount(), 3)
       assert.match(await importers[0].importSource({
-        source: 'v:tools/chrome-devtools-full', args: ['--autoConnect'],
+        source: 'v:tools/chrome-devtools', args: ['--autoConnect'],
       }, sessions[0]), /^Error loading project Chrome:/)
       assert.equal(connect.mock.callCount(), 3)
       assert.equal(launches.length, 3)
       sessions[0].resetDynamic()
       await t.waitFor(() => assert.equal(live.size, 2))
-      assert.match(await importers[1].importSource({ source: 'v:tools/chrome-devtools-full' }, sessions[1]), /^Loaded 1 tool/)
+      assert.match(await importers[1].importSource({ source: 'v:tools/chrome-devtools' }, sessions[1]), /^Loaded 1 tool/)
       assert.equal(launches.length, 3)
       assert.match(await importers[0].importSource({
         source: 'v:tools/chrome-devtools', args: ['--remote-debugging-port', '9400', '--no-usage-statistics'],

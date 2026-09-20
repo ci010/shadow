@@ -5,6 +5,9 @@ import { isClusterIdentifier } from '../cluster/contracts.ts'
 import type { SessionManager } from './session-manager.ts'
 import { LOCAL_NODE_ID, resolveSessionLocations, type WorkdirRefV1 } from './locality.ts'
 import { FolderError, type FolderRegistry, UUID_PATTERN } from '../folders/registry.ts'
+import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
+import { isManagedWorkdir, managedSessionCapability } from '../execution/managed-workdir.ts'
+import { allocateRemoteSessionWorkdir } from '../execution/remote-managed-workdir-client.ts'
 
 export function remoteSessionPlugin(options: {
   sessions: Pick<SessionManager, 'workspace' | 'workdirCapabilityLookup' | 'remoteExecutor' | 'buildSession'> &
@@ -12,6 +15,7 @@ export function remoteSessionPlugin(options: {
   authorize: (request: Request) => boolean | Promise<boolean>
   requireFolderOwnership?: boolean
   folders?: FolderRegistry
+  managedSessions?: { projectId: string; inventory: () => NodeInventoryResponse }
 }): GatewayPlugin {
   const pending = new Map<string, { target: string; result: Promise<{ sessionId: string; chatId: string; workdir: WorkdirRefV1; folderId?: string }> }>()
   return app => {
@@ -27,9 +31,13 @@ export function remoteSessionPlugin(options: {
         if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'invalid_request' }, 400)
         const value = body as Record<string, unknown>
         if (Object.keys(value).some(key => key !== 'nodeId' && key !== 'capabilityId' && key !== 'requestId')
-          || !isClusterIdentifier(value.nodeId) || !isClusterIdentifier(value.capabilityId)
+          || !isClusterIdentifier(value.nodeId) ||
+          (value.capabilityId !== undefined && (!isClusterIdentifier(value.capabilityId) || isManagedWorkdir(value.capabilityId)))
           || (value.requestId !== undefined && (typeof value.requestId !== 'string' || !UUID_PATTERN.test(value.requestId)))
+          || (value.capabilityId === undefined && value.requestId === undefined)
           || value.nodeId === LOCAL_NODE_ID) return c.json({ error: 'invalid_remote_workdir' }, 400)
+        const scratch = value.capabilityId === undefined
+        if (scratch && !options.managedSessions) return c.json({ error: 'managed_sessions_unsupported', action: 'upgrade_node' }, 409)
         if (options.requireFolderOwnership && !options.folders) {
           return c.json({
             error: 'remote_folder_identity_required',
@@ -38,9 +46,10 @@ export function remoteSessionPlugin(options: {
           }, 409)
         }
         if (!options.sessions.remoteExecutor) return c.json({ error: 'remote_executor_unavailable' }, 503)
-        const workdir: WorkdirRefV1 = { version: 1, nodeId: value.nodeId, capabilityId: value.capabilityId }
         const chatId = `chat-${typeof value.requestId === 'string' ? value.requestId.toLowerCase() : randomUUID()}`
         const sessionId = `web:${chatId}`
+        const workdir: WorkdirRefV1 = { version: 1, nodeId: value.nodeId, capabilityId: scratch
+          ? managedSessionCapability(options.managedSessions!.projectId, sessionId) : value.capabilityId as string }
         const target = JSON.stringify([workdir.nodeId, workdir.capabilityId])
         try {
           const existing = options.sessions.getSessionState?.(sessionId)
@@ -54,12 +63,24 @@ export function remoteSessionPlugin(options: {
           const active = pending.get(sessionId)
           if (active && active.target !== target) return c.json({ error: 'remote_request_conflict' }, 409)
           const result = active?.result ?? (async () => {
-            const folder = await options.folders?.registerRemote(workdir, c.req.raw.signal)
-            const selected = folder?.workdir ?? workdir
+            options.folders?.assertSessionFolder({ sessionId, workdir })
+            let selected = workdir
+            if (scratch) {
+              const node = options.managedSessions!.inventory().nodes.find(node => node.nodeId === workdir.nodeId && node.role === 'child')
+              if (node?.connection !== 'connected') throw new FolderError('managed_session_node_unavailable', 'Connect the selected node before starting a remote session.', 503)
+              if (node.supportsManagedSessions !== true) throw new FolderError('managed_sessions_unsupported', 'Update the selected node to support managed sessions, then reconnect.', 409)
+              selected = await allocateRemoteSessionWorkdir({
+                executor: options.sessions.remoteExecutor!, projectId: options.managedSessions!.projectId,
+                sessionId, nodeId: workdir.nodeId, signal: c.req.raw.signal,
+              })
+            }
+            const folder = scratch ? undefined : await options.folders?.registerRemote(workdir, c.req.raw.signal)
+            selected = folder?.workdir ?? selected
             const resolved = resolveSessionLocations(options.sessions.workspace, { sessionId, workdir: selected },
               LOCAL_NODE_ID, options.sessions.workdirCapabilityLookup).workdir
             if (!resolved.available) throw new FolderError('workdir_unavailable', `Remote workdir unavailable: ${resolved.reason}`, 409)
             if (resolved.locality !== 'remote') throw new FolderError('invalid_remote_workdir', 'Choose a remote folder capability.')
+            c.req.raw.signal.throwIfAborted()
             await options.sessions.buildSession(sessionId, undefined, { mode: 'session', workdir: selected, ...(folder ? { folderId: folder.id } : {}) })
             return { sessionId, chatId, workdir: selected, ...(folder ? { folderId: folder.id } : {}) }
           })()
@@ -69,8 +90,10 @@ export function remoteSessionPlugin(options: {
           }
         } catch (error) {
           if (error instanceof FolderError) return c.json({ error: error.code, message: error.message,
-            action: error.code === 'remote_workdir_identity_unsupported' ? 'upgrade_node' : 'connect_node' }, error.status)
+            action: ['remote_workdir_identity_unsupported', 'managed_sessions_unsupported'].includes(error.code) ? 'upgrade_node' : 'connect_node' }, error.status)
           if (c.req.raw.signal.aborted) return c.json({ error: 'request_cancelled' }, 409)
+          if (scratch) return c.json({ error: 'managed_session_allocation_failed',
+            message: 'The remote session could not be created. Reconnect and retry; no local folder was used.' }, 503)
           return c.json({ error: 'remote_folder_failed', message: 'Remote folder ownership could not be verified. No local folder was used.' }, 503)
         }
       })

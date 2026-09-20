@@ -16,7 +16,7 @@ const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative'])
+const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'authoring_change'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
@@ -252,6 +252,8 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  private borrowedOwner?: SessionTools
+  private borrowedLifetime?: AbortSignal
   private dynamicLifetime = new AbortController()
   private readonly validators = new WeakMap<Tool, JsonSchemaValidator<unknown>>()
   private readonly dynamicResources = new Map<string, { active: boolean }>()
@@ -274,10 +276,12 @@ export class SessionTools extends Tools {
     workspace: string,
     allowedTools?: string[],
     blockedTools?: string[],
+    readonly allowedModules?: readonly string[],
   ) {
     super(workspace)
-    this.allowed = allowedTools?.length ? new Set(allowedTools) : undefined
+    this.allowed = allowedTools !== undefined ? new Set(allowedTools) : undefined
     this.blocked = blockedTools?.length ? new Set(blockedTools) : undefined
+    this.allowedModules = allowedModules === undefined ? undefined : Object.freeze([...allowedModules])
   }
 
   /** Check if a tool name passes the allow/block policy. */
@@ -343,6 +347,17 @@ export class SessionTools extends Tools {
   }
 
   get dynamicSignal(): AbortSignal { return this.dynamicLifetime.signal }
+
+  /** Leaf snapshots borrow resources; independent sessions own their own resources. */
+  get dynamicOwner(): SessionTools { return this.borrowedOwner ?? this }
+  get ownerSignal(): AbortSignal { return this.borrowedLifetime ?? this.dynamicSignal }
+
+  createIsolated(): SessionTools {
+    const tools = new SessionTools(this.base, this.workspace,
+      this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined, this.allowedModules)
+    tools.scope = this.scope
+    return tools
+  }
 
   /** Register a tool for the current session only. */
   registerDynamic(tool: Tool, connectionKey?: string, resource?: { active: boolean }): void {
@@ -483,7 +498,9 @@ export class SessionTools extends Tools {
       if (tool) base.register(tool)
     }
     const copy = new SessionTools(base, this.workspace,
-      this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined)
+      this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined, this.allowedModules)
+    copy.borrowedOwner = this.dynamicOwner
+    copy.borrowedLifetime = this.ownerSignal
     for (const tool of this.tools.values()) {
       if (this.canUseDynamic(tool.name) && this.hasDynamic(tool.name)) {
         copy.registerDynamic(tool)
@@ -501,25 +518,29 @@ export class SessionTools extends Tools {
 
   /** Clear all session-scoped tools and run cleanup callbacks (called on sleep). */
   resetDynamic(): void {
+    void this.resetDynamicAndWait().catch(error => console.error('[tools] Session resource cleanup failed', error))
+  }
+
+  async resetDynamicAndWait(): Promise<void> {
     this.dynamicLifetime.abort()
     this.dynamicLifetime = new AbortController()
     this.tools.clear()
     this.dynamicResources.clear()
     // Disconnect all session-owned MCP connections
+    const closing: Promise<unknown>[] = []
     for (const { conn, resource } of this.mcpConns.values()) {
       resource.active = false
-      conn.disconnect().catch(error => console.error('[mcp] Session connection cleanup failed', error))
+      closing.push(Promise.resolve().then(() => conn.disconnect()))
     }
     this.mcpConns.clear()
     const cbs = this.resetCallbacks.splice(0)
     for (const cb of cbs) {
-      try {
-        const result = cb()
-        if (result && typeof (result as Promise<void>).catch === 'function') {
-          ;(result as Promise<void>).catch(() => {})
-        }
-      } catch { /* ignore cleanup errors */ }
+      try { closing.push(Promise.resolve(cb())) }
+      catch (error) { closing.push(Promise.reject(error)) }
     }
+    const results = await Promise.allSettled(closing)
+    const failures = results.filter(result => result.status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Session resource cleanup failed')
   }
 
   override get(name: string): Tool | undefined {

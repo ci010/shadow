@@ -30,17 +30,117 @@ function harness(t: TestContext, initial: Partial<YieldSource> = {}) {
   return { state, source, requests, app }
 }
 
-test('yield response validates session identity, exactly three options, and one default', () => {
+test('yield response validates session identity, two or three options, and one default', () => {
   assert.deepEqual(parseYieldResponse({ request: question() }, 'web:root'), question())
   assert.equal(parseYieldResponse({ request: null }, 'web:root'), null)
   for (const invalid of [
     {}, { request: undefined }, { request: question('web:other') },
-    { request: { ...question(), options: ['One', 'Two'] } },
+    { request: { ...question(), options: ['One'] } },
     { request: { ...question(), options: ['One', 'One', 'Three'] } },
     { request: { ...question(), defaultOption: 'Other' } },
     { request: { ...question(), recipient: { kind: 'parent', sessionId: 'web:root' } } },
     { request: { ...question(), deadline: 'not a date' } },
   ]) assert.throws(() => parseYieldResponse(invalid, 'web:root'))
+})
+
+test('binary buttons submit exactly the clicked option and block duplicate clicks', async t => {
+  const { state, requests } = harness(t)
+  const binary = { ...question(), options: ['Yes', 'No'], defaultOption: 'No' }
+  requests[0]!.finish(Response.json({ request: binary }))
+  await settle()
+  assert.equal(requests.length, 1, 'Rendering the default never submits it')
+  assert.equal(await state.choose('Not offered'), false)
+  const answer = state.choose('Yes')
+  assert.equal(await state.choose('No'), false)
+  assert.deepEqual(JSON.parse(String(requests[1]!.init.body)), { requestId: binary.id, option: 'Yes' })
+  requests[1]!.finish(Response.json({ answer: {
+    requestId: binary.id, option: 'Yes', answeredBy: 'user', answeredAt: new Date().toISOString(),
+  } }))
+  assert.equal(await answer, true)
+  assert.equal(state.request.value, null)
+})
+
+test('custom responses survive polling and rejection, require explicit confirmation and block duplicate answers', async t => {
+  const { state, requests } = harness(t)
+  requests[0]!.finish(Response.json({ request: question() }))
+  await settle()
+  state.customMode.value = true
+  for (const invalid of ['', ' \n ', 'x'.repeat(4001)]) {
+    state.customText.value = invalid
+    assert.equal(await state.submit(), false)
+    assert.match(state.error.value, /1 to 4000/)
+    assert.equal(requests.length, 1)
+  }
+  state.customText.value = '  My approach\nwith details  '
+  const refresh = state.refresh()
+  requests[1]!.finish(Response.json({ request: question() }))
+  await refresh
+  assert.equal(state.customMode.value, true)
+  assert.equal(state.customText.value, '  My approach\nwith details  ')
+  const rejected = state.submit()
+  assert.deepEqual(JSON.parse(String(requests[2]!.init.body)), { requestId: 'question-1', customText: 'My approach\nwith details' })
+  assert.equal(await state.submit(), false)
+  assert.equal(await state.choose('Minimal change'), false)
+  requests[2]!.finish(Response.json({ error: 'unavailable', message: 'Retry later.' }, { status: 503 }))
+  assert.equal(await rejected, false)
+  assert.equal(state.customText.value, '  My approach\nwith details  ')
+  const receipt = { requestId: 'question-1', option: 'My approach\nwith details', answeredBy: 'user', answeredAt: new Date().toISOString() }
+  const unconfirmed = state.submit()
+  requests[3]!.finish(Response.json({ answer: receipt }))
+  assert.equal(await unconfirmed, false)
+  assert.match(state.error.value, /did not confirm/)
+  const confirmed = state.submit()
+  requests[4]!.finish(Response.json({ answer: { ...receipt, custom: true } }))
+  assert.equal(await confirmed, true)
+  assert.equal(state.customMode.value, false)
+  assert.equal(state.customText.value, '')
+  assert.equal(state.request.value, null)
+})
+
+test('custom drafts clear when the request disappears or changes, access is revoked, or the session changes', async t => {
+  const { state, source, requests } = harness(t)
+  requests[0]!.finish(Response.json({ request: question() }))
+  await settle()
+  const draft = () => { state.customMode.value = true; state.customText.value = 'Private to this question' }
+  draft()
+  const missing = state.refresh()
+  requests.at(-1)!.finish(Response.json({ request: null }))
+  await missing
+  assert.equal(state.request.value, null)
+  assert.equal(state.customMode.value, false)
+  assert.equal(state.customText.value, '')
+  const restored = state.refresh()
+  requests.at(-1)!.finish(Response.json({ request: question() }))
+  await restored
+  draft()
+  const next = state.refresh()
+  requests.at(-1)!.finish(Response.json({ request: question('web:root', 'question-2') }))
+  await next
+  assert.equal(state.customText.value, '')
+  draft()
+  source.canAnswer = false
+  assert.equal(state.customText.value, '')
+  assert.equal(await state.submit(), false)
+  source.canAnswer = true
+  draft()
+  source.sessionId = 'web:other'
+  assert.equal(state.customMode.value, false)
+  assert.equal(state.customText.value, '')
+})
+
+test('direct presets can still be selected after opening custom entry', async t => {
+  const { state, requests } = harness(t)
+  requests[0]!.finish(Response.json({ request: question() }))
+  await settle()
+  state.customMode.value = true
+  state.customText.value = 'Unsent custom draft'
+  const answer = state.choose('Minimal change')
+  assert.deepEqual(JSON.parse(String(requests[1]!.init.body)), { requestId: 'question-1', option: 'Minimal change' })
+  requests[1]!.finish(Response.json({ answer: {
+    requestId: 'question-1', option: 'Minimal change', answeredBy: 'user', answeredAt: new Date().toISOString(),
+  } }))
+  assert.equal(await answer, true)
+  assert.equal(state.customText.value, '')
 })
 
 test('only visible waiting sessions fetch and stale session responses cannot appear', async t => {

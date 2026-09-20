@@ -94,6 +94,24 @@ test('launch advances only on ready and remains retryable after failure', async 
   assert.equal(succeeded.state.step, 'complete')
 })
 
+test('ensureRuntime preserves safe failure diagnostics and saved setup across retry', async () => {
+  const state = transitionWizard(mainLaunchState(), { type: 'sidecar-ready' })
+  const storage = new MemoryStorage(state)
+  let attempts = 0
+  const coordinator = createCoordinator(storage, {
+    start: async () => ++attempts === 1
+      ? { phase: 'failed', role: 'main', kind: 'readiness-timeout', elapsedMs: 15000, message: 'private-key' }
+      : { phase: 'ready', apiBase: 'http://127.0.0.1:43123' },
+  }, new MemoryLaunchProfiles({ version: 1, role: 'main', localExecutor: false, port: 43123 }))
+  assert.deepEqual(await coordinator.ensureRuntime(), {
+    ok: false, code: 'runtime-unavailable',
+    failure: { role: 'main', kind: 'readiness-timeout', elapsedMs: 15000 },
+  })
+  assert.deepEqual(await storage.load(), state)
+  assert.equal((await coordinator.ensureRuntime()).ok, true)
+  assert.deepEqual(await storage.load(), state)
+})
+
 test('generic dispatch rejects privileged transitions', async () => {
   const coordinator = new BootstrapCoordinator(
     new MemoryStorage(mainDirectoryState()),

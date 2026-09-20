@@ -8,10 +8,10 @@ const parameters = {
   properties: {
     action: { type: 'string', enum: ['ask', 'answer'], default: 'ask', description: 'Ask a question or answer a child session’s request.' },
     question: { type: 'string', description: 'For ask: a clear question requiring a decision.' },
-    options: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 3, uniqueItems: true, description: 'For ask: exactly three distinct non-empty choices.' },
+    options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2, uniqueItems: true, description: 'For ask: two distinct non-empty suggested choices. The UI automatically provides a third, custom-response entry; do not generate an Other or free-text option.' },
     default_option: { type: 'string', description: 'For ask: exactly one of options, used only if the configured timeout expires.' },
     request_id: { type: 'string', description: 'For answer: the request ID received from your child session.' },
-    option: { type: 'string', description: 'For answer: the exact text of one of the child’s three options.' },
+    option: { type: 'string', description: 'For answer: the exact text of one of the child’s options.' },
   },
   additionalProperties: false,
 }
@@ -21,7 +21,7 @@ export class YieldTool implements Tool {
   readonly name = 'yield'
   readonly readonly = false
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Yield for a decision with exactly three choices and one default. Root sessions ask the human; child sessions ask their stored parent. Waits until answered, cancelled, or the configured timeout selects the default. Use action="answer" to answer a child request. You cannot select the recipient or timeout.'
+  readonly description = 'Yield for a decision with two suggested choices and one default. The UI always adds a custom-response entry; do not generate it yourself. A human may return their own text in option with custom: true. Root sessions ask the human; child sessions ask their stored parent. Waits until answered, cancelled, or the configured timeout selects the default. This is not an authorization mechanism for protected actions such as resource publication. Use action="answer" to answer a child request. You cannot select the recipient or timeout.'
   readonly parameters: ToolParameters = parameters
 
   constructor(private readonly yields: YieldManager) {}
@@ -50,6 +50,7 @@ export class YieldTool implements Tool {
       throw new YieldError('invalid_request', error instanceof Error ? error.message : String(error))
     }
     return JSON.stringify(await this.yields.ask(ctx.sessionId, question, ctx.signal,
-      ctx.inputSource === 'user' ? { channel: ctx.channel, senderId: ctx.senderId } : undefined))
+      ctx.inputSource === 'user' ? { channel: ctx.channel, senderId: ctx.senderId } : undefined,
+      ctx.inputSource === 'user' ? ctx.platformMessageId : undefined))
   }
 }

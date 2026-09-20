@@ -27,7 +27,7 @@ export class SearchTool implements Tool {
   readonly supportsRemoteWorkdir = true
   readonly readonly = (args: Record<string, unknown>) =>
     typeof args.space === 'string' && ['glob', 'grep', 'web', 'skills', 'sessions'].includes(parseSpace(args.space).scheme)
-  readonly description = 'Search files, the web, skills, Project topic sessions, or available tools via the `space` scheme. sessions: discovers peer topic goals, scope, folders and Initiative references. skills: returns skill summaries and read paths without activating tools; read a skill to register its declared tools in this session. tools: returns exact names and complete parameter schemas for invoke_tool. Tool discovery may connect MCP servers but never executes their tools.'
+  readonly description = 'Search files, the web, skills, Project topic sessions, or available tools via the `space` scheme. sessions: discovers peer topic goals, scope, folders and Initiative references. skills: returns skill summaries and read paths without activating tools; read a skill to register its declared tools in this session. tools: searches installed MCP indexes without connecting, returning exact names and parameter schemas for invoke_tool. Explicit built-in browser/factory discovery may initialize resources but never executes their tools.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -38,10 +38,11 @@ export class SearchTool implements Tool {
       space: {
         type: 'string',
         description:
-          'grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. sessions: — Project peer topic discovery (no activation). skills:[category] — skill discovery without activation. tools:[source] — tool contracts (e.g. tools:mail); tools: searches configured sources and active tools. Browser/factory sources require explicit selection.',
+          'grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. sessions: — Project peer topic discovery (no activation). skills:[category] — skill discovery without activation. tools:[source] — tool contracts (e.g. tools:mail); tools: searches persisted MCP metadata and active tools without starting configured servers. Browser/factory sources require explicit selection.',
       },
       limit: { type: 'integer', description: 'Maximum entries per page: tools: 1-10 (default 3), skills: and sessions: 1-20 (default 5).' },
       offset: { type: 'integer', default: 0, description: 'tools:, skills: and sessions: only. Nonnegative result offset; use nextOffset to continue listing or searching.' },
+      instance: { type: 'string', description: 'tools:chrome-devtools only. Session browser instance ID; required when multiple instances are open. Returns that instance\'s live contracts.' },
     },
     required: ['space'],
   }
@@ -90,6 +91,9 @@ export class SearchTool implements Tool {
   ): Promise<string> {
     if (typeof args.space !== 'string') return 'Error: space must be a string.'
     const { scheme, qualifier } = parseSpace(args.space)
+    if (args.instance !== undefined && (scheme !== 'tools' || qualifier !== 'chrome-devtools')) {
+      return 'Error: instance requires space tools:chrome-devtools.'
+    }
     if (scheme === 'sessions') {
       if (!this.topics) return 'Error: Project topic discovery is not configured.'
       if (qualifier) return 'Error: sessions: searches only the current Project; qualifiers are not supported.'
@@ -109,6 +113,7 @@ export class SearchTool implements Tool {
         source: qualifier || undefined,
         limit: args.limit,
         offset: args.offset,
+        instance: args.instance,
       }, context)
     }
     if (typeof args.query !== 'string') return 'Error: query must be a string for file or web search.'

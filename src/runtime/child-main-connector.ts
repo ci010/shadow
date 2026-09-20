@@ -71,6 +71,12 @@ export class ChildMainConnector implements MainConnector {
     return Promise.resolve()
   }
 
+  async advertiseCapability(capability: CapabilityDescriptorV1): Promise<void> {
+    for (const session of this.#sessions) {
+      if (session.state === 'authenticated') await session.advertiseCapabilityWhenReady(capability)
+    }
+  }
+
   shutdown(): Promise<void> {
     if (this.#shutdownPromise) return this.#shutdownPromise
     this.#shutdownPromise = Promise.all(
@@ -144,7 +150,7 @@ export class ChildMainConnector implements MainConnector {
       const capabilities = await this.#options.capabilities()
       options.signal.throwIfAborted()
       for (const capability of capabilities) {
-        if (capability.online) session.advertiseCapability(capability)
+        if (capability.online) await session.advertiseCapabilityWhenReady(capability)
       }
       options.signal.throwIfAborted()
     } catch (error) {

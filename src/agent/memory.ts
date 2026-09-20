@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path'
-import { appendFile, mkdir, readdir, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { readFileIfExists, workspacePath } from '../utils/paths.ts'
 import { streamJsonlObjects } from '../utils/jsonl.ts'
 
@@ -109,6 +109,7 @@ export class MemoryStore {
       maxRelated?: number
       currentInitiative?: string
       initiativeOf?: (sessionId: string) => string | undefined
+      since?: string
     } = {},
   ): Promise<string> {
     const { maxOwn = 40, maxRelated = 15, currentInitiative, initiativeOf } = opts
@@ -119,6 +120,7 @@ export class MemoryStore {
     for await (
       const event of streamJsonlObjects<EventLogEntry>(this.eventLogPath(date))
     ) {
+      if (opts.since && !(Date.parse(event.when ?? '') > Date.parse(opts.since))) continue
       if (event.origin && event.origin === currentSessionId) own.push(event)
       else related.push(event)
     }
@@ -198,9 +200,17 @@ export class MemoryStore {
    * Truncates to `maxLines` to prevent oversized system prompts.
    * Returns empty string if no file exists.
    */
-  async readSessionMemory(sessionKey: string, maxLines = 200): Promise<string> {
+  async readSessionMemory(sessionKey: string, maxLines = 200, since?: string): Promise<string> {
     const safe = this.sanitizeSessionKey(sessionKey)
     const filePath = join(this.sessionMemoryDir(), `${safe}.md`)
+    if (since) {
+      try {
+        if ((await stat(filePath)).mtimeMs <= Date.parse(since)) return ''
+      } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return ''
+        throw error
+      }
+    }
     const content = await readFileIfExists(filePath)
     if (!content?.trim()) return ''
     const lines = content.split('\n')
@@ -239,13 +249,14 @@ export class MemoryStore {
    * Render this session's working set (files touched), collapsed by path
    * (latest action wins, most-recent last). Returns '' when nothing modified.
    */
-  async readWorkingSet(sessionKey: string, maxFiles = 50): Promise<string> {
+  async readWorkingSet(sessionKey: string, maxFiles = 50, since?: string): Promise<string> {
     const latest = new Map<string, string>() // path -> action
     for await (
-      const e of streamJsonlObjects<{ path?: string; action?: string }>(
+      const e of streamJsonlObjects<{ path?: string; action?: string; when?: string }>(
         this.modifiedFilesPath(sessionKey),
       )
     ) {
+      if (since && !(Date.parse(e.when ?? '') > Date.parse(since))) continue
       if (!e.path) continue
       latest.delete(e.path) // re-touched file moves to the end (recency)
       latest.set(e.path, e.action ?? 'write')

@@ -8,6 +8,7 @@ import { mainNodeInventory, nodeInventoryApiPlugin, type NodeInventoryEntry } fr
 import { createNodeWebSocketApi } from './node-websocket-api.ts'
 import { InMemoryPairingNodeRegistry } from './registry.ts'
 import { setTimeout } from 'node:timers/promises'
+import { MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION } from '../execution/managed-workdir.ts'
 
 const now = new Date('2026-09-01T00:00:00.000Z')
 const auth = { deviceId: 'private-device', nodeId: 'child-1', credentialId: 'private-credential' }
@@ -54,6 +55,25 @@ function registryFixture(): InMemoryPairingNodeRegistry {
   registry.advertiseCapability(auth, capability)
   return registry
 }
+
+test('managed-session availability requires its actual live allocation permission', () => {
+  const registry = registryFixture()
+  let advertised = true
+  const inventory = () => mainNodeInventory(undefined, registry, {
+    isNodeConnected: () => true, hasAdvertisedCapability: () => advertised,
+  }).nodes[0]
+  assert.equal(inventory().supportsManagedSessions, false)
+  registry.advertiseCapability(auth, {
+    ...capability, capabilityId: MANAGED_SESSION_CAPABILITY, kind: 'shell', displayPath: undefined, permissions: [],
+  })
+  assert.equal(inventory().supportsManagedSessions, false)
+  registry.advertiseCapability(auth, {
+    ...capability, capabilityId: MANAGED_SESSION_CAPABILITY, kind: 'shell', displayPath: undefined, permissions: [MANAGED_SESSION_OPERATION],
+  })
+  assert.equal(inventory().supportsManagedSessions, true)
+  advertised = false
+  assert.equal(inventory().supportsManagedSessions, false)
+})
 
 test('inventory authorization fails closed independently and retains launch protection', async () => {
   let reads = 0
@@ -117,6 +137,7 @@ test('restored inventory is offline and only folders allowlisted remote fields',
     displayName: 'Child host',
     role: 'child',
     connection: 'offline',
+    supportsManagedSessions: false,
     capabilities: [{
       capabilityId: 'workdir-1',
       kind: 'workdir',
@@ -149,6 +170,7 @@ test('restored inventory is offline and only folders allowlisted remote fields',
     displayName: 'Child host',
     role: 'child',
     connection: 'revoked',
+    supportsManagedSessions: false,
     capabilities: [],
   })
   assert.ok(!JSON.stringify(revoked).includes('private'))

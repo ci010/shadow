@@ -17,6 +17,7 @@ test('I/O and background notifications never become resend prompts or fallback c
     { role: 'user', content: 'Compacted history', isSummary: true },
     { role: 'user', content: 'Tool result', event: 'tool_result' },
     { role: 'tool', content: 'Output' },
+    { role: 'user', content: 'Delegated handoff', sessionSource: { id: 'web:orchestrator' } },
   ]) {
     assert.equal(resendableUserMessage([...answered, message]), undefined)
     assert.equal(resendableUserMessage([message]), undefined)
@@ -26,6 +27,14 @@ test('I/O and background notifications never become resend prompts or fallback c
     { role: 'user', content: 'I/O completed', isSystemEvent: true },
     { role: 'user', content: 'exec finished', isSystemEvent: true },
   ]), undefined)
+})
+
+test('session messages never appear in the human history navigator', () => {
+  assert.deepEqual(userMessageMarkers([
+    { role: 'user', content: 'Human request' },
+    { role: 'user', content: 'Delegated task', sessionSource: { id: 'web:orchestrator', intent: 'handoff' } },
+    { role: 'user', content: 'Human follow-up' },
+  ]).map(marker => marker.index), [0, 2])
 })
 
 test('history rail includes only real user turns, preserving rendered message indexes and timestamps', () => {

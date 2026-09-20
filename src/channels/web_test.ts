@@ -12,6 +12,8 @@ import { WebChannel } from './web.ts'
 import { localFolderWorkdirRef, type WorkdirCapabilityLookup } from '../sessions/locality.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import { RealtimeHub } from '../realtime/hub.ts'
+import { FolderError } from '../folders/registry.ts'
+import { registerGatewayRoutes } from '../gateway/server.ts'
 
 test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
   const bus = new Bus()
@@ -299,6 +301,137 @@ test('web media rejects links that escape the session workdir', async () => {
     const privateEscape = join(sessionRoot, 'uploads', 'linked', 'secret.txt')
     assertEquals((await app.request(`/api/media?chatId=chat-a&path=${encodeURIComponent(privateEscape)}`)).status, 404)
     assertEquals((await app.request('/api/chat/uploads/linked/secret.txt?chatId=chat-a')).status, 404)
+  } finally {
+    await channel.stop()
+    await rm(workspace, { recursive: true })
+  }
+})
+
+test('SNS logical session media uses inherited private uploads, not capability workdirs or other sessions', async () => {
+  const workspace = await createTempWorkspace()
+  const sessionId = 'bot:project-a:bot-a:qq:group%3A123'
+  const owner = sessionWorkspacePath(workspace, 'qq:owner')
+  const sibling = sessionWorkspacePath(workspace, 'qq:sibling')
+  const folder = join(workspace, 'folder')
+  for (const root of [owner, sibling, folder]) await mkdir(join(root, 'uploads'), { recursive: true })
+  await writeFile(join(owner, 'uploads', '视频.mp4'), '0123456789')
+  await writeFile(join(owner, 'private.txt'), 'not an upload')
+  await writeFile(join(sibling, 'uploads', 'other.mp4'), 'other session')
+  await writeFile(join(folder, 'uploads', '视频.mp4'), 'workdir decoy')
+  await writeFile(join(folder, 'workdir.txt'), 'workdir file')
+  const { app, channel } = await createWebApp(workspace, id =>
+    [sessionId, 'qq:legacy'].includes(id) ? {
+      sessionId: id, workspaceRoot: 'qq:owner', workdir: localFolderWorkdirRef('folder'),
+    } : null, () => ({
+      node: 'online', capability: { kind: 'workdir', online: true, path: folder },
+    }))
+  const url = (path: string, id = sessionId) =>
+    `/api/media?sessionId=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}`
+  try {
+    for (const id of [sessionId, 'qq:legacy']) {
+      for (const path of ['uploads/视频.mp4', 'uploads\\视频.mp4', join(owner, 'uploads', '视频.mp4')]) {
+        // Backslashes represent path separators only on Windows.
+        if (path.includes('\\') && process.platform !== 'win32') continue
+        const response = await app.request(url(path, id), { headers: { Range: 'bytes=1-3' } })
+        assert.equal(response.status, 206)
+        assert.equal(response.headers.get('Content-Type'), 'video/mp4')
+        assert.equal(await response.text(), '123')
+      }
+    }
+    const head = await app.request(`${url('uploads/视频.mp4')}&download=1`, { method: 'HEAD' })
+    assert.equal(head.status, 200)
+    assert.equal(head.headers.get('Content-Length'), '10')
+    assert.match(head.headers.get('Content-Disposition')!, /^attachment;.*filename\*=UTF-8''%E8%A7%86%E9%A2%91.mp4$/)
+    assert.equal(await head.text(), '')
+    for (const path of [
+      'workdir.txt', 'private.txt', 'uploads/../private.txt', '../qq_sibling/uploads/other.mp4',
+      join(sibling, 'uploads', 'other.mp4'), join(folder, 'uploads', '视频.mp4'),
+      'uploads/missing.mp4', 'uploads', 'uploads/\0invalid',
+    ]) assert.equal((await app.request(url(path))).status, 404, path)
+    for (const id of ['qq:unknown', 'bot:project-b:bot-a:qq:group%3A123', '__proto__']) {
+      assert.equal((await app.request(url(join(owner, 'uploads', '视频.mp4'), id))).status, 404)
+    }
+    for (const query of ['chatId=a&sessionId=', 'chatId=&sessionId=qq%3Alegacy', 'chatId=a&sessionId=qq%3Alegacy', 'sessionId=']) {
+      assert.equal((await app.request(`/api/media?${query}&path=uploads/file.mp4`)).status, 400)
+    }
+    await symlink(sibling, join(owner, 'uploads', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal((await app.request(url('uploads/linked/uploads/other.mp4'))).status, 404)
+    await rm(join(owner, 'uploads'), { recursive: true })
+    await symlink(join(sibling, 'uploads'), join(owner, 'uploads'), process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal((await app.request(url('uploads/other.mp4'))).status, 404)
+  } finally {
+    await channel.stop()
+    await rm(workspace, { recursive: true })
+  }
+})
+
+test('session media and legacy upload serving retain gateway authentication and GET/HEAD folder checks', async () => {
+  const workspace = await createTempWorkspace()
+  const root = sessionWorkspacePath(workspace, 'qq:chat')
+  await mkdir(join(root, 'uploads'), { recursive: true })
+  await writeFile(join(root, 'uploads', 'clip.webm'), 'video')
+  const app = new Hono()
+  registerGatewayRoutes(app, [], { launchCredential: 'media-test-credential' })
+  const checked: string[] = []
+  let denied = false
+  const channel = new WebChannel(new Bus(), { workspace, sessionManager: {
+    getSessionState: (id: string) => id === 'qq:chat' || id === 'web:chat'
+      ? { sessionId: id, workspaceRoot: 'qq:chat' } : null,
+    assertFolderAccess: (id: string) => {
+      checked.push(id)
+      if (denied) throw new FolderError('folder_unavailable', 'Folder unavailable', 409)
+    },
+  } as unknown as SessionManager })
+  await channel.start(app)
+  const headers = { Authorization: 'Bearer media-test-credential' }
+  try {
+    for (const [url, id] of [
+      ['/api/media?sessionId=qq%3Achat&path=uploads%2Fclip.webm', 'qq:chat'],
+      ['/api/media?chatId=chat&path=uploads%2Fclip.webm', 'web:chat'],
+      ['/api/chat/uploads/clip.webm?chatId=chat', 'web:chat'],
+    ]) {
+      for (const method of ['GET', 'HEAD']) {
+        const count = checked.length
+        assert.equal((await app.request(url, { method })).status, 401)
+        assert.equal(checked.length, count)
+        const response = await app.request(url, { method, headers })
+        assert.equal(response.status, 200)
+        assert.equal(response.headers.get('Content-Length'), '5')
+        assert.equal(response.headers.get('Access-Control-Allow-Origin'), null)
+        assert.equal(await response.text(), method === 'HEAD' ? '' : 'video')
+        assert.equal(checked.at(-1), id)
+        denied = true
+        assert.equal((await app.request(url, { method, headers })).status, 409)
+        denied = false
+      }
+      const range = await app.request(`${url}&download=1`, { headers: { ...headers, Range: 'bytes=1-2' } })
+      assert.equal(range.status, 206)
+      assert.match(range.headers.get('Content-Disposition')!, /^attachment;/)
+      assert.equal(await range.text(), 'id')
+    }
+  } finally {
+    await channel.stop()
+    await rm(workspace, { recursive: true })
+  }
+})
+
+test('explicit session media refuses remote and unavailable workdirs even when private uploads exist', async () => {
+  const workspace = await createTempWorkspace()
+  const { app, channel } = await createWebApp(workspace, sessionId => ({
+    sessionId,
+    workdir: { ...localFolderWorkdirRef('missing'), nodeId: sessionId === 'qq:remote' ? 'remote' : 'local' },
+  }), ref => ({
+    node: 'online', capability: { kind: 'workdir', online: ref.nodeId === 'remote', path: workspace },
+  }))
+  try {
+    for (const sessionId of ['qq:remote', 'qq:missing']) {
+      const root = sessionWorkspacePath(workspace, sessionId)
+      await mkdir(join(root, 'uploads'), { recursive: true })
+      await writeFile(join(root, 'uploads', 'clip.mp4'), 'not served')
+      for (const method of ['GET', 'HEAD']) {
+        assert.equal((await app.request(`/api/media?sessionId=${encodeURIComponent(sessionId)}&path=uploads%2Fclip.mp4`, { method })).status, 404)
+      }
+    }
   } finally {
     await channel.stop()
     await rm(workspace, { recursive: true })

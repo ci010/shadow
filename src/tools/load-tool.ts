@@ -1,9 +1,9 @@
 import { basename, isAbsolute, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { readFile, stat as nodeStat } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
-import { McpToolAdapter } from '../mcp/adapter.ts'
+import { McpToolAdapter, mcpToolContract } from '../mcp/adapter.ts'
 import { McpConnection } from '../mcp/client.ts'
+import { McpToolIndex } from '../mcp/tool-index.ts'
 import { parseMcpConfigDocument, parseMcpServerConfig } from '../mcp/config.ts'
 import { mcpCleanupFailure, mcpFailure } from '../mcp/errors.ts'
 import { toolSearchScore } from './search-tools.ts'
@@ -11,12 +11,15 @@ import type { McpServerConfig } from '../config/schema.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { toolInvocationContract, type SessionTools } from './registry.ts'
 import type { ChromeManager } from '../browser/chrome-manager.ts'
-import { registerTypeScriptLoader } from '../utils/typescript.ts'
+import { executeScript } from '../script-runtime/runtime.ts'
+import { assertImportPolicy } from '../script-runtime/module-policy.ts'
+import { bindScriptTools } from '../script-runtime/bridge.ts'
 import { getProjectScope } from '../projects/scope.ts'
 import { isDeepStrictEqual } from 'node:util'
-import { randomUUID } from 'node:crypto'
 import { SkillToolDeclarationsSchema, resolveSkillToolSource, type SkillToolDeclaration, type SkillDirectoryResolver } from '../skills/tool-declarations.ts'
 import type { Skill } from '../skills/loader.ts'
+import { SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
+import { BrowserSetupTool } from './browser-setup.ts'
 
 /**
  * Describes an MCP server that can be connected on-demand and whose tools
@@ -29,9 +32,9 @@ export interface McpLoadable {
   config: McpServerConfig
   /**
    * Absolute path to a JSON config file with persistent extra args.
-   * Format: `{ "args": ["--browser-path=...", "--profile=..."] }`
-   *
-   * Written once during setup (guided by the skill), read on every `import_tool` call.
+   * Format: `{ "args": ["--no-usage-statistics"] }`.
+   * Browser entries allow only reviewed adapter switches and a managed port.
+   * Session browser_setup choices are ephemeral and never written here.
    */
   configPath?: string
   /**
@@ -80,79 +83,42 @@ function isFactoryLoadable(entry: LoadableEntry): entry is FactoryLoadable {
   return 'factory' in entry
 }
 
-/**
- * Shape of a TypeScript module that defines an agent-created tool.
- * The agent writes these into skill directories and loads them via `import_tool(source=...)`.
- */
-interface ScriptToolModule {
-  name: string
-  description: string
-  parameters: ToolParameters
-  execute: (
-    args: Record<string, unknown>,
-    callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>,
-  ) => Promise<unknown>
-  /** Optional init function called at import time with the `args` from `import_tool`. */
-  init?: (args: string[]) => Promise<void> | void
-  [key: string]: unknown
-}
-
-function isScriptToolModule(
-  mod: Record<string, unknown>,
-): mod is ScriptToolModule {
-  return (
-    typeof mod.name === 'string' &&
-    typeof mod.description === 'string' &&
-    typeof mod.parameters === 'object' && mod.parameters !== null &&
-    typeof mod.execute === 'function'
-  )
-}
-
 interface ImportOptions {
   signal: AbortSignal
 }
 
-/**
- * Wraps an agent-authored TypeScript tool module as a Tool instance.
- * The module's execute receives a `callTool` callback that dispatches
- * to the session's tool overlay, allowing custom tools to compose
- * with any loaded tool.
- */
 class ScriptToolAdapter implements Tool {
-  readonly name: string
   readonly description: string
   readonly parameters: ToolParameters
 
-  constructor(private mod: ScriptToolModule, registeredName?: string, private validate?: (context: ExecutionContext) => Promise<void>) {
-    this.name = registeredName ?? mod.name
-    this.description = mod.description
-    this.parameters = mod.parameters as ToolParameters
+  constructor(
+    readonly name: string,
+    private declaration: SkillToolDeclaration,
+    private code: string,
+    private validate: (context: ExecutionContext) => Promise<void>,
+  ) {
+    this.description = declaration.description
+    this.parameters = declaration.parameters
   }
 
   async execute(
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<string> {
-    await this.validate?.(context)
-    const callTool = async (
-      name: string,
-      toolArgs: Record<string, unknown>,
-    ): Promise<unknown> => {
-      const result = context.tools.hasDynamic(name)
-        ? await context.tools.executeDynamic(name, toolArgs, context)
-        : context.tools.has(name)
-        ? await context.tools.execute(name, toolArgs, context)
-        : await context.tools.execute('invoke_tool', { name, args: toolArgs }, context)
-      try {
-        return JSON.parse(result)
-      } catch {
-        return result
-      }
+    await this.validate(context)
+    const imports = this.declaration.imports
+    assertImportPolicy(imports, context.tools.allowedModules ?? imports)
+    const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal, context.tools.ownerSignal])
+    const binding = bindScriptTools({ ...context, signal }, { dynamic: true })
+    try {
+      const { value: result } = await executeScript({
+        code: this.code, args, signal: binding.signal, cwd: context.cwd, filename: this.declaration.source,
+        entry: 'run', policy: { kind: 'restricted', imports }, callModule: binding.call,
+      })
+      return typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+    } finally {
+      await binding.cleanup()
     }
-
-    const result = await this.mod.execute(args, callTool)
-    if (typeof result === 'string') return result
-    return JSON.stringify(result, null, 2)
   }
 }
 
@@ -192,7 +158,7 @@ function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
       (value === undefined || value === 'true' || value === 'false')) {
       forwarded.push(arg)
     } else {
-      throw new Error('Project Chrome accepts only a managed remote-debugging-port and reviewed capability/telemetry switches; external endpoints, auto-connect, profiles and other launch options are not supported')
+      throw new Error('Project Chrome imports accept only a managed remote-debugging-port and reviewed capability/telemetry switches; use browser_setup for browser selection or explicit CDP attachment, never raw connection/profile flags')
     }
   }
   return { args: forwarded, port }
@@ -203,7 +169,7 @@ function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
  *
  * Supports three path forms:
  *  - `v:tools/<name>` — load a pre-registered tool, MCP server, or factory.
- *  - `<path>.ts` — import a TypeScript tool module from the filesystem.
+ * Skill tools are declared in SKILL.md; their source runs only in a child.
  *  - `<path>.json` — load an MCP server from a JSON config file (standard
  *    `{ mcpServers: { ... } }` or shim `{ command, args, env }` format).
  *
@@ -219,23 +185,24 @@ export class ImportTool implements Tool {
   private readonly scope = getProjectScope()
   private readonly projectId?: string
   private readonly browserKeys = new WeakMap<SessionTools, Map<string, string>>()
+  private readonly browsers = new SessionBrowsers()
   readonly name = 'import_tool'
   readonly supportsRemoteWorkdir = true
   readonly description = 'Import a tool or MCP server into the current session. ' +
-    'Source: v:tools/<name> for pre-registered, .ts for script tools, .json for MCP config files. ' +
+    'Source: v:tools/<name> for registered tools (including SKILL.md declarations), or .json for MCP config files. ' +
     'Read v:tools for available sources. Returns current tool contracts before execution. Active until sleep or configuration changes.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       source: {
         type: 'string',
-        description: 'Virtual source (v:tools/<name>) or filesystem path (.ts module, .json MCP config).',
+        description: 'Virtual source (v:tools/<name>) or .json MCP configuration path.',
       },
       args: {
         type: 'array',
         items: { type: 'string' },
         description: 'Extra string arguments. For MCP tools: CLI flags (e.g. ["--remote-debugging-port=9223"]). ' +
-          'For .ts modules: passed to the module\'s optional init(args) function.',
+          'Skill tools take arguments at invocation, not import time.',
       },
       server: {
         type: 'string',
@@ -250,12 +217,65 @@ export class ImportTool implements Tool {
     private workspace: string,
     private chromeManager?: ChromeManager,
     private getSkillDirectory: SkillDirectoryResolver = () => undefined,
+    private mcpIndex = new McpToolIndex(workspace),
   ) {
     this.builtins = new Map(loadable)
     this.projectId = this.scope?.projectId ?? chromeManager?.projectId
     if (this.scope && chromeManager && chromeManager.projectId !== this.projectId) {
       throw new Error('Import tool Chrome project binding mismatch')
     }
+    if (this.sessionBrowsersEnabled()) {
+      this.registerBuiltin('browser_setup', new BrowserSetupTool(async (request, context) => {
+        const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
+        if (denied) return denied
+        if (!context.tools.canUseDynamic('browser_setup') || !context.tools.has('invoke_tool')) {
+          return 'Error: browser setup is not available for this agent type.'
+        }
+        const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
+        return this.withImports(context.tools.dynamicOwner, signal, async () => {
+          if (request.action === 'list') return JSON.stringify({
+            instances: this.browsers.list(context.tools).map(instance => this.browserReceipt(instance)),
+          })
+          if (request.action === 'close') {
+            const instance = this.browsers.resolve(context.tools, request.instance)
+            if (typeof instance === 'string') return instance
+            await this.browsers.close(context.tools, instance)
+            return JSON.stringify({ instance: instance.id, closed: true })
+          }
+          const instance = this.browsers.create(context.tools, request.target)
+          const result = await this.withImports(instance.tools, signal, () =>
+            this.loadByName('chrome-devtools', instance.tools, [], { signal }))
+          if (typeof result === 'string') return result
+          return JSON.stringify(this.browserReceipt(instance))
+        })
+      }))
+    }
+  }
+
+  private sessionBrowsersEnabled(): boolean {
+    const entry = this.loadable.get('chrome-devtools')
+    return !!(entry && isMcpLoadable(entry) && this.projectId &&
+      (entry.chromeManager ?? entry.sharedConn?.chromeManager ?? this.chromeManager))
+  }
+
+  private browserReceipt(instance: BrowserInstance) {
+    return {
+      instance: instance.id, source: 'tools:chrome-devtools', mode: instance.target.mode,
+      owned: instance.target.mode === 'launch', ready: instance.ready,
+      ...(instance.target.mode === 'launch' ? instance.target.options : { endpoint: instance.target.endpoint }),
+      usage: 'Pass instance to search({space:"tools:chrome-devtools",instance,...}) and invoke_tool({name:"chrome-devtools__...",instance,args:{...}}). Required when multiple instances are open.',
+    }
+  }
+
+  resolveInvocationTools(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string {
+    if (!toolName.startsWith('chrome-devtools__') || !this.sessionBrowsersEnabled()) {
+      return instance === undefined ? context.tools : 'Error: instance is supported only for the built-in session browser.'
+    }
+    const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
+    if (denied) return denied
+    if (!context.tools.canUseDynamic(toolName)) return `Error: dynamic tool "${toolName}" is not available for this agent type.`
+    const target = this.browsers.resolve(context.tools, instance)
+    return typeof target === 'string' ? target : target.tools
   }
 
   isBuiltinName(name: string): boolean { return this.builtins.has(name) }
@@ -275,7 +295,7 @@ export class ImportTool implements Tool {
   async registerSkillTools(skill: Skill, context: ExecutionContext): Promise<string[]> {
     if (skill.meta.toolsError) throw new Error(`Invalid tools in skill "${skill.meta.name}": ${skill.meta.toolsError}`)
     const declarations = SkillToolDeclarationsSchema.parse(skill.meta.tools ?? {})
-    if (Object.keys(declarations).length && context.remoteWorkdir) throw new Error('Skill TypeScript tools require a local workdir')
+    if (Object.keys(declarations).length && context.remoteWorkdir) throw new Error('Skill scripts require a local workdir')
     if (skill.meta.admin && !context.admin) throw new Error('This skill requires an admin session')
     if (this.projectId && context.projectId !== this.projectId) throw new Error('Skill tool Project binding mismatch')
     const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
@@ -283,6 +303,7 @@ export class ImportTool implements Tool {
       const current = this.skillTools.get(context.tools) ?? new Map<string, ScriptLoadable>()
       const next = new Map<string, ScriptLoadable>()
       for (const [name, declaration] of Object.entries(declarations)) {
+        assertImportPolicy(declaration.imports, context.tools.allowedModules ?? declaration.imports)
         if (!context.tools.has('invoke_tool') || !context.tools.canUseDynamic(name)) {
           throw new Error(`Skill tool "${name}" is not available for this agent type`)
         }
@@ -349,12 +370,12 @@ export class ImportTool implements Tool {
       name,
       content: JSON.stringify({
         source: `${VIRTUAL_TOOLS_PREFIX}${name}`,
-        kind: isMcpLoadable(entry) ? 'mcp' : isScriptLoadable(entry) ? 'typescript' : 'tool',
+        kind: isMcpLoadable(entry) ? 'mcp' : isScriptLoadable(entry) ? 'script' : 'tool',
         ...(isScriptLoadable(entry) ? { skill: entry.script.skill } : {}),
         description: isMcpLoadable(entry)
           ? entry.config.description ?? `MCP server ${entry.config.name} (${entry.config.transport})`
           : isFactoryLoadable(entry) ? `On-demand tool ${name}`
-          : isScriptLoadable(entry) ? `Skill TypeScript tool ${name}; loaded on tool discovery or invocation` : entry.description,
+          : isScriptLoadable(entry) ? entry.script.description : entry.description,
       }),
     }))
   }
@@ -367,6 +388,8 @@ export class ImportTool implements Tool {
   }
 
   async searchTools(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+    const requester = context.tools
+    const requestSignal = AbortSignal.any([context.signal, requester.dynamicSignal, requester.ownerSignal])
     if (!context.tools.has('search') || !context.tools.has('invoke_tool')) {
       return 'Error: tool search and invocation are not available for this agent type.'
     }
@@ -387,9 +410,27 @@ export class ImportTool implements Tool {
     const selected = typeof args.source === 'string'
       ? args.source.replace(/^v:tools\//, '') : undefined
     if (selected !== undefined && !this.catalogFor(context.tools).has(selected)) return `Error: unknown catalog source "${selected}".`
-    const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
+    if (args.instance !== undefined && (typeof args.instance !== 'string' || !args.instance.trim())) {
+      return 'Error: instance must be a nonempty browser instance ID.'
+    }
+    if (args.instance !== undefined && selected !== 'chrome-devtools') return 'Error: instance requires space tools:chrome-devtools.'
+    let browserInstance: BrowserInstance | undefined
+    if (selected === 'chrome-devtools' && this.sessionBrowsersEnabled()) {
+      const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
+      if (denied) return denied
+      const target = this.browsers.resolve(context.tools, args.instance as string | undefined)
+      if (typeof target === 'string') return target
+      browserInstance = target
+      context = { ...context, tools: target.tools }
+    } else if (args.instance !== undefined) return 'Error: session browser instances are not configured.'
+    const signal = AbortSignal.any([requestSignal, context.tools.dynamicSignal])
     return this.withImports(context.tools, signal, async () => {
-      const candidates = new Map<string, { tool: Tool; source?: string }>()
+      const candidates = new Map<string, {
+        tool: { name: string; description: string; parameters: Record<string, unknown> }
+        source?: string
+        indexedAt?: string
+        instance?: string
+      }>()
       const errors: Array<{ source: string; message: string }> = []
       const searchedSources: string[] = []
       const deferredSources: string[] = []
@@ -408,6 +449,21 @@ export class ImportTool implements Tool {
           return
         }
         try {
+          if (isMcpLoadable(entry) && this.configured.get(name) === entry &&
+            entry.config.name !== 'chrome-devtools' && !entry.chromeManager && !entry.sharedConn?.chromeManager) {
+            const indexed = await this.mcpIndex.read(entry.config)
+            signal.throwIfAborted()
+            if (!indexed) {
+              errors.push({ source, message: 'MCP tools are not indexed for this configuration. Read and save v:config/mcp.json to index them; search does not connect configured servers.' })
+              return
+            }
+            searchedSources.push(source)
+            for (const info of indexed.tools) {
+              const tool = mcpToolContract(entry.config.name, info)
+              if (requester.canUseDynamic(tool.name)) candidates.set(tool.name, { tool, source, indexedAt: indexed.indexedAt })
+            }
+            return
+          }
           const result = await this.loadByName(name, context.tools, [], {
             signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
           })
@@ -418,7 +474,7 @@ export class ImportTool implements Tool {
           }
           searchedSources.push(source)
           for (const tool of result) {
-            if (context.tools.canUseDynamic(tool.name)) candidates.set(tool.name, { tool, source })
+            if (requester.canUseDynamic(tool.name)) candidates.set(tool.name, { tool, source, instance: browserInstance?.id })
           }
         } catch (error) {
           signal.throwIfAborted()
@@ -438,15 +494,24 @@ export class ImportTool implements Tool {
         for (const tool of context.tools.activeDynamicTools()) {
           if (!candidates.has(tool.name)) candidates.set(tool.name, { tool })
         }
+        for (const instance of this.browsers.list(requester)) {
+          for (const tool of instance.tools.activeDynamicTools()) {
+            if (requester.canUseDynamic(tool.name)) candidates.set(`${instance.id}:${tool.name}`, {
+              tool, source: `${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, instance: instance.id,
+            })
+          }
+        }
       }
       const ranked = [...candidates.values()]
-        .filter(({ tool }) => context.tools.hasDynamic(tool.name))
         .map(candidate => ({ ...candidate, score: toolSearchScore(query, candidate.tool, candidate.source) }))
         .filter(candidate => candidate.score > 0)
         .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name, 'en'))
       return JSON.stringify({
-        tools: ranked.slice(offset, offset + limit).map(({ tool, source }) => ({
+        ...(browserInstance ? { instance: browserInstance.id } : {}),
+        tools: ranked.slice(offset, offset + limit).map(({ tool, source, indexedAt, instance }) => ({
           name: tool.name, source, description: tool.description, parameters: tool.parameters,
+          ...(instance ? { instance } : {}),
+          ...(indexedAt ? { indexedAt } : {}),
         })),
         totalMatches: ranked.length,
         hasMore: ranked.length > offset + limit,
@@ -494,6 +559,8 @@ export class ImportTool implements Tool {
       return await pending
     } finally {
       if (this.imports.get(tools) === pending) this.imports.delete(tools)
+      const instance = this.browsers.forTools(tools)
+      if (signal.aborted && instance && !instance.ready) await this.browsers.close(instance.owner, instance)
     }
   }
 
@@ -512,7 +579,7 @@ export class ImportTool implements Tool {
     const extraArgs: string[] = Array.isArray(args.args) ? args.args : []
 
     if (!path) {
-      return 'Error: `source` is required. Use v:tools/<name> for pre-registered tools, .ts for script tools, .json for MCP config files.'
+      return 'Error: `source` is required. Use v:tools/<name> for registered tools or .json for MCP config files.'
     }
 
     // Virtual tool path: v:tools/<name>
@@ -528,7 +595,8 @@ export class ImportTool implements Tool {
       const summary = entry && isMcpLoadable(entry)
         ? `Loaded ${result.length} tool(s) from MCP server "${name}" for this session.`
         : `Tool "${name}" loaded for this session.`
-      return `${summary}\n${toolInvocationContract(result)}`
+      const browser = name === 'chrome-devtools' ? this.browsers.list(tools)[0] : undefined
+      return `${summary}${browser ? ` Browser instance: ${browser.id}.` : ''}\n${toolInvocationContract(result)}`
     }
 
     // JSON MCP config file
@@ -536,13 +604,7 @@ export class ImportTool implements Tool {
       return await this.loadFromJsonConfig(path, tools, extraArgs, args.server, options)
     }
 
-    // TypeScript module
-    if (path.endsWith('.ts')) {
-      if (args.server !== undefined) return 'Error: server selects an entry in a JSON config; omit it for script tools.'
-      return await this.loadFromPath(path, tools, extraArgs, options)
-    }
-
-    return `Error: unrecognized source "${path}". Use v:tools/<name>, a .ts module path, or a .json MCP config file.`
+    return `Error: unrecognized source "${path}". Declare scripts in SKILL.md and read the skill, then use v:tools/<name>; MCP configurations use .json.`
   }
 
   async execute(
@@ -566,6 +628,13 @@ export class ImportTool implements Tool {
         context.projectId !== (this.projectId ?? manager?.projectId)) {
         return 'Error: import tool Chrome project binding mismatch'
       }
+      if (entry.config.name === 'chrome-devtools' && this.projectId) {
+        const scope = getProjectScope()
+        if (!manager || manager.projectId !== this.projectId || this.scope?.closed ||
+          (scope && (scope.projectId !== this.projectId || (this.scope && scope !== this.scope)))) {
+          return 'Error: project Chrome requires its own runtime-managed browser'
+        }
+      }
     }
     return undefined
   }
@@ -583,6 +652,11 @@ export class ImportTool implements Tool {
     signal?: AbortSignal,
   ): Promise<string | undefined> {
     if (!sessionTools.canUseDynamic(toolName)) return undefined
+    if (toolName.startsWith('chrome-devtools__') && this.sessionBrowsersEnabled()) {
+      const target = this.browsers.resolve(sessionTools)
+      if (typeof target === 'string') return target
+      sessionTools = target.tools
+    }
     if (sessionTools.hasDynamic(toolName)) return undefined
     const activeSignal = signal ? AbortSignal.any([signal, sessionTools.dynamicSignal]) : sessionTools.dynamicSignal
     const load = (name: string) => this.withImports(sessionTools, activeSignal, async () => {
@@ -627,6 +701,33 @@ export class ImportTool implements Tool {
     }
 
     if (isMcpLoadable(entry)) {
+      if (name === 'chrome-devtools' && this.sessionBrowsersEnabled()) {
+        const instance = this.browsers.resolve(tools)
+        if (typeof instance === 'string') return instance
+        if (extraArgs.length && instance.importArgs && !isDeepStrictEqual(extraArgs, instance.importArgs)) {
+          return 'Error loading project Chrome: browser instance startup arguments are fixed. Close it before changing preload arguments. Use browser_setup for separately routed browser targets.'
+        }
+        const instanceArgs = instance.importArgs ?? extraArgs
+        const load = async () => {
+          const signal = AbortSignal.any([options.signal, instance.tools.dynamicSignal])
+          try {
+            const result = await this.loadMcp(name, entry, instance.tools, instanceArgs, { signal })
+            signal.throwIfAborted()
+            if (typeof result !== 'string') {
+              instance.ready = true
+              instance.importArgs = [...instanceArgs]
+            } else if (!instance.ready) await this.browsers.close(instance.owner, instance)
+            return result
+          } catch (error) {
+            if (!instance.ready) {
+              try { await this.browsers.close(instance.owner, instance) }
+              catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Browser setup and cleanup failed') }
+            }
+            throw error
+          }
+        }
+        return tools === instance.tools ? load() : this.withImports(instance.tools, options.signal, load)
+      }
       return await this.loadMcp(name, entry, tools, extraArgs, options)
     }
 
@@ -637,10 +738,11 @@ export class ImportTool implements Tool {
     if (isScriptLoadable(entry)) {
       await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
       if (tools.hasDynamic(name)) return tools.activeDynamicTools().filter(tool => tool.name === name)
-      return this.loadScript(entry.script.source, tools, entry.script.args ?? [], options, name, entry.resource, async context => {
+      if (extraArgs.length) return 'Error: skill scripts do not accept import-time arguments; pass arguments to invoke_tool.'
+      return this.loadScript(entry.script, tools, options, name, entry.resource, async context => {
         if (!entry.resource.active) throw new Error('Skill tool registration expired; read the skill again')
         if (entry.script.admin && !context.admin) throw new Error('This skill requires an admin session')
-        if (context.remoteWorkdir) throw new Error('Skill TypeScript tools require a local workdir')
+        if (context.remoteWorkdir) throw new Error('Skill scripts require a local workdir')
         if (this.projectId && context.projectId !== this.projectId) throw new Error('Skill tool Project binding mismatch')
         await resolveSkillToolSource(entry.script.skill, entry.script.source, this.getSkillDirectory)
       })
@@ -671,7 +773,7 @@ export class ImportTool implements Tool {
     const projectId = this.projectId ?? scope?.projectId ?? chromeManager?.projectId
     const managedChrome = projectId !== undefined &&
       (chromeManager !== undefined || connOwner.config.name === 'chrome-devtools' ||
-        name === 'chrome-devtools' || name === 'chrome-devtools-full')
+        name === 'chrome-devtools')
     if (managedChrome && (!chromeManager || chromeManager.projectId !== projectId ||
       (scope && (scope.projectId !== projectId || (this.scope && scope !== this.scope))) ||
       this.scope?.closed)) {
@@ -698,24 +800,31 @@ export class ImportTool implements Tool {
       } catch (error) {
         return `Error loading project Chrome: ${error instanceof Error ? error.message : String(error)}`
       }
-      let keys = this.browserKeys.get(sessionTools)
-      if (!keys) {
-        keys = new Map()
-        this.browserKeys.set(sessionTools, keys)
+      const instance = this.browsers.forTools(sessionTools)
+      if (instance?.target.mode === 'attach') {
+        if (parsed.port !== undefined) return 'Error: an attached browser cannot use a managed remote-debugging-port.'
+        effectiveArgs.push(instance.target.argument)
+      } else {
+        let keys = this.browserKeys.get(sessionTools)
+        if (!keys) {
+          keys = new Map()
+          this.browserKeys.set(sessionTools, keys)
+        }
+        let key = keys.get(connKey)
+        if (!key) {
+          key = crypto.randomUUID()
+          keys.set(connKey, key)
+          const allocationKey = key
+          sessionTools.onReset(async () => {
+            keys.delete(connKey)
+            await chromeManager.release(allocationKey)
+          })
+        }
+        const result = await chromeManager.allocate(key, parsed.port, undefined,
+          instance?.target.mode === 'launch' ? instance.target.options : undefined, options.signal)
+        if ('error' in result) return `Error launching project Chrome: ${result.error}`
+        effectiveArgs.push(...result.extraArgs)
       }
-      let key = keys.get(connKey)
-      if (!key) {
-        key = crypto.randomUUID()
-        keys.set(connKey, key)
-        const allocationKey = key
-        sessionTools.onReset(async () => {
-          keys.delete(connKey)
-          await chromeManager.release(allocationKey)
-        })
-      }
-      const result = await chromeManager.allocate(key, parsed.port)
-      if ('error' in result) return `Error launching project Chrome: ${result.error}`
-      effectiveArgs.push(...result.extraArgs)
     } else if (chromeManager) {
       // Check if port/user-data-dir were explicitly provided
       const hasExplicitPort = effectiveArgs.some((a) => a.startsWith('--remote-debugging-port='))
@@ -747,7 +856,8 @@ export class ImportTool implements Tool {
     try {
       const adapters = await this.connectMcp(
         { ...connOwner.config, args: effectiveArgs }, connKey, sessionTools, entry.toolFilter, options,
-        () => this.loadable.get(name) === entry,
+        () => this.loadable.get(name) === entry && this.browsers.forTools(sessionTools)?.active !== false,
+        this.configured.get(name) === entry && !extraCliArgs.length && !chromeManager ? entry.config : undefined,
       )
       return adapters
     } catch (error) {
@@ -767,6 +877,7 @@ export class ImportTool implements Tool {
     filter: Set<string> | undefined,
     options: ImportOptions,
     isCurrent: () => boolean = () => true,
+    indexConfig?: McpServerConfig,
   ): Promise<Tool[]> {
     const checkCurrent = () => {
       options.signal.throwIfAborted()
@@ -807,6 +918,13 @@ export class ImportTool implements Tool {
       checkCurrent()
       if (sessionTools.getMcpConn(connKey) !== cached || version !== cached.version) {
         throw new Error('MCP tool list changed during import; import the source again.')
+      }
+      if (indexConfig) {
+        await this.mcpIndex.store(indexConfig, tools, options.signal)
+        checkCurrent()
+        if (sessionTools.getMcpConn(connKey) !== cached || version !== cached.version) {
+          throw new Error('MCP tool list changed during index refresh; import the source again.')
+        }
       }
       sessionTools.refreshMcpTools(connKey, JSON.stringify(tools))
       const connection = cached.conn
@@ -894,71 +1012,24 @@ export class ImportTool implements Tool {
     return tools
   }
 
-  private async loadFromPath(
-    path: string,
-    sessionTools: SessionTools,
-    initArgs: string[],
-    options: ImportOptions,
-  ): Promise<string> {
-    const result = await this.loadScript(path, sessionTools, initArgs, options)
-    return typeof result === 'string' ? result
-      : `Custom tool "${result[0].name}" loaded for this session.\n${toolInvocationContract(result)}`
-  }
-
   private async loadScript(
-    path: string,
+    declaration: SkillToolDeclaration,
     sessionTools: SessionTools,
-    initArgs: string[],
     options: ImportOptions,
-    registeredName?: string,
-    resource?: { active: boolean },
-    validate?: (context: ExecutionContext) => Promise<void>,
+    registeredName: string,
+    resource: { active: boolean },
+    validate: (context: ExecutionContext) => Promise<void>,
   ): Promise<Tool[] | string> {
     options.signal.throwIfAborted()
-    const registrationExpired = () => resource?.active === false
-    const absolutePath = isAbsolute(path) ? path : resolve(this.workspace, path)
-
+    let code: string
     try {
-      await nodeStat(absolutePath)
-    } catch {
-      return `Error: tool module not found at "${absolutePath}"`
-    }
-
-    let mod: Record<string, unknown>
-    options.signal.throwIfAborted()
-    if (registrationExpired()) return 'Error: skill tool registration changed before loading; read the skill again'
-    try {
-      registerTypeScriptLoader()
-      const specifier = pathToFileURL(absolutePath).href
-      // Cache-bust so re-loading a modified module picks up changes
-      mod = await import(`${specifier}?v=${randomUUID()}`)
+      code = await readFile(declaration.source, 'utf8')
     } catch (err) {
-      return `Error importing tool module: ${err instanceof Error ? err.message : String(err)
-        }`
+      return `Error reading tool source: ${err instanceof Error ? err.message : String(err)}`
     }
-
-    if (!isScriptToolModule(mod)) {
-      return (
-        'Error: tool module must export: name (string), description (string), ' +
-        'parameters (object), and execute (function). ' +
-        `Found exports: ${Object.keys(mod).join(', ')}`
-      )
-    }
-
     options.signal.throwIfAborted()
-    if (registrationExpired()) return 'Error: skill tool registration changed before initialization; read the skill again'
-    // Call optional init() with load-time args
-    if (mod.init && initArgs.length > 0) {
-      try {
-        await mod.init(initArgs)
-      } catch (err) {
-        return `Error initializing tool "${mod.name}": ${err instanceof Error ? err.message : String(err)}`
-      }
-    }
-
-    const tool = new ScriptToolAdapter(mod, registeredName, validate)
-    options.signal.throwIfAborted()
-    if (registrationExpired()) return `Error: skill tool "${tool.name}" changed while loading; read the skill again`
+    if (!resource.active) return `Error: skill tool "${registeredName}" changed while loading; read the skill again`
+    const tool = new ScriptToolAdapter(registeredName, declaration, code, validate)
     sessionTools.registerDynamic(tool, undefined, resource)
     return [tool]
   }

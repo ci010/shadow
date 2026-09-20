@@ -82,7 +82,8 @@
             <div class="trace-title">LLM Request</div>
             <div v-if="traceRequestMessages.length" class="trace-messages">
               <div v-for="(msg, i) in traceRequestMessages" :key="i" class="trace-msg">
-                <span class="trace-msg-role">{{ msg.role }}</span>
+                <span class="trace-msg-role">{{ messageRoleLabel(msg) }}</span>
+                <span v-if="messageRoleLabel(msg) !== msg.role" class="trace-msg-protocol">Model role: {{ msg.role }}</span>
                 <pre class="trace-msg-content">{{ typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) }}</pre>
                 <div v-if="msg.tool_calls?.length" class="trace-msg-tools">
                   <div v-for="tc in msg.tool_calls" :key="tc.id" class="trace-msg-tool">
@@ -98,7 +99,8 @@
             <div class="trace-title">LLM Response</div>
             <div v-if="traceResponseMessages.length" class="trace-messages">
               <div v-for="(msg, i) in traceResponseMessages" :key="i" class="trace-msg">
-                <span class="trace-msg-role">{{ msg.role }}</span>
+                <span class="trace-msg-role">{{ messageRoleLabel(msg) }}</span>
+                <span v-if="messageRoleLabel(msg) !== msg.role" class="trace-msg-protocol">Model role: {{ msg.role }}</span>
                 <pre class="trace-msg-content">{{ typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) }}</pre>
                 <div v-if="msg.tool_calls?.length" class="trace-msg-tools">
                   <div v-for="tc in msg.tool_calls" :key="tc.id" class="trace-msg-tool">
@@ -117,6 +119,7 @@
 </template>
 
 <script setup lang="ts">
+import { messageRoleLabel } from '../message-author.ts'
 import { apiUrl } from '../api-url.ts'
 import { computed, ref, watch } from 'vue'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
@@ -756,6 +759,8 @@ defineExpose({ logCount: computed(() => logEntries.value.length) })
   max-height: 200px;
   overflow: auto;
 }
+
+.trace-msg-protocol { margin-left: 8px; color: var(--c-text-secondary); font-size: 11px; }
 
 .trace-msg-tools {
   margin-top: 0.25rem;

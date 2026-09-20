@@ -41,7 +41,7 @@ const question = (sessionId: string, id: string, parent = false) => ({
 const pending = new Map<string, ReturnType<typeof question>>()
 const live = new LiveFixture()
 const failures: string[] = []
-const answers: { requestId: string; option: string }[] = []
+const answers: { requestId: string; option?: string; customText?: string }[] = []
 const cancellations: { requestId: string }[] = []
 let rejectNext = false
 let sends = 0
@@ -92,10 +92,14 @@ const server = createServer(async (request, response) => {
         answers.push(input)
         if (rejectNext) { rejectNext = false; return json({ error: 'unavailable', message: 'Synthetic answer rejection.' }, 503) }
         const current = pending.get(id)
-        assert.ok(current && current.id === input.requestId && current.options.includes(input.option))
+        assert.ok(current && current.id === input.requestId)
+        const custom = typeof input.customText === 'string'
+        assert.deepEqual(Object.keys(input).sort(), [custom ? 'customText' : 'option', 'requestId'])
+        assert.ok(custom ? input.customText.trim() && input.customText.length <= 4000 : current.options.includes(input.option))
         assert.equal(current.recipient.kind, 'user')
         pending.delete(id)
-        json({ answer: { ...input, answeredBy: 'user', answeredAt: new Date().toISOString() } })
+        json({ answer: { requestId: input.requestId, option: custom ? input.customText.trim() : input.option,
+          ...(custom ? { custom: true } : {}), answeredBy: 'user', answeredAt: new Date().toISOString() } })
         live.chat(id, { event: 'response', content: 'Answer received.', done: true })
         live.finish(id)
         return
@@ -170,6 +174,8 @@ async function runViewport(origin: string, width: number, height: number) {
   window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith(`${origin}/`)) event.preventDefault() })
   try {
     await window.loadURL(`${origin}/chat/${encodeURIComponent(root)}`)
+    window.webContents.debugger.attach('1.3')
+    await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
     await waitFor(window, `!!document.querySelector('.composer-input textarea') && !!document.querySelector('.chat-bubble')`)
     const beforeReads = reads
     await new Promise(resolve => setTimeout(resolve, 1600))
@@ -195,6 +201,71 @@ async function runViewport(origin: string, width: number, height: number) {
     await evaluate(window, `document.querySelector('.yield-continue').click()`)
     await waitFor(window, `!document.querySelector('.yield-question') && !document.querySelector('.composer-input textarea').disabled`)
     assert.equal(answers.at(-1)?.option, 'Refactor the implementation with focused tests')
+    assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+
+    for (const count of [2, 3]) {
+      const current = question(root, `custom-${count}-${width}`)
+      if (count === 2) { current.options = ['Yes', 'No']; current.defaultOption = 'No' }
+      pending.set(root, current)
+      live.publisher.invalidateSessions(root)
+      await waitFor(window, `!!document.querySelector('.yield-custom-toggle')`)
+      assert.equal(await evaluate(window, `document.querySelectorAll('.yield-custom-toggle').length`), 1)
+      await evaluate(window, `document.querySelector('.yield-custom-toggle').click()`)
+      await waitFor(window, `document.activeElement === document.querySelector('.yield-custom textarea')`)
+      assert.equal(await evaluate(window, `document.querySelector('.yield-continue').disabled`), true)
+      assert.equal(await evaluate(window, `document.querySelector('.yield-custom textarea').maxLength`), 4000)
+      await evaluate(window, `(() => {
+        const input = document.querySelector('.yield-custom textarea');
+        input.value = 'My own approach\\nwith details';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`)
+      await new Promise(resolve => setTimeout(resolve, 1600))
+      assert.equal(await evaluate(window, `document.querySelector('.yield-custom textarea').value`), 'My own approach\nwith details')
+      const bounds = await evaluate(window, `(() => {
+        const card = document.querySelector('.yield-question'), input = card.querySelector('textarea'), button = card.querySelector('.yield-continue');
+        const rect = card.getBoundingClientRect(), r = button.getBoundingClientRect(), text = input.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return { bounded: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
+          overflow: card.scrollWidth > card.clientWidth || document.documentElement.scrollWidth > innerWidth,
+          inputVisible: text.top >= rect.top && text.bottom <= rect.bottom,
+          reachable: hit === button || button.contains(hit) };
+      })()`)
+      assert.deepEqual(bounds, { bounded: true, overflow: false, inputVisible: true, reachable: true }, `Custom entry stays usable with ${count} presets at ${width}px`)
+      await writeFile(join(directory, `yield-custom-${count}-${width}.png`), (await window.webContents.capturePage()).toPNG())
+      rejectNext = true
+      await evaluate(window, `document.querySelector('.yield-continue').click()`)
+      await waitFor(window, `document.querySelector('.yield-error')?.textContent.includes('Synthetic answer rejection')`)
+      assert.equal(await evaluate(window, `document.querySelector('.yield-custom textarea').value`), 'My own approach\nwith details')
+      assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+      assert.equal(await evaluate(window, `(() => {
+        const button = document.querySelector('.yield-continue'), rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return hit === button || button.contains(hit);
+      })()`), true, 'A rejected response keeps the retry action reachable')
+      await evaluate(window, `document.querySelector('.yield-continue').click()`)
+      await waitFor(window, `!document.querySelector('.yield-question')`)
+      assert.deepEqual(answers.at(-1), { requestId: current.id, customText: 'My own approach\nwith details' })
+      assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+      console.log(`LAYOUT_YIELD_CUSTOM ${JSON.stringify({ width, count, bounds })}`)
+    }
+
+    pending.set(root, { ...question(root, `binary-${width}`), question: 'Continue with this approach?', options: ['Yes', 'No'], defaultOption: 'No' })
+    live.publisher.invalidateSessions(root)
+    await waitFor(window, `document.querySelectorAll('.yield-choice').length === 2`)
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input[type="radio"]').length`), 0)
+    const beforeBinary = answers.length
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-continue').length`), 0)
+    const binaryBounds = await evaluate<boolean>(window, `Array.from(document.querySelectorAll('.yield-choice')).every(button => {
+      const r = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return r.left >= 0 && r.right <= innerWidth && r.height >= 32 && (hit === button || button.contains(hit));
+    })`)
+    assert.equal(binaryBounds, true, 'Both direct answers fit and remain reachable')
+    await writeFile(join(directory, `yield-binary-${width}.png`), (await window.webContents.capturePage()).toPNG())
+    assert.equal(answers.length, beforeBinary)
+    await evaluate(window, `document.querySelector('.yield-choice').click()`)
+    await waitFor(window, `!document.querySelector('.yield-question')`)
+    assert.deepEqual(answers.at(-1), { requestId: `binary-${width}`, option: 'Yes' })
     assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
 
     const expiring = question(root, `expired-${width}`)
@@ -230,6 +301,7 @@ async function runViewport(origin: string, width: number, height: number) {
     await window.loadURL(`${origin}/chat/${encodeURIComponent(child)}`)
     await waitFor(window, `document.querySelector('.yield-question')?.textContent.includes('Only that session can answer')`)
     assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input:disabled').length`), 3)
+    assert.equal(await evaluate(window, `document.querySelector('.yield-custom-toggle').matches(':disabled')`), true)
     assert.equal(await evaluate(window, `!!document.querySelector('.yield-continue')`), false)
     assert.equal(await evaluate(window, `!!document.querySelector('.yield-cancel')`), false)
     await inspect(window, `yield-parent-${width}`)

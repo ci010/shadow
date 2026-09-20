@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import type { MainCluster } from '../cluster/main-cluster.ts'
 import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
 import { ConfigSchema } from '../config/schema.ts'
-import { CapabilityFilesystem } from '../execution/capability-filesystem.ts'
-import { CapabilityWorkdirIdentity } from '../execution/capability-workdir-identity.ts'
+import { ManagedChildWorkdirs } from '../execution/managed-child-workdirs.ts'
+import { MANAGED_SESSION_CAPABILITY } from '../execution/managed-workdir.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { WORKDIR_IDENTITY_OPERATION } from '../execution/workdir-identity.ts'
 import { createProjectRuntime } from './main/project-runtime.ts'
@@ -28,9 +28,9 @@ test('production project composition creates remote folders and sessions with op
   await catalog.init()
   const project = catalog.get('default')!
   const bindings = [{ capabilityId: 'folder', rootPath: folders }]
-  const child = new LocalExecutor(new ProcessManager(), 'child', [
-    new CapabilityWorkdirIdentity(bindings), new CapabilityFilesystem(bindings),
-  ])
+  const workdirs = new ManagedChildWorkdirs(join(root, 'child-managed'), 'child', bindings)
+  await workdirs.init()
+  const child = new LocalExecutor(new ProcessManager(), 'child', workdirs.operationHandlers)
   const descriptor: CapabilityDescriptorV1 = {
     version: 1, nodeId: 'child', capabilityId: 'folder', kind: 'workdir', displayName: 'Remote folder',
     displayPath: home, online: true, permissions: [WORKDIR_IDENTITY_OPERATION],
@@ -38,19 +38,20 @@ test('production project composition creates remote folders and sessions with op
   const cluster = {
     remoteExecutor: child,
     workdirCapabilityLookup: () => ({ node: 'online', capability: { kind: 'workdir', online: true } }),
-    registry: { listCapabilities: () => [descriptor] },
+    registry: { listCapabilities: () => [descriptor, ...workdirs.capabilities.filter(capability => capability.capabilityId !== 'folder')] },
     getNodeInventory: () => ({ version: 1, nodes: [{ nodeId: 'child', role: 'child', displayName: 'Child',
-      connection: 'connected', capabilities: [descriptor] }] }),
+      connection: 'connected', supportsManagedSessions: true, capabilities: [descriptor, ...workdirs.capabilities.filter(capability => capability.capabilityId !== 'folder')] }] }),
   } as unknown as MainCluster
   const config = ConfigSchema.parse({ agent: { workspace: home, model: 'fixture@openai' },
     providers: { openai: { apiKey: 'fixture-not-used', baseUrl: 'http://127.0.0.1:1' } }, channels: {}, mcp: {} })
   const configStore = new ProjectConfigStore({ configPath: join(root, 'config', 'project.json'), home, getSharedConfig: () => config })
   const effective = await configStore.init(config)
-  const scope = createProjectScope('default')
-  const runtime = await scope.run(() => createProjectRuntime(effective, {
+  let scope = createProjectScope('default')
+  const startRuntime = () => scope.run(() => createProjectRuntime(effective, {
     project, home, scope, catalog, configStore, mainCluster: cluster, copilotAuth: new CopilotAuthenticator(),
-    chromePortAllocator: new ChromePortAllocator(), authorize: () => true, gatewayBaseUrl: 'http://127.0.0.1:1', selfCodeRoot: process.cwd(),
+    chromePortAllocator: new ChromePortAllocator(), authorize: () => true, selfCodeRoot: process.cwd(),
   }))
+  let runtime = await startRuntime()
   try {
     await runtime.ready
     const request = (path: string, body?: unknown) => runtime.app.request(path, body === undefined ? {} : {
@@ -140,6 +141,40 @@ test('production project composition creates remote folders and sessions with op
     assert.equal(localTopic.status, 200, await localTopic.clone().text())
     assert.equal((await localTopic.json()).folderId, local.folder.id)
     assert.equal((await request('/api/topics', { ...topicRequest, agentType: 'orchestrator' })).status, 400)
+    const folderCount = catalog.folders().length
+    const scratchBody = { nodeId: 'child', requestId: randomUUID() }
+    const scratchResponse = await request('/api/sessions/remote', scratchBody)
+    assert.equal(scratchResponse.status, 201, await scratchResponse.clone().text())
+    const scratch = await scratchResponse.json()
+    assert.equal(scratch.folderId, undefined)
+    assert.equal(catalog.folders().length, folderCount)
+    const allocated = workdirs.capabilities.find(capability => capability.capabilityId === scratch.workdir.capabilityId)!
+    assert(allocated)
+    assert.notEqual(allocated.capabilityId, MANAGED_SESSION_CAPABILITY)
+    await writeFile(join(allocated.displayPath!, 'scratch.txt'), 'Independent Child session')
+    const scratchPreview = await request(`/api/sessions/${encodeURIComponent(scratch.sessionId)}/preview?path=scratch.txt`)
+    assert.equal(scratchPreview.status, 200, await scratchPreview.clone().text())
+    assert.equal((await scratchPreview.json()).content, 'Independent Child session')
+    const scratchGraph = await (await request('/api/sessions/graph')).json()
+    const state = scratchGraph.sessions.find((item: { sessionId: string }) => item.sessionId === scratch.sessionId)
+    assert.equal(state.projectId, 'default')
+    assert.equal(state.folderId, undefined)
+    assert.deepEqual(await (await request('/api/sessions/remote', scratchBody)).json(), scratch)
+    await scope.run(() => runtime.shutdown())
+    scope.close()
+    scope = createProjectScope('default')
+    runtime = await startRuntime()
+    await runtime.ready
+    const resumed = await request(`/api/sessions/${encodeURIComponent(scratch.sessionId)}/preview?path=scratch.txt`)
+    assert.equal(resumed.status, 200, await resumed.clone().text())
+    assert.equal((await resumed.json()).content, 'Independent Child session')
+    assert.deepEqual(await (await request('/api/sessions/remote', scratchBody)).json(), scratch)
+    assert.equal(catalog.folders().length, folderCount)
+    assert(!catalog.folders().some(folder => folder.kind === 'remote' &&
+      folder.workdir.capabilityId === scratch.workdir.capabilityId))
+    const deleted = await runtime.app.request(`/api/sessions/${encodeURIComponent(scratch.sessionId)}`, { method: 'DELETE' })
+    assert.equal(deleted.status, 200, await deleted.clone().text())
+    assert.equal(await readFile(join(allocated.displayPath!, 'scratch.txt'), 'utf8'), 'Independent Child session')
   } finally {
     await scope.run(() => runtime.shutdown())
     scope.close()

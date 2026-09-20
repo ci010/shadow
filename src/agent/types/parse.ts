@@ -2,6 +2,7 @@ import type { AgentTypeDefinition } from './types.ts'
 import { parseFrontmatter } from '../../utils/frontmatter.ts'
 import { isReasoningEffort } from '../llm-config.ts'
 import { parseExecutionMode } from '../../sessions/execution-mode.ts'
+import { ScriptImportsSchema } from '../../script-runtime/module-policy.ts'
 
 /**
  * Parse an AGENT.md file into an AgentTypeDefinition.
@@ -41,6 +42,7 @@ export function parseAgentFile(
     prompt: body,
     allowedTools: toStringArray(fm.allowedTools),
     blockedTools: toStringArray(fm.blockedTools),
+    allowedModules: fm.allowedModules === undefined ? undefined : ScriptImportsSchema.parse(fm.allowedModules),
     defaultMode: fm.defaultMode === undefined
       ? fm.ephemeral === true ? 'task' : 'session'
       : parseExecutionMode(fm.defaultMode),

@@ -9,7 +9,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { EventService } from '../events/service.ts'
 import type { EventSubscription } from '../events/types.ts'
 import type { VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
-import { newPhysicalSessionId } from '../utils/paths.ts'
+import { physicalSessionId } from '../sessions/session-identity.ts'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -110,7 +110,7 @@ export function createSessionsHandler(sessions: SessionManager): {
     const physicalId = isPhysicalId
       ? sessionKey
       : state
-      ? newPhysicalSessionId(state.sessionId, state.segmentIndex)
+      ? physicalSessionId(state)
       : undefined
 
     if (!physicalId && !isPhysicalId) {

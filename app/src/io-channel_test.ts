@@ -2,11 +2,28 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { IoEventQueue } from './io/channel.ts'
 import { IO_MAX_CHUNK_BYTES, IO_MAX_BUFFER_BYTES } from '../../src/io/contracts.ts'
-import { encodeBytes } from './io/transport.ts'
+import { encodeBytes, ioRequest, IoRequestError } from './io/transport.ts'
 
 const credentials = { clientId: 'client', clientToken: 'token', leaseToken: 'lease' }
 const base = 'http://localhost:3000/projects/default/'
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+
+test('I/O transport retains status and error code for targeted lease recovery', async t => {
+  for (const body of [
+    { error: 'client_expired', message: 'Reconnect' },
+    { error: 'forbidden', message: 'Access denied' },
+    null,
+  ]) {
+    t.mock.method(globalThis, 'fetch', async () => Response.json(body, { status: 403 }))
+    await assert.rejects(ioRequest(base, '/clients/client/heartbeat', {}), error => {
+      assert.ok(error instanceof IoRequestError)
+      assert.equal(error.status, 403)
+      assert.equal(error.code, body?.error)
+      assert.equal(error.message, body?.message ?? 'I/O request failed (403)')
+      return true
+    })
+  }
+})
 
 test('relay queue serializes ACKs; responses do not execute or deliver view effects', async () => {
   const events: string[] = []

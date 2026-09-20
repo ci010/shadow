@@ -10,18 +10,20 @@ export function buildMediaUrl(
   apiBase: string,
   sessionId: string,
   path: string,
+  download = false,
 ): string | null {
   if (
     path.startsWith('http://') || path.startsWith('https://') ||
     /^data:image\//i.test(path)
   ) return path
-  if (path.startsWith('data:')) return null
+  if (/^data:/i.test(path)) return null
 
   const chatId = chatIdForMediaSession(sessionId)
-  if (!chatId) return null
+  if (!sessionId || (!chatId && !sessionId.includes(':'))) return null
 
   const url = apiUrl(apiBase, '/api/media')
-  url.searchParams.set('chatId', chatId)
+  url.searchParams.set(chatId ? 'chatId' : 'sessionId', chatId ?? sessionId)
   url.searchParams.set('path', path)
+  if (download) url.searchParams.set('download', '1')
   return url.toString()
 }

@@ -10,6 +10,8 @@ import type { WorkdirCapabilityState } from './locality.ts'
 import { remoteSessionPlugin } from './remote-session-routes.ts'
 import type { Executor } from '../execution/executor.ts'
 import type { SessionStore } from './session-store.ts'
+import { randomUUID } from 'node:crypto'
+import type { NodeInventoryEntry } from '../cluster/node-inventory.ts'
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: remote conversation creation checks Main authority and persists only capability references`, async t => {
@@ -24,6 +26,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       getStatus: async () => null,
       cancel: async () => { throw new Error('Creation must not cancel a job') },
     }
+
     const sessions: Pick<SessionManager, 'workspace' | 'workdirCapabilityLookup' | 'remoteExecutor' | 'buildSession'> = {
       workspace, remoteExecutor: executor,
       workdirCapabilityLookup: ref => ref.nodeId === 'wsl' && ref.capabilityId === 'test-dir' ? capability : { node: 'missing' },
@@ -63,3 +66,40 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     } finally { store.close?.() }
   })
 }
+
+test('rootless creation requires a live allocation grant and never falls back to an existing workdir', async () => {
+  let executed = 0
+  let node: NodeInventoryEntry = {
+    nodeId: 'child', displayName: 'Old Child', role: 'child', connection: 'connected',
+    capabilities: [{ capabilityId: 'arbitrary-folder', kind: 'workdir', displayName: 'Existing folder', online: true }],
+  }
+  const executor: Executor = {
+    execute: () => { executed++; throw new Error('Must not execute') },
+    getStatus: async () => null, cancel: async () => { throw new Error('Must not cancel') },
+  }
+  const app = new Hono()
+  remoteSessionPlugin({
+    authorize: () => true,
+    sessions: {
+      workspace: process.cwd(), remoteExecutor: executor, workdirCapabilityLookup: undefined,
+      buildSession: async () => { throw new Error('Must not create') },
+    },
+    managedSessions: { projectId: 'default', inventory: () => ({ version: 1, nodes: [node] }) },
+  })(app)
+  const request = () => app.request('/api/sessions/remote', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nodeId: 'child', requestId: randomUUID() }),
+  })
+  const unsupported = await request()
+  assert.equal(unsupported.status, 409)
+  assert.deepEqual(await unsupported.json(), {
+    error: 'managed_sessions_unsupported', message: 'Update the selected node to support managed sessions, then reconnect.', action: 'upgrade_node',
+  })
+  node = { ...node, connection: 'offline', supportsManagedSessions: true }
+  assert.equal((await request()).status, 503)
+  node = { ...node, connection: 'revoked' }
+  assert.equal((await request()).status, 503)
+  node = { ...node, nodeId: 'another' }
+  assert.equal((await request()).status, 503)
+  assert.equal(executed, 0)
+})

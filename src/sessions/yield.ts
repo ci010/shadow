@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import type { SessionState } from './session-store.ts'
 import {
-  parseYieldPolicy, parseYieldQuestion,
+  parseYieldPolicy, parseYieldQuestion, parseYieldCustomText,
   type YieldAnswer, type YieldPolicy, type YieldQuestion, type YieldRequest,
 } from './yield-contract.ts'
 
@@ -21,7 +21,7 @@ interface YieldManagerDeps {
   assertCanYield?: (id: string) => void
   getState: (id: string) => SessionState | null | undefined
   getPolicy: (id: string) => YieldPolicy
-  notifyUser: (request: YieldRequest) => Promise<void>
+  notifyUser: (request: YieldRequest, replyTo?: string) => Promise<void>
   notifyParent: (request: YieldRequest) => Promise<void>
 }
 
@@ -61,6 +61,7 @@ export class YieldManager {
     question: YieldQuestion,
     signal: AbortSignal,
     channelUser?: { channel: string; senderId: string },
+    replyTo?: string,
   ): Promise<YieldAnswer> {
     signal.throwIfAborted()
     this.deps.assertCanYield?.(sessionId)
@@ -114,7 +115,7 @@ export class YieldManager {
       // Attach rejection handling immediately, including when delivery throws synchronously.
       try {
         const delivery = recipient.kind === 'user'
-          ? this.deps.notifyUser(snapshot(request))
+          ? this.deps.notifyUser(snapshot(request), replyTo)
           : this.deps.notifyParent(snapshot(request))
         Promise.resolve(delivery).catch(error => this.deliveryFailed(pending, error))
       } catch (error) {
@@ -132,12 +133,20 @@ export class YieldManager {
     return this.answer(this.userRequest(sessionId, requestId), option, 'user')
   }
 
+  answerUserText(sessionId: string, requestId: string, text: string): YieldAnswer {
+    return this.answerText(this.userRequest(sessionId, requestId), text)
+  }
+
   cancelUser(sessionId: string, requestId: string): void {
     this.fail(this.userRequest(sessionId, requestId), abortError('Yield cancelled by user.'))
   }
 
   answerChannel(sessionId: string, requestId: string, option: string, channel: string, senderId: string): YieldAnswer {
     return this.answer(this.channelRequest(sessionId, requestId, channel, senderId), option, 'user')
+  }
+
+  answerChannelText(sessionId: string, requestId: string, text: string, channel: string, senderId: string): YieldAnswer {
+    return this.answerText(this.channelRequest(sessionId, requestId, channel, senderId), text)
   }
 
   cancelChannel(sessionId: string, requestId: string, channel: string, senderId: string): void {
@@ -220,14 +229,25 @@ export class YieldManager {
 
   private answer(pending: PendingYield, option: string, by: 'user' | 'parent'): YieldAnswer {
     if (typeof option !== 'string' || !pending.request.options.includes(option)) {
-      throw new YieldError('invalid_request', 'Answer must exactly match one of the three options.')
+      throw new YieldError('invalid_request', 'Answer must exactly match one of the offered options.')
     }
     return this.complete(pending, option, by)
   }
 
-  private complete(pending: PendingYield, option: string, answeredBy: YieldAnswer['answeredBy']): YieldAnswer {
-    const answer: YieldAnswer = Object.freeze({
+  private answerText(pending: PendingYield, text: string): YieldAnswer {
+    let option: string
+    try { option = parseYieldCustomText(text) }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error
+      throw new YieldError('invalid_request', error.message)
+    }
+    return this.complete(pending, option, 'user', true)
+  }
+
+  private complete(pending: PendingYield, option: string, answeredBy: YieldAnswer['answeredBy'], custom = false): YieldAnswer {
+    const answer = Object.freeze<YieldAnswer>({
       requestId: pending.request.id, option, answeredBy, answeredAt: new Date().toISOString(),
+      ...(custom ? { custom: true } : {}),
     })
     this.cleanup(pending)
     pending.resolve(answer)

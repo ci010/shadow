@@ -1,5 +1,5 @@
 <template>
-  <details class="tool-group tool-activity">
+  <details class="tool-group tool-activity" @toggle.self="groupOpen = isOpen($event)">
     <summary class="tool-activity-summary" @click="emit('interact')">
       <span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />
       <span class="activity-title">{{ batch.entries[0].title }}<span v-if="batch.entries.length > 1"> and {{ batch.entries.length - 1 }} other tool {{ batch.entries.length === 2 ? 'call' : 'calls' }}</span></span>
@@ -14,7 +14,7 @@
         <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
         <span v-else class="activity-status">Line counts unavailable</span>
       </div>
-      <details v-for="entry in batch.entries" :key="entry.index" class="tool-entry">
+      <details v-for="entry in batch.entries" :key="entry.index" class="tool-entry" @toggle.self="setExpanded(entry.index, $event)">
         <summary class="tool-call-header" :title="entry.summary || entry.title" @click="emit('interact')">
           <span class="tool-icon activity-icon" :class="icons[entry.icon]" aria-hidden="true" />
           <span class="tool-name">{{ entry.title }}</span>
@@ -23,14 +23,14 @@
           <span v-else-if="entry.file" class="activity-status">Counts unavailable</span>
           <span v-if="entry.summary && !entry.file" class="tool-args-summary">{{ entry.summary }}</span>
         </summary>
-        <div class="tool-entry-content">
+        <div v-if="groupOpen && expanded.has(entry.index)" class="tool-entry-content">
           <div v-if="entry.arguments" class="tool-arguments">
             <span class="activity-detail-label">Arguments</span>
-            <pre class="tool-call-detail">{{ entry.arguments }}</pre>
+            <ToolPayload class="tool-call-detail" :source="entry.arguments" />
           </div>
-          <details v-if="entry.result !== undefined" class="tool-result" open>
+          <details v-if="entry.result !== undefined" class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
             <summary class="tool-result-header">Result</summary>
-            <pre class="tool-result-content">{{ entry.result || '(Empty result)' }}</pre>
+            <ToolPayload v-if="!closedResults.has(entry.index)" class="tool-result-content" :source="entry.result || '(Empty result)'" />
           </details>
           <p v-if="entry.usage" class="activity-usage">{{ entry.usage.promptTokens.toLocaleString() }} prompt · {{ entry.usage.completionTokens.toLocaleString() }} completion · {{ entry.usage.totalTokens.toLocaleString() }} total tokens</p>
           <p v-if="entry.result === undefined" class="activity-status">{{ running ? 'Waiting for result…' : 'No result recorded' }}</p>
@@ -41,10 +41,26 @@
 </template>
 
 <script setup lang="ts">
+import { reactive, ref } from 'vue'
 import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
+import ToolPayload from './ToolPayload.vue'
 defineProps<{ batch: ToolActivityBatch; running?: boolean }>()
 const emit = defineEmits<{ interact: [] }>()
+const groupOpen = ref(false)
+const expanded = reactive(new Set<number>())
+const closedResults = reactive(new Set<number>())
+function isOpen(event: Event): boolean {
+  return event.currentTarget instanceof HTMLDetailsElement && event.currentTarget.open
+}
+function setExpanded(index: number, event: Event): void {
+  if (isOpen(event)) expanded.add(index)
+  else expanded.delete(index)
+}
+function setResultExpanded(index: number, event: Event): void {
+  if (isOpen(event)) closedResults.delete(index)
+  else closedResults.add(index)
+}
 const icons: Record<ToolActivity['icon'], string> = {
   write: 'i-lucide-file-pen-line',
   read: 'i-lucide-file',

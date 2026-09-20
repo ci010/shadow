@@ -1,15 +1,11 @@
 import type { ExecutionContext } from './context.ts'
-import { type ChildProcess, spawn as childSpawn } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import process from 'node:process'
 import {
   formatElapsed,
   type ManagedProcessStatus,
   type ManagedProcess,
   type ProcessManager,
-  terminateProcessTree,
 } from '../execution/processes/manager.ts'
 import {
   defaultManagedShell,
@@ -17,9 +13,8 @@ import {
   resolveExecShell,
 } from '../execution/processes/shells.ts'
 import type { CommandHandlerManager } from './shell-commands/command-handler.ts'
-import { generatePreamble, startToolBridge } from '../script-runtime/bridge.ts'
-import type { EvalRunnerRequest, EvalRunnerResponse } from '../script-runtime/types.ts'
-import { RUNNER_RESPONSE_PREFIX } from '../script-runtime/types.ts'
+import { bindScriptTools } from '../script-runtime/bridge.ts'
+import { startScript, type ScriptRun } from '../script-runtime/runtime.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { errMsg } from '../utils/truncate.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
@@ -29,7 +24,6 @@ import { decodeChunks } from '../utils/decode-chunks.ts'
 import type { LocalProcessExecutor } from '../execution/executor.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
-import { isWindows } from '../utils/runtime.ts'
 import { executeRemoteShell } from '../execution/remote-shell-client.ts'
 
 async function waitForExit<T>(
@@ -67,11 +61,6 @@ const DANGEROUS_PATTERNS = [
 
 export type ExecShell = ManagedShell | 'node'
 
-function getChildScriptUrl(): string {
-  const extension = import.meta.url.endsWith('.ts') ? 'ts' : 'js'
-  return fileURLToPath(new URL(`../script-runtime/child.${extension}`, import.meta.url))
-}
-
 function parseStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((entry): entry is string => typeof entry === 'string')
@@ -98,132 +87,6 @@ function parseExecShell(
   return null
 }
 
-function encodePayload(payload: EvalRunnerRequest): string {
-  const json = JSON.stringify(payload)
-  const bytes = new TextEncoder().encode(json)
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
-}
-
-function parseRunnerResponse(stdout: string): EvalRunnerResponse | null {
-  const line = stdout
-    .split(/\r?\n/)
-    .find((entry) => entry.startsWith(RUNNER_RESPONSE_PREFIX))
-
-  if (!line) return null
-
-  try {
-    const payload = line.slice(RUNNER_RESPONSE_PREFIX.length)
-    const parsed = JSON.parse(payload) as Partial<EvalRunnerResponse>
-    if (typeof parsed.ok !== 'boolean') return null
-    if (typeof parsed.module !== 'string') return null
-    if (typeof parsed.cwd !== 'string') return null
-    if (typeof parsed.stdout !== 'string') return null
-    if (typeof parsed.stderr !== 'string') return null
-    return parsed as EvalRunnerResponse
-  } catch {
-    return null
-  }
-}
-
-function buildRunnerArgs(payload: string): string[] {
-  return [
-    getChildScriptUrl(),
-    '--eval-runner',
-    payload,
-  ]
-}
-
-interface NodeChildHandle {
-  child: ChildProcess
-  stdoutChunks: Uint8Array[]
-  stderrChunks: Uint8Array[]
-  exitPromise: Promise<ManagedProcessStatus>
-  request: EvalRunnerRequest
-}
-
-async function spawnNodeChild(
-  request: EvalRunnerRequest,
-  workspace: string,
-  bridgeUrl?: string,
-  options: { isolated?: boolean; signal?: AbortSignal } = {},
-): Promise<NodeChildHandle> {
-  const payload = encodePayload(request)
-  const commandArgs = buildRunnerArgs(payload)
-  const childEnv = {
-    ...process.env,
-    ...await loadDotEnv(workspace),
-    ELECTRON_RUN_AS_NODE: '1',
-    SHADOW_TOOLS_URL: bridgeUrl ?? '',
-    SHADOW_TOOLS_CREDENTIAL: process.env.GATEWAY_LAUNCH_CREDENTIAL ??
-      process.env.WINDOWS_USE_LAUNCH_TOKEN ?? '',
-  }
-  options.signal?.throwIfAborted()
-  const child = childSpawn(process.execPath, commandArgs, {
-    cwd: request.cwd,
-    env: childEnv,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-    ...(options.isolated ? { detached: !isWindows } : {}),
-  })
-
-  const stdoutChunks: Uint8Array[] = []
-  const stderrChunks: Uint8Array[] = []
-
-  // Stream stdout/stderr into chunk buffers
-  const pipeStream = async (
-    stream: NodeJS.ReadableStream | null,
-    chunks: Uint8Array[],
-  ) => {
-    if (!stream) return
-    try {
-      for await (const chunk of stream) chunks.push(chunk as Uint8Array)
-    } catch { /* stream closed */ }
-  }
-  const stdoutDone = pipeStream(child.stdout, stdoutChunks)
-  const stderrDone = pipeStream(child.stderr, stderrChunks)
-
-  const exitPromise = new Promise<ManagedProcessStatus>((resolve, reject) => {
-    child.once('error', reject)
-    child.once('close', (code, signal) => {
-      Promise.all([stdoutDone, stderrDone]).then(() => {
-        resolve({
-          success: code === 0 && signal === null,
-          code: code ?? -1,
-          signal,
-        })
-      })
-    })
-  })
-
-  return { child, stdoutChunks, stderrChunks, exitPromise, request }
-}
-
-function formatNodeResult(
-  handle: NodeChildHandle,
-  status: ManagedProcessStatus,
-): string {
-  const stdout = decodeChunks(handle.stdoutChunks)
-  const stderr = decodeChunks(handle.stderrChunks)
-  const parsed = parseRunnerResponse(stdout)
-  if (parsed) {
-    parsed.module = '<inline script>'
-    return JSON.stringify(parsed, null, 2)
-  }
-  const response: EvalRunnerResponse = {
-    ok: status.success,
-    module: '<inline script>',
-    cwd: handle.request.cwd,
-    stdout,
-    stderr,
-    error: status.success
-      ? undefined
-      : `Runner exited with code ${status.code}`,
-  }
-  return JSON.stringify(response, null, 2)
-}
-
 /**
  * Execute a script via a selected runtime.
  *
@@ -235,7 +98,7 @@ function formatNodeResult(
  *     elapsed time, and a note that the process is still running (it is NOT
  *     killed; use background-task tools to follow up).
  * For `shell=node`, the script is treated as inline TypeScript and executed
- * in an isolated child process with the tool bridge enabled.
+ * by the shared script worker with privileged host imports and session tool RPC.
  * Leaf calls instead require a positive timeout (default/max 120 seconds),
  * terminate owned foreground work on timeout/abort, and never register callbacks.
  */
@@ -434,17 +297,10 @@ export class ExecTool implements Tool {
       : foreground ? MAX_CALL_TIMEOUT_MS : this._defaultTimeoutMs
 
     if (shell === 'node') {
-      if (foreground) return this.executeForegroundNode(script, scriptArgs, cwd, timeoutMs, context, cancel)
-      if (timeoutMs === 0) {
-        return await this.backgroundNodeScript(script, scriptArgs, cwd, context)
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647) {
+        return 'Error: `timeout_ms` must be a finite non-negative integer no greater than 2147483647'
       }
-      return await this.executeNodeScript(
-        script,
-        scriptArgs,
-        cwd,
-        timeoutMs,
-        context,
-      )
+      return this.executeNodeScript(script, scriptArgs, cwd, timeoutMs, context, foreground, cancel)
     }
 
     const resolvedShell = await resolveExecShell(shell)
@@ -579,267 +435,121 @@ export class ExecTool implements Tool {
     }
   }
 
-  private async executeForegroundNode(
-    script: string,
-    scriptArgs: string[],
-    cwd: string,
-    timeoutMs: number,
-    context: ExecutionContext,
-    cancel: () => void,
-  ): Promise<string> {
-    const bridge = startToolBridge(context.tools, context)
-    let directory: string | undefined
-    let handle: NodeChildHandle | undefined
-    let cleanup: Promise<ManagedProcessStatus> | undefined
-    const terminate = () => cleanup ??= this.cleanupForeground(context,
-      () => terminateProcessTree(handle!.child, handle!.exitPromise, true))
-    try {
-      await mkdir(join(this.workspace, '.eval'), { recursive: true })
-      directory = await mkdtemp(join(this.workspace, '.eval', 'exec-node-'))
-      const module = join(directory, 'script.mts')
-      await writeFile(module, generatePreamble(context.tools.names()) + '\n' + script)
-      handle = await spawnNodeChild({ module, args: scriptArgs, cwd }, this.workspace, bridge.url,
-        { isolated: true, signal: context.signal })
-      const result = await waitForExit(handle.exitPromise, timeoutMs, context.signal)
-      if (result) return formatNodeResult(handle, result.status)
-      cancel()
-      const status = await terminate()
-      return JSON.stringify({ ...JSON.parse(formatNodeResult(handle, status)), ok: false,
-        error: `Foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.` }, null, 2)
-    } finally {
-      cancel()
-      try { if (handle) await terminate() }
-      finally {
-        bridge.cleanup()
-        if (directory) await rm(directory, { recursive: true, force: true })
-      }
-    }
-  }
-
   private async executeNodeScript(
     script: string,
     scriptArgs: string[],
     cwd: string,
     timeoutMs: number,
     context: ExecutionContext,
+    foreground: boolean,
+    cancel: () => void,
   ): Promise<string> {
-    let bridge: { url: string; cleanup?: () => void } | null = null
-    if (context.tools) {
-      try {
-        bridge = await startToolBridge(context.tools, context)
-      } catch (err) {
-        console.warn('[exec:node] Failed to start tool bridge:', errMsg(err))
-      }
-    }
-
-    let tmpDir: string | undefined
-    let activeChild: ChildProcess | undefined
-    try {
-      await mkdir(join(this.workspace, '.eval'), { recursive: true })
-      tmpDir = await mkdtemp(join(this.workspace, '.eval', 'exec-node-'))
-      const preamble = bridge
-        ? generatePreamble(context.tools.names()) + '\n'
-        : ''
-      const tmpFile = join(tmpDir, 'script.mts')
-      await writeFile(tmpFile, preamble + script)
-
-      const request: EvalRunnerRequest = {
-        module: tmpFile,
-        args: scriptArgs,
-        cwd,
-      }
-      const handle = await spawnNodeChild(request, this.workspace, bridge?.url)
-      activeChild = handle.child
-
-      // Race: exit vs timeout
-      const result = await waitForExit(handle.exitPromise, timeoutMs, context.signal)
-
-      if (result === null) {
-        // Don't kill — register as background task and return partial output
-        const stdout = decodeChunks(handle.stdoutChunks)
-        const stderr = decodeChunks(handle.stderrChunks)
-        let partial = ''
-        if (stdout) partial += stdout
-        if (stderr) partial += `\n[stderr]\n${stderr}`
-        partial = partial.trim()
-
-        const elapsed = formatElapsed(timeoutMs)
-        const header =
-          `Node.js script still running after ${elapsed}. Output so far:`
-
-        // Register as bg task so agent can await/observe/kill
-        // Keep tmpDir and bridge alive for the running process
-        const cleanupTmpDir = tmpDir
-        const cleanupBridge = bridge
-        tmpDir = undefined // prevent cleanup in finally
-        bridge = null // prevent cleanup in finally
-        activeChild = undefined
-        const taskId = this.backgroundTasks?.runPromiseTask(
-          {
-            kind: 'process',
-            title: `exec node: ${script.slice(0, 80)}`,
-            sessionId: context.sessionId,
-            inputId: context.messageId,
-            callback: {
-              sessionId: context.sessionId,
-              replyTo: { channel: context.channel, chatId: context.chatId },
-              isGroup: context.isGroup,
-              senderName: 'Background Task',
-            },
-            observe: () => {
-              const out = decodeChunks(handle.stdoutChunks)
-              const err = decodeChunks(handle.stderrChunks)
-              let o = ''
-              if (out) o += out
-              if (err) o += `\n[stderr]\n${err}`
-              return o.trim() || '(no output yet)'
-            },
-            onCancel: () => { handle.child.kill() },
-          },
-          handle.exitPromise.then((status) => formatNodeResult(handle, status)).finally(() => {
-            // Cleanup after process finishes
-            if (cleanupTmpDir) {
-              rm(cleanupTmpDir, { recursive: true }).catch(() => {})
-            }
-            if (cleanupBridge?.cleanup) {
-              try {
-                cleanupBridge.cleanup()
-              } catch { /* ignore */ }
-            }
-          }),
-        )
-
-        const body = partial
-          ? `${header}\n${partial}`
-          : `${header}\n(no output yet)`
-        return taskId
-          ? `${body}\n\nBackground task ID: ${taskId}\nUse \`kill\` tool to cancel if needed.`
-          : body
-      }
-
-      return formatNodeResult(handle, result.status)
-    } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`
-    } finally {
-      if (context.signal?.aborted) activeChild?.kill()
-      if (tmpDir) {
-        await rm(tmpDir, { recursive: true }).catch(() => {})
-      }
-      if (bridge?.cleanup) {
-        try {
-          bridge.cleanup()
-        } catch { /* ignore */ }
-      }
-    }
-  }
-
-  private async backgroundNodeScript(
-    script: string,
-    scriptArgs: string[],
-    cwd: string,
-    context: ExecutionContext,
-  ): Promise<string> {
-    if (!this.backgroundTasks) {
+    if (timeoutMs === 0 && !this.backgroundTasks) {
       return 'Error: background tasks are not available in this context'
     }
-
-    // Detach from the current LLM turn. A background Node.js script is a long-lived
-    // daemon (e.g. a self-made event source), so it must NOT share the turn's
-    // AbortSignal — otherwise a turn abort (including one triggered by an event
-    // the script itself emits back into the session) would tear the process and
-    // its tool bridge down after a single iteration. It also has no artificial
-    // timeout: it runs until it exits or is killed.
     const controller = new AbortController()
-    const bgContext: ExecutionContext = {
-      ...context,
-      signal: controller.signal,
+    const abort = () => controller.abort(context.signal.reason)
+    let transferred = false
+    let binding: ReturnType<typeof bindScriptTools> | undefined
+    let run: ScriptRun | undefined
+    let completion: Promise<string> | undefined
+    const ownedExecCalls = new Set<Promise<unknown>>()
+    const detach = () => context.signal.removeEventListener('abort', abort)
+    const observe = () => {
+      const { stdout = '', stderr = '' } = run?.output() ?? {}
+      return `${stdout}${stderr ? `\n[stderr]\n${stderr}` : ''}`.trim() || '(no output yet)'
     }
-
-    let bridge: { url: string; cleanup?: () => void } | null = null
-    if (bgContext.tools) {
-      try {
-        bridge = await startToolBridge(bgContext.tools, bgContext)
-      } catch (err) {
-        console.warn('[exec:node] Failed to start tool bridge:', errMsg(err))
-      }
-    }
-
-    let tmpDir: string | undefined
-    let handle: NodeChildHandle
     try {
-      await mkdir(join(this.workspace, '.eval'), { recursive: true })
-      tmpDir = await mkdtemp(join(this.workspace, '.eval', 'exec-node-'))
-      const preamble = bridge
-        ? generatePreamble(bgContext.tools.names()) + '\n'
-        : ''
-      const tmpFile = join(tmpDir, 'script.mts')
-      await writeFile(tmpFile, preamble + script)
-      handle = await spawnNodeChild(
-        { module: tmpFile, args: scriptArgs, cwd },
-        this.workspace,
-        bridge?.url,
-      )
-    } catch (err) {
-      if (tmpDir) await rm(tmpDir, { recursive: true, force: true })
-      if (bridge?.cleanup) {
-        try {
-          bridge.cleanup()
-        } catch { /* ignore */ }
+      context.signal.throwIfAborted()
+      if (timeoutMs !== 0) context.signal.addEventListener('abort', abort, { once: true })
+      binding = bindScriptTools({ ...context, signal: controller.signal })
+      const env = { ...process.env, ...await loadDotEnv(this.workspace) }
+      context.signal.throwIfAborted()
+      run = startScript({
+        code: script,
+        args: scriptArgs,
+        cwd,
+        filename: join(cwd, 'exec.mts'),
+        entry: 'script',
+        policy: { kind: 'host' },
+        signal: binding.signal,
+        callModule: (name, input, signal) => {
+          const pending = binding!.call(name, input, signal)
+          // Only native exec owns reapable child processes. Arbitrary tool promises
+          // may ignore cancellation and must not extend a script's deadline.
+          if (foreground && context.tools.get(name) instanceof ExecTool) {
+            ownedExecCalls.add(pending)
+            void pending.then(() => ownedExecCalls.delete(pending), () => ownedExecCalls.delete(pending))
+          }
+          return pending
+        },
+        toolNames: binding.names,
+        timeoutMs: foreground ? timeoutMs : null,
+        env,
+      })
+      completion = run.completion.then(
+        result => JSON.stringify({
+          ok: true, module: '<inline script>', cwd,
+          stdout: result.stdout, stderr: result.stderr, result: result.value,
+        }, null, 2),
+        error => JSON.stringify({
+          ok: false, module: '<inline script>', cwd, ...run!.output(), error: errMsg(error),
+        }, null, 2),
+      ).finally(async () => {
+        await binding!.cleanup()
+        await Promise.allSettled(ownedExecCalls)
+      })
+      const result = timeoutMs === 0 ? null : await waitForExit(completion, timeoutMs, context.signal)
+      if (result) {
+        context.signal.throwIfAborted()
+        return result.status
       }
-      return `Error: ${err instanceof Error ? err.message : String(err)}`
-    }
-
-    const cleanup = () => {
-      if (tmpDir) rm(tmpDir, { recursive: true }).catch(() => {})
-      if (bridge?.cleanup) {
-        try {
-          bridge.cleanup()
-        } catch { /* ignore */ }
+      if (foreground) {
+        cancel()
+        run.cancel()
+        await completion
+        return JSON.stringify({
+          ok: false, module: '<inline script>', cwd, ...run.output(),
+          error: `Foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.`,
+        }, null, 2)
       }
-    }
-
-    const deferred = this.backgroundTasks.createDeferredTask({
-      kind: 'process',
-      title: `exec node: ${script.slice(0, 80)}`,
-      sessionId: context.sessionId,
-      inputId: context.messageId,
-      callback: {
+      if (!this.backgroundTasks) throw new Error('Background tasks are not available in this context')
+      const taskId = this.backgroundTasks.runPromiseTask({
+        kind: 'process',
+        title: `exec node: ${script.slice(0, 80)}`,
         sessionId: context.sessionId,
-        replyTo: { channel: context.channel, chatId: context.chatId },
-        isGroup: context.isGroup,
-        senderName: 'Background Task',
-      },
-      observe: () => {
-        const out = decodeChunks(handle.stdoutChunks)
-        const err = decodeChunks(handle.stderrChunks)
-        let o = ''
-        if (out) o += out
-        if (err) o += `\n[stderr]\n${err}`
-        return o.trim() || '(no output yet)'
-      },
-      onCancel: () => {
-        controller.abort()
-        try {
-          handle.child.kill()
-        } catch { /* ignore */ }
-      },
-    })
-
-    handle.exitPromise
-      .then((status) => {
-        cleanup()
-        deferred.complete(formatNodeResult(handle, status))
-      })
-      .catch((err) => {
-        cleanup()
-        deferred.fail(err)
-      })
-
-    return [
-      'Node.js script running in background (detached from this turn).',
-      `Background task ID: ${deferred.taskId}`,
-      'It keeps running with full tool access until it exits or you `kill` it.',
-    ].join('\n')
+        inputId: context.messageId,
+        callback: {
+          sessionId: context.sessionId,
+          replyTo: { channel: context.channel, chatId: context.chatId },
+          isGroup: context.isGroup,
+          senderName: 'Background Task',
+        },
+        observe,
+        onCancel: () => {
+          controller.abort(new Error('Background task cancelled'))
+          run!.cancel()
+        },
+      }, completion)
+      // Ownership now belongs to the background task, not the LLM turn.
+      detach()
+      transferred = true
+      const header = timeoutMs === 0
+        ? 'Node.js script running in background (detached from this turn).'
+        : `Node.js script still running after ${formatElapsed(timeoutMs)}. Output so far:\n${observe()}`
+      return `${header}\nBackground task ID: ${taskId}\nIt keeps running with full tool access until it exits or you \`kill\` it.`
+    } catch (error) {
+      context.signal.throwIfAborted()
+      return `Error: ${errMsg(error)}`
+    } finally {
+      detach()
+      if (!transferred) {
+        if (foreground) cancel()
+        run?.cancel()
+        if (completion) await completion
+        else await binding?.cleanup()
+      }
+    }
   }
 
   private async intercept(

@@ -8,7 +8,7 @@ import { ContextBuilder } from '../agent/context/builder.ts'
 import { HandoffManager } from './handoff/manager.ts'
 import { Tools } from '../tools/registry.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { newPhysicalSessionId } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 import type { ChatMessage, LLMProvider, LLMResponse } from '../providers/provider.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
@@ -71,8 +71,9 @@ const post = (app: Hono, id: string, action: string, body: object) => app.reques
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 })
 async function seed(store: SessionStore, id: string, state: Partial<SessionState>, messages: Array<Partial<StoredMessage>>) {
-  await store.saveState(id, { sessionId: id, segmentIndex: 0, ...state })
-  await store.appendMessages(newPhysicalSessionId(id, 0), messages.map(message => ({
+  const saved = { sessionId: id, segmentIndex: 0, ...state }
+  await store.saveState(id, saved)
+  await store.appendMessages(physicalSessionId(saved), messages.map(message => ({
     role: 'user', content: '', timestamp: '2025-01-01T00:00:00Z', ...message,
   })))
 }
@@ -165,7 +166,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.sessions.getSessionRecovery('web:chat-empty'), undefined)
         await f.sessions.recoverIncompleteSessions()
         assert.deepEqual(f.sessions.getSessionRecovery(id), recovery)
-        const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
         assert.equal(records.length, 3, 'Startup only updates recovery metadata, never the transcript')
         assert.equal(records.filter(record => record.tool_call_id === 'unknown').length, 0)
         await f.sessions.stop()
@@ -214,7 +215,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         await f.sessions.deliver(id, input('original'))
         await waitFor(() => f.calls.length === 1)
-        const before = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        const before = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
         for (let attempt = 0; attempt < 3; attempt++) {
           f.calls[attempt].reject(new Error('Synthetic API failure'))
           await waitFor(() => !!f.sessions.getSessionRecovery(id))
@@ -222,7 +223,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
           await waitFor(() => f.calls.length === attempt + 2)
           assert.deepEqual(f.calls[attempt + 1].messages, f.calls[0].messages)
-          assert.deepEqual(await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0))), before)
+          assert.deepEqual(await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!))), before)
         }
         f.calls[3].resolve(done())
         await waitFor(() => f.facts.length === 4)
@@ -254,7 +255,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await post(f.app, id, 'cancel', { requestId: 'original' })
         release.resolve('Committed receipt after cancellation')
         await waitFor(() => !!f.sessions.getSessionRecovery(id))
-        const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
         assert.deepEqual(records.filter(record => record.role === 'tool').map(record => [record.tool_call_id, record.content]),
           [['first', 'Committed receipt after cancellation']])
         const recovery = f.sessions.getSessionRecovery(id)!
@@ -292,7 +293,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await waitFor(() => executions.length === 1)
         await post(f.app, id, 'cancel', { requestId: 'original' })
         await waitFor(() => !!f.sessions.getSessionRecovery(id))
-        const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
         assert.equal(records.filter(record => record.role === 'tool').length, 0, 'Cancellation must not fabricate a tool result')
         const recovery = f.sessions.getSessionRecovery(id)!
         await post(f.app, id, 'resume', { recoveryId: recovery.id })
@@ -329,7 +330,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         ] })
         await waitFor(() => f.toolResults.includes('fast'))
         assert.equal(executions, 2)
-        const records = await Array.fromAsync(store.readSessionLog(newPhysicalSessionId(id, 0)))
+        const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
         assert.deepEqual(records.filter(record => record.role === 'tool').map(record => record.tool_call_id), ['fast'])
         await post(f.app, id, 'cancel', { requestId: 'original' })
         release.resolve('Slow committed receipt')

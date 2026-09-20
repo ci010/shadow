@@ -2,6 +2,7 @@ import type { CapabilityDescriptorV1 } from './contracts.ts'
 import type { InMemoryPairingNodeRegistry } from './registry.ts'
 import type { NodeWebSocketApi } from './node-websocket-api.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
+import { MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION } from '../execution/managed-workdir.ts'
 
 export interface NodeInventoryResponse {
   readonly version: 1
@@ -16,6 +17,7 @@ export interface NodeInventoryEntry {
   readonly capabilities: readonly NodeInventoryCapability[]
   readonly implementationVersion?: string
   readonly lastSeen?: string
+  readonly supportsManagedSessions?: boolean
 }
 
 export interface NodeInventoryCapability {
@@ -58,6 +60,10 @@ export function mainNodeInventory(
           displayName: node.displayName,
           role: 'child',
           connection,
+          supportsManagedSessions: registry.listCapabilities(node.nodeId).some(capability =>
+            capability.capabilityId === MANAGED_SESSION_CAPABILITY && capability.kind === 'shell' &&
+            capability.online && capability.permissions.includes(MANAGED_SESSION_OPERATION) &&
+            connection === 'connected' && connections.hasAdvertisedCapability(node.nodeId, capability.capabilityId)),
           // Persisted descriptors are not live until this connection advertises them.
           capabilities: registry.listCapabilities(node.nodeId).map((capability) =>
             inventoryCapability(

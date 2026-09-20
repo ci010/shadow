@@ -97,64 +97,56 @@ When the process is challenging but **relatively fixed**, write code that does
 it, so future sessions call one tool instead of re-deriving the steps. You can
 encapsulate the whole process, or just the fiddly part of it.
 
-Write each TypeScript tool module beneath a discovered skill folder containing
+Write each JavaScript or TypeScript tool module beneath a discovered skill folder containing
 `SKILL.md`. Declare one or many tools in that file's YAML frontmatter:
 
 ```yaml
 tools:
-  csv_summary:
-    source: tools/summary.ts
-    args: []
-  csv_format:
-    source: tools/format.ts
+  line_count:
+    source: tools/count.ts
+    description: Count nonempty lines in text.
+    parameters:
+      type: object
+      properties:
+        text: {type: string}
+      required: [text]
+    imports: []
 ```
 
-The map key is the invocation alias independently of the module's exported name.
+The map key is the invocation alias. Metadata belongs here, not in executable exports.
 Sources must be relative to the skill directory and pass realpath containment;
 do not use absolute paths or standalone modules outside the owning skill.
 Keep original files and dependencies in place. An exact
 `read("v:skills/<skill-name>")` registers declarations in the current session,
-without importing modules or running `init`/`execute`. Skill search, category/index
+without executing any source. Skill search, category/index
 reads, and resource reads do not activate tools. New sessions and sleep/reset
 require reading the skill again. Declarations persist only in `SKILL.md`, not
-Project configuration. This role does not invoke tools; document arguments for
-an authorized session. A tool module exports:
+Project configuration. Source runs in the shared Node child/VM runtime, never in
+Main. This role does not invoke tools; have an authorized execution agent verify
+the exact source with explicit input/expected-output cases. A tool module exports:
 
 ```ts
-export const name = '<tool-name>'
-export const description = '<one-line description of what it does>'
-export const parameters = {
-  type: 'object',
-  properties: {
-    /* ... */
-  },
-  required: [/* ... */],
+export async function run(args: { text: string }) {
+  return { lines: args.text.split(/\r?\n/).filter(line => line.trim()).length }
 }
-
-// `callTool` lets your tool compose with any other loaded tool.
-export async function execute(
-  args: Record<string, unknown>,
-  callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>,
-): Promise<string> {
-  /* ... */
-  return 'result'
-}
-
-// Optional: run at lazy tool discovery or invocation with the declared init args.
-export function init(args: string[]): void {}
 ```
 
 Rules:
 - Keep the tool's surface small and its behavior deterministic.
-- Validate it compiles before finishing with the project's TypeScript check.
+- Declare exact `imports` for native modules and `@shadow/<tool-name>` calls.
+  Agent `allowedModules`, when configured, is an additional ceiling; session tool
+  permissions still apply to every brokered call. Native filesystem/network
+  imports retain host authority: VM/process isolation is not an OS sandbox.
+- Validate behavior in the shared runner, not just compilation. Evaluation binds
+  test inputs and mock modules to the same source and engine used for real calls.
 - Document the trigger in the owning skill's `SKILL.md` so a future session knows when
   to read `v:skills/<skill-name>`, then call the declared alias directly through
   `invoke_tool({ name: "<tool-name>", args: { /* ... */ } })`.
   Explain execution arguments in the skill body; invocation validates the
-  module's schema. The declaration's optional `args` configure `init`;
-  invocation's `args` are execution parameters. Reading does not verify execution.
-- After activation, tool search can import/init a module for schema discovery,
-  without calling `execute`. Rereading the exact skill refreshes changed
+  declared schema. There are no import-time arguments or `init` hooks.
+  Reading does not verify execution.
+- After activation, tool search reads declared metadata without running source.
+  Rereading the exact skill refreshes changed
   declarations and entrypoints; registrations are not shared across sessions.
   Invalid declarations remain discoverable with `toolsError`, but exact reads
   fail explicitly.

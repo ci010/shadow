@@ -2,7 +2,8 @@ import { type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
-import { manageChildren, runPnpm, startNode } from './processes.ts'
+import { manageChildren, runPnpm } from './processes.ts'
+import { forwardDesktopEndpoint } from './desktop-endpoint.ts'
 import { createReleaseManifest, sourceFingerprint } from './release-manifest.ts'
 import { prepareReleaseDownloads } from './release-downloads.ts'
 
@@ -35,10 +36,15 @@ if (mode === 'build') {
 } else {
   const port = process.env.VITE_DEV_PORT ?? '5273'
   const url = `http://127.0.0.1:${port}`
-  const vite = startNode([
+  const vite = spawn(process.execPath, [
     'node_modules/vite/bin/vite.js', '--host', '127.0.0.1',
     '--port', port, '--strictPort',
-  ], { cwd: 'app' })
+  ], {
+    cwd: 'app',
+    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    env: { ...process.env, SHADOW_DESKTOP_DEV_IPC: '1' },
+    shell: false,
+  })
   const children: ChildProcess[] = [vite]
   const lifecycle = manageChildren(children)
   const startupFailure = new Promise<never>((_resolve, reject) => {
@@ -49,14 +55,16 @@ if (mode === 'build') {
     await Promise.race([waitForRenderer(url), startupFailure])
     const require = createRequire(new URL('../desktop/package.json', import.meta.url))
     const executable: string = require('electron')
-    const environment: NodeJS.ProcessEnv = { ...process.env, VITE_DEV_URL: url }
+    const environment: NodeJS.ProcessEnv = { ...process.env, VITE_DEV_URL: url, SHADOW_DESKTOP_DEV_IPC: '1' }
     delete environment.ELECTRON_RUN_AS_NODE
-    children.push(spawn(executable, ['.'], {
+    const electron = spawn(executable, ['.'], {
       cwd: 'desktop',
-      stdio: 'inherit',
+      stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
       env: environment,
       shell: false,
-    }))
+    })
+    children.push(electron)
+    forwardDesktopEndpoint(electron, vite)
     await lifecycle.wait()
   } finally {
     await lifecycle.stop()

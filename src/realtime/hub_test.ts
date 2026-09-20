@@ -95,6 +95,45 @@ test('ordered replay excludes already consumed cursor and isolates projects', as
   } finally { hub.close() }
 })
 
+test('unavailable catalog projects do not break healthy topics and recover on the same feed', async () => {
+  const hub = new RealtimeHub({ projectExists: id => ['one', 'two'].includes(id), telemetryMs: 5 })
+  const one = hub.registerProject('one')
+  const selected: RealtimeTopic[] = [chat('one'), chat('two'), { kind: 'logs', projectId: 'two' }]
+  const response = hub.connect(selected, new AbortController().signal)
+  assert.equal(response.status, 200)
+  const stream = read(response)
+  try {
+    assert.equal((await stream.next()).type, 'reset')
+    assert.deepEqual(await stream.next(), { type: 'unavailable', cursor: hub.cursor, topics: selected.slice(1) })
+    assert.equal((await stream.next()).type, 'ready')
+    one.chat('web:chat', { content: 'healthy' })
+    const healthy = await stream.next()
+    assert.equal(healthy.type, 'event')
+    assert(healthy.type === 'event' && healthy.topic.projectId === 'one')
+    let latest = 0
+    const two = hub.registerProject('two', {
+      latest: () => latest,
+      query: (_kind, after) => latest > after ? [{ id: latest }] : [],
+    })
+    assert.deepEqual(await stream.next(), { type: 'reset', cursor: hub.cursor, reason: 'project-restored' })
+    assert.equal((await stream.next()).type, 'ready')
+    two.chat('web:chat', { content: 'recovered' })
+    const recovered = await stream.next()
+    assert(recovered.type === 'event' && recovered.topic.projectId === 'two')
+    latest++
+    const log = await Promise.race([stream.next(), delay(1000).then(() => { throw new Error('Restored telemetry did not start') })])
+    assert(log.type === 'event' && log.topic.kind === 'logs')
+    two.close()
+    assert.deepEqual(await stream.next(), { type: 'reset', cursor: hub.cursor, reason: 'project-removed' })
+    assert.deepEqual(await stream.next(), { type: 'unavailable', cursor: hub.cursor, topics: selected.slice(1) })
+    assert.equal((await stream.next()).type, 'ready')
+    one.chat('web:chat', { content: 'still healthy' })
+    assert.equal((await stream.next()).type, 'event')
+    assert.equal(hub.stats.clients, 1)
+    assert.equal(hub.connect([chat('unknown')], new AbortController().signal).status, 404)
+  } finally { await stream.cancel(); hub.close() }
+})
+
 test('I/O uses a project-scoped invalidation topic without media or chat delivery', async () => {
   const hub = new RealtimeHub()
   const one = hub.registerProject('one')

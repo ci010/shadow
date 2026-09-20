@@ -9,8 +9,9 @@ import { createLocalMainAdminContext } from './installation-context.ts'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
 import DesktopFrame from './DesktopFrame.vue'
+import BrowserAuth from './BrowserAuth.vue'
+import { browserSessionKey, createBrowserSession, mountBrowserSession } from './web-auth.ts'
 import {
-	browserBootstrap,
 	resolveDesktopBootstrap,
 	type RendererBootstrapOutcome,
 	type ShadowDesktopApi,
@@ -59,15 +60,21 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 	const clearSetup = api.bootstrap.clear
 	const recovery = createApp(desktopRoot(RuntimeRecovery, {
 		canReset: typeof clearSetup === 'function',
+		role: outcome.role,
+		code: outcome.code,
+		failure: outcome.failure,
+		revealLog: api.diagnostics ? () => api.diagnostics!.revealStartupLog() : undefined,
 		retry: async () => {
+			const next = await resolveDesktopBootstrap(api)
 			recovery.unmount()
-			await startDesktopApp(api)
+			renderDesktopOutcome(api, next)
 		},
 		reset: typeof clearSetup === 'function'
 			? async () => {
 				await api.bootstrap.clear?.()
+				const next = await resolveDesktopBootstrap(api)
 				recovery.unmount()
-				await startDesktopApp(api)
+				renderDesktopOutcome(api, next)
 			}
 			: undefined,
 	}))
@@ -82,6 +89,26 @@ const desktopApi = window.shadowDesktop
 if (desktopApi) {
 	await startDesktopApp(desktopApi)
 } else {
-	const outcome = browserBootstrap(createLocalMainAdminContext(apiBase))
-	if (outcome.view === 'app') mountMainApp(outcome.context)
+	const session = createBrowserSession(apiBase)
+	const stopMounting = mountBrowserSession(session, {
+		authenticated: () => {
+			const app = createApp(App).use(router)
+				.use(createInstallationContextProvider(createLocalMainAdminContext(apiBase)))
+				.provide(browserSessionKey, session)
+			app.mount('#app')
+			return () => app.unmount()
+		},
+		unauthenticated: () => {
+			const auth = createApp(BrowserAuth, { session })
+			auth.mount('#app')
+			return () => auth.unmount()
+		},
+	})
+	const stopListening = session.listen(window, document)
+	void session.refresh()
+	if (import.meta.hot) import.meta.hot.dispose(() => {
+		stopMounting()
+		stopListening()
+		session.dispose()
+	})
 }

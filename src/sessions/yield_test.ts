@@ -26,6 +26,9 @@ test('channel decisions bind the initiating human, not anyone who can see or quo
   assert.throws(() => manager.cancelChannel(state.sessionId, request.id, 'discord', 'bob'), code('forbidden'))
   assert.throws(() => manager.answerChannel(state.sessionId, request.id, 'Continue', 'qq', 'alice'), code('forbidden'))
   assert.throws(() => manager.answerChannel('discord:other', request.id, 'Continue', 'discord', 'alice'), code('forbidden'))
+  assert.throws(() => manager.answerChannelText(state.sessionId, request.id, 'My approach', 'discord', 'bob'), code('forbidden'))
+  assert.throws(() => manager.answerChannelText(state.sessionId, request.id, 'My approach', 'qq', 'alice'), code('forbidden'))
+  assert.throws(() => manager.answerChannelText('discord:other', request.id, 'My approach', 'discord', 'alice'), code('forbidden'))
   assert.equal(manager.get(state.sessionId)?.id, request.id)
   manager.answerChannel(state.sessionId, request.id, 'Change', 'discord', 'alice')
   assert.equal((await waiting).option, 'Change')
@@ -45,6 +48,7 @@ test('expired channel controls cannot override the configured default', async t 
   t.mock.timers.tick(10)
   assert.equal((await waiting).answeredBy, 'timeout')
   assert.throws(() => manager.cancelChannel('feishu:room', id, 'feishu', 'alice'), code('not_found'))
+  assert.throws(() => manager.answerChannelText('feishu:room', id, 'Too late', 'feishu', 'alice'), code('not_found'))
 })
 
 function fixture(overrides: {
@@ -68,6 +72,34 @@ function fixture(overrides: {
   })
   return { manager, states, users, parents, setPolicy: (value: YieldPolicy) => { policy = value } }
 }
+
+test('custom human answers use an explicit validated path without relaxing parent or preset answers', async () => {
+  const f = fixture()
+  const controller = new AbortController()
+  const waiting = f.manager.ask('root', question(), controller.signal)
+  const request = f.manager.get('root')!
+  for (const text of ['', ' \n ', 'x'.repeat(4001)]) {
+    assert.throws(() => f.manager.answerUserText('root', request.id, text), code('invalid_request'))
+  }
+  assert.throws(() => f.manager.answerUser('root', request.id, 'Custom approach'), code('invalid_request'))
+  assert.throws(() => f.manager.answerUserText('other', request.id, 'Custom approach'), code('forbidden'))
+  assert.equal(f.manager.get('root')?.id, request.id)
+  const answer = f.manager.answerUserText('root', request.id, '  Custom approach\nwith details  ')
+  assert.equal(await waiting, answer)
+  assert.equal(answer.option, 'Custom approach\nwith details')
+  assert.equal(answer.custom, true)
+  assert.equal(answer.answeredBy, 'user')
+  assert.ok(Object.isFrozen(answer))
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
+  assert.throws(() => f.manager.answerUserText('root', request.id, 'Again'), code('not_found'))
+
+  const child = f.manager.ask('child', question(), signal())
+  const childId = f.manager.get('child')!.id
+  assert.throws(() => f.manager.answerUserText('child', childId, 'Custom approach'), code('forbidden'))
+  assert.throws(() => f.manager.answerParent('parent', childId, 'Custom approach'), code('invalid_request'))
+  f.manager.answerParent('parent', childId, 'Continue')
+  assert.equal((await child).custom, undefined)
+})
 
 test('root waits for its human; child uses real stored parent, never reportTo', async () => {
   const f = fixture()

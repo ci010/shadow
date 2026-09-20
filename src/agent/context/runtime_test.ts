@@ -343,9 +343,10 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
 
   await t.test('coordinator runtime cap suppresses worker delegation and decisions', async () => {
     let activeLookups = 0
+    let skillLookups = 0
     const provider = runtimeIdentityProvider({
       identity: new IdentityManager('.'),
-      getSkillsSummary: () => '',
+      getSkillsSummary: () => { skillLookups++; return 'Worker skill activation instructions' },
       getAgentTypesSummary: () => 'Worker role catalog',
       getActiveSubagents: async () => {
         activeLookups++
@@ -358,11 +359,14 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
       agent: { name: 'orchestrator', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
     }))!
     assert.match(prompt, /Allowed Delegation Modes\*\*: none/)
-    assert.match(prompt, /Coordinator cap.*read\/search\/topic\/message\/initiative only/)
+    assert.match(prompt, /Coordinator cap.*read\/search\/topic\/message\/initiative\/project_config only/)
     assert.match(prompt, /Self-code \(src\/\) writes\*\*: NOT ALLOWED/)
     assert.match(prompt, /Worker role catalog/)
     assert.doesNotMatch(prompt, /Ask decisions with yield|Managed Subagents|fixture:child/)
     assert.equal(activeLookups, 0)
+    assert.equal(skillLookups, 0)
+    assert.doesNotMatch(prompt, /Available Exec Shells|Default Exec Shell|inline TypeScript|Worker skill activation/)
+    assert.match(prompt, /Publish\/Cancel \(revision command only as fallback\)/)
     assert.match(prompt, /creator provenance and context ancestry do not confer ownership/)
   })
   assert(restricted?.includes('**Allowed Delegation Modes**: none'))

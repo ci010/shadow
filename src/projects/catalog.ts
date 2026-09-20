@@ -8,6 +8,7 @@ import { isClusterIdentifier } from '../cluster/contracts.ts'
 import { parseWorkdirRefV1, type WorkdirRefV1 } from '../sessions/locality.ts'
 import { existingDirectory, FolderError } from '../folders/registry.ts'
 import { DEFAULT_PROJECT_ID, projectPaths, type ProjectRecord } from './contracts.ts'
+import { isManagedWorkdir } from '../execution/managed-workdir.ts'
 
 function onlyFields(value: object, fields: readonly string[]): boolean {
   return !Array.isArray(value) && Object.keys(value).every(key => fields.includes(key))
@@ -43,6 +44,9 @@ function remoteRef(value: unknown): WorkdirRefV1 {
   const ref = parseWorkdirRefV1(value)
   if (!ref || ref.nodeId === 'local' || !isClusterIdentifier(ref.nodeId) || !isClusterIdentifier(ref.capabilityId)) {
     throw new Error('Invalid remote folder reference')
+  }
+  if (isManagedWorkdir(ref.capabilityId)) {
+    throw new FolderError('managed_workdir_not_folder', 'Managed session workdirs cannot be registered as project folders.')
   }
   return ref
 }

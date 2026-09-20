@@ -25,6 +25,7 @@ import { RingSet } from '../utils/ring-set.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { AbstractChannel } from './base.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
+import { QQDeliveryError, QQPassiveReplies, qqResponseError } from './qq-replies.ts'
 
 // ---------------------------------------------------------------------------
 // Endpoints & constants
@@ -147,9 +148,16 @@ export class QQChannel extends AbstractChannel {
     }
   }
 
-  // QQ group/C2C messages cannot be edited, so opt out of progressive updates:
-  // the base class sends each outbound chunk as an independent message.
+  // QQ cannot edit messages. GROUP/C2C delivery is additionally final-only.
   override update = undefined
+
+  override async onMessage(msg: OutboundMessage): Promise<void> {
+    const target = parseChatId(msg.chatId)
+    if (target?.kind === 'group' || target?.kind === 'c2c') {
+      if (msg.event !== 'response' || (!msg.done && !msg.yieldRequest)) return
+    }
+    await super.onMessage(msg)
+  }
 
   private appId: string
   private secret: string
@@ -179,13 +187,9 @@ export class QQChannel extends AbstractChannel {
   // Dedup recently seen message IDs (gateway may redeliver)
   private _seenIds = new RingSet<string>(200)
 
-  // Last inbound message id per chat — used as the passive-reply target so the
-  // bot can answer within the platform's reply window even for follow-up sends.
+  // Legacy guild behavior only. GROUP/C2C must carry their exact source ID.
   private _lastMsgId = new Map<string, string>()
-
-  // Per-source-message reply sequence counter (QQ requires a unique msg_seq for
-  // each passive reply to the same msg_id).
-  private _msgSeq = new Map<string, number>()
+  private passiveReplies = new QQPassiveReplies()
 
   constructor(bus: Bus, opts: QQChannelOptions) {
     super(bus, opts.allowFrom, false, opts.adminChats)
@@ -240,6 +244,8 @@ export class QQChannel extends AbstractChannel {
     this.accessToken = null
     this.sessionId = null
     this.seq = null
+    this.passiveReplies.clear()
+    this._lastMsgId.clear()
     this.reportState('disconnected')
     console.info('[qq] Channel stopped')
     return Promise.resolve()
@@ -267,7 +273,9 @@ export class QQChannel extends AbstractChannel {
       await res.body?.cancel()
       throw new Error(`QQ token request failed: status=${res.status}`)
     }
-    const data = await res.json() as {
+    const data = await res.json().catch(() => {
+      throw new Error('QQ token response returned invalid JSON')
+    }) as {
       access_token?: string
       expires_in?: number | string
       message?: string
@@ -297,58 +305,54 @@ export class QQChannel extends AbstractChannel {
 
   @Span('QQChannel.send')
   async send(msg: OutboundMessage): Promise<string | null> {
+    this.assertConnection()
     const target = parseChatId(msg.chatId)
     if (!target) {
-      console.warn(`[qq] Unrecognized chatId format: ${msg.chatId}`)
-      return null
+      throw new QQDeliveryError('invalid_source', 'rejected')
     }
 
-    let firstMessageId: string | null = null
-    try {
-      const passiveMsgId = msg.replyTo ?? this._lastMsgId.get(msg.chatId)
-
+    const isV2 = target.kind === 'group' || target.kind === 'c2c'
+    const passiveMsgId = isV2 ? msg.replyTo : msg.replyTo ?? this._lastMsgId.get(msg.chatId)
+    const deliver = async (next?: () => number) => {
+      let firstMessageId: string | null = null
       if (msg.content.trim()) {
         firstMessageId = await this.sendText(
           target,
           msg.content,
           passiveMsgId,
+          next,
         )
       }
 
       if (msg.media && msg.media.length > 0) {
         for (const mediaPath of msg.media) {
-          await this.sendMedia(target, msg.chatId, mediaPath, passiveMsgId)
-            .catch((err) =>
-              console.warn(
-                `[qq] Failed to send media ${mediaPath}`,
-                errMsg(err),
-              )
-            )
+          const id = await this.sendMedia(target, msg.chatId, mediaPath, passiveMsgId, next).catch(error => {
+            if (isV2) throw error
+            console.warn('[qq] Failed to send guild media')
+            return null
+          })
+          firstMessageId ??= id
         }
       }
-    } catch (err) {
-      console.error('[qq] Error sending message')
+      return firstMessageId
     }
-    return firstMessageId
-  }
-
-  /** Next msg_seq for a given passive source message id. */
-  private nextSeq(passiveMsgId: string | undefined): number {
-    if (!passiveMsgId) return 1
-    const next = (this._msgSeq.get(passiveMsgId) ?? 0) + 1
-    this._msgSeq.set(passiveMsgId, next)
-    // Bound the map so it doesn't grow without limit
-    if (this._msgSeq.size > 500) {
-      const firstKey = this._msgSeq.keys().next().value
-      if (firstKey !== undefined) this._msgSeq.delete(firstKey)
+    if (isV2) {
+      const count = Number(!!msg.content.trim()) + (msg.media?.length ?? 0)
+      if (!count) return null
+      return this.passiveReplies.send(msg.chatId, passiveMsgId, count, deliver)
     }
-    return next
+    // Retain legacy guild failure/fallback behavior.
+    try { return await deliver() } catch {
+      console.error('[qq] Error sending guild message')
+      return null
+    }
   }
 
   private async sendText(
     target: QQTarget,
     content: string,
     passiveMsgId: string | undefined,
+    next?: () => number,
   ): Promise<string | null> {
     const headers = await this.authHeaders()
     const path = target.kind === 'group'
@@ -360,49 +364,57 @@ export class QQChannel extends AbstractChannel {
       : `/dms/${target.id}/messages`
     const isV2 = target.kind === 'group' || target.kind === 'c2c'
 
-    // Try Markdown first (msg_type 2). QQ Markdown can reject content that the
-    // plain-text endpoint accepts (e.g. links to unconfigured domains), so fall
-    // back to a plain-text send when the Markdown payload is rejected.
+    // V2 sends exactly one format; only guilds retain their legacy fallback.
     if (this.markdown) {
       const mdBody: Record<string, unknown> = { markdown: { content } }
       if (isV2) {
         mdBody.msg_type = MSG_TYPE_MARKDOWN
-        mdBody.msg_seq = this.nextSeq(passiveMsgId)
+        mdBody.msg_seq = next!()
       }
       if (passiveMsgId) mdBody.msg_id = passiveMsgId
 
-      const md = await this.postMessage(path, headers, mdBody)
-      if (md.ok) return md.id
-      console.warn('[qq] Markdown send rejected, falling back to plain text')
+      try {
+        return await this.postMessage(path, headers, mdBody)
+      } catch (error) {
+        // No documented safe V2 formatting-only rejection is allowlisted.
+        // Never turn a quota, permission or ambiguous failure into a second send.
+        if (isV2 || (error instanceof QQDeliveryError && error.status === undefined)) throw error
+        console.warn('[qq] Guild Markdown send rejected, falling back to plain text')
+      }
     }
 
     const body: Record<string, unknown> = { content }
     if (isV2) {
       body.msg_type = MSG_TYPE_TEXT
-      body.msg_seq = this.nextSeq(passiveMsgId)
+      body.msg_seq = next!()
     }
     if (passiveMsgId) body.msg_id = passiveMsgId
-    const res = await this.postMessage(path, headers, body)
-    return res.id
+    return this.postMessage(path, headers, body)
   }
 
   private async postMessage(
     path: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
-  ): Promise<{ ok: boolean; id: string | null }> {
-    const res = await this.request(`${this.apiBase}${path}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      await res.body?.cancel()
-      console.warn(`[qq] Send failed: status=${res.status}`)
-      return { ok: false, id: null }
+  ): Promise<string> {
+    let res: Response
+    try {
+      res = await this.request(`${this.apiBase}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    } catch {
+      throw new QQDeliveryError('unknown', 'unknown')
     }
-    const data = await res.json().catch(() => ({})) as { id?: string }
-    return { ok: true, id: data.id ?? null }
+    if (!res.ok) {
+      throw await qqResponseError(res)
+    }
+    const data: unknown = await res.json().catch(() => undefined)
+    if (!data || typeof data !== 'object' || !('id' in data) || typeof data.id !== 'string' || !data.id) {
+      throw new QQDeliveryError('unknown', 'unknown', res.status)
+    }
+    return data.id
   }
 
   /**
@@ -416,7 +428,8 @@ export class QQChannel extends AbstractChannel {
     chatId: string,
     mediaPath: string,
     passiveMsgId: string | undefined,
-  ): Promise<void> {
+    next?: () => number,
+  ): Promise<string | null> {
     const { filename, data, ext } = await readMediaFile(
       this.workspace,
       this.logicalSessionId(chatId),
@@ -433,9 +446,8 @@ export class QQChannel extends AbstractChannel {
         data,
         fileType,
       )
-      if (!uploaded.file_info) {
-        console.warn('[qq] Media upload response missing file_info')
-        return
+      if (typeof uploaded.file_info !== 'string' || !uploaded.file_info) {
+        throw new Error('QQ media upload response missing file_info')
       }
 
       const sendPath = target.kind === 'group'
@@ -443,12 +455,11 @@ export class QQChannel extends AbstractChannel {
         : `/v2/users/${target.id}/messages`
       const body: Record<string, unknown> = {
         msg_type: MSG_TYPE_MEDIA,
-        msg_seq: this.nextSeq(passiveMsgId),
+        msg_seq: next!(),
         media: { file_info: uploaded.file_info },
       }
       if (passiveMsgId) body.msg_id = passiveMsgId
-      await this.postMessage(sendPath, headers, body)
-      return
+      return this.postMessage(sendPath, headers, body)
     }
 
     // Guild channel / direct message: multipart upload
@@ -472,6 +483,7 @@ export class QQChannel extends AbstractChannel {
         `[qq] Guild media send failed: status=${res.status}`,
       )
     }
+    return null
   }
 
   /**
@@ -505,13 +517,12 @@ export class QQChannel extends AbstractChannel {
       }),
     })
     if (!prepareRes.ok) {
-      const text = await prepareRes.text().catch(() => '')
-      throw new Error(
-        `Media upload preparation failed (${preparePath}): status=${prepareRes.status} ${text}`,
-      )
+      throw await qqResponseError(prepareRes)
     }
 
-    const prepared = await prepareRes.json() as {
+    const prepared = await prepareRes.json().catch(() => {
+      throw new Error('QQ media upload preparation returned invalid JSON')
+    }) as {
       upload_id?: string
       block_size?: number
       parts?: Array<{ index?: number; presigned_url?: string }>
@@ -555,10 +566,7 @@ export class QQChannel extends AbstractChannel {
         }),
       })
       if (!finishRes.ok) {
-        const text = await finishRes.text().catch(() => '')
-        throw new Error(
-          `Media part completion failed (${finishPath}): status=${finishRes.status} ${text}`,
-        )
+        throw await qqResponseError(finishRes)
       }
     }
 
@@ -568,12 +576,11 @@ export class QQChannel extends AbstractChannel {
       body: JSON.stringify({ upload_id: prepared.upload_id }),
     })
     if (!uploadRes.ok) {
-      const text = await uploadRes.text().catch(() => '')
-      throw new Error(
-        `Media upload completion failed (${resourcePath}/files): status=${uploadRes.status} ${text}`,
-      )
+      throw await qqResponseError(uploadRes)
     }
-    return await uploadRes.json() as { file_info?: string }
+    return await uploadRes.json().catch(() => {
+      throw new Error('QQ media upload completion returned invalid JSON')
+    }) as { file_info?: string }
   }
 
   // ── WebSocket gateway ──────────────────────────────────────────────────────
@@ -821,19 +828,17 @@ export class QQChannel extends AbstractChannel {
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.member_openid
     if (!msgId || !groupId || !senderId) return
-    if (!this._seenIds.add(msgId)) return
-
     const chatId = `group:${groupId}`
-    this._lastMsgId.set(chatId, msgId)
+    if (!this._seenIds.add(JSON.stringify([chatId, msgId]))) return
 
     const content = ((data.content as string) ?? '').trim()
     const media = await this.downloadAttachments(data, chatId)
     if (!content && !media) return
 
-    await this.handleIncoming(senderId, chatId, content, msgId, {
+    await this.passiveReplies.admit(chatId, msgId, data.timestamp, () => this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: true,
-    }, media)
+    }, media))
   }
 
   private async onC2CMessage(data: Record<string, unknown>): Promise<void> {
@@ -841,19 +846,17 @@ export class QQChannel extends AbstractChannel {
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.user_openid
     if (!msgId || !senderId) return
-    if (!this._seenIds.add(msgId)) return
-
     const chatId = `c2c:${senderId}`
-    this._lastMsgId.set(chatId, msgId)
+    if (!this._seenIds.add(JSON.stringify([chatId, msgId]))) return
 
     const content = ((data.content as string) ?? '').trim()
     const media = await this.downloadAttachments(data, chatId)
     if (!content && !media) return
 
-    await this.handleIncoming(senderId, chatId, content, msgId, {
+    await this.passiveReplies.admit(chatId, msgId, data.timestamp, () => this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: false,
-    }, media)
+    }, media))
   }
 
   private async onGuildMessage(

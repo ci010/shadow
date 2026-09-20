@@ -5,6 +5,7 @@ import test from 'node:test'
 import type { ExecutionContext } from '../tools/context.ts'
 import { Bus } from '../bus/bus.ts'
 import { McpConnection } from '../mcp/client.ts'
+import { McpToolIndex } from '../mcp/tool-index.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import { ImportTool } from '../tools/load-tool.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
@@ -91,7 +92,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         if (turns === 3) {
           assert.doesNotMatch(String(last.content), /^Error/)
           assert.equal(configStore.current().mcp.servers[0].name, 'fixture')
-          assert.equal(connect.mock.callCount(), 0)
+          assert.equal(connect.mock.callCount(), 1, 'Configuration must be indexed before saving')
           return {
             content: '', finishReason: 'tool_calls',
             toolCalls: [{ id: 'invoke', name: 'invoke_tool', arguments: { name: 'fixture__echo', args: {} } }],
@@ -234,6 +235,7 @@ export async function execute() {return 'skill-case-complete'}
       return 'written'
     })
     await importer.updateMcpServers([{ name: 'fixture', transport: 'stdio', command: 'never-executed' }])
+    await new McpToolIndex(home).ensure({ name: 'fixture', transport: 'stdio', command: 'never-executed' })
     let turns = 0
     const provider: LLMProvider = {
       name: 'synthetic',

@@ -102,6 +102,24 @@ test('runtime ensure failure produces a recoverable state', async () => {
 	assertEquals((await resolveDesktopBootstrap(api)).view, 'runtime-recovery')
 })
 
+test('recovery carries only safe failure details, distinguishes Child and allows retry', async () => {
+	let attempts = 0
+	const api = {
+		bootstrap: {
+			load: async () => ({ version: 1, revision: 1, mode: 'child', step: 'complete' }),
+			ensureRuntime: async () => ++attempts === 1 ? {
+				ok: false, code: 'runtime-unavailable',
+				failure: { role: 'child', kind: 'early-exit', elapsedMs: 900, message: 'private-key' },
+			} : { ok: true, context: realContext },
+		},
+	} as unknown as ShadowDesktopApi
+	deepStrictEqual(await resolveDesktopBootstrap(api), {
+		view: 'runtime-recovery', role: 'child', code: 'runtime-unavailable',
+		failure: { role: 'child', kind: 'early-exit', elapsedMs: 900 },
+	})
+	assertEquals((await resolveDesktopBootstrap(api)).view, 'app')
+})
+
 test('thrown runtime ensure produces the same recoverable state', async () => {
 	const api = {
 		bootstrap: {

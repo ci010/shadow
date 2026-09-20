@@ -5,6 +5,7 @@ import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
 import type { ProjectCatalog } from './catalog.ts'
 import type { WorkdirRefV1 } from '../sessions/locality.ts'
+import { isManagedWorkdir } from '../execution/managed-workdir.ts'
 
 /** Loading a Project never adopts an unowned or foreign session. */
 export async function assertSessionProjectOwnership(store: SessionStore, projectId: string): Promise<void> {
@@ -27,7 +28,7 @@ export async function reserveRemoteSessionWorkdirs(home: string, catalog: Projec
   const collect = async (store: SessionStore) => {
     await assertSessionProjectOwnership(store, projectId)
     for (const state of Object.values(await store.listAllStates())) {
-      if (state.workdir && state.workdir.nodeId !== 'local') refs.push(state.workdir)
+      if (state.workdir && state.workdir.nodeId !== 'local' && !isManagedWorkdir(state.workdir.capabilityId)) refs.push(state.workdir)
     }
   }
   await collect(new JsonlSessionStore(directory))

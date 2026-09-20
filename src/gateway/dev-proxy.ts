@@ -97,6 +97,8 @@ export function devProxyPlugin(target: string): GatewayPlugin {
       const headers = new Headers(c.req.raw.headers)
       headers.delete('host')
       headers.delete('connection')
+      headers.delete('authorization')
+      headers.delete('cookie')
 
       const hasBody = c.req.method !== 'GET' && c.req.method !== 'HEAD'
       const init: RequestInit & { duplex?: 'half' } = {

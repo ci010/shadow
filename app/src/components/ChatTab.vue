@@ -60,6 +60,7 @@
           </button>
           <SessionHeading :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
             :name="activeSessionName" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
+            :can-rename="installation.uiScopes.includes('chat:write')" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
           <button :id="domId('diagnosis-toggle')" class="diagnosis-toggle" :aria-controls="domId('diagnosis-panel')"
             :aria-pressed="activePanel === 'diagnosis'" :title="activePanel === 'diagnosis' ? 'Back to conversation' : 'Open diagnosis'"
@@ -74,7 +75,8 @@
 
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history">
-        <div ref="messagesContainer" class="flex-1 overflow-y-auto px-4 py-3 chat-messages" style="position: relative;" @click="openConversationLink">
+        <div ref="messagesContainer" class="chat-messages" @click="openConversationLink">
+          <div class="chat-message-list">
           <div v-if="loadingHistory" class="text-sm text-ink/50">Loading history...</div>
           <div v-else-if="messages.length === 0 && !composerError" class="text-sm text-ink/40 select-none">{{ isExecution ? 'No execution trace yet.' : 'No messages yet. Send one below.' }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
@@ -91,7 +93,10 @@
               @click="inspectExecution(execution.sessionId)">{{ execution.label }} <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
           </details>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${idx}`">
-            <ExecutionMessage v-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
+            <CommandResult v-if="msg.commandReceipt" :receipt="msg.commandReceipt">
+              <div class="prose" v-html="renderMarkdown(msg.content)" />
+            </CommandResult>
+            <ExecutionMessage v-else-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
               @inspect="inspectExecution" @interact="clearSelection">
               <div v-if="inlineExecutions.entries.get(idx)!.output" class="prose" v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
             </ExecutionMessage>
@@ -106,26 +111,24 @@
               <div v-if="msg.content" class="prose" v-html="renderMarkdown(msg.content)" />
             </ConversationEvent>
             <!-- Compaction summary (previous conversation context) -->
-            <div
-              v-else-if="msg.isSummary"
-              class="compaction-summary"
-            >
-              <div class="compaction-summary-header">
-                <span class="compaction-summary-title">Previous Conversation Summary</span>
-              </div>
-              <div class="compaction-summary-body" v-html="renderMarkdown(msg.content)" />
-            </div>
+            <ConversationSummary v-else-if="msg.isSummary" :content="msg.content"
+              :render-content="renderMarkdown" @interact="clearSelection" />
             <!-- Normal messages -->
             <div
               v-else
               class="chat-bubble"
               :class="[
-                msg.role === 'user' ? 'chat-user' : 'chat-assistant',
+                msg.sessionSource ? 'chat-session' : msg.role === 'user' ? 'chat-user' : 'chat-assistant',
               ]"
               role="article"
-              :aria-label="msg.role === 'user' ? (msg.senderName ? `Message from ${msg.senderName}` : 'User message') : 'Assistant message'"
+              :aria-label="msg.sessionSource ? `${sessionMessageTitle(msg.sessionSource)} from ${msg.sessionSource.id || msg.sessionSource.name || 'unknown session'}` : msg.role === 'user' ? (msg.senderName ? `Message from ${msg.senderName}` : 'User message') : 'Assistant message'"
             >
-              <div v-if="msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
+              <div v-if="msg.sessionSource" class="chat-session-source">
+                <span class="i-lucide-messages-square" aria-hidden="true" />
+                <strong>{{ sessionMessageTitle(msg.sessionSource) }}</strong>
+                <span>{{ msg.sessionSource.id || msg.sessionSource.name || 'Unknown session' }}</span>
+              </div>
+              <div v-else-if="msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
               <!-- Reasoning / thinking content (collapsible) -->
               <div v-if="msg.reasoningContent || msg.reasoningText" class="thinking-block">
                 <div class="thinking-header" @click="toggleThinking(idx)">
@@ -135,24 +138,14 @@
                 </div>
                 <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
               </div>
-              <div class="chat-content prose" v-html="renderMarkdown(msg.content)" />
+              <div v-if="msg.attachmentBody.text" class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
               <div
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
               >
                 <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Retry</button>
               </div>
-              <div v-if="msg.media?.length" class="chat-media">
-                <template v-for="(src, mIdx) in msg.media" :key="mIdx">
-                  <img
-                    v-if="isImageMedia(src) && resolveMediaUrl(src)"
-                    :src="resolveMediaUrl(src)!"
-                    class="chat-media-img"
-                    loading="lazy"
-                    @click="openMediaUrl(src)"
-                  />
-                </template>
-              </div>
+              <MessageAttachments :paths="msg.attachmentBody.paths" :api-base="apiBase" :session-id="activeSessionId" />
               <div class="chat-footer">
               <div v-if="msg.usage" class="usage-info">
                 <span class="usage-badge">{{ msg.usage.promptTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.prompt.toLocaleString() }})</span> prompt</span>
@@ -183,6 +176,7 @@
             <span class="segment-nav-label">Viewing previous session</span>
             <button v-if="previousPhysicalId" class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" /> View older session</button>
           </div>
+          </div>
         </div>
         <MessageHistoryRail :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
         </div>
@@ -202,6 +196,18 @@
         <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled" />
+        <CredentialRequest v-if="activeSessionId === 'web:orchestrator'" :api-base="apiBase"
+          :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
+          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+        <PublicationRequest :api-base="apiBase"
+          :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
+          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
+        <AuthoringProbeRequest :api-base="apiBase"
+          :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
+          :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
+          :stage="sessionStage" :can-submit="installation.uiScopes.includes('main:admin')" />
 
         <!-- Input (direct-chat only) -->
         <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" class="chat-composer">
@@ -222,6 +228,11 @@
           <BackgroundTasks :api-base="apiBase" :session-id="activeSessionId" :active="paneActive && !!activeSession" />
           <div class="composer-box" :class="{ 'image-drop-target': imageDropTarget }"
             @dragover="handleImageDragOver" @dragleave="handleImageDragLeave" @drop="handleImageDrop">
+          <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
+            :text="inputText" :input="chatInput" :focused="composerFocused"
+            :selection-start="composerSelection.start" :selection-end="composerSelection.end"
+            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
+            @complete="completeSlashCommand" />
           <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" aria-label="Attached files">
             <span v-for="attachment in pendingAttachments" :key="attachment.key" class="context-chip attachment-chip" :class="{ 'attachment-reference': attachment.sourceKey }" :title="attachment.source?.path ?? attachment.file.name">
@@ -244,10 +255,23 @@
               v-model="inputText"
               :placeholder="remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
               aria-label="Message"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-haspopup="listbox"
+              :aria-expanded="slashMenu?.open ?? false"
+              :aria-controls="slashMenu?.open ? slashMenu.listId : undefined"
+              :aria-activedescendant="slashMenu?.activeId"
               rows="3"
               :disabled="submissionBusy"
               @keydown="handleKeyDown"
-              @input="autoResize"
+              @input="autoResize(); updateComposerSelection()"
+              @focus="composerFocused = true; updateComposerSelection()"
+              @blur="composerFocused = false"
+              @click="updateComposerSelection"
+              @keyup="updateComposerSelection"
+              @select="updateComposerSelection"
+              @compositionstart="composerComposing = true"
+              @compositionend="composerComposing = false; updateComposerSelection()"
               @paste="handleComposerPaste"
             />
           </div>
@@ -272,7 +296,7 @@
               </ComposerPopover>
               <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
               <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
-                :api-base="apiBase" :selected="draftRemote" :local-label="draftFolder?.name"
+                :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
@@ -323,7 +347,8 @@ import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import katex from 'katex'
-import { buildMediaUrl } from '../media-url.ts'
+import MessageAttachments from './MessageAttachments.vue'
+import { messageAttachments } from '../message-attachments.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
@@ -331,6 +356,7 @@ import BackgroundTasks from './BackgroundTasks.vue'
 import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
 import ComposerPopover from './ComposerPopover.vue'
+import SlashCommandMenu from './SlashCommandMenu.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
 import FileWorkbench from './files/FileWorkbench.vue'
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
@@ -339,6 +365,9 @@ import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
 import YieldQuestion from './YieldQuestion.vue'
+import CredentialRequest from './CredentialRequest.vue'
+import PublicationRequest from './PublicationRequest.vue'
+import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
 import ExecutionMessage from './ExecutionMessage.vue'
 import ConversationEvent from './ConversationEvent.vue'
 import { inlineExecutionMessages } from '../execution-messages.ts'
@@ -355,16 +384,20 @@ import { createLiveRefresh } from '../live-refresh.ts'
 import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
 import { addChatContext, chatContextName, composeChatMessage, type ChatContextItem } from '../chat-draft.ts'
 import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
-import { createFolderChatDraft, createRemoteChatDraft, type RemoteConversationTarget } from '../remote-conversations.ts'
+import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
+import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
 import type { SessionDetails } from '../session-details.ts'
 import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import { resendableUserMessage, userMessageMarkers } from '../message-history.ts'
+import { isUserMessage, resendableUserMessage, userMessageMarkers } from '../message-history.ts'
+import CommandResult from './CommandResult.vue'
+import { mergeCommandResults } from '../command-results.ts'
+import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-commands/receipt.ts'
 import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
 import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
-import { groupSenderNames } from '../message-author.ts'
+import { groupSenderNames, parseSessionMessage, sessionMessageTitle, type SessionMessageSource } from '../message-author.ts'
 import SessionHeading from './SessionHeading.vue'
 import IoRequestCard from './io/IoRequestCard.vue'
 import { useIoConversation } from '../io/conversation.ts'
@@ -372,6 +405,7 @@ import { updateSessionSettings, type ReasoningSettings, type ConversationSetting
 import { draftSettingsKey as createDraftSettingsKey, loadDraftSettings, saveDraftSettings } from '../draft-settings.ts'
 import { useConversationNavigation } from '../composables/useConversationNavigation.ts'
 import ToolActivityGroup from './ToolActivityGroup.vue'
+import ConversationSummary from './ConversationSummary.vue'
 import { groupToolActivity } from '../tool-activity.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
 import { conversationLinkSession, isDirectConversation } from '../project-coordination.ts'
@@ -521,6 +555,22 @@ const streamContent = ref('')
 const streamTimestamp = ref<string>()
 const streamingToolCallData = ref<{ name: string; arguments: Record<string, unknown> } | null>(null)
 const inputText = ref('')
+const slashMenu = ref<InstanceType<typeof SlashCommandMenu>>()
+const composerFocused = ref(false)
+const composerComposing = ref(false)
+const composerSelection = reactive({ start: 0, end: 0 })
+function updateComposerSelection() {
+  composerSelection.start = chatInput.value?.selectionStart ?? 0
+  composerSelection.end = chatInput.value?.selectionEnd ?? 0
+}
+async function completeSlashCommand(text: string) {
+  inputText.value = text
+  await nextTick()
+  chatInput.value?.focus({ preventScroll: true })
+  chatInput.value?.setSelectionRange(text.length, text.length)
+  updateComposerSelection()
+  autoResize()
+}
 const mobileSidebarOpen = ref(false)
 
 // ── Session stage polling (batch) ────────────────────────────────────────────
@@ -592,7 +642,7 @@ const executionParent = computed(() => allSessions.value.find(session =>
 const activeSessionName = computed(() => {
   const session = activeSession.value
   if (session?.label && session.label !== session.sessionId && session.label !== session.sessionId.replace('web:', '')) return session.label
-  return messages.value.find(message => message.role === 'user' && !message.isSystemEvent && !message.isSummary)?.content.trim().split('\n')[0] || 'Conversation'
+  return messages.value.find(isUserMessage)?.content.trim().split('\n')[0] || 'Conversation'
 })
 const detailsRevision = ref(0)
 const settingsOverride = ref<ConversationSettings>()
@@ -762,7 +812,8 @@ function refreshDirectHistory(): void {
     || sendRequest || historyRequest || directRefreshTimer !== undefined || deferActiveHistory && requestBusy.value) return
   directRefreshTimer = setTimeout(() => {
     directRefreshTimer = undefined
-    if (disposed || !paneActive.value || sendRequest || historyRequest || !directRefreshPending || deferActiveHistory && requestBusy.value) return
+    if (disposed || !paneActive.value || !activeSessionId.value || viewingPhysicalId.value
+      || sendRequest || historyRequest || !directRefreshPending || deferActiveHistory && requestBusy.value) return
     directRefreshPending = false
     void loadDirectChat(true)
   }, 50)
@@ -790,6 +841,21 @@ function connectEventStream(chatId: string): void {
       const payload = envelope.payload
       if (!isStreamPayload(payload)) throw new Error('Invalid live conversation payload')
       if (envelope.requestId && payload.event !== 'session_message' && finishedRequests.has(envelope.requestId)) return
+      if (payload.event === 'command_result' && payload.receipt) {
+        const requestId = envelope.requestId ?? payload.receipt.id
+        finishedRequests.add(requestId)
+        if (finishedRequests.size > 64) finishedRequests.delete(finishedRequests.values().next().value!)
+        const control = currentRequest.value
+        if (control?.state.requestId === requestId) control.finish()
+        if (paneActive.value && !historyRequest) {
+          messages.value = mergeCommandResults(messages.value, [payload.receipt])
+          scrollToBottom()
+        }
+        detailsRevision.value++
+        refreshDirectHistory()
+        void loadSessionList()
+        return
+      }
       if (envelope.requestId && payload.event !== 'turn_finished' && payload.event !== 'session_message') {
         if (streamRequestId && streamRequestId !== envelope.requestId) {
           bgStreamState = { accumulated: '' }
@@ -904,7 +970,9 @@ function switchPanel(panel: ConversationPanel): void {
 interface ChatMsg {
   role: string
   content: string
+  commandReceipt?: CommandReceipt
   senderName?: string
+  sessionSource?: SessionMessageSource
   timestamp?: string
   event?: string
   toolName?: string
@@ -927,7 +995,9 @@ interface ChatMsg {
 }
 
 const messages = ref<ChatMsg[]>([])
-const displayMessages = computed(() => messages.value)
+const displayMessages = computed(() => messages.value.map(msg => ({
+  ...msg, attachmentBody: messageAttachments(msg.content, msg.media),
+})))
 const inlineExecutions = computed(() => inlineExecutionMessages(
   displayMessages.value, allSessions.value, activeSessionId.value, sessionStages.value, streaming.value,
 ))
@@ -1059,7 +1129,8 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           isSystemEvent: true,
         })
       } else {
-        const entry: ChatMsg = { role: 'user', content, senderName: senderNames[i], timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : undefined }
+        const entry: ChatMsg = { role: 'user', content, senderName: senderNames[i], timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : undefined,
+          ...parseSessionMessage(msg) }
         if (media.length > 0) entry.media = media
         out.push(entry)
       }
@@ -1258,15 +1329,20 @@ function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePic
   })
 }
 
-function selectExecutionLocation(target: RemoteConversationTarget | undefined): void {
+function selectExecutionLocation(target: ExecutionLocation | undefined): void {
   if (preparingSend.value || activeSessionId.value) return
-  if (target && (contextItems.value.length || pendingAttachments.value.length)) {
+  if ((target?.kind === 'node' || target?.kind === 'folder' && target.folder.kind === 'remote') && (contextItems.value.length || pendingAttachments.value.length)) {
     composerError.value = 'Remove local attachments before selecting a remote workspace. Files are not transferred between devices.'
     return
   }
-  composerError.value = ''
-  if (!target && draftFolder.value?.kind === 'remote') draftFolder.value = undefined
-  draft.value = target ? createRemoteChatDraft(props.apiBase, target) : createFolderChatDraft(foldersClient, draftFolder.value)
+  try {
+    const next = createExecutionLocationDraft(props.apiBase, props.projectId || liveProjectId(props.apiBase), foldersClient, target)
+    draft.value = next
+    draftFolder.value = next.folder
+    composerError.value = ''
+  } catch (cause) {
+    composerError.value = cause instanceof Error ? cause.message : 'Could not select this execution location. Refresh and retry.'
+  }
 }
 
 function clearPendingAttachments(): void {
@@ -1506,7 +1582,7 @@ async function loadDirectChat(background = false): Promise<void> {
     if (controller.signal.aborted) return
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
-    messages.value = collapseHistory(data.history ?? [])
+    messages.value = mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults)
     if (!sendRequest && !streaming.value) {
       streaming.value = false
       streamContent.value = ''
@@ -1565,7 +1641,7 @@ async function loadReadonlySession(background = false): Promise<void> {
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     const rawMessages: RawMessage[] = histData.messages ?? []
-    messages.value = collapseHistory(rawMessages)
+    messages.value = mergeCommandResults(collapseHistory(rawMessages), histData.commandResults)
     previousPhysicalId.value = histData.previousPhysicalId ?? null
     if (!background) {
       viewingPhysicalId.value = null
@@ -1608,7 +1684,7 @@ async function viewPreviousSegment(): Promise<void> {
     if (controller.signal.aborted) return
     const rawMessages: RawMessage[] = data.messages ?? []
     physicalIdStack.value.push(viewingPhysicalId.value ?? '')
-    messages.value = collapseHistory(rawMessages)
+    messages.value = mergeCommandResults(collapseHistory(rawMessages), data.commandResults)
     viewingPhysicalId.value = physId
     previousPhysicalId.value = data.previousPhysicalId ?? null
     composerError.value = ''
@@ -1633,6 +1709,7 @@ async function goBackToCurrentSegment(): Promise<void> {
 // ── Send message ──────────────────────────────────────────────────────────────
 
 function handleKeyDown(e: KeyboardEvent): void {
+  if (slashMenu.value?.handleKeyDown(e)) return
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
     e.preventDefault()
     void sendMessage()
@@ -1644,7 +1721,8 @@ interface StreamState { accumulated: string; timestamp?: string }
 
 /** A decoded SSE payload emitted by the web channel. */
 interface StreamPayload {
-  event?: 'response' | 'tool_call' | 'tool_result' | 'session_message' | 'turn_finished'
+  event?: 'response' | 'tool_call' | 'tool_result' | 'session_message' | 'turn_finished' | 'command_result'
+  receipt?: CommandReceipt
   content?: string
   done?: boolean
   media?: string[]
@@ -1657,7 +1735,7 @@ interface StreamPayload {
 
 function isStreamPayload(value: unknown): value is StreamPayload {
   if (!isRecord(value)
-    || (value.event !== undefined && !['response', 'tool_call', 'tool_result', 'session_message', 'turn_finished'].includes(String(value.event)))
+    || (value.event !== undefined && !['response', 'tool_call', 'tool_result', 'session_message', 'turn_finished', 'command_result'].includes(String(value.event)))
     || (value.content !== undefined && typeof value.content !== 'string')
     || (value.done !== undefined && typeof value.done !== 'boolean')
     || (value.media !== undefined && (!Array.isArray(value.media) || !value.media.every(item => typeof item === 'string')))
@@ -1669,6 +1747,7 @@ function isStreamPayload(value: unknown): value is StreamPayload {
       return typeof count === 'number' && Number.isFinite(count) && count >= 0
     })))) return false
   if (value.event === 'session_message') return !!parseChatEvent(value.message)
+  if (value.event === 'command_result') return value.done === true && isCommandReceipt(value.receipt)
   if (value.event === 'turn_finished') return value.done === true && ['completed', 'failed', 'cancelled'].includes(String(value.status)) && typeof value.turnId === 'string'
   return true
 }
@@ -1773,6 +1852,7 @@ async function sendMessage(overrideContent?: string, opts?: {
   }
   const retry = opts?.retry === true
   const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
+  const isCommand = !retry && content.trimStart().startsWith('/')
   const attachments = retry ? [] : [...pendingAttachments.value]
   const model = explicitModel.value
   const savedDraftKey = pendingDraftSettings.value ? draftSettingsKey.value : undefined
@@ -1819,7 +1899,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     workbench.value?.showConversation()
     activePanel.value = 'conversation'
     clearSelection()
-    if (!followUp) {
+    if (!followUp && !isCommand) {
       streaming.value = true
       streamPhase.value = 'llm'
       streamContent.value = ''
@@ -1850,10 +1930,12 @@ async function sendMessage(overrideContent?: string, opts?: {
     } else {
       payload.content = messageContent
       if (uploadedMedia.length > 0) payload.media = uploadedMedia
-      const msg: ChatMsg = { role: 'user', content: messageContent, timestamp: new Date().toISOString() }
-      if (uploadedMedia.length > 0) msg.media = uploadedMedia
-      optimisticMessage = msg
-      messages.value.push(msg)
+      if (!isCommand) {
+        const msg: ChatMsg = { role: 'user', content: messageContent, timestamp: new Date().toISOString() }
+        if (uploadedMedia.length > 0) msg.media = uploadedMedia
+        optimisticMessage = msg
+        messages.value.push(msg)
+      }
       messageAdded = true
     }
     if (opts?.parentSessionId) payload.parentSessionId = opts.parentSessionId
@@ -1876,9 +1958,12 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (!isRecord(admission) || admission.chatId !== chatId || typeof admission.requestId !== 'string' || !admission.requestId) {
       throw new Error('Main did not confirm the request identity. Refresh activity before retrying; the request may be running.')
     }
+    if (admission.commandReceipt !== undefined && !isCommandReceipt(admission.commandReceipt)) {
+      throw new Error('Main returned an invalid command result. Refresh the conversation before retrying.')
+    }
     accepted = true
     // Steered inputs are admitted before the tool boundary writes them to history.
-    if (followUp && generation === sessionSelectionGeneration) deferActiveHistory = true
+    if (followUp && !isCommand && generation === sessionSelectionGeneration) deferActiveHistory = true
     if (!retry && generation === sessionSelectionGeneration) {
       inputText.value = ''
       clearPendingAttachments()
@@ -1887,6 +1972,14 @@ async function sendMessage(overrideContent?: string, opts?: {
     }
     if (sessionRecoveries.value[sessionId]?.id === priorRecoveryId) delete sessionRecoveries.value[sessionId]
     control.admitted(admission.requestId)
+    if (isCommandReceipt(admission.commandReceipt)) {
+      control.finish()
+      if (generation === sessionSelectionGeneration && !viewingPhysicalId.value) {
+        messages.value = mergeCommandResults(messages.value, [admission.commandReceipt])
+        detailsRevision.value++
+        refreshDirectHistory()
+      }
+    }
     if (finishedRequests.has(admission.requestId)) control.finish()
     if (savedDraftKey) {
       try { window.localStorage.removeItem(savedDraftKey) }
@@ -1904,7 +1997,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       const index = messages.value.indexOf(optimisticMessage)
       if (index >= 0) messages.value.splice(index, 1)
     }
-    if (followUp || !activeSessionId.value || !messageAdded || rejected) {
+    if (isCommand || followUp || !activeSessionId.value || !messageAdded || rejected) {
       composerError.value = err instanceof Error ? err.message : 'Could not start the conversation. Retry.'
     } else {
       messages.value.push({ role: 'assistant', content: `Error: ${err}`, isError: true, timestamp: new Date().toISOString() })
@@ -1988,34 +2081,7 @@ function usageDelta(idx: number): { prompt: number; completion: number; total: n
   return null
 }
 
-const FILE_REF_RE = /\[file:\s*([^\]]+)\]/g
-const IMAGE_EXT_SET = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'svg', 'avif', 'heic', 'heif'])
-
-function isImageMedia(path: string): boolean {
-  if (path.startsWith('data:image/')) return true
-  try {
-    const ext = new URL(path).pathname.split('.').pop()?.toLowerCase() ?? ''
-    return IMAGE_EXT_SET.has(ext)
-  } catch {
-    const ext = path.split('.').pop()?.toLowerCase() ?? ''
-    return IMAGE_EXT_SET.has(ext)
-  }
-}
-
-function preprocessFileRefs(text: string): string {
-  return text.replace(FILE_REF_RE, (_match, rawPath: string) => {
-    const path = rawPath.trim()
-    if (isImageMedia(path)) {
-      const url = resolveMediaUrl(path)
-      if (!url) return _match
-      return `<img src="${url}" alt="${path}" class="chat-inline-img" loading="lazy" />`
-    }
-    return _match
-  })
-}
-
 function preprocessCustomXml(text: string): string {
-  text = preprocessFileRefs(text)
   text = text.replace(
     /<available_skills>\s*([\s\S]*?)\s*<\/available_skills>/g,
     (_match, inner: string) => {
@@ -2088,16 +2154,6 @@ function renderMarkdown(text: string): string {
     ADD_TAGS: [...KATEX_TAGS, 'img'],
     ADD_ATTR: [...KATEX_ATTRS, 'target', 'rel', 'src', 'alt', 'loading', 'class'],
   })
-}
-
-/** Resolve a media path (absolute or workspace-relative) to a servable URL. */
-function resolveMediaUrl(path: string): string | null {
-  return buildMediaUrl(props.apiBase, activeSessionId.value, path)
-}
-
-function openMediaUrl(path: string): void {
-  const url = resolveMediaUrl(path)
-  if (url) globalThis.open(url, '_blank')
 }
 
 function clearSelection(): void {
@@ -2261,6 +2317,21 @@ function resendLastMessage() {
 .conversation-heading-row { display: flex; align-items: center; flex-shrink: 0; min-width: 0; }
 .conversation-heading-row > :deep(.session-heading) { flex: 1; }
 .conversation-dock { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; pointer-events: none; z-index: 3; }
+.conversation-dock:not(.in-flow):has(> .chat-composer)::before {
+  content: '';
+  position: absolute;
+  inset: -16px 0 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 0,
+    color-mix(in srgb, var(--c-bg) 10%, transparent) 32px,
+    color-mix(in srgb, var(--c-bg) 50%, transparent) 80px,
+    color-mix(in srgb, var(--c-bg) 90%, transparent) 128px,
+    var(--c-bg) 160px
+  );
+}
 .conversation-dock > * { pointer-events: auto; }
 .conversation-dock > .chat-working:last-child { margin-bottom: 16px; }
 .conversation-dock.in-flow { position: static; flex: 0 0 auto; }
@@ -2281,8 +2352,8 @@ function resendLastMessage() {
 .draft-folder-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
 .draft-heading .draft-scratch { margin-top: 14px; }
 .draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
-.chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
-.chat-messages { min-height: 0; min-width: 0; padding-right: 56px; padding-bottom: calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
+.chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
+.chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
 .chat-working { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 0; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--c-blue) 22%, var(--c-border)); border-radius: var(--radius-surface); background: color-mix(in srgb, var(--c-blue) 5%, var(--c-bg-card)); color: var(--c-blue); }
 .chat-working.tool { border-color: color-mix(in srgb, var(--c-warning, #d49a35) 28%, var(--c-border)); background: color-mix(in srgb, var(--c-warning, #d49a35) 6%, var(--c-bg-card)); color: var(--c-warning, #d49a35); }
 .chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
@@ -2458,51 +2529,18 @@ function resendLastMessage() {
   margin: 0.3rem 0;
 }
 
-/* ── Chat media ──────────────────────────────────────────── (original) */
-
-.chat-media {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: 0.4rem;
-}
-
-.chat-media-img {
-  max-width: 100%;
-  max-height: 320px;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--c-border);
-  cursor: pointer;
-  transition: opacity 0.12s ease;
-}
-
-.chat-media-img:hover {
-  opacity: 0.85;
-}
-
-.chat-content :deep(.chat-inline-img) {
-  max-width: 100%;
-  max-height: 320px;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--c-border);
-  cursor: pointer;
-  margin: 0.4rem 0;
-  display: block;
-  object-fit: cover;
-  transition: transform 0.2s ease, max-width 0.2s ease, max-height 0.2s ease;
-  position: relative;
-  z-index: 1;
-}
-
 /* ── Chat messages ──────────────────────────────────────────── */
 
-.chat-messages {
+.chat-message-list {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  /* Use the pane's width, not the scrollbar-reduced scrollport, to stay centered with the composer. */
+  width: calc(100cqw - 112px);
+  margin-inline: auto;
 }
 
-.chat-messages > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card)) {
+.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card)) {
   min-width: 0;
   max-width: var(--conversation-item-max-width);
   align-self: flex-start;
@@ -2535,37 +2573,10 @@ function resendLastMessage() {
   color: var(--c-text);
 }
 
-/* ── Compaction summary ───────────────────────────────────── */
-
-.compaction-summary {
-  border: 1px dashed var(--c-info, #6366f1);
-  border-radius: var(--radius-surface);
-  overflow: hidden;
-  font-size: 0.8rem;
-}
-
-.compaction-summary-header {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.75rem;
-  background: var(--c-bg-muted);
-}
-
-.compaction-summary-title {
-  color: var(--c-info, #6366f1);
-  font-weight: 600;
-  font-size: 0.75rem;
-  letter-spacing: 0.02em;
-}
-
-.compaction-summary-body {
-  padding: 0.5rem 0.75rem;
-  max-height: 400px;
-  overflow-y: auto;
-  background: var(--c-bg-muted);
-  opacity: 0.85;
-}
+.chat-session { align-self: flex-start; background: var(--c-bg-soft); color: var(--c-text); box-shadow: none; border-style: dashed; }
+.chat-session-source { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; color: var(--c-text-secondary); font-size: 12px; }
+.chat-session-source strong { font-weight: 600; color: var(--c-teal); }
+.chat-session-source > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 
 /* ── Segment navigation bar ──────────────────────────────── */
 

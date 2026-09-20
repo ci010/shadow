@@ -75,6 +75,7 @@ export function writePrivateFile(path: string, content: string): void {
 export interface ConfigStoreOptions {
   configPath?: string
   getConfig?: () => Config
+  beforeCommit?: (config: Config, raw: RawConfig, signal?: AbortSignal) => void | Promise<void>
   onChanged?: (config: Config, raw: RawConfig) => void | Promise<void>
 }
 
@@ -180,6 +181,11 @@ export class ConfigStore {
     const text = JSON.stringify(raw, null, 2) + '\n'
     if (readFileSync(path, 'utf8') !== previousText) {
       throw new Error('Configuration changed on disk; reload the runtime before updating it. No file was overwritten.')
+    }
+    await this.options.beforeCommit?.(parsed, structuredClone(raw), signal)
+    signal?.throwIfAborted()
+    if (readFileSync(path, 'utf8') !== previousText) {
+      throw new Error('Configuration changed on disk during preparation; reload the runtime before updating it. No file was overwritten.')
     }
     if (text !== previousText) writePrivateFile(path, text)
     try {

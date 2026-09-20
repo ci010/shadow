@@ -66,6 +66,7 @@ test('message tool awaits acceptance before displaying one session-origin messag
   })
   accepted.resolve({ status: 'accepted', sessionId: 'web:target', inputId: delivered.id })
   assert.match(await result, /Message sent to web:target/)
+  assert.match(await result, /Queued for a response after any active turn, without interrupting it/)
   assert.equal(displayed.length, 1)
   assert.equal(displayed[0].chatId, 'target')
   assert.equal(displayed[0].content, 'task')
@@ -138,9 +139,29 @@ test('message tool preserves silent policy and refuses self or another parent ch
   assert.match(await tool.execute({ sessionId: 'web:source', content: 'task' }, context()), /current session/)
   assert.match(await tool.execute({ sessionId: 'web:owned', content: 'task' }, context()), /another session/)
   assert.equal(inputs.length, 0)
-  await tool.execute({ sessionId: 'web:target', content: 'record', silent: true }, context())
+  const receipt = await tool.execute({ sessionId: 'web:target', content: 'record', silent: true }, context())
   assert(inputs[0].kind === 'message')
   assert.equal(inputs[0].policy, 'silent')
+  assert.match(receipt, /Recorded only: not injected into the active turn and will not wake the recipient/)
+  assert.match(receipt, /later non-silent message is required for processing/)
+})
+
+test('intent labels never silently change message scheduling or receipts', async () => {
+  const inputs: SessionInput[] = []
+  const tool = new MessageTool(new Bus(), () => true, () => undefined, () => [], async (sessionId, input) => {
+    inputs.push(input)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  })
+  for (const intent of ['request', 'question', 'progress', 'handoff', 'acknowledgement']) {
+    for (const silent of [undefined, false, true]) {
+      const receipt = await tool.execute({ sessionId: 'web:target', content: 'Fixture context', intent, ...(silent === undefined ? {} : { silent }) }, context())
+      const input = inputs.at(-1)!
+      assert(input.kind === 'message' && input.source.kind === 'session')
+      assert.equal(input.policy, silent ? 'silent' : 'queue')
+      assert.equal(input.source.coordination?.intent, intent)
+      assert.match(receipt, silent ? /will not wake/ : /Queued for a response/)
+    }
+  }
 })
 
 test('message routes to actual parent and same-owner siblings, but never across unrelated owners', async () => {

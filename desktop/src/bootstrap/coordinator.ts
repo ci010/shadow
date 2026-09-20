@@ -6,6 +6,7 @@ import { defaultMainDirectory } from './main-directory.js'
 import type { NativeDirectorySelection } from '../ipc-contract.js'
 import type { LaunchProfileStore, MainLaunchProfile } from './launch-profile.js'
 import type { MainAgentConfigInitializer } from './main-agent-config.js'
+import { startupFailure, type StartupFailure } from '../sidecar/startup-diagnostics.js'
 import {
   createWizardState,
   transitionWizard,
@@ -22,6 +23,9 @@ export interface MainRuntimeStartOptions {
 export interface MainRuntimeStatus {
   readonly phase: string
   readonly apiBase?: string
+  readonly role?: 'main' | 'child'
+  readonly kind?: string
+  readonly elapsedMs?: number
 }
 
 export interface MainRuntimeHost {
@@ -44,7 +48,7 @@ export interface MainRuntimeContext {
 
 export type EnsureRuntimeResult =
   | { readonly ok: true; readonly context: MainRuntimeContext }
-  | { readonly ok: false; readonly code: 'invalid-state' | 'profile-missing' | 'runtime-unavailable' }
+  | { readonly ok: false; readonly code: 'invalid-state' | 'profile-missing' | 'runtime-unavailable'; readonly failure?: StartupFailure }
 
 const MAIN_UI_SCOPES = [
   'chat:read',
@@ -215,7 +219,8 @@ export class BootstrapCoordinator {
         const config = await this.configReader.readMain()
         const status = await this.runtimeHost.start(profile)
         if (status.phase !== 'ready' || status.apiBase === undefined) {
-          return { ok: false, code: 'runtime-unavailable' }
+          const failure = startupFailure(status)
+          return { ok: false, code: 'runtime-unavailable', ...(failure ? { failure } : {}) }
         }
         return {
           ok: true,

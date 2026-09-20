@@ -10,6 +10,8 @@ import { createServer } from 'node:http'
 test('dev proxy forwards org pages but never loops scoped backend requests through Vite', async () => {
   const paths: string[] = []
   const upstream = createServer((request, response) => {
+    assert.equal(request.headers.authorization, undefined)
+    assert.equal(request.headers.cookie, undefined)
     paths.push(request.url ?? '')
     response.writeHead(200, { 'Content-Type': 'text/html' })
     response.end('<html>Vite page</html>')
@@ -21,7 +23,9 @@ test('dev proxy forwards org pages but never loops scoped backend requests throu
   const app = new Hono()
   devProxyPlugin(`http://127.0.0.1:${address.port}`)(app)
   try {
-    const page = await app.request('/projects/default/settings/bots')
+    const page = await app.request('/projects/default/settings/bots', {
+      headers: { authorization: 'Bearer fixture-secret', cookie: 'shadow_web_fixture=private' },
+    })
     assert.equal(page.status, 200)
     assert.equal(await page.text(), '<html>Vite page</html>')
     for (const path of ['/projects/default/api/missing', '/projects/default/v1/query/logs', '/nodes/v1/missing']) {

@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createTempWorkspace } from '../testing/workspace.ts'
 import type { ChildProcess } from 'node:child_process'
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import type {
   ManagedProcess,
@@ -29,27 +29,12 @@ import { ExecTool } from './shell.ts'
 import { ProcessManager as RealProcessManager } from '../execution/processes/manager.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
-import { Hono } from 'hono'
-import { serve } from '@hono/node-server'
-import { registerEvalBridgeRoute } from '../script-runtime/bridge.ts'
+import { EvalBridgeRuntime } from '../script-runtime/bridge.ts'
+import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
 const sandbox = await createTempWorkspace()
 const cwd = () => sandbox
-const previousPort = process.env.GATEWAY_PORT
-const previousHost = process.env.GATEWAY_HOST
-const bridgeApp = new Hono()
-registerEvalBridgeRoute(bridgeApp)
-const listening = Promise.withResolvers<number>()
-const bridgeServer = serve({ fetch: bridgeApp.fetch, hostname: '127.0.0.1', port: 0 },
-  address => listening.resolve(address.port))
-process.env.GATEWAY_PORT = String(await listening.promise)
-process.env.GATEWAY_HOST = '127.0.0.1'
 after(async () => {
-  if (previousPort === undefined) delete process.env.GATEWAY_PORT
-  else process.env.GATEWAY_PORT = previousPort
-  if (previousHost === undefined) delete process.env.GATEWAY_HOST
-  else process.env.GATEWAY_HOST = previousHost
-  await new Promise<void>((resolve, reject) => bridgeServer.close(error => error ? reject(error) : resolve()))
   await rm(sandbox, { recursive: true, force: true })
 })
 
@@ -281,12 +266,143 @@ test('ExecTool foreground LocalExecutor parity: turn abort still rejects without
   exit.resolve({ success: true, code: 0, signal: null })
 })
 
-function callContext(workspace: string, tool: ExecTool, signal = new AbortController().signal): ExecutionContext {
-  const base = new Tools(workspace)
+function callContext(workspace: string, tool: ExecTool, signal = new AbortController().signal, base = new Tools(workspace)): ExecutionContext {
   base.register(tool)
   const tools = new SessionTools(base, workspace)
   tools.setExecutionScope('call', [])
   return { ...context(workspace, signal), tools }
+}
+
+test('node exec uses the shared TS runtime with native imports, args, cwd, env and bound project tools without HTTP', async () => {
+  const workspace = await createTempWorkspace()
+  const scope = createProjectScope('script-project')
+  const runtime = new EvalBridgeRuntime({
+    projectId: scope.projectId, scope,
+  })
+  const tool = execTool(workspace, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))))
+  const base = new Tools(workspace)
+  const ctx = callContext(workspace, tool, undefined, base)
+  const calls: ExecutionContext[] = []
+  ctx.projectId = scope.projectId
+  ctx.evalBridge = runtime
+  ctx.toolCallId = 'outer-call'
+  ctx.toolCallName = 'exec'
+  base.register({
+    name: 'fixture', description: 'fixture', parameters: { type: 'object', properties: {} },
+    async execute(input, bound) {
+      assert.equal(getProjectScope(), scope)
+      calls.push(bound)
+      return JSON.stringify({ input, sessionId: bound.sessionId })
+    },
+  })
+  try {
+    await writeFile(join(workspace, '.env'), 'SCRIPT_FIXTURE_VALUE=synthetic\n')
+    const response = await tool.execute({
+      shell: 'node', args: ['one', 'two'],
+      script: [
+        'import { basename } from "node:path";',
+        'const number: number = 42;',
+        'console.log(basename(process.cwd()), process.env.SCRIPT_FIXTURE_VALUE);',
+        'export default async (args: string[]) => ({ number, args, calls: [await fixture({ value: 1 }), await fixture({ value: 2 })] });',
+      ].join('\n'),
+    }, ctx)
+    const result = JSON.parse(response)
+    assert.equal(result.ok, true, response)
+    assert.match(result.stdout, /synthetic/)
+    assert.deepEqual(result.result, {
+      number: 42, args: ['one', 'two'],
+      calls: [{ input: { value: 1 }, sessionId: ctx.sessionId }, { input: { value: 2 }, sessionId: ctx.sessionId }],
+    })
+    assert.equal(calls.length, 2)
+    assert(calls.every(call => call.projectId === scope.projectId && call.physicalSessionId === ctx.physicalSessionId))
+    assert(calls.every(call => call.toolCallName === 'fixture' && call.toolCallId !== ctx.toolCallId))
+    assert.notEqual(calls[0].toolCallId, calls[1].toolCallId)
+    assert.equal(existsSync(join(workspace, '.eval')), false)
+  } finally {
+    await runtime.shutdown()
+    scope.close()
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+test('node exec refuses missing project bindings and invalid finite timeouts before running source', async () => {
+  const tool = execTool(sandbox, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))))
+  const ctx = { ...context(sandbox), tools: new SessionTools(new Tools(sandbox), sandbox), projectId: 'unbound' }
+  const script = 'throw new Error("source must not execute")'
+  for (const timeout_ms of [0, 100]) {
+    assert.match(await tool.execute({ shell: 'node', script, timeout_ms }, ctx), /injected eval bridge/)
+  }
+  for (const timeout_ms of [NaN, Infinity, -1, 0.5, 2_147_483_648]) {
+    assert.match(await tool.execute({ shell: 'node', script, timeout_ms }, ctx), /finite non-negative integer/)
+  }
+})
+
+class ScriptBackgroundTasks extends RecordingBackgroundTasks {
+  options?: Parameters<BackgroundTaskManager['runPromiseTask']>[0]
+  completion?: Promise<string>
+
+  override runPromiseTask(
+    options?: Parameters<BackgroundTaskManager['runPromiseTask']>[0],
+    completion?: Promise<string>,
+  ): string {
+    this.options = options
+    this.completion = completion
+    return super.runPromiseTask()
+  }
+}
+
+for (const timeout_ms of [0, 50]) {
+  test(`node exec background timeout=${timeout_ms} survives its turn and exposes live output, tools, cancellation and reaping`, async () => {
+    const workspace = await createTempWorkspace()
+    const background = new ScriptBackgroundTasks()
+    const controller = new AbortController()
+    const tool = execTool(workspace, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))), background)
+    const base = new Tools(workspace)
+    const tools = new SessionTools(base, workspace)
+    let calls = 0
+    base.register({
+      name: 'heartbeat', description: '', parameters: { type: 'object', properties: {} },
+      async execute(_input, ctx) {
+        ctx.signal.throwIfAborted()
+        calls++
+        return 'alive'
+      },
+    })
+    const ownerFile = join(workspace, 'owner.pid')
+    const childFile = join(workspace, 'child.pid')
+    try {
+      const response = await tool.execute({
+        shell: 'node', timeout_ms,
+        script: [
+          'import { writeFileSync } from "node:fs";',
+          'import { spawn } from "node:child_process";',
+          `writeFileSync(${JSON.stringify(ownerFile)}, String(process.pid));`,
+          'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });',
+          `writeFileSync(${JSON.stringify(childFile)}, String(child.pid));`,
+          'setInterval(async () => console.log(await heartbeat({})), 5);',
+        ].join('\n'),
+      }, { ...context(workspace, controller.signal), tools })
+      assert.match(response, /Background task ID/)
+      assert.equal(background.calls, 1)
+      controller.abort(new Error('turn ended'))
+      const deadline = Date.now() + 10_000
+      while (calls < 140 || !String(await background.options?.observe?.()).includes('alive')) {
+        assert(Date.now() < deadline, 'background script did not stay alive and call its tools')
+        await delay(20)
+      }
+      background.options?.onCancel?.()
+      await background.completion
+      for (const file of [ownerFile, childFile]) {
+        const pid = Number(await readFile(file, 'utf8'))
+        assert.throws(() => process.kill(pid, 0), (error: any) => error.code === 'ESRCH')
+      }
+      assert.equal(existsSync(join(workspace, '.eval')), false)
+    } finally {
+      background.options?.onCancel?.()
+      await background.completion
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
 }
 
 test('call exec exposes foreground-only schema and rejects background, invalid limits and remote workdirs before spawn', async () => {
@@ -398,7 +514,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
       if (shell === 'node') assertEquals(JSON.parse(result).ok, true)
       assertEquals(manager.list(), [])
       assertEquals(background.calls, 0)
-      if (shell === 'node') assertEquals(await readdir(join(workspace, '.eval')), [])
+      if (shell === 'node') assertEquals(existsSync(join(workspace, '.eval')), false)
     } finally { await rm(workspace, { recursive: true, force: true }) }
   })
 
@@ -453,7 +569,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
         }
         assertEquals(manager.list(), [])
         assertEquals(background.calls, 0)
-        if (shell === 'node') assertEquals(await readdir(join(workspace, '.eval')), [])
+        if (shell === 'node') assertEquals(existsSync(join(workspace, '.eval')), false)
       } finally {
         controller.abort()
         await work?.catch(() => {})

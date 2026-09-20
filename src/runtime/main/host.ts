@@ -28,6 +28,8 @@ import { initializeNodeTelemetry } from '../../otel/runtime.ts'
 import { otelPlugin } from '../../otel/routes.ts'
 import { ChromePortAllocator } from '../../browser/chrome-manager.ts'
 import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
+import { StartupTimings } from '../startup-timings.ts'
+import { BrowserAuth } from '../../gateway/web-auth.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -35,13 +37,16 @@ export async function startProjectHost(
   factory: ProjectRuntimeFactory,
   selfCodeRoot: string,
 ): Promise<MainRuntimeHandle> {
+  const startup = new StartupTimings('host')
   const baseHome = resolve(config.agent.workspace)
   const hostHome = `${baseHome}.projects`
   const catalog = new ProjectCatalog(hostHome, [baseHome])
-  await catalog.init()
-  for (const project of catalog.list()) {
-    await reserveRemoteSessionWorkdirs(projectPaths(hostHome, project.id).home, catalog, project.id)
-  }
+  await startup.measure('catalog', () => catalog.init())
+  await startup.measure('ownership', async () => {
+    for (const project of catalog.list()) {
+      await reserveRemoteSessionWorkdirs(projectPaths(hostHome, project.id).home, catalog, project.id)
+    }
+  })
 
   const cleanup: Array<() => unknown> = []
   try {
@@ -55,7 +60,7 @@ export async function startProjectHost(
 
   async function startHostServices(): Promise<MainRuntimeHandle> {
   const app = new Hono()
-  const realtimeHub = new RealtimeHub()
+  const realtimeHub = new RealtimeHub({ projectExists: id => !!catalog.get(id) })
   cleanup.push(() => realtimeHub.close())
   const hostOtelStore = new OtelStore(resolve(hostHome, '.host.otel.db'))
   let hostTelemetry: ReturnType<typeof initializeNodeTelemetry>
@@ -66,7 +71,9 @@ export async function startProjectHost(
   cleanup.push(closeTelemetry)
   const clientAddresses = new GatewayClientAddressRegistry()
   const launchCredential = resolveLaunchCredential(options.gateway?.launchCredential, process.env.GATEWAY_LAUNCH_CREDENTIAL, process.env.WINDOWS_USE_LAUNCH_TOKEN)
-  const authorize = (request: Request) => authorizeMainNodeInventory(request, launchCredential, clientAddresses)
+  const browserAuth = new BrowserAuth({ launchCredential, clientAddresses, developmentUrl: process.env.VITE_DEV_URL })
+  cleanup.push(() => browserAuth.close())
+  const authorize = (request: Request) => browserAuth.authorize(request) || authorizeMainNodeInventory(request, launchCredential, clientAddresses)
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
   const stores = new Map<string, ProjectConfigStore>()
@@ -77,7 +84,7 @@ export async function startProjectHost(
   const copilotAuth = new CopilotAuthenticator()
   const chromePortAllocator = new ChromePortAllocator()
   let provider = createAggregatedProvider(config, copilotAuth)
-  const mainCluster = await createMainCluster({
+  const mainCluster = await startup.measure('cluster', () => createMainCluster({
     authorizeInventory: authorize,
     localNodeInventory: () => mainLocalNodeInventory({
       localNodeId: options.localNodeId ?? 'local', implementationVersion: '0.1.0', shellAvailable: true,
@@ -96,7 +103,7 @@ export async function startProjectHost(
     localHello: { protocolMajor: 1, protocolMinor: 0, implementationVersion: '0.1.0', features: ['jobs-v1', 'capabilities-v1', 'workdir-display-v1'] },
     authorizeOfferCreation: request => launchCredential ? validateLaunchCredential(request.headers.get('Authorization') ?? undefined, launchCredential) : false,
     clientKey: request => clientAddresses.resolve(request),
-  })
+  }))
   cleanup.push(() => mainCluster.closeNodeConnections())
   const sharedConfigStore = new AppProviderConfigStore({
     configPath: options.configPath,
@@ -124,7 +131,6 @@ export async function startProjectHost(
   if (options.configPath) await sharedConfigStore.read()
   const providerSetup = new ProviderSetup({ store: sharedConfigStore, getConfig: () => activeConfig, auth: copilotAuth })
   cleanup.push(() => providerSetup.dispose())
-  let gatewayBaseUrl = `http://127.0.0.1:${options.gateway?.port ?? process.env.GATEWAY_PORT ?? process.env.REST_API_PORT ?? 3123}`
   const start = (id: string): Promise<void> => {
     if (stopping) return Promise.reject(new Error('Project host is stopping'))
     if (runtimes.has(id)) return Promise.resolve()
@@ -142,10 +148,11 @@ export async function startProjectHost(
       })
       let runtime: ProjectRuntime | undefined
       try {
-        const projectConfig = await store.init()
+        const projectStartup = new StartupTimings('project', id)
+        const projectConfig = await projectStartup.measure('config', () => store.init())
         runtime = await scope.run(() => factory(projectConfig, {
           project, home: paths.home, scope, catalog, configStore: store,
-          mainCluster, copilotAuth, chromePortAllocator, authorize, gatewayBaseUrl: gatewayBaseUrl + projectBasePath(id), selfCodeRoot, realtimeHub,
+          mainCluster, copilotAuth, chromePortAllocator, authorize, selfCodeRoot, realtimeHub,
         }))
         await runtime.ready
         if (stopping) {
@@ -170,8 +177,8 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [...mainCluster.plugins, localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), providerPlugin(() => provider, () => providerSetup.status())], {
-    launchCredential, launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
+  registerGatewayRoutes(app, [browserAuth.plugin(), ...mainCluster.plugins, localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), providerPlugin(() => provider, () => providerSetup.status())], {
+    launchCredential, browserAuth, clientAddresses, launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
   })
   registerRealtimeRoute(app, realtimeHub, authorize)
   const hostDiagnostics = new Hono()
@@ -205,6 +212,7 @@ export async function startProjectHost(
   let shutdownPromise: Promise<void> | undefined
   shutdown = () => shutdownPromise ??= (async () => {
     stopping = true
+    browserAuth.close()
     realtimeHub.close()
     localControl.markStopping()
     const errors: unknown[] = []
@@ -230,10 +238,17 @@ export async function startProjectHost(
     if (errors.length) throw new AggregateError(errors, 'Main shutdown failed')
   })()
   try {
-    await gateway.ready
-    gatewayBaseUrl = `http://127.0.0.1:${gateway.addr.port}`
-    for (const project of catalog.list()) await start(project.id)
+    await startup.measure('gateway', () => gateway.ready)
+    await startup.measure('projects', async () => {
+      // Bound disk/watcher pressure while avoiding one slow Project delaying every other start.
+      const projects = catalog.list()[Symbol.iterator]()
+      const worker = async () => {
+        for (const project of projects) await start(project.id)
+      }
+      await Promise.all(Array.from({ length: Math.min(3, catalog.list().length) }, worker))
+    })
     localControl.markReady()
+    startup.ready()
   } catch (error) {
     await shutdown().catch(cleanup => console.error('[projects] Host cleanup failed', cleanup))
     throw error

@@ -1,12 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { groupToolActivity, parseLineChanges, type ToolActivityMessage } from './tool-activity.ts'
+import { groupToolActivity, parseLineChanges, toolPayloadPath, type ToolActivityMessage } from './tool-activity.ts'
 import { countLineChanges } from '../../src/tools/line-changes.ts'
 import { formatWriteResult } from '../../src/tools/write-result.ts'
 
 const call = (name: string, args: Record<string, unknown>): ToolActivityMessage => ({ event: 'tool_call', content: '', toolCall: { name, arguments: args } })
 const result = (text: string): ToolActivityMessage => ({ event: 'tool_result', content: text })
 const success = (added: number, removed: number) => result(`Success: edit a.ts\nUTF-8 bytes written: 42; result lines: 5.\nLine changes: +${added} -${removed}.\nL1: output`)
+
+test('tool payloads highlight valid JSON without treating plain output or malformed arguments as code', () => {
+  for (const source of ['{"path":"file.ts","value":42}', '[true,null,"<script>"]', '"text"', '42', 'null', ' \r\n{"ok": true}\r\n']) {
+    assert.equal(toolPayloadPath(source), 'payload.json')
+  }
+  for (const source of ['', '(Empty result)', 'Message sent to web:chat.', 'Error: missing file', '{"incomplete":', '<script>alert(1)</script>']) {
+    assert.equal(toolPayloadPath(source), 'payload.txt')
+  }
+})
 
 test('actual backend write reports feed operation counts into tool activity', () => {
   const content = 'same\nnew\nextra\n'

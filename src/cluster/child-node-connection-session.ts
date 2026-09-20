@@ -206,6 +206,15 @@ export class ChildNodeConnectionSession {
     return structuredClone(capability)
   }
 
+  async advertiseCapabilityWhenReady(value: CapabilityDescriptorV1): Promise<void> {
+    this.#requireAuthenticated()
+    while (this.#outbound.length >= this.#options.maxOutboundQueue) {
+      await new Promise<void>(resolve => this.#outboundSpace.add(resolve))
+      this.#requireAuthenticated()
+    }
+    this.advertiseCapability(value)
+  }
+
   withdrawCapability(capabilityId: string): boolean {
     this.#requireAuthenticated()
     if (!isClusterIdentifier(capabilityId)) {

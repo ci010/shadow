@@ -141,3 +141,20 @@ test('compact memory guidance preserves write-role gating and persistence conven
     }
   }
 })
+
+test('coordinator workspace retains read context without worker resources or write instructions', async () => {
+  const fs = new VirtualFs()
+  for (const prefix of ['v:project', 'v:sessions', 'v:memory', 'v:tools', 'v:bg', 'v:skills', 'v:config', 'v:events']) {
+    fs.mount(prefix, prefix === 'v:memory' ? 'read, search, and write memory' : `${prefix} resources`, () => '')
+  }
+  const provider = workspaceProvider(resolve('.test-data', 'coordinator-prompt'), fs)
+  const prompt = (await provider.getPromptSection(context({
+    agent: { ...agent, name: 'orchestrator' },
+  })))!
+  assert.match(prompt, /Workspace root|Session uploads|absolute attachment paths/)
+  for (const path of ['v:project', 'v:sessions', 'v:memory']) assert(prompt.includes(path))
+  assert.doesNotMatch(prompt, /v:tools|v:bg|v:skills|v:config|v:events|write\(|read, search, and write|Write what you need|scratch\/ephemeral/)
+  const ordinary = (await provider.getPromptSection(context()))!
+  assert.match(ordinary, /v:tools|v:config/)
+  assert.match(ordinary, /write\("notes.md"\)/)
+})

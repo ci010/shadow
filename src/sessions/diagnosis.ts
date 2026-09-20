@@ -2,7 +2,7 @@ import type { OtelStore } from '../otel/store.ts'
 import type { SessionTraceResponse } from '../otel/session-trace.ts'
 import type { PromptCapture } from './prompt-capture.ts'
 import type { SessionState } from './session-store.ts'
-import { newPhysicalSessionId } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 
 export interface DiagnosisSource {
   projectId?: string
@@ -139,11 +139,11 @@ export async function createSessionDiagnosis(
   if (!state || (source.projectId !== undefined && state.projectId !== undefined && state.projectId !== source.projectId)) {
     throw new DiagnosisRequestError('Session not found in this project', 404)
   }
-  const currentPhysicalId = newPhysicalSessionId(sessionId, state.segmentIndex)
+  const currentPhysicalId = physicalSessionId(state)
   const physicalId = query.physicalId ?? currentPhysicalId
   let segmentIndex = -1
   for (let index = 0; index <= state.segmentIndex; index++) {
-    if (newPhysicalSessionId(sessionId, index) === physicalId) { segmentIndex = index; break }
+    if (physicalSessionId(state, index) === physicalId) { segmentIndex = index; break }
   }
   if (segmentIndex < 0) throw new DiagnosisRequestError('Physical segment does not belong to this session', 404)
   const projection = diagnosisProjection(query.textLimit, query.view === 'summary' ? 80_000 : 500_000)
@@ -212,7 +212,7 @@ export async function createSessionDiagnosis(
       projectId: source.projectId ?? state.projectId, sessionId, physicalId, segmentIndex, currentPhysicalId,
       parentSessionId: state.parentSessionId ?? state.parent?.id ?? null,
       parentPhysicalId: state.parent?.physicalId,
-      previousPhysicalId: segmentIndex > 0 ? newPhysicalSessionId(sessionId, segmentIndex - 1) : null,
+      previousPhysicalId: segmentIndex > 0 ? physicalSessionId(state, segmentIndex - 1) : null,
     },
     overview: {
       scope: 'returned-records' as const,

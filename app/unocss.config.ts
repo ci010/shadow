@@ -5,15 +5,11 @@ import { join } from 'node:path'
 
 export default defineConfig({
   content: {
-    // Seed icons before lazy modules load, without creating a second filesystem watcher.
+    // Seed all utilities before lazy modules load, without a second filesystem watcher.
     inline: [() => {
       const root = fileURLToPath(new URL('./src', import.meta.url))
-      const icons = new Set<string>()
-      for (const path of globSync('**/*.{vue,ts}', { cwd: root, exclude: ['**/*_test.ts'] })) {
-        const source = readFileSync(join(root, path), 'utf8')
-        for (const match of source.matchAll(/\bi-(?:lucide|simple-icons)-[a-z0-9]+(?:-[a-z0-9]+)*/g)) icons.add(match[0])
-      }
-      return [...icons].join(' ')
+      return [...globSync('**/*.{vue,ts}', { cwd: root, exclude: ['**/*_test.ts'] })]
+        .map(path => readFileSync(join(root, path), 'utf8')).join('\n')
     }],
     pipeline: { include: [/\.(?:vue|[jt]sx?|html)(?:$|\?)/] },
   },

@@ -11,6 +11,7 @@ import { type ProcessEntryResult, runProcessEntry } from '../process-entry.ts'
 import { startProductionChildRuntime } from '../production-child.ts'
 import { startMainRuntime } from './start.ts'
 import { resolveServiceEnvironment } from '../service-mode.ts'
+import { runWebPair } from '../web-pairing-cli.ts'
 
 export async function runBackendCli(
   hooks: BackendProcessHooks = nodeProcessHooks,
@@ -30,8 +31,13 @@ export async function runBackendCli(
 
 export async function runRootProcessEntry(
   hooks: BackendProcessHooks = nodeProcessHooks,
-): Promise<ProcessEntryResult> {
-  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' ? 1 : 2)
+): Promise<ProcessEntryResult | { readonly route: 'web-pair' }> {
+  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'web' ? 1 : 2)
+  if (runtimeArgs[0] === 'web') {
+    if (runtimeArgs[1] !== 'pair') throw new Error('Use web pair --connection <absolute descriptor> or web pair --url <loopback origin> --credential-file <absolute file>')
+    await runWebPair(runtimeArgs.slice(2))
+    return { route: 'web-pair' }
+  }
   const environment = await resolveServiceEnvironment(runtimeArgs, {
     GATEWAY_PORT: process.env.GATEWAY_PORT,
     GATEWAY_HOST: process.env.GATEWAY_HOST,

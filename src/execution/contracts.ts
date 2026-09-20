@@ -10,6 +10,8 @@ export interface JobRequestV1 {
   args: unknown
   createdAt: string
   deadlineAt: string
+  /** Sent only for managed-session capabilities to nodes advertising allocation support. */
+  managedProject?: string
 }
 
 export type JobStateV1 =
@@ -190,6 +192,7 @@ export function validateJobRequestV1(value: unknown): ValidationResult<JobReques
     'args',
     'createdAt',
     'deadlineAt',
+    'managedProject',
   ], errors)
   if (value.version !== 1) errors.push('version must be 1')
   for (
@@ -204,6 +207,10 @@ export function validateJobRequestV1(value: unknown): ValidationResult<JobReques
     ]
   ) requireString(value, key, errors)
   if (!Object.hasOwn(value, 'args')) errors.push('args is required')
+  if (value.managedProject !== undefined &&
+    (typeof value.managedProject !== 'string' || !/^[0-9a-f]{32}$/.test(value.managedProject))) {
+    errors.push('managedProject must be a managed project scope')
+  }
   requireTimestamp(value, 'createdAt', errors)
   requireTimestamp(value, 'deadlineAt', errors)
   if (

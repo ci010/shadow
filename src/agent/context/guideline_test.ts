@@ -66,15 +66,24 @@ test('MCP contracts remain inline without generic safety or blanket group restri
     /search\(\{ space: "tools:", query, limit\?, offset\? \}\)/,
     /Limit: 3 by default, 10 maximum/,
     /nextOffset: null.*ends pagination/,
-    /Search may connect MCP servers for metadata, never tool execution/,
+    /Before config commits.*temporary connections and paginated `tools\/list`.*no tools execute or runtime connection remains/,
+    /Index failure aborts save with previous config\/catalog unchanged/,
+    /A no-op resave can index legacy configs/,
+    /Report installed\/indexed, not guaranteed availability or execution/,
+    /Installed MCP search, global or targeted, reads the persistent index.*indexedAt.*zero connections, `tools\/list` RPCs or dynamic registration/,
+    /Repeated searches work offline; 100 installed servers will not start from search/,
+    /Missing\/mismatched\/corrupt indexes give explicit source errors, never fallback auto-connect; read\/save MCP config to build missing metadata/,
     /errors.*deferredSources.*partial results do not prove absence/,
     /browser\/factory sources initialize only with explicit source selection/,
+    /one public source, `chrome-devtools`, no `chrome-devtools-full` alias/,
     /read\("v:tools"\).*without connecting/,
     /invoke_tool\(\{ name, args \}\)/,
     /Invalid arguments return the current contract without execution/,
     /Do not guess another tool ID after failure/,
     /Skills are optional guidance for MCP/,
-    /live search schemas override copied examples/,
+    /connect lazily and list live tools, refreshing the index before execution/,
+    /Indexed metadata can be stale; the current live invocation contract wins/,
+    /current invocation schemas override copied examples/,
     /Rediscover the exact tool if compaction removed its schema/,
     /Agent tool restrictions still apply/,
     /mcp_error.*phase, server\/source, sanitized reason.*HTTP\/RPC\/OS codes.*retryability/,
@@ -86,6 +95,7 @@ test('MCP contracts remain inline without generic safety or blanket group restri
     /toolExecution: "unknown".*inspect the outcome before any retry/,
   ]
   for (const agent of await getBuiltinAgentTypes()) {
+    if (agent.name === 'orchestrator') continue
     for (const mode of EXECUTION_MODES) {
       for (const isGroup of [false, true]) {
         const prompt = (await provider.getPromptSection({
@@ -129,4 +139,16 @@ test('general root direct guideline stays within its character budget', async ()
     .replace(/\r\n/g, '\n')
   // Includes revisioned MCP, skill activation, and peer-topic coordination contracts.
   assert(prompt.length <= 14500, `guideline grew to ${prompt.length} characters`)
+})
+
+test('coordinator static prompt stays compact without generic worker manuals', async () => {
+  const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')!
+  const prompt = (await guidelineProvider().getPromptSection(makeContext(agent, false)))!.replace(/\r\n/g, '\n')
+  assert(agent.prompt.length <= 4500, `coordinator role grew to ${agent.prompt.length} characters`)
+  assert(prompt.length <= 7500, `coordinator guideline grew to ${prompt.length} characters`)
+  assert(prompt.split('\n').length <= 120)
+  assert.doesNotMatch(prompt, /### Environment|Configure MCP|Activate skill tools|vm\.SourceTextModule|shell: "node"/)
+  assert.match(prompt, /action: schema/)
+  assert.match(prompt, /LAST message a non-silent request/)
+  assert.match(prompt, /silent: true.*archive without triggering a response/)
 })

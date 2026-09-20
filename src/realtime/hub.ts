@@ -24,6 +24,7 @@ interface Client {
   keys: Set<string>
   send(frame: Uint8Array): boolean
   close(error?: Error): void
+  refresh(reason: ResetReason): void
 }
 interface JournalEntry { sequence: number; projectId: string; key: string; frame: Uint8Array }
 
@@ -46,6 +47,7 @@ export class RealtimeHub {
       journalCount: 2048, journalBytes: 4 * 1024 * 1024,
       clientBytes: 8 * 1024 * 1024, heartbeatMs: 15_000, telemetryMs: 1000,
       diagnostic: (reason) => console.warn(`[realtime] ${reason}`), ...options,
+      projectExists: options.projectExists ?? (id => this.projects.has(id)),
     }
     for (const key of ['journalCount', 'journalBytes', 'clientBytes', 'heartbeatMs', 'telemetryMs'] as const) {
       if (!Number.isSafeInteger(this.options[key]) || this.options[key] < 1) throw new TypeError(`Invalid ${key}`)
@@ -61,6 +63,9 @@ export class RealtimeHub {
     }
     const project: Project = { telemetry, tails: new Map() }
     this.projects.set(projectId, project)
+    for (const client of this.clients) {
+      if (client.topics.some(topic => topic.projectId === projectId)) client.refresh('project-restored')
+    }
     const active = () => !this.closed && this.projects.get(projectId) === project
     return {
       chat: (sessionId, payload, requestId) => {
@@ -82,6 +87,10 @@ export class RealtimeHub {
         this.journalBytes = this.journal.reduce((sum, entry) => sum + entry.frame.byteLength, 0)
         for (const client of [...this.clients]) {
           if (!client.topics.some(topic => topic.projectId === projectId)) continue
+          if (this.options.projectExists(projectId)) {
+            client.refresh('project-removed')
+            continue
+          }
           client.send(this.frame({ type: 'reset', reason: 'project-removed', cursor: this.cursor }))
           client.close()
         }
@@ -110,7 +119,8 @@ export class RealtimeHub {
 
   private subscribeTelemetry(topic: RealtimeTopic): () => void {
     if (topic.kind !== 'logs' && topic.kind !== 'spans') return () => {}
-    const project = this.projects.get(topic.projectId)!
+    const project = this.projects.get(topic.projectId)
+    if (!project) return () => {}
     const store = project.telemetry
     if (!store) return () => {}
     const kind = topic.kind
@@ -150,7 +160,7 @@ export class RealtimeHub {
     if (this.closed) return Response.json({ error: 'realtime_stopping' }, { status: 503 })
     // Also validate direct callers; the HTTP route is not the trust boundary.
     topics = parseRealtimeTopics(JSON.stringify(topics))
-    if (topics.some(topic => !this.projects.has(topic.projectId))) {
+    if (topics.some(topic => !this.projects.has(topic.projectId) && !this.options.projectExists(topic.projectId))) {
       return Response.json({ error: 'unknown_realtime_project' }, { status: 404 })
     }
     let reason: ResetReason | undefined
@@ -166,7 +176,7 @@ export class RealtimeHub {
     }
     // Stopped telemetry tails leave an interval that the journal cannot replay.
     if (!reason && topics.some(topic => (topic.kind === 'logs' || topic.kind === 'spans')
-      && !this.projects.get(topic.projectId)!.tails.has(topic.kind))) reason = 'expired'
+      && !this.projects.get(topic.projectId)?.tails.has(topic.kind))) reason = 'expired'
     let client: Client
     const stream = new ReadableStream<Uint8Array>({
       start: controller => {
@@ -174,6 +184,15 @@ export class RealtimeHub {
         let heartbeat: ReturnType<typeof setInterval> | undefined
         const releases: Array<() => void> = []
         const abort = () => client.close()
+        const subscribe = () => {
+          for (const release of releases.splice(0)) release()
+          for (const topic of topics) releases.push(this.subscribeTelemetry(topic))
+        }
+        const sendAvailability = () => {
+          const unavailable = topics.filter(topic => !this.projects.has(topic.projectId))
+          if (unavailable.length) client.send(this.frame({ type: 'unavailable', cursor: this.cursor, topics: unavailable }))
+          client.send(this.frame({ type: 'ready', cursor: this.cursor }))
+        }
         client = {
           topics, keys: new Set(topics.map(realtimeTopicKey)),
           close: error => {
@@ -195,17 +214,25 @@ export class RealtimeHub {
             controller.enqueue(frame)
             return true
           },
+          refresh: reason => {
+            if (ended) return
+            try {
+              subscribe()
+              client.send(this.frame({ type: 'reset', reason, cursor: this.cursor }))
+              sendAvailability()
+            } catch (error) { client.close(error instanceof Error ? error : new Error(String(error))) }
+          },
         }
         if (signal.aborted) { client.close(); return }
         this.clients.add(client)
         signal.addEventListener('abort', abort, { once: true })
         try {
-          for (const topic of topics) releases.push(this.subscribeTelemetry(topic))
+          subscribe()
           if (reason) client.send(this.frame({ type: 'reset', cursor: this.cursor, reason }))
           else for (const entry of this.journal) {
             if (entry.sequence > after && client.keys.has(entry.key)) client.send(entry.frame)
           }
-          client.send(this.frame({ type: 'ready', cursor: this.cursor }))
+          sendAvailability()
           if (!ended) {
             heartbeat = setInterval(() => client.send(this.frame({ type: 'heartbeat', cursor: this.cursor })), this.options.heartbeatMs)
             heartbeat.unref?.()
@@ -234,6 +261,7 @@ export class RealtimeHub {
 }
 
 export interface RealtimeHubOptions {
+  projectExists?: (projectId: string) => boolean
   journalCount?: number
   journalBytes?: number
   clientBytes?: number

@@ -3,6 +3,17 @@ import { randomUUID } from 'node:crypto'
 import { writeFile as nodeWriteFile } from 'node:fs/promises'
 import { Hono } from 'hono'
 import { AgentTypesManager } from '../../agent/types/manager.ts'
+import { AgentResourceStore } from '../../agent-authoring/store.ts'
+import { AuthoringChanges } from '../../agent-authoring/changes.ts'
+import { authoringChangeTool, createAuthoringHandler, type ChangeManagementOptions } from '../../agent-authoring/change-management.ts'
+import { AuthoringProbeRequests, authoringProbesPlugin } from '../../agent-authoring/probe-requests.ts'
+import { AgentAuthoringService } from '../../agent-authoring/service.ts'
+import { CapabilityBroker } from '../../agent-authoring/capabilities.ts'
+import { AgentCredentialStore } from '../../agent-authoring/credentials.ts'
+import { CredentialRequests } from '../../agent-authoring/credential-requests.ts'
+import { agentToolTest } from '../../tools/agent-tool-test.ts'
+import { PublicationBusyError, PublicationRequestError, PublicationRequests, authoringPublicationPlugin } from '../../agent-authoring/publication-requests.ts'
+import { authoringManagementTool, registerAuthoringCommands, authoringCredentialsPlugin, type AuthoringManagementOptions } from '../../agent-authoring/management.ts'
 import { AgentApp } from '../../agent/app.ts'
 import { BackgroundTaskManager } from '../../agent/background-task.ts'
 import { backgroundTasksPlugin } from '../../agent/background-task-routes.ts'
@@ -28,18 +39,20 @@ import { createHelpCommand } from '../../slash-commands/handlers/help.ts'
 import { createLearnCommand } from '../../slash-commands/handlers/learn.ts'
 import { triggerReflectorFlush, learningTask } from '../../agent/learning/pipelines.ts'
 import { createCompactCommand } from '../../slash-commands/handlers/compact.ts'
+import { createClearCommand } from '../../slash-commands/handlers/clear.ts'
 import { createSessionsCommand } from '../../slash-commands/handlers/sessions.ts'
 import { createStatusCommand } from '../../slash-commands/handlers/status.ts'
 import { CommandDispatcher } from '../../slash-commands/index.ts'
-import type { Config, McpServerConfig } from '../../config/schema.ts'
+import { slashCommandsPlugin } from '../../slash-commands/routes.ts'
+import type { Config } from '../../config/schema.ts'
 import { HandoffManager } from '../../sessions/handoff/manager.ts'
 import { McpManager } from '../../mcp/manager.ts'
-import { SessionManager } from '../../sessions/session-manager.ts'
+import { ConversationContextsBusyError, SessionManager } from '../../sessions/session-manager.ts'
 import { JsonlSessionStore } from '../../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../../sessions/session-store-sqlite.ts'
 import type { SessionStore } from '../../sessions/session-store.ts'
 import { localFolderWorkdirRef, resolveSessionLocations, type WorkdirCapabilityLookup } from '../../sessions/locality.ts'
-import { FolderError, FolderRegistry } from '../../folders/registry.ts'
+import { FolderError, FolderRegistry, UUID_PATTERN } from '../../folders/registry.ts'
 import { FolderService } from '../../folders/routes.ts'
 import { ProjectFolderDiscovery } from '../../folders/discovery.ts'
 import { folderAccessMiddleware } from '../../folders/access.ts'
@@ -51,7 +64,7 @@ import { CronTool } from '../../tools/cron.ts'
 import { LogTool } from '../../tools/log.ts'
 import { EventSubscribeTool } from '../../tools/event-subscribe.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
-import type { LoadableEntry, McpLoadable } from '../../tools/load-tool.ts'
+import type { LoadableEntry } from '../../tools/load-tool.ts'
 import { InvokeTool } from '../../tools/invoke-tool.ts'
 import { ImportTool } from '../../tools/load-tool.ts'
 import { createMcpConfigHandler } from '../../mcp/virtual-config.ts'
@@ -70,6 +83,7 @@ import { ExecTool } from '../../tools/shell.ts'
 import { SubagentTool } from '../../tools/subagent.ts'
 import { YieldTool } from '../../tools/yield.ts'
 import { remoteSessionPlugin } from '../../sessions/remote-session-routes.ts'
+import { isManagedWorkdir, ownsManagedWorkdir, MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION } from '../../execution/managed-workdir.ts'
 import { RemoteFolderOwnership } from '../../folders/remote-ownership.ts'
 import {
   createBgTasksHandler,
@@ -103,14 +117,13 @@ import { MODEL_CONTEXT_WINDOWS, resolveContextWindow } from '../../providers/mod
 import { providerPlugin } from '../../providers/routes.ts'
 import { sessionsApiPlugin } from '../../sessions/routes.ts'
 import { sessionDiagnosisPlugin } from '../../sessions/diagnosis-routes.ts'
-import { registerEvalBridgeRoute } from '../../script-runtime/bridge.ts'
 import { SearchTool } from '../../tools/search.ts'
+import { createWebSearchTool } from '../../tools/web-provider.ts'
 import {
   detectSearXNG,
-  FirecrawlSearchTool,
   SearXNGSearchTool,
-  WebSearchTool,
 } from '../../tools/web.ts'
+import { StartupTimings } from '../startup-timings.ts'
 import { ChromeManager } from '../../browser/chrome-manager.ts'
 import { cleanupTempFiles, workspacePath } from '../../utils/paths.ts'
 import { isCronEventPayload } from '../../cron/events.ts'
@@ -154,6 +167,7 @@ export async function createProjectRuntime(
   dependencies: ProjectRuntimeDependencies,
 ): Promise<ProjectRuntime> {
   const { scope, project, mainCluster, copilotAuth, configStore } = dependencies
+  const startup = new StartupTimings('project', project.id)
   const workspace = config.agent.workspace
   const selfCodeRoot = dependencies.selfCodeRoot
   const cleanup: Array<() => unknown> = []
@@ -190,7 +204,7 @@ export async function createProjectRuntime(
     if (!dependencies.realtimeHub) realtimeHub.close()
   }
   cleanup.push(closeRealtime)
-  for (const topic of ['session.input.accepted', 'session.message.appended', 'session.turn.finished', 'session.handoff', 'session.ended', 'background.task.changed'] as const) {
+  for (const topic of ['session.input.accepted', 'session.message.appended', 'session.turn.finished', 'session.handoff', 'session.ended', 'session.renamed', 'background.task.changed'] as const) {
     const subscription = bus.on(topic, fact => realtime.invalidateSessions(fact.sessionId))
     cleanup.push(() => bus.off(subscription))
   }
@@ -205,7 +219,7 @@ export async function createProjectRuntime(
 
   cleanup.push(closeTelemetry)
   try {
-    await events.start()
+    await startup.measure('events', () => events.start())
     return await startServices()
   } catch (error) {
     for (const close of cleanup.reverse()) {
@@ -238,12 +252,13 @@ export async function createProjectRuntime(
   const app = new Hono()
   app.use('*', (_c, next) => scope.run(next))
   if (!dependencies.realtimeHub) registerRealtimeRoute(app, realtimeHub, dependencies.authorize)
-  const evalBridge = new EvalBridgeRuntime({ projectId: project.id, scope, gatewayBaseUrl: dependencies.gatewayBaseUrl })
+  const evalBridge = new EvalBridgeRuntime({ projectId: project.id, scope })
   cleanup.push(() => evalBridge.shutdown())
   const folderRegistry = new FolderRegistry(resolve(workspace), { projectId: project.id, catalog: dependencies.catalog })
-  await folderRegistry.init()
+  await startup.measure('folders', () => folderRegistry.init())
   app.use('*', folderAccessMiddleware(folderRegistry))
   const ownsWorkdir = (ref: import('../../sessions/locality.ts').WorkdirRefV1): boolean => {
+    if (isManagedWorkdir(ref.capabilityId)) return ref.nodeId !== 'local' && ownsManagedWorkdir(project.id, ref.capabilityId)
     if (folderRegistry.lookupWorkdir(ref)?.capability) return true
     if (folderRegistry.ownsRemoteWorkdir(ref)) return true
     if (folderRegistry.isRetiredWorkdir(ref)) return false
@@ -255,6 +270,11 @@ export async function createProjectRuntime(
   const workdirCapabilityLookup: WorkdirCapabilityLookup = ref =>
     folderRegistry.lookupWorkdir(ref) ?? (ownsWorkdir(ref) ? mainCluster.workdirCapabilityLookup(ref) : { node: 'online' })
   const remoteExecutor = new ProjectExecutor(project.id, mainCluster.remoteExecutor, request => {
+    if (request.capabilityId === MANAGED_SESSION_CAPABILITY && request.operation === MANAGED_SESSION_OPERATION &&
+      request.sessionId.startsWith('web:chat-') && UUID_PATTERN.test(request.sessionId.slice('web:chat-'.length))) {
+      folderRegistry.assertSessionFolder({ sessionId: request.sessionId })
+      return
+    }
     if (request.sessionId === `folder-identity:${project.id}` && request.operation === 'workdir.identity') return
     if (request.sessionId.startsWith('folder:')) {
       if (!folderRegistry.get(request.sessionId.slice('folder:'.length))) {
@@ -298,14 +318,10 @@ export async function createProjectRuntime(
   // Web search provider for the `search` tool's `web:` scheme.
   // Not registered as a standalone tool — only wired into SearchTool below.
   // Firecrawl takes precedence over Brave when both keys are configured.
-  let webSearchTool: import('../../tools/tool.ts').Tool | undefined
-  if (config.tools.firecrawlApiKey) {
-    webSearchTool = new FirecrawlSearchTool(config.tools.firecrawlApiKey)
-  } else if (config.tools.braveApiKey) {
-    webSearchTool = new WebSearchTool(config.tools.braveApiKey)
-  }
+  const webSearchTool = createWebSearchTool(config.tools)
 
   const loadable = new Map<string, LoadableEntry>()
+  loadable.set('agent_tool_test', agentToolTest)
   const searxngFactory = async () => {
     const base = await detectSearXNG()
     if (!base) {
@@ -316,40 +332,11 @@ export async function createProjectRuntime(
     return new SearXNGSearchTool(base)
   }
 
-  try {
-    const searxng = await searxngFactory()
-    // tools.register(searxng)
-    if (!webSearchTool) webSearchTool = searxng
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.info(`[main] SearXNG eager load skipped: ${message}`)
-  }
-
-  // Zero-config fallback: keyless Firecrawl works without an API key when no
-  // other web search provider (Brave key or local SearXNG) is available.
-  // See https://www.firecrawl.dev/blog/firecrawl-keyless-launch
-  if (!webSearchTool) {
-    webSearchTool = new FirecrawlSearchTool()
-  }
-
-  // SearXNG web search �?eager-loaded when reachable, still lazy-loadable later.
+  // Explicit SearXNG discovery remains available independently of provider selection.
   loadable.set('web_search', {
     factory: searxngFactory,
   })
 
-  // Chrome DevTools MCP — two loadable entries for progressive disclosure:
-  //   chrome-devtools      → common tools (input, navigation, snapshot)
-  //   chrome-devtools-full → remaining tools (emulation, performance, network, console)
-  const chromeDevToolsConfig: McpServerConfig = {
-    name: 'chrome-devtools',
-    transport: 'stdio',
-    command: 'npx',
-    args: ['chrome-devtools-mcp@latest'],
-  }
-  const chromeDevToolsConfigPath = workspacePath(
-    workspace,
-    '.chrome-devtools.json',
-  )
   // Chrome config getter that re-reads from the config file so edits take effect
   // without a process restart (e.g. user sets tools.chrome.executablePath).
   const chromeConfigGetter = (): {
@@ -362,39 +349,16 @@ export async function createProjectRuntime(
     projectId: project.id, portAllocator: dependencies.chromePortAllocator,
   })
   cleanup.push(() => chromeManager.releaseAll())
-  const chromeDevToolsEntry: McpLoadable = {
-    config: chromeDevToolsConfig,
-    configPath: chromeDevToolsConfigPath,
+  loadable.set('chrome-devtools', {
+    config: {
+      name: 'chrome-devtools',
+      description: 'Managed browser: pages, forms, screenshots, JavaScript, network, console, performance, memory, audits and emulation. browser_setup selects session-local Chrome/Edge/Brave or an explicit Electron/CDP target; search and invoke_tool route by instance ID. Guidance: v:skills/chrome-devtools.',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['chrome-devtools-mcp@latest'],
+    },
+    configPath: workspacePath(workspace, '.chrome-devtools.json'),
     chromeManager,
-    toolFilter: new Set([
-      // input
-      'click',
-      'drag',
-      'fill',
-      'fill_form',
-      'handle_dialog',
-      'hover',
-      'press_key',
-      'type_text',
-      'upload_file',
-      // navigation
-      'close_page',
-      'list_pages',
-      'navigate_page',
-      'new_page',
-      'select_page',
-      'wait_for',
-      // snapshot
-      'evaluate_script',
-      'take_snapshot',
-      'take_screenshot',
-    ]),
-  }
-  loadable.set('chrome-devtools', chromeDevToolsEntry)
-  loadable.set('chrome-devtools-full', {
-    config: chromeDevToolsConfig,
-    configPath: chromeDevToolsConfigPath,
-    sharedConn: chromeDevToolsEntry,
   })
 
   const initiativeTool = new InitiativeTool({
@@ -444,9 +408,9 @@ export async function createProjectRuntime(
     ? new SqliteSessionStore(sessionsDir)
     : new JsonlSessionStore(sessionsDir)
 
-  await sessionStore.init()
+  await startup.measure('sessions', () => sessionStore.init())
   cleanup.push(() => sessionStore.close?.())
-  await assertSessionProjectOwnership(sessionStore, project.id)
+  await startup.measure('ownership', () => assertSessionProjectOwnership(sessionStore, project.id))
 
   const handoffManager = new HandoffManager(
     provider,
@@ -463,7 +427,40 @@ export async function createProjectRuntime(
   cleanup.push(() => handoffManager.stop())
 
   const context = new ContextBuilder(workspace)
+  const botStore = new BotInstanceStore({
+    projectId: project.id,
+    path: resolve(workspace, '..', 'config', 'bots.v1.json'),
+    ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
+  })
+  const authoringDirectory = resolve(workspace, '..', 'config', 'agent-resources')
+  const agentResources = new AgentResourceStore({ projectId: project.id, directory: authoringDirectory })
+  const authoringChanges = new AuthoringChanges({ projectId: project.id, directory: authoringDirectory, resources: agentResources })
+  const agentCredentials = new AgentCredentialStore(authoringDirectory)
+  const credentialRequests = new CredentialRequests({ projectId: project.id, credentials: agentCredentials })
+  cleanup.push(() => credentialRequests.stop())
+  const canDeliverAuthoredMessage = (id: string): boolean => {
+    const state = sessions.getSessionState(id)
+    return !!state && state.mode === 'session' && state.sessionKind !== 'orchestrator' &&
+      id !== 'web:orchestrator' && sessions.canReceiveSessionMessage(id)
+  }
+  const capabilityBroker = new CapabilityBroker({
+    projectId: project.id, directory: authoringDirectory,
+    resolveSecret: async ref => agentCredentials.resolve(ref),
+    deliver: (id, input) => deliverInput(id, input),
+    canDeliver: canDeliverAuthoredMessage,
+  })
+  const authoring = new AgentAuthoringService({
+    projectId: project.id, workspace, store: agentResources, broker: capabilityBroker,
+    folders: folderRegistry, remoteExecutor: mainCluster.remoteExecutor,
+    legacyAddress: id => {
+      const colon = id.indexOf(':')
+      if (colon < 0) return undefined
+      const bot = botStore.list().find(bot => bot.legacySessionId && bot.platform === id.slice(0, colon))
+      return bot ? { projectId: project.id, botInstanceId: bot.id, platform: bot.platform, conversationId: id.slice(colon + 1), legacySessionId: true } : undefined
+    },
+  })
   const sessions: SessionManager = new SessionManager({
+    conversationPolicies: authoring,
     projectId: project.id,
     promptCaptures,
     hasInitiative: id => initiatives.getSummary(id) !== null,
@@ -507,7 +504,7 @@ export async function createProjectRuntime(
           ...node,
           capabilities: node.capabilities.filter(capability => capability.kind !== 'workdir' ||
             ownsWorkdir({ version: 1, nodeId: node.role === 'main' ? 'local' : node.nodeId, capabilityId: capability.capabilityId })),
-        })).filter(node => node.role === 'main' || node.capabilities.some(capability => capability.kind === 'workdir')),
+        })),
       }
     },
     onSessionStopped: (id) => backgroundTasks.handleSessionStopped(id),
@@ -551,7 +548,7 @@ export async function createProjectRuntime(
       }
     },
   })
-  await io.start()
+  await startup.measure('io', () => io.start())
   cleanup.push(() => io.shutdown())
   registerIoRoutes(app, io, dependencies.authorize)
   importTool.registerBuiltin('io_capabilities', new IoCapabilitiesTool(io, project.id))
@@ -692,9 +689,107 @@ export async function createProjectRuntime(
   commandDispatcher.register(createConfigCommand(sessions))
   commandDispatcher.register(createYieldCommand(sessions))
   commandDispatcher.register(createCompactCommand(sessions))
+  commandDispatcher.register(createClearCommand(sessions))
   commandDispatcher.register(createDumpPromptCommand(agent))
   commandDispatcher.register(createStatusCommand(sessions))
   commandDispatcher.register(createSessionsCommand(agent))
+  const authoringOptions: Omit<AuthoringManagementOptions, 'publicationRequests'> = {
+    service: authoring, credentials: agentCredentials, credentialRequests,
+    inventory: () => ({
+      bots: botStore.list().map(({ id, platform, displayName, enabled, legacySessionId }) => ({ id, platform, displayName, enabled, legacySessionId })),
+      conversations: sessions.listSessions().map(session => ({
+        sessionId: session.sessionId, address: authoring.address(session.sessionId),
+      })),
+      folders: folderRegistry.list(),
+    }),
+    retire: async matches => {
+      try { await sessions.retireIdleConversationContexts(matches) } catch (error) {
+        if (error instanceof ConversationContextsBusyError) throw new PublicationBusyError(error.message)
+        throw error
+      }
+    },
+    validateLive: async snapshot => {
+      for (const binding of snapshot.bundle.bindings.filter(binding => binding.enabled)) {
+        const bot = botStore.get(binding.botInstanceId)
+        if (bot.platform !== binding.platform) throw new Error('Binding platform does not match its bot instance.')
+        for (const id of binding.readFolders) {
+          if (!folderRegistry.get(id)) throw new Error(`Read folder ${id} is not registered in this Project.`)
+        }
+        for (const grant of binding.grants) {
+          if (grant.kind === 'http' && grant.credential && !agentCredentials.names().includes(grant.credential.secretRef)) {
+            throw new Error(`Credential reference ${grant.credential.secretRef} must be provisioned outside the conversation before publication.`)
+          }
+          if (grant.kind === 'inbox' && !canDeliverAuthoredMessage(grant.sessionId)) throw new Error('Inbox target must be a durable, non-coordinator conversation in this Project.')
+        }
+      }
+    },
+  }
+  const canAuthor = (id: string): boolean => {
+    const state = sessions.getSessionState(id)
+    if (!state || state.projectId !== project.id || state.mode !== 'session' || !id.startsWith('web:') ||
+      sessions.isManagedConversation(id)) return false
+    const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
+    return locations.workdir.available && locations.workdir.locality === 'local'
+  }
+  const publicationRequests = new PublicationRequests({
+    ...authoringOptions,
+    validateRequest: request => {
+      if (!request.change) return
+      const change = authoringChanges.get(request.change.id)
+      if (change.closed || change.snapshot.revision !== request.revision ||
+        change.accessRevision !== request.change.accessRevision ||
+        change.base.revision !== request.baseRevision || !canAuthor(request.change.sourceSessionId)) {
+        throw new PublicationRequestError('stale_request', 409, 'The reviewed Change or authoring session is no longer current. Request a new review.')
+      }
+      authoringChanges.authorize(change.id, request.change.sourceSessionId)
+    },
+  })
+  const probeRequests = new AuthoringProbeRequests({
+    projectId: project.id, directory: authoringDirectory, changes: authoringChanges,
+    service: authoring, credentials: agentCredentials, canAuthor,
+    notify: async request => {
+      await events.emit({
+        type: 'authoring.probe.completed', source: 'system', targetSessionId: request.sourceSessionId,
+        delivery: { urgency: 'queue' },
+        content: `Authoring probe ${request.id}: ${request.status}. Change ${request.changeId}, revision ${request.revision}. ` +
+          (request.runId ? `Read saved run ${request.runId} with authoring_change; no publication or write was performed.`
+            : 'No live request ran. Do not automatically request another approval.'),
+        meta: { changeId: request.changeId, requestId: request.id, runId: request.runId ?? '' },
+      })
+    },
+  })
+  let publicationRetryTimer: ReturnType<typeof setInterval> | undefined
+  let publicationRetry: Promise<void> | undefined
+  const resumeApprovedPublications = () => {
+    if (publicationRetry) return
+    publicationRetry = publicationRequests.retryWaiting().then(() => {}, error => {
+      console.error('[authoring-publication] Could not resume reviewed publication', {
+        error: error instanceof PublicationRequestError ? error.code : error instanceof Error ? error.name : 'Error',
+      })
+    }).finally(() => { publicationRetry = undefined })
+  }
+  const stopPublicationReviews = async () => {
+    clearInterval(publicationRetryTimer)
+    publicationRequests.stop()
+    await publicationRetry
+  }
+  const changeManagement: ChangeManagementOptions = {
+    changes: authoringChanges, service: authoring, credentials: agentCredentials,
+    publications: publicationRequests, probes: probeRequests, canAuthor,
+    inventory: authoringOptions.inventory, validateLive: authoringOptions.validateLive,
+    evaluateScenario: (prompt, tools, input, signal, llmOverrides) =>
+      sessions.evaluateAuthoringScenario({ prompt, tools, input, signal, llmOverrides }),
+  }
+  const changeTool = authoringChangeTool(changeManagement)
+  tools.register(changeTool)
+  importTool.registerBuiltin(changeTool.name, changeTool)
+  const authoringVfs = createAuthoringHandler(changeManagement)
+  vfs.mount('v:authoring', 'scoped agent/skill Change files; exact-revision edits and saved check runs', authoringVfs.read, undefined, authoringVfs.write)
+  const authoringManagement: AuthoringManagementOptions = { ...authoringOptions, publicationRequests }
+  cleanup.push(stopPublicationReviews)
+  cleanup.push(() => probeRequests.stop())
+  tools.register(authoringManagementTool(authoringManagement))
+  registerAuthoringCommands(commandDispatcher, authoringManagement)
 
   tools.register(
     new MessageTool(
@@ -785,16 +880,11 @@ export async function createProjectRuntime(
       activeConfig = newConfig
       channels.updateConfig(newConfig)
   }
-  const botStore = new BotInstanceStore({
-    projectId: project.id,
-    path: resolve(workspace, '..', 'config', 'bots.v1.json'),
-    ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
-  })
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
     projectId: project.id, instanceStore: botStore, realtime,
   })
   cleanup.push(() => channels.stopAll())
-  await channels.init()
+  await startup.measure('channels', () => channels.init())
   const folders = new FolderService({
     registry: folderRegistry,
     remoteExecutor,
@@ -837,6 +927,10 @@ export async function createProjectRuntime(
   cleanup.push(releaseFolderLifecycle)
 
   for (const plugin of [
+    slashCommandsPlugin(commandDispatcher, sessions, dependencies.authorize),
+    authoringCredentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
+    authoringPublicationPlugin(publicationRequests, dependencies.authorize),
+    authoringProbesPlugin(probeRequests, dependencies.authorize),
     otelPlugin(otelStore),
     agentTypesPlugin(sessions, agentTypes),
     sessionDiagnosisPlugin({
@@ -849,7 +943,7 @@ export async function createProjectRuntime(
       authorize: dependencies.authorize,
       assertAccess: id => sessions.assertFolderAccess(id),
     }),
-    sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize }),
+    sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize }),
     topicsPlugin(topics, dependencies.authorize),
     backgroundTasksPlugin(backgroundTasks, id => !!sessions.getSessionState(id)),
     remoteSessionPlugin({
@@ -857,6 +951,7 @@ export async function createProjectRuntime(
       authorize: dependencies.authorize,
       requireFolderOwnership: true,
       folders: folderRegistry,
+      managedSessions: { projectId: project.id, inventory: () => mainCluster.getNodeInventory() },
     }),
     folders.plugin,
     botSetupPlugin({
@@ -868,17 +963,10 @@ export async function createProjectRuntime(
     projectConfigPlugin(configStore),
   ]) plugin(app)
 
-  // ── Channel manager ───────────────────────────────────────────────
-  // Each channel registers its own routes (e.g. feishu proxy) onto the app
-  await channels.startAll(app)
-
   // Register subagent tool (requires ChannelManager for thread creation)
   tools.register(
     new SubagentTool(bus, sessions, agentTypes, channels),
   )
-
-  // Register eval bridge routes before starting the server.
-  registerEvalBridgeRoute(app, evalBridge)
 
   // ── Graceful shutdown ─────────────────────────────────────────────
   let shutdownPromise: Promise<void> | undefined
@@ -897,6 +985,9 @@ export async function createProjectRuntime(
     // Quiesce producers before draining output; one failed cleanup must not
     // leave the remaining channels, persistence writes, or gateway running.
     for (const close of [
+      () => credentialRequests.stop(),
+      stopPublicationReviews,
+      () => probeRequests.stop(),
       () => io.shutdown(),
       () => cronService.stop(),
       () => stopLearning,
@@ -925,8 +1016,8 @@ export async function createProjectRuntime(
   // ── Start everything ──────────────────────────────────────────────
   console.info('[main] Starting all services...')
 
-  const startAgent = agent.start()
-  const startCron = cronService.start()
+  const startAgent = startup.measure('agent', () => agent.start())
+  const startCron = startup.measure('cron', () => cronService.start())
   cleanup.push(() => cronService.stop())
   cleanup.push(() => agent.shutdown())
   cleanup.push(() => backgroundTasks.stop())
@@ -936,11 +1027,17 @@ export async function createProjectRuntime(
 
   // Recover sessions interrupted by the previous process exit.
   const ready = Promise.all([startAgent, startCron]).then(async () => {
-    await sessions.recoverIncompleteSessions()
+    await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
   })
   await ready
+  resumeApprovedPublications()
+  publicationRetryTimer = setInterval(resumeApprovedPublications, 2000)
+  publicationRetryTimer.unref()
+  // Local readiness must not wait for external platform authentication or networking.
+  // Admission starts only after the session runtime can receive channel messages.
+  await channels.startAll(app, { waitForConnections: false })
+  startup.ready()
   console.info('[main] All services started')
-  return { app, folders: folderRegistry, ready, shutdown, updateConfig,
-    setGatewayBaseUrl: url => evalBridge.setGatewayBaseUrl(url) }
+  return { app, folders: folderRegistry, ready, shutdown, updateConfig }
   }
 }

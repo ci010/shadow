@@ -1,5 +1,6 @@
 import type { InboundMessage, MessageContext } from '../bus/events.ts'
 import { channelAddressFromSessionId, type ChannelAddress } from '../bus/events.ts'
+import type { CommandReceipt } from '../slash-commands/receipt.ts'
 
 export interface ReplyAddress {
   channelAddress?: ChannelAddress
@@ -78,6 +79,7 @@ export interface DeliveryReceipt {
   status: 'accepted'
   sessionId: string
   inputId: string
+  commandReceipt?: CommandReceipt
 }
 
 export interface AcceptedSessionInput {

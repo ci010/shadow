@@ -42,6 +42,94 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const config = (model: string) => ({ agent: { model, workspace: 'C:\\synthetic', temperature: .7 }, learning: {} })
 
+test('session heading rename trims and saves, retains failed edits, and cancels stale requests', async t => {
+  const requests: Array<{ url: string; init?: RequestInit; finish: (value: unknown, status?: number) => void }> = []
+  t.mock.method(globalThis, 'fetch', (url: unknown, init?: RequestInit) => new Promise<Response>(resolve => {
+    requests.push({ url: String(url), init, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
+  }))
+  const renamed: string[] = []
+  const props = reactive({
+    apiBase: 'http://fixture/projects/a', sessionId: 'web:one', projectName: 'Alpha',
+    name: 'Old', physicalId: null, revision: 0, active: true, canRename: true,
+    onRenamed: (name: string) => renamed.push(name),
+  })
+  const state = mountScript(t, 'SessionHeading.vue', props)
+  const details = { sessionId: 'web:one', name: 'Old',
+    workdir: { kind: 'local', displayPath: 'C:\\synthetic' }, usage: null, usageScope: 'session',
+    context: { usedTokens: null, windowTokens: null } }
+  requests[0].finish(details)
+  await settle()
+  await state().startRename()
+  assert.equal(state().draftName, 'Old', 'Project prefix is not part of the editable name')
+  state().draftName = '  New name  '
+  const save = state().saveName()
+  await state().saveName()
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].url, 'http://fixture/projects/a/api/sessions/web%3Aone/name')
+  assert.deepEqual(JSON.parse(requests[1].init!.body as string), { name: 'New name' })
+  state().cancelRename()
+  assert.equal(state().editing, true, 'Do not imply cancellation after dispatch')
+  requests[1].finish({}, 500)
+  await save
+  assert.equal(state().draftName, '  New name  ')
+  assert.equal(state().editing, true)
+  assert.match(state().renameError, /Retry/)
+  assert.deepEqual(renamed, [])
+  const retry = state().saveName()
+  requests[2].finish({ sessionId: 'web:one', name: 'New name' })
+  await retry
+  assert.equal(state().name, 'Alpha / New name')
+  assert.equal(state().editing, false)
+  assert.deepEqual(renamed, ['New name'])
+  await state().startRename()
+  state().draftName = 'Another'
+  const late = state().saveName()
+  assert.equal(requests[3].init?.signal?.aborted, true, 'Old details cannot overwrite the rename')
+  props.sessionId = 'web:two'
+  props.name = 'Second'
+  await nextTick()
+  assert.equal(requests[4].init?.signal?.aborted, true)
+  requests[4].finish({ sessionId: 'web:one', name: 'Another' })
+  requests[3].finish(details)
+  await late
+  assert.deepEqual(renamed, ['New name'])
+  assert.equal(state().editing, false)
+  assert.equal(state().name, 'Alpha / Second')
+})
+
+test('session rename validates input, cancels without requests and respects read-only UI', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    sessionId: 'web:one', name: 'Original', workdir: { kind: 'local', displayPath: null },
+    usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null },
+  }))
+  const props = reactive({ apiBase: 'http://fixture', sessionId: 'web:one', name: 'Original',
+    physicalId: null, revision: 0, active: true, canRename: false })
+  const state = mountScript(t, 'SessionHeading.vue', props)
+  await settle()
+  await state().startRename()
+  assert.equal(state().editing, false)
+  props.canRename = true
+  await nextTick()
+  await state().startRename()
+  for (const invalid of ['', '  ', 'a'.repeat(121), 'bad\nname']) {
+    state().draftName = invalid
+    await state().saveName()
+    assert.ok(state().renameError)
+  }
+  state().cancelRename()
+  assert.equal(state().editing, false)
+  assert.equal(state().name, 'Original')
+})
+
+test('saved names take precedence over topic and coordinator fallback labels', () => {
+  const sessions = parseSessionGraph({ sessions: [
+    { sessionId: 'web:topic', name: 'My name', title: 'Generated', topic: { title: 'Topic title', goal: 'Goal', scope: 'Scope' } },
+    { sessionId: 'web:orchestrator', name: 'My coordinator' },
+  ], nodes: [] })
+  assert.deepEqual(sessions.map(session => session.label), ['My name', 'My coordinator'])
+  assert.equal(sessions[0].topic?.title, 'Topic title')
+})
+
 test('Project session invalidation also refreshes its folder catalog for agent-registered folders', async t => {
   let invalidate: (() => void) | undefined
   t.mock.method(globalThis, 'fetch', async (url: URL) => Response.json(url.pathname.endsWith('/graph')
@@ -66,6 +154,47 @@ test('Project session invalidation also refreshes its folder catalog for agent-r
   invalidate()
   await new Promise(resolve => setTimeout(resolve, 300))
   assert.equal(state().liveFolderRevision, 1, 'Coalesced session events invalidate the owning folder catalog once')
+})
+
+test('bot sidebar names stay Project-scoped and late catalogs cannot replace another Project while activity remains live', async t => {
+  let finishOldCatalog: ((response: Response) => void) | undefined
+  let oldSignal: AbortSignal | null | undefined
+  const bot = (projectId: string) => ({
+    id: 'shared', projectId, platform: 'qq', displayName: `${projectId} bot`, label: 'QQ',
+    enabled: true, configured: true, state: 'connected', config: { enabled: true }, secrets: {},
+  })
+  t.mock.method(globalThis, 'fetch', async (input: string | URL, init?: RequestInit) => {
+    const url = new URL(input)
+    const projectId = url.pathname.split('/')[2]!
+    const sessionId = `bot:${projectId}:shared:qq:dm%3Aone`
+    if (url.pathname.endsWith('/graph')) return Response.json({ sessions: [{ sessionId, projectId }], nodes: [] })
+    if (url.pathname.endsWith('/stages')) return Response.json({ stages: { [sessionId]: 'tool' } })
+    assert.ok(url.pathname.endsWith('/channels'))
+    if (projectId === 'a') {
+      oldSignal = init?.signal
+      return new Promise<Response>(resolve => { finishOldCatalog = resolve })
+    }
+    return Response.json({ channels: [bot(projectId)] })
+  })
+  const props = reactive({
+    apiBase: 'http://fixture', project: { id: 'a', name: 'A', createdAt: '' },
+    navigationKey: '/projects/a/chat', selectedProjectId: 'a', selectedSessionId: '', remoteFolders: true,
+  })
+  const state = mountScript(t, 'ProjectGroup.vue', props, undefined, {
+    '../composables/useLiveClient.ts': { useLiveClientPool: () => ({ client: () => ({ subscribe: () => ({ close() {} }) }) }) },
+  })
+  await settle()
+  assert.equal(state().stages['bot:a:shared:qq:dm%3Aone'], 'tool', 'Bot catalog latency does not delay stage updates')
+  assert.ok(finishOldCatalog)
+  props.project = { id: 'b', name: 'B', createdAt: '' }
+  await nextTick()
+  await settle()
+  assert.equal(oldSignal?.aborted, true)
+  assert.deepEqual(state().bots, [{ id: 'shared', projectId: 'b', platform: 'qq', displayName: 'b bot' }])
+  finishOldCatalog(Response.json({ channels: [bot('a')] }))
+  await settle()
+  assert.equal(state().bots[0].displayName, 'b bot')
+  assert.equal(state().sessions[0].channelAddress.projectId, 'b')
 })
 
 test('folder catalog revision cancels stale lists and moves an agent-created topic into its new folder', async t => {

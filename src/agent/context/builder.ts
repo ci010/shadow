@@ -34,6 +34,8 @@ export interface SessionPromptContext {
   agent: AgentTypeDefinition
   /** Stable Initiative ID for shared work context (from SessionState). */
   initiativeId?: string
+  /** Fresh-context boundary for automatically injected transient memory. */
+  contextResetAt?: string
   /** Selected registered folder, independent of the effective workdir capability. */
   folderId?: string
   /** Session id owning the shared working directory (subagents inherit the spawner's). */

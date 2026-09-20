@@ -54,6 +54,15 @@ test('QQ sends a local file from the originating group session', async () => {
         secret: 'app-secret',
         workspace,
       })
+      channel.setReceiver(async message => ({
+        status: 'accepted', sessionId: `qq:${message.chatId}`, inputId: message.messageId,
+      }))
+      await (channel as unknown as {
+        handleDispatch(event: string, data: Record<string, unknown>): Promise<void>
+      }).handleDispatch('GROUP_AT_MESSAGE_CREATE', {
+        id: 'source-id', group_openid: 'group-openid', author: { member_openid: 'sender' },
+        content: 'report', timestamp: new Date().toISOString(),
+      })
       await channel.send({
         channel: 'qq',
         chatId,
@@ -61,6 +70,7 @@ test('QQ sends a local file from the originating group session', async () => {
         content: '',
         media: ['report.txt'],
         done: true,
+        replyTo: 'source-id',
       })
 
       assertEquals(requests, [
@@ -100,6 +110,7 @@ test('QQ sends a local file from the originating group session', async () => {
           body: {
             msg_type: 7,
             msg_seq: 1,
+            msg_id: 'source-id',
             media: { file_info: 'file-info' },
           },
         },

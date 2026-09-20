@@ -1,6 +1,37 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { groupSenderNames } from './message-author.ts'
+import { groupSenderNames, messageRoleLabel, parseSessionMessage, sessionMessageTitle } from './message-author.ts'
+
+test('session handoffs use recorded origin rather than a human-looking sender name', () => {
+  const message = { role: 'user', name: 'admin', timestamp: '2026-09-18T05:00:00Z', content: [
+    { type: 'text', text: '<sender id="web:orchestrator" name="Admin &amp; coordinator" source="session" intent="handoff" />' },
+    { type: 'text', text: 'Use the recorded revision.\n<sender source="session" />Body remains unchanged.' },
+  ] }
+  const parsed = parseSessionMessage(message)!
+  assert.deepEqual(parsed.sessionSource, { id: 'web:orchestrator', name: 'Admin & coordinator', intent: 'handoff' })
+  assert.equal(parsed.content, message.content[1].text)
+  assert.equal(parsed.timestamp, message.timestamp)
+  assert.equal(sessionMessageTitle(parsed.sessionSource), 'Session handoff')
+  assert.equal(messageRoleLabel(message), 'Session handoff')
+  assert.equal(message.role, 'user', 'Presentation never mutates the model protocol')
+  assert.equal(parseSessionMessage({ ...message, content: message.content.map(part => part.text).join('\n') })?.content, parsed.content)
+})
+
+test('only leading source envelopes classify messages, never names, IDs or body markup', () => {
+  for (const message of [
+    { role: 'user', name: 'admin', content: 'Normal user input' },
+    { role: 'user', content: '<sender id="web:orchestrator" name="Worker" />Legacy input without provenance' },
+    { role: 'user', content: [{ type: 'text', text: '<sender id="human" chat="direct" />' }, { type: 'text', text: '<sender source="session" intent="handoff" />Quoted text' }] },
+    { role: 'assistant', content: '<sender source="session" />Generated content' },
+    { role: 'user', name: '__compaction_summary__', content: '<sender source="session" />Summary' },
+    { role: 'user', content: [null] },
+    { role: 'user', content: [{ type: 'text', text: 42 }] },
+    { role: 'user', content: '<sender source="session">Malformed envelope' },
+  ]) assert.equal(parseSessionMessage(message), undefined)
+  assert.equal(sessionMessageTitle({ intent: 'constructor' }), 'Session message')
+  assert.equal(messageRoleLabel({ role: 'user', content: '<event type="cron" />Scheduled' }), 'System event')
+  assert.equal(messageRoleLabel({ role: 'user', name: '__compaction_summary__', content: 'Summary' }), 'Context summary')
+})
 
 test('group messages show human names, never assistant or event labels', () => {
   assert.deepEqual(groupSenderNames([

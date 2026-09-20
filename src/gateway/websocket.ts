@@ -47,6 +47,11 @@ export async function upgradeGatewayWebSocket(
   }
   const response = await gatewayWebSockets(app).upgradeWebSocket(() => ({
     onOpen: (_event, socket) => {
+      const signal = context.req.raw.signal
+      const close = () => socket.raw?.close(1008, 'Session ended')
+      if (signal.aborted) { close(); return }
+      signal.addEventListener('abort', close, { once: true })
+      socket.raw?.once('close', () => signal.removeEventListener('abort', close))
       try {
         onOpen(socket.raw!)
       } catch (error) {

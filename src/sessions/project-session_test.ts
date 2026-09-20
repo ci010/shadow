@@ -18,6 +18,7 @@ import { WriteTool } from '../tools/filesystem.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { ExecTool } from '../tools/shell.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 import { localFolderWorkdirRef, managedSessionWorkdirRef, resolveSessionLocations, type WorkdirCapabilityLookup } from './locality.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
@@ -288,7 +289,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       deepEqual(observedCwds, [folders.a, folders.a, folders.b, folders.b])
       equal(existsSync(join(home, 'relative.txt')), false)
       equal(existsSync(join(home, 'shell.txt')), false)
-      await sessions.buildSession('web:fork', { id: 'web:a', physicalId: 'web_a-0', index: 3 })
+      await sessions.buildSession('web:fork', { id: 'web:a', physicalId: physicalSessionId(sessions.getSessionState('web:a')!), index: 3 })
       await sessions.buildSession('web:nested', { id: 'web:fork' })
       for (const id of ['web:fork', 'web:nested']) {
         const state = sessions.getSessionState(id)!
@@ -369,7 +370,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         provider, new SessionTools(tools, home), new Bus(), store,
         {
           create: async () => ({
-            targetSessionId: 'web_a-1', timestamp: new Date().toISOString(),
+            targetSessionId: physicalSessionId(sessions.getSessionState('web:a')!, 1), timestamp: new Date().toISOString(),
             context: { summary: 'Fixture', currentObjective: '', recentTranscript: [] },
             prompt: 'Compacted folder fixture',
           }),
@@ -388,7 +389,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal(compactedState?.children, undefined)
         equal(compactedState?.description, 'Folder a')
         equal(compactedState?.config?.temperature, 0.2)
-        equal((await store.readFirstRecord('web_a-1'))?.summary_context, 'Compacted folder fixture')
+        equal((await store.readFirstRecord(physicalSessionId(compactedState!)))?.summary_context, 'Compacted folder fixture')
       } finally {
         clearTimeout(timeout)
         compacting.stop()

@@ -16,7 +16,7 @@ export function guidelineProvider(): SystemPromptProvider {
 
       const sections = [agentType.prompt]
 
-      sections.push(TOOLS)
+      if (agentType.name !== 'orchestrator') sections.push(TOOLS)
       sections.push(toolsGuideline(ctx))
       sections.push(executionModeGuideline(ctx))
       return sections.join('\n\n')

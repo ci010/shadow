@@ -10,6 +10,7 @@ import { ReadTool, WriteTool } from '../tools/filesystem.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { createMcpConfigHandler } from './virtual-config.ts'
+import { McpConnection } from './client.ts'
 
 const path = 'v:config/mcp.json'
 const initialMcp = {
@@ -26,6 +27,9 @@ const initialMcp = {
 }
 
 async function fixture(t: TestContext, mcp: Record<string, unknown> = initialMcp) {
+  t.mock.method(McpConnection.prototype, 'connect', async () => {})
+  t.mock.method(McpConnection.prototype, 'listTools', async () => [])
+  t.mock.method(McpConnection.prototype, 'disconnect', async () => {})
   const root = await createTempWorkspace()
   t.after(() => rm(root, { recursive: true, force: true }))
   const configPath = join(root, 'project.json')
@@ -64,7 +68,7 @@ async function fixture(t: TestContext, mcp: Record<string, unknown> = initialMcp
   }
 }
 
-test('virtual read and overwrite roundtrip secrets, preserve Project settings, and do not connect', async t => {
+test('virtual read and indexed overwrite roundtrip secrets and preserve Project settings', async t => {
   const f = await fixture(t)
   const before = await f.read()
   for (const secret of ['synthetic-env-secret', 'synthetic-url-secret', 'synthetic-header-secret', 'synthetic-custom-header', 'synthetic-shared-secret']) {
@@ -75,7 +79,8 @@ test('virtual read and overwrite roundtrip secrets, preserve Project settings, a
   document.mcpServers.local.command = 'different-synthetic-command'
   const result = await f.overwrite(document)
   assert.match(result, /config saved; catalog updated/)
-  assert.match(result, /No MCP connection or verification was performed/)
+  assert.match(result, /tool indexes ready/)
+  assert.match(result, /No MCP tools were executed/)
   assert.ok(!result.includes('synthetic-'), 'Write receipt contains no content preview')
   const saved = await f.saved()
   assert.equal(saved.mcp.local.env.TOKEN, initialMcp.local.env.TOKEN)

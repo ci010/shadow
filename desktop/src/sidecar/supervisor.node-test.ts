@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
+import type { StartupDiagnosticEntry } from './startup-diagnostics.js'
 import {
   FakeSidecarSupervisor,
   NodeSidecarSupervisor,
@@ -163,7 +164,7 @@ test('production main sidecar uses the exact server startup contract with local 
 test('production child sidecar rejects local executor as configuration error', async () => {
   const { calls, supervisor } = harness()
 
-  assert.deepEqual(await supervisor.start({ ...request, localExecutor: true }), {
+  assert.partialDeepStrictEqual(await supervisor.start({ ...request, localExecutor: true }), {
     phase: 'failed',
     role: 'child',
     kind: 'configuration-error',
@@ -175,7 +176,7 @@ test('production child sidecar rejects local executor as configuration error', a
 
 test('production sidecar requires a backend module before spawning Electron', async () => {
   const { calls, supervisor } = harness()
-  assert.deepEqual(await supervisor.start({ ...request, entryPath: '' }), {
+  assert.partialDeepStrictEqual(await supervisor.start({ ...request, entryPath: '' }), {
     phase: 'failed',
     role: 'child',
     kind: 'configuration-error',
@@ -192,7 +193,7 @@ test('production sidecar classifies exit before readiness', async () => {
   })
   const starting = supervisor.start(request)
   child.exit(12)
-  assert.deepEqual(await starting, {
+  assert.partialDeepStrictEqual(await starting, {
     phase: 'failed',
     role: 'child',
     kind: 'early-exit',
@@ -237,6 +238,7 @@ test('production sidecar enforces its deadline when a readiness probe hangs', as
     role: 'child',
     kind: 'readiness-timeout',
     message: 'Sidecar was not ready within 25ms',
+    elapsedMs: 25,
   })
 })
 
@@ -366,4 +368,133 @@ test('production sidecar forces stop after graceful timeout and stop is idempote
   await first
   assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL'])
   assert.deepEqual(supervisor.status, { phase: 'stopped' })
+})
+
+test('diagnostics distinguish timeout from early exit with safe role, duration and exit code', async () => {
+  for (const kind of ['early-exit', 'readiness-timeout'] as const) {
+    const child = new FakeChild()
+    const clock = new ManualClock()
+    const entries: StartupDiagnosticEntry[] = []
+    const logs: SidecarLogEntry[] = []
+    const supervisor = new NodeSidecarSupervisor({
+      spawn: () => child,
+      readinessProbe: () => new Promise(() => undefined),
+      clock,
+      readinessTimeoutMs: 25,
+      diagnosticSink: entry => entries.push(entry),
+      logSink: entry => logs.push(entry),
+    })
+    const starting = supervisor.start(request)
+    child.stdout.write(`authorization: Bearer ${request.launchToken}\nprivate chat body\n`)
+    child.stderr.write('secret-config-path and provider-key')
+    clock.advance(kind === 'early-exit' ? 7 : 25)
+    if (kind === 'early-exit') child.exit(12)
+    const result = await starting
+    assert.equal(result.phase === 'failed' && result.kind, kind)
+    assert.deepEqual(entries.map(entry => entry.event), ['starting', 'spawned', 'failed'])
+    assert.deepEqual(entries.at(-1), {
+      timestamp: kind === 'early-exit' ? '1970-01-01T00:00:00.007Z' : '1970-01-01T00:00:00.025Z',
+      role: 'child', event: 'failed', elapsedMs: kind === 'early-exit' ? 7 : 25, kind,
+      ...(kind === 'early-exit' ? { exitCode: 12 } : {}),
+    })
+    assert.doesNotMatch(JSON.stringify([entries, logs, result]), /test-token|private chat|secret-config|provider-key/)
+    if (kind === 'readiness-timeout') assert.deepEqual(child.signals, ['SIGTERM'])
+    await supervisor.stop()
+  }
+})
+
+test('raw output only informs bounded category classification and never reaches a log sink', async () => {
+  const child = new FakeChild()
+  const logs: unknown[] = []
+  const supervisor = new NodeSidecarSupervisor({
+    spawn: () => child, readinessProbe: () => new Promise(() => undefined),
+    diagnosticSink: entry => logs.push(entry), logSink: entry => logs.push(entry),
+  })
+  const starting = supervisor.start(request)
+  child.stderr.write(`private-${'x'.repeat(10_000)}\nEADDR`)
+  child.stderr.write('INUSE secret-token')
+  child.exit(1)
+  assert.equal((await starting as { kind: string }).kind, 'port-conflict')
+  assert.doesNotMatch(JSON.stringify(logs), /private-|secret-token|EADDR/)
+})
+
+test('spawn and readiness exceptions cannot leak credentials in failures or diagnostics', async () => {
+  const secret = 'synthetic-private-key'
+  const entries: unknown[] = []
+  const supervisor = new NodeSidecarSupervisor({
+    spawn: () => { throw new Error(secret) },
+    readinessProbe: async () => ({ ready: false }),
+    diagnosticSink: entry => entries.push(entry),
+  })
+  const status = await supervisor.start(request)
+  assert.equal(status.phase === 'failed' && status.kind, 'spawn-error')
+  assert.doesNotMatch(JSON.stringify([status, entries]), /synthetic-private-key/)
+
+  const child = new FakeChild()
+  const second = new NodeSidecarSupervisor({
+    spawn: () => child,
+    readinessProbe: async () => ({ ready: false, failure: { kind: 'configuration-error', message: secret } }),
+    diagnosticSink: entry => entries.push(entry),
+  })
+  const failure = await second.start(request)
+  assert.doesNotMatch(JSON.stringify([failure, entries]), /synthetic-private-key/)
+  assert.deepEqual(child.signals, ['SIGTERM'])
+})
+
+test('diagnostic write failures cannot break startup or shutdown', async () => {
+  const child = new FakeChild()
+  const supervisor = new NodeSidecarSupervisor({
+    spawn: () => child,
+    readinessProbe: async () => ({ ready: true }),
+    diagnosticSink: () => { throw new Error('disk failure') },
+  })
+  assert.equal((await supervisor.start(request)).phase, 'ready')
+  await supervisor.stop()
+  assert.equal(supervisor.status.phase, 'stopped')
+})
+
+test('repeated probe exceptions emit one safe diagnostic per attempt', async () => {
+  const child = new FakeChild()
+  const entries: StartupDiagnosticEntry[] = []
+  let probes = 0
+  const supervisor = new NodeSidecarSupervisor({
+    spawn: () => child, readinessPollIntervalMs: 1,
+    readinessProbe: async () => {
+      if (++probes < 4) throw new Error('synthetic-private-token')
+      return { ready: true }
+    },
+    diagnosticSink: entry => entries.push(entry),
+  })
+  assert.equal((await supervisor.start(request)).phase, 'ready')
+  assert.equal(entries.filter(entry => entry.event === 'probe-error').length, 1)
+  assert.doesNotMatch(JSON.stringify(entries), /synthetic-private-token/)
+  await supervisor.stop()
+})
+
+test('supervisor captures whitelisted backend startup phases but not raw output or post-ready markers', async () => {
+  const child = new FakeChild()
+  const entries: StartupDiagnosticEntry[] = []
+  let ready!: (value: SidecarReadinessResult) => void
+  const supervisor = new NodeSidecarSupervisor({
+    spawn: () => child,
+    readinessProbe: () => new Promise(resolve => { ready = resolve }),
+    diagnosticSink: entry => entries.push(entry),
+  })
+  const starting = supervisor.start(request)
+  const marker = '[startup] ' + JSON.stringify({
+    version: 1, component: 'project', projectId: 'private-project',
+    phase: 'config', status: 'completed', elapsedMs: 12, durationMs: 9,
+  }) + '\n'
+  child.stdout.write('credential=private-key\n')
+  child.stdout.write(marker.slice(0, 15))
+  child.stdout.write(marker.slice(15))
+  ready({ ready: true })
+  await starting
+  child.stdout.write(marker)
+  const backend = entries.filter(entry => entry.event === 'backend-phase')
+  assert.equal(backend.length, 1)
+  assert.equal(backend[0]?.backend?.phase, 'config')
+  assert.equal(backend[0]?.backend?.projectOrdinal, 1)
+  assert.doesNotMatch(JSON.stringify(entries), /private-project|private-key|credential/)
+  await supervisor.stop()
 })

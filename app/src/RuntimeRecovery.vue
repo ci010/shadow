@@ -1,19 +1,24 @@
 <template>
 	<main class="recovery-shell">
-		<section class="recovery-panel" aria-labelledby="recovery-title">
+		<section class="recovery-panel" aria-labelledby="recovery-title" :aria-busy="busy">
 			<img class="brand-mark" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
 			<div>
-				<p class="eyebrow">Shadow desktop</p>
-				<h1 id="recovery-title">Main is not ready</h1>
-				<p class="message">The desktop runtime could not be started. Your setup is still saved.</p>
+				<h1 id="recovery-title">{{ runtimeName }} is not ready</h1>
+				<p class="message">{{ reason }} Your setup is still saved.</p>
+				<p v-if="duration" class="message">{{ duration }}</p>
 			</div>
-			<p v-if="actionFailed" class="notice" role="alert">That action could not be completed. Try again.</p>
+			<p v-if="actionFailed" class="notice" role="alert">{{ actionFailed }}</p>
+			<p v-if="busy" class="status" role="status">{{ activeAction === 'retry' ? 'Starting the runtime again…' : activeAction === 'log' ? 'Locating the startup log…' : 'Resetting setup…' }}</p>
+			<div v-if="revealLog" class="diagnostics">
+				<p class="message">Startup logs contain timing and failure categories, not chat content or credentials.</p>
+				<button class="secondary-button" :disabled="busy" @click="invoke('log')">Show startup log</button>
+			</div>
 			<div class="actions">
 				<button v-if="canReset" class="secondary-button" :disabled="busy" @click="resetSetup">
 					Reset setup
 				</button>
 				<button class="primary-button" :disabled="busy" @click="retry">
-					{{ busy ? 'Trying again…' : 'Retry' }}
+					{{ busy && activeAction === 'retry' ? 'Trying again…' : 'Retry' }}
 				</button>
 			</div>
 		</section>
@@ -21,26 +26,44 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import shadowLogo from './assets/shadow-logo.png'
+import { parseRuntimeFailure, runtimeRecoveryDuration, runtimeRecoveryMessage, type RuntimeFailure } from './runtime-recovery.ts'
 
 const props = defineProps<{
 	canReset: boolean
 	retry: () => Promise<void>
 	reset?: () => Promise<void>
+	revealLog?: () => Promise<void>
+	role?: 'main' | 'child'
+	code?: string
+	failure?: RuntimeFailure
 }>()
 
+const runtimeName = computed(() => {
+	const role = parseRuntimeFailure(props.failure)?.role ?? props.role
+	return role === 'child' ? 'Child' : role === 'main' ? 'Main' : 'Runtime'
+})
+const reason = computed(() => runtimeRecoveryMessage(props.failure, props.code))
+const duration = computed(() => runtimeRecoveryDuration(props.failure))
 const busy = ref(false)
-const actionFailed = ref(false)
+const actionFailed = ref('')
+const activeAction = ref<'retry' | 'reset' | 'log'>('retry')
 
-async function invoke(action: 'retry' | 'reset'): Promise<void> {
+async function invoke(action: 'retry' | 'reset' | 'log'): Promise<void> {
+	if (busy.value) return
 	busy.value = true
-	actionFailed.value = false
+	activeAction.value = action
+	actionFailed.value = ''
 	try {
 		if (action === 'retry') await props.retry()
+		else if (action === 'log') await props.revealLog?.()
 		else await props.reset?.()
 	} catch {
-		actionFailed.value = true
+		actionFailed.value = action === 'log'
+			? 'The startup log could not be shown. It may not have been saved. You can still retry startup.'
+			: action === 'reset' ? 'Setup could not be reset. Try again.' : 'Startup could not be retried. Try again.'
+	} finally {
 		busy.value = false
 	}
 }
@@ -79,19 +102,24 @@ async function resetSetup(): Promise<void> {
 	background: #fff;
 	box-shadow: 0 18px 48px rgba(25, 49, 39, .1);
 }
+.recovery-panel > div { min-width: 0; overflow-wrap: anywhere; }
 .brand-mark {
 	width: 44px;
 	height: 44px;
 	display: block;
 	object-fit: contain;
 }
-.eyebrow { margin: 0 0 3px; color: var(--accent); font-size: 12px; font-weight: 700; text-transform: uppercase; }
 h1 { margin: 0; font: 600 24px/1.2 Georgia, "Times New Roman", serif; letter-spacing: 0; }
 .message { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
 .notice { grid-column: 1 / -1; margin: 4px 0 0; padding: 11px 13px; color: #7b3027; border: 1px solid #e5bbb4; border-radius: var(--radius-surface); background: #fff5f3; font-size: 13px; }
-.actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.status { grid-column: 1 / -1; margin: 0; font-size: 14px; color: var(--muted); }
+.diagnostics { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 4px; }
+.diagnostics button { margin-top: 12px; }
+.actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 button { min-height: 38px; padding: 0 16px; border-radius: var(--radius-control); font: 650 13px/1 "Segoe UI Variable", "Segoe UI", sans-serif; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .52; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+button:not(:disabled):hover { filter: brightness(.96); }
 .primary-button { color: white; border: 1px solid var(--accent); background: var(--accent); }
 .secondary-button { color: var(--ink); border: 1px solid #bac4be; background: white; }
 @media (max-width: 480px) {

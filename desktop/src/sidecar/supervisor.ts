@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
+import type { StartupDiagnosticEntry } from './startup-diagnostics.js'
+import { BackendStartupDiagnostics, type BackendStartupTiming } from './backend-startup-diagnostics.js'
 
 export type SidecarRole = 'main' | 'child'
 
@@ -16,7 +18,7 @@ export type SidecarStatus =
   | { readonly phase: 'stopped' }
   | { readonly phase: 'starting'; readonly role: SidecarRole }
   | { readonly phase: 'ready'; readonly role: SidecarRole; readonly apiBase: string }
-  | { readonly phase: 'failed'; readonly role: SidecarRole; readonly kind: SidecarFailureKind; readonly message: string }
+  | { readonly phase: 'failed'; readonly role: SidecarRole; readonly kind: SidecarFailureKind; readonly message: string; readonly elapsedMs?: number }
 
 export interface SidecarStartRequest {
   readonly role: SidecarRole
@@ -80,6 +82,7 @@ export interface NodeSidecarSupervisorOptions {
   readonly authenticatedShutdownRequest?: SidecarShutdownRequest
   readonly clock?: SidecarClock
   readonly logSink?: (entry: SidecarLogEntry) => void
+  readonly diagnosticSink?: (entry: StartupDiagnosticEntry) => void
   readonly environment?: NodeJS.ProcessEnv
   readonly readinessTimeoutMs?: number
   readonly readinessPollIntervalMs?: number
@@ -114,6 +117,10 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
   private launchContext: { readonly apiBase: string; readonly launchToken: string } | undefined
   private stopping = false
   private recentOutput = ''
+  private startedAt = 0
+  private role: SidecarRole = 'main'
+  private probeErrorReported = false
+  private backendDiagnostics: BackendStartupDiagnostics | undefined
 
   constructor(private readonly options: NodeSidecarSupervisorOptions) {
     this.spawn = options.spawn ?? defaultSpawn
@@ -145,6 +152,11 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
   }
 
   private async startProcess(request: SidecarStartRequest): Promise<SidecarStatus> {
+    this.startedAt = this.clock.now()
+    this.role = request.role
+    this.probeErrorReported = false
+    this.backendDiagnostics = new BackendStartupDiagnostics(entry => this.diagnostic('backend-phase', undefined, undefined, entry))
+    this.diagnostic('starting')
     const validationFailure = this.validate(request)
     if (validationFailure) return this.fail(request.role, 'configuration-error', validationFailure)
 
@@ -173,16 +185,17 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
-    } catch (error) {
-      return this.fail(request.role, 'spawn-error', this.errorMessage(error))
+    } catch {
+      return this.fail(request.role, 'spawn-error', 'The runtime process could not be launched')
     }
 
     this.exitPromise = new Promise((resolve) => {
       this.resolveExit = resolve
     })
     this.captureLogs(this.child)
+    this.diagnostic('spawned')
     this.child.once('error', (error) => {
-      this.log('supervisor', `Spawn error: ${error.message}`)
+      this.log('supervisor', 'The runtime process could not be launched')
       this.resolveExit?.({ code: null, signal: null, error })
     })
     this.child.once('exit', (code, signal) => {
@@ -204,29 +217,39 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
       )
 
       if (outcome.type === 'exit') {
-        if (outcome.exit.error) return this.fail(request.role, 'spawn-error', outcome.exit.error.message)
+        if (outcome.exit.error) return this.fail(request.role, 'spawn-error', 'The runtime process could not be launched')
         const kind = this.classifyEarlyExit()
-        return this.fail(request.role, kind, `Sidecar exited before readiness with ${this.formatExit(outcome.exit.code, outcome.exit.signal)}`)
+        return this.fail(request.role, kind, `Sidecar exited before readiness with ${this.formatExit(outcome.exit.code, outcome.exit.signal)}`, outcome.exit.code)
       }
       if (outcome.type === 'deadline') {
+        const failure = this.fail(request.role, 'readiness-timeout', `Sidecar was not ready within ${this.readinessTimeoutMs}ms`)
         await this.stopChild()
-        return this.fail(request.role, 'readiness-timeout', `Sidecar was not ready within ${this.readinessTimeoutMs}ms`)
+        return failure
       }
       if (outcome.type === 'probe' && outcome.result.failure) {
+        const failure = this.fail(request.role, outcome.result.failure.kind, 'Runtime readiness checks failed')
         await this.stopChild()
-        return this.fail(request.role, outcome.result.failure.kind, outcome.result.failure.message)
+        return failure
       }
       if (outcome.type === 'probe' && outcome.result.ready) {
+        if (this.stopping) return this.status
         this.launchContext = { apiBase, launchToken: request.launchToken }
         this.status = { phase: 'ready', role: request.role, apiBase }
+        this.recentOutput = ''
+        this.backendDiagnostics = undefined
+        this.diagnostic('ready')
         return this.status
       }
-      if (outcome.type === 'probe-error') this.log('supervisor', `Readiness probe failed: ${this.errorMessage(outcome.error)}`)
+      if (outcome.type === 'probe-error' && !this.probeErrorReported) {
+        this.probeErrorReported = true
+        this.diagnostic('probe-error')
+      }
       await this.delay(Math.min(this.readinessPollIntervalMs, Math.max(0, deadline - this.clock.now())))
     }
 
+    const failure = this.fail(request.role, 'readiness-timeout', `Sidecar was not ready within ${this.readinessTimeoutMs}ms`)
     await this.stopChild()
-    return this.fail(request.role, 'readiness-timeout', `Sidecar was not ready within ${this.readinessTimeoutMs}ms`)
+    return failure
   }
 
   private async waitForReadinessOutcome(
@@ -266,6 +289,9 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     try {
       await this.stopChild()
       this.status = { phase: 'stopped' }
+      this.recentOutput = ''
+      this.backendDiagnostics = undefined
+      this.diagnostic('stopped')
     } finally {
       this.launchContext = undefined
     }
@@ -292,6 +318,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
         }
       } else if (shutdownOutcome === 'failed') {
         this.log('supervisor', 'Authenticated shutdown request failed; falling back to SIGTERM')
+        this.diagnostic('shutdown-fallback')
       }
     }
 
@@ -299,6 +326,7 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     const exited = await this.waitForExit(exitPromise, this.stopTimeoutMs)
     if (!exited) {
       this.log('supervisor', 'Sidecar did not stop gracefully; forcing termination')
+      this.diagnostic('shutdown-forced')
       child.kill('SIGKILL')
       await exitPromise
     }
@@ -351,14 +379,19 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
   }
 
   private captureLogs(child: SidecarChildProcess): void {
-    child.stdout?.on('data', (chunk) => this.log('stdout', String(chunk)))
-    child.stderr?.on('data', (chunk) => this.log('stderr', String(chunk)))
+    const capture = (stream: 'stdout' | 'stderr', chunk: unknown) => {
+      if (this.status.phase !== 'starting') return
+      const text = String(chunk)
+      this.recentOutput = `${this.recentOutput}${text.slice(-8_192)}`.slice(-8_192)
+      this.backendDiagnostics?.push(stream, text)
+    }
+    child.stdout?.on('data', chunk => capture('stdout', chunk))
+    child.stderr?.on('data', chunk => capture('stderr', chunk))
   }
 
   private log(stream: SidecarLogEntry['stream'], message: string): void {
     const normalized = message.trim()
     if (!normalized) return
-    this.recentOutput = `${this.recentOutput}\n${normalized}`.slice(-8_192)
     this.logSink({ stream, message: normalized })
   }
 
@@ -379,19 +412,38 @@ export class NodeSidecarSupervisor implements SidecarSupervisor {
     return undefined
   }
 
-  private fail(role: SidecarRole, kind: SidecarFailureKind, message: string): SidecarStatus {
-    this.status = { phase: 'failed', role, kind, message }
+  private fail(role: SidecarRole, kind: SidecarFailureKind, message: string, exitCode?: number | null): SidecarStatus {
+    this.status = { phase: 'failed', role, kind, message, elapsedMs: this.elapsedMs() }
+    this.diagnostic('failed', kind, exitCode)
+    this.recentOutput = ''
+    this.backendDiagnostics = undefined
     return this.status
+  }
+
+  private elapsedMs(): number {
+    return Math.max(0, Math.round(this.clock.now() - this.startedAt))
+  }
+
+  private diagnostic(event: StartupDiagnosticEntry['event'], kind?: SidecarFailureKind, exitCode?: number | null, backend?: BackendStartupTiming): void {
+    try {
+      this.options.diagnosticSink?.({
+        timestamp: new Date(this.clock.now()).toISOString(),
+        role: this.role,
+        event,
+        elapsedMs: this.elapsedMs(),
+        ...(kind ? { kind } : {}),
+        ...(exitCode !== undefined && exitCode !== null ? { exitCode } : {}),
+        ...(backend ? { backend } : {}),
+      })
+    } catch {
+      // Diagnostics must never prevent startup or cleanup.
+    }
   }
 
   private delay(delayMs: number): Promise<void> {
     return new Promise((resolve) => {
       this.clock.setTimeout(resolve, delayMs)
     })
-  }
-
-  private errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
   }
 
   private formatExit(code: number | null, signal: NodeJS.Signals | null): string {

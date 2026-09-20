@@ -1,6 +1,7 @@
 import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, utimes, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { MemoryStore } from '../memory.ts'
 import { memoryProvider } from './memory-provider.ts'
 import type { SessionPromptContext } from './builder.ts'
@@ -113,5 +114,40 @@ test('memory provider — returns null when nothing to inject', async () => {
       await provider.getPromptSection(ctx('fresh:1', agent('general'))),
       null,
     )
+  })
+
+  test('clear excludes old transient context without deleting memory and accepts new entries', async () => {
+    await withTempWorkspace(async workspace => {
+      const memory = new MemoryStore(workspace)
+      await memory.addConvention('session', 'web:clear', 'KEEP_CONVENTION')
+      const directory = join(workspace, 'memory', 'sessions')
+      await mkdir(directory, { recursive: true })
+      const summary = join(directory, 'web_clear.md')
+      await writeFile(summary, 'OLD_SUMMARY')
+      const reset = '2026-07-08T12:00:00.000Z'
+      await utimes(summary, new Date('2026-07-08T11:00:00Z'), new Date('2026-07-08T11:00:00Z'))
+      await writeFile(join(directory, 'web_clear.files.jsonl'), [
+        { when: '2026-07-08T11:00:00Z', path: 'OLD_FILE', action: 'write' },
+        { when: '2026-07-08T13:00:00Z', path: 'NEW_FILE', action: 'edit' },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+      const eventDir = join(workspace, 'memory', 'events')
+      await mkdir(eventDir, { recursive: true })
+      await writeFile(join(eventDir, `${new Date().toISOString().slice(0, 10)}.jsonl`), [
+        { when: '2026-07-08T11:00:00Z', what: 'OLD_EVENT', origin: 'web:clear' },
+        { what: 'OLD_UNDATED', origin: 'web:clear' },
+        { when: '2026-07-08T13:00:00Z', what: 'NEW_EVENT', origin: 'web:clear' },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+      const context = { ...ctx('web:clear', agent('general')), contextResetAt: reset }
+      const provider = memoryProvider(memory, () => undefined)
+      const prompt = await provider.getPromptSection(context)
+      assert.match(prompt!, /KEEP_CONVENTION/)
+      assert.match(prompt!, /NEW_FILE/)
+      assert.match(prompt!, /NEW_EVENT/)
+      assert.doesNotMatch(prompt!, /OLD_/)
+      assert.equal(await readFile(summary, 'utf8'), 'OLD_SUMMARY')
+      await writeFile(summary, 'NEW_SUMMARY')
+      await utimes(summary, new Date('2026-07-08T13:00:00Z'), new Date('2026-07-08T13:00:00Z'))
+      assert.match((await provider.getPromptSection(context))!, /NEW_SUMMARY/)
+    })
   })
 })

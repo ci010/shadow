@@ -9,15 +9,23 @@ import { migrateSessionsToSqlite } from './migrate-sessions-to-sqlite.ts'
 import { SqliteSessionStore } from '../src/sessions/session-store-sqlite.ts'
 import type { SessionState } from '../src/sessions/session-store.ts'
 import { OwnershipValidationError } from '../src/projects/ownership.ts'
+import { physicalSessionId } from '../src/sessions/session-identity.ts'
 
-test('migration preserves modern SessionState metadata and JSONL logs', async () => {
+for (const physicalIdVersion of [undefined, 2] as const) {
+  test(`migration preserves modern SessionState metadata and v${physicalIdVersion ?? 1} JSONL log addresses`, () => checkModernMigration(physicalIdVersion))
+}
+
+async function checkModernMigration(physicalIdVersion: 2 | undefined) {
   const sessionsDir = await createTempWorkspace()
   const state: SessionState & { futureMetadata: { retained: boolean } } = {
     ownershipVersion: 2,
+    ...(physicalIdVersion === undefined ? {} : { physicalIdVersion }),
     projectId: 'owner',
     folderId: 'directory',
     sessionId: 'discord:complete',
+    name: 'User-selected conversation name',
     segmentIndex: 3,
+    contextResetAt: '2026-08-26T11:00:00.000Z',
     lastActivityAt: '2026-08-26T12:34:56.000Z',
     lastKnownTokens: 4321,
     recovery: { id: 'recovery-fixture', reason: 'interrupted' },
@@ -34,7 +42,8 @@ test('migration preserves modern SessionState metadata and JSONL logs', async ()
     futureMetadata: { retained: true },
   }
   const statePath = join(sessionsDir, 'discord_complete.json')
-  const logPath = join(sessionsDir, 'discord_complete-3.jsonl')
+  const logId = physicalSessionId(state)
+  const logPath = join(sessionsDir, `${logId}.jsonl`)
   const stateSource = JSON.stringify(state, null, 2)
   const logSource = '{"type":"start"}\n{"role":"user","content":"hello"}\n'
 
@@ -52,7 +61,7 @@ test('migration preserves modern SessionState metadata and JSONL logs', async ()
     const { futureMetadata: _futureMetadata, ...runtimeState } = state
     assertEquals(migrated, runtimeState)
     const log = []
-    for await (const record of store.readSessionLog('discord_complete-3')) {
+    for await (const record of store.readSessionLog(logId)) {
       log.push(record)
     }
     assertEquals(log, [{ type: 'start' }, { role: 'user', content: 'hello' }])
@@ -79,7 +88,7 @@ test('migration preserves modern SessionState metadata and JSONL logs', async ()
   } finally {
     await rm(sessionsDir, { recursive: true })
   }
-})
+}
 
 test('migration translates history aliases with canonical ownership and is repeatable', async () => {
   const sessionsDir = await createTempWorkspace()

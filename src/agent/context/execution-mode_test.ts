@@ -162,10 +162,16 @@ test('coordinator guidance cannot advertise worker tools even with broad role me
   const prompt = (await guidelineProvider().getPromptSection(context))!
   assert.match(prompt, /### Project Topics/)
   assert.match(prompt, /### Coordinator Capability Boundary/)
+  const normalized = prompt.replace(/\s+/g, ' ')
+  assert.match(normalized, /hard runtime cap permits only read\/search\/topic\/message\/initiative\/project_config\/authoring_change; never invoke_tool, exec, write, or subagent/)
+  assert.match(normalized, /Use `authoring_change` for scoped prompt edits, delegated skill changes, saved check runs and owner review/)
+  assert.match(normalized, /Do not bypass this boundary through skills, discovery, events, URLs or other tools/)
   assert.match(prompt, /Allowed delegation modes:\nnone/)
-  assert.doesNotMatch(prompt, /### Shell|### Delegation|### Decisions/)
+  assert.doesNotMatch(prompt, /### Shell|### Delegation|### Decisions|### Environment|Configure MCP|Activate skill tools|Skill Tools and External MCP Tools/)
+  assert.doesNotMatch(prompt, /invoke_tool\(\{|shell: "node"|vm\.SourceTextModule/)
   assert.match(prompt, /initialMessageStatus.*accepted.*not_requested.*not_replayed/)
   assert.match(prompt, /receipt confirms admission, not acceptance, completion, or ownership transfer/)
+  assert.doesNotMatch(normalized, /coordinator does not start an LLM turn automatically/)
   for (const mode of ['task', 'call'] as const) {
     const oneShot = (await guidelineProvider().getPromptSection({ ...context, mode }))!
     assert.doesNotMatch(oneShot, /### Project Topics/)
@@ -182,10 +188,16 @@ test('compact coordination guidance retains decision and completion routing prot
         agent: general, mode, parentSessionId,
       }))!.replace(/\s+/g, ' ')
       assert.match(prompt, /Invoke directly, never inside exec\/scripts/)
-      assert.match(prompt, /action: "ask".*question.*exactly three distinct `options`, `default_option` matching one/)
+      assert.match(prompt, /action: "ask".*question.*two distinct suggested `options`, `default_option` matching one/)
+      assert.match(prompt, /UI always adds a custom-response entry/)
       assert.match(prompt, /Wait for the result; the default is not permission to proceed early/)
       assert.match(prompt, /Session\/global configuration controls waiting, not model arguments/)
       assert.match(prompt, /silent: true.*without triggering a response/)
+      assert.match(prompt, /silent: false.*WITHOUT interrupting it/)
+      assert.match(prompt, /without triggering a response, active-context injection or wakeup/)
+      assert.match(prompt, /materials\/corrections\/unblockers need non-silent requests/)
+      assert.match(prompt, /LAST message a non-silent request/)
+      assert.match(prompt, /purpose only, not scheduling/)
       assert.match(prompt, /completion routing does not grant messaging permission/)
       if (mode === 'session') {
         assert.match(prompt, /action: "answer".*request_id.*one exact `option`/)

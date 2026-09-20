@@ -3,6 +3,7 @@ import type { BootstrapCommandResult } from './bootstrap/coordinator.js'
 import type { EnsureRuntimeResult } from './bootstrap/coordinator.js'
 import { normalizeMainDirectoryPath } from './bootstrap/runtime-config.js'
 import type { DesktopMediaCaptureApi } from './media-capture-contract.js'
+import type { DesktopWebPairingApi } from './web-pairing-contract.js'
 
 export const IPC_CHANNELS = {
   loadWizard: 'shadow:bootstrap:load',
@@ -20,6 +21,8 @@ export const IPC_CHANNELS = {
   selectMainDirectoryPath: 'shadow:bootstrap:select-main-directory-path',
   openExternal: 'shadow:native:open-external',
   openCopilotLogin: 'shadow:native:open-copilot-login',
+  revealStartupLog: 'shadow:diagnostics:reveal-startup-log',
+  createWebPairing: 'shadow:web-pairing:create',
   windowGetState: 'shadow:window:get-state',
   windowMinimize: 'shadow:window:minimize',
   windowToggleMaximize: 'shadow:window:toggle-maximize',
@@ -51,6 +54,10 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+  readonly webPairing: DesktopWebPairingApi
+  readonly diagnostics: {
+    revealStartupLog(): Promise<void>
+  }
   readonly mediaCapture: DesktopMediaCaptureApi
   readonly windowControls: DesktopWindowControls
   readonly folders: {

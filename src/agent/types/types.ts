@@ -12,6 +12,8 @@ export interface AgentTypeDefinition {
   allowedTools?: string[]
   /** Blacklist — these tools are removed from the full set */
   blockedTools?: string[]
+  /** Optional ceiling for controlled skill-tool imports; never an OS sandbox. */
+  allowedModules?: string[]
   /** Default invocation contract; callers may select another mode. */
   defaultMode: ExecutionMode
   /** 'builtin' or 'workspace' */

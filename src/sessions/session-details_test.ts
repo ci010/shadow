@@ -43,6 +43,80 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: rename persists display metadata without changing identity, topic or history`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const bus = new Bus()
+      const renamed: string[] = []
+      bus.on('session.renamed', fact => renamed.push(fact.sessionId))
+      const sessions = makeManager(workspace, store, { bus })
+      try {
+        await store.saveState('web:rename', {
+          sessionId: 'web:rename', segmentIndex: 0, mode: 'session', sessionKind: 'topic',
+          topic: { title: 'Original topic', goal: 'Preserve goal', scope: 'Preserve scope' },
+        })
+        await store.createSessionLog(newPhysicalSessionId('web:rename', 0, 1), [
+          { role: 'user', content: 'Original message' },
+        ])
+        await sessions.start()
+        const app = new Hono()
+        sessionsApiPlugin(sessions)(app)
+        const patch = (body: unknown, key = 'web:rename') => app.request(`/api/sessions/${key}/name`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        })
+        const before = structuredClone(sessions.getSessionState('web:rename')!)
+        equal((await patch({ name: '  Renamed conversation  ' })).status, 200)
+        equal(sessions.getSessionState('web:rename')?.name, 'Renamed conversation')
+        deepEqual(sessions.getSessionState('web:rename'), { ...before, name: 'Renamed conversation' })
+        equal((await sessions.getSessionDetails('web:rename'))?.name, 'Renamed conversation')
+        equal((await (await app.request('/api/sessions/graph')).json()).sessions[0].title, 'Renamed conversation')
+        equal((await store.listSessions())[0].name, 'Renamed conversation')
+        equal(sessions.listSessions()[0].name, 'Renamed conversation')
+        equal(await sessions.getFirstUserMessage('web:rename'), 'Original message')
+        deepEqual(renamed, ['web:rename'])
+        for (const invalid of [null, [], {}, { name: '' }, { name: '  ' }, { name: 42 }, { name: null },
+          { name: 'a'.repeat(121) }, { name: 'two\nlines' }, { name: 'bad\u0000name' },
+          { name: 'valid', sessionId: 'web:other' }]) equal((await patch(invalid)).status, 400)
+        equal((await app.request('/api/sessions/web:rename/name', { method: 'PATCH', body: '{' })).status, 400)
+        equal((await patch({ name: 'No creation' }, 'web:missing')).status, 404)
+        const denied = new Hono()
+        sessionsApiPlugin(sessions, { authorizeRename: () => false })(denied)
+        equal((await denied.request('/api/sessions/web:rename/name', { method: 'PATCH', body: '{"name":"denied"}' })).status, 401)
+        deepEqual(renamed, ['web:rename'])
+        await sessions.renameSession('web:rename', 'x'.repeat(120))
+        await sessions.setSessionConfig('web:rename', { model: 'fixture' })
+        equal((await store.getState('web:rename'))?.name, 'x'.repeat(120), 'Later metadata saves retain the name')
+        await sessions.stop()
+        const restarted = makeManager(workspace, store)
+        await restarted.start()
+        try { equal((await restarted.getSessionDetails('web:rename'))?.name, 'x'.repeat(120)) }
+        finally { await restarted.stop() }
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: failed rename does not publish optimistic metadata or notifications`, async t => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const bus = new Bus()
+      let notifications = 0
+      bus.on('session.renamed', () => notifications++)
+      const sessions = makeManager(workspace, store, { bus })
+      try {
+        await store.saveState('web:one', { sessionId: 'web:one', segmentIndex: 0, name: 'Before' })
+        await sessions.start()
+        const save = t.mock.method(store, 'saveState', async () => { throw new Error('synthetic disk failure') })
+        await assert.rejects(sessions.renameSession('web:one', 'After'), /synthetic disk failure/)
+        equal(sessions.getSessionState('web:one')?.name, 'Before')
+        equal((await store.getState('web:one'))?.name, 'Before')
+        equal(notifications, 0)
+        save.mock.restore()
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: remote details use current registry metadata and explicit availability`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -113,13 +187,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await store.init()
       try {
         await store.saveState('web:one', { sessionId: 'web:one', segmentIndex: 1, workspaceRoot: 'web:owner' })
-        await store.createSessionLog(newPhysicalSessionId('web:one', 0), [
+        await store.createSessionLog(newPhysicalSessionId('web:one', 0, 1), [
           { previous_physical_id: null },
           { role: 'user', content: '<sender name="Human"/> Actual question' },
           { role: 'assistant', content: 'old', usage: earlier },
         ])
-        await store.createSessionLog(newPhysicalSessionId('web:one', 1), [
-          { previous_physical_id: newPhysicalSessionId('web:one', 0) },
+        await store.createSessionLog(newPhysicalSessionId('web:one', 1, 1), [
+          { previous_physical_id: newPhysicalSessionId('web:one', 0, 1) },
           { role: 'assistant', content: 'new', usage },
           { role: 'assistant', content: 'copied usage', usage },
           { role: 'assistant', content: 'invalid fractional usage', usage: { ...usage, promptTokens: 1.5 } },
@@ -144,7 +218,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           usage, usageScope: 'latest-call',
           context: { usedTokens: 120, windowTokens: 8000 },
         })
-        const segment = await sessions.getSessionDetails('web:one', newPhysicalSessionId('web:one', 0))
+        const segment = await sessions.getSessionDetails('web:one', newPhysicalSessionId('web:one', 0, 1))
         deepEqual(segment?.usage, earlier)
         equal(segment?.context.usedTokens, 40)
         for (const [id, workdir, expected] of [

@@ -29,6 +29,23 @@ test('failed or ambiguous deletions never become successful UI confirmations', a
   }
 })
 
+test('deletion failures show Main explanation without treating a failed response as confirmation', async () => {
+  await assert.rejects(deleteConversation(target, new AbortController().signal, async () => Response.json({
+    error: 'history_conflict',
+    message: 'This history is shared. Repair it before continuing.',
+    deleted: [target.sessionId],
+  }, { status: 409 })), {
+    message: 'Could not delete this conversation. This history is shared. Repair it before continuing.',
+  })
+  for (const response of [
+    new Response('<html>gateway unavailable</html>', { status: 503 }),
+    Response.json({ message: '' }, { status: 500 }),
+    Response.json({ message: { unsafe: 'not text' } }, { status: 409 }),
+  ]) {
+    await assert.rejects(deleteConversation(target, new AbortController().signal, async () => response), /Deletion was not confirmed/)
+  }
+})
+
 test('both session deletion entrypoints use the same DOM confirmation instead of native confirm', async () => {
   for (const filename of ['ChatTab.vue', 'ProjectGroup.vue']) {
     const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
@@ -48,4 +65,6 @@ test('both session deletion entrypoints use the same DOM confirmation instead of
   }).errors, [])
   assert.match(source, /showModal\(\)/)
   assert.match(source, /if \(busy\.value\) return/)
+  assert.match(source, /delegated tasks and calls will be deleted, including their execution history/)
+  assert.match(source, /Independent topics are kept; shared history may be retained to protect other conversations/)
 })

@@ -10,6 +10,8 @@ import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import type { LLMProvider, LLMResponse, ChatMessage } from '../providers/provider.ts'
 import type { HandoffManager } from './handoff/manager.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
+import { MessageTool } from '../tools/message.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import type { SessionState } from './session-store.ts'
 import type { SessionInput, SessionMessageInput, SessionTurnFact } from './input.ts'
@@ -361,6 +363,49 @@ for (const policy of ['queue', 'silent', 'interactive', 'steering'] as const) {
   })
 }
 
+for (const staged of [false, true]) {
+  test(`message context handoff resumes without human input (${staged ? 'silent parts then final request' : 'queued follow-up requests'})`, async () => {
+    const f = await fixture()
+    const tool = new MessageTool(f.bus, () => true, () => undefined, () => [], async (sessionId, message) => {
+      f.session.dispatch(message, llm)
+      return { status: 'accepted', sessionId, inputId: message.id }
+    })
+    const context: ExecutionContext = {
+      sessionId: 'web:orchestrator', physicalSessionId: 'coordinator.0', channel: 'web', chatId: 'orchestrator',
+      senderId: 'owner', messageId: 'handoff', signal: new AbortController().signal,
+      tools: new SessionTools(f.tools, '.'),
+    }
+    const send = (content: string, silent = false) => tool.execute({
+      sessionId: f.state.sessionId, content, intent: silent ? 'progress' : 'request', silent,
+    }, context)
+    try {
+      await send('Implement issues')
+      await waitFor(() => f.calls.length === 1)
+      await send('Notify source', staged)
+      await send('Agent and skill baseline', staged)
+      if (staged) await send('All material supplied; finish implementation')
+      assert.equal(f.calls.length, 1, 'Follow-ups do not start concurrent inference')
+      assert.equal(f.calls[0].signal.aborted, false, 'Ordinary messaging never interrupts active work')
+      assert.equal(f.calls[0].messages.some(message => JSON.stringify(message.content).includes('Notify source')), false)
+      f.calls[0].resolve(done('Issues complete'))
+      await waitFor(() => f.calls.length === 2)
+      assert(f.calls[1].messages.some(message => JSON.stringify(message.content).includes('Notify source')))
+      if (staged) {
+        assert(f.calls[1].messages.some(message => JSON.stringify(message.content).includes('Agent and skill baseline')))
+        assert(f.calls[1].messages.some(message => JSON.stringify(message.content).includes('All material supplied')))
+      }
+      f.calls[1].resolve(done('Notify complete'))
+      if (!staged) {
+        await waitFor(() => f.calls.length === 3)
+        assert(f.calls[2].messages.some(message => JSON.stringify(message.content).includes('Agent and skill baseline')))
+        f.calls[2].resolve(done('All complete'))
+      }
+      await waitFor(() => f.session.quiescent)
+      assert.equal(f.facts.length, staged ? 2 : 3)
+    } finally { await f.close() }
+  })
+}
+
 test('silent records have no model turn; retry reuses the original prompt', async () => {
   const f = await fixture()
   try {
@@ -610,6 +655,48 @@ test('task interactive follow-up is rejected without aborting the initial execut
     await waitFor(() => f.ended.length === 1)
     assert.equal(f.facts.length, 1)
   } finally { await f.close() }
+})
+
+test('coordinator queues session-origin input instead of steering an authorized owner tool turn', async () => {
+  const f = await fixture({ state: { sessionId: 'web:orchestrator' } })
+  const gate = Promise.withResolvers<string>()
+  const started = Promise.withResolvers<void>()
+  const sources: Array<string | undefined> = []
+  f.tools.register({
+    name: 'fixture_wait', description: '', parameters: { type: 'object', properties: {} },
+    execute: async (_args, context) => {
+      sources.push(context.inputSource)
+      started.resolve()
+      return gate.promise
+    },
+  })
+  try {
+    f.session.dispatch({
+      ...input('owner', 'interactive'),
+      source: { kind: 'user', sender: { channel: 'web', chatId: 'orchestrator', senderId: 'owner', messageId: 'owner', admin: true } },
+    }, llm)
+    await waitFor(() => f.calls.length === 1)
+    f.calls[0].resolve({ content: null, toolCalls: [{ id: 'owner-tool', name: 'fixture_wait', arguments: {} }] })
+    await started.promise
+    f.session.dispatch({
+      ...input('external-request', 'interactive'),
+      source: { kind: 'session', sessionId: 'web:worker' },
+    }, llm)
+    gate.resolve('Owner operation finished')
+    await waitFor(() => f.calls.length === 2)
+    assert(!JSON.stringify(f.calls[1].messages).includes('external-request'))
+    f.calls[1].resolve(done())
+    await waitFor(() => f.calls.length === 3)
+    assert(JSON.stringify(f.calls[2].messages).includes('external-request'))
+    f.calls[2].resolve({ content: null, toolCalls: [{ id: 'worker-tool', name: 'fixture_wait', arguments: {} }] })
+    await waitFor(() => f.calls.length === 4)
+    assert.deepEqual(sources, ['user', 'session'])
+    f.calls[3].resolve(done())
+    await waitFor(() => f.facts.length === 2)
+  } finally {
+    gate.resolve('cleanup')
+    await f.close()
+  }
 })
 
 test('report_to observes domain facts once, not outbound done, and reports failures', async () => {

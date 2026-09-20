@@ -3,7 +3,9 @@ import { createServer } from 'node:http'
 import { mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { app, BrowserWindow, session } from 'electron'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { app, BrowserWindow, session, type NativeImage } from 'electron'
 import { Hono } from 'hono'
 import { uiPlugin } from '../../../src/gateway/ui.ts'
 import type { ConfiguredProvider, ProviderSetupStatus } from '../../../app/src/provider-setup.ts'
@@ -18,6 +20,10 @@ function argument(name: string): string {
   return resolve(value)
 }
 const assets = argument('layout-assets')
+const layoutMode = process.argv.find(value => value.startsWith('--conversation-layout='))?.split('=')[1]
+const messageSourceMode = process.argv.includes('--message-source')
+const conversationSummaryMode = process.argv.includes('--conversation-summary')
+let devServer: { close(): Promise<void> } | undefined
 const ui = new Hono()
 uiPlugin(assets)(ui)
 const directory = argument('layout-root')
@@ -85,7 +91,14 @@ const editHistory = [
   { role: 'tool', tool_call_id: 'edit-check', content: 'Tool activity checks passed.' },
 ]
 const messagesA = [
-  { role: 'user', name: '__compaction_summary__', content: 'Earlier synthetic context.' },
+  { role: 'user', name: '__compaction_summary__', content: conversationSummaryMode
+    ? '## Recent Transcript Excerpt\n\n' + '- Synthetic earlier context preserved for the next turn.\n'.repeat(24)
+      + '\n## Current Objective\n\nKeep the complete summary readable without an inner scrollbar.\n\n'
+      + '[Reference](https://example.invalid/' + 'long-reference-'.repeat(35) + ')\n\n'
+      + '## Continuation Instruction\n\nPreserve **decisions** and `inline code`.\n\n'
+      + '| Item | State |\n| --- | --- |\n| Summary | Preserved |\n\n```ts\nconst summary = "safe"\n```\n\n'
+      + '<span onclick="window.unsafeSummary = true">Safe content</span><script>window.unsafeSummary = true</script>'
+    : 'Earlier synthetic context.' },
   { role: 'user', name: 'Direct user', content: '<sender id="direct" name="Direct user" chat="direct" />Inspect the folder and explain the result.', timestamp: timestamp(100) },
   { role: 'assistant', content: 'I will inspect the folder files.', timestamp: timestamp(1800) },
   { role: 'assistant', content: '', tool_calls: [{ id: 'call-a', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }], timestamp: timestamp(2000) },
@@ -396,8 +409,14 @@ const server = createServer(async (request, response) => {
       return json(acknowledgement)
     }
     const historyFor = (id: string) => {
+      if (layoutMode && (id === idEmpty || `web:${id}` === idEmpty)) return []
       const history = id === idAgent ? agentMessages : id.includes('split-child') ? childMessages : id === idGroup ? groupMessages : id.includes('diagnosis-b') ? [{ role: 'user', content: 'Only the second session.' }] : id === 'physical-older' ? [{ role: 'user', content: 'Historical segment only.' }] : messagesA
-      return [...history, ...realtime.history(id.startsWith('chat-') ? `web:${id}` : id)]
+      return [...history, ...(messageSourceMode ? [{
+        role: 'user', name: 'admin', timestamp: timestamp(11000), content: [
+          { type: 'text', text: '<sender id="web:orchestrator" name="admin" source="session" intent="handoff" />' },
+          { type: 'text', text: 'Delegated inspection from coordinator. Use the published revision.' },
+        ],
+      }] : []), ...realtime.history(id.startsWith('chat-') ? `web:${id}` : id)]
     }
     if (path === '/api/chat/session') {
       chatHistoryRequests.push(url.searchParams.get('chatId') || '')
@@ -572,6 +591,46 @@ async function assertConversationCaps(checkNaturalWidth = false): Promise<void> 
     })()`), true, 'Short assistant replies keep natural width and user bubbles remain right-aligned')
   }
 }
+async function assertConversationAlignment(label: string, expectedPanes = 1): Promise<void> {
+  const panes = await evaluate<Array<{
+    width: number; historyWidth: number; scrollWidth: number; left: number; right: number; scrollbar: number
+    railLeft: number; railRight: number; railOffset: number; flexGrow: string; overflow: string
+    users: number[]; assistants: number[]; overflowWidth: number; contentWidth: number
+    rowWidths: number[]; composerOffset: number; navigatorLeft: number
+  }>>(`Array.from(document.querySelectorAll('.chat-panel')).filter(pane => pane.getClientRects().length && pane.querySelector('.chat-messages')).map(pane => {
+    const scroll = pane.querySelector('.chat-messages'), history = pane.querySelector('.chat-history');
+    const r = scroll.getBoundingClientRect(), css = getComputedStyle(scroll), rail = scroll.querySelector('.chat-message-list').getBoundingClientRect();
+    return { width: pane.getBoundingClientRect().width, historyWidth: history.getBoundingClientRect().width, scrollWidth: r.width,
+      left: r.left, right: r.right, scrollbar: scroll.offsetWidth - scroll.clientWidth,
+      railLeft: rail.left, railRight: rail.right, railOffset: (rail.left + rail.right - r.left - r.right) / 2,
+      flexGrow: css.flexGrow, overflow: css.overflowY, overflowWidth: scroll.scrollWidth - scroll.clientWidth,
+      contentWidth: rail.width,
+      rowWidths: Array.from(scroll.querySelectorAll('.chat-bubble, .tool-activity, .system-event, .compaction-summary')).map(node => node.getBoundingClientRect().width),
+      composerOffset: (() => { const r = pane.closest('.file-workbench').querySelector('.chat-composer').getBoundingClientRect(); const p = pane.getBoundingClientRect(); return (r.left + r.right - p.left - p.right) / 2; })(),
+      navigatorLeft: pane.querySelector('.message-history-rail').getBoundingClientRect().left,
+      users: Array.from(scroll.querySelectorAll('.chat-user')).map(node => node.getBoundingClientRect().right),
+      assistants: Array.from(scroll.querySelectorAll('.chat-assistant, .tool-activity, .system-event, .compaction-summary')).map(node => node.getBoundingClientRect().left) };
+  })`)
+  console.log(`LAYOUT_GEOMETRY ${JSON.stringify({ label, panes })}`)
+  assert.equal(panes.length, expectedPanes, `${label}: expected visible conversation panes`)
+  for (const pane of panes) {
+    assert.ok(Math.abs(pane.scrollWidth - pane.historyWidth) <= 1, `${label}: message scroller fills history`)
+    assert.equal(pane.flexGrow, '1', `${label}: message scroller grows with the pane`)
+    assert.equal(pane.overflow, 'auto', `${label}: history owns vertical scrolling`)
+    assert.ok(pane.railLeft - pane.left >= 55, `${label}: message gutter mirrors the navigator clearance`)
+    assert.ok(Math.abs(pane.railOffset) <= 1, `${label}: message rail stays centered with and without scrollbars`)
+    assert.ok(Math.abs(pane.contentWidth - (pane.width - 112)) <= 1, `${label}: message rail fills its pane with fixed navigator gutters instead of a desktop width cap`)
+    if (pane.width > 1200) assert.ok(Math.max(...pane.rowWidths) > 860 * .8 + 40, `${label}: long bubbles expand beyond the former desktop cap`)
+    assert.ok(pane.overflowWidth <= 1, `${label}: no horizontal overflow`)
+    assert.ok(Math.abs(pane.composerOffset) <= 1, `${label}: composer remains centered in its own pane`)
+    for (const width of pane.rowWidths) assert.ok(width <= pane.contentWidth * .8 + 1, `${label}: row keeps its 80% cap`)
+    for (const left of pane.assistants) assert.ok(Math.abs(left - pane.railLeft) <= 1, `${label}: assistant/tool left alignment`)
+    for (const right of pane.users) {
+      assert.ok(Math.abs(right - pane.railRight) <= 1, `${label}: user right alignment`)
+      assert.ok(right <= pane.navigatorLeft, `${label}: history navigator never obscures a user bubble`)
+    }
+  }
+}
 async function showSessionView(diagnosis: boolean, scope = '.primary-conversation'): Promise<void> {
   const selector = `${scope} .diagnosis-toggle`
   if (await evaluate(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-pressed')`) !== String(diagnosis)) await click(selector)
@@ -738,18 +797,180 @@ async function main(): Promise<void> {
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
   const origin = `http://127.0.0.1:${address.port}`
+  let rendererOrigin = origin
+  if (layoutMode === 'dev') {
+    const appRoot = resolve(assets, '..')
+    const require = createRequire(join(appRoot, 'package.json'))
+    const { createServer: createViteServer } = await import(pathToFileURL(require.resolve('vite')).href)
+    const vite = await createViteServer({
+      root: appRoot, configFile: join(appRoot, 'vite.config.ts'), envFile: false,
+      cacheDir: join(directory, 'vite-cache'), logLevel: 'error',
+      plugins: [{ name: 'synthetic-api-only', configResolved(config: { server: { proxy: Record<string, { target?: string }> } }) {
+        for (const proxy of Object.values(config.server.proxy)) proxy.target = origin
+      } }],
+      server: { host: '127.0.0.1', port: 0, strictPort: false, proxy: {
+        '^/projects/[^/]+/(?:api|debug|nodes|v1)(?:/|$)': { target: origin },
+        '/api': { target: origin }, '/debug': { target: origin }, '/nodes/v1': { target: origin }, '/v1': { target: origin },
+      } },
+    })
+    devServer = vite
+    await vite.listen()
+    rendererOrigin = vite.resolvedUrls.local[0].replace(/\/$/, '')
+  }
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
-    const allowed = details.url.startsWith(origin + '/') || details.url.startsWith(`blob:${origin}/`) || details.url.startsWith('devtools:') || details.url.startsWith('data:')
+    const allowed = details.url.startsWith(origin + '/') || details.url.startsWith(rendererOrigin + '/') || details.url.startsWith(rendererOrigin.replace('http:', 'ws:') + '/') || details.url.startsWith(`blob:${origin}/`) || details.url.startsWith('devtools:') || details.url.startsWith('data:')
     if (!allowed) unexpected.push(`External request: ${details.url}`)
     callback({ cancel: !allowed })
   })
-  window = new BrowserWindow({ width: 1400, height: 1000, show: false, webPreferences: { offscreen: true, backgroundThrottling: false, preload: join(directory, 'layout-preload.cjs'), additionalArguments: [`--layout-api-base=${origin}`] } })
+  window = new BrowserWindow({ width: 1400, height: 1000, show: false, webPreferences: { offscreen: true, backgroundThrottling: false, preload: join(directory, 'layout-preload.cjs'), additionalArguments: [`--layout-api-base=${rendererOrigin}`] } })
   disposeDocumentShortcuts = installDocumentTabShortcuts(window)
-  await window.loadURL(`${origin}/chat`)
+  await window.loadURL(`${rendererOrigin}/chat`)
   await waitFor(`document.querySelectorAll('.session-select').length === 5`)
   await selectSession(idA)
   await waitFor(`document.querySelectorAll('.chat-bubble').length >= 4`)
   await waitFor(`document.querySelector('.file-workbench.explorer-docked .tree-row[data-path="README.md"]')`)
+  if (conversationSummaryMode) {
+    assert.equal(await evaluate(`document.querySelector('.compaction-summary').tagName`), 'DETAILS')
+    assert.equal(await evaluate(`document.querySelector('.compaction-summary').open`), false)
+    assert.equal(await evaluate(`document.querySelector('.compaction-summary-body')`), null, 'Collapsed summaries do not render Markdown')
+    for (const width of [1400, 390]) {
+      window.setContentSize(width, width === 390 ? 844 : 1000)
+      for (const dark of [false, true]) {
+        await evaluate(`document.documentElement.classList.toggle('dark', ${dark})`)
+        await evaluate(`document.querySelector('.compaction-summary-header').click()`)
+        await waitFor(`!!document.querySelector('.compaction-summary-body h2')`)
+        const layout = await evaluate<{ maxHeight: string; overflow: string; opacity: string; heading: number; body: number; border: string; bounded: boolean; scrolls: boolean }>(`(() => {
+          const summary = document.querySelector('.compaction-summary');
+          const body = summary.querySelector('.compaction-summary-body');
+          const style = getComputedStyle(body);
+          const rect = summary.getBoundingClientRect();
+          return {
+            maxHeight: style.maxHeight, overflow: style.overflowY, opacity: style.opacity,
+            heading: parseFloat(getComputedStyle(body.querySelector('h2')).fontSize),
+            body: parseFloat(style.fontSize), border: getComputedStyle(summary).borderTopStyle,
+            bounded: rect.left >= 0 && rect.right <= innerWidth && body.scrollWidth <= body.clientWidth + 1,
+            scrolls: body.scrollHeight > body.clientHeight + 1,
+          };
+        })()`)
+        assert.deepEqual(layout, {
+          maxHeight: 'none', overflow: 'visible', opacity: '1', heading: 14, body: 13,
+          border: 'none', bounded: true, scrolls: false,
+        }, `Readable summary at ${width}px, dark=${dark}`)
+        assert.equal(await evaluate(`document.querySelectorAll('.compaction-summary-body li').length`), 24)
+        assert.equal(await evaluate(`document.querySelector('.compaction-summary-body strong').textContent`), 'decisions')
+        assert.equal(await evaluate(`document.querySelector('.compaction-summary-body a').target`), '_blank')
+        assert.equal(await evaluate(`document.querySelector('.compaction-summary-body a').rel`), 'noopener noreferrer')
+        assert.equal(await evaluate(`Boolean(window.unsafeSummary || document.querySelector('.compaction-summary-body script, .compaction-summary-body [onclick]'))`), false)
+        await evaluate(`document.querySelector('.compaction-summary-header').click()`)
+        await waitFor(`!document.querySelector('.compaction-summary-body')`)
+        assert.ok(await evaluate(`document.querySelector('.compaction-summary').getBoundingClientRect().height <= 60`))
+      }
+    }
+    assert.deepEqual(unexpected, [])
+    console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, mode: 'conversation-summary' })}`)
+    return
+  }
+  if (messageSourceMode) {
+    const captureSource = async (name: string) => {
+      const contents = window!.webContents
+      const png = await new Promise<Buffer>((resolve, reject) => {
+        const painted = (_event: unknown, _rect: unknown, image: NativeImage) => { clearTimeout(timeout); resolve(image.toPNG()) }
+        const timeout = setTimeout(() => { contents.removeListener('paint', painted); reject(new Error(`${name}: no fixture frame painted`)) }, 5000)
+        contents.once('paint', painted)
+        contents.invalidate()
+      })
+      await writeFile(join(directory, name), png)
+    }
+    for (const width of [1400, 390]) {
+      window.setContentSize(width, width === 390 ? 844 : 1000)
+      await showSessionView(false)
+      await waitFor(`!!document.querySelector('.chat-session')`)
+      await evaluate(`document.querySelector('.chat-session').scrollIntoView({ block: 'center' })`)
+      await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      assert.equal(await evaluate(`document.querySelectorAll('.chat-user').length`), 2, 'Only human input uses user bubbles')
+      assert.equal(await evaluate(`document.querySelectorAll('.history-marker').length`), 2, 'Handoffs are not human history markers')
+      assert.equal(await evaluate(`document.querySelector('.resend-btn')`), null, 'A handoff cannot be resent as human input')
+      assert.match(await evaluate<string>(`document.querySelector('.chat-session').getAttribute('aria-label')`), /Session handoff from web:orchestrator/)
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.chat-session')).alignSelf`), 'flex-start')
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.chat-session')).borderTopStyle`), 'dashed')
+      assert.doesNotMatch(await evaluate<string>(`document.querySelector('.chat-session .chat-content').textContent`), /<sender/)
+      assert.equal(await evaluate(`(() => { const r = document.querySelector('.chat-session').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth; })()`), true)
+      await captureSource(`message-source-chat-${width}.png`)
+      await showSessionView(true)
+      await waitFor(`!!document.querySelector('.event-kind.SESSION')`)
+      await evaluate(`[...document.querySelectorAll('.event-filters button')].find(button => button.textContent.trim() === 'session').click()`)
+      await waitFor(`document.querySelectorAll('.trace-event').length === 1`)
+      await evaluate(`(() => { const header = document.querySelector('.trace-event-header'); if (header.getAttribute('aria-expanded') !== 'true') header.click(); header.scrollIntoView({ block: 'start' }); })()`)
+      await waitFor(`!!document.querySelector('.message-source')`)
+      assert.match(await evaluate<string>(`document.querySelector('.trace-event-header').textContent`), /SESSION.*Session handoff.*web:orchestrator/s)
+      assert.equal(await evaluate(`document.querySelector('.event-preview').textContent`), 'Delegated inspection from coordinator. Use the published revision.')
+      assert.match(await evaluate<string>(`document.querySelector('.trace-event-detail').textContent`), /protocol role, not a human author/)
+      assert.match(await evaluate<string>(`document.querySelector('.trace-event-detail details pre').textContent`), /source="session"/)
+      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true)
+      await captureSource(`message-source-trace-${width}.png`)
+      console.log(`LAYOUT_SOURCE ${JSON.stringify({ width, humanMessages: 2, sessionMessages: 1, rawEvidence: true })}`)
+    }
+    assert.deepEqual(unexpected, [])
+    console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, mode: 'message-source' })}`)
+    return
+  }
+  if (layoutMode) {
+    for (const [width, height] of [[1400, 1000], [1920, 1080], [2560, 1080], [390, 844]]) {
+      window.setContentSize(width, height)
+      await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+      await assertConversationAlignment(`${layoutMode}-${width}`)
+      await assertConversationCaps(width > 700)
+      for (const dark of [false, true]) {
+        assert.equal(await evaluate(`(() => {
+          document.documentElement.classList.toggle('dark', ${dark});
+          const dock = document.querySelector('.primary-conversation .conversation-dock');
+          const fade = getComputedStyle(dock, '::before');
+          const input = dock.querySelector('textarea');
+          const rect = input.getBoundingClientRect();
+          const surface = getComputedStyle(document.body).backgroundColor;
+          return fade.content === '""' && fade.pointerEvents === 'none' && fade.zIndex === '-1'
+            && fade.top === '-16px' && fade.backgroundImage.startsWith('linear-gradient(')
+            && fade.backgroundImage.includes(surface + ' 160px')
+            && ['32px', '80px', '128px'].every(stop => fade.backgroundImage.includes(stop))
+            && getComputedStyle(dock).maskImage === 'none'
+            && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === input;
+        })()`), true, `${layoutMode}-${width}-${dark ? 'dark' : 'light'}: the backdrop fades to the theme surface behind interactive controls`)
+      }
+      await evaluate(`document.querySelectorAll('.chat-messages').forEach(node => node.scrollTop = node.scrollHeight)`)
+      assert.equal(await evaluate(`(() => {
+        const pane = document.querySelector('.primary-conversation');
+        const messages = pane.querySelectorAll('.chat-bubble');
+        return messages[messages.length - 1].getBoundingClientRect().bottom <= pane.querySelector('.conversation-dock').getBoundingClientRect().top;
+      })()`), true, `${layoutMode}-${width}: the last reply can scroll above the composer`)
+      await evaluate(`document.querySelectorAll('.chat-messages').forEach(node => node.scrollTop = 0)`)
+      await new Promise(resolve => setTimeout(resolve, 250))
+      await writeFile(join(directory, `conversation-${layoutMode}-${width}.png`), (await window.webContents.capturePage()).toPNG())
+    }
+    await evaluate(`document.querySelectorAll('.chat-messages').forEach(node => node.className = 'chat-messages')`)
+    await assertConversationAlignment(`${layoutMode}-without-layout-utilities`)
+    await selectMessage('.primary-conversation')
+    await evaluate(`getSelection().removeAllRanges()`)
+    window.setContentSize(1920, 1080)
+    await window.loadURL(`${rendererOrigin}/chat/${encodeURIComponent(idA)}?child=${encodeURIComponent(idChild)}`)
+    await waitFor(`document.querySelector('.child-conversation .chat-messages')?.textContent.includes('child-only')`)
+    await waitFor(`document.querySelector('.conversation-workspace.is-split') && document.querySelector('.primary-conversation .chat-assistant')`)
+    await assertConversationAlignment(`${layoutMode}-split`, 2)
+    await new Promise(resolve => setTimeout(resolve, 250))
+    await writeFile(join(directory, `conversation-${layoutMode}-split.png`), (await window.webContents.capturePage()).toPNG())
+    window.setContentSize(390, 844)
+    await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+    await assertConversationAlignment(`${layoutMode}-split-mobile`)
+    sidebarEdgeCases = true
+    await window.loadURL(`${rendererOrigin}/chat/${encodeURIComponent(idEmpty)}`)
+    await waitFor(`document.querySelector('.chat-message-list')?.textContent.includes('No messages yet.')`)
+    assert.equal(await evaluate(`(() => {
+      const rail = document.querySelector('.chat-message-list').getBoundingClientRect();
+      const pane = document.querySelector('.chat-history').getBoundingClientRect();
+      return rail.width > 0 && Math.abs(rail.left + rail.right - pane.left - pane.right) <= 1;
+    })()`), true, 'An empty transcript keeps the same centered rail')
+    console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, mode: layoutMode })}`)
+    return
+  }
   assert.equal(await evaluate(`!document.querySelector('.conversation-tabs') && document.querySelector('.diagnosis-toggle').getAttribute('aria-pressed') === 'false' && document.querySelector('.chat-history').getAttribute('role') === 'region'`), true, 'Conversation history uses a region with a separate Diagnosis toggle')
   assert.equal(await evaluate(`(() => {
     const folders = document.querySelector('.folders-sidebar').getBoundingClientRect();
@@ -866,7 +1087,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelector('.chat-bubble') === window.stableMessage && document.querySelector('.composer-input textarea') === window.stableComposerInput && window.stableComposerInput.value === 'Keep draft and selection' && window.stableComposerInput.selectionStart === 2`), true)
   await click('.folder-folder')
   await waitFor(`document.querySelector('.folder-toggle').getAttribute('aria-expanded') === 'true'`)
-  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.folder-folder-row.selected')).backgroundColor === getComputedStyle(document.querySelector('.folder-session-row.active')).backgroundColor`), true, 'Folder and conversation selections share the same row treatment')
+  assert.equal(await evaluate(`!document.querySelector('.folder-folder-row.selected') && !!document.querySelector('.folder-session-row.active.selected')`), true, 'Selecting a folder header does not duplicate the active conversation highlight')
   await click('.folder-folder')
   assert.equal(await evaluate(`document.querySelector('.folder-toggle').getAttribute('aria-expanded')`), 'true', 'Selecting the current folder must not toggle its contents')
   assert.equal(chatHistoryRequests.length, historyBeforeRepeat)
@@ -2632,6 +2853,7 @@ async function cleanup(): Promise<void> {
     window.destroy()
   }
   realtime.close()
+  await devServer?.close()
   server.closeAllConnections()
   if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
 }

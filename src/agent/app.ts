@@ -2,6 +2,7 @@ import type { Bus } from '../bus/bus.ts'
 import type { InboundMessage } from '../bus/events.ts'
 import { deriveSessionId } from '../bus/events.ts'
 import type { CommandDispatcher } from '../slash-commands/index.ts'
+import type { CommandReceipt } from '../slash-commands/receipt.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { errDetail } from '../utils/truncate.ts'
 import type { AgentTypesManager } from './types/manager.ts'
@@ -92,31 +93,45 @@ export class AgentApp {
     }
     const sessionId = deriveSessionId(msg)
     this.sessions.assertFolderAccess(sessionId)
+    const input = channelMessageInput(msg)
+    this.sessions.authorizeConversationInput(sessionId, input)
     if (msg.senderId.trim()) {
       await this.identity?.observeInboundAccount(msg.channel, msg.senderId, msg.chatId, msg.senderName, msg.channelAddress)
     }
-    const input = channelMessageInput(msg)
     const llm = this.getLlmRuntimeConfig()
-    const output = input.kind === 'message' && input.policy === 'interactive'
-      ? await this.commandDispatcher.dispatch(input.content, {
-        sessionId,
-        msg,
-        admin: !!msg.admin,
-        llm,
-      })
-      : null
+    let output: string | null = null
+    let failed = false
+    if (input.kind === 'message' && input.policy === 'interactive'
+      && !this.sessions.isManagedConversation(sessionId) && input.content.trimStart().startsWith('/')) {
+      await this.sessions.prepareCommandSession(sessionId)
+      try {
+        output = await this.commandDispatcher.dispatch(input.content, {
+          sessionId, msg, admin: !!msg.admin, llm,
+        })
+        failed = output !== null && /^(?:Error:|Permission denied:)/.test(output)
+      } catch (error) {
+        console.error(`[agent] Command failed (${sessionId}, ${input.id}):`, errDetail(error))
+        output = 'Error: Command execution failed. Check the server logs for details.'
+        failed = true
+      }
+    }
     let receipt: DeliveryReceipt
     if (output !== null) {
-      receipt = { status: 'accepted', sessionId, inputId: input.id }
+      const commandReceipt: CommandReceipt = {
+        id: input.id, command: msg.content.trim(), output, failed,
+        timestamp: new Date().toISOString(),
+      }
+      await this.sessions.recordCommandResult(sessionId, commandReceipt)
+      receipt = { status: 'accepted', sessionId, inputId: input.id, commandReceipt }
       this.bus.emit('session.input.accepted', { sessionId, input })
-      this.publishCommandResponse(msg, output)
+      this.publishCommandResponse(msg, commandReceipt)
     } else {
       receipt = await this.sessions.deliver(sessionId, input, llm)
     }
 
     // Fanout is a separate source publication; its failure cannot undo acceptance
     // of the original input or cause a client to retry an already accepted turn.
-    if (input.kind === 'message') {
+    if (input.kind === 'message' && output === null) {
       void this.events.publishChannelMessage(msg).catch((error) => {
         console.error(`[agent] Channel subscription delivery failed (${sessionId}, ${input.id}):`, errDetail(error))
       })
@@ -124,18 +139,19 @@ export class AgentApp {
     return receipt
   }
 
-  private publishCommandResponse(msg: InboundMessage, content: string): void {
+  private publishCommandResponse(msg: InboundMessage, receipt: CommandReceipt): void {
     this.bus.emit('message.outbound', {
       event: 'response',
       channel: msg.channel,
       chatId: msg.chatId,
       ...(msg.channelAddress ? { channelAddress: msg.channelAddress } : {}),
-      content,
+      content: receipt.output,
       replyTo: msg.platformMessageId,
       done: true,
       metadata: {
         partType: 'text',
         command: true,
+        commandReceipt: receipt,
       },
     })
   }

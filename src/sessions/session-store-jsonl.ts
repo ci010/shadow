@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { appendFile, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { parseSessionName, SessionNameError } from './session-name.ts'
 import type {
   SessionState,
   SessionStore,
@@ -11,6 +12,8 @@ import { parseAutomationSessionRef } from '../cron/contracts.ts'
 import { validateOwnership, OwnershipValidationError } from '../projects/ownership.ts'
 import { normalizeInitiativeMetadata, InitiativeMetadataError } from './initiative-metadata.ts'
 import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
+import { parsePhysicalIdVersion, SessionIdentityError } from './session-identity.ts'
+import { parseContextResetAt, ContextResetMetadataError } from './session-store.ts'
 
 /**
  * JSONL-file-backed session store.
@@ -37,18 +40,24 @@ export class JsonlSessionStore implements SessionStore {
     try {
       const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
       if (!state.sessionId) return null
+      if (state.name !== undefined) state.name = parseSessionName(state.name)
+      parsePhysicalIdVersion(state.physicalIdVersion)
+      parseContextResetAt(state.contextResetAt)
       if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
       Object.assign(state, parseTopicSessionFields(state))
       return state
     } catch (error) {
-      if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError) throw error
+      if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error
       return null
     }
   }
 
   async saveState(sessionKey: string, state: SessionState): Promise<void> {
+    if (state.name !== undefined) state = { ...state, name: parseSessionName(state.name) }
     state = normalizeInitiativeMetadata(validateOwnership({ ...state, ownershipVersion: state.ownershipVersion ?? 2 })) as unknown as SessionState
     parseAutomationSessionRef(state.automation)
+    parsePhysicalIdVersion(state.physicalIdVersion)
+    parseContextResetAt(state.contextResetAt)
     state = { ...state, ...parseTopicSessionFields(state) }
     const contents = JSON.stringify(state, null, 2)
     await this.queueStateWrite(sessionKey, async () => {
@@ -67,6 +76,7 @@ export class JsonlSessionStore implements SessionStore {
     Array<
       {
         sessionId: string
+        name?: string
         segmentIndex: number
         lastActivityAt?: string
         folderId?: string
@@ -79,6 +89,7 @@ export class JsonlSessionStore implements SessionStore {
     const results: Array<
       {
         sessionId: string
+        name?: string
         segmentIndex: number
         lastActivityAt?: string
         folderId?: string
@@ -95,15 +106,19 @@ export class JsonlSessionStore implements SessionStore {
         try {
           const parsed = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
           if (!parsed.sessionId) continue
+          if (parsed.name !== undefined) parsed.name = parseSessionName(parsed.name)
+          parsePhysicalIdVersion(parsed.physicalIdVersion)
+          parseContextResetAt(parsed.contextResetAt)
           Object.assign(parsed, parseTopicSessionFields(parsed))
           results.push({
             sessionId: parsed.sessionId,
+            ...(parsed.name !== undefined ? { name: parsed.name } : {}),
             segmentIndex: parsed.segmentIndex ?? 0,
             lastActivityAt: parsed.lastActivityAt,
             folderId: typeof parsed.folderId === 'string' ? parsed.folderId : undefined,
             ...parseTopicSessionFields(parsed),
           })
-        } catch (error) { if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError) throw error }
+        } catch (error) { if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     return results
@@ -119,10 +134,13 @@ export class JsonlSessionStore implements SessionStore {
         try {
           const state = normalizeInitiativeMetadata(validateOwnership(JSON.parse(raw))) as unknown as SessionState
           if (!state.sessionId) continue
+          if (state.name !== undefined) state.name = parseSessionName(state.name)
+          parsePhysicalIdVersion(state.physicalIdVersion)
+          parseContextResetAt(state.contextResetAt)
           if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
           Object.assign(state, parseTopicSessionFields(state))
           result[state.sessionId] = state
-        } catch (error) { if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError) throw error }
+        } catch (error) { if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     return result
@@ -130,9 +148,7 @@ export class JsonlSessionStore implements SessionStore {
 
   async deleteState(sessionKey: string): Promise<void> {
     await this.queueStateWrite(sessionKey, async () => {
-      try {
-        await rm(this.statePath(sessionKey))
-      } catch { /* ignore */ }
+      await rm(this.statePath(sessionKey), { force: true })
     })
   }
 
@@ -182,9 +198,7 @@ export class JsonlSessionStore implements SessionStore {
   }
 
   async deleteSessionLog(sessionId: string): Promise<void> {
-    try {
-      await rm(this.logPath(sessionId))
-    } catch { /* ignore */ }
+    await rm(this.logPath(sessionId), { force: true })
   }
 
   async countSessionLog(sessionId: string): Promise<number> {

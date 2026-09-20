@@ -121,12 +121,13 @@
             <button class="trace-event-header" :aria-expanded="expanded.has(event.id)" @click="toggleEvent(event.id)">
               <span class="event-chevron" aria-hidden="true">{{ expanded.has(event.id) ? '&#9662;' : '&#9656;' }}</span>
               <span class="event-kind" :class="event.kind">{{ event.kind }}</span>
-              <strong v-if="event.kind === 'TOOL' || event.kind === 'CONTEXT'" class="event-name">{{ event.title }}</strong>
+              <strong v-if="event.kind === 'TOOL' || event.kind === 'CONTEXT' || event.kind === 'SESSION'" class="event-name">{{ event.title }}</strong>
+              <span v-if="event.sessionSource" class="event-origin" :title="event.sessionSource.id">{{ event.sessionSource.id || event.sessionSource.name || 'Unknown session' }}</span>
               <span class="event-preview">{{ preview(event) }}</span>
               <span v-if="event.kind === 'TOOL' && toolSpan(event.id)" class="event-duration">{{ formatTraceDuration(spanDuration(toolSpan(event.id)!, now)) }}</span>
               <time class="event-time" :title="formatTime(event.timestamp)">{{ shortTime(event.timestamp) }}</time>
             </button>
-            <div v-if="expanded.has(event.id)" class="trace-event-detail">
+            <div v-if="expanded.has(event.id) && (!collapsedTurns.has(group.turn) || query || filter !== 'ALL')" class="trace-event-detail">
               <div v-if="event.callId" class="event-call-id">Call ID: {{ event.callId }}<button v-if="toolSpan(event.id)" class="diagnosis-button" @click="selectSpan(toolSpan(event.id)!)">Inspect timing</button></div>
               <TraceEventDetails :event="event" />
             </div>
@@ -188,7 +189,7 @@ const domId = (id: string) => props.idPrefix ? `${props.idPrefix}-${id}` : id
 const views = [{ id: 'trace', label: 'Trace' }, { id: 'prompt', label: 'System prompt' }, { id: 'tools', label: 'Tools' }] as const
 const section = ref<typeof views[number]['id']>('trace')
 const query = ref('')
-const kinds = ['ALL', 'USER', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
+const kinds = ['ALL', 'USER', 'SESSION', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
 const filter = ref('ALL')
 const events = ref<DiagnosisEvent[]>([])
 const modelResponses = ref<DiagnosisEvent[]>([])
@@ -296,7 +297,7 @@ const lanes = computed<Array<{ name: string; items: TimelineItem[] }>>(() => {
     live: span.live, failed: span.statusCode === 2, matches: spanMatches(span, query.value),
   }))
   return [
-    { name: 'Input', items: events.value.flatMap(event => event.timestamp !== undefined && ['USER', 'CONTEXT', 'SYSTEM'].includes(event.kind)
+    { name: 'Input', items: events.value.flatMap(event => event.timestamp !== undefined && ['USER', 'SESSION', 'CONTEXT', 'SYSTEM'].includes(event.kind)
       ? [{ id: event.id, start: event.timestamp, end: event.timestamp, title: event.title, event, label: `${event.kind} | ${formatTime(event.timestamp)} | ${preview(event)}`, live: false, failed: false, matches: eventMatches(event, query.value) }] : []) },
     { name: 'Model', items: spanItems(modelSpans.value) },
     { name: 'Tools', items: spanItems(toolSpans.value) },
@@ -587,6 +588,8 @@ h3 { font-size: 14px; font-weight: 550; }
 .event-chevron { font-size: 12px; width: 8px; flex-shrink: 0; }
 .event-kind { flex: 0 0 auto; display: inline-block; color: #7d91b5; background: color-mix(in srgb, #7d91b5 12%, transparent); font: 600 9px ui-monospace, monospace; letter-spacing: .045em; padding: 4px 6px; border-radius: var(--radius-sm); }
 .event-kind.USER { color: #8a84c9; background: color-mix(in srgb, #8a84c9 12%, transparent); }
+.event-kind.SESSION { color: var(--c-teal); background: color-mix(in srgb, var(--c-teal) 12%, transparent); }
+.event-origin { max-width: 25%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--c-text-secondary); }
 .event-kind.ASSISTANT { color: #5e96c5; background: color-mix(in srgb, #5e96c5 12%, transparent); }
 .event-kind.TOOL { color: #b99552; background: color-mix(in srgb, #b99552 12%, transparent); }
 .event-kind.CONTEXT { color: #5eaa93; background: color-mix(in srgb, #5eaa93 12%, transparent); }

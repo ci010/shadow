@@ -27,7 +27,7 @@ import type { OutboundMessage } from '../bus/events.ts'
 const question = { question: 'Which approach?', options: ['Continue', 'Change approach', 'Stop'], default_option: 'Continue' }
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
-const ask = (): LLMResponse => ({ content: '', toolCalls: [{ id: 'ask-call', name: 'yield', arguments: question }] })
+const ask = (input = question): LLMResponse => ({ content: '', toolCalls: [{ id: 'ask-call', name: 'yield', arguments: input }] })
 const message = (id: string): SessionMessageInput => ({
   kind: 'message', id, content: 'Start', timestamp: new Date().toISOString(), policy: 'queue',
   source: { kind: 'event', eventId: id, type: 'test', source: 'fixture' },
@@ -93,7 +93,79 @@ async function answer(app: Hono, sessionId: string, requestId: string, option: s
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
-  test(`${Store.name}: actual channel turns preserve decision sender and structured delivery`, async () => {
+  test(`${Store.name}: custom HTTP and channel replies resume and persist the same tool call`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const customText = 'A different approach\nwith a focused check.'
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver('web:custom', message('custom-input'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0]!.resolve(ask({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' }))
+        await waitFor(() => !!f.sessions.yields.get('web:custom'))
+        const requestId = f.sessions.yields.get('web:custom')!.id
+        const post = (body: unknown) => f.app.request('/api/sessions/web:custom/yield', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        })
+        for (const body of [
+          { requestId }, { requestId, customText: '' }, { requestId, customText: ' \n ' },
+          { requestId, customText: 'x'.repeat(4001) }, { requestId, customText: 1 },
+          { requestId, customText, option: 'Yes' }, { requestId, customText, unknown: true },
+          { requestId, customText, option: null }, { requestId, option: 'Yes', customText: null },
+        ]) assert.equal((await post(body)).status, 400)
+        assert.equal(f.sessions.yields.get('web:custom')?.id, requestId)
+        const response = await post({ requestId, customText: `  ${customText}  ` })
+        assert.equal(response.status, 200)
+        const receipt = (await response.json()).answer
+        assert.equal(receipt.option, customText)
+        assert.equal(receipt.custom, true)
+        assert.equal(receipt.answeredBy, 'user')
+        assert.equal((await post({ requestId, customText })).status, 404)
+        await waitFor(() => f.calls.length === 2)
+        const results = f.calls[1]!.messages.filter(item => item.tool_call_id === 'ask-call')
+        assert.equal(results.length, 1)
+        assert.deepEqual(JSON.parse(String(results[0]!.content)), receipt)
+        f.calls[1]!.resolve(done())
+        await waitFor(() => f.facts.length === 1)
+
+        const msg = { channel: 'qq', chatId: 'room', senderId: 'alice', content: 'Start', messageId: 'custom-channel', timestamp: new Date().toISOString(), isGroup: true }
+        await f.sessions.deliver('qq:room', channelMessageInput(msg))
+        await waitFor(() => f.calls.length === 3)
+        f.calls[2]!.resolve(ask({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' }))
+        await waitFor(() => !!f.sessions.yields.get('qq:room'))
+        const channelId = f.sessions.yields.get('qq:room')!.id
+        const command = createYieldCommand(f.sessions)
+        const ctx: SlashCommandContext = { sessionId: 'qq:room', msg, admin: false, llm }
+        assert.match(f.outbound.at(-1)!, /text <your response>/)
+        assert.match(await command.execute({ ...ctx, msg: { ...msg, senderId: 'bob' } }, `${channelId} text ${customText}`), /Only the user/)
+        assert.match(await command.execute(ctx, `${channelId} text`), /1 to 4000/)
+        assert.equal(await command.execute(ctx, `${channelId} text ${customText}`), `Answered: ${customText}`)
+        await waitFor(() => f.calls.length === 4)
+        const channelResult = f.calls[3]!.messages.find(item => item.tool_call_id === 'ask-call')!
+        assert.equal(JSON.parse(String(channelResult.content)).option, customText)
+        assert.equal(JSON.parse(String(channelResult.content)).custom, true)
+        f.calls[3]!.resolve(done())
+        await waitFor(() => f.facts.length === 2)
+      } finally { await f.sessions.stop(); store.close?.() }
+      const reopened: SessionStore = new Store(join(workspace, 'sessions'))
+      await reopened.init()
+      const restored = fixture(workspace, reopened)
+      try {
+        await restored.sessions.start()
+        for (const sessionId of ['web:custom', 'qq:room']) {
+          const history = await restored.sessions.getHistory(sessionId)
+          const results = history.messages.filter(item => item.tool_call_id === 'ask-call')
+          assert.equal(results.length, 1)
+          assert.equal(JSON.parse(String(results[0]!.content)).option, customText)
+          assert.equal(JSON.parse(String(results[0]!.content)).custom, true)
+        }
+      } finally { await restored.sessions.stop(); reopened.close?.() }
+    })
+  })
+
+  test(`${Store.name}: binary channel turns preserve decision sender, paired history and structured delivery`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -107,22 +179,24 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         await f.sessions.deliver('discord:room', channelMessageInput(msg))
         await waitFor(() => f.calls.length === 1)
-        f.calls[0]!.resolve(ask())
+        f.calls[0]!.resolve(ask({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' }))
         await waitFor(() => deliveries.length === 1)
         const request = f.sessions.yields.get('discord:room')!
         assert.equal(deliveries[0]?.yieldRequest?.id, request.id)
         assert.equal(deliveries[0]?.done, true)
+        assert.match(deliveries[0]!.content, /<1\|2\|cancel>/)
         const command = createYieldCommand(f.sessions)
         const ctx: SlashCommandContext = { sessionId: 'discord:room', msg, admin: false, llm }
         assert.match(await command.execute({ ...ctx, msg: { ...msg, senderId: 'bob' } }, `${request.id} 1`), /Only the user/)
-        assert.match(await command.execute(ctx, `${request.id} 2`), /Selected: Change approach/)
+        assert.match(await command.execute(ctx, `${request.id} 3`), /choose one of the options/)
+        assert.match(await command.execute(ctx, `${request.id} 2`), /Selected: No/)
         await waitFor(() => f.calls.length === 2)
         f.calls[1]!.resolve(done())
         await waitFor(() => f.facts.length === 1)
         const history = await f.sessions.getHistory('discord:room')
         const results = history.messages.filter(item => item.tool_call_id === 'ask-call')
         assert.equal(results.length, 1)
-        assert.equal(JSON.parse(String(results[0]?.content)).option, 'Change approach')
+        assert.equal(JSON.parse(String(results[0]?.content)).option, 'No')
       } finally { await f.sessions.stop(); store.close?.() }
     })
   })
@@ -187,6 +261,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(request.recipient, { kind: 'parent', sessionId: 'web:parent' })
         assert.equal(f.calls[1]?.sessionId, 'web:parent')
         assert.equal((await answer(f.app, 'virtual:child', request.id, 'Continue')).status, 403)
+        assert.equal((await f.app.request('/api/sessions/virtual:child/yield', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId: request.id, customText: 'Not the parent' }),
+        })).status, 403)
         f.calls[1]!.resolve({
           content: '', toolCalls: [{ id: 'answer-call', name: 'yield', arguments: {
             action: 'answer', request_id: request.id, option: 'Change approach',

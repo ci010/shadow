@@ -2,8 +2,6 @@ import assert from 'node:assert/strict'
 import { access, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
-import { EventEmitter, once } from 'node:events'
-import { randomUUID } from 'node:crypto'
 import { SkillsManager, type SkillMeta } from '../skills/loader.ts'
 import { parseSkillFile } from '../skills/parse.ts'
 import type { SkillToolDeclarations } from '../skills/tool-declarations.ts'
@@ -16,6 +14,9 @@ import { InvokeTool } from './invoke-tool.ts'
 import { ReadTool } from './read.ts'
 import { SearchTool } from './search.ts'
 import { Tools, SessionTools } from './registry.ts'
+import { CallTools } from '../sessions/call-tools.ts'
+import { EvalBridgeRuntime } from '../script-runtime/bridge.ts'
+import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
 function setup(home: string) {
   const skills = new SkillsManager(home)
@@ -28,7 +29,7 @@ function setup(home: string) {
   base.register(new SearchTool(home, undefined, vfs, loader, skills))
   const session = new SessionTools(base, home)
   const context: ExecutionContext = {
-    projectId: 'fixture', sessionId: 'fixture', physicalSessionId: 'fixture-0',
+    sessionId: 'fixture', physicalSessionId: 'fixture-0',
     channel: 'test', messageId: 'test', senderId: 'test', chatId: 'test',
     tools: session, signal: new AbortController().signal, cwd: home,
   }
@@ -38,29 +39,31 @@ function setup(home: string) {
   return { skills, loader, vfs, base, session, context, read, invoke }
 }
 
-async function addSkill(home: string, skills: SkillsManager, name: string, tools: SkillToolDeclarations, extra: Partial<SkillMeta> = {}) {
+async function addSkill(home: string, skills: SkillsManager, name: string,
+  tools: Record<string, Pick<SkillToolDeclarations[string], 'source'> & Partial<SkillToolDeclarations[string]>>,
+  extra: Partial<SkillMeta> = {}) {
   const dir = join(home, 'skills', name)
   await mkdir(join(dir, 'tools'), { recursive: true })
-  const manifest = `---\n${JSON.stringify({ name, description: `Useful ${name} tools`, tools, ...extra })}\n---\nCall the declared tools with {value: string}. Unique body text: spreadsheets.`
+  const declarations = Object.fromEntries(Object.entries(tools).map(([alias, declaration]) => [alias, {
+    description: 'Synthetic string tool',
+    parameters: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] },
+    imports: [], ...declaration,
+  }]))
+  const manifest = `---\n${JSON.stringify({ name, description: `Useful ${name} tools`, tools: declarations, ...extra })}\n---\nCall the declared tools with {value: string}. Unique body text: spreadsheets.`
   await writeFile(join(dir, 'SKILL.md'), manifest)
   skills.setSkill(name, { ...parseSkillFile(manifest, name), dirPath: dir })
   return dir
 }
 
 const moduleText = (prefix: string) => `
-export const name = 'exported'
-export const description = 'Synthetic string tool'
-export const parameters = {type:'object',properties:{value:{type:'string'}},required:['value']}
-let initValue = ''
-export function init(args) {initValue = args[0]}
-export async function execute(args) {return initValue + ${JSON.stringify(prefix)} + args.value}
+export async function run(args: {value: string}) {return ${JSON.stringify(prefix)} + args.value}
 `
 
-test('read skill registers multiple aliases without importing code; direct invoke validates schema and initializes lazily', async () => {
+test('skill metadata is declarative; discovery never runs source and invocation uses a child', async () => {
   await withTempWorkspace(async home => {
     const f = setup(home)
     const dir = await addSkill(home, f.skills, 'csv', {
-      csv_summary: { source: 'tools/summary.ts', args: ['init:'] },
+      csv_summary: { source: 'tools/summary.ts', imports: ['node:fs'] },
       csv_format: { source: 'tools/format.ts' },
     })
     const marker = join(home, 'loaded')
@@ -72,7 +75,10 @@ test('read skill registers multiple aliases without importing code; direct invok
     await assert.rejects(access(marker), { code: 'ENOENT' })
     assert.equal(f.session.hasDynamic('csv_summary'), false)
     assert.match(f.loader.readCatalog('', f.session), /"skill":"csv"/)
-    assert.equal(await f.invoke('csv_summary'), 'init:summary:value')
+    await f.loader.importForInvocation('csv_summary', f.session)
+    await assert.rejects(access(marker), { code: 'ENOENT' })
+    assert.equal(await f.invoke('csv_summary'), 'summary:value')
+    assert.equal(await readFile(marker, 'utf8'), 'loaded')
     assert.equal(await f.invoke('csv_format'), 'format:value')
     assert.match(await f.invoke('csv_summary', { value: 7 }), /no tool was executed/)
     assert.deepEqual(f.session.names(), ['read', 'invoke_tool', 'search'])
@@ -256,11 +262,13 @@ test('skill search supports deterministic pagination, category, ranking and stri
 test('skill tools can lazily compose sibling tools after a single skill read', async () => {
   await withTempWorkspace(async home => {
     const f = setup(home)
-    const dir = await addSkill(home, f.skills, 'csv', { first: { source: 'tools/one.ts' }, second: { source: 'tools/two.ts' } })
+    const dir = await addSkill(home, f.skills, 'csv', {
+      first: { source: 'tools/one.ts', imports: ['@shadow/second'], parameters: { type: 'object', properties: {} } },
+      second: { source: 'tools/two.ts' },
+    })
     await writeFile(join(dir, 'tools', 'one.ts'), `
-export const name='one'; export const description='Compose';
-export const parameters={type:'object',properties:{}};
-export async function execute(_,callTool){return await callTool('second',{value:'nested'})}
+import second from '@shadow/second'
+export async function run(){return await second({value:'nested'})}
 `)
     await writeFile(join(dir, 'tools', 'two.ts'), moduleText('second:'))
     await f.read('v:skills/csv')
@@ -269,31 +277,94 @@ export async function execute(_,callTool){return await callTool('second',{value:
   })
 })
 
-test('sleep during module initialization cannot reactivate a skill tool', async () => {
+test('sleep aborts a running child and its broker calls without reactivating a skill tool', { timeout: 10_000 }, async () => {
   await withTempWorkspace(async home => {
     const f = setup(home)
-    const dir = await addSkill(home, f.skills, 'csv', { waiting: { source: 'tools/wait.ts', args: ['wait'] } })
-    const start = `skill-start-${randomUUID()}`
-    const release = `skill-release-${randomUUID()}`
+    const dir = await addSkill(home, f.skills, 'csv', {
+      waiting: { source: 'tools/wait.ts', imports: ['@shadow/gate'], parameters: { type: 'object', properties: {} } },
+    })
+    const entered = Promise.withResolvers<void>()
+    let brokerSignal: AbortSignal | undefined
+    f.base.register({
+      name: 'gate', description: 'Synthetic blocking tool', parameters: { type: 'object', properties: {} },
+      async execute(_args, context) {
+        brokerSignal = context.signal
+        entered.resolve()
+        return new Promise<string>((_resolve, reject) => {
+          context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true })
+        })
+      },
+    })
     await writeFile(join(dir, 'tools', 'wait.ts'), `
-import {once} from 'node:events';
-export const name='wait'; export const description='Controlled initialization';
-export const parameters={type:'object',properties:{}};
-export async function init(){process.emit(${JSON.stringify(start)});await once(process,${JSON.stringify(release)})}
-export async function execute(){return 'obsolete'}
+import gate from '@shadow/gate'
+export async function run(){await gate({}); return 'obsolete'}
 `)
     await f.read('v:skills/csv')
-    const entered = once(process, start, { signal: AbortSignal.timeout(10_000) })
-    const pending = f.loader.importForInvocation('waiting', f.session)
-    try {
-      await entered
-      f.session.resetDynamic()
-    } finally {
-      EventEmitter.prototype.emit.call(process, release)
-    }
-    await assert.rejects(pending, { name: 'AbortError' })
+    const pending = f.invoke('waiting', {})
+    await entered.promise
+    f.session.resetDynamic()
+    assert.match(await pending, /abort|cancel/i)
+    assert.equal(brokerSignal?.aborted, true)
     assert.equal(f.session.hasDynamic('waiting'), false)
     assert.match(await f.invoke('waiting', {}), /could not be imported/)
     assert.match(await readFile(join(dir, 'SKILL.md'), 'utf8'), /waiting/)
+  })
+})
+
+test('controlled skill callbacks stay in their owning project and use fresh invocation identities', async () => {
+  await withTempWorkspace(async home => {
+    const f = setup(home)
+    const scope = createProjectScope('skill-project')
+    const runtime = new EvalBridgeRuntime({ projectId: scope.projectId, scope })
+    const context = { ...f.context, projectId: scope.projectId, evalBridge: runtime, toolCallId: 'outer-call' }
+    f.base.register({
+      name: 'who', description: 'Synthetic scope identity', parameters: { type: 'object', properties: {} },
+      async execute(_args, nested) {
+        assert.equal(getProjectScope(), scope)
+        assert.equal(nested.projectId, scope.projectId)
+        assert.notEqual(nested.toolCallId, 'outer-call')
+        assert.equal(nested.toolCallName, 'who')
+        return JSON.stringify({ projectId: nested.projectId, callId: nested.toolCallId })
+      },
+    })
+    const dir = await addSkill(home, f.skills, 'scope', {
+      scoped: { source: 'tools/scoped.ts', imports: ['@shadow/who'] },
+    })
+    await writeFile(join(dir, 'tools', 'scoped.ts'), `import who from '@shadow/who'; export async function run(args) { return await who(args) }`)
+    try {
+      await f.read('v:skills/scope', context)
+      const result = JSON.parse(await f.invoke('scoped', { value: 'fixture' }, context))
+      assert.equal(result.projectId, scope.projectId)
+      assert.equal(typeof result.callId, 'string')
+      assert.match(await f.invoke('scoped', { value: 'fixture' }, { ...context, projectId: 'foreign' }), /binding mismatch/)
+      await runtime.shutdown()
+      assert.match(await f.invoke('scoped', { value: 'fixture' }, context), /closed/)
+    } finally {
+      await runtime.shutdown()
+      scope.close()
+      f.session.resetDynamic()
+    }
+  })
+})
+
+test('agent module ceilings restrict registration, borrowed tools and invocation', async () => {
+  await withTempWorkspace(async home => {
+    const f = setup(home)
+    const dir = await addSkill(home, f.skills, 'paths', {
+      basename: { source: 'tools/path.js', imports: ['node:path'] },
+    })
+    await writeFile(join(dir, 'tools', 'path.js'), `import path from 'node:path'; export function run(args) { return path.basename(args.value) }`)
+    const denied = new SessionTools(f.base, home, undefined, undefined, [])
+    assert.match(await f.read('v:skills/paths', { ...f.context, tools: denied }), /allow.*module|module.*allow/i)
+    const allowed = new SessionTools(f.base, home, undefined, undefined, ['node:path'])
+    const context = { ...f.context, tools: allowed }
+    await f.read('v:skills/paths', context)
+    assert.equal(await f.invoke('basename', { value: 'one/two' }, context), 'two')
+    assert.deepEqual(allowed.snapshot().allowedModules, ['node:path'])
+    const narrowed = new CallTools(allowed, home, undefined, undefined, [])
+    assert.deepEqual(narrowed.allowedModules, [])
+    assert.match(await f.invoke('basename', { value: 'one/two' }, { ...context, tools: narrowed }), /allow.*module|module.*allow/i)
+    assert.match(await f.loader.importSource({ source: join(dir, 'tools', 'path.js') }, allowed), /Declare scripts in SKILL.md/)
+    allowed.resetDynamic()
   })
 })

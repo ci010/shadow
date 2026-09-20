@@ -2,6 +2,14 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool, ToolParameters } from '../tools/tool.ts'
 import type { McpConnection, McpToolInfo } from './client.ts'
 
+export function mcpToolContract(serverName: string, toolInfo: McpToolInfo) {
+  return {
+    name: `${serverName}__${toolInfo.name}`,
+    description: `[MCP:${serverName}] ${toolInfo.description}`,
+    parameters: toolInfo.inputSchema,
+  }
+}
+
 /**
  * Wraps a single MCP tool as a local Tool instance.
  */
@@ -14,9 +22,9 @@ export class McpToolAdapter implements Tool {
     private connection: McpConnection,
     private toolInfo: McpToolInfo,
   ) {
-    // Prefix with server name to avoid collisions
-    this.name = `${connection.config.name}__${toolInfo.name}`
-    this.description = `[MCP:${connection.config.name}] ${toolInfo.description}`
+    const contract = mcpToolContract(connection.config.name, toolInfo)
+    this.name = contract.name
+    this.description = contract.description
     this.parameters = (toolInfo.inputSchema ??
       { type: 'object', properties: {} }) as unknown as ToolParameters
   }

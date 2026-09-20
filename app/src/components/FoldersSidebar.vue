@@ -3,7 +3,12 @@
     <SidebarResizer v-if="!grouped && desktop && resizeActive && !isRail" class="folders-resizer" :model-value="sidebarWidth" :bounds="resizeBounds"
       label="Resize folders" controls="sessions-sidebar" @update:model-value="preferredWidth = $event" />
     <header class="folders-header">
-      <h2 v-if="!isRail"><button v-if="grouped" class="project-toggle" :aria-expanded="groupExpanded" :aria-controls="domId('folders-navigation')" @click="groupExpanded = !groupExpanded"><span class="i-lucide-chevron-right w-3.5 h-3.5" :class="{ 'org-expanded': groupExpanded }" aria-hidden="true" />{{ projectName }}</button><template v-else>Folders</template></h2>
+      <button v-if="grouped" type="button" class="project-toggle"
+        :aria-label="`${groupExpanded ? 'Collapse' : 'Expand'} project ${projectName}`"
+        :aria-expanded="groupExpanded" :aria-controls="domId('folders-navigation')" @click="groupExpanded = !groupExpanded">
+        <span class="i-lucide-chevron-right w-3.5 h-3.5" :class="{ 'org-expanded': groupExpanded }" aria-hidden="true" />
+      </button>
+      <h2 v-if="!isRail"><slot v-if="grouped" name="project-name">{{ projectName }}</slot><template v-else>Folders</template></h2>
       <div class="folders-header-actions">
         <slot name="project-actions" />
         <HoverInfo v-if="!grouped && desktop" :text="isRail ? 'Expand folders' : 'Collapse folders'"><template #default="{ triggerProps }">
@@ -16,7 +21,6 @@
         </template></HoverInfo>
       </div>
     </header>
-    <slot name="project-entry" />
     <div v-show="!grouped || groupExpanded" :id="domId('folders-navigation')" class="folders-scroll" :aria-busy="loading || sessionsLoading">
       <p v-if="loading" class="sidebar-note" :class="{ 'rail-note': isRail }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading folders…</span></p>
       <div v-if="error && !isRail" class="sidebar-error" role="alert">
@@ -25,7 +29,7 @@
       </div>
       <HoverInfo v-if="error && isRail" :text="error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Folders unavailable. Retry folders" @click="loadFolders"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
       <section v-for="group in groups.folders" :key="group.folder.id" class="folder-group">
-        <TreeRow class="folder-folder-row" :selected="selectedFolderId === group.folder.id"
+        <TreeRow class="folder-folder-row" :selected="!activeSessionId && selectedFolderId === group.folder.id"
           :class="{ working: !!folderWorkingStage(group.sessions) }" :icon-only="isRail"
           :label="group.folder.name" :title="group.folder.kind === 'remote' ? `${group.folder.workdir.nodeId}: ${group.folder.path}` : group.folder.path" :expanded="expandedFolders.has(group.folder.id)" separate-toggle
           button-class="folder-folder" toggle-class="folder-toggle"
@@ -56,12 +60,31 @@
           <FolderSessionList :sessions="group.sessions" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
-      <section v-if="groups.chats.length || sessionsLoading || sessionsError" class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
+      <section v-if="chatGroups.chats.length || sessionsLoading || sessionsError" class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
         <h3 :id="domId('legacy-chats-heading')" :class="{ 'rail-visually-hidden': isRail }">Chats</h3>
         <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading conversations…</span></p>
         <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">Retry conversations</button></div>
         <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Conversations unavailable. Retry conversations" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
-        <FolderSessionList :sessions="groups.chats" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+        <FolderSessionList :sessions="chatGroups.chats" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+      </section>
+      <section v-for="bot in chatGroups.bots" :key="bot.id" class="bot-conversations" :data-bot-id="bot.id">
+        <TreeRow :label="bot.label" :title="`${bot.label}\n${bot.connection.label}\n${bot.platform}\n${bot.id}`"
+          :expanded="!collapsedBots.has(bot.id)" :icon-only="isRail" button-class="bot-toggle"
+          :button-attrs="{ 'aria-controls': domId(`bot-conversations-${encodeURIComponent(bot.id)}`) }"
+          :ariaLabel="`${collapsedBots.has(bot.id) ? 'Expand' : 'Collapse'} bot ${bot.label}: ${bot.connection.label}`"
+          @select="toggleBot(bot.id)">
+          <template #icon><span class="i-lucide-bot" /></template>
+          <template #meta>
+            <SessionActivity v-if="folderWorkingStage(bot.sessions)" :stage="folderWorkingStage(bot.sessions)" compact :title="undefined" />
+            <span class="bot-connection" :data-state="bot.connection.state" :title="bot.connection.label" aria-hidden="true">
+              <span :class="bot.connection.icon" />
+            </span>
+          </template>
+        </TreeRow>
+        <div v-show="!collapsedBots.has(bot.id)" :id="domId(`bot-conversations-${encodeURIComponent(bot.id)}`)">
+          <FolderSessionList v-if="!collapsedBots.has(bot.id)" :sessions="bot.sessions" :depth="1" :rail="isRail" :active-session-id="activeSessionId"
+            :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+        </div>
       </section>
       <AutomationSidebar :api-base="apiBase" :active="resizeActive && (!grouped || groupExpanded)" :rail="isRail"
         :groups="groups.automations" :stages="stages" :selected-id="selectedAutomationId || activeAutomation?.jobId"
@@ -97,11 +120,14 @@ import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
 import { automationSessionOwners, groupFolderSessions, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
 import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
+import { groupBotConversations, restoreCollapsedBots, saveCollapsedBots, type SidebarBot } from '../bot-sidebar.ts'
 
 const props = defineProps<{
   apiBase: string
   grouped?: boolean
   projectName?: string
+  projectId?: string
+  bots?: SidebarBot[]
   folderRevision?: number
   sessions: SidebarSession[]
   activeSessionId: string
@@ -131,6 +157,20 @@ const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
 const folderActions = computed(() => FOLDER_ACTIONS.filter(action => action.id !== 'remote' || props.remoteFolders))
 const folders = ref<FolderRecord[]>([])
 const groups = computed(() => groupFolderSessions(folders.value, props.sessions))
+const chatGroups = computed(() => groupBotConversations(groups.value.chats, props.projectId, props.bots))
+const collapsedBots = ref(new Set<string>())
+watch(() => [props.apiBase, props.projectId], () => {
+  try { collapsedBots.value = props.projectId ? restoreCollapsedBots(window.localStorage, props.apiBase, props.projectId) : new Set() }
+  catch { collapsedBots.value = new Set() }
+}, { immediate: true })
+function toggleBot(id: string) {
+  if (collapsedBots.value.has(id)) collapsedBots.value.delete(id)
+  else collapsedBots.value.add(id)
+  if (props.projectId) {
+    try { saveCollapsedBots(window.localStorage, props.apiBase, props.projectId, collapsedBots.value) }
+    catch { /* Disclosure still works when browser storage is unavailable. */ }
+  }
+}
 const activeAutomation = computed(() => automationSessionOwners(props.sessions).get(props.activeSessionId))
 const expandedFolders = reactive(new Set<string>())
 const selectedFolderId = ref('')
@@ -306,9 +346,9 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .is-grouped .folders-scroll { overflow: visible; flex: none; padding-bottom: 12px; }
 .is-grouped .folders-header { min-height: 48px; padding: 8px 10px; gap: 4px; }
 .is-grouped .folders-header h2 { flex: 1; min-width: 0; }
-.project-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px; border: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; overflow-wrap: anywhere; }
-.project-toggle span { flex-shrink: 0; }
+.project-toggle { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); cursor: pointer; }
 .project-toggle:hover { background: var(--c-bg-muted); }
+.project-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .org-expanded { transform: rotate(90deg); }
 .folders-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 60px; padding: 12px 16px 8px 20px; }
 .folders-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
@@ -321,6 +361,12 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .folder-add { opacity: 0; }
 .folder-folder-row:hover .folder-add, .folder-folder-row:focus-within .folder-add { opacity: 1; }
 .legacy-chats { margin-top: 20px; }
+.bot-conversations { margin-top: 12px; }
+.bot-connection { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-inline-start: 6px; flex-shrink: 0; color: var(--c-text-secondary); }
+.bot-connection > span { width: 13px; height: 13px; }
+.bot-connection[data-state="connected"] { color: var(--c-git-added); }
+.bot-connection[data-state="connecting"], .bot-connection[data-state="restart-required"], .bot-connection[data-state="running"] { color: var(--c-warn); }
+.bot-connection[data-state="error"] { color: var(--c-error); }
 .legacy-chats h3 { margin: 0 12px 8px; font-size: 12px; font-weight: 500; color: var(--c-text-secondary); }
 .sidebar-note { margin: 8px 12px 16px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; }
 .sidebar-error { margin: 12px; color: var(--c-error); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }

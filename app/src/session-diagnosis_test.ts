@@ -9,6 +9,30 @@ function span(overrides: Partial<SessionTraceSpan> = {}): SessionTraceSpan {
   return { id: 1, traceId: 'trace-a', spanId: 'span-a', name: 'agent.chat', startTime: 1000, endTime: 2000, live: false, attributes: {}, events: [], ...overrides }
 }
 
+test('trace distinguishes delegated input from humans without losing raw evidence or turn boundaries', () => {
+  const tag = '<sender id="web:orchestrator" name="Admin &amp; coordinator" source="session" intent="handoff" />'
+  const { events } = parseDiagnosisHistory({ messages: [
+    { role: 'user', content: 'Human request' },
+    { role: 'user', name: 'admin', content: [{ type: 'text', text: tag }, { type: 'text', text: 'Delegated work' }] },
+    { role: 'assistant', content: 'Worker response' },
+    { role: 'user', content: '<event type="cron-tick" source="cron" />Background check' },
+    { role: 'user', content: [{ type: 'text', text: '<sender id="human" chat="direct" />' },
+      { type: 'text', text: 'Literal <sender source="session" /> content' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,fixture' } }] },
+  ] })
+  assert.deepEqual(events.map(event => [event.kind, event.turn]), [['USER', 1], ['SESSION', 2], ['ASSISTANT', 2], ['CONTEXT', 2], ['USER', 3]])
+  assert.equal(events[1].title, 'Session handoff')
+  assert.equal(events[1].content, 'Delegated work')
+  assert.equal(events[1].rawContent, `${tag}\nDelegated work`)
+  assert.equal(events[1].sessionSource?.id, 'web:orchestrator')
+  assert.equal(eventMatches(events[1], 'Admin & coordinator', 'SESSION'), true)
+  assert.equal(eventMatches(events[1], 'web:orchestrator', 'USER'), false)
+  assert.equal(events[3].content, 'Background check')
+  assert.match(events[3].rawContent!, /^<event /)
+  assert.match(events[4].content, /^Literal <sender source="session" \/> content/)
+  assert.match(events[4].content, /data:image\/png;base64,fixture/)
+})
+
 test('history preserves genuine turns and distinguishes system and compaction context', () => {
   const { events, physicalId } = parseDiagnosisHistory({ currentPhysicalId: 'physical-a', messages: [
     { role: 'system', content: 'Historical system prompt' },

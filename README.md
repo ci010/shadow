@@ -21,6 +21,15 @@ project switcher**. Their conversations, bots, and background runtimes can
 run concurrently; selecting a conversation does not retarget another group's
 work. Each group has folders/repositories, retained **Start from scratch** chats, and
 **Automations** that start a fresh context for each run.
+Click a project's name to open **Project coordination**; only the arrow to its
+left expands or collapses its children. Coordination has no separate sidebar
+item, and opening it leaves the group's expanded state unchanged.
+
+Use the pencil beside a conversation's heading to rename it. Enter saves and
+Escape cancels; names are trimmed, non-empty, single-line, and at most 120
+characters. The saved display name updates the sidebar and survives restarts
+with either JSONL or SQLite storage. Renaming never changes the session ID,
+history, folder, or topic goal/scope, and takes precedence over generated titles.
 
 Each project owns its Home, sessions, context, memory, identity/Soul,
 workspace skills and agent overrides, learning, bots, and diagnostics.
@@ -236,6 +245,45 @@ preserving module-relative paths rather than bundling the backend. Vite emits
 `http://localhost:3123` when the frontend build is present. Keep both output
 directories and installed runtime dependencies together when deploying headlessly.
 
+### Browser access without Electron
+
+Electron is an optional setup/native-window host, not the backend's login server.
+A Node process or the [Windows service](docs/release.md#opt-in-headless-windows-service)
+can own the backend while a normal browser opens its loopback gateway URL.
+Only Electron shows the native minimize, maximize and close controls.
+
+When the gateway has a launch credential, its frontend shell opens a browser
+pairing screen instead of requiring the management credential in the browser.
+In Electron's Main window, click the browser icon beside the theme button
+(**Connect browser** on hover) to generate
+a one-use code, then **Copy code** and **Open Web**. The panel shows the browser
+address and expiry, and can generate a new code when needed. Closing the panel
+clears its displayed code but does not revoke an unused code before expiry.
+This entry is Electron-only; issuance uses Main's protected connection without
+exposing its management credential to the renderer.
+
+Without Electron, generate a one-time code using an authorized local terminal:
+
+```powershell
+pnpm web:pair --connection 'C:\ProgramData\ShadowService\control\connection.v1.json'
+# Or select a protected credential file and its explicit loopback backend:
+pnpm web:pair --url http://127.0.0.1:18800 --credential-file 'C:\ProgramData\ShadowService\control\launch-token'
+```
+
+Open the printed URL and enter the code. Codes expire after five minutes and can
+be used once. Browser sessions last twelve hours, use an HttpOnly/SameSite=Strict
+cookie, and are invalidated by logout or backend restart. Logout/expiry also
+closes that session's live event/WebSocket connections. Browser sessions do not
+grant access to service readiness/shutdown, pairing-code issuance, or device
+enrollment controls. Management credentials stay outside the renderer, browser
+storage and URLs. Keep pairing codes private until used.
+
+This is local loopback browser access, not an Internet-facing login system or
+multi-user authorization. An ordinary local backend without a launch credential
+retains its existing unprotected behavior. Closing Electron still stops an
+Electron-owned sidecar; a separately started Node backend or Windows service
+continues independently.
+
 ## Electron
 
 ```sh
@@ -249,11 +297,34 @@ The Electron launch shortcut in `.github/github-app.yml` uses this command.
 Keep its pnpm version aligned with `packageManager` in the root `package.json`.
 
 The development command builds the backend and Electron main/preload, starts
-Vite, and launches Electron. The packaging command runs typechecks and the
+Vite, and launches Electron. Vite follows the backend origin reported by Electron
+instead of assuming port `3123`; it returns a retryable `503` while that runtime
+is not ready. Only the origin crosses this development IPC boundary, not the
+management credential. Plain `pnpm dev` retains its normal backend target.
+
+After an owned desktop backend is ready, the terminal prints the
+deployment-specific pairing command for its live descriptor under
+`<userData>\control\web-access\connection.v1.json`. On Windows, the associated
+credential is protected with CurrentUser DPAPI and a restrictive DACL. The
+descriptor expires after five minutes, is refreshed while the backend is ready,
+and is removed on stop. An attached service uses its existing protected service
+descriptor instead.
+Source checkouts use `pnpm web:pair`; built runtimes support
+`node dist\src\index.js web pair` without starting another backend.
+For the installed Electron Node runtime, see the
+[installed pairing command](docs/release.md#opt-in-headless-windows-service).
+
+The packaging command runs typechecks and the
 focused release tests, builds the production UI, creates a Windows NSIS
 installer in `desktop/release`, and verifies that fresh package. See
 [release verification](docs/release.md) for download mirrors/caches, artifact
 identity checks, and the remaining Windows installation/service acceptance boundary.
+
+On Windows, the taskbar icon shows an indeterminate progress indicator while
+any Project has an active agent turn (thinking, using tools, or waiting).
+This is maintained by Electron main, including while the window is minimized;
+it clears when all turns stop. Desktop main-process changes require restarting
+`pnpm desktop:dev`; renderer hot reload alone does not apply them.
 
 Desktop development uses a separate profile at `.tmp/desktop-dev/user-data` in
 the worktree, rather than the installed application's profile. An absolute
@@ -263,6 +334,31 @@ an expanded path); it can be edited or selected with Browse. Existing saved
 Main directories are preserved. Development instead defaults Main to
 `.tmp/desktop-dev/data` to avoid using personal data during smoke tests. The
 absolute `SHADOW_DESKTOP_DEV_MAIN_DIRECTORY` override applies only to development.
+
+Startup no longer probes optional web-search services: SearXNG discovery runs on
+the first search when no Firecrawl/Brave key is configured. Up to three Projects
+initialize concurrently, after persisted workdir ownership has been checked.
+The desktop still verifies authenticated local readiness; it does not mark
+unfinished Project services ready or wait for QQ/Discord network connections.
+
+For a disposable real-Electron backend startup regression (three launches with
+four synthetic Projects, using the unchanged 15-second readiness budget), run
+`pnpm build`, then
+`pnpm exec node --import tsx --test desktop/tests/runtime-startup.node-test.ts`.
+This reports process-launch-to-readiness timings and does not use your desktop
+profile or credentials.
+
+Desktop startup diagnostics are saved to `<userData>/logs/startup.jsonl`
+(`.tmp/desktop-dev/user-data/logs/startup.jsonl` with the default development
+profile). The failure page shows the runtime role, failure category and elapsed
+time; **Show startup log** reveals this fixed file. **Retry** preserves setup
+and waits for the failed process to stop before launching another attempt.
+The log rotates through the current file and `.1`/`.2`, each at most 256 KiB.
+It records lifecycle events and allowlisted backend phase timings, not raw
+stdout/stderr, credentials, configuration, or conversation content. Project
+identities are replaced by per-attempt numeric ordinals. Up to 512 backend phase
+records are retained per attempt; this is a startup diagnostic, not a full
+runtime log. Existing Project diagnostics remain available after startup.
 
 After Main starts, an unconfigured provider opens **Connect a model provider**
 instead of an unusable chat. Choose **GitHub Copilot** for device-code login, or
@@ -277,6 +373,13 @@ provider** card offers providers not yet configured and named local endpoints.
 Saving updates the shared provider connection; project model defaults are
 managed separately. A card marked **Configured**
 means settings exist, not that its connection has been checked.
+
+Bot conversation groups show a small connection icon at the right of their
+header, without a text badge. Hover or keyboard focus on the header explains
+the state. Verified connection, connecting, disconnected, errors, and an
+unverified SDK connection use distinct indicators; an unavailable status is
+never shown as connected. Status follows the existing sidebar refresh cycle
+(conversation invalidations plus a 20-second fallback while the sidebar is active).
 
 **Project settings → Bots** configures **QQ, Feishu, and Discord** bot
 instances. A project can have several bots on the same platform, each with
@@ -303,9 +406,58 @@ retained configuration is not a connected bot. Old `/providers` links
 redirect to `/settings/providers`; `/settings/channels` opens Default's Bots.
 QQ and Discord show **Connected** only after gateway readiness. Feishu shows
 **Running · connection unverified** because its SDK cannot confirm readiness to
-the UI. A saved configuration is not proof that platform credentials, event
+the UI. Main and the desktop become locally ready without waiting for these
+external connections. An offline or slow bot remains Connecting/Error in Bots
+instead of blocking application startup; shutdown cancels pending startup
+connections. A saved configuration is not proof that platform credentials, event
 permissions, or message delivery work. Editing configuration outside Channels
 may require reapplying it here or restarting Main.
+
+**QQ GROUP/C2C outbound policy:** ordinary replies send the final summary only,
+not raw tool names/results or intermediate model progress. App events and session
+history retain those details. Final error messages and genuine yield/decision
+questions remain distinct messages; questions are not buffered until the turn
+finishes. Guild channels/DMs retain their existing progressive delivery.
+
+The [official GROUP endpoint](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html)
+documents at most **5 passive replies per inbound `d.id`, within 5 minutes**.
+The [official C2C endpoint](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)
+headline/overview says **4 replies within 60 minutes**, but its `msg_id` field
+still says **5 minutes** (public documentation reviewed September 18, 2026).
+Shadow therefore uses **4 replies and a conservative 5-minute C2C deadline**.
+These are documentation-derived local safeguards, **not live-runtime-verified
+platform guarantees**. Ordinary text, Markdown, decisions and each attachment
+share the allowance. GROUP streaming is unsupported; the separate C2C streaming
+endpoint and its quota accounting are not implemented.
+
+Each bot instance tracks accepted gateway sources by conversation plus message
+ID, serializes sends and allocates unique `msg_seq` values before message I/O.
+It prechecks an entire text/media bundle against the remaining budget and checks
+expiry again before each message POST. No latest-message substitution or
+automatic proactive send is allowed. Unknown, unaccepted, expired and exhausted
+sources fail visibly through channel delivery failure handling. A resumed yield
+turn currently retains its original source: a later human answer or unrelated
+group message does **not** refresh that turn's deadline. Long waits can therefore
+complete in App/history but fail to deliver to QQ; trusted answer-origin rebinding
+is not implemented.
+
+Tracking is in memory, bounded to 500 live sources per instance, pruned on later
+ingress without per-source timers. At capacity, ingress continues but untracked
+sources cannot reply. Transient gateway reconnects retain counts/deadlines;
+stop/replacement clears them. A usable gateway timestamp must be no earlier than
+this tracking lifecycle and no later than local receipt, so missing timestamps,
+clock skew or pre-restart backlog fail closed rather than minting a fresh window.
+Source retries never reset the recorded deadline/count.
+
+GROUP/C2C do not automatically retry Markdown as plain text: no documented,
+formatting-only rejection is currently allowlisted. Known expiry/count codes
+`304103`, `40034005`, `40034128`, duplicate `40054005`, invalid/unauthorized source
+`40034024`, active rate `40034100` and permission `40034105` are classified without
+retaining raw error bodies. Network failures, unrecognized errors and missing
+acknowledgements have **unknown outcome**. Message attempts are never refunded;
+a platform rejection or unknown send blocks further delivery on that source,
+preventing blind retries/duplicates. Safe errors contain only the classification,
+HTTP status and allowlisted code. Partial text/media delivery is not rolled back.
 
 Copilot requests follow each model's advertised `supported_endpoints`. Models
 that support chat completions retain that protocol; Responses-only models use
@@ -354,6 +506,16 @@ images directly; **Add file / Add folder** keep their existing path-context
 behavior. The browser's **Add file** uploads attachments. Files stay in the
 draft until Send, image-only messages are supported, and uploaded images remain
 visible when history is reopened.
+
+Conversation attachments from Web and SNS channels also render when reopening
+history: images have previews, videos have inline playback controls, and other
+files appear as filename/type rows with **Download**. Video/audio bytes load only
+when playback starts; unsupported formats offer a download instead. Downloads
+use the authenticated, Project-scoped Web endpoint, not Electron-only file APIs.
+SNS file references resolve only within the owning session's private uploads.
+Video serving supports byte ranges for seeking without buffering the entire file.
+This previews media for the user; it does not add video understanding or archive
+extraction to the model.
 
 The composer exposes **Stop request** while a request is being prepared or is
 running. Stop cancels the targeted request through the session's provider/tool
@@ -524,6 +686,36 @@ The focus shortcut does not cancel the native key or insert `event.key` as text:
 Backspace keeps native deletion behavior, and input-method text remains owned by
 the IME. Recognizable IME-start keys can focus the composer before composition;
 first-key handoff from a non-editable area still depends on the OS/input method.
+Typing `/` at the start of the composer opens the current Project's registered
+slash commands. Continue typing to filter by command name; Up/Down selects,
+Tab or Enter completes the name, and Escape dismisses the list. Clicking a
+command also completes it without sending: add any arguments, then send normally.
+Shift+Enter and IME composition retain their normal behavior. Slashes in prose,
+paths, arguments, or multiline text do not open the menu. The authenticated
+`GET /api/chat/commands?sessionId=...` catalog shares the backend registry with
+`/help`; owner publication commands appear only in Project coordination.
+Catalog failures offer Retry and never substitute a hard-coded command list.
+Slash commands return a separate **Command result** in the conversation, not a
+user/assistant exchange. Results survive reloads and stay with their history
+segment, but neither command text nor output is added to model context or
+forwarded to channel-message subscribers. A first command also initializes the
+scratch conversation's local data directory without starting a model turn.
+`/clear` starts a fresh AI context in the same conversation, including the fixed
+Project coordinator. It reloads the selected agent definition, discards the
+in-memory tool overlay, and opens an empty history segment without an LLM call or
+handoff summary. Previous segments remain viewable. Project/folder bindings,
+files, tasks, configuration, and long-term memory/conventions are retained;
+pre-clear event entries, working-set entries, and session summaries are no longer
+automatically injected. Active or queued work must finish or be stopped first.
+Unlike `/compact`, `/clear` does not carry conversation context forward.
+
+Previous conversation summaries appear as a collapsed disclosure in the message
+history. Expanding one renders the complete Markdown with compact headings and
+readable spacing; it scrolls with the conversation rather than inside a separate
+panel. Collapsing it releases the rendered content without changing the saved
+summary.
+Compiled backend/tool implementation changes still require a backend restart;
+this command reloads the installed agent definition, not running application code.
 The composer has one compact model button showing the model and effort. Its menu
 contains only **Model** and **Effort**; each opens a submenu in the same popover.
 Model retains searchable options, provider labels, and the current selection
@@ -635,6 +827,14 @@ indicators, are all zero; UnoCSS rounded utilities use those same tokens.
 This does not restyle native operating-system windows or sandboxed file content.
 Conversation events, tool activity, and assistant replies share one responsive
 maximum-width constraint rather than letting event bars span the entire pane.
+Selecting a conversation highlights only its chat row, not its bot or folder
+header. A folder is highlighted for a new folder draft when no chat is selected.
+Tool **Arguments** and **Result** details use theme-aware JSON syntax highlighting
+when their content is valid JSON; plain output and malformed legacy arguments
+remain unchanged. Payload rendering and highlighting begin only when the tool
+group and call are expanded, and a collapsed Result does not render or highlight
+incoming updates. Diagnosis tool details use the same renderer when opened.
+Highlighting failures retain the original text and offer **Retry**.
 
 The **Files** explorer sits beside Projects and can be collapsed horizontally.
 Drag the right edge of **Projects** or the docked **Files** sidebar to resize it.
@@ -649,7 +849,9 @@ again to return to the conversation. There is no second Conversation/Diagnosis
 tab row.
 Project coordination and built-in learning browse the current Project's Home in
 Files and Git, without changing the agent's execution workdir. Clicking an already
-selected Project coordination entry does not reload or navigate the conversation.
+selected project's name does not reload or navigate its coordination conversation.
+Opening it keeps the project name and keyboard focus stable while
+preventing duplicate requests; failures still expose an inline retry action.
 Other sessions show the current effective workdir in Files, including when
 Conversation displays an older segment. Its root label shows the directory name;
 hover or focus it to see the backend-resolved full path, including for empty
@@ -869,11 +1071,16 @@ or set it to `0` and restart to disable capture.
 
 Each project's Folders **+** menu contains **Open folder**, **Open remote folder**,
 **Clone repo**, and **Start from scratch**. Open remote folder opens a new draft
-with the remote-device picker already open. Choose a connected Child's advertised
-workspace; selection does not create a session before the first send. It does not
-register arbitrary paths on another machine. On send, Main verifies the Child's
-folder identity and registers the folder in that project; unsupported
-Children or ownership conflicts return an explicit error rather than using Main.
+with the execution-location picker already open, the same picker available in the composer. **Project
+folders** includes all registered local and remote folders belonging to the current
+project, not other projects' folders or the global list of advertised workdirs.
+**Remote devices** starts from scratch on a Child: first send allocates an
+independent managed conversation directory on that device, without registering a
+Project folder. **This computer** starts a local managed conversation with no folder
+selected. Merely opening the picker or changing selections allocates nothing.
+Offline or unsupported remote locations are disabled; failures never fall back to
+Main's filesystem. Existing remote folders remain selectable on compatible devices
+even when those devices do not support managed scratch conversations.
 Open folder registers an existing directory using
 Electron's native folder picker (the browser accepts an explicit Main-local path).
 Registered folders remain visible when empty. Each folder's own **+** opens a
@@ -894,7 +1101,7 @@ Each Project has exactly one coordinator, `web:orchestrator`, pinned in the UI
 as the default routing entry. It reuses or creates topics and lets the user
 continue directly in the appropriate topic. It is **not a structural parent**:
 durable topics are root peers. The built-in `orchestrator` has a hard runtime
-cap of `read`, `search`, `topic`, `message`, and `initiative`; it cannot use
+cap of `read`, `search`, `topic`, `message`, `initiative`, `project_config`, and `authoring_change`; it cannot use
 `invoke_tool`, `exec`, `write`, or `subagent`.
 
 `search({space: "sessions:", query, limit: 5, offset: 0})` discovers Project topics
@@ -930,6 +1137,107 @@ automatically start an LLM run. JSONL and SQLite migration flatten legacy reusab
 structural children into peers while preserving context ancestry, fixed workdirs,
 and `createdBySessionId` provenance. Compatibility data-location references do
 not reestablish structural ownership.
+
+### Change-based conversation agent authoring
+
+The owner can create a Change in a durable developer topic or Project
+coordination with `authoring_change`. Each Change starts from published
+resources, has its own editable files and revision, and never silently imports
+the legacy shared draft. Delegate explicit resource paths to a developer,
+then **edit → check → propose** using the same `changeId`. Small prompt edits
+can stay in coordination. No business source folder or copied bundle is needed;
+`v:authoring` provides revision-checked virtual resource files. Hashes, check
+evidence and diffs are saved automatically and retrieved by `runId`.
+
+This is framework support, not a built-in feedback/GitHub bot. `propose` opens
+an owner-only review in the originating topic and coordination, summarizing
+changed files, affected bindings, permission changes and current-version checks.
+Review the exact code, bindings and grants before confirming publication.
+Approval pins both the candidate and published base; changed proposals require
+fresh review. Pending reviews survive restart but never auto-confirm. Publishing
+a Change leaves unrelated shared drafts untouched. `project_config` and
+`/agent-publish <exact-draft-revision>` retain the older coordination-only draft
+workflow; they do not automatically migrate existing work.
+If an affected conversation is busy after approval, the review shows **waiting**
+and activates at a safe idle boundary after revalidation. It does not interrupt
+accepted work or ask for the same approval repeatedly.
+`/agent-rollback <historical-revision> <current-revision>` restores a retained
+release without discarding the draft.
+
+The coordinator delegates substantial implementation to a durable local topic
+with persisted Change edit scopes; it does not gain shell, arbitrary file
+writes or subagent access. `check` supports validation, prompt assembly,
+synthetic tool cases and actual model scenarios with synthetic tools.
+Checks distinguish assertions from smoke execution and mark older source
+versions as stale. Standalone developer topics can also invoke the catalog tool
+`agent_tool_test` through `invoke_tool`: it runs exact JavaScript or erasable
+TypeScript using the same shared script engine as published tools, checks
+synthetic cases against expected JSON, and reports a source hash, policy/module
+manifest and per-case actual/expected evidence. ESM `export async function run(args)`
+runs inside a separate Node child process,
+with exact skill `imports` constrained by the authored agent's `allowedModules`.
+`@shadow/<grant-id>` exposes the corresponding approved service through a module
+instead of a second capabilities declaration. Runtime selectors, legacy
+`run(args, capabilities)` and executable metadata exports are unsupported;
+the owner recreates old tools. Existing runtime data/configuration is not migrated.
+HTTP mocks use the real
+`{status, body}` envelope; non-2xx statuses throw the same safe error/status as
+the broker. `{throws:{code,status?}}` and `{sequence:[receipts/errors]}` cover
+failure paths and repeated requests without another VM harness.
+This does not contact services or prove live access.
+Synthetic tests permit only pure supported native modules and mocked named
+modules. Explicit raw filesystem/network imports are live-only, have the child
+OS user's authority, and are not restricted by `readFolders` or HTTP grants.
+They require developer validation with disposable fixtures. VM import routing
+and child-process fault isolation are not an OS sandbox.
+Workers return a `changeId` and saved check references, not redundant reports or
+checksum manifests. Their delegated edits/checks and review requests can continue
+on peer-triggered turns, but worker messages cannot authorize publication.
+For legacy shared drafts, the coordinator can use `project_config` **schema**, **inspect**, **read**,
+**preview**, and synthetic **test**
+while handling worker reports to retrieve missing baselines without asking the
+owner to repeat "continue". Preview/tests may use an in-memory candidate `bundle`
+without staging it. Other actions retain their direct-owner requirement.
+Task materials sent through `message` should be non-silent: normal delivery
+queues without interrupting work, while silent delivery only records context
+and never wakes the recipient. If splitting context, send parts sequentially
+and finish with a non-silent request.
+
+For a controlled live check, `authoring_change request_probe` opens a one-use,
+expiring GET-only approval in the current topic and coordination. The owner
+reviews the exact source, arguments, origin/routes and credential references.
+Only clicking approval executes it; a new connection can be tested before
+publication without repeating the instruction in a different chat. The host
+saves the run and sends its reference back to the author. This does not approve
+production permissions, writes, native I/O or inbox delivery.
+
+The legacy `project_config` action `probe` still runs the
+**current draft**, or an in-memory candidate when `bundle` is supplied, using
+unchanged existing approved HTTP `GET` grants. Publication is not required to
+test new code. Only an explicit `target: "published"` tests the deployed version.
+Optional `expectedRevision` pins the selected source; stale values fail rather
+than silently testing another version. No bot turn, HTTP write, inbox delivery,
+draft mutation or publication occurs. This legacy action cannot approve new
+service permissions; use the explicit Change test review for a new connection.
+Receipts distinguish tested source revision/hash from `authorizationRevision`,
+and retain denied/failed calls, transport-attempt markers and HTTP status even
+when the script catches errors. An attempted transport does not prove server
+receipt. `httpVerified` requires a successful response, and does not prove
+issue creation/commenting/wakeups or every business branch. Safe errors preserve
+code/status without raw host errors or credential values.
+Probes reject raw filesystem/network module declarations even if unused.
+
+Published bindings replace the ordinary prompt and tool registry with the
+selected custom role, selected skill bodies, explicitly granted folder reads and
+owner-approved tools. They do not inherit private Project memory, dynamic tool
+loading, shell/write tools or DM-admin management authority. `allowedTools: []`
+means **no tools**. Disabled or removed previously bound conversations fail
+closed rather than reverting to the general agent. Conversations that have
+never been bound still follow their existing channel/agent behavior; this is not
+an automatic lockdown of existing bots.
+
+See [conversation agent authoring](docs/agent-authoring.md) for the resource
+format, owner approval, credentials, HTTP/inbox grants and operational boundaries.
 
 **Subagent execution modes.** `agent_type` selects the role and tool constraints;
 `mode` selects the execution contract independently:
@@ -984,16 +1292,26 @@ Main's authenticated administrator API has a dedicated remote-conversation path:
 `POST /projects/<id>/api/sessions/remote` with
 `{"nodeId":"child-id","capabilityId":"workdir-id"}`.
 This verifies remote folder ownership and creates or reuses the project's
-project before creating the conversation. An optional UUID `requestId` makes
+folder before creating the conversation. An optional UUID `requestId` makes
 retries refer to the same conversation; reusing it for a different capability
 returns a conflict. The unscoped legacy endpoint targets Default.
+For remote Start from scratch, send `{"nodeId":"child-id","requestId":"<uuid>"}`
+without `capabilityId`; the UUID is required in this mode. A supporting Child allocates a private managed session
+workdir; the returned opaque `workdir` is persisted with the owning Project's
+session, with no `folderId` or Project folder registration. Retrying the same
+request reuses the session and managed directory. Older Children return an explicit
+unsupported error and must be updated before using this mode.
+The Child retains these directories under `managed-session-workdirs-v1` in its
+data directory, including across restarts and conversation deletion; deleting a
+conversation does not automatically remove remote files. Configured static workdir
+roots must not overlap this managed storage.
 For an already registered folder, first send instead uses
-`POST /projects/<id>/api/folders/<project-id>/sessions`, also accepting
+`POST /projects/<id>/api/folders/<folder-id>/sessions`, also accepting
 an optional UUID `requestId` (an empty body remains supported). Remote projects
 revalidate their saved folder identity; retries reuse the conversation rather
 than selecting a new capability, and a request ID owned by another project is
 a `409` conflict.
-It accepts only an online workdir capability, not an absolute/display path, and
+The explicit-folder mode accepts only an online workdir capability, not an absolute/display path, and
 returns `folderId`, `sessionId`, and `chatId` for the normal scoped chat endpoints. Its durable workdir
 reference uses the existing JSONL/SQLite session state. Existing conversations are
 not silently moved.
@@ -1033,8 +1351,13 @@ renders the same persisted event. A blocking call renders its returned result in
 its original card, without a separate completion event. System self-reflection retains its
 dedicated section. An asynchronous task does not make an idle parent appear busy;
 a caller awaiting a blocking call is explicitly waiting rather than thinking or
-waiting for human input. Call traces remain available for diagnostics, but only
-the final result crosses the caller's context boundary.
+waiting for human input. Call traces remain available for diagnostics while their
+owning conversation exists, but only the final result crosses the caller's
+context boundary. Deleting a conversation stops and recursively deletes its
+delegated tasks and calls, including finished executions and nested call traces.
+Ownership comes from each execution's persisted parent, not the optional child
+list. Independent topics are retained; shared or ambiguous legacy histories are
+still preserved for conversations that depend on them.
 
 Agent definitions can set `defaultMode: session|task|call`. The old `ephemeral`
 frontmatter is accepted with a deprecation warning (`true` maps to `task`, `false`
@@ -1052,19 +1375,29 @@ and Project-validated `initiativeId`/`itemId`. Work references appear in the
 first trusted sender envelope and provide context only. A receipt means admission,
 not agreement to undertake work, completion, or ownership transfer.
 
-**Yield decisions.** The `yield` tool pauses the current tool call with exactly
-three options and one default. Root sessions ask the human; subagents ask their
+**Yield decisions.** The `yield` tool pauses the current tool call with two
+suggested options and one default. The model must not generate an Other/free-text
+option: human custom entry is provided by the application. Root sessions ask the human; subagents ask their
 stored parent, independently of `report_to`. The parent answers through the same
 tool using `action: "answer"`, `request_id`, and an exact `option`; an ordinary
 message does not resolve the request. Built-in agent types include this tool;
 custom parents must enable it or the child receives an explicit error. Call mode
 removes yield regardless of the role definition.
 
-In the conversation UI, the default is preselected but not automatically
-submitted. Parent-directed questions are read-only to the human. Discord and Feishu
+In the conversation UI, two-option decisions (such as yes/no) have direct answer
+buttons plus a fixed **Write my own response...** entry. This opens a separate
+text field and **Send response**, answering the pending tool call without touching
+the chat draft or sending a new message. Legacy three-option questions retain
+all radio choices and **Continue**, plus the same custom entry. The default
+is preselected but not automatically submitted. Custom drafts survive polling
+and failed submissions, but clear when the question/session changes or access is
+revoked. Parent-directed questions are read-only to the human. Discord and Feishu
 use native choices when supported by the current connection; a failed native send
 falls back to `/yield <request-id> <1|2|3|cancel>` text instructions. QQ and iLink
-currently use that text form. Questions are sent separately from progressive
+currently use that text form. Humans can also use
+`/yield <request-id> text <your response>` for custom text. Custom answers are
+nonblank, at most 4000 characters, and returned in `option` with `custom: true`;
+parent answers and timeouts still choose a preset. Questions are sent separately from progressive
 response messages, so later output cannot overwrite their controls.
 
 Channel answers and cancellation are bound to the human who initiated the turn,
@@ -1161,7 +1494,8 @@ Lucide (general UI) and Simple Icons (brands) collections on demand. Icons are
 compiled into CSS masks using `currentColor`, without a runtime icon CDN or
 shipping the entire collections. Source scanning includes Vue templates and
 TypeScript class maps before the first development stylesheet response, so
-icons do not depend on route-load order or a later HMR update.
+layout, spacing, typography and icons do not depend on route-load order or a
+later HMR update. This includes System prompt and Tools cards in Diagnosis.
 Project sidebars omit empty-conversation/folder guidance and hide empty Chats
 and Automations sections; folder rows and creation actions remain available.
 Loading, offline and retryable error states are still shown.
@@ -1207,6 +1541,7 @@ performed by the build or automatically by ordinary desktop startup.
 | `pnpm test:packaged` | Exercise a built Windows package after relocating it outside the repository |
 | `pnpm typecheck` | Backend/scripts, desktop and Vue application typechecks |
 | `pnpm desktop:dev` / `pnpm desktop` | Desktop development / Windows installer |
+| `pnpm web:pair --connection <absolute-path>` | Issue a short-lived code for a browser session on a protected local backend |
 | `pnpm migrate:sessions <directory>` | Explicit JSONL-to-SQLite history migration; retains source files |
 | `pnpm dev:searxng` | Optional SearXNG service |
 | `pnpm dev:docker:compose` | Development container with Chrome/Xpra and SearXNG |
@@ -1220,21 +1555,28 @@ Use `pnpm test:update` only when snapshot changes are intentional.
 Configured MCP servers stay in a lazy catalog, including after configuration
 reloads; their tools are not added to the model's base function list.
 `search({space: "tools:", query, limit?, offset?})` searches names/descriptions and returns
-only matching tools' exact names and complete schemas (default 3, maximum 10).
+only matching tools' exact names, descriptions, parameters and `indexedAt`
+timestamps (default 3, maximum 10).
 Use `space: "tools:mail"` to select a source. Empty, whitespace or omitted query
 lists tools in stable name order; pass `nextOffset` as `offset` to get the next
 page (`null` means the end). The same `search` tool retains grep:/glob:/web:;
 there is no separate tool-discovery function in the base tool list.
-It uses keyword ranking, not embeddings. Search discovers metadata from
-configured servers without executing their tools. Failures and deferred
-browser/factory sources are explicit; select a deferred source to initialize it.
+It uses keyword ranking, not embeddings. Global and targeted configured MCP
+searches read the persistent index: no connections, `tools/list` RPCs, tool
+execution or dynamic registration, including repeated searches offline.
+Even 100 installed servers will not start from search. Missing, mismatched or
+corrupt index records produce explicit source errors, never automatic connections;
+read/save `v:config/mcp.json` to build missing metadata. Deferred built-in
+browser/factory sources are explicit; selecting one may initialize live resources.
 `read("v:tools")` remains a connection-free source listing.
 
 Use `invoke_tool({name, args})` directly for a known tool ID. It connects lazily
-and validates arguments against the current schema before execution, with no
+and lists live tools, refreshing the index and validating arguments against the
+current schema before execution, with no
 separate import/disclosure round trip. Invalid arguments return the target
 tool's contract without executing. Changed configuration/tool listings invalidate
 old adapters; sleeping clears session connections, which known MCP IDs can recreate.
+Indexed metadata can become stale; the live invocation contract wins.
 There is no persisted "schema already seen" flag. Skills remain optional guidance
 for MCP; skill-declared TypeScript tools require an exact skill read as below.
 
@@ -1278,11 +1620,21 @@ automate OAuth login. Keep credentials out of committed files and chat.
 Writes validate the whole document and persist atomically through
 `ProjectConfigStore` in the **current Project**. A stale revision is rejected
 with a reread instruction: reread, preserve concurrent edits, and reapply the
-intended change. Saving only updates the catalog; it performs no handshake or
-MCP tool call. It proves persistence, not connectivity. When live verification
-is intended, `search({space: "tools:localApi", query: ""})` connects lazily and
-discovers schemas. Check its errors before claiming reachability; invocation
-is a separate operation with possible side effects.
+intended change. Before committing configuration, missing/new/config-changed
+metadata is collected through temporary connections and paginated `tools/list`,
+then the connections close. Indexing never executes tools or retains a runtime
+connection. Matching cached records are reused; removal needs no new connection.
+Indexing runs in batches of up to three with 60-second per-source timeouts.
+Failure aborts the save, leaving prior configuration and runtime catalog unchanged.
+An unchanged resave can index legacy configurations missing metadata.
+
+Private, configuration-bound, content-addressed records are atomically persisted
+under Project Home `.mcp-tool-index` before the configuration commit, without raw
+configuration or credentials. Unreferenced records may remain for rollback;
+configuration activation rollback still applies. Restart restores only the
+source catalog with zero connections. Report servers as installed/indexed, not
+guaranteed currently available or executable. Targeted search reads cached
+metadata too; invocation is a separate operation with possible side effects.
 
 Exact edits also use the existing `write` API: `{path, match, content}`, with
 optional `flag: "g"` for all matches. They edit a remembered redacted read
@@ -1290,9 +1642,9 @@ snapshot scoped to the logical and physical session, require a prior read,
 and remain revision-checked. Whole-document overwrite must carry the revision
 explicitly. See the `mcp-config` skill for both write forms.
 
-### Discover skills and activate TypeScript tools
+### Discover skills and activate script tools
 
-TypeScript tools must belong to a discovered skill folder containing `SKILL.md`.
+JavaScript/erasable TypeScript tools must belong to a discovered skill folder containing `SKILL.md`.
 One skill declares one or many tools in its YAML frontmatter:
 
 ```yaml
@@ -1302,17 +1654,37 @@ description: Summarize and format CSV text
 tools:
   csv_summary:
     source: tools/summary.ts
-    args: []
+    description: Summarize CSV text
+    parameters:
+      type: object
+      properties:
+        text: { type: string }
+      required: [text]
+      additionalProperties: false
+    imports: []
   csv_format:
     source: tools/format.ts
+    description: Format CSV text
+    parameters:
+      type: object
+      properties:
+        text: { type: string }
+      required: [text]
+      additionalProperties: false
+    imports: []
 ---
 ```
 
 The skill body explains when to call each alias and its execution arguments.
-Modules export `description`, `parameters`, and `execute` (optionally `init`).
+Metadata lives only in `SKILL.md`: `source`, `description`, `parameters`, `imports`.
+Source modules export `async function run(args)`. There are no metadata exports,
+`init`, `execute`, source-path tool loading or legacy compatibility adapters.
+Declared `@shadow/<tool-name>` imports expose module calls rather than a
+`callTool` argument; invocation remains subject to session tool permissions.
 Sources are relative to the owning skill directory only, with realpath
 containment checks; absolute paths and standalone external modules are not
-accepted. Keep original source files and dependencies in place.
+accepted. Keep source files in place; imports use the supported native/module
+catalog, not arbitrary packages or source-file loaders.
 
 ```js
 search({ space: "skills:", query: "CSV", limit: 5, offset: 0 })
@@ -1323,14 +1695,13 @@ invoke_tool({ name: "csv_summary", args: { text: "name,count\napple,2" } })
 Skill search returns names, descriptions, and read paths; `skills:<category>`
 optionally narrows it. Search, index/category reads, and bundled resource reads
 do **not** activate tools. Only the exact skill read registers its declarations
-in the **current session**, without importing modules or running `init`/`execute`.
+in the **current session**, without importing or executing source in Main.
 After that read, direct invocation needs no additional preparation and validates
-the module's schema. The example assumes the skill documents a `text` parameter.
-Declaration `args` are optional `init(args)` arguments, distinct from invocation
-arguments. Lazy tool discovery or invocation can import the module and run
-`init` with host permissions. After activation,
-`search({space: "tools:csv_summary", query: ""})` can load its current schema
-without calling `execute`; skill search never activates or loads these modules.
+the declared parameter schema. After activation,
+`search({space: "tools:csv_summary", query: ""})` reads metadata without executing
+source. Invocation uses the shared child/VM engine with controlled imports;
+host `exec` uses the same engine with host policy, not the tool import policy.
+Neither policy nor the process boundary is an OS sandbox.
 Rereading the exact skill refreshes changed declarations and entrypoints.
 Registrations are not shared across sessions. Invalid tool declarations remain
 discoverable with `toolsError`, but the exact skill read fails explicitly.

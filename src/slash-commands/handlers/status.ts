@@ -1,6 +1,6 @@
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import type { SlashCommandHandler } from '../index.ts'
-import { newPhysicalSessionId } from '../../utils/paths.ts'
+import { physicalSessionId } from '../../sessions/session-identity.ts'
 
 export function createStatusCommand(
   sessions: SessionManager,
@@ -25,7 +25,7 @@ export function createStatusCommand(
 
       if (state) {
         lines.push(
-          `- Physical Session ID: ${newPhysicalSessionId(state.sessionId, state.segmentIndex)}`,
+          `- Physical Session ID: ${physicalSessionId(state)}`,
           `- Session Chain Length: ${state.segmentIndex + 1}`,
           `- Last Activity: ${state.lastActivityAt ?? 'unknown'}`,
           `- Last Known Tokens: ${state.lastKnownTokens ?? 0}`,

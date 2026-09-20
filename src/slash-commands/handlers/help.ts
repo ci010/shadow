@@ -7,11 +7,11 @@ export function createHelpCommand(
     name: 'help',
     description: 'List all available slash commands.',
     adminOnly: true,
-    async execute(): Promise<string> {
+    async execute(context): Promise<string> {
       const lines = [
         'Available slash commands:',
         '',
-        ...dispatcher.getHandlers().map((handler) =>
+        ...dispatcher.getHandlers(context).map((handler) =>
           `- /${handler.name} — ${handler.description}`
         ),
       ]

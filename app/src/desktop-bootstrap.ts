@@ -1,4 +1,6 @@
 import type { InstallationContextV1 } from './installation-context.ts'
+import { parseRuntimeFailure, type RuntimeFailure } from './runtime-recovery.ts'
+import type { DesktopWebPairingApi } from '../../desktop/src/web-pairing-contract.ts'
 
 export type InstallationMode = 'main' | 'child'
 
@@ -57,6 +59,10 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+	readonly webPairing?: DesktopWebPairingApi
+	readonly diagnostics?: {
+		revealStartupLog(): Promise<void>
+	}
 	readonly windowControls?: DesktopWindowControls
 	readonly folders?: {
 		selectDirectory(): Promise<string | null>
@@ -86,12 +92,13 @@ export type EnsureRuntimeResult =
 	| {
 		readonly ok: false
 		readonly code: 'invalid-state' | 'profile-missing' | 'runtime-unavailable'
+		readonly failure?: RuntimeFailure
 	}
 
 export type RendererBootstrapOutcome =
 	| { readonly view: 'app'; readonly context: InstallationContextV1 }
 	| { readonly view: 'wizard'; readonly initialState: WizardState | null; readonly loadError: boolean }
-	| { readonly view: 'runtime-recovery' }
+	| { readonly view: 'runtime-recovery'; readonly role?: InstallationMode; readonly code?: string; readonly failure?: RuntimeFailure }
 
 declare global {
 	interface Window {
@@ -150,8 +157,15 @@ export async function resolveDesktopBootstrap(api: ShadowDesktopApi): Promise<Re
 
 	try {
 		const runtime = await api.bootstrap.ensureRuntime()
-		return runtime.ok ? { view: 'app', context: runtime.context } : { view: 'runtime-recovery' }
+		if (runtime.ok) return { view: 'app', context: runtime.context }
+		const failure = parseRuntimeFailure(runtime.failure)
+		return {
+			view: 'runtime-recovery',
+			role: failure?.role ?? initialState.mode ?? undefined,
+			code: runtime.code,
+			...(failure ? { failure } : {}),
+		}
 	} catch {
-		return { view: 'runtime-recovery' }
+		return { view: 'runtime-recovery', role: initialState.mode ?? undefined }
 	}
 }

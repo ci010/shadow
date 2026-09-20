@@ -7,6 +7,7 @@ import type { FolderRecord } from './contracts.ts'
 import type { ProjectCatalog } from '../projects/catalog.ts'
 import type { RemoteFolderOwnership } from './remote-ownership.ts'
 import type { RemoteFolderRecord } from './contracts.ts'
+import { isManagedWorkdir, ownsManagedWorkdir } from '../execution/managed-workdir.ts'
 
 // A rename must not mint new capability identities for existing directory grants.
 const FOLDER_PREFIX = 'local-project-v1:'
@@ -191,6 +192,10 @@ export class FolderRegistry {
 
   assertSessionFolder(state: { sessionId?: string; folderId?: string; workdir?: WorkdirRefV1 }): void {
     if (!this.scope) return
+    if (state.workdir && isManagedWorkdir(state.workdir.capabilityId) &&
+      (state.folderId || state.workdir.nodeId === 'local' || !ownsManagedWorkdir(this.scope.projectId, state.workdir.capabilityId))) {
+      throw new FolderError('folder_access_revoked', 'This managed session workdir does not belong to this project.', 409)
+    }
     if (state.sessionId && this.scope.catalog.isRetiredSession(this.scope.projectId, state.sessionId) ||
       (state.folderId ? !this.get(state.folderId) : state.workdir &&
         this.scope.catalog.isRetiredWorkdir(this.scope.projectId, state.workdir))) {
@@ -204,6 +209,7 @@ export class FolderRegistry {
 
   registerRemote(ref: WorkdirRefV1, signal: AbortSignal): Promise<RemoteFolderRecord> {
     this.#assertReady()
+    if (isManagedWorkdir(ref.capabilityId)) throw new FolderError('managed_workdir_not_folder', 'Managed session workdirs cannot be registered as project folders.')
     if (!this.#remoteOwnership) throw new FolderError('remote_folders_unavailable', 'Remote folder ownership is not configured.', 503)
     return this.#remoteOwnership.register(ref, signal)
   }

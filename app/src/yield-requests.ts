@@ -1,6 +1,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
-import { parseYieldRequest, type YieldRequest } from '../../src/sessions/yield-contract.ts'
+import { parseYieldRequest, parseYieldCustomText, MAX_YIELD_CUSTOM_TEXT_LENGTH, type YieldRequest } from '../../src/sessions/yield-contract.ts'
+export { MAX_YIELD_CUSTOM_TEXT_LENGTH }
 
 export function parseYieldResponse(value: unknown, sessionId: string): YieldRequest | null {
   if (!value || typeof value !== 'object' || !('request' in value)) {
@@ -42,6 +43,8 @@ export interface YieldSource {
 export function useYieldRequest(source: () => YieldSource) {
   const request = ref<YieldRequest | null>(null)
   const selected = ref('')
+  const customMode = ref(false)
+  const customText = ref('')
   const error = ref('')
   const submitting = ref(false)
   const cancelling = ref(false)
@@ -81,10 +84,12 @@ export function useYieldRequest(source: () => YieldSource) {
       const response = await fetch(endpoint(), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) })
       const next = parseYieldResponse(await readResponse(response), sessionId)
       if (current !== generation || controller.signal.aborted) return
-      if (next?.id === answeredId) return
+      if (next && next.id === answeredId) return
       const changed = next?.id !== request.value?.id
       if (changed) {
         selected.value = next?.defaultOption ?? ''
+        customMode.value = false
+        customText.value = ''
         answerError = false
       }
       request.value = next
@@ -99,12 +104,26 @@ export function useYieldRequest(source: () => YieldSource) {
   }
   async function mutate(isCancellation: boolean): Promise<boolean> {
     const question = request.value
-    if (!answerable.value || !question || write || (!isCancellation && !question.options.includes(selected.value))) return false
+    if (!answerable.value || !question || write) return false
+    const custom = !isCancellation && customMode.value
+    let option = selected.value
+    if (!isCancellation) {
+      if (custom) {
+        try { option = parseYieldCustomText(customText.value) }
+        catch (cause) {
+          if (!(cause instanceof TypeError)) throw cause
+          error.value = cause.message
+          return false
+        }
+      } else if (!question.options.includes(option)) {
+        error.value = 'Choose an offered option or write your own response.'
+        return false
+      }
+    }
     read?.abort()
     read = undefined
     loading.value = false
     const current = generation
-    const option = selected.value
     const controller = new AbortController()
     write = controller
     submitting.value = !isCancellation
@@ -112,7 +131,8 @@ export function useYieldRequest(source: () => YieldSource) {
     try {
       const response = await fetch(endpoint(), {
         method: isCancellation ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isCancellation ? { requestId: question.id } : { requestId: question.id, option }),
+        body: JSON.stringify(isCancellation ? { requestId: question.id }
+          : { requestId: question.id, ...(custom ? { customText: option } : { option }) }),
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
       })
       const value = await readResponse(response)
@@ -124,6 +144,7 @@ export function useYieldRequest(source: () => YieldSource) {
       } else if (!value || typeof value !== 'object' || !('answer' in value) || !value.answer || typeof value.answer !== 'object'
         || !('requestId' in value.answer) || value.answer.requestId !== question.id
         || !('option' in value.answer) || value.answer.option !== option
+        || (custom && (!('custom' in value.answer) || value.answer.custom !== true))
         || !('answeredBy' in value.answer) || value.answer.answeredBy !== 'user'
         || !('answeredAt' in value.answer) || typeof value.answer.answeredAt !== 'string'
         || !Number.isFinite(Date.parse(value.answer.answeredAt))) {
@@ -132,6 +153,8 @@ export function useYieldRequest(source: () => YieldSource) {
       answeredId = question.id
       request.value = null
       selected.value = ''
+      customMode.value = false
+      customText.value = ''
       error.value = ''
       answerError = false
       return true
@@ -152,6 +175,8 @@ export function useYieldRequest(source: () => YieldSource) {
     stopRequests()
     request.value = null
     selected.value = error.value = ''
+    customMode.value = false
+    customText.value = ''
     answeredId = undefined
     answerError = false
     if (!source().active || !source().sessionId || source().stage !== 'waiting') return
@@ -160,6 +185,10 @@ export function useYieldRequest(source: () => YieldSource) {
     interval = setInterval(() => { now.value = Date.now(); void refresh() }, 1500)
   }, { immediate: true, flush: 'sync' })
   watch(() => source().canAnswer, () => {
+    if (!source().canAnswer) {
+      customMode.value = false
+      customText.value = ''
+    }
     if (!source().canAnswer && write) {
       write.abort()
       write = undefined
@@ -167,6 +196,12 @@ export function useYieldRequest(source: () => YieldSource) {
     }
   }, { flush: 'sync' })
   onUnmounted(stopRequests)
-  return { request, selected, error, submitting, cancelling, busy, loading, now, answerable, refresh,
-    submit: () => mutate(false), cancelQuestion: () => mutate(true) }
+  return { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh,
+    submit: () => mutate(false), cancelQuestion: () => mutate(true),
+    choose: (option: string) => {
+      if (!answerable.value || busy.value || !request.value?.options.includes(option)) return Promise.resolve(false)
+      customMode.value = false
+      selected.value = option
+      return mutate(false)
+    } }
 }

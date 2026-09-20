@@ -28,6 +28,7 @@ import { defaultManagedShell } from '../execution/processes/shells.ts'
 import type { ManagedProcessStatus } from '../execution/processes/manager.ts'
 import { managedSessionWorkdirRef, resolveSessionLocations } from './locality.ts'
 import { parseTopicMetadata } from './topic-contract.ts'
+import { physicalSessionId } from './session-identity.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const question = { question: 'Choose a path', options: ['A', 'B', 'C'], default_option: 'A' }
@@ -204,11 +205,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const role = resolve(name)
         return name === 'orchestrator' && role ? { ...role, allowedTools: ['exec', 'invoke_tool', 'subagent'] } : role
       }
-      for (const name of ['search', 'topic', 'initiative']) {
+      for (const name of ['search', 'topic', 'initiative', 'project_config']) {
         f.tools.register({ name, description: name, optIn: name === 'initiative',
           parameters: { type: 'object', properties: {} }, execute: async () => name })
       }
-      const allowed = ['initiative', 'message', 'read', 'search', 'topic']
+      const allowed = ['initiative', 'message', 'project_config', 'read', 'search', 'topic']
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })
@@ -573,7 +574,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: owner deletion cancels task but retains its diagnostic trace`, async () => {
+  test(`${Store.name}: owner deletion cancels and removes unindexed tasks and their persisted traces`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -583,11 +584,160 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const { child, parent } = await f.spawn()
         parent.resolve(done())
         const task = await f.next(child)
-        await f.sessions.deleteSession('web:root')
+        const physicalId = physicalSessionId(f.sessions.getSessionState(child)!)
+        assert.ok(!f.sessions.getSessionState('web:root')!.children?.includes(child))
+        assert.deepEqual(await f.sessions.deleteSession('web:root'), [child, 'web:root'])
         assert.equal(task.signal.aborted, true)
         assert.equal(f.sessions.getSessionState('web:root'), null)
-        assert.equal(f.sessions.getSessionState(child)?.executionStatus, 'cancelled')
-        assert.ok((await f.sessions.getHistory(child)).messages.length > 0)
+        assert.equal(f.sessions.getSessionState(child), null)
+        assert.equal(await store.getState(child), null)
+        assert.equal(await store.countSessionLog(physicalId), 0)
+        assert.equal(f.reports.length, 0)
+        await f.sessions.stop()
+        await f.sessions.start()
+        assert.equal(f.sessions.getSessionState(child), null)
+        assert.equal(f.sessions.getSessionState('web:root'), null)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: deletion discovers finished and nested executions but preserves independent topics`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root')
+        await f.sessions.buildSession('virtual:task', { id: 'web:root' }, { mode: 'task', parentSessionId: 'web:root' })
+        await f.sessions.buildSession('virtual:call', { id: 'virtual:task' }, { mode: 'call', parentSessionId: 'virtual:task' })
+        await f.sessions.buildSession('web:topic', { id: 'web:root' }, { mode: 'session', parentSessionId: null, createdBySessionId: 'web:root' })
+        await f.sessions.buildSession('virtual:other-task', { id: 'web:topic' }, { mode: 'task', parentSessionId: 'web:topic' })
+        const traces: string[] = []
+        for (const id of ['virtual:task', 'virtual:call']) {
+          const state = f.sessions.getSessionState(id)!
+          state.executionStatus = 'completed'
+          await store.saveState(id, state)
+          traces.push(physicalSessionId(state))
+          await store.appendMessages(physicalSessionId(state), [{ role: 'assistant', content: 'Completed trace', timestamp: new Date().toISOString() }])
+        }
+        assert.equal(f.sessions.getSessionState('web:root')!.children, undefined)
+        const app = new Hono()
+        sessionsApiPlugin(f.sessions)(app)
+        const response = await app.request('/api/sessions/web%3Aroot', { method: 'DELETE' })
+        assert.equal(response.status, 200)
+        assert.deepEqual((await response.json()).deleted, ['virtual:call', 'virtual:task', 'web:root'])
+        for (const id of traces) assert.equal(await store.countSessionLog(id), 0)
+        for (const id of ['web:topic', 'virtual:other-task']) assert.ok(await store.getState(id))
+        await f.sessions.stop()
+        await f.sessions.start()
+        assert.deepEqual(f.sessions.listSessions().map(state => state.sessionId).sort(), ['virtual:other-task', 'web:topic'])
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: deletion drains an owned child creation already writing its first log`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const create = store.createSessionLog.bind(store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:root')
+        store.createSessionLog = async (...args) => { entered.resolve(); await release.promise; await create(...args) }
+        const creation = f.sessions.buildSession('virtual:late', { id: 'web:root' }, { mode: 'task', parentSessionId: 'web:root' })
+        await entered.promise
+        const deletion = f.sessions.deleteSession('web:root')
+        release.resolve()
+        await creation
+        assert.deepEqual(await deletion, ['virtual:late', 'web:root'])
+        assert.equal(await store.getState('virtual:late'), null)
+        assert.equal(f.sessions.getSessionState('virtual:late'), null)
+      } finally { release.resolve(); store.createSessionLog = create; await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: deleting a live call drains its final receipt before removing its trace`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver('web:root', input('Call a worker'))
+        ;(await f.next('web:root')).resolve(invoke('subagent', {
+          description: 'Blocking work', mode: 'call', agent_type: 'limited', task: 'Pending call',
+        }, 'call-for-deletion'))
+        await waitFor(() => f.sessions.listSessions().some(state => state.mode === 'call'))
+        const child = f.sessions.listSessions().find(state => state.mode === 'call')!.sessionId
+        const request = await f.next(child)
+        const physicalId = physicalSessionId(f.sessions.getSessionState(child)!)
+        assert.deepEqual(await f.sessions.deleteSession(child), [child])
+        assert.equal(request.signal.aborted, true)
+        ;(await f.next('web:root')).resolve(done())
+        assert.equal(f.sessions.getSessionState(child), null)
+        assert.equal(await store.getState(child), null)
+        assert.equal(await store.countSessionLog(physicalId), 0)
+        assert.ok(f.sessions.getSessionState('web:root'))
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: an in-flight completion report cannot restore a deleted task`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const save = store.saveState.bind(store)
+      try {
+        await f.sessions.start()
+        const { child, parent } = await f.spawn()
+        parent.resolve(done())
+        store.saveState = async (id, state) => {
+          if (id === child && state.completionReported) { entered.resolve(); await release.promise }
+          await save(id, state)
+        }
+        ;(await f.next(child)).resolve(done('Finished task'))
+        await entered.promise
+        const physicalId = physicalSessionId(f.sessions.getSessionState(child)!)
+        const deletion = f.sessions.deleteSession('web:root')
+        release.resolve()
+        assert.deepEqual(await deletion, [child, 'web:root'])
+        assert.equal(await store.getState(child), null)
+        assert.equal(f.sessions.getSessionState(child), null)
+        assert.equal(await store.countSessionLog(physicalId), 0)
+      } finally { release.resolve(); store.saveState = save; await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: owner deletion stops a task waiting for a nested call and removes both traces`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        const { child, parent } = await f.spawn()
+        parent.resolve(done())
+        ;(await f.next(child)).resolve(invoke('subagent', {
+          description: 'Nested call', mode: 'call', agent_type: 'limited', task: 'Still running',
+        }, 'nested-call'))
+        await waitFor(() => f.sessions.listSessions().some(state => state.mode === 'call'))
+        const leaf = f.sessions.listSessions().find(state => state.mode === 'call')!.sessionId
+        const request = await f.next(leaf)
+        const traces = [child, leaf].map(id => physicalSessionId(f.sessions.getSessionState(id)!))
+        assert.deepEqual(await f.sessions.deleteSession('web:root'), [leaf, child, 'web:root'])
+        assert.equal(request.signal.aborted, true)
+        for (const id of [child, leaf]) {
+          assert.equal(await store.getState(id), null)
+          assert.equal(f.sessions.getSessionState(id), null)
+        }
+        for (const id of traces) assert.equal(await store.countSessionLog(id), 0)
         assert.equal(f.reports.length, 0)
       } finally { await f.sessions.stop(); store.close?.() }
     })

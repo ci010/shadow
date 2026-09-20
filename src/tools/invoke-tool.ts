@@ -4,6 +4,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 
 export interface DynamicToolImporter {
   canInvokeFromRemote?(toolName: string): boolean
+  resolveInvocationTools?(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string
   importForInvocation(
     toolName: string,
     sessionTools: SessionTools,
@@ -30,6 +31,7 @@ export class InvokeTool implements Tool {
         type: 'object',
         description: 'Arguments for the named tool, matching its current imported contract.',
       },
+      instance: { type: 'string', description: 'Session browser instance ID from browser_setup or discovery. Required for chrome-devtools tools when multiple instances are open; never a business-tool argument.' },
     },
     required: ['name', 'args'],
   }
@@ -53,6 +55,18 @@ export class InvokeTool implements Tool {
       Array.isArray(toolArgs)
     ) {
       return 'Error: args must be an object'
+    }
+    if (args.instance !== undefined && (typeof args.instance !== 'string' || !args.instance.trim())) {
+      return 'Error: instance must be a nonempty browser instance ID.'
+    }
+    if (args.instance !== undefined && !this.importer?.resolveInvocationTools) {
+      return 'Error: browser instance routing is not configured.'
+    }
+    const target = this.importer?.resolveInvocationTools?.(name, context, args.instance as string | undefined)
+    if (typeof target === 'string') return target
+    if (target) context = {
+      ...context, tools: target,
+      signal: AbortSignal.any([context.signal, context.tools.dynamicSignal, context.tools.ownerSignal, target.dynamicSignal]),
     }
 
     if (!context.tools.hasDynamic(name) && this.importer) {

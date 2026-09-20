@@ -6,7 +6,7 @@
       <h2 :id="titleId">Delete conversation?</h2>
       <p class="delete-target"><strong>{{ target.name }}</strong><span>{{ target.sessionId }}</span></p>
       <p v-if="target.projectName" class="delete-project">Project: {{ target.projectName }}</p>
-      <p :id="descriptionId">This conversation and its child sessions will be deleted. Active work will be stopped. This cannot be undone.</p>
+      <p :id="descriptionId">This conversation and its delegated tasks and calls will be deleted, including their execution history. Active work will be stopped. Independent topics are kept; shared history may be retained to protect other conversations. This cannot be undone.</p>
       <p v-if="error" class="delete-error" role="alert">{{ error }}</p>
       <form @submit.prevent="submit">
         <button ref="cancelButton" type="button" class="delete-button" :disabled="busy" autofocus @click="close">Cancel</button>

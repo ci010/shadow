@@ -1,4 +1,7 @@
 import { ProcessManager } from '../execution/processes/manager.ts'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { ManagedChildWorkdirs } from '../execution/managed-child-workdirs.ts'
 import { requestDeviceChallengeProtocol } from '../cluster/device-challenge-client.ts'
 import { AtomicDeviceCredentialReferenceStore } from '../cluster/device-credential-reference-store.ts'
 import {
@@ -10,11 +13,6 @@ import { createPlatformDeviceKeyStore } from '../cluster/protected-device-key-st
 import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
 import type { NodeWebSocketFactory } from '../cluster/websocket-node-transport.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
-import {
-  CapabilityFilesystem,
-  FILESYSTEM_READ_OPERATION,
-  FILESYSTEM_WRITE_OPERATION,
-} from '../execution/capability-filesystem.ts'
 import type { ChildBootstrapConfigV1 } from './bootstrap-config.ts'
 import { ChildMainConnector } from './child-main-connector.ts'
 import {
@@ -28,10 +26,6 @@ import type { DeviceCredentialReferenceStore } from '../cluster/device-credentia
 import type { ChallengeFetch } from '../cluster/device-challenge-client.ts'
 import { ChildLocalControlService } from './child-local-control.ts'
 import { childLocalNodeInventory } from './node-inventory.ts'
-import { CapabilityShell, WORKDIR_PROCESS_EXECUTE_OPERATION } from '../execution/capability-shell.ts'
-import { CapabilityGit, GIT_DIFF_OPERATION, GIT_STATUS_OPERATION } from '../execution/capability-git.ts'
-import { CapabilityWorkdirIdentity } from '../execution/capability-workdir-identity.ts'
-import { WORKDIR_IDENTITY_OPERATION } from '../execution/workdir-identity.ts'
 
 export interface ProductionChildOptions {
   readonly keyStore?: ProtectedDeviceKeyStore
@@ -68,12 +62,15 @@ export async function startProductionChildRuntime(
     keyStore,
   )
   const processManager = options.processManager ?? new ProcessManager()
-  const workdirs = config.workdirs ?? []
-  const filesystem = new CapabilityFilesystem(workdirs.map((workdir) => ({
-    capabilityId: workdir.capabilityId,
-    rootPath: workdir.rootPath,
-  })))
-  const capabilities: CapabilityDescriptorV1[] = [
+  // Re-pairing must not advertise a previous Main's managed workdirs.
+  const pairingScope = createHash('sha256').update(JSON.stringify([
+    new URL(config.mainEndpoint).href, reference.credentialId,
+  ])).digest('hex')
+  const workdirs = new ManagedChildWorkdirs(
+    join(paths.dataDir, 'managed-session-workdirs-v1', pairingScope), config.localNodeId, config.workdirs ?? [],
+  )
+  await workdirs.init()
+  const capabilities = (): CapabilityDescriptorV1[] => [
     {
       version: 1,
       capabilityId: 'process-execute',
@@ -83,21 +80,12 @@ export async function startProductionChildRuntime(
       permissions: ['process.execute'],
       online: true,
     },
-    ...workdirs.map((workdir): CapabilityDescriptorV1 => ({
-      version: 1,
-      capabilityId: workdir.capabilityId,
-      nodeId: config.localNodeId,
-      kind: 'workdir',
-      displayName: workdir.displayName,
-      displayPath: workdir.rootPath,
-      permissions: [FILESYSTEM_READ_OPERATION, FILESYSTEM_WRITE_OPERATION, WORKDIR_PROCESS_EXECUTE_OPERATION, GIT_STATUS_OPERATION, GIT_DIFF_OPERATION, WORKDIR_IDENTITY_OPERATION],
-      online: true,
-    })),
+    ...workdirs.capabilities,
   ]
   const executor = new LocalExecutor(
     processManager,
     config.localNodeId,
-    [filesystem, new CapabilityShell(workdirs), new CapabilityGit(workdirs), new CapabilityWorkdirIdentity(workdirs)],
+    workdirs.operationHandlers,
     ['process-execute'],
   )
   const validateCredential = async (signal: AbortSignal): Promise<void> => {
@@ -124,7 +112,7 @@ export async function startProductionChildRuntime(
       credentialId: reference.credentialId,
     },
     executor,
-    capabilities: () => capabilities,
+    capabilities,
     webSocketFactory: options.webSocketFactory,
     authenticationProtocol: async ({ endpoint, authentication, signal }) => {
       const credential = await resolveDeviceCredentialForConnect(
@@ -142,18 +130,19 @@ export async function startProductionChildRuntime(
     },
     session: { maxOutboundQueue: 128, heartbeatTimeoutMs: 90_000 },
   })
+  workdirs.onCapability = capability => connector.advertiseCapability(capability)
 
   let runtime: ChildRuntimeHandle | undefined
   const localControl = options.localControl
     ? new ChildLocalControlService({
       ...options.localControl,
       requestShutdown: () => runtime?.shutdown(),
-      nodeInventory: () => childLocalNodeInventory(config, capabilities, '0.1.0'),
+      nodeInventory: () => childLocalNodeInventory(config, capabilities(), '0.1.0'),
     })
     : undefined
   runtime = startChildRuntime(config, {
     nodeIdentity: new CredentialIdentityService(validateCredential),
-    localExecutors: new LocalExecutorService(processManager),
+    localExecutors: new LocalExecutorService(processManager, workdirs),
     mainConnector: connector,
     localControl,
   })
@@ -176,7 +165,7 @@ class CredentialIdentityService implements ChildRuntimeService {
 }
 
 class LocalExecutorService implements ChildRuntimeService {
-  constructor(readonly processManager: ProcessManager) {}
+  constructor(readonly processManager: ProcessManager, readonly workdirs: ManagedChildWorkdirs) {}
 
   start(_signal: AbortSignal): Promise<void> {
     return Promise.resolve()
@@ -187,6 +176,7 @@ class LocalExecutorService implements ChildRuntimeService {
       process.exitedAt === undefined
     )
     await Promise.all(running.map((process) => this.processManager.terminate(process)))
+    await this.workdirs.settleAllocations()
   }
 }
 

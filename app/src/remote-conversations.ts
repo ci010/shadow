@@ -13,6 +13,28 @@ export interface RemoteConversationTarget {
   available: boolean
 }
 
+export interface RemoteNodeTarget {
+  nodeId: string
+  capabilityId?: never
+  nodeName: string
+  displayName: string
+  displayPath?: never
+  available: boolean
+  unavailableReason?: string
+}
+
+export type RemoteChatTarget = RemoteConversationTarget | RemoteNodeTarget
+
+export function remoteNodeTargets(nodes: readonly NodeInventoryEntry[]): RemoteNodeTarget[] {
+  return nodes.filter(node => node.role === 'child').map(node => ({
+    nodeId: node.nodeId, nodeName: node.displayName, displayName: 'From scratch',
+    available: node.connection === 'connected' && node.supportsManagedSessions === true,
+    ...(node.connection !== 'connected'
+      ? { unavailableReason: node.connection === 'revoked' ? 'Revoked' : 'Offline' }
+      : !node.supportsManagedSessions ? { unavailableReason: 'Update this device to start from scratch' } : {}),
+  }))
+}
+
 export function remoteConversationTargets(nodes: readonly NodeInventoryEntry[]): RemoteConversationTarget[] {
   return nodes.filter(node => node.role === 'child').flatMap(node =>
     node.capabilities.filter(capability => capability.kind === 'workdir').map(capability => ({
@@ -37,7 +59,7 @@ export function createFolderChatDraft(client: Pick<FoldersClient, 'createSession
   }
 }
 
-export function createRemoteChatDraft(apiBase: string, target: RemoteConversationTarget, request: typeof fetch = fetch,
+export function createRemoteChatDraft(apiBase: string, target: RemoteChatTarget, request: typeof fetch = fetch,
   createRequestId: () => string = () => crypto.randomUUID()) {
   const selection = { ...target }
   const requestId = createRequestId()
@@ -51,6 +73,9 @@ export function createRemoteChatDraft(apiBase: string, target: RemoteConversatio
       if (!response.ok) {
         if (response.status === 409 && response.headers.get('content-type')?.includes('application/json')) {
           const detail: unknown = await response.json()
+          if (isRecord(detail) && detail.error === 'managed_sessions_unsupported') {
+            throw new Error('This device does not support remote Start from scratch. Update the device and retry. No local folder was used.')
+          }
           if (isRecord(detail) && ['remote_folder_identity_required', 'remote_workdir_identity_unsupported'].includes(String(detail.error))) {
             throw new Error('This device cannot verify remote folder ownership for a project. Update Main and the device to a version supporting ownership verification, then retry. No local folder was used.')
           }
@@ -71,7 +96,8 @@ export function createRemoteChatDraft(apiBase: string, target: RemoteConversatio
       if (!isRecord(result) || typeof result.chatId !== 'string' || !result.chatId.startsWith('chat-')
         || result.sessionId !== `web:${result.chatId}` || !isRecord(result.workdir)
         || result.workdir.version !== 1 || result.workdir.nodeId !== selection.nodeId
-        || result.workdir.capabilityId !== selection.capabilityId) {
+        || typeof result.workdir.capabilityId !== 'string' || !result.workdir.capabilityId
+        || (selection.capabilityId ? result.workdir.capabilityId !== selection.capabilityId : result.folderId !== undefined)) {
         throw new Error('Main returned an invalid remote conversation. Refresh before retrying.')
       }
       return `web:${result.chatId}`

@@ -35,6 +35,7 @@ export interface BusTopics {
   'session.handoff': { sessionId: string; sourceSessionId: string; targetSessionId: string }
   'app.lifecycle': { action: 'start' | 'stop' }
   'session.ended': { sessionId: string; agentType?: string }
+  'session.renamed': { sessionId: string }
   'session.input.accepted': AcceptedSessionInput
   'session.message.appended': { sessionId: string; physicalSessionId: string; message: ChatMessage }
   'session.turn.finished': SessionTurnFact

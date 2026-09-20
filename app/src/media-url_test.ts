@@ -20,12 +20,12 @@ test('media URL maps and encodes the direct web chat identity and path', () => {
   )
 })
 
-test('media URL rejects non-web sessions and preserves remote and data URLs', () => {
+test('media URL addresses SNS and historical sessions by full identity and preserves remote and data URLs', () => {
   assertEquals(chatIdForMediaSession('discord:channel-1'), null)
   assertEquals(chatIdForMediaSession('web:readonly-import'), null)
   assertEquals(
     buildMediaUrl('http://localhost:5173', 'discord:channel-1', 'image.png'),
-    null,
+    'http://localhost:5173/api/media?sessionId=discord%3Achannel-1&path=image.png',
   )
   assertEquals(
     buildMediaUrl(
@@ -43,6 +43,14 @@ test('media URL rejects non-web sessions and preserves remote and data URLs', ()
     ),
     'data:image/png;base64,c3ludGhldGlj',
   )
+})
+
+test('SNS downloads retain their owning Project and never use a fabricated web identity', () => {
+  const url = new URL(buildMediaUrl('http://fixture/projects/a/', 'bot:a:bot-1:qq:group%3Ax', 'uploads/video.mp4', true)!)
+  assertEquals(url.pathname, '/projects/a/api/media')
+  assertEquals(url.searchParams.get('sessionId'), 'bot:a:bot-1:qq:group%3Ax')
+  assertEquals(url.searchParams.get('chatId'), null)
+  assertEquals(url.searchParams.get('download'), '1')
 })
 
 test('absolute Windows upload paths round-trip unchanged through the media URL', () => {

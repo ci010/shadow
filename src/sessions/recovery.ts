@@ -1,4 +1,4 @@
-import { newPhysicalSessionId } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import { parseSessionRecovery, type SessionState, type SessionStore } from './session-store.ts'
 
@@ -26,7 +26,7 @@ export function pendingToolCalls(messages: ChatMessage[]): NonNullable<ChatMessa
 export async function prepareSessionRecovery(store: SessionStore, state: SessionState): Promise<void> {
   if (state.mode !== 'session') return
   const prior = parseSessionRecovery(state.recovery)
-  const physicalId = newPhysicalSessionId(state.sessionId, state.segmentIndex)
+  const physicalId = physicalSessionId(state)
   let lastRole: string | undefined
   let finalResponse = false
   for await (const record of store.readSessionLog(physicalId)) {

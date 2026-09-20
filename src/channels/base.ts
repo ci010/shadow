@@ -52,7 +52,7 @@ export interface BaseChannel {
   getCapabilities?(chatId: string): ChannelCapabilities | Promise<ChannelCapabilities>
   setDecisionHandler?(handler: ChannelDecisionHandler): void
   presentDecision?(chatId: string, request: YieldRequest, content: string): Promise<void>
-  presentDecisionText?(chatId: string, content: string): Promise<void>
+  presentDecisionText?(chatId: string, content: string, replyTo?: string): Promise<void>
 
   /** Start listening for messages (long-running). Receives the gateway Hono app so the channel can register its own routes. */
   start(app: Hono): Promise<void>
@@ -182,9 +182,10 @@ export abstract class AbstractChannel implements BaseChannel {
     await this.presentDecisionText(chatId, content)
   }
 
-  async presentDecisionText(chatId: string, content: string): Promise<void> {
+  async presentDecisionText(chatId: string, content: string, replyTo?: string): Promise<void> {
     const messageId = await this.send({
       channel: this.name, chatId, content, event: 'response', done: true,
+      ...(replyTo ? { replyTo } : {}),
       ...(this.botScope ? { channelAddress: this.address(chatId) } : {}),
     })
     if (!messageId) throw new Error('Channel decision message was not acknowledged')

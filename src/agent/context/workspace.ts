@@ -16,6 +16,7 @@ export function workspaceProvider(
   return {
     name: 'workspace-intro',
     async getPromptSection(ctx) {
+      const coordinator = ctx.agent.name === 'orchestrator'
       const locations = resolveSessionLocations(
         workspace,
         {
@@ -38,10 +39,13 @@ export function workspaceProvider(
         lines.push(
           `**Workspace root (this session)**: \`${locations.workdir.path}\``,
           '',
-          'Keep this folder tidy. Relative file paths resolve from your workspace root.',
+          coordinator ? 'Relative file paths resolve from your workspace root.'
+            : 'Keep this folder tidy. Relative file paths resolve from your workspace root.',
           `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the registered folder).`,
-          'The shared `.tmp/` name resolves from Home, not the workspace root, for scratch/ephemeral data.',
-          '`write("notes.md")` writes into the workspace root; `write("v:memory/today.md")` into shared memory.',
+          ...(!coordinator ? [
+            'The shared `.tmp/` name resolves from Home, not the workspace root, for scratch/ephemeral data.',
+            '`write("notes.md")` writes into the workspace root; `write("v:memory/today.md")` into shared memory.',
+          ] : []),
         )
       } else if (!locations.workdir.available) {
         const ref = locations.workdir.workdir
@@ -70,13 +74,15 @@ export function workspaceProvider(
         'Use the absolute attachment paths supplied in messages; they are not remote workdir paths.',
       )
 
-      const prefixes = virtualFs.prefixes()
+      const prefixes = virtualFs.prefixes().filter(p => !coordinator ||
+        ['v:project', 'v:sessions', 'v:memory'].includes(p.prefix.replace(/\/$/, '')))
       if (prefixes.length > 0) {
         lines.push(
           '',
           'Virtual folders (use `read`/`search` to access):',
           '',
-          ...prefixes.map((p) => `- \`${p.prefix}/\` — ${p.description}`),
+          ...prefixes.map((p) => `- \`${p.prefix}/\` — ${coordinator && p.prefix.replace(/\/$/, '') === 'v:memory'
+            ? 'read/search relevant Project memory' : p.description}`),
         )
       }
 
@@ -95,7 +101,7 @@ export function workspaceProvider(
         '',
       )
 
-      if (isToolAllowed(ctx.agent, 'write')) {
+      if (!coordinator && isToolAllowed(ctx.agent, 'write')) {
         lines.push(
           '- Files survive restarts; mental notes do not. Write what you need to remember under `v:memory/`, including explicit "remember this" requests.',
           '- Record mistakes to avoid repeating them; save lessons in memory or update/create relevant skills.',

@@ -2,15 +2,17 @@
 
 `GET /api/live?topics=<JSON array>&cursor=<optional epoch:sequence>` is a
 host-origin endpoint, not a project-prefixed endpoint. It uses the existing
-Main inventory authorization: launch bearer credential when configured; otherwise
-verified loopback client address and hostname. Ordinary gateway origin and launch
+Main authorization: launch bearer credential or a valid local browser session
+when configured; otherwise verified loopback client address and hostname. Ordinary gateway origin and launch
 credential checks also apply. Opening the endpoint does not start projects.
 
 [`src/realtime/protocol.ts`](../src/realtime/protocol.ts) is importable by backend
 and renderer without Node or Vue imports.
 Topics are explicit project-scoped `chat` (with logical `sessionId`, such as
 `web:chat-123`), `sessions`, `logs`, `spans`, or `io`. Unknown projects and topic
-kinds are rejected. At most 128 topics and 32 KiB of UTF-8 subscription JSON are
+kinds are rejected. A catalog Project whose runtime failed to start is known but
+unavailable, not an unknown Project: it does not reject the other subscriptions
+sharing the connection. At most 128 topics and 32 KiB of UTF-8 subscription JSON are
 accepted. There is no wildcard subscription.
 
 The Node gateway explicitly bounds the combined HTTP request-target/header
@@ -28,9 +30,13 @@ All frames use SSE `event: realtime` and JSON `RealtimeEnvelope` data:
   their existing event/content fields; requestId is outbound `replyTo`, not inferred from
   the most recent HTTP command. SSE `id` equals the envelope cursor.
 - `reset`: cursor and an explicit reason (`initial`, `expired`, `epoch`,
-  `invalid`, or `project-removed`).
+  `invalid`, `project-removed`, or `project-restored`).
+- `unavailable`: cursor and the requested topics whose catalog Project currently
+  has no runtime. These topics are not ready; their readiness promises reject
+  explicitly instead of allowing message submission. Other topics remain live.
 - `ready`: current cursor, always after replay or reset. Control frames
   deliberately have no SSE id; clients must process their explicit cursor.
+  This marks the connection and available topics ready, not unavailable Projects.
 - `heartbeat`: observable control frame every 15 seconds for EventSource
   watchdogs, with current cursor but no SSE id. This is not a persisted data
   event and does not advance the journal sequence.
@@ -64,7 +70,12 @@ persisted chat history on completion/reset. Token deltas are not restart-durable
 Telemetry is tailed only while requested. Reconnecting to a stopped log/span
 tail explicitly resets with `expired`, even if the cursor is otherwise valid:
 a journal cannot reconstruct writes made during an unsubscribed interval.
-Consumers refetch telemetry snapshots after that reset.
+Consumers refetch telemetry snapshots after that reset. Runtime loss/restoration
+for a catalog Project emits a reset, the current unavailable-topic list when
+nonempty, and readiness on the existing connection. Reset clears the prior
+unavailable set. Restored Projects resume publishing and telemetry polling without
+opening a second connection; their HTTP APIs still independently enforce runtime
+readiness and return explicit unavailable errors while startup is failing.
 
 ## I/O control and media separation
 
@@ -105,8 +116,11 @@ current implementation limits.
 Each connection has an 8 MiB byte-counted stream queue. A slow client is
 disconnected with a `slow-client-disconnected` diagnostic instead of growing
 memory indefinitely. The next connection replays or resets normally. Heartbeats
-run every 15 seconds. Abort, stream cancellation, host shutdown, and runtime
-removal release connections and timers. Removed-runtime publisher leases become
+run every 15 seconds. Abort, stream cancellation and host shutdown release
+connections and timers. Runtime removal releases its telemetry tails; a Project
+still in the host catalog becomes explicitly unavailable without disconnecting
+healthy Projects. Unknown/removed catalog Projects still invalidate the affected
+connection. Removed-runtime publisher leases become
 inert, including callbacks queued before removal; replay data from that runtime
 is removed and cursors invalidated conservatively.
 

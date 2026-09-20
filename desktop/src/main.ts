@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   app,
@@ -50,7 +50,7 @@ import {
   createProductionRuntimeHost,
   registerRuntimeHostQuitLifecycle,
 } from './sidecar/runtime-host.js'
-import { installRuntimeRequestAuthorization } from './runtime-authorization.js'
+import { installRuntimeRequestAuthorization, type RuntimeAuthorization } from './runtime-authorization.js'
 import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
@@ -60,6 +60,12 @@ import { installDocumentTabShortcuts } from './document-tabs.js'
 import { installMediaPermissions } from './media-permissions.js'
 import { loadServiceConnection, selectServiceConnectionPath } from './service/connection.js'
 import { createServiceBootstrapCoordinator } from './service/bootstrap.js'
+import { installStartupDiagnostics } from './startup-diagnostics-ipc.js'
+import { startupLogPath } from './sidecar/startup-diagnostics.js'
+import { TaskbarActivity } from './taskbar-activity.js'
+import { DesktopConnectionStore, RuntimeConnectionPublication } from './control/publication.js'
+import type { RuntimeEndpointMessage } from './control/runtime-endpoint.js'
+import { installWebPairing } from './web-pairing.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
@@ -154,6 +160,11 @@ export function createMainWindow(target: RendererTarget): BrowserWindow {
   })
   removeNativeMenus(Menu, window)
   installWindowControls(ipcMain, window)
+  installStartupDiagnostics(ipcMain, window, () => {
+    const path = startupLogPath(app.getPath('userData'))
+    if (!existsSync(path)) throw new Error('Startup log is not available')
+    shell.showItemInFolder(path)
+  })
   installDocumentTabShortcuts(window)
   installFolderDirectoryPicker(ipcMain, window, async () => {
     const result = await dialog.showOpenDialog(window, {
@@ -240,13 +251,44 @@ async function start(): Promise<void> {
     session.defaultSession,
     (details) => details.webContentsId === mainWindow?.webContents.id,
   )
+  let taskbarActivity: TaskbarActivity | undefined
+  let activityAuthorization: RuntimeAuthorization | null = null
+  const sendRuntimeEndpoint = (message: RuntimeEndpointMessage): void => {
+    if (process.env.SHADOW_DESKTOP_DEV_IPC === '1' && process.connected) {
+      process.send?.(message, () => {})
+    }
+  }
+  const publication = new RuntimeConnectionPublication({
+    store: new DesktopConnectionStore(userDataPath),
+    isReady: (authorization) => runtimeHost.status.phase === 'ready'
+      && runtimeHost.status.role === 'main' && runtimeHost.apiBase === authorization.apiBase,
+    onPublished: (path) => {
+      const quote = (value: string) => `'${value.replace(/'/gu, process.platform === 'win32' ? "''" : "'\\''")}'`
+      if (app.isPackaged) {
+        console.info('[desktop] Web access: with ELECTRON_RUN_AS_NODE=1, run:')
+        console.info(`& ${quote(process.execPath)} ${quote(join(process.resourcesPath, 'backend', 'dist', 'src', 'index.js'))} web pair --connection ${quote(path)}`)
+      } else console.info(`[desktop] Web access: pnpm web:pair --connection ${quote(path)}`)
+    },
+    onError: () => console.error('[desktop] Web pairing connection publication failed; desktop runtime status is unchanged.'),
+    onUnavailable: () => sendRuntimeEndpoint({ type: 'shadow:runtime-stopped' }),
+    ...(serviceConnectionPath ? { serviceConnectionPath } : {}),
+  })
   const runtimeHost = createProductionRuntimeHost({
     executablePath: process.execPath,
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath,
     userDataPath,
     packaged: app.isPackaged,
-  }, onAuthorizationChanged, serviceConnection)
+  }, (authorization): void => {
+    onAuthorizationChanged(authorization)
+    const status = runtimeHost.status
+    activityAuthorization = status.phase === 'ready' && status.role === 'main' ? authorization : null
+    taskbarActivity?.setAuthorization(activityAuthorization)
+    sendRuntimeEndpoint(activityAuthorization
+      ? { type: 'shadow:runtime-ready', apiBase: activityAuthorization.apiBase }
+      : { type: 'shadow:runtime-stopped' })
+    void publication.setAuthorization(activityAuthorization)
+  }, serviceConnection)
   const coordinator = serviceConnection
     ? createServiceBootstrapCoordinator(serviceConnection.descriptor, runtimeHost)
     : new BootstrapCoordinator(
@@ -262,7 +304,11 @@ async function start(): Promise<void> {
       process.env.SHADOW_DESKTOP_DEV_MAIN_DIRECTORY,
     ),
   )
-  registerRuntimeHostQuitLifecycle(app, runtimeHost)
+  registerRuntimeHostQuitLifecycle(app, {
+    stop: async () => {
+      try { await runtimeHost.stop() } finally { await publication.close() }
+    },
+  })
   if (serviceConnection) {
     const result = await coordinator.ensureRuntime()
     if (!result.ok) {
@@ -278,7 +324,12 @@ async function start(): Promise<void> {
     ...(developmentUrl ? { developmentUrl } : {}),
   })
   mainWindow = createMainWindow(target)
+  installWebPairing(ipcMain, mainWindow, () => activityAuthorization)
+  taskbarActivity = new TaskbarActivity(mainWindow)
+  taskbarActivity.setAuthorization(activityAuthorization)
   mainWindow.on('closed', () => {
+    taskbarActivity?.dispose()
+    taskbarActivity = undefined
     mainWindow = null
   })
   if (target.kind === 'url') await mainWindow.loadURL(target.url)

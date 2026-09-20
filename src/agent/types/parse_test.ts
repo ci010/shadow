@@ -3,6 +3,16 @@ import { test } from 'node:test'
 import { parseAgentFile } from './parse.ts'
 import { EXECUTION_MODES, isExecutionMode, parseExecutionMode } from '../../sessions/execution-mode.ts'
 
+test('agent module ceilings are explicit validated declarations', () => {
+  const agent = parseAgentFile('---\nallowedModules: [node:path, "@shadow/read"]\n---\nRole', 'fixture', 'fixture')
+  assert.deepEqual(agent.allowedModules, ['node:path', '@shadow/read'])
+  assert.deepEqual(parseAgentFile('---\nallowedModules: []\n---\nRole', 'fixture', 'fixture').allowedModules, [])
+  assert.equal(parseAgentFile('Role', 'fixture', 'fixture').allowedModules, undefined)
+  for (const value of ['true', '"node:path"', '["./other.js"]']) {
+    assert.throws(() => parseAgentFile(`---\nallowedModules: ${value}\n---\nRole`, 'fixture', 'fixture'))
+  }
+})
+
 test('legacy planning tool policies rename to Initiative without widening access', () => {
   const role = parseAgentFile('---\nallowedTools: [read, project]\nblockedTools: project, exec\n---\nRole', 'legacy', 'fixture')
   assert.deepEqual(role.allowedTools, ['read', 'initiative'])

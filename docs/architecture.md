@@ -42,7 +42,7 @@ current references from historical proposals.
 | Tools | Files, text editing, search, shell processes, background continuations, messaging, plans, conventions, dynamic script tools, and MCP adapters |
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus project-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by project runtimes |
-| Browser automation | Lazy Chrome DevTools MCP with per-session browser allocation; requires a usable browser/MCP process |
+| Browser automation | Lazy Chrome DevTools MCP with session-local launch/attach instances; requires a usable browser/CDP target and MCP process |
 | Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory from the backend; paired nodes execute without operation approvals |
 | Electron | Main bootstrap, persisted launch profile, backend supervision, narrow preload API, renderer setup/recovery; Child/product integration remains incomplete |
 | Device execution | Pairing/challenge/WebSocket code and bounded remote UTF-8 workdir operations exist; full remote tools, artifacts, UI administration, and release hardening remain WIP |
@@ -96,8 +96,8 @@ to maintain. Package scripts and `build.ts` own compilation/assets; do not infer
 current packaging from the older compiled-sidecar proposals.
 
 The backend build emits ESM modules and supporting assets under `dist/src`,
-preserving relative paths. Its entry is `dist/src/index.js`; the separate eval
-runner is `dist/src/script-runtime/child.js`. Electron packaging uses
+preserving relative paths. Its entry is `dist/src/index.js`; the shared script
+worker is `dist/src/script-runtime/worker.js`. Electron packaging uses
 `pnpm deploy --prod --node-linker hoisted` to include the built backend and its
 runtime dependencies without relying on development-tree symlinks. The renderer
 build emits `app/dist`.
@@ -129,8 +129,31 @@ the `createProjectRuntime` composition factory:
 5. Mount its VFS and routes, register commands, messaging/subagent tools,
    schedules, and `LearningService`; start channels, watchers, and recovery.
 6. Mount scoped project dispatch alongside shared host routes, then the
-   frontend fallback. Start all catalogued projects, independently tracking
-   their ready/failed state rather than selecting one global runtime.
+   frontend fallback. Start catalogued projects with at most three concurrent
+   starts, independently tracking their ready/failed state rather than
+   selecting one global runtime. Reserve persisted remote-workdir ownership
+   before starting any Project.
+
+Main's local readiness still waits for the initial Project starts to settle;
+it does not declare incomplete Project services ready. Optional web-search
+network discovery is deferred to the first search, and external channel
+connections continue independently of local readiness. MCP startup registers
+its lazy catalog; it does not connect every configured server.
+
+Fixed-shape `[startup]` records report host/Project phases, completion/failure,
+elapsed milliseconds and phase durations. They include no configuration values,
+workspace paths, conversation contents, or error payloads. These timings separate
+local store/recovery work from desktop process-launch overhead.
+
+Electron validates these records through a bounded startup-only parser and
+persists safe lifecycle/failure events and phase timings to
+`<userData>/logs/startup.jsonl`. Project IDs become per-attempt numeric ordinals;
+raw child output is not persisted. The current log and two rotations are each
+bounded to 256 KiB. Recovery displays the failure category, runtime role and
+elapsed time, and a main-window-only, argument-free IPC action reveals that
+fixed log. Retry awaits failed-process cleanup. The readiness watchdog remains
+15 seconds; the optimization removes optional network discovery from startup
+rather than masking slow initialization with a longer timeout.
 
 Shutdown is coordinated through a runtime handle: stop accepting work, stop
 polls/sessions/channels/schedules/watchers, release browsers, drain node
@@ -371,10 +394,24 @@ cross-node filesystem identity guarantees, or distributed release readiness.
    callers supply a session ID without disguising input as a channel message.
 2. **Handle channel commands.** `AgentApp` tries the slash-command dispatcher for
    ordinary channel text, retaining its existing admin checks.
-   Commands such as `/help`, `/config`, `/status`, `/sessions`, `/compact`,
+   Commands such as `/help`, `/config`, `/status`, `/sessions`, `/compact`, `/clear`,
    `/dump-prompt`, and `/learn` can respond without an ordinary agent turn.
+   Command admission initializes session identity and Main-owned session data,
+   without creating external folder paths or interpreting remote display paths.
+   Results are persisted as non-message `command_result` records in both stores,
+   returned separately as `commandResults` by display-history APIs, and delivered
+   as typed web receipts (also included in the send acknowledgement). They do not
+   enter provider history, inherited fork context, or channel-message fanout.
+   Other channel adapters retain their ordinary textual command response.
    Event and other-session inputs do not pass through this command boundary.
    Retry is a typed control, not another copy of the user's content.
+   `/clear` serializes with input admission, requires an idle persistent session,
+   refreshes its installed agent definition, retires its in-memory context/tools,
+   and persists an empty next segment without invoking handoff or the provider.
+   Logical identity, locality, lineage, and old logs remain unchanged. Fork
+   inheritance applies only to segment zero. Both stores persist `contextResetAt`,
+   which excludes older transient memory from prompt injection without deleting
+   files or long-term conventions. The next turn builds a new prompt/tool overlay.
 3. **Accept into a session.** `SessionManager.deliver(sessionId, input)`
    restores/builds state and history,
    resolves the agent type and workdir, builds context, and supplies the
@@ -441,7 +478,11 @@ retired streaming APIs return explicit HTTP 410 migration errors.
 
 The wire contract is `src/realtime/protocol.ts`: named `realtime` SSE envelopes
 carry epoch/sequence cursors, ordered data, explicit reset/ready controls and
-observable heartbeats. The server bounds its replay journal and client queues;
+observable heartbeats. A failed catalog Project is reported with an explicit
+`unavailable` topic list rather than rejecting the whole multiplexed connection.
+Only its readiness waits fail; healthy Projects keep receiving updates, and a
+successful retry resets/re-enables its topics on the existing connection.
+The server bounds its replay journal and client queues;
 slow consumers disconnect rather than growing an unbounded server queue.
 The renderer closes the old transport before replacing a subscription set,
 deduplicates replayed cursors, reconnects with bounded backoff, and detects
@@ -578,7 +619,12 @@ Graph parentage comes from delegation ownership, not a historical context parent
 - Content has an explicit `interactive`, `queue`, `steering`, or `silent` policy.
   Event defaults and trailing-debounce flushes are explicitly queued, including
   during LLM/tool work; they cannot accidentally take the human-interruption path.
-  Silent inputs only record content. Retry/cancel/compact are distinct controls;
+  Silent inputs only record content after any active turn; they neither inject
+  into its context nor start a later model turn. The `message` tool defaults to
+  queued, non-interrupting delivery regardless of its descriptive `intent`.
+  Required materials and unblocking instructions need a non-silent request;
+  multi-part context must end with one, not with silent follow-ups.
+  Retry/cancel/compact are distinct controls;
   debounce exists only in the event router, not as another admission policy.
 - `EphemeralSession` serializes admitted work without persistent-session steering,
   idle sleep, or compaction. Admission does not wait for the model; lifetime end
@@ -595,11 +641,30 @@ compaction creates a continuation before the loop stops.
 
 `SessionState` holds a stable logical session ID, current segment index, activity
 and token values, settings, parent/children, agent type, execution mode, project, report target,
-workdir, and preload tools. Physical logs are generated from a sanitized ID and
-segment number. Compaction starts a new segment linked to the previous one;
+workdir, and preload tools. New sessions persist `physicalIdVersion: 2` in both
+JSONL and SQLite. Their physical log addresses combine a readable sanitized prefix,
+a SHA-256 digest of the **complete** logical ID, and the segment number. This keeps
+same-bot private chats and groups distinct even when their logical IDs share a long
+Project/bot prefix. Compaction starts a new segment linked to the previous one;
 forks can inherit a parent segment up to a record index. History assembly
 sanitizes/truncates tool-call/result pairs rather than treating every stored
 message as independent.
+
+Absent `physicalIdVersion` retains the old log addresses for inspection; startup
+does not rename, split, discard, or automatically migrate old transcripts. Legacy
+IDs truncated at 48 characters may already reference mixed histories. Those
+sessions (and forks inheriting their history) reject further execution and new
+forks pending repair; automatic recovery/reporting also skips them. Explicit
+deletion removes the selected session and recursively owned tasks/calls, including
+finished executions missing from the optional `children` index. It drains active
+execution, in-flight child creation and final receipt/report writes before deleting
+persisted state and traces in JSONL or SQLite. Independent topics remain separate;
+ambiguous legacy logs and history still referenced by another conversation are
+preserved. A subsequent
+message recreates the deleted address with a fresh v2 transcript, without adopting
+the retained legacy log. Failed storage deletions remain errors, not successful
+deletion confirmations. Short legacy sessions retain their previous behavior. This is
+history-address isolation, not a change to shared Project memory or tool permissions.
 
 Registered folders have a project-filtered registry backed by the host
 catalog's ownership index.
@@ -937,12 +1002,21 @@ session tool bridge. OS-shell names such as `pwsh`, `bash`, or `cmd` select the
 ordinary managed-process path.
 
 `yield` is called directly, not through the Node script bridge. Its question
-has exactly three distinct options and one default. Root sessions expose the
+advertises two distinct suggested options and one default; legacy three-option
+requests remain readable. Binary questions render direct answer buttons; legacy
+three-option questions use radio selection. The application always adds its own
+custom-response entry for humans, separate from the chat composer. Root sessions expose the
 question to the human; a child addresses its stored parent, not `reportTo`.
 Only that parent can answer through `yield(action="answer")`; human answers
 use the session yield HTTP endpoint or the `/yield` channel command. The
 coordinator checks recipient, request ID and exact option before resolving
 the suspended call. Session stages report `waiting` while a request is active.
+Human free-text replies use the separate HTTP body `{requestId, customText}` or
+`/yield <request-id> text <your response>`, with the same recipient and initiating
+channel-user checks. Mixing `option` and `customText` is rejected. Text is bounded
+to 4000 characters and trimmed, never accepted as an arbitrary preset or parent
+answer. The tool receipt contains the text in `option` with `custom: true` and is
+persisted through the ordinary paired tool result in both stores.
 
 Global `tools.yield.timeoutMs` defaults to indefinite waiting (`null`).
 `SessionConfig.yield` can override it, including explicit indefinite waiting;
@@ -1005,50 +1079,130 @@ platform/architecture, category/core presentation, and admin visibility.
 These filters are not an execution sandbox for scripts referenced by a skill.
 Skills are optional workflow guidance, not an MCP admission requirement. A server
 does not need a corresponding skill; a workflow may use several servers, and
-several skills may guide use of the same server. Live discovery results, rather than
-copied skill examples, are authoritative for tool schemas.
-TypeScript tools require an owning skill's frontmatter `tools` map. One skill
-can declare many aliases, such as
-`csv_summary: { source: "tools/summary.ts", args: [] }` and
-`csv_format: { source: "tools/format.ts" }`. Sources must be relative to the
+several skills may guide use of the same server. Indexed MCP schemas can be stale;
+the current live invocation contract overrides indexed metadata and copied examples.
+JavaScript/erasable TypeScript tools require an owning skill's frontmatter
+`tools` map. Each alias declares `source`, `description`, `parameters` and
+`imports`. Source files export ESM `async function run(args)`. Sources must be relative to the
 skill directory and pass realpath containment checks; absolute paths and
 standalone external modules are not accepted.
+
+Published conversation tools use a separate immutable resource path under
+`src/agent-authoring`, with the same shared execution engine as generic skill
+tools. Their SKILL.md tool declaration specifies exact
+`imports: [node:path, '@shadow/service-read']`; the authored role's AGENT.md must
+explicitly allow each import in `allowedModules`. Absent/empty module lists
+deny imports. This authored role ceiling adds to controlled skill-tool import
+policy; ordinary host exec does not use the authored role ceiling.
+Runtime selectors, duplicate capabilities declarations and legacy
+`run(args, capabilities)` entrypoints are unsupported. Owners recreate old
+tools; no local runtime data or configuration is migrated.
+`@shadow/<grant-id>` exports named `call` and the same
+function as default; selected bindings still grant exact HTTP targets/routes/
+secretRefs and inbox IDs, never all main tools.
+
+The shared `src/script-runtime/runtime.ts` core executes authored tools, generic
+skill tools and host exec in disposable Node children. Controlled tools use
+`vm.SourceTextModule`, with controlled
+static/dynamic import resolution, no global process/require/fetch or default
+Node loader; exec retains host authority under a separate host policy, not a
+separate engine. The catalog in `src/script-runtime/module-policy.ts` permits exact
+supported node: identifiers, not wildcards, npm installs or arbitrary package/
+file/data/http imports. Defaults are 15 seconds wall including startup, 64 MiB
+V8 old-space (not RSS/total OS memory), 32 capability calls and 256 KiB source/
+JSON bounds; timeout, cancellation, completion and crash clean up the child.
+Module policy and the child process are not an OS sandbox for hostile code.
+Approved immutable main/developer-authored tools are trusted implementations.
+Raw fs/network modules require explicit author/owner approval and carry the
+child user's OS authority: they are not readFolders-limited and bypass named
+HTTP-grant restrictions by design when granted. Prefer @shadow grants for scoped
+HTTP/credentials. Production native filesystem tools run on Main with cwd set
+to Project Home; remote workdir sessions reject them without fallback.
+Raw native I/O can have nontransactional side effects even when cancellation or
+a revision change later rejects the result; process isolation does not roll
+those effects back.
+
+Tests/live use the shared runner but explicit test/probe policy permits only
+`PURE_NODE_MODULES`, rejecting effectful native imports even unused. Authoring
+tests use synthetic @shadow receipts (including sequences and safe thrown
+errors). `authoring_change` maintains independent published-base Changes with
+scoped, revocable editor assignments and immutable-version check evidence.
+Virtual authoring files never become live loader files. The coordinator can
+edit a small prompt directly or delegate explicit paths without relaying source
+bundles. Rebase is explicit and conflicts on divergent file/binding changes.
+
+Change probe reviews pin exact source/arguments, expose only GET grant scope,
+expire and authorize one bounded execution after an authenticated owner click
+in the topic or coordination. New test connections need no production release.
+Legacy `project_config` probes retain their unchanged-published-grant rule.
+Neither route permits writes/inbox delivery. Source revision/hash and authorization
+revision are distinct; no staging or publication is needed for candidate tests.
+Only an explicit published target tests deployed code. Probe receipts retain
+failures and transport/response evidence even when guest code catches errors.
+Developers test native fs/http with
+normal exec and project-local disposable fixtures, not synthetic tests.
+Prompt scenarios use the ordinary ephemeral session loop with only synthetic
+tools and bounded model execution, not a separate provider/tool implementation.
+Preview is assembly evidence, not a model behavior test. Runs are persisted by
+identity instead of recovered from chat logs or manually maintained reports.
+
+Publication remains owner-reviewed. Durable review stores pin exact snapshots,
+base revisions and affected bindings; Change publication does not overwrite a
+legacy shared draft. The coordinator still has no shell/write/dynamic invocation
+authority. Delegated Change operations do not confer live or deployment rights.
+Nonmutating `project_config` actions `schema`, `inspect`, `read`, `preview`, and
+synthetic `test` are available in
+session/event-triggered turns of that same Project's coordinator. All other
+actions of that legacy tool retain the direct-owner-turn requirement. The
+separate Change tool validates Project, durable authoring session and assigned
+resource paths on every operation; bot/group conversations and other Projects
+are not authoring principals. Reads never return stored credential values.
+See [Conversation agent authoring](agent-authoring.md) for formats, test inputs,
+source hashes, approval and credential boundaries.
 
 `search({ space: "skills:", query: "CSV", limit: 5, offset: 0 })` returns names,
 descriptions, and read paths, optionally filtered with `skills:<category>`.
 Search, index/category reads, and bundled resource reads never activate tools.
 Only an exact `read("v:skills/csv-utils")` registers that skill's declarations
-in the current session. This does not import modules or execute `init`/`execute`.
+in the current session. This never imports source into Main for metadata.
 The skill body documents arguments, so an agent can invoke a declared alias
 directly after reading, without a separate preparation step; invocation
-lazy-loads the module and validates its schema.
+validates the declared schema and executes the source in the shared child.
 
 Declarations persist only in `SKILL.md`; there is no Project persistence of
 skill-tool registrations. New sessions and sleep/reset require another exact
-skill read. Files and dependencies remain in their original locations. Optional
-declaration `args` are passed to `init(args)` at lazy tool discovery or invocation,
-not at read time. After activation, `search({space: "tools:<alias>", query: ""})`
-can import/init the module to obtain its current schema, but never calls
-`execute`. Skill search never activates tools. Rereading the exact skill refreshes
+skill read. Source files remain in their original locations.
+After activation, `search({space: "tools:<alias>", query: ""})`
+reads schema metadata without executing source. Skill search never activates
+tools. Rereading the exact skill refreshes
 changed entrypoints and declarations; registrations are not shared across
 sessions. Invalid frontmatter tools remain discoverable with `toolsError`,
 while an exact skill read fails explicitly.
-Modules expose metadata/parameters and `execute(args, callTool)`, optionally
-`init`, and can compose existing tools. Loading executes trusted host code,
-not sandboxed data.
+Metadata belongs exclusively to `SKILL.md`; `init`, `execute`, `callTool`,
+executable metadata exports and source-path tool loading are unsupported.
+Declared `@shadow/<tool-name>` imports can compose session-authorized tools
+through module-call bindings, without granting access to every tool.
 
 ### Project MCP configuration and lazy loading
 
 [`search-tools.ts`](../src/tools/search-tools.ts) ranks names and descriptions
 lexically, returning complete schemas only for the top matches (default 3,
-maximum 10). The importer shares session lifetime, connection invalidation and
-serialized import coordination between search and invocation. Search lists
-configured MCP servers in batches of up to three, with per-source MCP discovery
-timeouts, but does not call their tools. It reports searched, failed and deferred
-sources rather than implying an exhaustive successful search when discovery
-failed. Built-in browser/factory initialization requires explicit source selection.
-Active session tools are also searchable. It does not introduce a persisted index,
-an embedding provider or a second tool registry.
+maximum 10). Global and targeted installed/configured MCP searches read a
+configuration-bound persistent index, returning exact names, descriptions,
+parameters and `indexedAt` timestamps. They perform zero connections or
+`tools/list` RPCs, execute no tools and register no dynamic tools.
+Search reports searched, failed and deferred sources rather than implying
+exhaustive success. Built-in browser/factory initialization still requires explicit
+source selection and may create live resources. Active session tools are also
+searchable. The metadata index is not an embedding provider or a second tool registry.
+
+After restart, persisted Project MCP configuration restores the source catalog,
+not live connections or tool registrations. Cold and repeated searches work
+offline from indexed metadata: 100 installed servers will not start from search.
+Missing, mismatched or corrupt records produce explicit source `errors`, never
+fallback auto-connections. Read/save MCP configuration to build missing metadata,
+including a no-op resave of legacy configuration. Keyword misses are not proof of
+absent capabilities. A session-only JSON import is not a persistent install.
 
 MCP configuration is persistent **current Project** state. Agents use existing
 `read`/`write` tools on `v:config/mcp.json`, not application configuration or
@@ -1071,9 +1225,22 @@ in one document for an atomic batch. The dedicated `mcp-config` skill documents
 the read/edit workflow and secret handling. No extra installation tool or
 explicit model-visible import tool is exposed.
 
-Saving updates the catalog only: it does not handshake, connect, or call MCP
-tools. Atomic persistence is not live connectivity verification. Connections
-are established later through discovery/invocation and failures remain per-source.
+Before writing configuration, `ProjectConfigStore` ensures persistent metadata
+for each installed MCP. Missing/new/config-changed records use temporary connections
+and paginated `tools/list` only, in batches of up to three with 60-second
+per-source timeouts. Connections close after indexing; no tools execute and no
+runtime connection is retained. Matching cached records are reused, and removal
+requires no new connection. Index failure aborts the save, leaving the previous
+configuration and runtime catalog unchanged.
+
+Private content-addressed index records under Project Home `.mcp-tool-index`
+are atomically persisted before the configuration commit. Records bind metadata
+to configuration without storing raw configuration or credentials. Unreferenced
+records may remain for rollback; ConfigStore activation rollback remains in place.
+Successful installation/indexing does not guarantee current availability or future
+execution. Metadata can become stale. Invoking an exact known ID still lazily
+connects, lists live tools and refreshes the index, then validates the current
+schema before `tools/call`; the current live invocation contract wins.
 
 The internal lazy loader remains responsible for session connections and
 modules. Unchanged connections are reused; changed configuration invalidates old
@@ -1117,7 +1284,7 @@ unlabelled secret emitted by an arbitrary server.
 
 Cleanup failures are reported alongside the primary failure, not instead of it.
 Listing failures no longer trigger a hidden reconnect/retry. The agent receives
-the diagnostic through lazy discovery or invocation and can attempt bounded
+the diagnostic through indexing or live invocation and can attempt bounded
 recovery; its tool guidance asks it to explain the server, phase, sanitized cause
 and required help to the user when needed. The existing conversation/tool-result
 projection is reused; there is no new automatic notification or credential repair
@@ -1134,23 +1301,67 @@ An empty, whitespace or omitted tools query lists contracts in stable name order
 the list or search. Partial failures and deferred sources remain explicit.
 Complete tool contracts bypass generic result truncation; other search spaces
 retain their existing result limits. File/web searches retain parallel-read
-scheduling, while tool discovery is conservatively serialized because it can
-connect subprocesses and update session imports.
+scheduling, while tool discovery is conservatively serialized because explicit
+built-in browser/factory selection can initialize live resources.
 Known MCP IDs can be invoked directly with current-schema validation. Skill
 aliases can be invoked directly after the exact owning skill read. There is no
-explicit model-visible import step. Saving configuration does not
-prove a live connection works; targeted MCP search verifies discovery, and tool
-execution is a separate operation with its own possible side effects.
+explicit model-visible import step. Saving configuration reports installed/indexed,
+not guaranteed live availability; targeted MCP search reads the index too, and
+tool execution is a separate operation with its own possible side effects.
 
-Chrome DevTools is split into common and full lazy entries sharing a connection.
-`ChromeManager` allocates session-specific debugging ports/profiles and releases
-browsers on cleanup. Browser/Windows automation comes from optional external
-tools/services; configuration fields alone do not establish native automation
-availability.
+Chrome DevTools has one public lazy source, `chrome-devtools`, with no
+`chrome-devtools-full` alias, exposing all advertised tools without a common/full
+filter. Search returns only the relevant
+contracts; loading the source does not inject all schemas into the base tool list.
+The dynamic catalog also exposes `browser_setup`: global
+`search({space: "tools:", query: "browser_setup"})` discovers its metadata without
+initializing browsers. Global `tools:` search also includes already-loaded browser
+contracts with per-result `instance` IDs without reconnecting. Uninitialized
+browser sources and live refresh remain deferred unless explicitly selected.
+Installed MCP global search remains offline.
+Invoke the known setup ID with `args: {action: "launch", browser: "edge"}` to
+select `edge`, `brave`, `chrome`, or `default`, or supply `executablePath` instead
+of `browser`. Explicit selections fail without fallback. Each owned launch gets
+a fresh private profile; host profiles are never copied and Project configuration
+is unchanged. Without setup, automatic lazy default launch remains available
+in an owning session.
+
+Explicit `{action: "attach", endpoint}` accepts only loopback HTTP(S)/WS(S)
+preenabled CDP targets, including compatible Electron. Examples are
+`http://127.0.0.1:9222` and `ws://127.0.0.1:9222/devtools/browser/...`.
+This is separate from import arguments: raw endpoint/profile/executable flags
+remain rejected. Startup import/preload arguments are pinned per instance;
+changing arguments cannot silently create a second browser. Empty
+`preload_tools: { "chrome-devtools": [] }` still works.
+
+Setup connects/lists live contracts without business tool RPCs and returns
+`{instance, source: "tools:chrome-devtools", mode, owned, ready, ...}`.
+`search({space: "tools:chrome-devtools", instance: id, query: "snapshot"})`
+reads that instance's live schemas.
+`invoke_tool({name: "chrome-devtools__take_snapshot", instance: id, args: {...}})`
+routes canonical tool names to isolated instance registries, never prefix variants.
+One instance allows an omitted ID; two or more require explicit selection, with
+no mutable current browser. Invalid/other-session IDs fail without fallback;
+IDs are scoped to the session lifecycle.
+
+Use `browser_setup` with `{action: "list"}` or `{action: "close", instance: id}`.
+Separate ordinary tasks/sessions remain independent, but blocking leaf
+calls/snapshots borrow their owner's instance IDs and may interact/list, not
+launch/attach/close. If the owner has no browser, automatic discovery/invocation
+fails asking the owner to initialize first, never silently creates a persistent
+resource in a leaf.
+Session sleep/reset closes owned instances and only disconnects attached targets,
+never kills external targets. Browser/host tests are synthetic, not actual browser
+end-to-end coverage. Browser/Windows automation still depends on optional external
+tools/services; configuration fields alone do not establish native automation availability.
 
 Web search preference in composition is configured Firecrawl, then Brave, then
-reachable SearXNG; a keyless Firecrawl path is the fallback. Service reachability,
-rate limits, and provider behavior remain external dependencies.
+reachable SearXNG; a keyless Firecrawl path is the fallback. Configured providers
+skip SearXNG detection. Otherwise the first `web:` search probes SearXNG with
+the turn's abort signal and remembers the selected provider for that Project
+runtime. Explicit lazy `web_search` discovery can still find SearXNG later.
+No search probe blocks runtime startup. Service reachability, rate limits,
+and provider behavior remain external dependencies.
 
 ## Events, background work, and cron
 
@@ -1338,9 +1549,32 @@ Origin header, and ordinary local startup may have no launch credential.
 Provider OAuth endpoints are not a general login/authorization system for all
 gateway data.
 
+Main additionally owns browser authentication in `src/gateway/web-auth.ts`;
+Electron is not an authentication dependency. Public frontend pages/assets and
+`/api/web-auth/*` are reachable before login, while ordinary APIs remain protected.
+An authorized local CLI issues a five-minute, single-use code through the
+management-only `POST /local/v1/web-pairing` endpoint. The browser exchanges it at
+`POST /api/web-auth/pair` for a twelve-hour HttpOnly/SameSite=Strict cookie.
+Only hashes of random codes/session secrets are retained in bounded in-memory
+stores. Failed exchanges are rate-limited. Restart drops all browser sessions;
+logout and expiry abort associated live feeds and WebSocket connections.
+Browser authorization is carried through scoped Project requests as well as the
+shared API gateway. Browser cookies never authorize `/local`, device-pairing or
+cluster-control routes; those retain their management/protocol checks.
+
+The browser flow requires a loopback target and the TCP peer captured at the
+server boundary, not forwarded client-address headers. Mutations require a
+same-origin request (or the explicitly configured development Vite origin);
+opaque Electron origins do not authorize browser cookies. Cookie names include
+the backend port to avoid collisions between local runtimes. This is a local
+browser session, not a remote deployment, per-user permissions model, or OS
+sandbox. Legacy local startup without a launch credential remains unprotected.
+
 Frontend serving is registered last: use a Vite development proxy if configured,
 otherwise an available built UI, otherwise expose APIs without a frontend.
 The development UI normally runs on `5273`; static UI can share the gateway.
+The reverse development proxy strips management authorization and browser
+cookies before forwarding frontend assets to Vite.
 `OtelStore` persists telemetry separately from conversations. Traces can contain
 tool arguments or other sensitive operational context.
 
@@ -1360,6 +1594,20 @@ Node does not provide a native WebSocket server.
 tool activity, session navigation, files/previews, and related controls;
 agent, span, and log views use backend APIs. Electron `file:` loading uses hash
 history; browser deployment uses web history.
+
+Shared button styles live in `app/src/styles.css`, not `App.vue`'s scoped styles.
+Use `btn` for a standard action, `btn primary` for its main action, `btn ghost`
+for a quiet action, and `btn btn-sm` for compact controls. Low-specificity
+defaults cover theme, focus and disabled states while preserving component-owned
+icon buttons, navigation rows and other specialized controls.
+
+Message presentation distinguishes human input from session-to-session handoffs
+and background events using recorded source envelopes, independently of the
+model protocol's `user` role. Delegated messages are left-aligned and labelled
+with their source session; they are excluded from human-message navigation and
+resend actions. Trace provides a separate `SESSION` filter and keeps the original
+envelope available as raw evidence. Missing legacy provenance is not inferred
+from a sender name or session-like ID; these labels do not grant permissions.
 
 Installation context and route policy distinguish Main/Child and UI scope.
 These client-side policies are presentation rules, not server authorization.
@@ -1414,9 +1662,19 @@ connection while the service finishes processing; cancellation closes the
 input channel. Backend processes remain managed by existing execution tools.
 Active capture is not restored after a restart.
 
+Client discovery and active capture leases have separate recovery behavior.
+An idle renderer renews an expired client registration automatically, including
+when returning to the foreground, without opening devices or resuming a run.
+Leaving a Project drops unused cached registrations and aborts pending ones;
+an active capture keeps its owning Project registered. Only the explicit
+`403 client_expired` response triggers quiet idle recovery. Other failures and
+failed re-registration remain visible. Losing a client during active input or
+processing still terminates that execution and requires a new explicit start;
+the backend's 15-second lease and consent checks are unchanged.
+
 This is a local user-interaction capability, not full Web API coverage or a
-whole-host sandbox. It adds neither QuickJS nor Node `vm`; ordinary agent
-scripts retain their existing execution privileges. Arbitrary embedded webpages,
+whole-host sandbox. It does not add another script execution mechanism;
+ordinary agent scripts retain their host execution privileges. Arbitrary embedded webpages,
 remote capture and unattended recording are outside the first implementation.
 See [Programmable I/O](io.md) for supported flows and validation boundaries.
 
@@ -1428,6 +1686,10 @@ enable context isolation and sandboxing and disable renderer Node integration.
 `preload.ts` exposes a narrow setup/runtime API, not arbitrary filesystem or
 process execution.
 
+The shared renderer shows minimize/maximize/close only when the native window
+capability exists. A normal browser bootstraps its own backend session and has no
+native window controls; setup/runtime recovery remains an Electron concern.
+
 The bootstrap coordinator persists setup state and a launch profile, initializes
 Main configuration, and starts/resumes the backend before mounting the product
 UI. The renderer can show first-run setup or recovery rather than pretending the
@@ -1438,6 +1700,17 @@ using `ELECTRON_RUN_AS_NODE=1`, checks authenticated loopback readiness, and
 requests shutdown during app quit. The launch credential remains in Electron
 main; request authorization is attached only to the current renderer's requests
 to the expected literal-loopback backend origin.
+
+`taskbar-activity.ts` observes the existing authenticated project catalog and
+session-stage endpoints in Electron main, independently of renderer visibility
+or the selected Project. Active `llm`, `tool`, or `waiting` stages drive native
+indeterminate taskbar progress; no remaining active turns clears it. Snapshot
+cycles are nonoverlapping, scheduled 1.5 seconds apart, bounded to four concurrent
+Project reads and a five-second cycle timeout. Unstarted/failed Project runtimes
+are not initialized or retried by observation. Failed/malformed reads are logged,
+without suppressing known activity in another Project. Revoked authorization,
+window closure, or a lost Main connection clears stale activity and cancels
+pending observation. Child hosts are not polled for Main session state.
 
 `pnpm desktop:dev` is the local desktop development path; `pnpm desktop` targets
 the current Windows installer pipeline. Build configuration and artifacts are

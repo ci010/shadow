@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { parse, compileScript, compileTemplate, compileStyle } from 'vue/compiler-sfc'
-import { createFolderChatDraft, createRemoteChatDraft, remoteConversationTargets } from './remote-conversations.ts'
+import { createFolderChatDraft, createRemoteChatDraft, remoteConversationTargets, remoteNodeTargets } from './remote-conversations.ts'
 import { createFoldersClient, type FolderRecord } from './folders-client.ts'
 import { type NodeInventoryEntry } from './node-inventory.ts'
 
@@ -22,6 +22,49 @@ test('remote picker offers only Child workdir capabilities and never treats offl
   }
   assert.equal(remoteConversationTargets([{ ...node, capabilities: [{ ...node.capabilities[0]!, online: false }] }])[0]?.available, false)
   assert.deepEqual(remoteConversationTargets([{ ...node, capabilities: [{ ...node.capabilities[0]!, kind: 'shell' }] }]), [])
+})
+
+test('remote scratch choices are nodes, never advertised folders, and require explicit managed-session support', () => {
+  const [target] = remoteNodeTargets([{ ...node, supportsManagedSessions: true }])
+  assert.equal(target.available, true)
+  assert.equal(target.capabilityId, undefined)
+  assert.equal(target.displayPath, undefined)
+  assert.deepEqual(remoteNodeTargets([{ ...node, role: 'main' }]), [])
+  assert.equal(remoteNodeTargets([node])[0].available, false)
+  assert.match(remoteNodeTargets([node])[0].unavailableReason!, /Update/)
+  for (const connection of ['offline', 'revoked'] as const) {
+    assert.equal(remoteNodeTargets([{ ...node, supportsManagedSessions: true, connection }])[0].available, false)
+  }
+})
+
+test('remote scratch first-send allocation sends only the node and reuses its request on retries', async () => {
+  const target = remoteNodeTargets([{ ...node, supportsManagedSessions: true }])[0]!
+  const requests: unknown[] = []
+  const draft = createRemoteChatDraft('http://fixture/projects/a/', target, async (url, init) => {
+    assert.equal(String(url), 'http://fixture/projects/a/api/sessions/remote')
+    requests.push(JSON.parse(String(init?.body)))
+    if (requests.length === 1) throw new Error('Synthetic lost reply')
+    return Response.json({ sessionId: 'web:chat-managed', chatId: 'chat-managed',
+      workdir: { version: 1, nodeId: 'wsl', capabilityId: 'managed-fixture' } })
+  }, () => requestId)
+  assert.deepEqual(requests, [])
+  assert.equal(draft.folder, undefined)
+  await assert.rejects(draft.prepare(), /lost reply/)
+  assert.deepEqual(await Promise.all([draft.prepare(), draft.prepare()]), ['web:chat-managed', 'web:chat-managed'])
+  assert.equal(await draft.prepare(), 'web:chat-managed')
+  assert.deepEqual(requests, [{ nodeId: 'wsl', requestId }, { nodeId: 'wsl', requestId }])
+})
+
+test('scratch rejects an ordinary registered folder response and explicitly reports unsupported devices', async () => {
+  const target = remoteNodeTargets([{ ...node, supportsManagedSessions: true }])[0]!
+  const invalid = createRemoteChatDraft('http://fixture/projects/a/', target, async () => Response.json({
+    sessionId: 'web:chat-managed', chatId: 'chat-managed', folderId: 'unwanted-folder',
+    workdir: { version: 1, nodeId: 'wsl', capabilityId: 'workspace' },
+  }))
+  await assert.rejects(invalid.prepare(), /invalid remote conversation/)
+  const unsupported = createRemoteChatDraft('http://fixture/projects/a/', target,
+    async () => Response.json({ error: 'managed_sessions_unsupported' }, { status: 409 }))
+  await assert.rejects(unsupported.prepare(), /Update the device.*No local folder was used/)
 })
 
 test('remote drafts allocate nothing before first send and preserve one server identity on retries', async () => {
@@ -136,8 +179,9 @@ test('remote selector and chat surfaces compile with accessible device selection
       assert.match(source, /Remove local attachments before selecting a remote workspace/)
     }
     if (file === 'ExecutionLocationSelector.vue') {
-      assert.match(source, /:label="remoteOnly \? 'Open remote folder' : 'Execution location'"/)
-      assert.match(source, /v-if="!remoteOnly"/)
+      assert.match(source, /label="Execution location"/)
+      assert.doesNotMatch(source, /remoteOnly|remoteConversationTargets/)
+      assert.match(source, /v-for="target in folderTargets"/)
       assert.match(source, /!target.available \|\| loading \|\| !!error/)
       assert.match(source, /@opened="refresh"/)
     }

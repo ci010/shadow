@@ -30,6 +30,7 @@
     "desktop": "node --import tsx scripts/desktop.ts build",
     "desktop:dev": "node --env-file-if-exists=.env --import tsx scripts/desktop.ts dev",
     "pair:child": "node --import tsx scripts/pair-child.ts",
+    "web:pair": "node --import tsx scripts/web-pair.ts",
     "migrate:sessions": "node --import tsx scripts/migrate-sessions-to-sqlite.ts"
   },
   "dependencies": {

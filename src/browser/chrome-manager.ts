@@ -12,7 +12,15 @@ import { getProjectScope } from '../projects/scope.ts'
 
 type ChromeConfig = z.infer<typeof ChromeToolSchema>
 
+export type BrowserKind = 'default' | 'chrome' | 'edge' | 'brave'
+
+export interface BrowserLaunchOptions {
+  browser?: BrowserKind
+  executablePath?: string
+}
+
 interface ChromeSession {
+  launchOptions?: BrowserLaunchOptions
   lease?: ChromePortLease
   port: number
   userDataDir: string
@@ -72,7 +80,7 @@ export class ChromePortAllocator {
 }
 
 export interface ChromeRuntimeOperations {
-  detectChrome(path?: string): Promise<string | null>
+  detectChrome(path?: string, browser?: BrowserKind): Promise<string | null>
   isDebugPortActive(port: number): Promise<boolean>
   isProcessAlive(pid: number): boolean | Promise<boolean>
   launchChrome(path: string, port: number, userDataDir: string, signal: AbortSignal): Promise<{ pid: number } | { error: string }>
@@ -86,7 +94,18 @@ export interface ChromeManagerOptions {
   runtime?: ChromeRuntimeOperations
 }
 
-type ChromeAllocation = { port: number; extraArgs: string[] } | { error: string }
+export type ChromeAllocation = { port: number; extraArgs: string[] } | { error: string }
+
+interface PendingAllocation {
+  operation: Promise<ChromeAllocation>
+  launchOptions: BrowserLaunchOptions
+  explicitPort?: number
+  controller: AbortController
+}
+
+function sameLaunchOptions(a: BrowserLaunchOptions, b: BrowserLaunchOptions): boolean {
+  return (a.browser ?? 'default') === (b.browser ?? 'default') && a.executablePath === b.executablePath
+}
 
 // Files/folders to copy from default profile for credential sharing
 const CREDENTIAL_FILES = [
@@ -104,33 +123,38 @@ const CREDENTIAL_DIRS = [
 ]
 
 /**
- * Detect the default Chrome/Edge/Brave executable path.
- * Returns the first path found, or null if none detected.
+ * Detect Chrome/Edge/Brave, without falling back from an explicit path or browser.
+ * Default detection retains the platform's existing preference order.
  */
-export async function detectChrome(configExePath?: string): Promise<string | null> {
-  // Use configured path if provided
-  if (configExePath) {
+export async function detectChrome(configExePath?: string, browser: BrowserKind = 'default'): Promise<string | null> {
+  if (!['default', 'chrome', 'edge', 'brave'].includes(browser)) return null
+  if (configExePath !== undefined) {
+    if (browser !== 'default') return null
     try {
       const stat = await nodeStat(configExePath)
       if (stat.isFile()) return configExePath
-    } catch { /* fall through to auto-detect */ }
-    console.warn(`[chrome-manager] Configured executablePath "${configExePath}" not found, falling back to auto-detect.`)
+    } catch { /* not found */ }
+    return null
   }
 
   const os = getOs()
 
   if (os === 'windows') {
-    const candidates = [
-      // Edge
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-      // Chrome
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      // Brave
-      'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
-      'C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
-    ]
+    const paths = {
+      edge: [
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      ],
+      chrome: [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      ],
+      brave: [
+        'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+        'C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+      ],
+    }
+    const candidates = browser === 'default' ? [...paths.edge, ...paths.chrome, ...paths.brave] : paths[browser]
     for (const candidate of candidates) {
       try {
         const stat = await nodeStat(candidate)
@@ -138,11 +162,12 @@ export async function detectChrome(configExePath?: string): Promise<string | nul
       } catch { /* not found */ }
     }
   } else if (os === 'darwin') {
-    const candidates = [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    ]
+    const paths = {
+      chrome: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
+      edge: ['/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'],
+      brave: ['/Applications/Brave Browser.app/Contents/MacOS/Brave Browser'],
+    }
+    const candidates = browser === 'default' ? [...paths.chrome, ...paths.edge, ...paths.brave] : paths[browser]
     for (const candidate of candidates) {
       try {
         const stat = await nodeStat(candidate)
@@ -150,7 +175,13 @@ export async function detectChrome(configExePath?: string): Promise<string | nul
       } catch { /* not found */ }
     }
   } else if (os === 'linux') {
-    const names = ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium', 'microsoft-edge']
+    const names = browser === 'default'
+      ? ['google-chrome', 'google-chrome-stable', 'chromium-browser', 'chromium', 'microsoft-edge', 'brave-browser', 'brave']
+      : {
+          chrome: ['google-chrome', 'google-chrome-stable'],
+          edge: ['microsoft-edge', 'microsoft-edge-stable'],
+          brave: ['brave-browser', 'brave'],
+        }[browser]
     for (const name of names) {
       try {
         const output = await new Promise<{ success: boolean; stdout: Buffer }>((resolve) => {
@@ -278,7 +309,7 @@ async function copyDirRecursive(src: string, dst: string): Promise<void> {
 export class ChromeManager {
   private sessions = new Map<string, ChromeSession>()
   private cachedExePath: string | null | undefined = undefined
-  private pending = new Map<string, Promise<ChromeAllocation>>()
+  private pending = new Map<string, PendingAllocation>()
   private releasing = new Map<string, Promise<void>>()
   private stopped = false
   private controller = new AbortController()
@@ -310,6 +341,7 @@ export class ChromeManager {
   /**
    * Allocate a Chrome session for the given key.
    * Detects Chrome, picks a free port, creates user-data-dir, launches Chrome if needed.
+   * Project launch choices are pinned until release; matching pending callers share cancellation.
    *
    * Returns the allocated port and any extra MCP args to inject, or an error string.
    */
@@ -317,53 +349,115 @@ export class ChromeManager {
     sessionKey: string,
     explicitPort?: number,
     explicitUserDataDir?: string,
+    launchOptions: BrowserLaunchOptions = {},
+    signal?: AbortSignal,
   ): Promise<ChromeAllocation> {
+    const choices = { browser: launchOptions.browser ?? 'default', executablePath: launchOptions.executablePath }
+    if (!['default', 'chrome', 'edge', 'brave'].includes(choices.browser)) {
+      return { error: 'Invalid browser selection' }
+    }
+    if (choices.executablePath !== undefined && (typeof choices.executablePath !== 'string' || !choices.executablePath.trim())) {
+      return { error: 'Browser executablePath must be a nonempty path' }
+    }
+    if (choices.browser !== 'default' && choices.executablePath !== undefined) {
+      return { error: 'Select either a named browser or an executablePath, not both' }
+    }
+    if (this.projectId === undefined && Object.keys(launchOptions).length > 0) {
+      return { error: 'Browser launch options require a project-managed isolated profile' }
+    }
     await this.releasing.get(sessionKey)
     if (this.stopped) return { error: 'Chrome manager is stopped' }
+    if (signal?.aborted) return { error: 'Chrome allocation cancelled' }
     if (this.projectId !== undefined && explicitUserDataDir !== undefined) {
       return { error: 'Project browser profiles are runtime-managed; explicit user-data-dir is not supported' }
     }
     const pending = this.pending.get(sessionKey)
-    if (pending) return pending
-    const operation = this.projectId === undefined
-      ? this.allocateLegacy(sessionKey, explicitPort, explicitUserDataDir)
-      : this.allocateIsolated(sessionKey, explicitPort)
-    this.pending.set(sessionKey, operation)
+    const existing = this.sessions.get(sessionKey)
+    const pinned = pending?.launchOptions ?? existing?.launchOptions
+    if (pinned && !sameLaunchOptions(pinned, choices)) {
+      return { error: 'Chrome session already has different browser launch options' }
+    }
+    if (pending) {
+      if (explicitPort !== undefined && pending.explicitPort !== explicitPort) {
+        return { error: 'Chrome session already has a pending allocation with a different debug port' }
+      }
+      return this.awaitAllocation(pending, signal)
+    }
+    const controller = new AbortController()
+    const combinedSignal = AbortSignal.any([this.controller.signal, controller.signal, ...(signal ? [signal] : [])])
+    const operation = (this.projectId === undefined
+      ? this.allocateLegacy(sessionKey, explicitPort, explicitUserDataDir, combinedSignal)
+      : this.allocateIsolated(sessionKey, explicitPort, choices, combinedSignal))
+      .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+    const allocation = { operation, launchOptions: choices, explicitPort, controller }
+    this.pending.set(sessionKey, allocation)
     void operation.then(() => this.pending.delete(sessionKey), () => this.pending.delete(sessionKey))
     return operation
   }
 
-  private async allocateIsolated(sessionKey: string, explicitPort?: number): Promise<ChromeAllocation> {
+  private async awaitAllocation(pending: PendingAllocation, signal?: AbortSignal): Promise<ChromeAllocation> {
+    const abort = () => pending.controller.abort(signal?.reason)
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      return await pending.operation
+    } finally {
+      signal?.removeEventListener('abort', abort)
+    }
+  }
+
+  private async allocateIsolated(
+    sessionKey: string,
+    explicitPort: number | undefined,
+    launchOptions: BrowserLaunchOptions,
+    signal: AbortSignal,
+  ): Promise<ChromeAllocation> {
     const existing = this.sessions.get(sessionKey)
     const active = this.options.runtime?.isDebugPortActive ?? isDebugPortActive
+    signal.throwIfAborted()
     if (existing) {
       if (explicitPort !== undefined && explicitPort !== existing.port) {
         return { error: 'Chrome session already owns a different debug port' }
       }
       if (existing.pid !== undefined && await this.isProcessAlive(existing.pid) && await active(existing.port)) {
+        signal.throwIfAborted()
         return { port: existing.port, extraArgs: [`--browserUrl=http://127.0.0.1:${existing.port}`] }
       }
       await this.releaseAllocated(sessionKey)
     }
-    const exePath = await this.getExePath()
-    if (!exePath) return { error: 'Chrome/Edge/Brave executable not found. Configure tools.chrome.executablePath.' }
+    signal.throwIfAborted()
+    const detect = this.options.runtime?.detectChrome ?? detectChrome
+    const exePath = launchOptions.executablePath !== undefined
+      ? await detect(launchOptions.executablePath)
+      : launchOptions.browser !== 'default' && launchOptions.browser !== undefined
+        ? await detect(undefined, launchOptions.browser)
+        : await this.getExePath()
+    signal.throwIfAborted()
+    if (!exePath) {
+      return { error: launchOptions.executablePath !== undefined
+        ? `Selected browser executable not found: ${launchOptions.executablePath}`
+        : launchOptions.browser !== 'default'
+          ? `Selected browser "${launchOptions.browser}" executable not found`
+          : 'Chrome/Edge/Brave executable not found. Configure tools.chrome.executablePath.' }
+    }
     let lease: ChromePortLease | undefined
     try {
       lease = await this.options.portAllocator!.reserve(this.config.basePort ?? 9222, explicitPort)
+      signal.throwIfAborted()
       if (await active(lease.port)) return { error: 'Reserved Chrome port is occupied; refusing to attach an unowned browser' }
-      this.controller.signal.throwIfAborted()
+      signal.throwIfAborted()
       const userDataDir = resolve(this.workspace, '.browser', crypto.randomUUID())
       await mkdir(userDataDir, { recursive: true })
+      signal.throwIfAborted()
       const result = this.options.runtime
-        ? await this.options.runtime.launchChrome(exePath, lease.port, userDataDir, this.controller.signal)
-        : await this.launchChrome(exePath, lease.port, userDataDir, this.controller.signal)
+        ? await this.options.runtime.launchChrome(exePath, lease.port, userDataDir, signal)
+        : await this.launchChrome(exePath, lease.port, userDataDir, signal)
       if ('error' in result) return result
       const port = lease.port
-      this.sessions.set(sessionKey, { port, userDataDir, pid: result.pid, owned: true, lease })
+      this.sessions.set(sessionKey, { port, userDataDir, pid: result.pid, owned: true, lease, launchOptions })
       lease = undefined
-      if (this.stopped) {
+      if (signal.aborted) {
         await this.releaseAllocated(sessionKey)
-        return { error: 'Chrome manager stopped during allocation' }
+        return { error: this.stopped ? 'Chrome manager stopped during allocation' : 'Chrome allocation cancelled' }
       }
       return { port, extraArgs: [`--browserUrl=http://127.0.0.1:${port}`] }
     } catch (error) {
@@ -377,12 +471,15 @@ export class ChromeManager {
     sessionKey: string,
     explicitPort?: number,
     explicitUserDataDir?: string,
+    signal?: AbortSignal,
   ): Promise<ChromeAllocation> {
+    signal?.throwIfAborted()
     // Already allocated for this session?
     const existing = this.sessions.get(sessionKey)
     if (existing) {
       // Verify it's still alive
       if (await isDebugPortActive(existing.port)) {
+        signal?.throwIfAborted()
         return {
           port: existing.port,
           extraArgs: [`--browserUrl=http://127.0.0.1:${existing.port}`],
@@ -394,6 +491,7 @@ export class ChromeManager {
 
     // Detect Chrome executable
     const exePath = await this.getExePath()
+    signal?.throwIfAborted()
     if (!exePath) {
       return {
         error:
@@ -407,6 +505,7 @@ export class ChromeManager {
 
     // Check if this port already has Chrome running
     const alreadyRunning = await isDebugPortActive(port)
+    signal?.throwIfAborted()
 
     let pid: number | undefined
     let owned = false
@@ -431,7 +530,7 @@ export class ChromeManager {
       }
 
       // Launch Chrome
-      const launchResult = await this.launchChrome(exePath, port, userDataDir)
+      const launchResult = await this.launchChrome(exePath, port, userDataDir, signal)
       if ('error' in launchResult) {
         return {
           error: `Failed to launch Chrome.\n` +
@@ -452,6 +551,10 @@ export class ChromeManager {
       owned,
     }
     this.sessions.set(sessionKey, session)
+    if (signal?.aborted) {
+      await this.releaseAllocated(sessionKey)
+      return { error: this.stopped ? 'Chrome manager stopped during allocation' : 'Chrome allocation cancelled' }
+    }
 
     return {
       port,
@@ -463,7 +566,7 @@ export class ChromeManager {
    * Release a Chrome session. If we own the process, kill it.
    */
   async release(sessionKey: string): Promise<void> {
-    await this.pending.get(sessionKey)
+    await this.pending.get(sessionKey)?.operation
     await this.releaseAllocated(sessionKey)
   }
 
@@ -501,7 +604,7 @@ export class ChromeManager {
   async releaseAll(): Promise<void> {
     this.stopped = true
     this.controller.abort(new Error('Chrome runtime stopped'))
-    await Promise.allSettled(this.pending.values())
+    await Promise.allSettled([...this.pending.values()].map((pending) => pending.operation))
     const outcomes = await Promise.allSettled([...this.sessions.keys()].map((key) => this.release(key)))
     const failures = outcomes.filter((outcome) => outcome.status === 'rejected')
     if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Failed to release owned Chrome sessions')
@@ -539,7 +642,12 @@ export class ChromeManager {
       }
     }
     this._lastConfigExe = configExe
-    const result = await (this.options.runtime?.detectChrome ?? detectChrome)(configExe)
+    const detect = this.options.runtime?.detectChrome ?? detectChrome
+    let result = await detect(configExe || undefined)
+    if (result === null && configExe) {
+      console.warn(`[chrome-manager] Configured executablePath "${configExe}" not found, falling back to auto-detect.`)
+      result = await detect()
+    }
     if (result !== null) {
       this.cachedExePath = result
     }
@@ -589,8 +697,7 @@ export class ChromeManager {
     console.info(`[chrome-manager] Launching Chrome: ${exePath} ${args.join(' ')}`)
 
     try {
-      // Spawn detached so the Chrome process survives independently of the
-      // parent — we only need the PID for tracking; output is throwaway.
+      signal?.throwIfAborted()
       const proc = childSpawn(exePath, args, {
         stdio: ['ignore', 'ignore', 'pipe'],
       })
@@ -611,7 +718,7 @@ export class ChromeManager {
         await new Promise((r) => setTimeout(r, 500))
         if (launchError || signal?.aborted || proc.exitCode !== null || proc.signalCode !== null) {
           if (proc.exitCode === null && proc.signalCode === null) proc.kill()
-          return { error: launchError?.message ?? (signal?.aborted ? 'Chrome runtime stopped' : 'Chrome process exited before its debug port was ready') }
+          return { error: launchError?.message ?? (signal?.aborted ? 'Chrome allocation cancelled or runtime stopped' : 'Chrome process exited before its debug port was ready') }
         }
         if (await isDebugPortActive(port)) {
           // Detach — let Chrome keep running after our process exits

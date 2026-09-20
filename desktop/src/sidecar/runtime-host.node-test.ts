@@ -124,6 +124,7 @@ test('rejects non-loopback readiness and clears authorization after failed start
   supervisor.ready('http://example.com:43123')
   await assert.rejects(starting, /invalid API origin/)
   assert.deepEqual(authorizations, [null])
+  assert.equal(supervisor.stopCount, 1)
 })
 
 test('clears authorization once when the supervisor start rejects', async () => {
@@ -141,6 +142,7 @@ test('clears authorization once when the supervisor start rejects', async () => 
 })
 
 test('releases a failed supervisor result so a retry creates a fresh launch', async () => {
+  let stopped = 0
   const failed: SidecarSupervisor = {
     status: {
       phase: 'failed',
@@ -154,7 +156,7 @@ test('releases a failed supervisor result so a retry creates a fresh launch', as
       kind: 'port-conflict',
       message: 'busy',
     }),
-    stop: async () => undefined,
+    stop: async () => { stopped++ },
   }
   const ready = new DeferredSupervisor()
   const supervisors: SidecarSupervisor[] = [failed, ready]
@@ -168,6 +170,7 @@ test('releases a failed supervisor result so a retry creates a fresh launch', as
     (await host.start({ role: 'main', port: 43123 })).phase,
     'failed',
   )
+  assert.equal(stopped, 1)
   const retried = host.start({ role: 'main', port: 43123 })
   ready.ready()
   assert.equal((await retried).phase, 'ready')

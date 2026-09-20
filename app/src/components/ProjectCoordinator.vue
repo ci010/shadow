@@ -1,13 +1,12 @@
 <template>
-  <div class="project-coordinator">
-    <button class="coordinator-entry" :class="{ selected }" :disabled="loading"
+  <span class="project-coordinator">
+    <button type="button" class="coordinator-entry" :class="{ selected }" :aria-disabled="loading"
       :aria-label="`Open Project coordination in ${projectName}`" :aria-current="selected ? 'page' : undefined"
       :aria-busy="loading" @click="open">
-      <span :class="loading ? 'i-lucide-loader-circle' : 'i-lucide-network'" class="w-4 h-4" aria-hidden="true" />
-      <span>{{ loading ? 'Opening coordination…' : 'Project coordination' }}</span>
+      <span>{{ projectName }}</span>
     </button>
-    <p v-if="error" class="coordinator-error" role="alert">{{ error }} <button class="text-action" @click="open">Retry</button></p>
-  </div>
+    <span v-if="error" class="coordinator-error" role="alert">{{ error }} <button type="button" class="text-action" @click="open">Retry</button></span>
+  </span>
 </template>
 
 <script setup lang="ts">
@@ -52,12 +51,12 @@ onUnmounted(cancel)
 </script>
 
 <style scoped>
-.project-coordinator { padding: 2px 8px 8px; }
-.coordinator-entry { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); text-align: left; font: inherit; font-size: 13px; cursor: pointer; }
+.project-coordinator { display: block; min-width: 0; }
+.coordinator-entry { display: block; width: 100%; min-height: 28px; padding: 4px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--c-text); text-align: left; font: inherit; font-size: 13px; overflow-wrap: anywhere; cursor: pointer; }
 .coordinator-entry:hover, .coordinator-entry.selected { background: var(--c-bg-muted); color: var(--c-text); }
 .coordinator-entry.selected { border-color: var(--c-border); }
-.coordinator-entry:disabled { cursor: progress; }
+.coordinator-entry[aria-busy="true"] { cursor: progress; }
 .coordinator-entry:focus-visible, .text-action:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
-.coordinator-error { margin: 6px 10px; color: var(--c-error); font-size: 12px; overflow-wrap: anywhere; }
+.coordinator-error { display: block; margin: 6px 4px; color: var(--c-error); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 .text-action { border: 0; padding: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
 </style>

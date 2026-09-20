@@ -2,8 +2,10 @@ import type { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { env } from 'node:process'
 import type { AddressInfo } from 'node:net'
+import { IncomingMessage } from 'node:http'
 import { gatewayWebSockets, normalizeGatewayUpgradeRequest } from './websocket.ts'
 import type { GatewayPlugin } from './types.ts'
+import type { BrowserAuth } from './web-auth.ts'
 
 export type { GatewayPlugin } from './types.ts'
 
@@ -30,9 +32,16 @@ export class GatewayClientAddressRegistry {
   }
 }
 
+export function isLoopbackGatewayRequest(request: Request, clientAddresses: GatewayClientAddressRegistry): boolean {
+  return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(request.url).hostname)
+    && ['tcp:127.0.0.1', 'tcp:::1', 'tcp:::ffff:127.0.0.1'].includes(clientAddresses.resolve(request))
+}
+
 export interface GatewayRouteOptions {
   allowedOrigins?: string[]
   launchCredential?: string
+  browserAuth?: BrowserAuth
+  clientAddresses?: GatewayClientAddressRegistry
   launchCredentialExemptions?: readonly {
     readonly method: string
     readonly path: string
@@ -136,8 +145,15 @@ function registerGatewayRoutes(
   )
 
   app.use('*', async (c, next) => {
+    if (opts.browserAuth?.isAuthenticationRequest(c.req.raw)) c.header('Cache-Control', 'no-store')
     try {
+      const original = c.req.raw
       normalizeGatewayUpgradeRequest(c)
+      opts.clientAddresses?.inherit(original, c.req.raw)
+      const incoming: unknown = typeof c.env === 'object' && c.env !== null && 'incoming' in c.env ? c.env.incoming : undefined
+      if (incoming instanceof IncomingMessage && incoming.socket.remoteAddress) {
+        opts.clientAddresses?.capture(c.req.raw, { transport: 'tcp', hostname: incoming.socket.remoteAddress })
+      }
     } catch {
       return c.json({ error: 'invalid_websocket_host' }, 400)
     }
@@ -197,9 +213,12 @@ function registerGatewayRoutes(
     const launchCredentialExempt = launchCredentialExemptions.has(
       `${c.req.method.toUpperCase()}\u0000${new URL(c.req.url).pathname}`,
     )
+    const browserSession = opts.browserAuth?.session(c.req.raw)
     if (
       c.req.method !== 'OPTIONS' && launchCredential &&
       !launchCredentialExempt &&
+      !opts.browserAuth?.isPublicRequest(c.req.raw) &&
+      !browserSession &&
       !await validateLaunchCredential(
         c.req.header('Authorization'),
         launchCredential,
@@ -210,6 +229,13 @@ function registerGatewayRoutes(
       })
     }
 
+    if (browserSession) {
+      const original = c.req.raw
+      c.req.raw = new Request(original, {
+        signal: AbortSignal.any([original.signal, browserSession.controller.signal]),
+      })
+      opts.clientAddresses?.inherit(original, c.req.raw)
+    }
     await next()
     if (normalizedRequestOrigin) {
       c.header('Access-Control-Allow-Origin', normalizedRequestOrigin)

@@ -18,7 +18,7 @@
           <label class="settings-field">Project name<input v-model="name" required maxlength="100" :disabled="saving || !project" /></label>
           <label class="settings-field">Home<input :value="config?.agent.workspace ?? ''" readonly aria-describedby="home-description" /></label>
           <p id="home-description" class="settings-help">This project's memory, skills, learning and scratch chats live here. Renaming does not move its Home.</p>
-          <button class="btn" :disabled="saving || !project || !name.trim()">{{ saving ? 'Saving...' : 'Save name' }}</button>
+          <button class="btn primary" :disabled="saving || !project || !name.trim()">{{ saving ? 'Saving...' : 'Save name' }}</button>
         </form>
         <section v-if="config && modelsOpened" v-show="section === 'models'">
           <ModelDefaultsForm :api-base="apiBase" scope="project" :project-id="projectId" />
@@ -31,7 +31,7 @@
           <p class="settings-help">Reflection, skill encapsulation and identity learning use only this project's sessions and Home.</p>
           <label v-if="typeof config?.learning?.enabled === 'boolean'" class="settings-checkbox"><input v-model="learningEnabled" type="checkbox" :disabled="saving || !config" />Enable automatic learning</label>
           <label v-for="item in learningFields" :key="item.key" class="settings-field">{{ item.label }} interval (minutes)<input v-model.number="learningIntervals[item.key]" type="number" min="1" max="35791" step="1" required :disabled="saving || !config" /></label>
-          <button class="btn" :disabled="saving || !config">{{ saving ? 'Saving...' : 'Save learning settings' }}</button>
+          <button class="btn primary" :disabled="saving || !config">{{ saving ? 'Saving...' : 'Save learning settings' }}</button>
           <LearningRuntimeStatus :api-base="apiBase" :project-id="projectId" :revision="learningRevision"
             :active="available && section === 'learning' && route.name === 'project-settings' && route.params.projectId === projectId" />
           <RouterLink class="settings-related" :to="{ name: 'chat', params: { projectId } }">View Self-reflection conversations</RouterLink>

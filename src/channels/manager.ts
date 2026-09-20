@@ -46,6 +46,7 @@ export class ChannelManager {
   private app?: Hono
   private closing = false
   private operations: Promise<unknown> = Promise.resolve()
+  private backgroundStarts = new Set<BaseChannel>()
   private health = new Map<string, { state: ChannelState; message?: string }>()
   private cleanupFailed = new Set<string>()
   private shutdownTask?: Promise<void>
@@ -394,7 +395,7 @@ export class ChannelManager {
     }
     if (this.availableChannel(msg.channel, msg.channelAddress) !== channel) throw new YieldError('unavailable', 'The channel connection has changed.')
     if (this.sessionManager.yields.get(request.sessionId)?.id !== request.id) return
-    await channel.presentDecisionText(msg.chatId, msg.content)
+    await channel.presentDecisionText(msg.chatId, msg.content, msg.replyTo)
   }
 
   private createChannel(id: ChannelId, config = this.config): BaseChannel {
@@ -513,6 +514,7 @@ export class ChannelManager {
         }
       }
       await channel.start(this.app!)
+      if (this.closing) return
       // Only transport callbacks can claim connection readiness.
       if (!channel.setStatusListener) this.health.set(id, { state: 'running' })
     } catch (error) {
@@ -528,18 +530,21 @@ export class ChannelManager {
         channel.setStatusListener?.(() => {})
         this.health.set(id, { state: 'restart-required', message: 'Connection cleanup failed. Restart the backend before reconnecting.' })
       }
+    } finally {
+      this.backgroundStarts.delete(channel)
     }
   }
 
   /**
    * Start all channels and the outbound dispatch loop.
    * Each channel receives the gateway Hono app to register its own routes.
+   * Local readiness may omit external connections; their lifecycle remains owned here.
    */
-  startAll(app: Hono): Promise<void> {
-    return this.inScope(() => this.startChannels(app))
+  startAll(app: Hono, options: { waitForConnections?: boolean } = {}): Promise<void> {
+    return this.inScope(() => this.startChannels(app, options.waitForConnections ?? true))
   }
 
-  private async startChannels(app: Hono): Promise<void> {
+  private async startChannels(app: Hono, waitForConnections: boolean): Promise<void> {
     if (this.running) return
     if (this.closing) throw new ChannelSetupError('channels_stopping', 503)
     if (this.options) {
@@ -556,24 +561,31 @@ export class ChannelManager {
     this.dispatchTask = this.dispatchOutbound(this.dispatchController.signal)
 
     // Start each channel
-    const starts = Array.from(this.channels.entries()).map(async ([key, ch]) => {
-      try {
-        if (isChannelId(ch.name)) {
-          await this.startChannel(key, ch)
-          return
+    const localStarts: Promise<void>[] = []
+    const starts = Array.from(this.channels.entries()).map(([key, ch]) => {
+      if (!waitForConnections && isChannelId(ch.name)) this.backgroundStarts.add(ch)
+      const starting = (async () => {
+        try {
+          if (isChannelId(ch.name)) {
+            await this.startChannel(key, ch)
+            return
+          }
+          await ch.start(app)
+          console.info(`[channel-manager] Channel started: ${ch.name}`)
+        } catch (err) {
+          console.error(
+            `[channel-manager] Channel failed to start: ${ch.name}`,
+            err,
+          )
+          if (!isChannelId(ch.name)) throw err
         }
-        await ch.start(app)
-        console.info(`[channel-manager] Channel started: ${ch.name}`)
-      } catch (err) {
-        console.error(
-          `[channel-manager] Channel failed to start: ${ch.name}`,
-          err,
-        )
-      }
+      })()
+      if (!isChannelId(ch.name)) localStarts.push(starting)
+      return starting
     })
 
     this.operations = Promise.allSettled(starts)
-    await this.operations
+    await (waitForConnections ? this.operations : Promise.all(localStarts))
   }
 
   /**
@@ -590,6 +602,10 @@ export class ChannelManager {
 
   private async stopChannels(): Promise<void> {
     this.beginShutdown()
+    await Promise.all(Array.from(this.backgroundStarts, async channel => {
+      try { await channel.stop() }
+      catch { console.error(`[channel-manager] Starting channel cleanup failed: ${channel.name}`) }
+    }))
     await this.operations
     this.running = false
     this.dispatchController?.abort()

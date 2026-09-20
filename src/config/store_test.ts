@@ -94,3 +94,45 @@ test('failed asynchronous activation rolls back disk and memory without poisonin
     assert.deepEqual((await new ConfigStore({ configPath }).read()).agent, { model: 'saved' })
   })
 })
+
+test('failed preparation leaves disk, memory and activation untouched', async () => {
+  await withTempWorkspace(async root => {
+    const configPath = join(root, 'config.json')
+    await writeFile(configPath, '{}')
+    let activations = 0
+    const store = new ConfigStore({
+      configPath,
+      beforeCommit: async () => {
+        assert.equal(await readFile(configPath, 'utf8'), '{}')
+        throw new Error('Indexing failed')
+      },
+      onChanged: () => { activations++ },
+    })
+    await assert.rejects(store.update(raw => ({ ...raw, mcp: { fixture: { command: 'synthetic' } } })), /Indexing failed/)
+    assert.equal(await readFile(configPath, 'utf8'), '{}')
+    assert.deepEqual(await store.read(), {})
+    assert.equal(activations, 0)
+  })
+})
+
+test('preparation preserves concurrent external edits and observes cancellation before writing', async () => {
+  await withTempWorkspace(async root => {
+    const configPath = join(root, 'config.json')
+    await writeFile(configPath, '{}')
+    const external = '{"agent":{"model":"external"}}'
+    const store = new ConfigStore({
+      configPath, beforeCommit: async () => { await writeFile(configPath, external) },
+    })
+    await assert.rejects(store.update(raw => ({ ...raw, mcp: {} })), /changed on disk during preparation/)
+    assert.equal(await readFile(configPath, 'utf8'), external)
+    const controller = new AbortController()
+    const aborting = new ConfigStore({
+      configPath, beforeCommit: (_config, _raw, signal) => {
+        assert.equal(signal, controller.signal)
+        controller.abort()
+      },
+    })
+    await assert.rejects(aborting.update(raw => ({ ...raw, mcp: {} }), controller.signal), { name: 'AbortError' })
+    assert.equal(await readFile(configPath, 'utf8'), external)
+  })
+})

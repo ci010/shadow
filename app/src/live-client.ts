@@ -32,6 +32,7 @@ export function createLiveClient(base: string, options: {
   const waiters = new Set<Waiter>()
   let source: Source | undefined
   let connectedTopics = new Set<string>()
+  let unavailableTopics = new Set<string>()
   let ready = false
   let cursor: string | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -78,7 +79,19 @@ export function createLiveClient(base: string, options: {
     subscriber.initialized = true
     subscriber.observer.reset(reason)
   }
+  function projectUnavailable() {
+    return new Error('This project is unavailable. Retry project startup before submitting a message.')
+  }
   function deliver(envelope: RealtimeEnvelope) {
+    if (envelope.type === 'unavailable') {
+      const keys = envelope.topics.map(realtimeTopicKey)
+      if (keys.some(key => !connectedTopics.has(key))) throw new Error('Unexpected unavailable live topic')
+      unavailableTopics = new Set(keys)
+      for (const waiter of [...waiters]) {
+        if (unavailableTopics.has(realtimeTopicKey(waiter.owner.topic))) waiter.reject(projectUnavailable())
+      }
+      return
+    }
     if (envelope.type === 'event') {
       if (cursor) {
         const separator = cursor.lastIndexOf(':')
@@ -97,16 +110,21 @@ export function createLiveClient(base: string, options: {
     }
     cursor = envelope.cursor
     if (envelope.type === 'reset') {
+      ready = false
+      unavailableTopics.clear()
       for (const subscriber of [...subscribers]) if (!subscriber.closed) initialize(subscriber, envelope.reason)
     } else if (envelope.type === 'ready') {
       ready = true
       attempt = 0
       update({ phase: 'live' })
       for (const subscriber of [...subscribers]) {
-        if (!subscriber.closed && !subscriber.initialized && connectedTopics.has(realtimeTopicKey(subscriber.topic))) initialize(subscriber, 'subscription')
+        if (!subscriber.closed && !subscriber.initialized && connectedTopics.has(realtimeTopicKey(subscriber.topic))
+          && !unavailableTopics.has(realtimeTopicKey(subscriber.topic))) initialize(subscriber, 'subscription')
       }
       for (const waiter of [...waiters]) {
-        if (connectedTopics.has(realtimeTopicKey(waiter.owner.topic))) waiter.resolve()
+        const key = realtimeTopicKey(waiter.owner.topic)
+        if (unavailableTopics.has(key)) waiter.reject(projectUnavailable())
+        else if (connectedTopics.has(key)) waiter.resolve()
       }
     }
   }
@@ -121,6 +139,7 @@ export function createLiveClient(base: string, options: {
       const current = (options.source ?? (url => new EventSource(url)))(url.toString())
       source = current
       connectedTopics = nextTopics
+      unavailableTopics.clear()
       update({ phase: attempt ? 'reconnecting' : 'connecting', ...(attempt ? { error: 'Live updates are reconnecting to Main.' } : {}) })
       heartbeat()
       current.addEventListener('realtime', event => {
@@ -158,7 +177,7 @@ export function createLiveClient(base: string, options: {
     const subscriber: Subscriber = { topic, observer, closed: false, initialized: false }
     subscribers.add(subscriber)
     changed()
-    if (ready && connectedTopics.has(realtimeTopicKey(topic))) {
+    if (ready && connectedTopics.has(realtimeTopicKey(topic)) && !unavailableTopics.has(realtimeTopicKey(topic))) {
       queueMicrotask(() => {
         if (subscriber.closed) return
         try { initialize(subscriber, 'subscription') }
@@ -169,6 +188,7 @@ export function createLiveClient(base: string, options: {
       ready(signal) {
         if (subscriber.closed) return Promise.reject(new DOMException('Live subscription closed', 'AbortError'))
         if (signal?.aborted) return Promise.reject(signal.reason)
+        if (ready && unavailableTopics.has(realtimeTopicKey(topic))) return Promise.reject(projectUnavailable())
         if (ready && connectedTopics.has(realtimeTopicKey(topic))) return Promise.resolve()
         if (status.phase === 'error') return Promise.reject(new Error(status.error))
         return new Promise<void>((resolve, reject) => {

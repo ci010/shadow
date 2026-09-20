@@ -11,32 +11,42 @@ function normalizeSearXNGBase(base: string): string {
   return base.trim().replace(/\/+$/, '')
 }
 
-async function probeSearXNGBase(base: string): Promise<string | null> {
+async function probeSearXNGBase(base: string, signal?: AbortSignal): Promise<string | null> {
+  const probeSignal = () => signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(SEARXNG_PROBE_TIMEOUT_MS)])
+    : AbortSignal.timeout(SEARXNG_PROBE_TIMEOUT_MS)
+  signal?.throwIfAborted()
   try {
     const res = await fetch(`${base}/search?q=test&format=json`, {
-      signal: AbortSignal.timeout(SEARXNG_PROBE_TIMEOUT_MS),
+      signal: probeSignal(),
     })
-    if (res.ok || res.status === 429) {
-      const ct = res.headers.get('content-type') ?? ''
-      if (ct.includes('json') || (await res.text()).includes('searxng')) {
-        return base
+    try {
+      if (res.ok || res.status === 429) {
+        const ct = res.headers.get('content-type') ?? ''
+        if (ct.includes('json') || (await res.text()).includes('searxng')) {
+          return base
+        }
       }
+    } finally {
+      if (!res.bodyUsed) await res.body?.cancel()
     }
   } catch {
+    signal?.throwIfAborted()
     // JSON output may be disabled or slower than the probe timeout.
   }
 
   try {
     const htmlRes = await fetch(`${base}/`, {
-      signal: AbortSignal.timeout(SEARXNG_PROBE_TIMEOUT_MS),
+      signal: probeSignal(),
     })
     if (htmlRes.ok) {
       const body = await htmlRes.text()
       if (body.toLowerCase().includes('searxng')) {
         return base
       }
-    }
+    } else await htmlRes.body?.cancel()
   } catch {
+    signal?.throwIfAborted()
     // host not reachable or timed out
   }
 
@@ -51,8 +61,9 @@ async function probeSearXNGBase(base: string): Promise<string | null> {
 async function probeSearXNG(
   host: string,
   port: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
-  return await probeSearXNGBase(`http://${host}:${port}`)
+  return await probeSearXNGBase(`http://${host}:${port}`, signal)
 }
 
 /**
@@ -61,18 +72,19 @@ async function probeSearXNG(
  * All probes run in parallel for fast detection.
  * Returns the base URL (e.g. "http://searxng:8080") or null if not found.
  */
-export async function detectSearXNG(): Promise<string | null> {
+export async function detectSearXNG(signal?: AbortSignal): Promise<string | null> {
+  signal?.throwIfAborted()
   const explicitBase = env.SEARXNG_URL
   if (explicitBase?.trim()) {
     const normalizedBase = normalizeSearXNGBase(explicitBase)
-    const detected = await probeSearXNGBase(normalizedBase)
+    const detected = await probeSearXNGBase(normalizedBase, signal)
     if (detected) return detected
   }
 
   const probes: Promise<string | null>[] = []
   for (const host of SEARXNG_PROBE_HOSTS) {
     for (const port of SEARXNG_PROBE_PORTS) {
-      probes.push(probeSearXNG(host, port))
+      probes.push(probeSearXNG(host, port, signal))
     }
   }
   const results = await Promise.all(probes)

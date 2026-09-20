@@ -4,14 +4,18 @@ import { SessionTools } from '../tools/registry.ts'
 /** Independent snapshot borrowing resources only while the caller awaits this leaf. */
 export class CallTools extends SessionTools {
   private readonly caller: SessionTools
-  constructor(caller: SessionTools, workspace: string, allowed?: string[], blocked?: string[]) {
+  constructor(caller: SessionTools, workspace: string, allowed?: string[], blocked?: string[], allowedModules?: readonly string[]) {
     const snapshot = caller.snapshot()
-    super(snapshot, workspace, allowed, blocked)
+    const modules = allowedModules === undefined ? caller.allowedModules
+      : caller.allowedModules === undefined ? allowedModules : allowedModules.filter(name => caller.allowedModules!.includes(name))
+    super(snapshot, workspace, allowed, blocked, modules)
     this.caller = snapshot
   }
   override canUseDynamic(name: string): boolean {
     return super.canUseDynamic(name) && this.caller.canUseDynamic(name)
   }
+  override get dynamicOwner(): SessionTools { return this.caller.dynamicOwner }
+  override get ownerSignal(): AbortSignal { return this.caller.ownerSignal }
   override hasDynamic(name: string): boolean {
     return this.canUseDynamic(name) && (super.hasDynamic(name) || this.caller.hasDynamic(name))
   }

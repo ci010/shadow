@@ -1,3 +1,5 @@
+import type { SessionMessageSource } from './message-author.ts'
+
 export interface HistoryMessage {
   role: string
   content: string
@@ -5,6 +7,7 @@ export interface HistoryMessage {
   event?: string
   isSystemEvent?: boolean
   isSummary?: boolean
+  sessionSource?: SessionMessageSource
 }
 
 export interface UserMessageMarker {
@@ -14,11 +17,11 @@ export interface UserMessageMarker {
 }
 
 export function isUserMessage(message: HistoryMessage): boolean {
-  return message.role === 'user' && !message.isSystemEvent && !message.isSummary && !message.event
+  return message.role === 'user' && !message.isSystemEvent && !message.isSummary && !message.event && !message.sessionSource
 }
 
 export function resendableUserMessage<T extends HistoryMessage>(messages: readonly T[]): T | undefined {
-  const last = messages.at(-1)
+  const last = messages.findLast(message => message.role !== 'command')
   return last && isUserMessage(last) ? last : undefined
 }
 

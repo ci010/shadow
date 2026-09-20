@@ -1,7 +1,7 @@
 import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import type { ChannelCapabilities } from './capabilities.ts'
 import { randomUUID } from 'node:crypto'
-import { readFile, realpath } from 'node:fs/promises'
+import { realpath } from 'node:fs/promises'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
@@ -13,8 +13,15 @@ import { FolderError } from '../folders/registry.ts'
 import { isConfigObject, parseSessionConfigPatch, type SessionConfigPatch } from '../sessions/config-patch.ts'
 import type { RealtimePublisher } from '../realtime/hub.ts'
 import type { RealtimeTurnFinishedPayload } from '../realtime/protocol.ts'
+import { isCommandReceipt } from '../slash-commands/receipt.ts'
+import { isMissingMediaFile, mediaFileResponse } from './media-response.ts'
 
 function outboundPayload(msg: OutboundMessage) {
+  const receipt = msg.metadata?.commandReceipt
+  if (receipt !== undefined) {
+    if (!isCommandReceipt(receipt)) throw new TypeError('Invalid outbound command receipt')
+    return { event: 'command_result', done: true, receipt }
+  }
   return {
     event: msg.event ?? 'response', content: msg.content, done: msg.done ?? false,
     media: msg.media, usage: msg.usage, toolCall: msg.toolCall,
@@ -32,7 +39,7 @@ export async function resolveSessionMediaPath(
   sessionRoot: string,
   mediaPath: string,
 ): Promise<string | null> {
-  if (!mediaPath || isAbsolute(mediaPath)) return null
+  if (!mediaPath || mediaPath.includes('\0') || isAbsolute(mediaPath)) return null
 
   const target = resolve(sessionRoot, mediaPath)
   if (target === sessionRoot || escapesRoot(sessionRoot, target)) return null
@@ -45,8 +52,9 @@ export async function resolveSessionMediaPath(
     return realTarget !== realRoot && !escapesRoot(realRoot, realTarget)
       ? realTarget
       : null
-  } catch {
-    return null
+  } catch (error) {
+    if (isMissingMediaFile(error)) return null
+    throw error
   }
 }
 
@@ -58,6 +66,9 @@ export async function resolveSessionMediaPath(
  *  POST /api/chat/message  — send message, wait for full response (sync REST)
  *  POST /api/chat/upload   — upload file/image, returns absolute private-session path
  *  GET  /api/chat/uploads/* — serve uploaded / outbound media files
+ *  GET/HEAD /api/media — chatId for web workdir media, or an existing sessionId
+ *    for private uploads only; path supports uploads/... and absolute upload refs.
+ *    Both file routes support byte ranges and download=1.
  */
 export class WebChannel extends AbstractChannel {
   readonly name = 'web'
@@ -121,12 +132,17 @@ export class WebChannel extends AbstractChannel {
   }
 
   async start(app: Hono): Promise<void> {
-    for (const path of ['/api/chat/send', '/api/chat/message', '/api/chat/upload', '/api/media']) {
+    for (const path of ['/api/chat/send', '/api/chat/message', '/api/chat/upload', '/api/chat/uploads/*', '/api/media']) {
       app.use(path, async (c, next) => {
         const ids: string[] = []
-        if (c.req.method === 'GET') {
+        if (c.req.method === 'GET' || c.req.method === 'HEAD') {
           const chatId = c.req.query('chatId')
+          const sessionId = path === '/api/media' ? c.req.query('sessionId') : undefined
+          if (path === '/api/media' && chatId !== undefined && sessionId !== undefined) {
+            return c.json({ error: 'Specify either chatId or sessionId, not both' }, 400)
+          }
           if (chatId) ids.push(`${this.name}:${chatId}`)
+          if (sessionId) ids.push(sessionId)
         } else {
           let body: Record<string, unknown> | undefined
           try {
@@ -234,52 +250,21 @@ export class WebChannel extends AbstractChannel {
       const chatId = c.req.query('chatId')
       const sessionId = chatId ? `${this.name}:${chatId}` : undefined
       const state = sessionId ? this.sessionManager?.getSessionState(sessionId) : null
+      if (sessionId) {
+        const { workdir } = resolveSessionLocations(
+          this.workspace, state ?? { sessionId }, undefined,
+          this.sessionManager?.workdirCapabilityLookup,
+        )
+        if (!workdir.available || workdir.locality === 'remote') {
+          return c.json({ error: 'Media unavailable' }, 404)
+        }
+      }
       const uploadsRoot = sessionId
         ? join(sessionWorkspacePath(this.workspace, state?.workspaceRoot ?? sessionId), 'uploads')
         : join(this.workspace, 'uploads')
       const filePath = await resolveSessionMediaPath(uploadsRoot, filename)
       if (!filePath) return c.json({ error: 'File not found' }, 404)
-      try {
-        const data = new Uint8Array(await readFile(filePath))
-        const ext = extname(filename).toLowerCase()
-        const mimeMap: Record<string, string> = {
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.png': 'image/png',
-          '.gif': 'image/gif',
-          '.webp': 'image/webp',
-          '.svg': 'image/svg+xml',
-          '.bmp': 'image/bmp',
-          '.avif': 'image/avif',
-          '.pdf': 'application/pdf',
-          '.doc': 'application/msword',
-          '.docx':
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          '.xls': 'application/vnd.ms-excel',
-          '.xlsx':
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          '.ppt': 'application/vnd.ms-powerpoint',
-          '.pptx':
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-          '.txt': 'text/plain',
-          '.csv': 'text/csv',
-          '.json': 'application/json',
-          '.mp4': 'video/mp4',
-          '.mp3': 'audio/mpeg',
-          '.wav': 'audio/wav',
-        }
-        const contentType = mimeMap[ext] || 'application/octet-stream'
-
-        return new Response(data, {
-          headers: {
-            'Content-Type': contentType,
-            'Content-Disposition': `inline; filename="${filename}"`,
-            'Access-Control-Allow-Origin': '*',
-          },
-        })
-      } catch {
-        return c.json({ error: 'File not found' }, 404)
-      }
+      return mediaFileResponse(filePath, c.req.raw, c.req.query('download') === '1')
     })
 
     // ── POST /api/chat/message — sync: send message, wait for full response ──
@@ -427,7 +412,7 @@ export class WebChannel extends AbstractChannel {
       }
 
       try {
-        await this.handleIncoming(
+        const receipt = await this.handleIncoming(
           senderId ?? 'web-user',
           chatId,
           content ?? '',
@@ -438,7 +423,7 @@ export class WebChannel extends AbstractChannel {
           },
           media,
         )
-        return c.json({ requestId, chatId })
+        return c.json({ requestId, chatId, ...(receipt.commandReceipt ? { commandReceipt: receipt.commandReceipt } : {}) })
       } catch (err) {
         return c.json(
           { error: err instanceof Error ? err.message : 'Message admission failed' },
@@ -465,25 +450,32 @@ export class WebChannel extends AbstractChannel {
         const { messages: history } = await this.sessionManager!.getHistory(
           sessionId,
         )
-        return c.json({ chatId, systemPrompt, history: history || [], tools })
+        const commandResults = await this.sessionManager!.getCommandResults(sessionId)
+        return c.json({ chatId, systemPrompt, history: history || [], commandResults, tools })
       } catch (error) {
         console.error('[web] Failed to retrieve session:', error)
         return c.json({ error: 'Failed to retrieve session' }, 500)
       }
     })
 
-    // ── GET /api/media?chatId=<id>&path=<relative> — serve session media files ──
+    // Explicit logical session IDs expose private uploads, never the session workdir.
     app.get('/api/media', async (c) => {
       const rawPath = c.req.query('path')
       if (!rawPath) return c.json({ error: 'path is required' }, 400)
 
       const chatId = c.req.query('chatId')
-      if (!chatId) return c.json({ error: 'chatId is required' }, 400)
-
-      const sessionId = `${this.name}:${chatId}`
-      const state = this.sessionManager?.getSessionState(sessionId) ?? {
-        sessionId,
+      const explicitSessionId = c.req.query('sessionId')
+      if (!(explicitSessionId ?? chatId)) {
+        return c.json({ error: 'chatId or sessionId is required' }, 400)
       }
+
+      const sessionId = explicitSessionId ?? `${this.name}:${chatId}`
+      const existingState = this.sessionManager?.getSessionState(sessionId)
+      // SessionManager is Project-bound and validates loaded SNS identities against that Project.
+      if (explicitSessionId !== undefined && existingState?.sessionId !== sessionId) {
+        return c.json({ error: 'Session not found' }, 404)
+      }
+      const state = existingState ?? { sessionId }
       const locations = resolveSessionLocations(
         this.workspace,
         state,
@@ -495,38 +487,20 @@ export class WebChannel extends AbstractChannel {
         return c.json({ error: 'Media unavailable' }, 404)
       }
 
-      const privateUpload = isAbsolute(rawPath)
+      const privateUpload = explicitSessionId !== undefined || isAbsolute(rawPath)
       const mediaRoot = privateUpload
         ? join(locations.sessionDataDir, 'uploads')
         : workdir.path
-      const mediaPath = privateUpload ? relative(mediaRoot, rawPath) : rawPath
+      if (privateUpload && !await resolveSessionMediaPath(locations.sessionDataDir, 'uploads')) {
+        return c.json({ error: 'Media unavailable' }, 404)
+      }
+      const mediaPath = privateUpload
+        ? relative(mediaRoot, isAbsolute(rawPath) ? rawPath : resolve(locations.sessionDataDir, rawPath))
+        : rawPath
       const resolved = await resolveSessionMediaPath(mediaRoot, mediaPath)
       if (!resolved) return c.json({ error: 'Media unavailable' }, 404)
 
-      try {
-        const data = new Uint8Array(await readFile(resolved))
-        const ext = extname(resolved).toLowerCase()
-        const mimeMap: Record<string, string> = {
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.png': 'image/png',
-          '.gif': 'image/gif',
-          '.webp': 'image/webp',
-          '.svg': 'image/svg+xml',
-          '.bmp': 'image/bmp',
-          '.avif': 'image/avif',
-          '.pdf': 'application/pdf',
-        }
-        return new Response(data, {
-          headers: {
-            'Content-Type': mimeMap[ext] || 'application/octet-stream',
-            'Cache-Control': 'public, max-age=3600',
-            'Access-Control-Allow-Origin': '*',
-          },
-        })
-      } catch {
-        return c.json({ error: 'File not found' }, 404)
-      }
+      return mediaFileResponse(resolved, c.req.raw, c.req.query('download') === '1')
     })
 
     console.info(

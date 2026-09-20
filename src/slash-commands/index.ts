@@ -12,6 +12,7 @@ export interface SlashCommandHandler {
   name: string
   description: string
   adminOnly: boolean
+  coordinatorOnly?: boolean
   execute(ctx: SlashCommandContext, args: string): Promise<string>
 }
 
@@ -22,8 +23,10 @@ export class CommandDispatcher {
     this.handlers.set(handler.name.toLowerCase(), handler)
   }
 
-  getHandlers(): SlashCommandHandler[] {
-    return Array.from(this.handlers.values()).sort((a, b) =>
+  getHandlers(context?: Pick<SlashCommandContext, 'admin' | 'sessionId'>): SlashCommandHandler[] {
+    return Array.from(this.handlers.values()).filter(handler => !context || (
+      (!handler.adminOnly || context.admin) && (!handler.coordinatorOnly || context.sessionId === 'web:orchestrator')
+    )).sort((a, b) =>
       a.name.localeCompare(b.name)
     )
   }

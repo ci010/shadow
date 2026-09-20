@@ -16,6 +16,10 @@ test('branding assets decode in the built renderer and native desktop window', {
   await runFixture(t, 'branding-smoke')
 })
 
+test('shared button styles reach Project settings and preserve component controls in both themes', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'button-styles-smoke')
+})
+
 test('built Vue layout stays bounded in isolated hidden Electron viewports', {
   timeout: 150_000,
 }, async (t) => {
@@ -26,12 +30,54 @@ test('session diagnosis preserves conversations and isolates trace navigation', 
   await runFixture(t, 'diagnosis-smoke')
 })
 
+test('session handoffs stay distinct from human messages in chat and trace', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'diagnosis-smoke', ['--message-source'])
+})
+
+test('conversation summaries collapse lazily and use readable bounded Markdown without nested scrolling', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'diagnosis-smoke', ['--conversation-summary'])
+})
+
+for (const mode of ['built', 'dev']) {
+  test(`conversation alignment fills desktop, mobile and split panes on ${mode} cold load`, { timeout: 150_000 }, async (t) => {
+    await runFixture(t, 'diagnosis-smoke', [`--conversation-layout=${mode}`])
+  })
+}
+
 test('image annotations attach original or marked pixels without changing source files', { timeout: 150_000 }, async (t) => {
   await runFixture(t, 'image-annotation-smoke')
 })
 
 test('model menu combines model and effort without changing conversation drafts', { timeout: 150_000 }, async (t) => {
   await runFixture(t, 'model-menu-smoke')
+})
+
+test('slash command completion preserves composer input and stays bounded in normal and embedded chats', { timeout: 150_000 }, async (t) => {
+  const scratch = join(repository, '.tmp')
+  await mkdir(scratch, { recursive: true })
+  const artifacts = await mkdtemp(join(scratch, 'slash-command-artifacts-'))
+  t.diagnostic(`Slash command screenshots and results: ${artifacts}`)
+  await runFixture(t, 'slash-command-smoke', [`--slash-artifacts=${artifacts}`])
+})
+
+test('command results persist outside model messages and preserve active requests in scratch chats', { timeout: 150_000 }, async (t) => {
+  const scratch = join(repository, '.tmp')
+  await mkdir(scratch, { recursive: true })
+  const artifacts = await mkdtemp(join(scratch, 'command-result-artifacts-'))
+  t.diagnostic(`Command result screenshots and evidence: ${artifacts}`)
+  await runFixture(t, 'command-result-smoke', [`--command-artifacts=${artifacts}`])
+})
+
+test('execution locations retain project folders and defer remote scratch allocation', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'execution-location-smoke')
+})
+
+test('bot sidebar groups exact instances and preserves disclosure, selection and deletion across Projects', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'bot-sidebar-smoke')
+})
+
+test('sidebar selection highlights only the current chat, preserving folder drafts and disclosures', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'bot-sidebar-smoke', ['--selection-only'])
 })
 
 test('reflection selection and folder clicks preserve layout and cached Home rows', { timeout: 150_000 }, async (t) => {
@@ -46,6 +92,10 @@ test('yield questions preserve drafts and route human answers and cancellation i
   await runFixture(t, 'yield-question-smoke')
 })
 
+test('private credential entry and publication approval preserve drafts without chat or answer submission', { timeout: 150_000 }, async (t) => {
+  await runFixture(t, 'credential-request-smoke')
+})
+
 test('subagent execution modes separate reusable conversations from inspectable tasks and calls', { timeout: 150_000 }, async (t) => {
   await runFixture(t, 'subagent-mode-smoke')
 })
@@ -58,7 +108,7 @@ test('settings groups providers and live channel setup with persistent drafts an
   await runFixture(t, 'settings-smoke')
 })
 
-async function runFixture(t: TestContext, fixture: string): Promise<void> {
+async function runFixture(t: TestContext, fixture: string, args: string[] = []): Promise<void> {
   const assets = join(repository, 'app', 'dist')
   await assert.doesNotReject(access(join(assets, 'index.html')), 'Build the renderer with pnpm build:app before the layout test')
   const scratch = join(repository, '.tmp')
@@ -91,6 +141,7 @@ async function runFixture(t: TestContext, fixture: string): Promise<void> {
     join(directory, 'layout-smoke.cjs'),
     `--layout-assets=${assets}`,
     `--layout-root=${directory}`,
+    ...args,
   ], {
     cwd: directory,
     env,
@@ -107,6 +158,50 @@ async function runFixture(t: TestContext, fixture: string): Promise<void> {
   const [code] = await closed
   const lines = stdout.split(/\r?\n/).filter((line) => line.startsWith('LAYOUT_'))
   for (const line of lines) t.diagnostic(line)
+  if (args.includes('--message-source') && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    for (const width of [1400, 390]) {
+      for (const view of ['chat', 'trace']) {
+        const name = `message-source-${view}-${width}.png`
+        try { await access(join(directory, name)) } catch { continue }
+        await copyFile(join(directory, name), join(output, name))
+      }
+    }
+  }
+  if (fixture === 'button-styles-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    for (const width of [1440, 390]) {
+      for (const theme of ['light', 'dark']) {
+        const name = `buttons-${theme}-${width}.png`
+        try { await access(join(directory, name)) } catch { continue }
+        await copyFile(join(directory, name), join(output, name))
+      }
+    }
+  }
+  if (fixture === 'credential-request-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    for (const width of [1440, 390]) {
+      for (const prefix of ['credential-request', 'publication-review']) {
+        const name = `${prefix}-${width}.png`
+        try { await access(join(directory, name)) } catch { continue }
+        await copyFile(join(directory, name), join(output, name))
+      }
+    }
+  }
+  if (fixture === 'bot-sidebar-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    for (const width of [1440, 390]) {
+      for (const state of ['bot-sidebar', 'bot-delete', 'bot-delete-error']) {
+        const name = `${state}-${width}.png`
+        try { await access(join(directory, name)) } catch { continue }
+        await copyFile(join(directory, name), join(output, name))
+      }
+    }
+  }
   if (fixture === 'chat-connections-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
     const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
     await mkdir(output, { recursive: true })
@@ -118,7 +213,17 @@ async function runFixture(t: TestContext, fixture: string): Promise<void> {
       await copyFile(join(directory, name), join(output, name))
     }
   }
-  if (fixture === 'diagnosis-smoke' && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+  if (args.length && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
+    const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
+    await mkdir(output, { recursive: true })
+    const mode = args[0]!.split('=')[1]
+    for (const size of ['1400', '1920', '390', 'split']) {
+      const name = `conversation-${mode}-${size}.png`
+      try { await access(join(directory, name)) } catch { continue }
+      await copyFile(join(directory, name), join(output, name))
+    }
+  }
+  if (fixture === 'diagnosis-smoke' && !args.length && process.env.SHADOW_LAYOUT_SCREENSHOTS) {
     const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
     await mkdir(output, { recursive: true })
     const copyScreenshot = async (name: string) => {
@@ -170,6 +275,8 @@ async function runFixture(t: TestContext, fixture: string): Promise<void> {
     await mkdir(output, { recursive: true })
     const screenshots = [
       'yield-question-desktop.png', 'yield-question-mobile.png',
+      'yield-custom-2-1440.png', 'yield-custom-3-1440.png',
+      'yield-custom-2-390.png', 'yield-custom-3-390.png',
       'yield-reflector-1440.png', 'yield-reflector-390.png',
       'yield-parent-1440.png', 'yield-parent-390.png',
       ...(code !== 0 ? ['yield-failure-1440.png', 'yield-failure-390.png'] : []),

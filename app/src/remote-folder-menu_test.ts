@@ -48,60 +48,82 @@ test('sidebar remote action opens the existing draft picker without allocating o
   assert.match(createDraft, /if \(props.managed\) emit\('navigate', ''\)/)
   assert.match(createDraft, /if \(openRemotePicker\) await executionLocationSelector.value\?\.openRemote\(\)/)
   assert.match(createDraft, /else chatInput.value\?\.focus/)
-  assert.match(createDraft, /createRemoteChatDraft\(props.apiBase, target\)/)
+  assert.match(createDraft, /createExecutionLocationDraft\(props.apiBase,/)
   assert.doesNotMatch(createDraft, /\.prepare\(|fetch\(/)
   assert.match(workspace, /@primary-change="primaryChanged"/)
   assert.match(workspace, /function primaryChanged\(\)[\s\S]*?childId.value = ''/)
 })
 
-test('direct remote picker loads only inventory, preserves offline targets, cancels and can retry errors', async t => {
-  const requests: { signal: AbortSignal; finish: (body: unknown, status?: number) => void }[] = []
-  t.mock.method(globalThis, 'fetch', (url: URL, options: RequestInit) => {
-    assert.equal(url.pathname, '/nodes/v1')
+test('direct picker loads scoped folders and node inventory, preserves offline targets, cancels and can retry errors', async t => {
+  const requests: { path: string; signal: AbortSignal; finish: (body: unknown, status?: number) => void }[] = []
+  t.mock.method(globalThis, 'fetch', (url: URL | string, options: RequestInit) => {
+    const path = new URL(url).pathname
+    assert.ok(['/nodes/v1', '/projects/a/api/folders', '/projects/b/api/folders'].includes(path))
     assert.equal(options.method, undefined)
     return new Promise<Response>(resolve => requests.push({
-      signal: options.signal!,
+      path, signal: options.signal!,
       finish: (body, status = 200) => resolve(Response.json(body, { status })),
     }))
   })
-  const { props, state } = mount(t, 'ExecutionLocationSelector', { apiBase: 'http://localhost' })
+  const { props, state } = mount(t, 'ExecutionLocationSelector', { apiBase: 'http://localhost/projects/a/', projectId: 'a' })
   state().popover = { show: () => { void state().refresh() } }
   await state().openRemote()
-  assert.equal(state().remoteOnly, true)
   assert.equal(state().loading, true)
   const capability = { capabilityId: 'code', kind: 'workdir', displayName: 'Code', online: true }
   requests[0]!.finish({ version: 1, nodes: [
     { nodeId: 'main', displayName: 'Main', role: 'main', connection: 'connected', capabilities: [capability] },
     { nodeId: 'child', displayName: 'Laptop', role: 'child', connection: 'offline', capabilities: [capability] },
   ] })
+  const local = { id: 'local', projectId: 'a', name: 'Local', path: 'C:\\fixture\\local', createdAt: '2026-09-17' }
+  requests[1]!.finish({ folders: [local] })
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(state().nodes.length, 1)
+  assert.equal(state().nodes.length, 2)
   assert.equal(state().targets[0].available, false)
+  assert.equal(state().folderTargets[0].folder.id, 'local', 'Programmatic opening includes local folders too')
   state().closed()
-  assert.equal(state().remoteOnly, false)
   await state().openRemote()
   state().closed()
-  assert.equal(requests[1]!.signal.aborted, true)
-  requests[1]!.finish({ version: 1, nodes: [] })
+  assert.equal(requests[2]!.signal.aborted, true)
+  assert.equal(requests[3]!.signal.aborted, true)
+  requests[2]!.finish({ version: 1, nodes: [] })
+  requests[3]!.finish({ folders: [] })
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(state().nodes.length, 1)
+  assert.equal(state().nodes.length, 2)
   await state().openRemote()
-  requests[2]!.finish({}, 503)
+  requests[4]!.finish({}, 503)
+  requests[5]!.finish({ folders: [local] })
   await new Promise(resolve => setImmediate(resolve))
   assert.match(state().error, /503/)
   assert.equal(state().nodes.length, 0)
   assert.equal(state().loading, false)
   const retry = state().refresh()
   assert.equal(state().error, '')
-  requests[3]!.finish({ version: 1, nodes: [] })
+  requests[6]!.finish({ version: 1, nodes: [] })
+  requests[7]!.finish({ folders: [local] })
   await retry
   assert.equal(state().loading, false)
   assert.equal(state().error, '')
+  const pending = state().refresh()
+  props.projectId = 'b'
+  props.apiBase = 'http://localhost/projects/b/'
+  await nextTick()
+  assert.equal(requests[8]!.signal.aborted, true)
+  assert.equal(state().folderTargets.length, 0, 'Switching projects immediately drops previous project options')
+  requests[8]!.finish({ version: 1, nodes: [] })
+  requests[9]!.finish({ folders: [local] })
+  await pending
+  assert.equal(state().folderTargets.length, 0, 'Late responses cannot restore previous project folders')
+  const last = requests.length - 2
+  requests[last]!.finish({ version: 1, nodes: [] })
+  requests[last + 1]!.finish({ folders: [{ ...local, id: 'b-local', projectId: 'b' }] })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(state().folderTargets[0].folder.id, 'b-local')
   state().closed()
+  const count = requests.length
   props.disabled = true
   await nextTick()
   await state().openRemote()
-  assert.equal(requests.length, 4)
+  assert.equal(requests.length, count)
 })
 
 test('programmatic popover opening focuses its panel and Escape restores the trigger', async t => {

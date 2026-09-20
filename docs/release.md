@@ -159,6 +159,41 @@ Conflicting command-line and environment paths are rejected. The descriptor is
 strictly validated and supplies the authoritative service configuration, port
 and credential file; setup in attached mode is read-only.
 
+The desktop is not required for browser access to this service. From a source
+checkout, run the pairing CLI as the selected local user who can read the
+service's protected control credential:
+
+```powershell
+pnpm web:pair --connection 'C:\ProgramData\ShadowService\control\connection.v1.json'
+```
+
+An installed application can use its bundled Node runtime instead, without a
+source checkout or a separate Node installation:
+
+```powershell
+$previousNodeMode = $env:ELECTRON_RUN_AS_NODE
+try {
+  $env:ELECTRON_RUN_AS_NODE = '1'
+  & 'C:\Program Files\Shadow\Shadow.exe' `
+    'C:\Program Files\Shadow\resources\backend\dist\src\index.js' `
+    web pair --connection 'C:\ProgramData\ShadowService\control\connection.v1.json'
+} finally {
+  $env:ELECTRON_RUN_AS_NODE = $previousNodeMode
+}
+```
+
+Use the actual installation paths. `web pair` runs before backend configuration
+startup, so this command issues a code from the existing service rather than
+starting a second backend.
+
+Open the printed loopback URL and enter the one-time code, not the service
+credential. The code expires in five minutes; the resulting browser session
+expires in twelve hours and is revoked on logout or service restart. Browser
+logout does not stop the service, and browser cookies cannot call service
+readiness/shutdown or issue more pairing codes. The normal browser has no
+Electron minimize/maximize/close controls. This access path is loopback-only;
+it does not establish an authenticated remote or multi-user deployment.
+
 The manager also supports `Status`, `Stop`, `Reinstall` and `Uninstall`, always
 with the explicit `-DataDirectory`. Install/Reinstall also require
 `-DesktopUser`. Stop first attempts authenticated backend shutdown, with a

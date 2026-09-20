@@ -21,12 +21,107 @@ async function main() {
   const pan = (value: number) => execute(`(() => { const input = document.querySelector('.timeline-pan input'); input.value = ${value}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
   const button = (label: string) => `button[aria-label="${label}"]`
   try {
+    await window.loadURL(`${process.env.TRACE_SMOKE_URL}/__context`)
+    await wait(`!!document.querySelector('#diagnosis-prompt-tab')`)
+    await click('#diagnosis-prompt-tab')
+    await wait(`document.querySelector('#diagnosis-prompt-tab').getAttribute('aria-selected') === 'true'`)
+    for (const width of [1200, 390]) {
+      window.setContentSize(width, 844)
+      await delay(100)
+      const layout = await execute(`(() => {
+        const content = document.querySelector('#diagnosis-prompt .system-prompt-content');
+        const card = content.parentElement.parentElement;
+        const header = card.firstElementChild;
+        const copy = header.querySelector('button');
+        const body = content.parentElement.getBoundingClientRect();
+        const top = header.getBoundingClientRect();
+        const button = copy.getBoundingClientRect();
+        return { direction: getComputedStyle(card).flexDirection, display: getComputedStyle(card).display,
+          stacked: body.top >= top.bottom - 1, bodyWidth: body.width, cardWidth: card.getBoundingClientRect().width,
+          copyFits: button.height < 50 && button.top >= top.top && button.bottom <= top.bottom + 1,
+          noOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+          copyText: copy.textContent.trim(), cards: document.querySelectorAll('#diagnosis-prompt .system-prompt-content').length };
+      })()`)
+      assert.equal(layout.display, 'flex')
+      assert.equal(layout.direction, 'column', 'System prompt header and body must stack vertically on the first stylesheet load')
+      assert.equal(layout.stacked, true)
+      assert.ok(layout.bodyWidth >= layout.cardWidth - 4, 'Prompt uses the full card width instead of a narrow side column')
+      assert.equal(layout.copyFits, true, 'Copy button stays in the header, not a full-height strip')
+      assert.equal(layout.copyText, 'Copy')
+      assert.equal(layout.cards, 2, 'Compaction summary remains a separate card')
+      assert.equal(layout.noOverflow, true)
+    }
+    await execute(`Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => { window.copiedPrompt = text; } } })`)
+    await click('#diagnosis-prompt .copy-btn')
+    await wait(`document.querySelector('#diagnosis-prompt .copy-btn').textContent.includes('Copied!')`)
+    assert.match(await execute('window.copiedPrompt'), /^# Project coordinator/)
+    await click('#diagnosis-tools-tab')
+    assert.equal(await execute(`getComputedStyle(document.querySelector('#diagnosis-tools > div')).flexDirection`), 'column')
+    assert.equal(await execute(`document.querySelector('#diagnosis-tools .tool-def-name').textContent`), 'read')
+    window.setContentSize(1200, 1100)
+    await window.loadURL(`${process.env.TRACE_SMOKE_URL}/__tool-details`)
+    await wait(`document.querySelectorAll('.tool-entry').length === 2`)
+    assert.equal(await execute(`document.querySelectorAll('.tool-payload, .file-highlight-content').length`), 0, 'Collapsed tool groups mount no payload renderers')
+    await click('.tool-activity-summary')
+    await wait(`document.querySelector('.tool-activity').open`)
+    assert.equal(await execute(`document.querySelectorAll('.tool-payload, .file-highlight-content').length`), 0, 'Opening the group does not highlight collapsed calls')
+    await click('.tool-call-header')
+    const colored = (selector: string) => `Array.from(document.querySelectorAll('${selector} .file-syntax-token')).some(token => token.style.getPropertyValue('--file-token-light'))`
+    await wait(colored('.tool-call-detail'))
+    await wait(colored('.tool-result-content'))
+    assert.equal(await execute(`document.querySelectorAll('.tool-entry')[1].querySelectorAll('.tool-payload').length`), 0)
+    assert.equal(await execute(`document.querySelector('.tool-call-detail pre').textContent`), '{\n  "path": "fixture.json",\n  "count": 42\n}')
+    assert.equal(await execute(`document.querySelector('.tool-result-content pre').textContent`), '{"ok":true,"html":"<img src=x onerror=alert(1)>"}')
+    assert.equal(await execute(`document.querySelectorAll('.tool-result-content img').length`), 0, 'Highlighted data is escaped text, never HTML')
+    const lightColor = await execute(`getComputedStyle(document.querySelector('.tool-call-detail .file-syntax-token[style]')).color`)
+    await execute(`document.documentElement.classList.add('dark')`)
+    assert.notEqual(await execute(`getComputedStyle(document.querySelector('.tool-call-detail .file-syntax-token[style]')).color`), lightColor, 'Tokens follow the active theme')
+    window.setContentSize(390, 844)
+    assert.equal(await execute(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), true)
+    await click('.tool-result-header')
+    await wait(`!document.querySelector('.tool-result-content')`)
+    await execute(`window.updateToolResult('{"latest":42}')`)
+    assert.equal(await execute(`document.querySelectorAll('.tool-result-content').length`), 0, 'Result updates do not render while its disclosure is closed')
+    await click('.tool-result-header')
+    await wait(colored('.tool-result-content'))
+    assert.equal(await execute(`document.querySelector('.tool-result-content pre').textContent`), '{"latest":42}')
+    await click('.tool-activity-summary')
+    await wait(`!document.querySelector('.file-highlight-content')`)
+    await execute(`window.updateToolResult('{"afterReopen":true}')`)
+    await click('.tool-activity-summary')
+    await wait(colored('.tool-result-content'))
+    assert.equal(await execute(`document.querySelector('.tool-result-content pre').textContent`), '{"afterReopen":true}', 'Group reopen preserves entry expansion and uses current content')
+    await execute(`window.updateToolResult(undefined)`)
+    await wait(`!document.querySelector('.tool-result')`)
+    await execute(`window.updateToolResult('{"arrived":true}')`)
+    await wait(colored('.tool-result-content'))
+    await execute(`window.updateToolResult('Message sent.\\r\\n<script>not executable</script>')`)
+    await wait(`document.querySelector('.tool-result-content') && !document.querySelector('.tool-result-content .file-highlight-content')`)
+    assert.equal(await execute(`document.querySelector('.tool-result-content pre').textContent`), 'Message sent.\r\n<script>not executable</script>')
+    await click('.tool-call-header')
+    await wait(`!document.querySelector('.tool-entry-content')`)
+    await execute(`document.querySelectorAll('.tool-call-header')[1].click()`)
+    await wait(`document.querySelector('.tool-result-content')?.textContent === '(Empty result)'`)
+    window.setContentSize(1200, 1100)
+
     await window.loadURL(`${process.env.TRACE_SMOKE_URL}/__trace`)
     await wait(`document.querySelectorAll('.lane-bar').length === 3`)
     assert.match(await scale(), /355m 0s/)
     assert.match(await scale(), /360m 0s/)
     assert.equal(await execute(`document.querySelector('.timeline-pan input').value`), '100')
     assert.equal(await execute(`document.querySelectorAll('.lane-bar[title]').length`), 0)
+    await execute(`[...document.querySelectorAll('.event-filters button')].find(b => b.textContent.trim() === 'session').click()`)
+    await wait(`document.querySelectorAll('.trace-event').length === 1`)
+    assert.equal(await execute(`document.querySelector('.event-kind.SESSION').textContent`), 'SESSION')
+    assert.match(await execute(`document.querySelector('.trace-event-header').textContent`), /Session handoff.*web:orchestrator.*Delegated inspection/s)
+    assert.doesNotMatch(await execute(`document.querySelector('.event-preview').textContent`), /<sender/)
+    await click('.trace-event-header')
+    assert.match(await execute(`document.querySelector('.trace-event-detail').textContent`), /protocol role, not a human author/)
+    assert.match(await execute(`document.querySelector('.trace-event-detail details pre').textContent`), /<sender id="web:orchestrator"/)
+    await execute(`[...document.querySelectorAll('.event-filters button')].find(b => b.textContent.trim() === 'user').click()`)
+    await wait(`document.querySelectorAll('.trace-event').length === 2`)
+    assert.equal(await execute(`document.querySelectorAll('.event-kind.SESSION').length`), 0)
+    await execute(`[...document.querySelectorAll('.event-filters button')].find(b => b.textContent.trim() === 'All events').click()`)
 
     await click('.lane-bar.input')
     await wait(`!!document.querySelector('.span-inspector .trace-event-content')`)
@@ -40,6 +135,7 @@ async function main() {
     assert.equal(call.id, 'call-1')
     assert.equal(JSON.parse(call.function.arguments).nested.value, 42)
     assert.match(await inspector(), /Synthetic tool result/)
+    await wait(colored('.span-inspector .trace-payload'))
 
     await execute(`document.querySelector('.lane-bar.tools').parentElement.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))`)
     await wait(`document.querySelector('[role="tooltip"]')?.textContent.includes('Synthetic metadata')`)

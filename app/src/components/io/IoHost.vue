@@ -19,7 +19,7 @@ import type { LiveSubscription } from '../../live-client.ts'
 import { browserIoCapabilities } from '../../io/adapters.ts'
 import { IoExecution } from '../../io/execution.ts'
 import { ioRunKey, type IoBridge } from '../../io/bridge.ts'
-import { ioRequest } from '../../io/transport.ts'
+import { IoRequestError, ioRequest } from '../../io/transport.ts'
 import { desktopIoIssue } from '../../io/desktop.ts'
 import DisplaySourcePicker from './DisplaySourcePicker.vue'
 
@@ -35,7 +35,7 @@ const statusText = computed(() => execution.value?.phase === 'recording' ? 'Reco
 const livePool = useLiveClientPool()
 const subscriptions = new Map<string, LiveSubscription>()
 const clients = new Map<string, { clientId: string; clientToken: string }>()
-const registrations = new Map<string, Promise<{ clientId: string; clientToken: string }>>()
+const registrations = new Map<string, { promise: Promise<{ clientId: string; clientToken: string }>; controller: AbortController }>()
 const attempted = new Set<string>()
 const capabilities = browserIoCapabilities()
 let disposed = false
@@ -69,17 +69,28 @@ async function client(base: string) {
   const existing = clients.get(base)
   if (existing) return existing
   const pending = registrations.get(base)
-  if (pending) return pending
+  if (pending) return pending.promise
+  const controller = new AbortController()
   const registration = (async () => {
     const clientId = crypto.randomUUID()
-    const result = await ioRequest<{ clientToken: string }>(base, '/clients', { id: clientId, name: 'Local capture client', capabilities })
-    if (disposed) throw new Error('Capture host closed')
+    const result = await ioRequest<{ clientToken: string }>(base, '/clients', { id: clientId, name: 'Local capture client', capabilities },
+      AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
+    controller.signal.throwIfAborted()
+    if (disposed || !bases.value.has(base)) throw new DOMException('Capture view closed', 'AbortError')
+    if (!result || typeof result.clientToken !== 'string' || !result.clientToken) throw new Error('Invalid capture client registration')
     const registered = { clientId, clientToken: result.clientToken }
     clients.set(base, registered)
     return registered
-  })().finally(() => registrations.delete(base))
-  registrations.set(base, registration)
+  })().finally(() => {
+    if (registrations.get(base)?.controller === controller) registrations.delete(base)
+  })
+  registrations.set(base, { promise: registration, controller })
   return registration
+}
+function forgetClient(base: string) {
+  clients.delete(base)
+  registrations.get(base)?.controller.abort()
+  registrations.delete(base)
 }
 async function poll() {
   if (polling || disposed || (document.hidden && !owned.value)) return
@@ -102,7 +113,10 @@ async function poll() {
         const all = new Map(bridge.runs.value)
         all.set(base, runs); bridge.runs.value = all
         setError(base)
-      } catch (cause) { setError(base, cause instanceof Error ? cause.message : 'Could not load capture requests.') }
+      } catch (cause) {
+        if (disposed || !bases.value.has(base) || (cause instanceof DOMException && cause.name === 'AbortError')) return
+        setError(base, cause instanceof Error ? cause.message : 'Could not load capture requests.')
+      }
     }))
     if (!owned.value && !bridge.busy.value) {
       const views = [...bridge.views.value.values()]
@@ -180,15 +194,28 @@ async function pulseClients() {
       if (!credentials) return
       try { await ioRequest(base, `/clients/${credentials.clientId}/heartbeat`, { clientToken: credentials.clientToken }, AbortSignal.timeout(5000)) }
       catch (cause) {
+        if (disposed || !bases.value.has(base) || clients.get(base) !== credentials) return
         clients.delete(base)
         const detail = cause instanceof Error ? cause.message : 'Client disconnected'
         if (owned.value && bridge.executionBase.value === base) await execution.value!.fail(new Error(`Capture connection lost: ${detail}`))
+        else if (cause instanceof IoRequestError && cause.status === 403 && cause.code === 'client_expired') {
+          try {
+            await client(base)
+            if (!disposed && bases.value.has(base)) setError(base)
+          } catch (error) {
+            if (disposed || !bases.value.has(base) || (error instanceof DOMException && error.name === 'AbortError')) return
+            setError(base, error instanceof Error ? error.message : 'Could not reconnect the capture client.')
+          }
+        }
         else setError(base, detail)
       }
     }))
   } finally { leaseBusy = false }
 }
 watch(bases, values => {
+  for (const base of new Set([...clients.keys(), ...registrations.keys()])) {
+    if (!values.has(base)) { forgetClient(base); setError(base) }
+  }
   const retained = new Map(bridge.runs.value)
   for (const base of retained.keys()) if (!values.has(base)) retained.delete(base)
   bridge.runs.value = retained
@@ -201,16 +228,22 @@ watch(bases, values => {
   void poll()
 }, { immediate: true })
 const pageHide = () => { void execution.value?.cancel('cancelled', 'The capture page was closed.'); execution.value?.dispose() }
+const visibilityChanged = () => {
+  if (!document.hidden) void pulseClients().then(() => poll())
+}
 onMounted(() => {
   pollTimer = setInterval(() => { void poll() }, 2000)
   leaseTimer = setInterval(() => { void pulseClients() }, 5000)
   clockTimer = setInterval(() => { bridge.clock.value = Date.now(); triggerRef(execution) }, 250)
   window.addEventListener('pagehide', pageHide)
+  document.addEventListener('visibilitychange', visibilityChanged)
 })
 onBeforeUnmount(() => {
   disposed = true; generation++
   clearInterval(pollTimer); clearInterval(leaseTimer); clearInterval(clockTimer)
   window.removeEventListener('pagehide', pageHide)
+  document.removeEventListener('visibilitychange', visibilityChanged)
+  for (const base of new Set([...clients.keys(), ...registrations.keys()])) forgetClient(base)
   pageHide(); bridge.actions.value = undefined
   for (const subscription of subscriptions.values()) subscription.close()
   subscriptions.clear()

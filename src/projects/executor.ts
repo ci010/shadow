@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { isManagedWorkdir, managedProjectScope, MANAGED_SESSION_CAPABILITY, projectExecutionKey } from '../execution/managed-workdir.ts'
 import type { CancelReceiptV1, ExecutionReceiptV1, JobEventV1, JobRequestV1, JobStatusV1 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
 
@@ -18,7 +18,7 @@ export class ProjectExecutor implements Executor {
   }
 
   #key(kind: string, value: string): string {
-    return `project-${createHash('sha256').update(JSON.stringify([this.projectId, kind, value])).digest('hex')}`
+    return projectExecutionKey(this.projectId, kind, value)
   }
 
   async *execute(request: JobRequestV1, signal: AbortSignal): AsyncIterable<JobEventV1> {
@@ -32,6 +32,8 @@ export class ProjectExecutor implements Executor {
       sessionId: this.#key('session', request.sessionId),
       turnId: this.#key('turn', request.turnId),
       idempotencyKey: this.#key('idempotency', request.idempotencyKey),
+      ...((isManagedWorkdir(request.capabilityId) || request.capabilityId === MANAGED_SESSION_CAPABILITY)
+        ? { managedProject: managedProjectScope(this.projectId) } : {}),
     }
     for await (const event of this.executor.execute(scoped, signal)) {
       if (event.jobId !== jobId) throw new Error('Project executor received an unowned job event')

@@ -52,6 +52,39 @@ test('many topics share one physical connection and identical topics share its s
   assert.equal(h.statuses.at(-1)?.phase, 'idle')
 })
 
+test('failed project topics reject readiness without disconnecting healthy projects and can recover', async t => {
+  const h = harness(t)
+  const healthy = h.subscribe(topic('web:chat', 'one'))
+  const failedTopic = topic('web:chat', 'two')
+  const failed = h.subscribe(failedTopic)
+  const pending = assert.rejects(failed.ready(), /project is unavailable/)
+  t.mock.timers.tick(0)
+  const source = h.sources.at(-1)!
+  source.send({ type: 'reset', reason: 'initial', cursor: cursor(0) })
+  source.send({ type: 'unavailable', cursor: cursor(0), topics: [failedTopic] })
+  source.send({ type: 'ready', cursor: cursor(0) })
+  await pending
+  await healthy.ready()
+  await assert.rejects(failed.ready(), /project is unavailable/)
+  assert.equal(source.closed, false)
+  assert.equal(h.statuses.at(-1)?.phase, 'live')
+  source.send({ type: 'event', cursor: cursor(1), topic: topic('web:chat', 'one'), payload: { content: 'healthy' } })
+  assert.equal(h.events.length, 1)
+  source.send({ type: 'reset', reason: 'project-restored', cursor: cursor(1) })
+  source.send({ type: 'ready', cursor: cursor(1) })
+  await failed.ready()
+  assert.equal(h.sources.length, 1)
+  source.send({ type: 'event', cursor: cursor(2), topic: failedTopic, payload: { content: 'recovered' } })
+  assert.equal(h.events.length, 2)
+  source.send({ type: 'reset', reason: 'project-removed', cursor: cursor(2) })
+  source.send({ type: 'unavailable', cursor: cursor(2), topics: [failedTopic] })
+  const betweenFrames = assert.rejects(failed.ready(), /project is unavailable/)
+  source.send({ type: 'ready', cursor: cursor(2) })
+  await betweenFrames
+  await healthy.ready()
+  assert.equal(source.closed, false)
+})
+
 test('reconnect replays in order, deduplicates cursors and never crosses projects', async t => {
   const h = harness(t)
   const subscription = h.subscribe(topic('web:chat-one', 'one'))

@@ -116,9 +116,9 @@ export function runtimeIdentityProvider(
       }
       const platform = `${getOs()} ${getArch()}`
       const remote = ctx.workdir && ctx.workdir.nodeId !== LOCAL_NODE_ID ? ctx.workdir : undefined
-      const defaultShell = ctx.defaultExecShell ?? defaultManagedShell()
-      const detectedShells = remote ? [] : await availableExecShells()
       const coordinator = ctx.agent.name === 'orchestrator'
+      const defaultShell = ctx.defaultExecShell ?? defaultManagedShell()
+      const detectedShells = remote || coordinator ? [] : await availableExecShells()
       const delegationModes = !coordinator && isToolAllowed(ctx.agent, 'subagent')
         ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId)
         : []
@@ -135,7 +135,7 @@ export function runtimeIdentityProvider(
       const lines = [
         '# Runtime',
         '',
-        ...(remote ? [
+        ...(coordinator ? [`- **Platform**: ${platform}`] : remote ? [
           `- **Main Host Platform**: ${platform} (not the execution target)`,
           `- **Execution Target**: remote node \`${remote.nodeId}\`, workdir capability \`${remote.capabilityId}\`.`,
           '- The Child chooses its default OS shell. Omit shell unless its availability on the Child is known; Main shell detection does not apply.',
@@ -176,7 +176,7 @@ export function runtimeIdentityProvider(
           }`,
       )
       if (coordinator) {
-        lines.push('- **Coordinator cap**: read/search/topic/message/initiative only. No invoke_tool, exec, write, or subagent.')
+        lines.push('- **Coordinator cap**: read/search/topic/message/initiative/project_config only. Resource mutations require direct owner input; publication requires owner review through Publish/Cancel (revision command only as fallback).')
       }
       if ((ctx.mode ?? ctx.agent.defaultMode) === 'session') {
         lines.push('- Durable topics are root peers. The pinned web:orchestrator routes work, not structural parentage; creator provenance and context ancestry do not confer ownership.')
@@ -233,7 +233,7 @@ export function runtimeIdentityProvider(
       }
 
       // Skills summary
-      if (ctx.agent.skills !== false) {
+      if (!coordinator && ctx.agent.skills !== false) {
         const skillsSummary = deps.getSkillsSummary(ctx.admin ?? false)
         if (skillsSummary) lines.push(skillsSummary, '')
       }

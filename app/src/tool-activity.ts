@@ -36,6 +36,16 @@ export interface ToolActivityBatch {
   incomplete: boolean
 }
 
+export function toolPayloadPath(source: string): string {
+  try {
+    JSON.parse(source)
+    return 'payload.json'
+  } catch {
+    // Tool output and legacy arguments may be plain text, not JSON.
+    return 'payload.txt'
+  }
+}
+
 export function parseToolCall(message: ToolActivityMessage): { name: string; args: Record<string, unknown>; raw: string } {
   if (message.toolCall) return { name: message.toolCall.name, args: message.toolCall.arguments, raw: JSON.stringify(message.toolCall.arguments, null, 2) }
   const match = /^([^(\n]+)\(([\s\S]*)\)$/.exec(message.content)

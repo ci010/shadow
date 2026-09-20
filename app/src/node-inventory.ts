@@ -35,6 +35,7 @@ export function parseNodeInventory(value: unknown): NodeInventoryResponse {
       || !nonempty(node.displayName) || (node.role !== 'main' && node.role !== 'child')
       || (node.connection !== 'connected' && node.connection !== 'offline' && node.connection !== 'revoked')
       || !Array.isArray(node.capabilities)
+      || (node.supportsManagedSessions !== undefined && typeof node.supportsManagedSessions !== 'boolean')
       || (node.implementationVersion !== undefined && !nonempty(node.implementationVersion))
       || (node.lastSeen !== undefined && (!nonempty(node.lastSeen) || !Number.isFinite(Date.parse(node.lastSeen))))) throw invalid()
     nodeIds.add(node.nodeId)
@@ -54,6 +55,7 @@ export function parseNodeInventory(value: unknown): NodeInventoryResponse {
     return {
       nodeId: node.nodeId, displayName: node.displayName, role: node.role,
       connection: node.connection, capabilities,
+      ...(node.supportsManagedSessions === undefined ? {} : { supportsManagedSessions: node.supportsManagedSessions }),
       ...(node.implementationVersion === undefined ? {} : { implementationVersion: node.implementationVersion }),
       ...(node.lastSeen === undefined ? {} : { lastSeen: node.lastSeen }),
     }

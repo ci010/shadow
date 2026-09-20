@@ -1,6 +1,7 @@
 import type { Executor } from '../execution/executor.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
-import { cleanupTempFiles, newPhysicalSessionId } from '../utils/paths.ts'
+import { cleanupTempFiles } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 import { inputContent, type SessionInput, type SessionMessageInput } from './input.ts'
 import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
@@ -143,7 +144,8 @@ export class Session extends BaseSession {
     // Silent / non-urgent events never interrupt an active turn: enqueue them
     // so they are handled (or, for silent, merely recorded) after this turn.
     if (
-      msg.policy === 'silent' || msg.policy === 'queue'
+      msg.policy === 'silent' || msg.policy === 'queue' ||
+      (this.id === 'web:orchestrator' && msg.source.kind !== 'user')
     ) {
       this.pushEvent({ type: 'message', msg, llm })
       return
@@ -568,11 +570,8 @@ export class Session extends BaseSession {
     const state = this.state
     const messages = this.messages
 
-    const sourcePhysicalId = newPhysicalSessionId(sessionId, state.segmentIndex)
-    const targetPhysicalId = newPhysicalSessionId(
-      sessionId,
-      state.segmentIndex + 1,
-    )
+    const sourcePhysicalId = physicalSessionId(state)
+    const targetPhysicalId = physicalSessionId(state, state.segmentIndex + 1)
     const handoff = await this.handoffManager.create(
       sessionId,
       sourcePhysicalId,
@@ -582,6 +581,8 @@ export class Session extends BaseSession {
     )
 
     const startEvent: SessionStartEvent = {
+      sessionId,
+      physicalIdVersion: state.physicalIdVersion,
       previous_physical_id: sourcePhysicalId,
       timestamp: handoff.timestamp,
       summary_context: handoff.prompt,

@@ -155,7 +155,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "search",
-      "description": "Search files, the web, skills, Project topic sessions, or available tools via the \`space\` scheme. sessions: discovers peer topic goals, scope, folders and Initiative references. skills: returns skill summaries and read paths without activating tools; read a skill to register its declared tools in this session. tools: returns exact names and complete parameter schemas for invoke_tool. Tool discovery may connect MCP servers but never executes their tools.",
+      "description": "Search files, the web, skills, Project topic sessions, or available tools via the \`space\` scheme. sessions: discovers peer topic goals, scope, folders and Initiative references. skills: returns skill summaries and read paths without activating tools; read a skill to register its declared tools in this session. tools: searches installed MCP indexes without connecting, returning exact names and parameter schemas for invoke_tool. Explicit built-in browser/factory discovery may initialize resources but never executes their tools.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -165,7 +165,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "space": {
             "type": "string",
-            "description": "grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. sessions: — Project peer topic discovery (no activation). skills:[category] — skill discovery without activation. tools:[source] — tool contracts (e.g. tools:mail); tools: searches configured sources and active tools. Browser/factory sources require explicit selection."
+            "description": "grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. sessions: — Project peer topic discovery (no activation). skills:[category] — skill discovery without activation. tools:[source] — tool contracts (e.g. tools:mail); tools: searches persisted MCP metadata and active tools without starting configured servers. Browser/factory sources require explicit selection."
           },
           "limit": {
             "type": "integer",
@@ -175,6 +175,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "type": "integer",
             "default": 0,
             "description": "tools:, skills: and sessions: only. Nonnegative result offset; use nextOffset to continue listing or searching."
+          },
+          "instance": {
+            "type": "string",
+            "description": "tools:chrome-devtools only. Session browser instance ID; required when multiple instances are open. Returns that instance's live contracts."
           }
         },
         "required": [
@@ -198,6 +202,10 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           "args": {
             "type": "object",
             "description": "Arguments for the named tool, matching its current imported contract."
+          },
+          "instance": {
+            "type": "string",
+            "description": "Session browser instance ID from browser_setup or discovery. Required for chrome-devtools tools when multiple instances are open; never a business-tool argument."
           }
         },
         "required": [

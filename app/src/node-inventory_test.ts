@@ -16,6 +16,8 @@ test('node inventory preserves actual data and omits unsupported fields', () => 
   assert.equal(result.nodes[0].implementationVersion, '1.0')
   assert.equal('credentialId' in result.nodes[0], false)
   assert.equal('implementationVersion' in parseNodeInventory(inventory()).nodes[0], false)
+  assert.equal(parseNodeInventory({ version: 1, nodes: [{ ...node, supportsManagedSessions: true }] }).nodes[0].supportsManagedSessions, true)
+  assert.equal(parseNodeInventory(inventory()).nodes[0].supportsManagedSessions, undefined)
 })
 
 test('browser context does not invent device identity or latency measurements', () => {
@@ -28,7 +30,7 @@ test('invalid or ambiguous inventory never becomes an empty successful response'
   for (const value of [null, {}, { version: 2, nodes: [] }, { version: 1, nodes: null }]) assert.throws(() => parseNodeInventory(value), /invalid device data/)
   for (const patch of [
     { nodeId: '' }, { role: 'other' }, { connection: 'online' }, { capabilities: null },
-    { lastSeen: 'yesterday' }, { implementationVersion: 12 },
+    { lastSeen: 'yesterday' }, { implementationVersion: 12 }, { supportsManagedSessions: 'true' },
     { capabilities: [{ ...node.capabilities[0], kind: 'invented' }] },
     { capabilities: [{ ...node.capabilities[0], online: 'true' }] },
     { capabilities: [{ ...node.capabilities[0], displayPath: 12 }] },

@@ -4,7 +4,7 @@ import type { SessionManager } from '../sessions/session-manager.ts'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
 import type { ChannelManager } from '../channels/manager.ts'
 import type { Tool, ToolParameters } from './tool.ts'
-import { newPhysicalSessionId } from '../utils/paths.ts'
+import { physicalSessionId } from '../sessions/session-identity.ts'
 import { isExecutionMode } from '../sessions/execution-mode.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import { parseInitiativeId } from '../sessions/initiative-metadata.ts'
@@ -126,7 +126,7 @@ export class SubagentTool implements Tool {
     const parentSessionId = ctx.sessionId
 
     // 2. Resolve parent lineage and create session prototype.
-    const parentPhysicalId = parentState ? newPhysicalSessionId(parentState.sessionId, parentState.segmentIndex) : undefined
+    const parentPhysicalId = parentState ? physicalSessionId(parentState) : undefined
     // Share the spawner's working directory: inherit its workspaceRoot if it is
     // itself a subagent, otherwise the spawner owns the folder (use its id).
     const workspaceRoot = parentState?.workspaceRoot ?? parentSessionId

@@ -9,6 +9,7 @@ import { AppProviderConfigStore, ProjectConfigStore } from '../projects/config-s
 import { appModelDefaultsPlugin } from './model-routes.ts'
 import { projectConfigPlugin } from '../projects/config-routes.ts'
 import { McpManager } from '../mcp/manager.ts'
+import { McpConnection } from '../mcp/client.ts'
 
 test('App defaults accept unset fields and reject unrelated settings without changing provider credentials', async () => {
   await withTempWorkspace(async root => {
@@ -30,7 +31,10 @@ test('App defaults accept unset fields and reject unrelated settings without cha
   })
 })
 
-test('project config saves directly await MCP activation instead of observing filesystem changes', async () => {
+test('project config saves directly await MCP activation instead of observing filesystem changes', async t => {
+  t.mock.method(McpConnection.prototype, 'connect', async () => {})
+  t.mock.method(McpConnection.prototype, 'listTools', async () => [])
+  t.mock.method(McpConnection.prototype, 'disconnect', async () => {})
   await withTempWorkspace(async root => {
     const entered = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()

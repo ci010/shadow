@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import test, { type TestContext } from 'node:test'
 import { createRenderer, defineComponent, h, nextTick, reactive, type Component } from 'vue'
+import * as Vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 
@@ -11,24 +12,35 @@ interface ElementNode {
   text: string
   props: Record<string, unknown>
   children: ElementNode[]
+  style: Record<string, string>
   parent?: ElementNode
 }
-const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [] })
+const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [], style: {} })
 const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 
 function mount(t: TestContext, filename: string, props: Record<string, unknown>) {
-  const url = new URL(`./components/${filename}`, import.meta.url)
-  const { descriptor } = parse(readFileSync(url, 'utf8'))
-  const source = compileScript(descriptor, { id: filename, inlineTemplate: true }).content
-  const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
-  const module = { exports: {} as { default: Component } }
-  const require = createRequire(url)
   const popover = defineComponent({
-    setup: (_, { slots }) => () => h('div', [slots.trigger?.(), slots.default?.()]),
+    setup: (_, { slots }) => () => h('div', [slots.trigger?.(), slots.default?.({ triggerProps: {} })]),
   })
-  new Function('require', 'module', 'exports', outputText)(
-    (id: string) => id.endsWith('.vue') ? { default: popover } : require(id), module, module.exports,
-  )
+  function load(filename: string): Component {
+    const url = new URL(`./components/${filename}`, import.meta.url)
+    const { descriptor } = parse(readFileSync(url, 'utf8'))
+    const source = compileScript(descriptor, { id: filename, inlineTemplate: true }).content
+    const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
+    const module = { exports: {} as { default: Component } }
+    const require = createRequire(url)
+    new Function('require', 'module', 'exports', outputText)(
+      (id: string) => {
+        if (id === 'vue' && ['ProjectGroup.vue', 'FoldersSidebar.vue'].includes(filename)) {
+          return { ...Vue, onMounted() {}, onActivated() {}, onUnmounted() {} }
+        }
+        if (id === './FoldersSidebar.vue' || id === './ProjectCoordinator.vue') return { default: load(id.slice(2)) }
+        return id.endsWith('.vue') ? { default: popover } : require(id)
+      }, module, module.exports,
+    )
+    return module.exports.default
+  }
+  const component = load(filename)
   const renderer = createRenderer<ElementNode, ElementNode>({
     createElement: element, createText: text => element('#text', text), createComment: text => element('#comment', text),
     insert(node, parent, anchor) {
@@ -44,10 +56,12 @@ function mount(t: TestContext, filename: string, props: Record<string, unknown>)
     patchProp: (node, key, _previous, value) => { node.props[key] = value },
     parentNode: node => node.parent ?? null,
     nextSibling: node => node.parent?.children[node.parent.children.indexOf(node) + 1] ?? null,
+    querySelector: () => element('body'),
   })
   const root = element('root')
   const state = reactive(props)
-  const app = renderer.createApp(defineComponent({ setup: () => () => h(module.exports.default, state) }))
+  const app = renderer.createApp(defineComponent({ setup: () => () => h(component, state) }))
+  app.component('RouterLink', defineComponent({ setup: (_, { slots }) => () => h('a', slots.default?.()) }))
   app.mount(root)
   t.after(() => app.unmount())
   const nodes = (): ElementNode[] => {
@@ -79,17 +93,25 @@ function coordinator(t: TestContext) {
   return { ...view, requests, opened, openings }
 }
 
-test('rendered fixed coordinator opens lazily, prevents duplicate ensures and reports selection accessibly', async t => {
+test('rendered project name opens coordination lazily, prevents duplicate ensures and reports selection accessibly', async t => {
   const view = coordinator(t)
   assert.equal(view.requests.length, 0, 'Rendering the sidebar never creates a coordinator or sends a model turn')
-  assert.match(view.text(), /Project coordination/)
+  assert.match(view.text(), /Alpha/)
+  assert.doesNotMatch(view.text(), /Project coordination/)
   assert.equal(view.button().props['aria-label'], 'Open Project coordination in Alpha')
+  const entry = view.nodes().find(node => node.tag === 'button')!
+  const label = entry.children.find(node => node.tag === 'span')!
+  const originalText = view.text()
   const first = view.button().click()
   await view.button().click()
   await nextTick()
   assert.equal(view.requests.length, 1)
-  assert.equal(view.button().props.disabled, true)
-  assert.match(view.text(), /Opening coordination/)
+  assert.equal(view.button().props['aria-disabled'], true)
+  assert.equal(view.button().props['aria-busy'], true)
+  assert.equal(view.button().props.disabled, undefined, 'Keep the button focusable while the request guard prevents repeat activation')
+  assert.equal(view.nodes().find(node => node.tag === 'button'), entry)
+  assert.equal(entry.children.find(node => node.tag === 'span'), label, 'Pending navigation must retain the project name')
+  assert.equal(view.text(), originalText, 'Pending navigation must not flash a loading label')
   assert.equal(view.requests[0]!.url, 'http://fixture/projects/a/api/orchestrator')
   assert.equal(view.requests[0]!.init.body, '{}')
   view.requests[0]!.finish()
@@ -99,7 +121,8 @@ test('rendered fixed coordinator opens lazily, prevents duplicate ensures and re
   view.state.selected = true
   await nextTick()
   assert.equal(view.button().props['aria-current'], 'page')
-  assert.equal(view.button().props.disabled, false)
+  assert.equal(view.button().props['aria-disabled'], false)
+  assert.equal(view.text(), originalText)
   const selectedText = view.text()
   for (let i = 0; i < 3; i++) {
     const click = view.button().click()
@@ -111,6 +134,54 @@ test('rendered fixed coordinator opens lazily, prevents duplicate ensures and re
     assert.equal(view.text(), selectedText, 'Selected item must not flash a loading label or icon')
     await click
   }
+})
+
+test('project header arrow only toggles children while its name opens coordination even when collapsed', async t => {
+  const requests: Array<{ finish: () => void }> = []
+  t.mock.method(globalThis, 'fetch', () => new Promise<Response>(resolve => {
+    requests.push({ finish: () => resolve(Response.json({ projectId: 'a', sessionId: 'web:orchestrator', chatId: 'orchestrator' })) })
+  }))
+  const selected: string[] = []
+  const view = mount(t, 'ProjectGroup.vue', {
+    apiBase: 'http://fixture', project: { id: 'a', name: 'Alpha', createdAt: '' },
+    selectedProjectId: 'a', selectedSessionId: 'web:topic', navigationKey: '/projects/a/chat/topic',
+    remoteFolders: false, onSelect: (id: string) => selected.push(id),
+  })
+  const toggle = view.nodes().find(node => node.props['aria-label'] === 'Collapse project Alpha')!
+  const name = view.nodes().find(node => node.props['aria-label'] === 'Open Project coordination in Alpha')!
+  assert.ok(toggle)
+  assert.ok(name)
+  assert.equal(toggle.parent?.tag, 'header')
+  assert.equal(name.parent?.parent?.tag, 'h2', 'Coordination belongs in the project heading, not a child item')
+  assert.equal(view.nodes().filter(node => node.props['aria-label'] === 'Open Project coordination in Alpha').length, 1)
+  assert.doesNotMatch(view.text(), /Project coordination/)
+  const navigation = view.nodes().find(node => node.props.id === toggle.props['aria-controls'])!
+  const click = (node: ElementNode) => (node.props.onClick as () => Promise<void> | void)()
+  await click(toggle)
+  await nextTick()
+  assert.equal(toggle.props['aria-expanded'], false)
+  assert.equal(toggle.props['aria-label'], 'Expand project Alpha')
+  assert.equal(navigation.style.display, 'none')
+  assert.equal(requests.length, 0, 'Disclosure must not create or open a coordination session')
+  const open = click(name)
+  await nextTick()
+  assert.equal(requests.length, 1)
+  assert.equal(toggle.props['aria-expanded'], false, 'Opening a project does not expand its children')
+  requests[0]!.finish()
+  await open
+  await settle()
+  assert.deepEqual(selected, ['web:orchestrator'])
+  view.state.selectedSessionId = 'web:orchestrator'
+  await nextTick()
+  assert.equal(name.props['aria-current'], 'page')
+  await click(toggle)
+  await nextTick()
+  assert.equal(toggle.props['aria-expanded'], true)
+  assert.notEqual(navigation.style.display, 'none')
+  assert.deepEqual(selected, ['web:orchestrator'], 'Disclosure does not navigate')
+  await click(name)
+  assert.equal(requests.length, 1)
+  assert.equal(toggle.props['aria-expanded'], true)
 })
 
 test('rendered coordinator aborts project/navigation switches and ignores late responses even if transport ignores abort', async t => {
@@ -160,7 +231,7 @@ test('another Project coordinator click cancels an earlier ensure before either 
   view.requests[0]!.finish()
   await pending
   assert.deepEqual(view.opened, [])
-  assert.equal(view.button().props.disabled, false)
+  assert.equal(view.button().props['aria-disabled'], false)
 })
 
 test('rendered heading recognizes Project coordination without a folder and exposes topic goal/scope', async t => {

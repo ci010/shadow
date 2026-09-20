@@ -9,6 +9,7 @@ import {
 } from '../cluster/device-credentials.ts'
 import { startProductionChildRuntime } from './production-child.ts'
 import type { RuntimeDerivedPaths } from './runtime-cli.ts'
+import { folderFixture } from '../folders/test-fixtures.ts'
 
 const paths: RuntimeDerivedPaths = {
   bootstrapConfigPath: '/state/bootstrap.json',
@@ -89,6 +90,7 @@ test('production Child rejects non-loopback cleartext without explicit opt-in', 
 })
 
 test('production Child starts with a correlated protected key and shuts down', async (t) => {
+  const { workspace, folders } = await folderFixture(t)
   const reservation = createServer().listen({ host: '127.0.0.1', port: 0 })
   await once(reservation, 'listening')
   const address = reservation.address()
@@ -124,9 +126,9 @@ test('production Child starts with a correlated protected key and shuts down', a
       dataDir: './data',
       localNodeId: 'node-1',
       mainEndpoint: 'https://main.example.test',
-      workdirs: [{ capabilityId: 'folder-root', displayName: 'Child folder', rootPath: process.cwd() }],
+      workdirs: [{ capabilityId: 'folder-root', displayName: 'Child folder', rootPath: folders }],
     },
-    paths,
+    { ...paths, dataDir: workspace },
     {
       keyStore,
       referenceStore,
@@ -167,10 +169,13 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes[0].nodeId, 'node-1')
   assertEquals(body.nodes[0].role, 'child')
   assertEquals(body.nodes[0].connection, 'connected')
+  assertEquals(body.nodes[0].supportsManagedSessions, true)
   assertEquals(body.nodes[0].capabilities, [{
     capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,
   }, {
-    capabilityId: 'folder-root', kind: 'workdir', displayName: 'Child folder', online: true, displayPath: process.cwd(),
+    capabilityId: 'managed-sessions-v1', kind: 'shell', displayName: 'Managed session allocation', online: true,
+  }, {
+    capabilityId: 'folder-root', kind: 'workdir', displayName: 'Child folder', online: true, displayPath: folders,
   }])
   assertEquals(JSON.stringify(body).includes('credential'), false)
   assertEquals(JSON.stringify(body).includes('fingerprint'), false)

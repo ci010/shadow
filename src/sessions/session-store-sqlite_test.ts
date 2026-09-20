@@ -57,6 +57,7 @@ test('SqliteSessionStore round-trips complete SessionState metadata', async () =
   const state: SessionState = {
     ownershipVersion: 2,
     sessionId: 'discord:complete',
+    name: 'User-selected conversation name',
     mode: 'task',
     executionId: 'discord:complete',
     executionStatus: 'completed',
@@ -64,6 +65,7 @@ test('SqliteSessionStore round-trips complete SessionState metadata', async () =
     completionReported: true,
     parentSessionId: 'discord:parent',
     segmentIndex: 3,
+    contextResetAt: '2026-08-26T11:00:00.000Z',
     lastActivityAt: '2026-08-26T12:34:56.000Z',
     lastKnownTokens: 4321,
     config: {

@@ -1,6 +1,19 @@
 import { isAbsolute, relative, resolve } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
 import { z } from 'zod'
+import { ScriptImportsSchema } from '../script-runtime/module-policy.ts'
+
+const parameter = z.object({
+  type: z.string(),
+  description: z.string().optional(),
+  enum: z.array(z.string()).optional(),
+  items: z.object({
+    type: z.string(),
+    properties: z.record(z.object({ type: z.string(), description: z.string().optional() }).passthrough()).optional(),
+    required: z.array(z.string()).optional(),
+  }).passthrough().optional(),
+  default: z.unknown().optional(),
+}).passthrough()
 
 export const SkillToolNameSchema = z.string().regex(
   /^[A-Za-z][A-Za-z0-9_-]*$/,
@@ -9,10 +22,14 @@ export const SkillToolNameSchema = z.string().regex(
 
 export const SkillToolDeclarationSchema = z.object({
   source: z.string().refine(
-    source => !isAbsolute(source) && !/^[A-Za-z]:/.test(source) && source.toLowerCase().endsWith('.ts'),
-    'Skill TypeScript sources must be relative .ts paths inside the skill directory',
+    source => !isAbsolute(source) && !/^[A-Za-z]:/.test(source) && /\.(?:js|ts)$/i.test(source),
+    'Skill sources must be relative .js or .ts paths inside the skill directory',
   ),
-  args: z.array(z.string()).optional(),
+  description: z.string().min(1).max(2000),
+  parameters: z.object({
+    type: z.literal('object'), properties: z.record(parameter), required: z.array(z.string()).optional(),
+  }).passthrough(),
+  imports: ScriptImportsSchema.default([]),
 }).strict()
 
 export const SkillToolDeclarationsSchema = z.record(SkillToolNameSchema, SkillToolDeclarationSchema)
@@ -36,8 +53,8 @@ export async function resolveSkillToolSource(
   if (!directory) throw new TypeError(`Skill "${skill}" was not found; create or discover its SKILL.md first`)
   const root = resolve(directory)
   const path = resolve(root, source)
-  if (!path.toLowerCase().endsWith('.ts') || !isWithin(root, path)) {
-    throw new TypeError('TypeScript entrypoints must be .ts files inside their owning skill directory')
+  if (!/\.(?:js|ts)$/i.test(path) || !isWithin(root, path)) {
+    throw new TypeError('Script entrypoints must be .js or .ts files inside their owning skill directory')
   }
   const [realRoot, realSource, realManifest] = await Promise.all([
     realpath(root), realpath(path), realpath(resolve(root, 'SKILL.md')),

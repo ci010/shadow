@@ -1,9 +1,13 @@
 import { trace } from '@opentelemetry/api'
+import { parseSessionName } from './session-name.ts'
+import { mkdir } from 'node:fs/promises'
+import { isCommandReceipt, type CommandReceipt } from '../slash-commands/receipt.ts'
 import { parseAutomationSessionRef, resolveAutomationSession, type AutomationSessionRef } from '../cron/contracts.ts'
 import { parseInitiativeId } from './initiative-metadata.ts'
 import type { Hono } from 'hono'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
 import type { AgentTypeDefinition } from '../agent/types/types.ts'
+import type { ConversationPolicies } from '../agent-authoring/service.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
 import type {
   ContextBuilder,
@@ -26,9 +30,11 @@ import {
 } from '../utils/messages.ts'
 import { Span } from '../otel/tracing.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
+import { hasTruncatedLegacyHistory, physicalSessionId, SessionIdentityError } from './session-identity.ts'
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
+import { evaluateAuthoringScenario } from './authoring-evaluation.ts'
 import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
 import { parseTopicMetadata, parseTopicSessionFields, type TopicMetadata } from './topic-contract.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
@@ -61,6 +67,8 @@ import {
 } from './input.ts'
 
 export type { SessionState, SessionStore } from './session-store.ts'
+
+export class ConversationContextsBusyError extends Error {}
 
 /**
  * Strip the leading `<sender .../>` or `<event .../>` metadata tag that is
@@ -100,6 +108,7 @@ export interface SleepConfig {
 }
 
 export interface SessionManagerDeps {
+  conversationPolicies?: ConversationPolicies
   promptCaptures?: import('./prompt-capture.ts').PromptCaptureStore
   projectId?: string
   hasInitiative?: (initiativeId: string) => boolean
@@ -190,6 +199,7 @@ interface BlockingCallFrame {
   session?: EphemeralSession
   blockedReason?: string
   cancelled: boolean
+  settled: Promise<void>
 }
 
 export class SessionManager {
@@ -211,6 +221,7 @@ export class SessionManager {
   private readonly calls = new Map<string, BlockingCallFrame>()
   private readonly topicUpdates = new Map<string, Promise<void>>()
   private readonly stateCreations = new Map<string, Promise<unknown>>()
+  private readonly ownedCreations = new Map<string, Set<Promise<void>>>()
 
   acquireFolderAccess(): () => void {
     return this.deps.acquireFolderAccess?.() ?? (() => {})
@@ -264,11 +275,25 @@ export class SessionManager {
     return [...this.calls.values()].some(frame => frame.callerId === sessionId)
   }
 
+  async evaluateAuthoringScenario(input: {
+    prompt: string; tools: SessionTools; input: string; signal: AbortSignal
+    llmOverrides?: Partial<Pick<LlmRuntimeConfig, 'model' | 'temperature' | 'maxTokens' | 'thinking' | 'reasoningEffort'>>
+  }) {
+    if (this.stopped || !this.deps.projectId) throw new Error('Authoring evaluation requires a running Project session manager.')
+    const llm = this.deps.getLlmRuntimeConfig?.()
+    if (!llm) throw new Error('Authoring evaluation requires the configured LLM runtime.')
+    return evaluateAuthoringScenario({
+      ...input, workspace: this.workspace, projectId: this.deps.projectId,
+      provider: this.deps.provider, llm: { ...llm, ...input.llmOverrides },
+    })
+  }
+
   getDelegationOwner(sessionId: string): string | undefined {
     return delegationOwner(this.sessionStates[sessionId])
   }
 
   getAllowedSubagentModes(sessionId: string): readonly ExecutionMode[] {
+    if (this.isManagedConversation(sessionId)) return []
     const state = this.sessionStates[sessionId]
     return allowedSubagentModes(state?.mode ?? 'session', !!delegationOwner(state))
   }
@@ -284,7 +309,7 @@ export class SessionManager {
     if (this.deleting.has(sessionId)) throw new Error('Delegation owner is being deleted.')
     if (!this.getAllowedSubagentModes(sessionId).includes(mode)) throw new Error(`Execution mode "${mode}" is not allowed from this session.`)
     const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
-    if (role.allowedTools?.length ? !role.allowedTools.includes('subagent') : role.blockedTools?.includes('subagent')) {
+    if (role.allowedTools !== undefined ? !role.allowedTools.includes('subagent') : role.blockedTools?.includes('subagent')) {
       throw new Error('The owner role does not permit subagent creation.')
     }
     const seen = new Set<string>()
@@ -321,9 +346,10 @@ export class SessionManager {
       throw error
     }
     const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
-    const tools = new CallTools(context.tools, this.workspace, role.allowedTools, role.blockedTools)
+    const tools = new CallTools(context.tools, this.workspace, role.allowedTools, role.blockedTools, role.agentType.allowedModules)
+    const settled = Promise.withResolvers<void>()
     const frame: BlockingCallFrame = {
-      callerId: context.sessionId, tools, cancelled: false,
+      callerId: context.sessionId, tools, cancelled: false, settled: settled.promise,
     }
     this.calls.set(sessionId, frame)
     tools.setExecutionScope('call', [], reason => {
@@ -405,6 +431,7 @@ export class SessionManager {
       context.signal.removeEventListener('abort', cancel)
       this.calls.delete(sessionId)
       tools.resetDynamic()
+      settled.resolve()
     }
   }
 
@@ -467,7 +494,27 @@ export class SessionManager {
 
   /** Derive the current physical session ID from state. */
   static currentPhysicalId(state: SessionState): string {
-    return newPhysicalSessionId(state.sessionId, state.segmentIndex)
+    return physicalSessionId(state)
+  }
+
+  private historyConflict(sessionId: string, seen = new Set<string>()): string | undefined {
+    if (seen.has(sessionId)) return
+    seen.add(sessionId)
+    const state = this.sessionStates[sessionId]
+    if (!state) return
+    if (hasTruncatedLegacyHistory(state)) return sessionId
+    if (state.parent?.index !== undefined) {
+      const parent = state.parent
+      if (hasTruncatedLegacyHistory({ sessionId: parent.id })
+        && parent.physicalId?.replace(/-\d+$/, '-0') === newPhysicalSessionId(parent.id, 0, 1)) return parent.id
+      return this.historyConflict(parent.id, seen)
+    }
+  }
+
+  private assertHistoryWritable(sessionId: string): void {
+    if (this.historyConflict(sessionId)) {
+      throw new SessionIdentityError('Legacy session history uses a truncated ID and may contain another conversation. Repair the history or delete this conversation before starting fresh. Shared legacy logs are preserved.')
+    }
   }
 
   constructor(
@@ -487,7 +534,7 @@ export class SessionManager {
       },
       getState: id => this.getSessionState(id),
       getPolicy: id => this.getYieldPolicy(id),
-      notifyUser: request => this.notifyYieldUser(request),
+      notifyUser: (request, replyTo) => this.notifyYieldUser(request, replyTo),
       notifyParent: request => this.notifyYieldParent(request),
     })
   }
@@ -496,7 +543,7 @@ export class SessionManager {
     return parseYieldPolicy(this.getSessionConfig(sessionId).yield ?? this.deps.getYieldPolicy?.() ?? { timeoutMs: null })
   }
 
-  private async notifyYieldUser(request: YieldRequest): Promise<void> {
+  private async notifyYieldUser(request: YieldRequest, replyTo?: string): Promise<void> {
     const separator = request.sessionId.indexOf(':')
     if (separator < 1 || request.sessionId.startsWith('web:')) return
     const channelAddress = channelAddressFromSessionId(request.sessionId)
@@ -508,10 +555,12 @@ export class SessionManager {
       channel: channelAddress?.platform ?? request.sessionId.slice(0, separator),
       chatId: channelAddress?.conversationId ?? request.sessionId.slice(separator + 1),
       ...(channelAddress ? { channelAddress } : {}),
+      ...(replyTo ? { replyTo } : {}),
       content: [
         request.question,
         ...request.options.map((option, index) => `${index + 1}. ${option}${option === request.defaultOption ? ' (default)' : ''}`),
-        `Reply with /yield ${request.id} <1|2|3|cancel>.`,
+        `Reply with /yield ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
+        `Or write your own response: /yield ${request.id} text <your response>.`,
         request.deadline ? `At ${request.deadline}, the default will be used if unanswered.` : 'Waiting for your answer; no automatic default.',
       ].join('\n'),
       done: true,
@@ -600,6 +649,11 @@ export class SessionManager {
     // Load all session states into memory cache
     this.sessionStates = await this.store.listAllStates()
     for (const state of Object.values(this.sessionStates)) {
+      if (this.historyConflict(state.sessionId)) {
+        console.error(`[session-manager] Session ${state.sessionId} has potentially shared legacy history; automatic continuation is blocked pending explicit repair.`)
+      }
+    }
+    for (const state of Object.values(this.sessionStates)) {
       state.automation ??= resolveAutomationSession(state)
       state.automationVersion = 1
       if (this.deps.projectId) {
@@ -643,6 +697,7 @@ export class SessionManager {
     // Legacy one-shot records remain closed even when they predate lifecycle status.
     for (const state of Object.values(this.sessionStates)) {
       if (!this.isEphemeralSession(state.sessionId)) continue
+      if (this.historyConflict(state.sessionId)) continue
       if (state.lastActivityAt || state.segmentIndex > 0) this.acceptedInputs.add(state.sessionId)
       let finalResponse = false
       for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
@@ -662,6 +717,7 @@ export class SessionManager {
     this.reportSubscription = this.deps.bus.on('session.turn.finished', this.deps.scope?.bind(report) ?? report)
     for (const state of Object.values(this.sessionStates)) {
       if (state.mode !== 'task' || state.completionReported || !state.lastActivityAt) continue
+      if (this.historyConflict(state.sessionId)) continue
       let fact: SessionTurnFact | undefined
       for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
         if (record.execution_receipt) fact = record.execution_receipt as SessionTurnFact
@@ -681,7 +737,7 @@ export class SessionManager {
 
   private reportCompletion(fact: SessionTurnFact): Promise<void> {
     const state = this.sessionStates[fact.sessionId]
-    if (!state || state.mode !== 'task') return Promise.resolve()
+    if (!state || state.mode !== 'task' || this.deleting.has(fact.sessionId)) return Promise.resolve()
     const targetId = state.reportTo
     if (!targetId || targetId === fact.sessionId || this.deleting.has(targetId)
       || (targetId === (state.parentSessionId ?? state.parent?.id) && !this.sessionStates[targetId])
@@ -768,11 +824,10 @@ export class SessionManager {
 
   /** Resolves after preparation and admission, never after model completion. */
   deliver(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig): Promise<DeliveryReceipt> {
-    if (this.stopped) return Promise.reject(new Error('Session manager stopped'))
-    const previous = this.preparations.get(sessionId) ?? Promise.resolve()
-    const admission = previous.catch(() => {}).then(async (): Promise<DeliveryReceipt> => {
-      if (this.stopped) throw new Error('Session manager stopped')
+    return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
+      this.deps.conversationPolicies?.authorize(sessionId, input)
       this.assertFolderAccess(sessionId)
+      this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
       const resume = input.kind === 'control' && input.command.type === 'resume' ? input.command : undefined
       if (resume && (state?.mode !== 'session' || state.recovery?.id !== resume.recoveryId)) {
@@ -808,7 +863,14 @@ export class SessionManager {
       }
       const config = llm ?? this.deps.getLlmRuntimeConfig?.()
       if (!config) throw new Error('Session delivery requires LLM runtime configuration')
-      const deliveryInput = input
+      const deliveryInput = this.isManagedConversation(sessionId) && input.kind === 'message'
+        ? {
+          ...input, policy: input.policy === 'silent' ? 'silent' as const : 'queue' as const,
+          source: input.source.kind === 'user'
+            ? { kind: 'user' as const, sender: { ...input.source.sender, admin: false } }
+            : input.source,
+        }
+        : input
       let session: Session | EphemeralSession | undefined = this.sessions[sessionId]
       if (resume && session && (!('quiescent' in session) || !session.quiescent)) {
         throw new SessionResumeError('The conversation has active or queued work. Wait before continuing.')
@@ -819,6 +881,10 @@ export class SessionManager {
       }
       const created = !session
       if (!session) session = await this.createActiveSession(sessionId, deliveryInput)
+      if (this.deleting.has(sessionId)) {
+        session.stop()
+        throw new DOMException('Session was deleted before admission.', 'AbortError')
+      }
       this.assertFolderAccess(sessionId)
       if (!trustedCompletion && state?.mode !== 'session' && ownerId && (this.deleting.has(ownerId) || !this.sessionStates[ownerId])) {
         session.stop()
@@ -847,6 +913,7 @@ export class SessionManager {
         }
       }
       try {
+        this.deps.conversationPolicies?.authorize(sessionId, input)
         session.dispatch(deliveryInput, config)
       } catch (error) {
         if (resume) {
@@ -861,12 +928,40 @@ export class SessionManager {
       this.deps.bus.emit('session.input.accepted', { sessionId, input: deliveryInput })
       return { status: 'accepted', sessionId, inputId: input.id }
     })
+  }
+
+  private withSessionPreparation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    if (this.stopped) return Promise.reject(new Error('Session manager stopped'))
+    const previous = this.preparations.get(sessionId) ?? Promise.resolve()
+    const admission = previous.catch(() => {}).then(() => {
+      if (this.stopped) throw new Error('Session manager stopped')
+      if (this.deleting.has(sessionId)) throw new Error('Session is being deleted')
+      return operation()
+    })
     this.preparations.set(sessionId, admission)
     const clean = () => {
       if (this.preparations.get(sessionId) === admission) this.preparations.delete(sessionId)
     }
     void admission.then(clean, clean)
     return admission
+  }
+
+  isManagedConversation(sessionId: string): boolean {
+    return this.deps.conversationPolicies?.managed(sessionId) ?? false
+  }
+
+  authorizeConversationInput(sessionId: string, input: SessionInput): void {
+    this.deps.conversationPolicies?.authorize(sessionId, input)
+  }
+
+  async retireIdleConversationContexts(matches: (sessionId: string) => boolean): Promise<void> {
+    if ([...this.preparations.keys()].some(matches)) throw new ConversationContextsBusyError('A channel input is being admitted. Publication can continue after admission finishes.')
+    const active = Object.entries(this.sessions).filter(([id]) => matches(id))
+    if (active.some(([, session]) => !(session instanceof Session) || !session.quiescent)) {
+      throw new ConversationContextsBusyError('Channel conversations still have active or queued work. Publication can continue when that work finishes.')
+    }
+    for (const [, session] of active) session.stop()
+    await Promise.all(active.map(([, session]) => session.completion))
   }
 
   private async createActiveSession(sessionId: string, input: SessionInput): Promise<Session | EphemeralSession> {
@@ -912,7 +1007,9 @@ export class SessionManager {
         this.deps.store,
         this.deps.handoffManager,
         onStopped,
-        () => this.deps.context.buildSystemPrompt(ctx.promptCtx),
+        () => ctx.conversationPolicy
+          ? Promise.resolve(this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId).systemPrompt)
+          : this.deps.context.buildSystemPrompt(ctx.promptCtx),
         this.deps.quickModel,
         this.sleepInactivityMs,
         this.deps.workdirCapabilityLookup,
@@ -930,6 +1027,7 @@ export class SessionManager {
   async recoverIncompleteSessions(): Promise<void> {
     for (const state of Object.values(this.sessionStates)) {
       if (this.sessions[state.sessionId] || this.preparations.has(state.sessionId)) continue
+      if (this.historyConflict(state.sessionId)) continue
       await prepareSessionRecovery(this.store, state)
     }
   }
@@ -987,6 +1085,7 @@ export class SessionManager {
   }
 
   private async buildSessionWithAccess(...[sessionId, parent, stateFields]: Parameters<SessionManager['buildSession']>): Promise<void> {
+    if (parent?.index !== undefined) this.assertHistoryWritable(parent.id)
     const topicFields = parseTopicSessionFields(stateFields ?? {})
     const coordinator = sessionId === 'web:orchestrator' || stateFields?.agentType === 'orchestrator'
       || topicFields.sessionKind === 'orchestrator'
@@ -1050,17 +1149,17 @@ export class SessionManager {
     }
 
     const ts = new Date().toISOString()
-    const physicalSessionId = newPhysicalSessionId(sessionId, 0)
+    const physicalSessionId = newPhysicalSessionId(sessionId, 0, 2)
 
     const startEvent: SessionStartEvent = {
+      sessionId,
+      physicalIdVersion: 2,
       projectId: this.deps.projectId,
       ...topicFields,
       sessionKind: topicFields.sessionKind ?? (mode === 'session' && !automation ? 'topic' : undefined),
       previous_physical_id: null,
       timestamp: ts,
     }
-
-    await this.store.createSessionLog(physicalSessionId, [startEvent])
 
     const config: SessionConfig = {
       model: agent?.model,
@@ -1081,6 +1180,7 @@ export class SessionManager {
       : undefined
     const state: SessionState = {
       ownershipVersion: 2,
+      physicalIdVersion: 2,
       projectId: this.deps.projectId,
       ...topicFields,
       sessionKind: topicFields.sessionKind ?? (mode === 'session' && !automation ? 'topic' : undefined),
@@ -1107,8 +1207,22 @@ export class SessionManager {
     }
     if (state.mode !== 'session') state.executionId = sessionId
 
-    await this.store.saveState(sessionId, state)
-    this.sessionStates[sessionId] = state
+    const settled = Promise.withResolvers<void>()
+    const pending = ownerId ? this.ownedCreations.get(ownerId) ?? new Set<Promise<void>>() : undefined
+    if (ownerId && pending) {
+      pending.add(settled.promise)
+      this.ownedCreations.set(ownerId, pending)
+    }
+    try {
+      await this.ensureSessionDataDirectory(state)
+      await this.store.createSessionLog(physicalSessionId, [startEvent])
+      await this.store.saveState(sessionId, state)
+      this.sessionStates[sessionId] = state
+    } finally {
+      settled.resolve()
+      pending?.delete(settled.promise)
+      if (ownerId && pending?.size === 0) this.ownedCreations.delete(ownerId)
+    }
   }
 
   /**
@@ -1256,7 +1370,8 @@ export class SessionManager {
   async updateTopicMetadata(sessionId: string, topic: TopicMetadata): Promise<void> {
     const next = parseTopicMetadata(topic)
     const previous = this.topicUpdates.get(sessionId) ?? Promise.resolve()
-    const update = previous.catch(() => {}).then(() => this.replaceTopicMetadata(sessionId, next))
+    const update = previous.catch(() => {}).then(() =>
+      this.withStateCreation(sessionId, () => this.replaceTopicMetadata(sessionId, next)))
     this.topicUpdates.set(sessionId, update)
     try { await update }
     finally { if (this.topicUpdates.get(sessionId) === update) this.topicUpdates.delete(sessionId) }
@@ -1282,6 +1397,19 @@ export class SessionManager {
     } finally { release() }
   }
 
+  async renameSession(sessionId: string, value: string): Promise<string> {
+    const name = parseSessionName(value)
+    return this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state) throw new Error('session_not_found')
+      if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
+      await this.store.saveState(sessionId, { ...state, name })
+      state.name = name
+      this.deps.bus.emit('session.renamed', { sessionId })
+      return name
+    })
+  }
+
   getSessionConfig(sessionId: string): SessionConfig {
     const state = this.sessionStates[sessionId]
     return state?.config ?? {}
@@ -1292,51 +1420,55 @@ export class SessionManager {
     patch: SessionConfigPatch,
     create = false,
   ): Promise<void> {
-    const state = this.sessionStates[sessionId] ??
-      (create ? await this.getOrCreateState(sessionId) : null)
-    if (!state) throw new Error('session_not_found')
-    const config = { ...state.config, ...patch.set }
-    for (const key of patch.unset) delete config[key]
-    const next = Object.keys(config).length ? config : undefined
-    // Keep the active session's state reference, but only publish durable changes.
-    await this.store.saveState(sessionId, { ...state, config: next })
-    state.config = next
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId] ??
+        (create ? await this.createMissingState(sessionId) : null)
+      if (!state) throw new Error('session_not_found')
+      const config = { ...state.config, ...patch.set }
+      for (const key of patch.unset) delete config[key]
+      const next = Object.keys(config).length ? config : undefined
+      // Keep the active session's state reference, but only publish durable changes.
+      await this.store.saveState(sessionId, { ...state, config: next })
+      state.config = next
+    })
   }
 
   async setSessionConfig(
     sessionId: string,
     patch: Partial<SessionConfig>,
   ): Promise<void> {
-    const state = this.sessionStates[sessionId]
-    if (!state) return
-    state.config = { ...state.config, ...patch }
-    await this.saveState(sessionId, state)
+    if (!this.sessionStates[sessionId]) return
+    await this.applySessionConfigPatch(sessionId, { set: patch, unset: [] })
   }
 
   async unsetSessionConfig(
     sessionId: string,
     key: keyof SessionConfig,
   ): Promise<void> {
-    const state = this.sessionStates[sessionId]
-    if (!state?.config) return
-    const next = { ...state.config }
-    delete next[key]
-    state.config = Object.keys(next).length > 0 ? next : undefined
-    await this.saveState(sessionId, state)
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state?.config) return
+      const config = { ...state.config }
+      delete config[key]
+      const next = Object.keys(config).length ? config : undefined
+      await this.store.saveState(sessionId, { ...state, config: next })
+      state.config = next
+    })
   }
 
   async resetSessionConfig(sessionId: string): Promise<void> {
-    const state = this.sessionStates[sessionId]
-    if (!state?.config) return
-    state.config = undefined
-    await this.saveState(sessionId, state)
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state?.config) return
+      await this.store.saveState(sessionId, { ...state, config: undefined })
+      state.config = undefined
+    })
   }
 
   // ── Deletion ──────────────────────────────────────────────────────
 
   /**
-   * Delete a session: stop it if active, remove all physical segment logs,
-   * delete its state, and cascade-delete all child sessions.
+   * Delete a session and its owned children, retaining shared or ambiguous logs.
    *
    * @returns The list of session IDs that were deleted.
    */
@@ -1347,25 +1479,6 @@ export class SessionManager {
     return deleted
   }
 
-  private async stopOwnedChildren(ownerId: string, seen = new Set<string>()): Promise<void> {
-    if (seen.has(ownerId)) return
-    seen.add(ownerId)
-    for (const child of Object.values(this.sessionStates)) {
-      if (delegationOwner(child) !== ownerId || seen.has(child.sessionId)) continue
-      const marked = !this.deleting.has(child.sessionId)
-      if (marked) this.deleting.add(child.sessionId)
-      try {
-        this.yields.cancelSession(child.sessionId, 'Owner session deleted.')
-        const execution = this.sessions[child.sessionId]
-        execution?.stop()
-        await execution?.completion
-        await this.stopOwnedChildren(child.sessionId, seen)
-      } finally {
-        if (marked) this.deleting.delete(child.sessionId)
-      }
-    }
-  }
-
   private async _deleteSessionRecursive(
     sessionId: string,
     deleted: string[],
@@ -1373,15 +1486,35 @@ export class SessionManager {
     const state = this.sessionStates[sessionId]
     if (!state || this.deleting.has(sessionId)) return
     this.deleting.add(sessionId)
-    await this.topicUpdates.get(sessionId)?.catch(() => {})
-
-    // Cascade: delete children first
-    if (state.children?.length) {
-      for (const childId of [...state.children]) {
-        if (delegationOwner(this.sessionStates[childId]) === sessionId) await this._deleteSessionRecursive(childId, deleted)
-      }
+    try {
+      await this.deleteSessionState(sessionId, state, deleted)
+    } finally {
+      this.deleting.delete(sessionId)
     }
-    await this.stopOwnedChildren(sessionId)
+  }
+
+  private async deleteSessionState(sessionId: string, state: SessionState, deleted: string[]): Promise<void> {
+    await this.topicUpdates.get(sessionId)?.catch(() => {})
+    this.yields.cancelSession(sessionId, 'Session deleted.')
+    const call = this.calls.get(sessionId)
+    if (call) {
+      call.cancelled = true
+      call.session?.cancel()
+    }
+    this.sessions[sessionId]?.stop()
+    await this.preparations.get(sessionId)?.catch(() => {})
+    const active = this.sessions[sessionId]
+    active?.stop()
+    await active?.completion
+    await call?.settled
+    await this.reporting.get(sessionId)?.catch(() => {})
+    await Promise.all(this.ownedCreations.get(sessionId) ?? [])
+
+    // The optional children index omits one-shot tasks/calls. Persisted ownership
+    // is authoritative; drain creators and final receipts before removing traces.
+    for (const child of Object.values(this.sessionStates)) {
+      if (delegationOwner(child) === sessionId) await this._deleteSessionRecursive(child.sessionId, deleted)
+    }
 
     // Ephemeral children may not be in state.children, but cannot keep waiting
     // or resume a provider call after their decision recipient is deleted.
@@ -1390,28 +1523,18 @@ export class SessionManager {
       if (delegationOwner(this.sessionStates[id]) && request?.recipient.kind === 'parent' && request.recipient.sessionId === sessionId) child.cancel()
     }
 
-    // Stop active session if running
-    const active = this.sessions[sessionId]
-    if (active) {
-      active.stop()
-      await active.completion
-      delete this.sessions[sessionId]
-    }
-    this.yields.cancelSession(sessionId, 'Session deleted.')
+    delete this.sessions[sessionId]
 
-    // Delete all physical segment logs (segment 0 through segmentIndex)
-    const retainedHistory = Object.values(this.sessionStates).some(other =>
-      other.sessionId !== sessionId && other.parent?.id === sessionId && other.parent?.index !== undefined)
+    // Truncated legacy addresses cannot prove exclusive ownership, even after the last owner is removed.
+    const retainedHistory = hasTruncatedLegacyHistory(state) || Object.values(this.sessionStates).some(other =>
+      other.sessionId !== sessionId && (
+        (other.parent?.id === sessionId && other.parent?.index !== undefined)
+        || physicalSessionId(other, 0) === physicalSessionId(state, 0)))
     for (let i = 0; !retainedHistory && i <= state.segmentIndex; i++) {
-      try {
-        await this.store.deleteSessionLog(newPhysicalSessionId(sessionId, i))
-      } catch { /* segment may not exist */ }
+      await this.store.deleteSessionLog(physicalSessionId(state, i))
     }
 
-    // Delete persisted state
-    try {
-      await this.store.deleteState(sessionId)
-    } catch { /* ignore */ }
+    await this.store.deleteState(sessionId)
 
     // Remove from in-memory cache
     delete this.sessionStates[sessionId]
@@ -1419,7 +1542,6 @@ export class SessionManager {
     this.acceptedInputs.delete(sessionId)
 
     deleted.push(sessionId)
-    this.deleting.delete(sessionId)
   }
 
   // ── Queries (state, history, tools, context) ───────────────────────
@@ -1439,7 +1561,7 @@ export class SessionManager {
     const state = this.getSessionState(sessionId)
     if (!state) return null
     const segments = Array.from({ length: state.segmentIndex + 1 }, (_, index) =>
-      newPhysicalSessionId(sessionId, index))
+      physicalSessionId(state, index))
     if (physicalId !== undefined && !segments.includes(physicalId)) return null
     const selected = physicalId ?? segments[segments.length - 1]!
     let usage: LLMResponseUsage | null = null
@@ -1474,7 +1596,7 @@ export class SessionManager {
       ...(state.projectId ? { projectId: state.projectId } : {}),
       ...parseTopicSessionFields(state),
       sessionId,
-      name: state.topic?.title ?? await this.getFirstUserMessage(sessionId),
+      name: state.name ?? state.topic?.title ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
       workdir: {
         kind: remote ? 'remote' as const : 'local' as const,
         displayPath: remote
@@ -1499,6 +1621,47 @@ export class SessionManager {
     return this.sessions[sessionId]
   }
 
+  /** Start a fresh context without summarizing, deleting history, or changing identity. */
+  clearSessionContext(sessionId: string): Promise<'cleared' | 'busy' | 'unsupported'> {
+    return this.withSessionPreparation(sessionId, () => this.withStateCreation(sessionId, async () => {
+      this.assertFolderAccess(sessionId)
+      this.assertHistoryWritable(sessionId)
+      const state = this.sessionStates[sessionId]
+      if (!state) throw new Error('Session not found')
+      if (state.mode !== 'session' || this.isManagedConversation(sessionId)) return 'unsupported'
+      const session = this.sessions[sessionId]
+      if (session && (!(session instanceof Session) || !session.quiescent)) return 'busy'
+      await this.deps.agentTypes.refresh(state.agentType ?? 'general')
+      // A manual compaction/sleep may have started while the definition was read.
+      if (session && (!(session instanceof Session) || !session.quiescent)) return 'busy'
+      session?.stop()
+      await session?.completion
+      if (this.stopped || this.deleting.has(sessionId)) throw new Error('Session is stopping')
+      this.assertFolderAccess(sessionId)
+      const timestamp = new Date().toISOString()
+      const next: SessionState = {
+        ...state, segmentIndex: state.segmentIndex + 1, contextResetAt: timestamp,
+        lastKnownTokens: 0, lastActivityAt: timestamp, executionStatus: 'pending',
+        recovery: undefined, preloadTools: undefined,
+      }
+      await this.store.createSessionLog(physicalSessionId(next), [{
+        sessionId, physicalIdVersion: next.physicalIdVersion,
+        previous_physical_id: physicalSessionId(state), timestamp, context_reset: true,
+      }])
+      // Publish the new pointer only after persistence succeeds; failure keeps old history usable.
+      try {
+        await this.store.saveState(sessionId, next)
+      } catch (error) {
+        try { await this.store.deleteSessionLog(physicalSessionId(next)) }
+        catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Failed to persist and clean up the cleared context') }
+        throw error
+      }
+      Object.assign(state, next)
+      this.acceptedInputs.delete(sessionId)
+      return 'cleared'
+    }))
+  }
+
   requestCompact(sessionId: string, llm: LlmRuntimeConfig): boolean {
     this.assertFolderAccess(sessionId)
     const sess = this.sessions[sessionId]
@@ -1519,12 +1682,13 @@ export class SessionManager {
   }
 
   listSessions(): Array<
-    Pick<SessionState, 'projectId' | 'sessionId' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'topic' | 'createdBySessionId'
+    Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'topic' | 'createdBySessionId'
       | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'executionStatus'>
   > {
     return Object.values(this.sessionStates).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
       sessionId: s.sessionId,
+      ...(s.name !== undefined ? { name: s.name } : {}),
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,
       folderId: s.folderId,
@@ -1541,7 +1705,7 @@ export class SessionManager {
   async getFirstUserMessage(sessionId: string): Promise<string | null> {
     const state = this.sessionStates[sessionId]
     if (!state) return null
-    const physicalId = newPhysicalSessionId(sessionId, 0)
+    const physicalId = physicalSessionId(state, 0)
     for await (const parsed of this.store.readSessionLog(physicalId)) {
       if (parsed.role === 'user' && parsed.name !== '__compaction_summary__') {
         const content = parsed.content
@@ -1606,7 +1770,7 @@ export class SessionManager {
       } else {
         const state = this.sessionStates[sessionId]
         if (!state) return { messages: [], total: 0 }
-        const forkInfo = state.parent?.physicalId && state.parent.index
+        const forkInfo = state.segmentIndex === 0 && state.parent?.physicalId && state.parent.index
           ? {
             parentPhysicalId: state.parent.physicalId,
             forkAt: state.parent.index,
@@ -1635,6 +1799,10 @@ export class SessionManager {
     sessionId?: string,
     behaviorOverride?: { allowedTools?: string[]; blockedTools?: string[] },
   ): Array<{ name: string; description: string; parameters: unknown }> {
+    const conversationPolicy = sessionId ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
+    if (conversationPolicy && sessionId) {
+      return this.deps.conversationPolicies!.tools(conversationPolicy, sessionId).getDefinitions().map(tool => tool.function)
+    }
     if (sessionId) {
       const sess = this.sessions[sessionId]
       if (sess && !behaviorOverride) {
@@ -1696,10 +1864,18 @@ export class SessionManager {
     }
 
     const active = this.getActiveSession(sessionId)
+    const conversationPolicy = this.deps.conversationPolicies?.resolve(sessionId)
     if (active && !opts.preview) {
       return {
         source: 'active-history',
         systemPrompt: extractSystemPrompt(active.history[0]),
+        tools: this.getToolDefinitions(sessionId),
+      }
+    }
+
+    if (conversationPolicy) {
+      return {
+        source: 'preview', ...this.deps.conversationPolicies!.prompt(conversationPolicy, sessionId),
         tools: this.getToolDefinitions(sessionId),
       }
     }
@@ -1726,6 +1902,7 @@ export class SessionManager {
       mode: state?.mode ?? agentType.defaultMode,
       parentSessionId: delegationOwner(state),
       initiativeId: state?.initiativeId,
+      contextResetAt: state?.contextResetAt,
       ...sessionPromptLocality(state),
     }
 
@@ -1754,14 +1931,14 @@ export class SessionManager {
       this.deps.agentTypes.resolve('general')!
 
     if (name === 'orchestrator' || sessionKind === 'orchestrator') {
-      const allowedTools = ['read', 'search', 'topic', 'message', 'initiative']
+      const allowedTools = ['read', 'search', 'topic', 'message', 'initiative', 'project_config', 'authoring_change']
       return {
         agentType: { ...resolved, allowedTools, blockedTools: undefined },
         allowedTools,
       }
     }
 
-    if (resolved.allowedTools?.length) {
+    if (resolved.allowedTools !== undefined) {
       return { agentType: resolved, allowedTools: resolved.allowedTools }
     }
 
@@ -1793,6 +1970,50 @@ export class SessionManager {
     return this.withStateCreation(sessionId, () => this.createMissingState(sessionId))
   }
 
+  /** Commands need durable identity and local session data, but no model loop. */
+  async prepareCommandSession(sessionId: string): Promise<void> {
+    this.assertHistoryWritable(sessionId)
+    await this.withStateCreation(sessionId, async () => {
+      const state = await this.createMissingState(sessionId)
+      await this.ensureSessionDataDirectory(state)
+    })
+  }
+
+  async recordCommandResult(sessionId: string, receipt: CommandReceipt): Promise<void> {
+    if (!isCommandReceipt(receipt)) throw new TypeError('Invalid command receipt')
+    await this.withStateCreation(sessionId, async () => {
+      this.assertHistoryWritable(sessionId)
+      const state = this.sessionStates[sessionId]
+      if (!state) throw new Error('Command conversation no longer exists')
+      await this.store.appendRawEvents(SessionManager.currentPhysicalId(state), [{
+        event: 'command_result', receipt,
+      }])
+    })
+  }
+
+  /** Receipts belong to this segment, not inherited/forked model history. */
+  async getCommandResults(sessionId: string, physicalId?: string): Promise<CommandReceipt[]> {
+    const state = this.sessionStates[sessionId]
+    const id = physicalId ?? (state ? SessionManager.currentPhysicalId(state) : undefined)
+    if (!id) return []
+    const receipts = new Map<string, CommandReceipt>()
+    for await (const record of this.store.readSessionLog(id)) {
+      if (record.event !== 'command_result') continue
+      if (!isCommandReceipt(record.receipt)) throw new TypeError('Invalid persisted command receipt')
+      receipts.set(record.receipt.id, record.receipt)
+      if (receipts.size > MAX_HISTORY) receipts.delete(receipts.keys().next().value!)
+    }
+    return [...receipts.values()]
+  }
+
+  private async ensureSessionDataDirectory(state: SessionState): Promise<void> {
+    const { sessionDataDir } = resolveSessionLocations(
+      this.workspace, state, undefined, this.workdirCapabilityLookup,
+    )
+    // Only Main-owned session data; never create a folder or remote display path.
+    await mkdir(sessionDataDir, { recursive: true })
+  }
+
   private async withStateCreation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.stateCreations.get(sessionId) ?? Promise.resolve()
     const pending = previous.catch(() => {}).then(() => {
@@ -1812,8 +2033,10 @@ export class SessionManager {
     if (sessionId === 'web:orchestrator') throw new Error('The Project orchestrator must be created through its canonical configuration')
 
     const ts = new Date().toISOString()
-    const physicalSessionId = newPhysicalSessionId(sessionId, 0)
+    const physicalSessionId = newPhysicalSessionId(sessionId, 0, 2)
     const startEvent: SessionStartEvent = {
+      sessionId,
+      physicalIdVersion: 2,
       previous_physical_id: null,
       timestamp: ts,
     }
@@ -1822,6 +2045,7 @@ export class SessionManager {
 
     const state: SessionState = {
       ownershipVersion: 2,
+      physicalIdVersion: 2,
       ...(this.deps.projectId ? { projectId: this.deps.projectId } : {}),
       sessionId,
       segmentIndex: 0,
@@ -1831,6 +2055,7 @@ export class SessionManager {
       executionStatus: 'pending',
       automationVersion: 1,
     }
+    await this.ensureSessionDataDirectory(state)
     await this.store.saveState(sessionId, state)
     this.sessionStates[sessionId] = state
 
@@ -1838,13 +2063,16 @@ export class SessionManager {
   }
 
   private async prepareSessionContext(input: SessionInput, sessionId: string) {
+    this.assertHistoryWritable(sessionId)
     const msg = inputContext(sessionId, input)
     const state = this.sessionStates[sessionId] ??
       await this.getOrCreateState(sessionId)
     const behavior = state.config ?? {}
 
-    const { agentType: resolvedAgentType, allowedTools, blockedTools } = this
-      .resolveAgentTypeTools(state.agentType, state.sessionKind)
+    const conversationPolicy = this.deps.conversationPolicies?.resolve(sessionId)
+    const { agentType: resolvedAgentType, allowedTools, blockedTools } = conversationPolicy
+      ? { agentType: conversationPolicy.agent, allowedTools: conversationPolicy.agent.allowedTools ?? [], blockedTools: undefined }
+      : this.resolveAgentTypeTools(state.agentType, state.sessionKind)
 
     const promptCtx: SessionPromptContext = {
       projectId: this.deps.projectId,
@@ -1858,15 +2086,18 @@ export class SessionManager {
       senderName: msg.senderName ?? msg.senderId,
       inputSource: input.source.kind,
       isGroup: msg.isGroup,
-      admin: msg.admin,
+      admin: conversationPolicy ? false : msg.admin,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       agent: resolvedAgentType,
       mode: state.mode,
       parentSessionId: delegationOwner(state),
       initiativeId: state.initiativeId,
+      contextResetAt: state.contextResetAt,
       ...sessionPromptLocality(state),
     }
-    const systemPrompt = await this.deps.context.buildSystemPrompt(promptCtx)
+    const systemPrompt = conversationPolicy
+      ? this.deps.conversationPolicies!.prompt(conversationPolicy, sessionId).systemPrompt
+      : await this.deps.context.buildSystemPrompt(promptCtx)
 
     // Execution must retain unfinished tool calls; display/fork sanitization
     // would discard the very batch that Continue needs to finish.
@@ -1875,7 +2106,7 @@ export class SessionManager {
       ? await this.parseSessionLog(
         SessionManager.currentPhysicalId(state),
         undefined,
-        state.parent?.physicalId && state.parent.index != null
+        state.segmentIndex === 0 && state.parent?.physicalId && state.parent.index != null
           ? { parentPhysicalId: state.parent.physicalId, forkAt: state.parent.index }
           : undefined,
       )
@@ -1886,13 +2117,16 @@ export class SessionManager {
       ...history,
     ]
 
-    const sessionTools = this.calls.get(sessionId)?.tools ?? new SessionTools(
+    const sessionTools = conversationPolicy
+      ? this.deps.conversationPolicies!.tools(conversationPolicy, sessionId)
+      : this.calls.get(sessionId)?.tools ?? new SessionTools(
       this.deps.tools,
       this.deps.workspace,
       allowedTools,
       blockedTools,
+      resolvedAgentType.allowedModules,
     )
-    if (!this.calls.has(sessionId)) sessionTools.setExecutionScope(state.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
+    if (!conversationPolicy && !this.calls.has(sessionId)) sessionTools.setExecutionScope(state.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
 
     // Import tools specified by parent (e.g., subagent preload_tools param)
     if (state.preloadTools && Object.keys(state.preloadTools).length > 0) {
@@ -1932,6 +2166,7 @@ export class SessionManager {
       allowedTools,
       blockedTools,
       promptCtx,
+      conversationPolicy,
     }
   }
 
@@ -1957,6 +2192,8 @@ export class SessionManager {
     let recordIndex = 0
 
     for await (const parsed of this.store.readSessionLog(physicalSessionId)) {
+      // Display-only receipts must not shift existing model-history fork offsets.
+      if (parsed.event === 'command_result') continue
       if (maxRecords != null && recordIndex >= maxRecords) break
       recordIndex++
 

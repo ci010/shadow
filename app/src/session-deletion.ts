@@ -14,7 +14,16 @@ export async function deleteConversation(
   const response = await request(apiUrl(target.apiBase, `/api/sessions/${encodeURIComponent(target.sessionId)}`), {
     method: 'DELETE', signal,
   })
-  if (!response.ok) throw new Error(`Deletion was not confirmed (${response.status}). Check Main and refresh the conversation list before retrying.`)
+  if (!response.ok) {
+    const fallback = `Deletion was not confirmed (${response.status}). Check Main and refresh the conversation list before retrying.`
+    let failure: unknown
+    try { failure = await response.json() }
+    catch { throw new Error(fallback) }
+    if (isRecord(failure) && typeof failure.message === 'string' && failure.message.trim()) {
+      throw new Error(`Could not delete this conversation. ${failure.message.trim()}`)
+    }
+    throw new Error(fallback)
+  }
   const result: unknown = await response.json().catch(() => {
     throw new Error('Main returned an invalid deletion confirmation. Refresh the conversation list before retrying.')
   })

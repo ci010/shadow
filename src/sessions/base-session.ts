@@ -20,7 +20,7 @@ import type { SessionTools } from '../tools/registry.ts'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { activeSpan, Span, spanAttributes, uspan } from '../otel/tracing.ts'
-import { newPhysicalSessionId } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 import { groupTools } from '../utils/tools-group.ts'
 import { errDetail, errMsg } from '../utils/truncate.ts'
 import type { SessionStore } from './session-manager.ts'
@@ -65,7 +65,7 @@ export abstract class BaseSession {
 
   /** The current physical session ID (segment in the handoff chain). */
   get physicalSessionId(): string {
-    return newPhysicalSessionId(this.state.sessionId, this.state.segmentIndex)
+    return physicalSessionId(this.state)
   }
 
   /** The current conversation history (cached in-memory). */

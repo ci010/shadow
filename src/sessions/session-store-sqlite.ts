@@ -11,11 +11,13 @@ import type {
 } from './session-store.ts'
 import { parseWorkdirRefV1 } from './locality.ts'
 import { isExecutionMode } from './execution-mode.ts'
-import { parseSessionRecovery } from './session-store.ts'
+import { parseSessionRecovery, parseContextResetAt, ContextResetMetadataError } from './session-store.ts'
 import { parseAutomationSessionRef } from '../cron/contracts.ts'
 import { normalizeInitiativeMetadata, parseInitiativeId, InitiativeMetadataError } from './initiative-metadata.ts'
 import { validateOwnership, OwnershipValidationError } from '../projects/ownership.ts'
 import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
+import { parsePhysicalIdVersion } from './session-identity.ts'
+import { parseSessionName, SessionNameError } from './session-name.ts'
 
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 50
@@ -32,6 +34,8 @@ interface SessionPrototypeV1 {
 }
 
 const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
+  'name',
+  'physicalIdVersion',
   'sessionKind',
   'topic',
   'createdBySessionId',
@@ -55,6 +59,7 @@ const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
   'mode',
   'executionStatus',
   'recovery',
+  'contextResetAt',
   'executionId',
   'parentSessionId',
   'executionKey',
@@ -87,9 +92,12 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (!isRecord(value)) return null
 
   const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value) }
+  if (value.name !== undefined) metadata.name = parseSessionName(value.name)
+  if (value.physicalIdVersion !== undefined) metadata.physicalIdVersion = parsePhysicalIdVersion(value.physicalIdVersion)
   if (value.automation !== undefined) metadata.automation = parseAutomationSessionRef(value.automation)
   if (value.automationVersion === 1) metadata.automationVersion = 1
   if (value.recovery !== undefined) metadata.recovery = parseSessionRecovery(value.recovery)
+  if (value.contextResetAt !== undefined) metadata.contextResetAt = parseContextResetAt(value.contextResetAt)
   if (typeof value.completionReported === 'boolean') metadata.completionReported = value.completionReported
   if (isExecutionMode(value.mode)) metadata.mode = value.mode
   if (['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'].includes(String(value.executionStatus))) {
@@ -317,7 +325,7 @@ export class SqliteSessionStore implements SessionStore {
           throw new OwnershipValidationError('Unsupported session prototype version or metadata')
         }
       } catch (error) {
-        if (error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError) throw error
+        if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof ContextResetMetadataError) throw error
         throw new OwnershipValidationError('Invalid session prototype metadata')
       }
     }
@@ -350,8 +358,10 @@ export class SqliteSessionStore implements SessionStore {
       version: PROTOTYPE_VERSION,
       metadata: {
         ...this.prototypeMetadataExtras.get(sessionKey),
+        name: state.name === undefined ? undefined : parseSessionName(state.name),
         ...parseTopicSessionFields(state),
         ownershipVersion: 2,
+        physicalIdVersion: parsePhysicalIdVersion(state.physicalIdVersion),
         projectId: state.projectId,
         config: state.config,
         parent: state.parent,
@@ -370,6 +380,7 @@ export class SqliteSessionStore implements SessionStore {
         mode: state.mode,
         executionStatus: state.executionStatus,
         recovery: state.recovery,
+        contextResetAt: parseContextResetAt(state.contextResetAt),
         executionId: state.executionId,
         parentSessionId: state.parentSessionId,
         executionKey: state.executionKey,
@@ -391,6 +402,7 @@ export class SqliteSessionStore implements SessionStore {
     Array<
       {
         sessionId: string
+        name?: string
         segmentIndex: number
         lastActivityAt?: string
         folderId?: string
@@ -407,13 +419,17 @@ export class SqliteSessionStore implements SessionStore {
       last_known_tokens: number | null
       prototype: string | null
     }>
-    return rows.map((r) => ({
-      sessionId: r.key,
-      segmentIndex: r.segment_count ?? 0,
-      lastActivityAt: r.last_activity_at ?? undefined,
-      folderId: this.parseRow(r).folderId,
-      ...parseTopicSessionFields(this.parseRow(r)),
-    }))
+    return rows.map(r => {
+      const state = this.parseRow(r)
+      return {
+        sessionId: r.key,
+        ...(state.name !== undefined ? { name: state.name } : {}),
+        segmentIndex: r.segment_count ?? 0,
+        lastActivityAt: r.last_activity_at ?? undefined,
+        folderId: state.folderId,
+        ...parseTopicSessionFields(state),
+      }
+    })
   }
 
   async listAllStates(): Promise<Record<string, SessionState>> {

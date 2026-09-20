@@ -8,7 +8,8 @@ export type RealtimeTopic =
 export type RealtimeEnvelope =
   | { type: 'event'; cursor: string; topic: RealtimeTopic; payload: unknown; requestId?: string }
   | { type: 'ready' | 'heartbeat'; cursor: string }
-  | { type: 'reset'; cursor: string; reason: 'initial' | 'expired' | 'epoch' | 'invalid' | 'project-removed' }
+  | { type: 'unavailable'; cursor: string; topics: RealtimeTopic[] }
+  | { type: 'reset'; cursor: string; reason: 'initial' | 'expired' | 'epoch' | 'invalid' | 'project-removed' | 'project-restored' }
 
 export const REALTIME_MAX_TOPICS = 128
 export const REALTIME_MAX_TOPICS_BYTES = 32 * 1024
@@ -61,7 +62,9 @@ export function isRealtimeCursor(value: unknown): value is string {
 export function isRealtimeEnvelope(value: unknown): value is RealtimeEnvelope {
   if (!record(value) || !isRealtimeCursor(value.cursor)) return false
   if (value.type === 'ready' || value.type === 'heartbeat') return true
-  if (value.type === 'reset') return ['initial', 'expired', 'epoch', 'invalid', 'project-removed'].includes(value.reason as string)
+  if (value.type === 'unavailable') return Array.isArray(value.topics) && value.topics.length <= REALTIME_MAX_TOPICS
+    && value.topics.every(isRealtimeTopic) && new TextEncoder().encode(JSON.stringify(value.topics)).byteLength <= REALTIME_MAX_TOPICS_BYTES
+  if (value.type === 'reset') return ['initial', 'expired', 'epoch', 'invalid', 'project-removed', 'project-restored'].includes(value.reason as string)
   return value.type === 'event' && isRealtimeTopic(value.topic) && 'payload' in value &&
     (value.requestId === undefined || identifier(value.requestId, 512))
 }

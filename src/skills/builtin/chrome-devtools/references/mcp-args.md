@@ -1,9 +1,43 @@
-# Chrome DevTools MCP — CLI Arguments
+# Chrome DevTools MCP — Managed Startup Options
 
-## Project-managed imports
+Read this only when diagnosing startup/configuration failures. Browser actions
+use `search` and `invoke_tool`, not a CLI. Live tool schemas, not startup flags,
+define the available actions and arguments.
 
-Project runtimes, including Default, always connect to
-their own managed browser. Import arguments and `.chrome-devtools.json` accept
+## Explicit session setup
+
+Discover `browser_setup` through global tool search or invoke its known ID.
+`{ action: "launch", browser: "edge" | "brave" | "chrome" | "default" }` selects a
+browser; use `executablePath` instead of `browser` for an explicit executable.
+Explicit selections fail without fallback. Launch creates a fresh private profile
+without copying host data or changing Project configuration.
+
+`{ action: "attach", endpoint }` accepts only loopback HTTP(S)/WS(S) CDP endpoints,
+including preenabled compatible Electron targets. For example,
+`http://127.0.0.1:9222` or `ws://127.0.0.1:9222/devtools/browser/...`.
+This is separate from startup/import flags. Setup connects/lists live contracts,
+not business tool RPCs, and returns an opaque `instance` ID with
+`source: "tools:chrome-devtools"`, `mode`, `owned`, and `ready`.
+
+Pass `instance` at the top level of subsequent `search`/`invoke_tool` requests.
+Omitting it is allowed with one instance, not with two or more; there is no
+mutable current browser or fallback for invalid/other-session IDs. Without setup,
+automatic lazy default launch remains available in an owning session. Use `{ action: "list" }` or
+`{ action: "close", instance }` through `browser_setup` to manage instances.
+Close/sleep/reset releases owned instances but only disconnects attached targets,
+never kills them. Blocking leaf calls/snapshots borrow the owner's instance IDs
+and may interact/list, not launch/attach/close; ordinary tasks/sessions stay
+independent. Without an existing owner browser, automatic discovery/invocation
+fails asking the owner to initialize first, never creates a persistent resource
+in a leaf.
+
+Global `tools:` search lists already-loaded browser contracts with per-result
+`instance` IDs without reconnecting. Uninitialized browser sources and live
+refresh stay deferred unless explicitly selected.
+
+## Managed startup imports
+
+Import arguments and `.chrome-devtools.json` accept
 only `--remote-debugging-port` (1-65535, consumed by the allocator), and these
 boolean switches: `--usage-statistics`, `--performance-crux`,
 `--category-emulation`, `--category-performance`, `--category-network`.
@@ -11,74 +45,26 @@ Camel-case aliases and `--no-` variants are also accepted; boolean values may
 use `=true` or `=false`. Omit the port for automatic allocation.
 
 All other flags are rejected, including external endpoints, auto-connect,
-custom profiles, executable/launch flags, and unknown future options. Configure
-the browser executable through the Project's `tools.chrome.executablePath`.
+custom profiles, executable/launch flags, and unknown future options. Use explicit
+`browser_setup` for session launch/attach, not raw flags. The Project's
+`tools.chrome.executablePath` remains a configured default.
 This controls the built-in adapter, not arbitrary host commands or custom MCPs.
+Startup import/preload arguments are pinned per instance; changing them cannot
+silently create another browser. Empty
+`preload_tools: { "chrome-devtools": [] }` remains supported.
 
-## Upstream CLI reference
+## Recovery
 
-The following `npx chrome-devtools-mcp@latest` options describe the upstream CLI,
-not the Project import allowlist.
+Use automatic port allocation unless the task requires a specific free port.
+If a launch port is occupied, use automatic allocation; never implicitly attach
+the existing process. Attaching requires an explicit setup request and a
+preenabled loopback CDP endpoint.
 
-## Connection
+If an expected tool is absent from a successful complete source listing, check
+whether its category has been disabled in the managed configuration and report
+that limitation. Do not silently change category or telemetry settings.
 
-| Flag | Description |
-|------|-------------|
-| `--browserUrl`, `-u` | Connect to a running debuggable Chrome (e.g. `http://127.0.0.1:9222`) |
-| `--wsEndpoint`, `-w` | WebSocket endpoint (e.g. `ws://127.0.0.1:9222/devtools/browser/<id>`) |
-| `--wsHeaders` | Custom WebSocket headers as JSON (only with `--wsEndpoint`) |
-| `--autoConnect` | Connect to a local Chrome 144+ instance via `chrome://inspect/#remote-debugging` |
-| `--channel` | Chrome channel: `stable`, `canary`, `beta`, `dev` (default: `stable`) |
-
-## Browser launch
-
-| Flag | Description |
-|------|-------------|
-| `--headless` | Run in headless (no UI) mode |
-| `--executablePath`, `-e` | Path to custom Chrome executable |
-| `--isolated` | Use a temporary user-data-dir, auto-cleaned on close |
-| `--userDataDir` | Path to user data directory |
-| `--viewport` | Initial viewport size, e.g. `1280x720` (headless max: 3840x2160) |
-| `--proxyServer` | Proxy server for Chrome (`--proxy-server` flag) |
-| `--acceptInsecureCerts` | Ignore self-signed / expired cert errors |
-| `--chromeArg` | Additional Chrome args (repeatable) |
-| `--ignoreDefaultChromeArg` | Disable specific default Puppeteer args (repeatable) |
-
-## Tool categories
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--categoryEmulation` | true | Include emulation tools |
-| `--categoryPerformance` | true | Include performance tools |
-| `--categoryNetwork` | true | Include network tools |
-| `--slim` | false | Only 3 tools: navigation, JS execution, screenshot |
-
-Use `--no-category-emulation`, `--no-category-performance`, `--no-category-network` to disable.
-
-## Other
-
-| Flag | Description |
-|------|-------------|
-| `--experimentalScreencast` | Enable screencast tools (requires ffmpeg) |
-| `--performanceCrux` | Send URLs to CrUX API for field data (default: true) |
-| `--usageStatistics` | Send usage stats to Google (default: true) |
-| `--logFile` | Path to debug log file |
-
-## Examples
-
-```bash
-# Connect to existing browser
-npx chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
-
-# Headless with custom viewport
-npx chrome-devtools-mcp@latest --headless --viewport 1920x1080
-
-# Disable emulation & performance tools
-npx chrome-devtools-mcp@latest --no-category-emulation --no-category-performance
-
-# Slim mode (3 tools only)
-npx chrome-devtools-mcp@latest --slim
-
-# Custom Chrome with proxy
-npx chrome-devtools-mcp@latest --executablePath /usr/bin/chromium --proxyServer socks5://localhost:1080
-```
+Upstream may support additional flags, but that does not make them permissible
+in a Project runtime. Do not run a separate server, use `--help` to infer browser
+action syntax, or copy host profiles to work around a managed configuration
+error. External MCP setup is a different task covered by `v:skills/mcp-config`.

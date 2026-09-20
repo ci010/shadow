@@ -11,6 +11,8 @@ import { createFolderDirectoriesApi } from './folder-directories.js'
 import { createChatContextApi } from './chat-context.js'
 import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from './document-tabs.js'
 import { createMediaCaptureApi } from './media-capture-preload.js'
+import { createStartupDiagnosticsApi } from './startup-diagnostics-ipc.js'
+import { createWebPairingApi } from './web-pairing-preload.js'
 
 const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction) => {
   window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
@@ -18,6 +20,8 @@ const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction)
 window.addEventListener('unload', disposeDocumentTabs, { once: true })
 
 const api: ShadowDesktopApi = Object.freeze({
+  webPairing: createWebPairingApi(ipcRenderer),
+  diagnostics: createStartupDiagnosticsApi(ipcRenderer),
   mediaCapture: createMediaCaptureApi(ipcRenderer, () => navigator.userActivation.isActive),
   windowControls: createWindowControlsApi(ipcRenderer),
   folders: createFolderDirectoriesApi(ipcRenderer),

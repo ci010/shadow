@@ -13,6 +13,8 @@
         </nav>
     </template>
     <template #actions>
+          <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
+          <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">Sign out</button>
           <button class="theme-toggle" @click="toggleTheme" :title="isDark ? 'Switch to light' : 'Switch to dark'" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'">
             <!-- Sun icon (shown in dark mode) -->
             <span v-if="isDark" class="i-lucide-sun w-3.5 h-3.5" aria-hidden="true" />
@@ -40,7 +42,7 @@
       </aside>
       <aside v-if="liveError" class="recovery-panel" role="status">
         <div class="recovery-copy"><strong>Live updates interrupted</strong><span>{{ liveError }}</span></div>
-        <div class="recovery-links"><button type="button" class="btn" @click="livePool.retry()">Retry live updates</button></div>
+        <div class="recovery-links"><button type="button" class="btn primary" @click="livePool.retry()">Retry live updates</button></div>
       </aside>
       <div
         class="route-content"
@@ -64,13 +66,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch, provide } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
+import { browserSessionKey } from './web-auth.ts'
 import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
 import { navigationFor, type NavigationGroup } from './navigation-policy.ts'
 import { createProviderSetupClient, type ProviderSetupStatus } from './provider-setup.ts'
 import DesktopFrame from './DesktopFrame.vue'
+import DesktopBrowserAccess from './components/DesktopBrowserAccess.vue'
 import IoHost from './components/io/IoHost.vue'
 import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
 import { projectChatLocation } from './projects.ts'
@@ -90,7 +94,15 @@ const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
 const livePool = useLiveClientPool()
 const liveStatuses = ref<readonly LiveStatus[]>([])
-const stopLiveStatus = livePool.observe(statuses => { liveStatuses.value = statuses })
+const browserSession = inject(browserSessionKey, null)
+const desktopWebPairing = window.shadowDesktop?.webPairing
+let liveInterrupted = false
+const stopLiveStatus = livePool.observe(statuses => {
+  liveStatuses.value = statuses
+  const interrupted = statuses.some(status => status.phase === 'error' || status.phase === 'reconnecting')
+  if (interrupted && !liveInterrupted) void browserSession?.refresh()
+  liveInterrupted = interrupted
+})
 const liveError = computed(() => liveStatuses.value.find(status => status.error)?.error ?? '')
 
 const resolvedBase = computed(() => installationContext.value.apiBase)
@@ -438,35 +450,6 @@ onUnmounted(() => {
 }
 
 /* ── Shared utility classes ──────────────────────────────── */
-
-.btn {
-  border: 1px solid var(--c-border);
-  background: var(--c-primary-bg);
-  color: var(--c-text-on-primary);
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius-control);
-  font-size: 0.75rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, background 0.15s ease;
-}
-
-.btn:hover {
-  background: var(--c-primary-bg-hover);
-  transform: translateY(-1px) scale(1.03);
-  box-shadow: 0 4px 12px var(--c-shadow);
-}
-
-.btn:active {
-  transform: translateY(0) scale(0.98);
-  box-shadow: none;
-  transition-duration: 0.08s;
-}
-
-.btn.ghost {
-  background: transparent;
-  color: var(--c-text);
-}
 
 .input {
   border: 1px solid var(--c-border);

@@ -1,6 +1,7 @@
 import { hostname } from 'node:os'
 import { stat } from 'node:fs/promises'
 import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
+import { MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION } from '../execution/managed-workdir.ts'
 import {
   inventoryCapability,
   type NodeInventoryEntry,
@@ -10,6 +11,7 @@ import { localFolderWorkdirRef } from '../sessions/locality.ts'
 import type { ChildBootstrapConfigV1 } from './bootstrap-config.ts'
 import {
   type GatewayClientAddressRegistry,
+  isLoopbackGatewayRequest,
   validateLaunchCredential,
 } from '../gateway/server.ts'
 
@@ -24,11 +26,7 @@ export function authorizeMainNodeInventory(
       launchCredential,
     )
   }
-  const hostname = new URL(request.url).hostname
-  if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname)) return false
-  return ['tcp:127.0.0.1', 'tcp:::1', 'tcp:::ffff:127.0.0.1'].includes(
-    clientAddresses.resolve(request),
-  )
+  return isLoopbackGatewayRequest(request, clientAddresses)
 }
 
 export function mainLocalNodeInventory(options: {
@@ -74,6 +72,8 @@ export async function childLocalNodeInventory(
     displayName: hostname(),
     role: 'child',
     connection: 'connected',
+    supportsManagedSessions: capabilities.some(capability => capability.capabilityId === MANAGED_SESSION_CAPABILITY &&
+      capability.kind === 'shell' && capability.online && capability.permissions.includes(MANAGED_SESSION_OPERATION)),
     implementationVersion,
     capabilities: await Promise.all(capabilities.map(async (capability) => {
       const projected = inventoryCapability(capability, true)

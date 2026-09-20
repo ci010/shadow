@@ -61,7 +61,7 @@ const stateLabels: Record<ChannelSetupStatus['state'], string> = {
   connected: 'Connected', disconnected: 'Disconnected', error: 'Needs attention',
   running: 'Running · connection unverified', 'restart-required': 'Restart required',
 }
-export function channelStateLabel(channel: ChannelSetupStatus): string {
+export function channelStateLabel(channel: Pick<ChannelSetupStatus, 'state' | 'configured'>): string {
   return !channel.configured && channel.state === 'disabled' ? 'Not configured' : stateLabels[channel.state]
 }
 export function channelDraft(channel: ChannelSetupStatus): ChannelDraft {

@@ -1,5 +1,6 @@
 import type { Hono } from 'hono'
 import { delegationOwner } from './execution-scope.ts'
+import { parseSessionName, SessionNameError } from './session-name.ts'
 import type { SessionManager } from './session-manager.ts'
 import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
@@ -9,7 +10,7 @@ import { FolderError } from '../folders/registry.ts'
 import { isLearningAutomationSession } from './session-purpose.ts'
 import { resolveAutomationSession } from '../cron/contracts.ts'
 import type { GatewayPlugin } from '../gateway/types.ts'
-import { newPhysicalSessionId } from '../utils/paths.ts'
+import { physicalSessionId, SessionIdentityError } from './session-identity.ts'
 import {
   resolveSessionLocations,
   type SessionLocalityState,
@@ -165,7 +166,10 @@ function sessionFileBase(
  */
 export function sessionsApiPlugin(
   sessions: SessionManager | undefined,
-  options: { authorizeContext?: (request: Request) => boolean | Promise<boolean> } = {},
+  options: {
+    authorizeContext?: (request: Request) => boolean | Promise<boolean>
+    authorizeRename?: (request: Request) => boolean | Promise<boolean>
+  } = {},
 ): GatewayPlugin {
   return (app: Hono) => {
     app.use('/api/sessions/:key/*', async (c, next) => {
@@ -260,14 +264,14 @@ export function sessionsApiPlugin(
           ...session,
           ...execution,
           automation: state ? resolveAutomationSession(state) : undefined,
-          title: state?.topic?.title ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
+          title: state?.name ?? state?.topic?.title ?? (execution.mode !== 'session' ? state?.description ?? firstMsg ?? undefined : firstMsg ?? undefined),
           description: state?.description ?? undefined,
           config: state?.config ?? undefined,
           lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
             null,
         })
         for (let i = 0; i <= session.segmentIndex; i++) {
-          const physicalId = newPhysicalSessionId(session.sessionId, i)
+          const physicalId = physicalSessionId(state ?? session, i)
           const parentPhysicalId = state?.parent?.physicalId ??
             null
           nodes.push({
@@ -329,6 +333,7 @@ export function sessionsApiPlugin(
         const receipt = await sessions.resumeSession(key, body.recoveryId)
         return c.json({ sessionId: key, recoveryId: body.recoveryId, requestId: receipt.inputId, status: 'accepted' }, 202)
       } catch (error) {
+        if (error instanceof SessionIdentityError) return c.json({ error: 'history_conflict', message: error.message }, 409)
         return c.json({
           error: error instanceof SessionResumeError ? 'recovery_conflict' : 'resume_failed',
           message: error instanceof Error ? error.message : 'Could not continue this conversation.',
@@ -350,15 +355,20 @@ export function sessionsApiPlugin(
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
       const cancel = c.req.method === 'DELETE'
-      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'requestId' && (cancel || key !== 'option'))
-        || typeof body.requestId !== 'string' || !body.requestId || (!cancel && typeof body.option !== 'string')) {
-        return c.json({ error: 'invalid_request', message: cancel ? 'Supply the current requestId.' : 'Supply requestId and one exact option.' }, 400)
+      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'requestId' && (cancel || (key !== 'option' && key !== 'customText')))
+        || typeof body.requestId !== 'string' || !body.requestId
+        || (!cancel && (Object.hasOwn(body, 'option') === Object.hasOwn(body, 'customText')
+          || (Object.hasOwn(body, 'option') ? typeof body.option !== 'string' : typeof body.customText !== 'string')))) {
+        return c.json({ error: 'invalid_request', message: cancel ? 'Supply the current requestId.' : 'Supply requestId and exactly one of option or customText.' }, 400)
       }
       try {
         if (cancel) {
           sessions.yields.cancelUser(key, body.requestId)
           sessions.getActiveSession(key)?.cancel()
           return c.json({ cancelled: true })
+        }
+        if (typeof body.customText === 'string') {
+          return c.json({ answer: sessions.yields.answerUserText(key, body.requestId, body.customText) })
         }
         if (typeof body.option !== 'string') return c.json({ error: 'invalid_request' }, 400)
         return c.json({ answer: sessions.yields.answerUser(key, body.requestId, body.option) })
@@ -367,6 +377,26 @@ export function sessionsApiPlugin(
         const status = error.code === 'not_found' ? 404 : error.code === 'forbidden' ? 403
           : error.code === 'conflict' ? 409 : error.code === 'unavailable' ? 503 : 400
         return c.json({ error: error.code, message: error.message }, status)
+      }
+    })
+
+    app.patch('/api/sessions/:key/name', async c => {
+      if (options.authorizeRename && !await options.authorizeRename(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = c.req.param('key')
+      if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+      let body: unknown
+      try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
+      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'name')) {
+        return c.json({ error: 'invalid_request', message: 'Supply only the session name.' }, 400)
+      }
+      try {
+        const name = await sessions.renameSession(key, parseSessionName(body.name))
+        return c.json({ sessionId: key, name })
+      } catch (error) {
+        if (error instanceof SessionNameError) return c.json({ error: 'invalid_name', message: error.message }, 400)
+        console.error('[sessions] Rename failed', error)
+        return c.json({ error: 'rename_failed', message: 'Could not save the session name. Retry.' }, 500)
       }
     })
 
@@ -662,8 +692,13 @@ export function sessionsApiPlugin(
       if (!state) {
         return c.json({ error: 'session_not_found', key }, 404)
       }
-      const deleted = await sessions.deleteSession(key)
-      return c.json({ deleted })
+      try {
+        const deleted = await sessions.deleteSession(key)
+        return c.json({ deleted })
+      } catch (error) {
+        if (error instanceof SessionIdentityError) return c.json({ error: 'history_conflict', message: error.message }, 409)
+        throw error
+      }
     })
 
     app.get('/api/sessions/:key', async (c) => {
@@ -692,10 +727,10 @@ export function sessionsApiPlugin(
         // Include segment info so the UI can navigate to previous segments
         const state = sessions.getSessionState(key)
         const segmentIndex = state?.segmentIndex ?? 0
-        const currentPhysicalId = newPhysicalSessionId(key, segmentIndex)
+        const currentPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex })
         let previousPhysicalId: string | null = null
         if (segmentIndex > 0) {
-          previousPhysicalId = newPhysicalSessionId(key, segmentIndex - 1)
+          previousPhysicalId = physicalSessionId(state ?? { sessionId: key, segmentIndex }, segmentIndex - 1)
         }
         return c.json({
           key,
@@ -703,6 +738,7 @@ export function sessionsApiPlugin(
           offset,
           pageSize,
           messages,
+          commandResults: await sessions.getCommandResults(key),
           segmentIndex,
           currentPhysicalId,
           previousPhysicalId,
@@ -727,6 +763,7 @@ export function sessionsApiPlugin(
           offset,
           pageSize,
           messages,
+          commandResults: await sessions.getCommandResults(key, key),
           previousPhysicalId,
         })
       } catch {

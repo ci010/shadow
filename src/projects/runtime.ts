@@ -20,7 +20,6 @@ export interface ProjectRuntimeDependencies {
   copilotAuth: CopilotAuthenticator
   chromePortAllocator: ChromePortAllocator
   authorize: (request: Request) => boolean | Promise<boolean>
-  gatewayBaseUrl: string
   selfCodeRoot: string
   realtimeHub?: RealtimeHub
 }
@@ -31,7 +30,6 @@ export interface ProjectRuntime {
   readonly ready: Promise<void>
   shutdown(): Promise<void>
   updateConfig(config: Config): void | Promise<void>
-  setGatewayBaseUrl(url: string): void
 }
 
 export type ProjectRuntimeFactory = (config: Config, dependencies: ProjectRuntimeDependencies) => Promise<ProjectRuntime>

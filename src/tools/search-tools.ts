@@ -2,7 +2,7 @@ import type { Tool } from './tool.ts'
 
 const stopWords = new Set(['a', 'an', 'the', 'and', 'or', 'to', 'of', 'in', 'for', 'with', 'by', 'tool', 'tools'])
 
-export function toolSearchScore(query: string, tool: Tool, source = ''): number {
+export function toolSearchScore(query: string, tool: Pick<Tool, 'name' | 'description'>, source = ''): number {
   const normalize = (text: string) => text.normalize('NFKC').toLowerCase()
   const text = normalize(query)
   if (!text.trim()) return 1

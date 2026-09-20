@@ -1,13 +1,17 @@
 import type { SessionTraceResponse, SessionTraceSpan } from '../../src/otel/session-trace.ts'
+import { messageEnvelope, parseSessionMessage, sessionMessageTitle, type SessionMessageSource } from './message-author.ts'
+import { eventPresentation, parseChatEvent } from './chat-events.ts'
 
 export type { SessionTraceSpan } from '../../src/otel/session-trace.ts'
-export type EventKind = 'SYSTEM' | 'USER' | 'CONTEXT' | 'ASSISTANT' | 'TOOL'
+export type EventKind = 'SYSTEM' | 'USER' | 'SESSION' | 'CONTEXT' | 'ASSISTANT' | 'TOOL'
 export interface DiagnosisEvent {
   id: string
   kind: EventKind
   turn: number
   title: string
   content: string
+  rawContent?: string
+  sessionSource?: SessionMessageSource
   timestamp?: number
   callId?: string
   toolCall?: string
@@ -136,6 +140,9 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
     const parts = Array.isArray(message.content) ? message.content : undefined
     const content = parts ? parts.map(part => record(part) && part.type === 'text' ? detailText(part.text) : detailText(part)).join('\n') : detailText(message.content)
     const firstText = parts ? (record(parts[0]) && parts[0].type === 'text' ? detailText(parts[0].text) : '') : content
+    const envelope = messageEnvelope(message)
+    const sessionMessage = parseSessionMessage(message)
+    const event = parseChatEvent(message)
     const timestamp = typeof message.timestamp === 'string' ? Date.parse(message.timestamp) : NaN
     const time = Number.isFinite(timestamp) ? timestamp : undefined
     const isContext = message.name === '__compaction_summary__' || (message.role === 'user' && /^<event\s[^>]*\/>/.test(firstText))
@@ -154,11 +161,19 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
     const kind = isContext ? 'CONTEXT'
       : message.role === 'system' ? 'SYSTEM'
       : message.role === 'assistant' ? 'ASSISTANT'
+      : sessionMessage ? 'SESSION'
       : message.role === 'user' ? 'USER' : 'CONTEXT'
     const response: DiagnosisEvent = {
       id: `message-${index}`, kind, turn,
-      title: kind === 'CONTEXT' ? (message.name === '__compaction_summary__' ? 'Compaction context' : 'Session event') : kind.toLowerCase(),
-      content, timestamp: time,
+      title: sessionMessage ? sessionMessageTitle(sessionMessage.sessionSource)
+        : kind === 'CONTEXT' ? (message.name === '__compaction_summary__' ? 'Compaction context'
+          : event ? eventPresentation(event.eventMeta).title : 'Session event') : kind.toLowerCase(),
+      content: envelope ? (parts ? [
+        detailText(parts[0].text).replace(/^<(?:sender|event)\s[^>]*\/>\s*/, ''),
+        ...parts.slice(1).map(part => record(part) && part.type === 'text' ? detailText(part.text) : detailText(part)),
+      ].filter(Boolean).join('\n') : envelope.content) : content,
+      rawContent: envelope ? content : undefined,
+      sessionSource: sessionMessage?.sessionSource, timestamp: time,
       reasoning: detailText(message.reasoning_text ?? message.reasoning_content) || undefined,
       usage: message.usage ? detailText(message.usage) : undefined,
       toolCalls: Array.isArray(message.tool_calls) && message.tool_calls.length ? detailText(message.tool_calls) : undefined,
@@ -186,7 +201,8 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
 
 export function eventMatches(event: DiagnosisEvent, query: string, kind = 'ALL'): boolean {
   return (kind === 'ALL' || event.kind === kind)
-    && matchesTerms([event.kind, event.title, event.content, event.arguments, event.result, event.reasoning, event.callId, event.usage].join('\n'), query)
+    && matchesTerms([event.kind, event.title, event.content, event.rawContent, event.sessionSource?.id, event.sessionSource?.name,
+      event.sessionSource?.intent, event.arguments, event.result, event.reasoning, event.callId, event.usage].join('\n'), query)
 }
 
 export function spanMatches(span: SessionTraceSpan, query: string): boolean {

@@ -1,5 +1,5 @@
 <template>
-  <FoldersSidebar :api-base="scope" grouped :project-name="project.name"
+  <FoldersSidebar :api-base="scope" grouped :project-id="project.id" :project-name="project.name" :bots="bots"
     :selected-automation-id="selectedProjectId === project.id ? selectedAutomationId : undefined"
     :folder-revision="(folderRevision ?? 0) + liveFolderRevision"
     :sessions="sessions" :active-session-id="selectedProjectId === project.id ? selectedSessionId : ''"
@@ -8,7 +8,7 @@
     :remote-folders="remoteFolders" @select="$emit('select', $event)" @delete="deleteSession"
     @toggle="toggle" @reload="refresh" @scratch="$emit('draft')" @remote="$emit('draft', undefined, true)" @draft="$emit('draft', $event)"
     @manage="(folder, action) => $emit('manage', folder, action)" @automation="$emit('automation', $event)">
-    <template #project-entry>
+    <template #project-name>
       <ProjectCoordinator :api-base="apiBase" :project-id="project.id" :project-name="project.name"
         :selected="selectedProjectId === project.id && selectedSessionId === ORCHESTRATOR_SESSION_ID"
         :navigation-key="navigationKey" :pending-project-id="pendingCoordinatorProjectId"
@@ -39,6 +39,8 @@ import type { FolderRecord } from '../folders-client.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import type { LiveSubscription } from '../live-client.ts'
 import { HomeTreeCacheKey } from '../home-tree-cache.ts'
+import { createBotSettingsClient } from '../bot-settings.ts'
+import type { SidebarBot } from '../bot-sidebar.ts'
 
 const props = defineProps<{
   apiBase: string; project: ProjectRecord; selectedProjectId: string; selectedSessionId: string
@@ -53,6 +55,7 @@ const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const livePool = useLiveClientPool()
 const homeCache = inject(HomeTreeCacheKey, undefined)
 const sessions = ref<SidebarSession[]>([])
+const bots = ref<SidebarBot[]>([])
 const liveFolderRevision = ref(0)
 const stages = ref<Record<string, string>>({})
 const collapsed = reactive(new Set<string>())
@@ -102,6 +105,18 @@ async function refresh() {
       homeCache?.setSessions(scope.value, next.sessions)
     }
     if (!next.stagesError) stages.value = next.stages
+    if (!next.sessionsError && next.sessions.some(session => session.channelAddress)) {
+      try {
+        const catalog = await createBotSettingsClient(scope.value, props.project.id).list(current.signal)
+        if (current.signal.aborted) return
+        bots.value = catalog.map(({ id, projectId, platform, displayName, state, configured }) =>
+          ({ id, projectId, platform, displayName, connection: { state, configured } }))
+      } catch {
+        // Bot settings may be unavailable to a conversation reader; retain scoped names and usable chats.
+        if (current.signal.aborted) return
+        clearBotConnections()
+      }
+    } else if (next.sessionsError) clearBotConnections()
     error.value = [...new Set([next.sessionsError, next.stagesError].filter(Boolean))].join(' ')
     if (error.value) {
       try {
@@ -149,6 +164,7 @@ async function sessionsDeleted(ids: string[]) {
   await refresh()
 }
 function stop() {
+  clearBotConnections()
   subscription?.close()
   subscription = undefined
   clearTimeout(timer)
@@ -156,6 +172,9 @@ function stop() {
   invalidationTimer = undefined
   controller?.abort()
   controller = undefined
+}
+function clearBotConnections() {
+  bots.value = bots.value.map(({ connection: _connection, ...bot }) => bot)
 }
 onMounted(() => { subscribe(); void refresh() })
 onActivated(() => {
@@ -170,6 +189,7 @@ watch(() => [props.apiBase, props.project.id], () => {
   deletion.value = undefined
   stop()
   sessions.value = []
+  bots.value = []
   stages.value = {}
   error.value = ''
   loading.value = true
