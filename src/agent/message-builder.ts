@@ -52,7 +52,7 @@ function escapeAttr(s: string): string {
  * Build a self-closing `<sender>` XML tag identifying the message author.
  * Injected as a separate content part so the user's actual text is untouched.
  */
-function buildSenderTag(msg: SessionMessageInput): string {
+export function buildSenderTag(msg: SessionMessageInput): string {
   const sender = inputSender(msg)
   const origin = msg.source.kind === 'session'
     ? ' source="session"'

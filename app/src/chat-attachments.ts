@@ -100,6 +100,26 @@ export function clipboardImageFiles(data: {
   return files
 }
 
+export function droppedChatFiles(data: {
+  files?: Iterable<File>
+  items?: Iterable<Pick<DataTransferItem, 'kind' | 'getAsFile'> & {
+    webkitGetAsEntry?: () => { isDirectory: boolean } | null
+  }>
+} | null): File[] {
+  if (!data) return []
+  const items = Array.from(data.items ?? []).filter(item => item.kind === 'file')
+  if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
+    throw new Error('Folders cannot be attached by dropping them. Drop files instead.')
+  }
+  const files = Array.from(data.files ?? [])
+  if (files.length) return files
+  return items.map(item => {
+    const file = item.getAsFile()
+    if (!file) throw new Error('Could not read the dropped file. Drop it again or use Add file.')
+    return file
+  })
+}
+
 export function canSendChatMessage(
   text: string,
   contextCount: number,

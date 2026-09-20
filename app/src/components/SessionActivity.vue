@@ -1,10 +1,11 @@
 <template>
   <span class="session-activity" :class="[activity.kind, { working: activity.working, compact }]" :title="activity.label" :aria-label="compact ? activity.label : undefined" :role="compact ? 'img' : undefined">
     <span class="activity-symbol" aria-hidden="true">
-      <span v-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
+      <span v-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
+      <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
       <span v-else class="activity-dot" />
     </span>
-    <span v-if="!compact" class="activity-label">{{ activity.label }}</span>
+    <span v-if="!compact || activity.kind === 'waiting' && !iconOnly" class="activity-label">{{ compact ? 'Needs reply' : activity.label }}</span>
   </span>
 </template>
 
@@ -12,7 +13,7 @@
 import { computed } from 'vue'
 import { isWaitingStage, sessionActivity } from '../session-activity.ts'
 
-const props = defineProps<{ stage?: string | null; compact?: boolean }>()
+const props = defineProps<{ stage?: string | null; compact?: boolean; iconOnly?: boolean }>()
 const activity = computed(() => sessionActivity(props.stage))
 </script>
 
@@ -21,6 +22,9 @@ const activity = computed(() => sessionActivity(props.stage))
 .session-activity.llm { color: var(--c-blue); }
 .session-activity.tool { color: var(--c-warning, #d49a35); }
 .session-activity.idle { color: var(--c-success); }
+.session-activity.waiting { color: var(--c-warn); }
+.session-activity.waiting.compact { gap: 4px; padding: 2px 5px; background: var(--c-warn-bg); border: 1px solid var(--c-warn); border-radius: var(--radius-control); }
+.attention-icon { width: 16px; height: 16px; }
 .session-activity.inactive, .session-activity.unknown { opacity: .5; }
 .activity-symbol { position: relative; display: grid; place-items: center; width: 16px; height: 16px; }
 .activity-spinner { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-bottom-color: transparent; border-radius: 50%; animation: activity-spin .8s linear infinite; }

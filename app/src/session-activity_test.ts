@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { displayedSessionStages, isWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, sessionActivity, shouldRefreshReadonlyHistory } from './session-activity.ts'
+import { displayedSessionStages, isWorkingStage, prominentWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, sessionActivity, shouldRefreshReadonlyHistory } from './session-activity.ts'
+
+test('sidebar groups prioritize yields over active work without confusing blocking calls with requests for a reply', () => {
+  assert.equal(prominentWorkingStage(['llm', 'waiting-for-call', 'waiting']), 'waiting')
+  assert.equal(prominentWorkingStage(['waiting', 'tool']), 'waiting')
+  assert.equal(prominentWorkingStage(['idle', 'tool', 'llm']), 'tool')
+  assert.equal(prominentWorkingStage(['waiting-for-call', 'completed']), 'waiting-for-call')
+  assert.equal(prominentWorkingStage([undefined, 'idle', 'inactive']), undefined)
+})
 
 test('LLM, tool execution and waiting retain working controls', () => {
   for (const stage of ['llm', 'tool', 'waiting']) {

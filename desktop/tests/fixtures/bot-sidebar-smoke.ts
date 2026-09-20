@@ -72,6 +72,8 @@ const server = createServer(async (request, response) => {
       ? json({ error: 'unavailable' }, 503) : json({ channels: bots.filter(bot => bot.projectId === projectId) })
     if (path === '/api/folders') return json({ folders: projectId === 'a' ? [{ id: 'code', projectId, name: 'Code', path: 'C:\\fixture\\code', createdAt: '' }] : [] })
     if (path === '/api/automations') return json({ automations: [] })
+    if (path === '/api/agent-resources/publication-requests') return json({ request: null })
+    if (path === '/api/agent-resources/probe-requests') return json({ requests: [] })
     if (path === '/api/sessions/graph') return json({ sessions: sessions.filter(row => row.projectId === projectId).map(row => ({ ...row, current: `physical-${row.sessionId}` })), nodes: [] })
     if (path === '/api/sessions/stages') return json({ stages: projectId === 'a' ? { [supportGroup]: supportStage } : {} })
     if (path === '/api/provider/setup') return json({ ready: true, provider: 'custom', model: 'synthetic', authMode: 'none', hasApiKey: false })
@@ -240,6 +242,22 @@ async function main(): Promise<void> {
     await click(`${projectA} [aria-label="Expand folder Code"]`)
     await waitFor(`document.querySelector(${JSON.stringify(`${projectA} .folder-group`)})?.textContent.includes('Folder room')`)
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${projectA} .legacy-chats`)}).textContent.includes('Ordinary chat')`), true)
+    const alignment = await evaluate<Array<{ icon: number; label: number; left: number; right: number }>>(`(() => {
+      const project = document.querySelector(${JSON.stringify(projectA)});
+      return ['.folder-conversations', '.legacy-chats', '.bot-conversations'].map(selector => {
+        const row = project.querySelector(selector + ' .folder-session-row');
+        const bounds = row.getBoundingClientRect();
+        return { icon: row.querySelector('.tree-icon').getBoundingClientRect().left,
+          label: row.querySelector('.tree-label').getBoundingClientRect().left,
+          left: bounds.left, right: bounds.right };
+      });
+    })()`)
+    for (const row of alignment.slice(1)) {
+      for (const column of ['icon', 'label', 'left', 'right'] as const) {
+        assert.ok(Math.abs(row[column] - alignment[0][column]) <= 1,
+          `Folder, Chats and bot conversation ${column} align at ${width}px: ${JSON.stringify(alignment)}`)
+      }
+    }
     await click(`${projectA} [aria-label="Folder room (read-only)"]`)
     await waitFor(`decodeURIComponent(location.pathname).endsWith(${JSON.stringify(folderChat)})`)
     if (width < 700) await click('.projects-mobile-toggle')

@@ -1,9 +1,16 @@
-import { messageEnvelope } from './message-author.ts'
+import { messageEnvelope, parseSessionMessage } from './message-author.ts'
 
 export interface ChatEventMeta {
   type: string
   source: string
   attrs: Record<string, string>
+}
+
+export function parseLiveSessionMessage(message: unknown) {
+  const event = parseChatEvent(message)
+  if (event) return { role: 'user', isSystemEvent: true, ...event }
+  const session = parseSessionMessage(message)
+  if (session) return { role: 'user', ...session }
 }
 
 export function parseChatEvent(message: unknown): { content: string; eventMeta: ChatEventMeta; timestamp?: string } | undefined {

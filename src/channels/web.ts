@@ -17,6 +17,7 @@ import { isCommandReceipt } from '../slash-commands/receipt.ts'
 import { isMissingMediaFile, mediaFileResponse } from './media-response.ts'
 
 function outboundPayload(msg: OutboundMessage) {
+  if (msg.sessionMessage) return { event: 'session_message', message: msg.sessionMessage, media: msg.media }
   const receipt = msg.metadata?.commandReceipt
   if (receipt !== undefined) {
     if (!isCommandReceipt(receipt)) throw new TypeError('Invalid outbound command receipt')

@@ -1645,6 +1645,23 @@ with their source session; they are excluded from human-message navigation and
 resend actions. Trace provides a separate `SESSION` filter and keeps the original
 envelope available as raw evidence. Missing legacy provenance is not inferred
 from a sender name or session-like ID; these labels do not grant permissions.
+The web channel preserves the same sender envelope on live peer-message
+projections, so progress and request cards do not wait for a history reload to
+show their origin. Their headings open the source conversation (or its read-only
+execution trace). Human-history markers scroll to the corresponding rendered
+message in the current pane, suspending automatic bottom jumps until the user
+returns to the bottom or sends another message. Sidebar yields show a highlighted **Needs reply**
+badge; folded folder, bot, automation and conversation-family indicators
+prioritize those waits over running work, without treating blocking calls as
+requests for a reply.
+Conversation rows share the same base indentation under folders, **Chats**, and
+bot groups; nested session lineage adds indentation relative to that base.
+The composer accepts dropped files (including mixed image/document batches) as
+pending attachments, using the same deduplication and upload path as **Add file**.
+Only images receive thumbnails; dropping does not upload until Send. Image-preview
+drags retain their source metadata, clipboard paste remains image-specific, and
+local attachments remain unavailable for remote workspaces. Directory drops are
+rejected explicitly rather than creating empty file attachments.
 
 Installation context and route policy distinguish Main/Child and UI scope.
 These client-side policies are presentation rules, not server authorization.

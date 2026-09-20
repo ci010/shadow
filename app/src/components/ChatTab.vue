@@ -77,7 +77,7 @@
 
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history">
-        <div ref="messagesContainer" class="chat-messages" @click="openConversationLink">
+        <div ref="messagesContainer" class="chat-messages" @click="openConversationLink" @scroll="trackHistoryScroll">
           <div class="chat-message-list">
           <div v-if="loadingHistory" class="text-sm text-ink/50">Loading history...</div>
           <div v-else-if="messages.length === 0 && !composerError" class="text-sm text-ink/40 select-none">{{ isExecution ? 'No execution trace yet.' : 'No messages yet. Send one below.' }}</div>
@@ -119,17 +119,22 @@
             <div
               v-else
               class="chat-bubble"
+              :data-msg-idx="idx"
               :class="[
                 msg.sessionSource ? 'chat-session' : msg.role === 'user' ? 'chat-user' : 'chat-assistant',
               ]"
               role="article"
               :aria-label="msg.sessionSource ? `${sessionMessageTitle(msg.sessionSource)} from ${msg.sessionSource.id || msg.sessionSource.name || 'unknown session'}` : msg.role === 'user' ? (msg.senderName ? `Message from ${msg.senderName}` : 'User message') : 'Assistant message'"
             >
-              <div v-if="msg.sessionSource" class="chat-session-source">
+              <component :is="msg.sessionSource.id ? 'button' : 'div'" v-if="msg.sessionSource" class="chat-session-source"
+                :type="msg.sessionSource.id ? 'button' : undefined"
+                :aria-label="msg.sessionSource.id ? `Open conversation ${msg.sessionSource.id}` : undefined"
+                @click="msg.sessionSource.id && inspectExecution(msg.sessionSource.id)">
                 <span class="i-lucide-messages-square" aria-hidden="true" />
                 <strong>{{ sessionMessageTitle(msg.sessionSource) }}</strong>
                 <span>{{ msg.sessionSource.id || msg.sessionSource.name || 'Unknown session' }}</span>
-              </div>
+                <span v-if="msg.sessionSource.id" class="i-lucide-arrow-up-right" aria-hidden="true" />
+              </component>
               <div v-else-if="msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
               <!-- Reasoning / thinking content (collapsible) -->
               <div v-if="msg.reasoningContent || msg.reasoningText" class="thinking-block">
@@ -180,7 +185,7 @@
           </div>
           </div>
         </div>
-        <MessageHistoryRail :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
+        <MessageHistoryRail :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
         </div>
       </template>
     </div>
@@ -228,8 +233,8 @@
             <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Resend last message</button>
           </div>
           <BackgroundTasks :api-base="apiBase" :session-id="activeSessionId" :active="paneActive && !!activeSession" />
-          <div class="composer-box" :class="{ 'image-drop-target': imageDropTarget }"
-            @dragover="handleImageDragOver" @dragleave="handleImageDragLeave" @drop="handleImageDrop">
+          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget }"
+            @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
           <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
@@ -302,7 +307,7 @@
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
-            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending message...' : awaitingCall ? 'Call running · Enter to send guidance' : requestBusy ? 'Enter to send guidance · Shift+Enter for a new line' : imageEditsBusy.size ? 'Preparing marked image...' : imageDropTarget ? 'Drop image to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : 'Enter to send · Shift+Enter for a new line' }}</span>
+            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending message...' : awaitingCall ? 'Call running · Enter to send guidance' : requestBusy ? 'Enter to send guidance · Shift+Enter for a new line' : imageEditsBusy.size ? 'Preparing marked image...' : attachmentDropTarget ? 'Drop files to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : 'Enter to send · Shift+Enter for a new line' }}</span>
             <button
               v-if="requestBusy"
               class="composer-stop"
@@ -374,7 +379,7 @@ import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
 import ExecutionMessage from './ExecutionMessage.vue'
 import ConversationEvent from './ConversationEvent.vue'
 import { inlineExecutionMessages } from '../execution-messages.ts'
-import { parseChatEvent, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
+import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
 import { executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl } from '../api-url.ts'
@@ -390,7 +395,7 @@ import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
 import { createFolderChatDraft, createRemoteChatDraft } from '../remote-conversations.ts'
 import { createExecutionLocationDraft, type ExecutionLocation } from '../execution-locations.ts'
 import type { SessionDetails } from '../session-details.ts'
-import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
+import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { isUserMessage, resendableUserMessage, userMessageMarkers } from '../message-history.ts'
@@ -504,7 +509,7 @@ const remoteConversation = computed(() => !activeSessionId.value ? !!draftRemote
 const contextItems = ref<ChatContextItem[]>([])
 const pendingAttachments = ref<PendingChatAttachment[]>([])
 const imageEditsBusy = ref(new Set<string>())
-const imageDropTarget = ref(false)
+const attachmentDropTarget = ref(false)
 const composerError = ref('')
 const deletion = ref<SessionDeletionTarget>()
 const readonlyContextError = ref('')
@@ -553,6 +558,8 @@ const isDirectChat = computed(() => {
 })
 const chatInput = ref<HTMLTextAreaElement>()
 const messagesContainer = ref<HTMLElement>()
+let historyBrowsing = false
+let historyLeftBottom = false
 const loadingHistory = ref(!!activeSessionId.value)
 const streaming = ref(false)
 const streamPhase = ref<WorkingStage>()
@@ -1359,7 +1366,7 @@ function clearPendingAttachments(): void {
   revokeChatAttachmentPreviews(pendingAttachments.value)
   pendingAttachments.value = []
   imageEditsBusy.value.clear()
-  imageDropTarget.value = false
+  attachmentDropTarget.value = false
   if (attachmentInput.value) attachmentInput.value.value = ''
 }
 
@@ -1383,30 +1390,32 @@ function handleImageContext(update: ImageContextUpdate): void {
   }
 }
 
-function isImageDrop(data: DataTransfer | null): boolean {
+function isAttachmentDrop(data: DataTransfer | null): boolean {
   return hasImageReference(data) || !!data && Array.from(data.types).includes('Files')
 }
 
-function handleImageDragOver(event: DragEvent): void {
-  if (!isImageDrop(event.dataTransfer)) return
+function handleAttachmentDragOver(event: DragEvent): void {
+  if (!isAttachmentDrop(event.dataTransfer)) return
   event.preventDefault()
   const allowed = canQuoteSelection.value && canAttachFiles.value
   if (event.dataTransfer) event.dataTransfer.dropEffect = allowed ? 'copy' : 'none'
-  imageDropTarget.value = allowed
+  attachmentDropTarget.value = allowed
 }
 
-function handleImageDragLeave(event: DragEvent): void {
+function handleAttachmentDragLeave(event: DragEvent): void {
   if (event.currentTarget instanceof Node && event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
-  imageDropTarget.value = false
+  attachmentDropTarget.value = false
 }
 
-function handleImageDrop(event: DragEvent): void {
-  if (!isImageDrop(event.dataTransfer)) return
+function handleAttachmentDrop(event: DragEvent): void {
+  if (!isAttachmentDrop(event.dataTransfer)) return
   event.preventDefault()
   event.stopPropagation()
-  imageDropTarget.value = false
+  attachmentDropTarget.value = false
   if (!canQuoteSelection.value || !canAttachFiles.value) {
-    composerError.value = 'This conversation cannot receive an image right now.'
+    composerError.value = remoteConversation.value
+      ? 'Local attachments are not transferred to remote workspaces.'
+      : 'This conversation cannot receive file attachments right now.'
     return
   }
   try {
@@ -1414,13 +1423,13 @@ function handleImageDrop(event: DragEvent): void {
     if (reference) {
       pendingAttachments.value = updateImageAttachment(pendingAttachments.value, reference.sourceKey, reference.file, { source: reference.source })
     } else {
-      const images = clipboardImageFiles(event.dataTransfer)
-      if (!images.length) throw new Error('Drop an image file here, or use Add file for other attachments.')
-      pendingAttachments.value = appendChatAttachments(pendingAttachments.value, images)
+      const files = droppedChatFiles(event.dataTransfer)
+      if (!files.length) throw new Error('No files were found in this drop. Drop files or use Add file.')
+      pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
     }
     composerError.value = ''
   } catch (cause) {
-    composerError.value = cause instanceof Error ? cause.message : 'Could not attach the image. Drag it again.'
+    composerError.value = cause instanceof Error ? cause.message : 'Could not attach the files. Drop them again.'
   }
 }
 
@@ -1547,6 +1556,8 @@ function resetConversation(): void {
   clearSelection()
   disconnectEventStream()
   messages.value = []
+  historyBrowsing = false
+  historyLeftBottom = false
   streamContent.value = ''
   streamTimestamp.value = undefined
   streamingToolCallData.value = null
@@ -1756,7 +1767,7 @@ function isStreamPayload(value: unknown): value is StreamPayload {
       const count = isRecord(value.usage) ? value.usage[key] : undefined
       return typeof count === 'number' && Number.isFinite(count) && count >= 0
     })))) return false
-  if (value.event === 'session_message') return !!parseChatEvent(value.message)
+  if (value.event === 'session_message') return !!parseLiveSessionMessage(value.message)
   if (value.event === 'command_result') return value.done === true && isCommandReceipt(value.receipt)
   if (value.event === 'turn_finished') return value.done === true && ['completed', 'failed', 'cancelled'].includes(String(value.status)) && typeof value.turnId === 'string'
   return true
@@ -1768,9 +1779,9 @@ function isStreamPayload(value: unknown): value is StreamPayload {
 function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean {
   const event = payload.event ?? 'response'
   if (event === 'session_message') {
-    const parsed = parseChatEvent(payload.message)
+    const parsed = parseLiveSessionMessage(payload.message)
     if (!parsed) throw new Error('Invalid live event message')
-    const eventId = parsed.eventMeta.attrs['event-id']
+    const eventId = 'eventMeta' in parsed ? parsed.eventMeta.attrs['event-id'] : undefined
     if (eventId && messages.value.some(message => message.eventMeta?.attrs['event-id'] === eventId)) return false
     if (state.accumulated) {
       messages.value.push({ role: 'assistant', content: state.accumulated, timestamp: state.timestamp })
@@ -1779,7 +1790,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
       streamContent.value = ''
       streamTimestamp.value = undefined
     }
-    messages.value.push({ role: 'user', isSystemEvent: true, ...parsed })
+    messages.value.push({ ...parsed, media: payload.media })
     void loadSessionList()
     scrollToBottom()
     return false
@@ -1972,6 +1983,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       throw new Error('Main returned an invalid command result. Refresh the conversation before retrying.')
     }
     accepted = true
+    if (generation === sessionSelectionGeneration) historyBrowsing = false
     // Steered inputs are admitted before the tool boundary writes them to history.
     if (followUp && !isCommand && generation === sessionSelectionGeneration) deferActiveHistory = true
     if (!retry && generation === sessionSelectionGeneration) {
@@ -2066,9 +2078,23 @@ function flushStreamingTool(): void {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function browseHistory(): void {
+  historyBrowsing = true
+  historyLeftBottom = false
+}
+
+function trackHistoryScroll(): void {
+  const container = messagesContainer.value
+  if (!historyBrowsing || !container) return
+  const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 32
+  // A smooth jump starts at the bottom; only resume following after returning there.
+  if (!atBottom) historyLeftBottom = true
+  else if (historyLeftBottom) historyBrowsing = false
+}
+
 function scrollToBottom(): void {
   nextTick(() => {
-    if (!props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
+    if (historyBrowsing || !props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
     const el = messagesContainer.value
     if (el) el.scrollTop = el.scrollHeight
   })
@@ -2291,7 +2317,7 @@ watch(composerDock, element => {
     const container = messagesContainer.value
     const followBottom = container && container.scrollHeight - container.scrollTop - container.clientHeight < 32
     dockHeight.value = element.getBoundingClientRect().height
-    if (followBottom) void nextTick(() => { if (container) container.scrollTop = container.scrollHeight })
+    if (followBottom) void nextTick(() => { if (container && !historyBrowsing) container.scrollTop = container.scrollHeight })
   })
   dockObserver.observe(element)
 }, { flush: 'post' })
@@ -2385,7 +2411,7 @@ function resendLastMessage() {
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 4px; min-width: 0; }
 .composer-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: calc(100% - 42px); }
 .composer-send { margin-left: auto; flex-shrink: 0; }
-.composer-box.image-drop-target { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.composer-box.attachment-drop-target { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .composer-send:disabled { opacity: .35; cursor: not-allowed; }
 .composer-send:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
@@ -2584,9 +2610,12 @@ function resendLastMessage() {
 }
 
 .chat-session { align-self: flex-start; background: var(--c-bg-soft); color: var(--c-text); box-shadow: none; border-style: dashed; }
-.chat-session-source { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; color: var(--c-text-secondary); font-size: 12px; }
+.chat-session-source { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; text-align: left; }
+button.chat-session-source { cursor: pointer; }
+button.chat-session-source:hover { color: var(--c-text); text-decoration: underline; }
+button.chat-session-source:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
 .chat-session-source strong { font-weight: 600; color: var(--c-teal); }
-.chat-session-source > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.chat-session-source > span { min-width: 0; overflow-wrap: anywhere; }
 
 /* ── Segment navigation bar ──────────────────────────────── */
 

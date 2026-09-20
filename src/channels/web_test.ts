@@ -14,6 +14,9 @@ import type { ChatMessage } from '../providers/provider.ts'
 import { RealtimeHub } from '../realtime/hub.ts'
 import { FolderError } from '../folders/registry.ts'
 import { registerGatewayRoutes } from '../gateway/server.ts'
+import { MessageTool } from '../tools/message.ts'
+import { buildUserChatMessage } from '../agent/message-builder.ts'
+import { SessionTools, Tools } from '../tools/registry.ts'
 
 test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
   const bus = new Bus()
@@ -45,6 +48,47 @@ test('live event envelopes and parallel tool IDs are forwarded only to the ownin
       assert.equal(payload.toolCallId, toolCallId)
       assert.equal(payload.toolName, 'subagent')
     }
+  } finally {
+    await reader.cancel()
+    await channel.stop()
+    hub.close()
+  }
+})
+
+test('peer progress is projected once with its persisted author envelope, not as assistant stream text', async () => {
+  const bus = new Bus()
+  const hub = new RealtimeHub()
+  const channel = new WebChannel(bus, { workspace: '.', realtime: hub.registerProject('one') })
+  const reader = hub.connect([{ kind: 'chat', projectId: 'one', sessionId: 'web:owner' }],
+    new AbortController().signal).body!.getReader()
+  const decode = async () => new TextDecoder().decode((await reader.read()).value)
+  let persisted: ChatMessage | undefined
+  const tool = new MessageTool(bus, () => true, () => undefined, () => [], async (sessionId, input) => {
+    assert.equal(input.kind, 'message')
+    if (input.kind !== 'message') throw new Error('Expected peer message')
+    persisted = await buildUserChatMessage(input, '.', '.')
+    bus.emit('session.message.appended', { sessionId, physicalSessionId: 'owner-0', message: persisted })
+    return { status: 'accepted', sessionId, inputId: input.id }
+  })
+  try {
+    await decode()
+    await decode()
+    await tool.execute({ sessionId: 'web:owner', content: '**Initial** progress', intent: 'progress', silent: true }, {
+      sessionId: 'web:peer', physicalSessionId: 'peer-0', messageId: 'cause',
+      channel: 'web', chatId: 'peer', senderId: 'fixture', senderName: 'A & B',
+      signal: new AbortController().signal,
+      tools: new SessionTools(new Tools('.'), '.'),
+    })
+    const payload = JSON.parse((await decode()).match(/^data: (.+)$/m)![1]).payload
+    assert.equal(payload.event, 'session_message')
+    assert.deepEqual(payload.message.content, persisted!.content)
+    assert.equal(payload.message.role, 'user')
+    assert.equal(payload.message.name, 'A & B')
+    assert.ok(Number.isFinite(Date.parse(payload.message.timestamp)))
+    bus.emit('message.outbound', { channel: 'web', chatId: 'owner', event: 'response', content: 'Actual reply', done: true })
+    const next = JSON.parse((await decode()).match(/^data: (.+)$/m)![1]).payload
+    assert.equal(next.event, 'response')
+    assert.equal(next.content, 'Actual reply', 'No duplicate peer message or untyped stream chunk precedes the real reply')
   } finally {
     await reader.cancel()
     await channel.stop()

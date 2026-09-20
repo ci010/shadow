@@ -4,6 +4,7 @@ import {
   appendChatAttachments,
   canSendChatMessage,
   clipboardImageFiles,
+  droppedChatFiles,
   composeImageReferenceMessage,
   isImageAttachment,
   revokeChatAttachmentPreviews,
@@ -40,6 +41,31 @@ test('clipboard item fallback supports multiple images without treating HTML or 
   assert.throws(() => clipboardImageFiles({ items: [
     { kind: 'file', type: 'image/png', getAsFile: () => null },
   ] }), /Could not read the clipboard image/)
+})
+
+test('file drops preserve mixed file types, empty files and order without duplicating the item list', () => {
+  const files = [
+    new File(['document'], 'report.pdf', { type: 'application/pdf' }),
+    new File(['image'], 'image.png', { type: 'image/png' }),
+    new File([], 'empty.txt', { type: 'text/plain' }),
+    new File(['binary'], 'unknown.custom'),
+  ]
+  assert.deepEqual(droppedChatFiles({ files, items: [
+    { kind: 'file', getAsFile: () => { assert.fail('Do not duplicate the file list') } },
+  ] }), files)
+  assert.deepEqual(droppedChatFiles(null), [])
+  assert.deepEqual(droppedChatFiles({ items: [{ kind: 'string', getAsFile: () => { assert.fail('Text is not a file') } }] }), [])
+  assert.deepEqual(droppedChatFiles({ items: files.map(file => ({ kind: 'file', getAsFile: () => file })) }), files)
+})
+
+test('folder and unreadable drops fail explicitly instead of becoming empty files or partial attachments', () => {
+  assert.throws(() => droppedChatFiles({ files: [new File([], 'folder')], items: [
+    { kind: 'file', getAsFile: () => new File([], 'folder'), webkitGetAsEntry: () => ({ isDirectory: true }) },
+  ] }), /Folders cannot be attached/)
+  assert.throws(() => droppedChatFiles({ items: [
+    { kind: 'file', getAsFile: () => new File(['ok'], 'readable.txt') },
+    { kind: 'file', getAsFile: () => null },
+  ] }), /Could not read the dropped file/)
 })
 
 test('attachments are deduplicated, preserve order, and only images get previews', () => {

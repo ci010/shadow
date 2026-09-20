@@ -11,6 +11,10 @@ export function isWorkingStage(stage: unknown): stage is WorkingStage {
   return stage === 'llm' || stage === 'tool' || stage === 'waiting' || stage === 'waiting-for-call' || stage === 'running'
 }
 
+export function prominentWorkingStage(stages: readonly (string | undefined)[]): WorkingStage | undefined {
+  return stages.includes('waiting') ? 'waiting' : stages.find(isWorkingStage)
+}
+
 export function sessionActivity(stage: unknown) {
   switch (stage) {
     case 'llm': return { kind: stage, label: 'Thinking', working: true }

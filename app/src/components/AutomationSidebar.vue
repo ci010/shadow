@@ -12,7 +12,7 @@
         :data-automation-id="job.id" @click="$emit('select', job.id)">
         <span class="i-lucide-repeat-2 automation-icon" aria-hidden="true" />
         <span v-if="!rail" class="automation-name">{{ job.name }}</span>
-        <SessionActivity v-if="working(job.id)" :stage="working(job.id)" compact :title="undefined" />
+        <SessionActivity v-if="working(job.id)" :stage="working(job.id)" compact :icon-only="rail" :title="undefined" />
         <span v-else-if="!job.enabled && !rail" class="automation-history">Inactive</span>
       </button>
     </template></HoverInfo>
@@ -23,7 +23,7 @@
 import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'
 import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
-import { isWorkingStage } from '../session-activity.ts'
+import { prominentWorkingStage } from '../session-activity.ts'
 import type { SidebarSession } from '../folders-sidebar.ts'
 
 const props = defineProps<{
@@ -33,7 +33,7 @@ const props = defineProps<{
 defineEmits<{ select: [id: string] }>()
 const { jobs, error, loading, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
 function working(id: string) {
-  return props.groups.find(group => group.id === id)?.sessions.map(session => props.stages[session.sessionId]).find(isWorkingStage)
+  return prominentWorkingStage(props.groups.find(group => group.id === id)?.sessions.map(session => props.stages[session.sessionId]) ?? [])
 }
 </script>
 

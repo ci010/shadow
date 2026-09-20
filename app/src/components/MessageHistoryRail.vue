@@ -27,6 +27,7 @@ import { nextTick, onActivated, onDeactivated, onUnmounted, ref, useId, watch } 
 import { formatMessageTime, type UserMessageMarker } from '../message-history.ts'
 
 const props = withDefaults(defineProps<{ entries: readonly UserMessageMarker[]; container?: HTMLElement; active?: boolean }>(), { active: true })
+const emit = defineEmits<{ navigate: [] }>()
 const rail = ref<HTMLElement>()
 const currentIndex = ref(-1)
 const preview = ref<UserMessageMarker>()
@@ -49,11 +50,13 @@ function showPreview(entry: UserMessageMarker, event: Event) {
   preview.value = entry
 }
 function jumpTo(index: number) {
-  const element = props.container?.querySelector<HTMLElement>(`[data-msg-idx="${index}"]`)
-  if (!element) return
-  element.scrollIntoView({
+  const container = props.container
+  const element = container?.querySelector<HTMLElement>(`[data-msg-idx="${index}"]`)
+  if (!container || !element) return
+  emit('navigate')
+  container.scrollTo({
+    top: container.scrollTop + element.getBoundingClientRect().top - container.getBoundingClientRect().top,
     behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-    block: 'start',
   })
   currentIndex.value = index
 }
