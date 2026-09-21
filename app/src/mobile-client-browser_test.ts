@@ -116,7 +116,7 @@ test('native boot gates browser preview, pairs securely, and unmounts on backgro
     }).catch(error=>{console.error(error);app.exit(1)});
   `)
   const env: NodeJS.ProcessEnv = { MOBILE_FIXTURE_URL: origin }
-  for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
+  for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
   for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) env[key] = directory

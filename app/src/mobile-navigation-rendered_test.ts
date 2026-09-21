@@ -128,7 +128,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
   const env: NodeJS.ProcessEnv = { MOBILE_SMOKE_URL: server.resolvedUrls.local[0], MOBILE_SCREENSHOT_DIR: process.env.SHADOW_LAYOUT_SCREENSHOTS }
-  for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
+  for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
   for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) env[key] = directory
