@@ -283,6 +283,8 @@ async function runFixture(t: TestContext, fixture: string, args: string[] = []):
     await mkdir(output, { recursive: true })
     const screenshots = [
       'yield-question-desktop.png', 'yield-question-mobile.png',
+      'yield-light-1440.png', 'yield-dark-1440.png', 'yield-light-390.png', 'yield-dark-390.png',
+      'yield-binary-1440.png', 'yield-binary-390.png',
       'yield-custom-2-1440.png', 'yield-custom-3-1440.png',
       'yield-custom-2-390.png', 'yield-custom-3-390.png',
       'yield-reflector-1440.png', 'yield-reflector-390.png',

@@ -43,7 +43,7 @@ test('yield response validates session identity, two or three options, and one d
   ]) assert.throws(() => parseYieldResponse(invalid, 'web:root'))
 })
 
-test('binary buttons submit exactly the clicked option and block duplicate clicks', async t => {
+test('direct choice helper submits exactly the requested option and blocks duplicate writes', async t => {
   const { state, requests } = harness(t)
   const binary = { ...question(), options: ['Yes', 'No'], defaultOption: 'No' }
   requests[0]!.finish(Response.json({ request: binary }))

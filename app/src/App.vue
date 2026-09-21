@@ -19,6 +19,12 @@
       <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
           <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
           <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">Sign out</button>
+          <button class="theme-toggle" :aria-pressed="sounds.preferences.value.enabled"
+            :aria-label="sounds.preferences.value.enabled ? 'Mute notification sounds' : 'Enable notification sounds'"
+            :title="sounds.error.value || (sounds.preferences.value.enabled ? 'Mute notification sounds' : 'Enable notification sounds')" @click="toggleSounds">
+            <span :class="sounds.preferences.value.enabled ? 'i-lucide-volume-2' : 'i-lucide-volume-x'" class="w-3.5 h-3.5" aria-hidden="true" />
+            <span v-if="mobile.enabled.value">{{ sounds.preferences.value.enabled ? 'Mute sounds' : 'Enable sounds' }}</span>
+          </button>
           <button class="theme-toggle" @click="toggleTheme" :title="isDark ? 'Switch to light' : 'Switch to dark'" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'">
             <!-- Sun icon (shown in dark mode) -->
             <span v-if="isDark" class="i-lucide-sun w-3.5 h-3.5" aria-hidden="true" />
@@ -49,6 +55,9 @@
       <aside v-if="liveError" class="recovery-panel" role="status">
         <div class="recovery-copy"><strong>Live updates interrupted</strong><span>{{ liveError }}</span></div>
         <div class="recovery-links"><button type="button" class="btn primary" @click="livePool.retry()">Retry live updates</button></div>
+      </aside>
+      <aside v-if="monitoringError || sounds.error.value" class="recovery-panel" role="status">
+        <div class="recovery-copy"><strong>Notification sounds</strong><span>{{ monitoringError || sounds.error.value }}</span></div>
       </aside>
       <div
         class="route-content"
@@ -89,6 +98,7 @@ import { projectChatLocation } from './projects.ts'
 import { projectBase } from './api-url.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
 import type { LiveStatus } from './live-client.ts'
+import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
 
 const route = useRoute()
 const mobile = provideMobileChrome()
@@ -104,6 +114,9 @@ watch(() => route.fullPath, (path) => {
 }, { immediate: true })
 const { isDark, toggleTheme } = useTheme()
 const installationContext = useInstallationContext()
+const { sounds, monitoringError, toggle: toggleSounds } = useAppNotificationSounds(() => ({
+  base: installationContext.value.apiBase, allowed: installationContext.value.uiScopes.includes('chat:read'),
+}))
 const livePool = useLiveClientPool()
 const liveStatuses = ref<readonly LiveStatus[]>([])
 const browserSession = inject(browserSessionKey, null)

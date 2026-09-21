@@ -75,7 +75,8 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           const sessionId = session ? decodeURIComponent(session[1]!) : ''
           const operation = session?.[2]
           let data: unknown
-          if (path === '/api/projects') data = { projects: [
+          if (path === '/api/web-auth/session') data = { version: 1, required: false, authenticated: true }
+          else if (path === '/api/projects') data = { projects: [
             { id: 'work', name: 'Workspace', createdAt: '' }, { id: 'other', name: 'Other project', createdAt: '' },
           ] }
           else if (path === '/api/provider/setup') data = { provider: 'openai', model: 'gpt-test', ready: true, hasApiKey: false, authMode: 'none' }
@@ -93,8 +94,11 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
           else if (/^\/api\/io\/clients\/[^/]+\/heartbeat$/.test(path)) data = { ok: true }
           else if (path === '/api/agent-resources/publication-requests') data = { request: null, requests: [] }
           else if (path === '/api/agent-resources/probe-requests') data = { requests: [] }
-          else if (path === '/v1/query/session-spans') data = { sessionId: url.searchParams.get('sessionId'), entries: [], hasMore: false }
-          else if (session && !operation) data = { messages: history, physicalId: 'physical-fixture' }
+          else if (path === '/v1/query/session-spans') data = {
+            sessionId: url.searchParams.get('sessionId'), physicalSessionId: url.searchParams.get('physicalSessionId') ?? undefined,
+            entries: [], hasMore: false,
+          }
+          else if (session && !operation) data = { messages: history, currentPhysicalId: 'physical-fixture' }
           else if (operation === 'background-tasks') data = { sessionId, total: 0, tasks: [] }
           else if (operation === 'details') data = { sessionId, name: names.get(sessionId), workdir: { kind: 'local', displayPath: 'C:\\synthetic' },
             usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null } }
@@ -123,7 +127,7 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs',
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
-  const env: NodeJS.ProcessEnv = { MOBILE_SMOKE_URL: server.resolvedUrls.local[0] }
+  const env: NodeJS.ProcessEnv = { MOBILE_SMOKE_URL: server.resolvedUrls.local[0], MOBILE_SCREENSHOT_DIR: process.env.SHADOW_LAYOUT_SCREENSHOTS }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }

@@ -10,6 +10,7 @@
     </Teleport>
     <MobileSheet v-if="mobileLayout" :open="viewsOpen" label="Open views" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
       <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span class="i-lucide-messages-square" aria-hidden="true" /><span>{{ conversationTitle || 'Conversation' }}</span></button></div>
+      <div v-if="tabs.diagnosis" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="chooseMobileView(DIAGNOSIS_TAB_KEY)"><span class="i-lucide-activity" aria-hidden="true" /><span>Diagnosis</span></button></div>
       <div v-if="knowledgeEnabled" class="mobile-view-row">
         <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>Knowledge</span></button>
         <button v-if="tabs.knowledge" class="mobile-view-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
@@ -23,7 +24,7 @@
       <div class="mobile-workbench-actions">
         <slot name="actions" />
         <button v-if="explorerAvailable" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />Browse files</button>
-        <button v-if="tabs.selected" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />Close current document</button>
+        <button v-if="tabs.selected && tabs.selected !== DIAGNOSIS_TAB_KEY" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />Close current document</button>
         <button v-if="tabs.files.length > 1 || tabs.knowledge" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">Close all documents</button>
         <slot name="mobile-actions" :close="closeMobileActions" />
       </div>
@@ -48,9 +49,15 @@
         </button>
         </HoverInfo>
         <div class="document-tablist" role="tablist" aria-label="Open documents" @wheel="scrollTabs">
-          <div class="document-tab conversation-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
+          <div class="document-tab conversation-tab fixed-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
             <button :id="tabId('')" role="tab" :aria-selected="tabs.selected === ''" :tabindex="tabs.selected === '' ? 0 : -1" :aria-controls="panelId('')" @click="selectTab('')" @keydown="tabKey($event, '')">
               <span class="document-icon i-lucide-messages-square" aria-hidden="true" /><span>Conversation</span>
+            </button>
+          </div>
+          <div v-if="tabs.diagnosis" class="document-tab diagnosis-tab fixed-tab" :class="{ selected: tabs.selected === DIAGNOSIS_TAB_KEY }" @mousedown="preventMiddleScroll">
+            <button :id="tabId(DIAGNOSIS_TAB_KEY)" role="tab" :aria-selected="tabs.selected === DIAGNOSIS_TAB_KEY" :tabindex="tabs.selected === DIAGNOSIS_TAB_KEY ? 0 : -1"
+              :aria-controls="panelId(DIAGNOSIS_TAB_KEY)" title="Session diagnosis" @click="selectTab(DIAGNOSIS_TAB_KEY)" @keydown="tabKey($event, DIAGNOSIS_TAB_KEY)">
+              <span class="document-icon i-lucide-activity" aria-hidden="true" /><span>Diagnosis</span>
             </button>
           </div>
           <div ref="documentTabs" class="document-tabs">
@@ -77,7 +84,7 @@
             <div v-if="tabMenu" class="document-menu-backdrop" @pointerdown.self="dismissTabMenu(true)" @contextmenu.prevent.self="dismissTabMenu(true)">
               <div ref="menuElement" class="document-menu" role="menu" aria-label="Document tab actions" :style="menuPosition" @keydown="menuKey">
                 <button type="button" role="menuitem" @click="runTabAction('close')">Close</button>
-                <button type="button" role="menuitem" :disabled="documentTabKeys(tabs).length < 3" @click="runTabAction('others')">Close others</button>
+                <button type="button" role="menuitem" :disabled="tabs.files.length + Number(!!tabs.knowledge) < 2" @click="runTabAction('others')">Close others</button>
                 <button type="button" role="menuitem" @click="runTabAction('all')"><span>Close all</span><span class="document-menu-shortcut">Ctrl+Shift+W</span></button>
               </div>
             </div>
@@ -89,6 +96,9 @@
       <div class="workbench-content" :class="{ 'draft-document': draft && tabs.selected === '' }">
         <div v-show="tabs.selected === ''" :id="panelId('')" class="conversation-document" role="tabpanel" :aria-labelledby="tabId('')">
           <slot />
+        </div>
+        <div v-if="tabs.diagnosis" v-show="tabs.selected === DIAGNOSIS_TAB_KEY" :id="panelId(DIAGNOSIS_TAB_KEY)" class="diagnosis-document" role="tabpanel" :aria-labelledby="tabId(DIAGNOSIS_TAB_KEY)">
+          <slot name="diagnosis" />
         </div>
         <div v-if="tabs.knowledge && knowledgeEnabled" v-show="tabs.selected === KNOWLEDGE_TAB_KEY"
           :id="panelId(KNOWLEDGE_TAB_KEY)" class="knowledge-document" role="tabpanel" :aria-labelledby="tabId(KNOWLEDGE_TAB_KEY)">
@@ -125,10 +135,10 @@ import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
-import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, KNOWLEDGE_TAB_KEY, nextDocumentTab, openFileTab, openKnowledgeTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile } from '../../file-workbench.ts'
+import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile } from '../../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false })
-const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false })
+const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
 const mobileHeader = useMobileHeader(() => props.active)
@@ -148,8 +158,8 @@ const preference = ref<boolean>()
 const remoteExpanded = ref(false)
 const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.folderId))
 const expanded = computed(() => explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? wide.value)))
-const tabs = ref<FileTabs>({ files: [], selected: '' })
-const selectedTitle = computed(() => tabs.value.selected === KNOWLEDGE_TAB_KEY ? 'Knowledge'
+const tabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
+const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? 'Diagnosis' : tabs.value.selected === KNOWLEDGE_TAB_KEY ? 'Knowledge'
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
     ?? props.conversationTitle ?? 'Conversation')
 function closeMobileActions() { actionsOpen.value = false }
@@ -207,7 +217,7 @@ function dismissTabMenu(restoreFocus = false) {
   if (restoreFocus && key !== undefined) document.getElementById(tabId(key))?.focus({ preventScroll: true })
 }
 async function openTabMenu(event: MouseEvent | KeyboardEvent, key: string) {
-  if (!props.active || !props.keyboardActive || !key || !documentTabKeys(tabs.value).includes(key)) return
+  if (!props.active || !props.keyboardActive || !key || key === DIAGNOSIS_TAB_KEY || !documentTabKeys(tabs.value).includes(key)) return
   const anchor = document.getElementById(tabId(key))?.getBoundingClientRect()
   if (!anchor) return
   const x = event instanceof MouseEvent && event.button === 2 ? event.clientX : anchor.left
@@ -254,7 +264,7 @@ function preventMiddleScroll(event: MouseEvent) {
 function middleClickTab(event: MouseEvent, path: string) {
   if (event.button !== 1) return
   event.preventDefault()
-  if (path) closeFile(path, tabs.value.selected === path)
+  if (path && path !== DIAGNOSIS_TAB_KEY) closeFile(path, tabs.value.selected === path)
 }
 function scrollTabs(event: WheelEvent) {
   const strip = documentTabs.value
@@ -265,12 +275,12 @@ function scrollTabs(event: WheelEvent) {
   strip.scrollLeft = next
 }
 function tabKey(event: KeyboardEvent, path: string) {
-  if (path && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+  if (path && path !== DIAGNOSIS_TAB_KEY && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
     event.preventDefault()
     void openTabMenu(event, path)
     return
   }
-  if (event.key === 'Delete' && path) { event.preventDefault(); closeFile(path); return }
+  if (event.key === 'Delete' && path && path !== DIAGNOSIS_TAB_KEY) { event.preventDefault(); closeFile(path); return }
   const next = nextDocumentTab(documentTabKeys(tabs.value), path, event.key)
   if (next === undefined) return
   event.preventDefault()
@@ -290,7 +300,7 @@ function shortcutContext() {
     active: props.active,
     keyboardActive: props.keyboardActive,
     visible: !!root.value?.getClientRects().length,
-    explorerEnabled: props.explorerEnabled || !!tabs.value.knowledge,
+    explorerEnabled: props.explorerEnabled || !!tabs.value.knowledge || !!tabs.value.diagnosis,
     overlayOpen,
     composing,
   }
@@ -304,7 +314,7 @@ function closeCurrentFile(): boolean {
 function closeAllDocuments(): boolean {
   if (!canCloseAllDocuments(tabs.value, shortcutContext())) return false
   tabs.value = closeAllFileTabs(tabs.value)
-  void nextTick(() => document.getElementById(tabId(''))?.focus({ preventScroll: true }))
+  void nextTick(() => document.getElementById(tabId(tabs.value.selected))?.focus({ preventScroll: true }))
   return true
 }
 function cycleTab(direction: DocumentTabDirection): boolean {
@@ -354,11 +364,14 @@ function toggleExplorer() {
 function measureWidth() {
   if (root.value?.getClientRects().length) width.value = root.value.getBoundingClientRect().width
 }
-watch(() => props.contextKey, (key, previous) => {
+watch(() => [props.contextKey, props.diagnosisEnabled] as const, ([key, diagnosis], [previous]) => {
   dismissTabMenu()
   remoteExpanded.value = false
-  if (previous !== undefined) cachedTabs.set(previous, tabs.value)
-  tabs.value = cachedTabs.get(key) ?? { files: [], selected: '' }
+  if (key !== previous) {
+    cachedTabs.set(previous, tabs.value)
+    tabs.value = cachedTabs.get(key) ?? { files: [], selected: '' }
+  }
+  tabs.value = withDiagnosisTab(tabs.value, diagnosis)
 })
 watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], () => {
   if (!props.knowledgeEnabled) {
@@ -371,6 +384,8 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
 }, { immediate: true })
 watch(() => props.active && props.keyboardActive, active => { if (!active) dismissTabMenu() })
 watch(() => tabs.value.selected === '', value => emit('conversation-visible', value), { immediate: true, flush: 'sync' })
+watch(() => [props.contextKey, tabs.value.selected === DIAGNOSIS_TAB_KEY] as const,
+  ([, value]) => emit('diagnosis-visible', value), { immediate: true, flush: 'sync' })
 watch(() => [tabs.value.selected === KNOWLEDGE_TAB_KEY, tabs.value.knowledge?.entryId] as const,
   ([active, entryId]) => emit('knowledge-navigation', active, entryId), { immediate: true })
 onMounted(() => {
@@ -419,10 +434,12 @@ onUnmounted(() => {
 .workbench-content { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .workbench-content.draft-document { justify-content: safe center; overflow-y: auto; padding: 40px 0 80px; box-sizing: border-box; }
 .draft-document > .conversation-document { flex: 0 0 auto; overflow: visible; }
-.document-toolbar { display: flex; align-items: stretch; flex: 0 0 40px; min-width: 0; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); }
+.document-toolbar { display: flex; align-items: stretch; flex: 0 0 var(--document-toolbar-height, 40px); min-width: 0; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); }
 .document-tablist { display: flex; flex: 1; min-width: 0; }
 .document-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
-.conversation-tab { flex: 0 0 auto; }
+.fixed-tab { flex: 0 1 auto; }
+.fixed-tab [role="tab"] { min-height: 40px; }
+.fixed-tab [role="tab"] > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .document-menu-backdrop { position: fixed; inset: 0; z-index: 900; }
 .document-menu { position: fixed; display: flex; flex-direction: column; width: 268px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 5px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-card); box-shadow: 0 8px 24px var(--c-shadow); }
 .document-menu button { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 36px; padding: 8px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
@@ -440,11 +457,15 @@ onUnmounted(() => {
 .document-close { margin-right: 4px; }
 button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.conversation-document, .file-document, .knowledge-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.workbench-explorer.drawer { position: absolute; inset: calc(41px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
-.explorer-backdrop { position: absolute; inset: calc(41px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }
+.conversation-document, .diagnosis-document, .file-document, .knowledge-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.workbench-explorer.drawer { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
+.explorer-backdrop { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }
 @media (max-width: 700px) {
   .document-menu button { min-height: 44px; }
   .workbench-content.draft-document { padding: 58px 0 28px; }
+}
+@media (pointer: coarse) {
+  .file-workbench { --document-toolbar-height: 44px; }
+  .fixed-tab [role="tab"] { min-height: 44px; }
 }
 </style>

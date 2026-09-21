@@ -1014,8 +1014,10 @@ ordinary managed-process path.
 
 `yield` is called directly, not through the Node script bridge. Its question
 advertises two distinct suggested options and one default; legacy three-option
-requests remain readable. Binary questions render direct answer buttons; legacy
-three-option questions use radio selection. The application always adds its own
+requests remain readable. Both binary and legacy three-option questions use the
+same square-edged, lettered selection list and an explicit **Continue** action;
+choosing a row never submits immediately. Letter keys select options while the
+question is focused, and Enter confirms a focused preset. The application adds its own
 custom-response entry for humans, separate from the chat composer. Root sessions expose the
 question to the human; a child addresses its stored parent, not `reportTo`.
 Only that parent can answer through `yield(action="answer")`; human answers
@@ -1692,6 +1694,15 @@ cannot retain header ownership. Desktop Electron chrome and desktop pane layout
 are unchanged. Session details, rename, diagnosis, Knowledge, files and child
 return remain reachable through sheets rather than extra persistent bars.
 
+Existing conversations expose permanent, square-edged **Conversation** and
+**Diagnosis** tabs before the scrollable file tabs. Diagnosis is reachable
+directly from any open document; it is not a title-row action or a closable file.
+Both views participate in document keyboard navigation. On phones, Diagnosis
+lives in **Switch view**, not the actions sheet. Blank drafts omit it until a
+session exists. The diagnosis view mounts lazily, retains its selected section
+between document switches, and hides the composer without discarding the draft
+or conversation scroll position.
+
 The drawer supports rightward swipes from anywhere in the viewport's left half
 and leftward swipes inside the open drawer. Once horizontal intent is established,
 its position and backdrop track the held finger; a 64px threshold commits the
@@ -1749,6 +1760,24 @@ reports loading failures with Retry, and restores focus without scrolling on
 close. Markdown image affordances are added after sanitization and support
 Enter/Space. Switching conversation, history segment, or active pane dismisses
 the preview; background message updates do not.
+
+Notification sounds are owned once by the renderer application, not by individual
+chat panes or Electron business logic. After a user gesture unlocks Web Audio,
+the monitor uses project catalogs, session live invalidations and validated HTTP
+snapshots across Projects, including when another application page is open.
+Observed work-to-idle transitions play a short descending cue; user-addressed yield
+requests play an ascending cue, deduplicated by question ID. Temporary tasks/calls,
+waiting-for-call transitions, initial snapshots and reconnect baselines do not
+produce question alerts. Cancelling an unanswered yield does not play an idle cue.
+Successful turn facts also attach `completedTurnId` to session invalidations, so
+short turns that finish between snapshots are not lost. The renderer confirms
+idle state and persistent-session identity before sounding them, ignores replay
+while the live feed is reconnecting, and deduplicates completed turn IDs.
+**App settings > Sounds** stores local enable/event/volume preferences; the app
+toolbar provides quick mute. No sound files or external services are used. Cues
+are short, grouped and rate-limited, with question prompts taking priority.
+Autoplay restrictions and device mute still apply; a closed or suspended renderer
+cannot notify. Each application window owns its own sound monitor.
 
 Installation context and route policy distinguish Main/Child and UI scope.
 These client-side policies are presentation rules, not server authorization.

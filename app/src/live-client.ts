@@ -218,6 +218,7 @@ export function createLiveClient(base: string, options: {
   }
   return {
     subscribe,
+    isLive: () => ready,
     retry() {
       if (disposed) return
       cursor = undefined

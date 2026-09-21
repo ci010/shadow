@@ -57,6 +57,10 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify(value))
     }
     const status = { provider: 'copilot', model: 'gpt-5-mini@copilot', authMode: 'copilot', ready: true, hasApiKey: false }
+    if (path === '/api/web-auth/session') return json({ version: 1, required: false, authenticated: true })
+    if (path === '/api/channels') return json({ channels: [] })
+    if (path === '/api/agent-resources/publication-requests') return json({ request: null, requests: [] })
+    if (path === '/api/agent-resources/probe-requests') return json({ requests: [] })
     if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
     if (path === '/api/automations') return json({ automations: [] })
     if (path === '/api/provider/setup') return json(status)
@@ -141,13 +145,16 @@ async function waitFor(window: BrowserWindow, expression: string) {
 }
 async function inspect(window: BrowserWindow, label: string) {
   await evaluate(window, 'document.fonts.ready')
-  const result = await evaluate<{ bounded: boolean; radios: number; checked: number; defaults: number; covered: boolean; overflow: boolean }>(window, `(() => {
+  const result = await evaluate<{ bounded: boolean; radios: number; checked: number; defaults: number; covered: boolean; overflow: boolean; square: boolean; aligned: boolean; touchTargets: boolean }>(window, `(() => {
     const card = document.querySelector('.yield-question'), rect = card.getBoundingClientRect();
     const button = card.querySelector('button[type="submit"]'), bounds = button?.getBoundingClientRect();
     const hit = bounds && document.elementFromPoint(bounds.x + bounds.width/2, bounds.y + bounds.height/2);
     return { bounded: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
       radios: card.querySelectorAll('input[type="radio"]').length, checked: card.querySelectorAll('input:checked').length,
       defaults: card.querySelectorAll('.yield-default').length, covered: !!button && !(hit === button || button.contains(hit)),
+      square: [card, ...card.querySelectorAll('button, .yield-option, .yield-index, textarea')].every(el => getComputedStyle(el).borderRadius === '0px'),
+      aligned: new Set([...card.querySelectorAll('.yield-index')].map(el => Math.round(el.getBoundingClientRect().left))).size === 1,
+      touchTargets: innerWidth > 600 || [...card.querySelectorAll('.yield-option, .yield-actions button')].every(el => el.getBoundingClientRect().height >= 44),
       overflow: document.documentElement.scrollWidth > innerWidth || card.scrollWidth > card.clientWidth };
   })()`)
   assert.equal(result.bounded, true, `${label} card stays in viewport`)
@@ -156,6 +163,9 @@ async function inspect(window: BrowserWindow, label: string) {
   assert.equal(result.defaults, 1)
   assert.equal(result.covered, false, `${label} Continue is independently reachable`)
   assert.equal(result.overflow, false)
+  assert.equal(result.square, true, `${label} uses square corners throughout`)
+  assert.equal(result.aligned, true, `${label} presets and custom answer share one text column`)
+  assert.equal(result.touchTargets, true, `${label} preserves mobile touch targets`)
   await writeFile(join(directory, `${label}.png`), (await window.webContents.capturePage()).toPNG())
   console.log(`LAYOUT_YIELD ${JSON.stringify({ label, ...result })}`)
 }
@@ -188,6 +198,11 @@ async function runViewport(origin: string, width: number, height: number) {
     await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
     assert.match(await evaluate<string>(window, `document.querySelector('.chat-working').textContent`), /Waiting for a response/)
     await inspect(window, width > 600 ? 'yield-question-desktop' : 'yield-question-mobile')
+    for (const theme of ['light', 'dark']) {
+      await evaluate(window, `document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
+      await inspect(window, `yield-${theme}-${width}`)
+    }
+    assert.equal(await evaluate(window, `document.querySelector('.yield-question').textContent.includes('No time limit')`), false, 'Indefinite waits do not repeat redundant status copy')
     assert.equal(await evaluate(window, `document.querySelector('.yield-question input:checked').value`), 'Make the smallest safe change')
     const beforeAnswers = answers.length
     await new Promise(resolve => setTimeout(resolve, 1600))
@@ -249,23 +264,46 @@ async function runViewport(origin: string, width: number, height: number) {
       console.log(`LAYOUT_YIELD_CUSTOM ${JSON.stringify({ width, count, bounds })}`)
     }
 
-    pending.set(root, { ...question(root, `binary-${width}`), question: 'Continue with this approach?', options: ['Yes', 'No'], defaultOption: 'No' })
+    const binaryOptions = ['Build both Apple Silicon arm64 and Intel x64 archives (recommended)', 'Build only the Apple Silicon arm64 archive']
+    pending.set(root, { ...question(root, `binary-${width}`), question: 'Which macOS architectures should the first release support? Each architecture will have its own archive.', options: binaryOptions, defaultOption: binaryOptions[1]! })
     live.publisher.invalidateSessions(root)
-    await waitFor(window, `document.querySelectorAll('.yield-choice').length === 2`)
-    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input[type="radio"]').length`), 0)
+    await waitFor(window, `document.querySelectorAll('label.yield-option').length === 2`)
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input[type="radio"]').length`), 2)
     const beforeBinary = answers.length
-    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-continue').length`), 0)
-    const binaryBounds = await evaluate<boolean>(window, `Array.from(document.querySelectorAll('.yield-choice')).every(button => {
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-continue').length`), 1)
+    const binaryBounds = await evaluate<boolean>(window, `Array.from(document.querySelectorAll('label.yield-option, .yield-continue')).every(button => {
       const r = button.getBoundingClientRect();
       const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
       return r.left >= 0 && r.right <= innerWidth && r.height >= 32 && (hit === button || button.contains(hit));
     })`)
-    assert.equal(binaryBounds, true, 'Both direct answers fit and remain reachable')
+    assert.equal(binaryBounds, true, 'Both answer rows and Continue fit and remain reachable')
     await writeFile(join(directory, `yield-binary-${width}.png`), (await window.webContents.capturePage()).toPNG())
     assert.equal(answers.length, beforeBinary)
-    await evaluate(window, `document.querySelector('.yield-choice').click()`)
+    await evaluate(window, `document.querySelector('label.yield-option').click()`)
+    assert.equal(answers.length, beforeBinary, 'Clicking an answer selects it without submitting')
+    assert.equal(await evaluate(window, `document.querySelector('.yield-question input:checked').value`), binaryOptions[0])
+    await evaluate(window, `{
+      const input = document.querySelector('.yield-question input');
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', {key:'b', bubbles:true, cancelable:true}));
+    }`)
+    assert.equal(await evaluate(window, `document.querySelector('.yield-question input:checked').value`), binaryOptions[1])
+    await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'c', bubbles:true, cancelable:true}))`)
+    await waitFor(window, `document.activeElement === document.querySelector('.yield-custom textarea')`)
+    await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'a', bubbles:true, cancelable:true}))`)
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input:checked').length`), 0, 'Typing inside a custom answer must not select a preset')
+    await evaluate(window, `{
+      const input = document.querySelector('.yield-question input');
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', {key:'a', bubbles:true, cancelable:true}));
+    }`)
+    assert.equal(answers.length, beforeBinary, 'Letter shortcuts only select answers')
+    const beforeEscape = cancellations.length
+    await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}))`)
+    assert.equal(cancellations.length, beforeEscape, 'Escape must not silently cancel the task')
+    await evaluate(window, `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}))`)
     await waitFor(window, `!document.querySelector('.yield-question')`)
-    assert.deepEqual(answers.at(-1), { requestId: `binary-${width}`, option: 'Yes' })
+    assert.deepEqual(answers.at(-1), { requestId: `binary-${width}`, option: binaryOptions[0] })
     assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
 
     const expiring = question(root, `expired-${width}`)

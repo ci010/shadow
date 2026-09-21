@@ -11,7 +11,7 @@ export interface RealtimeTelemetry {
 }
 export interface RealtimePublisher {
   chat(sessionId: string, payload: unknown, requestId?: string): void
-  invalidateSessions(sessionId?: string): void
+  invalidateSessions(sessionId?: string, completedTurnId?: string): void
   invalidateIo?(runId: string): void
   close(): void
 }
@@ -71,8 +71,8 @@ export class RealtimeHub {
       chat: (sessionId, payload, requestId) => {
         if (active()) this.publish({ kind: 'chat', projectId, sessionId }, payload, requestId)
       },
-      invalidateSessions: sessionId => {
-        if (active()) this.publish({ kind: 'sessions', projectId }, { event: 'invalidate', sessionId })
+      invalidateSessions: (sessionId, completedTurnId) => {
+        if (active()) this.publish({ kind: 'sessions', projectId }, { event: 'invalidate', sessionId, ...(completedTurnId ? { completedTurnId } : {}) })
       },
       invalidateIo: runId => {
         if (active()) this.publish({ kind: 'io', projectId }, { event: 'invalidate', runId })

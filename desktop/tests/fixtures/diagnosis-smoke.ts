@@ -634,9 +634,9 @@ async function assertConversationAlignment(label: string, expectedPanes = 1): Pr
   }
 }
 async function showSessionView(diagnosis: boolean, scope = '.primary-conversation'): Promise<void> {
-  const selector = `${scope} .diagnosis-toggle`
-  if (await evaluate(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-pressed')`) !== String(diagnosis)) await click(selector)
-  await waitFor(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-pressed') === '${diagnosis}'`)
+  const selector = `${scope} .${diagnosis ? 'diagnosis' : 'conversation'}-tab [role="tab"]`
+  await click(selector)
+  await waitFor(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-selected') === 'true'`)
 }
 async function selectMessage(scope: string): Promise<string> {
   await evaluate(`(() => {
@@ -1018,7 +1018,7 @@ async function main(): Promise<void> {
     console.log(`LAYOUT_RESULT ${JSON.stringify({ ok: true, mode: layoutMode })}`)
     return
   }
-  assert.equal(await evaluate(`!document.querySelector('.conversation-tabs') && document.querySelector('.diagnosis-toggle').getAttribute('aria-pressed') === 'false' && document.querySelector('.chat-history').getAttribute('role') === 'region'`), true, 'Conversation history uses a region with a separate Diagnosis toggle')
+  assert.equal(await evaluate(`!document.querySelector('.diagnosis-toggle') && document.querySelector('.diagnosis-tab [role="tab"]').getAttribute('aria-selected') === 'false' && document.querySelector('.chat-history').getAttribute('role') === 'region'`), true, 'Diagnosis is a permanent document tab beside Conversation')
   assert.equal(await evaluate(`(() => {
     const folders = document.querySelector('.folders-sidebar').getBoundingClientRect();
     const explorer = document.querySelector('.workbench-explorer').getBoundingClientRect();
@@ -1048,7 +1048,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelectorAll('.chat-content .katex math').length`), 2)
   assert.equal(await evaluate(`Boolean(document.querySelector('.chat-content .katex-display'))`), true)
   assert.equal(await evaluate(`Boolean(window.unsafeMarkup || document.querySelector('.chat-content [onclick], .chat-content script'))`), false)
-  for (const selector of ['.theme-toggle span', '.model-chevron', '.composer-send span', '.diagnosis-toggle span']) {
+  for (const selector of ['.theme-toggle span', '.model-chevron', '.composer-send span', '.diagnosis-tab .document-icon']) {
     assert.equal(await evaluate(`(() => { const icon = document.querySelector(${JSON.stringify(selector)}); const css = getComputedStyle(icon); return icon.getAttribute('aria-hidden') === 'true' && css.maskImage.includes('data:image/svg+xml') && icon.getBoundingClientRect().width >= 12; })()`), true, `Missing generated icon: ${selector}`)
   }
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.chat-content > :first-child')).marginTop`), '0px')
@@ -1432,12 +1432,7 @@ async function main(): Promise<void> {
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
   await waitFor(`innerWidth === 390`)
   await new Promise(resolve => setTimeout(resolve, 150))
-  const headingCenterOffset = await evaluate<number>(`(() => {
-    const title = document.querySelector('.heading-name').getBoundingClientRect();
-    const diagnosis = document.querySelector('.diagnosis-toggle').getBoundingClientRect();
-    return Math.abs(title.top + title.height / 2 - diagnosis.top - diagnosis.height / 2);
-  })()`)
-  assert.ok(headingCenterOffset < 2, `Mobile heading title and Diagnosis toggle center offset: ${headingCenterOffset}px`)
+  assert.equal(await evaluate(`!!document.querySelector('[aria-label="Switch view"]') && !document.querySelector('.diagnosis-toggle')`), true, 'Mobile view selection replaces the title-row diagnosis action')
   await captureSelectionMenu('selection-menu-mobile.png', true)
   await nativeKey('Escape', 'Escape', 27)
   window.webContents.disableDeviceEmulation()
@@ -1522,12 +1517,16 @@ async function main(): Promise<void> {
   await click('.tree-row[data-path="src"]')
   await waitFor(`document.querySelector('.tree-row[data-path="src/main.ts"]')`)
   await click('.tree-row[data-path="src/main.ts"]')
-  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.document-tablist [role="tab"]'), node => node.getAttribute('aria-label') || node.textContent.trim())`), ['Conversation', 'README.md', 'src/main.ts'])
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.document-tablist [role="tab"]'), node => node.getAttribute('aria-label') || node.textContent.trim())`), ['Conversation', 'Diagnosis', 'README.md', 'src/main.ts'])
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
   await evaluate(`document.querySelector('.composer-input textarea').focus()`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
+  await waitFor(`document.querySelector('.diagnosis-tab [role="tab"]').getAttribute('aria-selected') === 'true'`)
+  await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await waitFor(`document.querySelector('.document-tablist [aria-label="README.md"]').getAttribute('aria-selected') === 'true'`)
+  await nativeKey('Tab', 'Tab', 9, undefined, 10)
+  await waitFor(`document.querySelector('.diagnosis-tab [role="tab"]').getAttribute('aria-selected') === 'true'`)
   await nativeKey('Tab', 'Tab', 9, undefined, 10)
   await waitFor(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation'`)
   await nativeKey('Tab', 'Tab', 9, undefined, 10)
@@ -1560,11 +1559,11 @@ async function main(): Promise<void> {
   assert.equal(chatHistoryRequests.length, historyBeforeDocuments, 'Explorer and document changes must not reload conversation history')
   await selectSession(idB)
   await waitFor(`document.querySelector('.chat-messages')?.textContent.includes('Only the second session')`)
-  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 1, 'Another session starts with its own documents')
+  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'Another session starts with its two fixed views')
   assert.equal(await evaluate(`document.querySelectorAll('.file-document .file-modal').length`), 0, 'Inactive sessions must not keep mounted file previews')
   await selectSession(idA)
   await waitFor(`document.querySelector('.document-tablist [aria-label="README.md"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('.file-markdown h1')?.textContent === 'README.md'`)
-  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'Returning to a session restores its open documents and selected file')
+  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 3, 'Returning to a session restores its open documents and selected file')
   await click('.document-tablist [aria-label="Close README.md"]')
   assert.equal(await evaluate(`document.activeElement.textContent.trim()`), 'Conversation', 'Closing the final file returns to Conversation')
   await click('.tree-row[data-path="preview.html"]')
@@ -1964,7 +1963,7 @@ async function main(): Promise<void> {
   await evaluate(`document.querySelector('.child-conversation textarea').focus()`)
   await nativeKey('Tab', 'Tab', 9, undefined, 2)
   await nativeKey('Tab', 'Tab', 9, undefined, 10)
-  assert.equal(await evaluate(`document.querySelector('.primary-conversation .document-tablist [aria-selected="true"]').textContent.trim()`), 'Conversation', 'An active side chat with one tab must not cycle documents in the inactive main pane')
+  assert.equal(await evaluate(`document.querySelector('.primary-conversation .document-tablist [aria-selected="true"]').textContent.trim()`), 'Conversation', 'Cycling a side chat between its fixed views must not change the inactive main pane')
   await evaluate(`(() => { const input = document.querySelector('.child-conversation textarea'); input.focus(); input.value = 'Keep child draft'; input.dispatchEvent(new Event('input', { bubbles: true })); input.setSelectionRange(input.value.length, input.value.length); input.blur(); })()`)
   await nativeKey('a', 'KeyA', 65, 'a')
   assert.equal(await evaluate(`document.querySelector('.child-conversation textarea').value`), 'Keep child drafta')
@@ -2014,7 +2013,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`Boolean(document.querySelector('.child-conversation .workbench-explorer, .child-conversation .explorer-toggle, .child-conversation .explorer-backdrop, .child-conversation .file-tree'))`), false, 'Side chats must not mount a file tree or its controls')
   assert.equal(fileRequests.some(request => request.sessionId === idChild), false, 'Side chats must not fetch filesystem listings')
   assert.equal(await evaluate(`Boolean(document.querySelector('.primary-conversation .explorer-toggle'))`), true, 'Main conversation keeps its file explorer')
-  assert.equal(await evaluate(`document.querySelector('.primary-conversation .diagnosis-toggle').getAttribute('aria-pressed')`), 'false')
+  assert.equal(await evaluate(`document.querySelector('.primary-conversation .diagnosis-tab [role="tab"]').getAttribute('aria-selected')`), 'false')
   assert.equal(await evaluate(`document.querySelector('.child-conversation [aria-label="Close child conversation"]').getClientRects().length > 0`), true, 'Child close action remains reachable without explorer controls')
   assert.equal(await evaluate(`(() => {
     const tabs = Array.from(document.querySelectorAll('.document-tablist [role="tab"]'));
@@ -2412,7 +2411,7 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent.trim() === 'Conversation' && document.querySelector('.composer-input textarea') === window.folderFileComposer`), true, 'Sending from a file returns to Conversation without replacing the composer')
   completeSend!()
   await waitFor(`!document.querySelector('textarea').disabled && document.querySelector('.tree-row[data-path="src"]')`)
-  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 1, 'Created sessions start with session-scoped documents')
+  assert.equal(await evaluate(`document.querySelectorAll('.document-tablist [role="tab"]').length`), 2, 'Created sessions start with Conversation and Diagnosis')
   assert.equal(fileRequests.at(-1)?.sessionId, 'web:chat-folder-created-1')
   await click('.tree-row[data-path="README.md"]')
   await waitFor(`document.querySelector('.file-markdown h1')?.textContent === 'README.md'`)

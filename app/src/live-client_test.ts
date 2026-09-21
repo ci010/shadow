@@ -88,11 +88,14 @@ test('failed project topics reject readiness without disconnecting healthy proje
 test('reconnect replays in order, deduplicates cursors and never crosses projects', async t => {
   const h = harness(t)
   const subscription = h.subscribe(topic('web:chat-one', 'one'))
+  assert.equal(h.client.isLive(), false)
   const source = h.open()
   await subscription.ready()
+  assert.equal(h.client.isLive(), true)
   const event: LiveEvent = { type: 'event', cursor: cursor(1), topic: topic('web:chat-one', 'one'), payload: { content: 'a' } }
   source.send(event)
   source.dispatchEvent(new Event('error'))
+  assert.equal(h.client.isLive(), false)
   assert.equal(source.closed, true)
   t.mock.timers.tick(500)
   const next = h.sources.at(-1)!
@@ -100,7 +103,9 @@ test('reconnect replays in order, deduplicates cursors and never crosses project
   next.send(event)
   next.send({ ...event, cursor: cursor(2), topic: topic('web:chat-one', 'two') })
   next.send({ ...event, cursor: cursor(3), payload: { content: 'b' } })
+  assert.equal(h.client.isLive(), false, 'Replayed events are distinguishable from fresh notifications')
   next.send({ type: 'ready', cursor: cursor(3) })
+  assert.equal(h.client.isLive(), true)
   assert.deepEqual(h.events.map(event => event.payload), [{ content: 'a' }, { content: 'b' }])
   source.send({ ...event, cursor: cursor(4) })
   assert.equal(h.events.length, 2, 'late callbacks from replaced connections are ignored')

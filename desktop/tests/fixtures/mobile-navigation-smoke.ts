@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { app, BrowserWindow } from 'electron'
@@ -9,7 +10,8 @@ app.on('window-all-closed', () => {})
 async function main() {
   await app.whenReady()
   const window = new BrowserWindow({ show: false, width: 390, height: 844,
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } })
+  window.webContents.setAudioMuted(true)
   const errors: string[] = []
   const failures: string[] = []
   const external: string[] = []
@@ -24,6 +26,7 @@ async function main() {
   const execute = (code: string) => window.webContents.executeJavaScript(code)
   const frame = () => execute('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   const resize = async (width: number, height = 844) => {
+    window.setContentSize(width, height)
     // Chromium emulation avoids Windows fractional-DPI rounding of native client sizes.
     window.webContents.enableDeviceEmulation({
       screenPosition: 'desktop', screenSize: { width, height }, deviceScaleFactor: 1,
@@ -54,6 +57,23 @@ async function main() {
   const drawerClosed = () => wait(`!${visible('[role="dialog"][aria-label="Navigation"]')}`)
   const open = async () => { await click('.mobile-menu-trigger'); await drawerOpen() }
   const more = async (label: string) => { await click('[aria-label="Conversation and document actions"]'); await text(label, '.mobile-workbench-actions button') }
+  const view = async (label: string) => { await click('[aria-label="Switch view"]'); await text(label, '.mobile-view-row button') }
+  const key = async (key: string, ctrlKey = false, shiftKey = false) => {
+    await execute(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)}, ctrlKey:${ctrlKey}, shiftKey:${shiftKey}, bubbles:true, cancelable:true}))`)
+    await frame()
+  }
+  const captureDiagnosis = async (layout: string) => {
+    for (const theme of ['light', 'dark']) {
+      await execute(`document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
+      await frame()
+      if (process.env.MOBILE_SCREENSHOT_DIR) {
+        await mkdir(process.env.MOBILE_SCREENSHOT_DIR, { recursive: true })
+        await writeFile(join(process.env.MOBILE_SCREENSHOT_DIR, `diagnosis-tabs-${layout}-${theme}.png`), (await window.webContents.capturePage()).toPNG())
+      }
+      const bounds = await execute(`({ width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, diagnosis: ${visible('.session-diagnosis')}.getBoundingClientRect().toJSON() })`)
+      assert.ok(bounds.scrollWidth <= bounds.width && bounds.diagnosis.bottom <= bounds.height + 1, `${layout}/${theme}: ${JSON.stringify(bounds)}`)
+    }
+  }
   const swipe = async (selector: string, x: number, y: number, endX: number, endY: number, count = 1, cancel = false) => {
     await execute(`(() => {
       const target = ${visible(selector)}; if (!target) throw new Error('Missing touch target');
@@ -251,10 +271,22 @@ async function main() {
     await execute(`{ const input = ${visible('input[aria-label="Session name"]')}; input.value='Renamed on phone'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await text('Save', '.session-rename button')
     await wait(`${visible('.mobile-document-title')}?.textContent.includes('Renamed on phone')`)
-    await more('Diagnosis')
+    await execute(`window.__retainedComposer = ${visible('textarea')}; window.__retainedHistory = ${visible('.chat-messages')}; window.__retainedHistory.scrollTop = 60; window.__retainedScroll = window.__retainedHistory.scrollTop; void 0;`)
+    await click('[aria-label="Switch view"]')
+    assert.equal(await execute(`[...document.querySelectorAll('.mobile-view-row button')].filter(window.__isVisible).find(el => el.textContent.trim() === 'Diagnosis').getBoundingClientRect().height >= 44`), true)
+    await text('Diagnosis', '.mobile-view-row button')
     await wait(`!!${visible('.session-diagnosis')}`)
-    await more('Back to conversation')
+    assert.equal(await execute(`!!${visible('textarea')}`), false)
+    assert.equal(await execute(`${visible('.mobile-document-title')}.textContent.trim()`), 'Diagnosis')
+    await captureDiagnosis('mobile')
+    await click('[id$="diagnosis-prompt-tab"]')
+    await execute(`window.__retainedDiagnosis = ${visible('.session-diagnosis')}; void 0;`)
+    await click('[aria-label="Conversation and document actions"]')
+    assert.equal(await execute(`[...document.querySelectorAll('.mobile-workbench-actions button')].filter(window.__isVisible).some(el => /Diagnosis|Back to conversation|Close current document/.test(el.textContent))`), false)
+    await escape()
+    await view('Renamed on phone')
     await wait(`!!${visible('.chat-history')}`)
+    assert.equal(await execute(`${visible('textarea')} === window.__retainedComposer && ${visible('.chat-messages')} === window.__retainedHistory && window.__retainedHistory.scrollTop === window.__retainedScroll`), true)
     await click('[aria-label="Message options"]')
     await wait(`!!${visible('[role="dialog"][aria-label="Message options"]')}`)
     assert.equal(await execute(`!!${visible('.mobile-message-settings')} && [...document.querySelectorAll('.context-action')].some(el => window.__isVisible(el) && el.textContent.includes('Add file') && !el.disabled)`), true)
@@ -275,11 +307,47 @@ async function main() {
     await text('notes.txt', '.workbench-explorer button')
     await wait(`${visible('.mobile-document-title')}?.textContent.includes('notes.txt')`)
     assert.match(await execute(`${visible('.file-document')}.innerText`), /Synthetic document body/)
+    await view('Diagnosis')
+    assert.equal(await execute(`${visible('.session-diagnosis')} === window.__retainedDiagnosis && ${visible('[id$="diagnosis-prompt-tab"]')}.getAttribute('aria-selected') === 'true'`), true, 'Opening Diagnosis directly from a file preserves its selected section')
+    await view('notes.txt')
     await click('[aria-label="Switch view"]')
     await wait(`!!${visible('[role="dialog"][aria-label="Open views"]')}`)
     assert.equal(await execute(`!!${visible('[aria-label="Close notes.txt"]')}`), true)
     await text('Renamed on phone', '.mobile-view-row button')
     await wait(`${visible('textarea')}?.value === 'Unsent investigation draft'`)
+    await resize(1100)
+    for (const theme of ['light', 'dark']) {
+      await execute(`document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
+      assert.deepEqual(await execute(`[...document.querySelectorAll('.document-tablist [role="tab"]')].filter(window.__isVisible).map(el => el.textContent.trim())`), ['Conversation', 'Diagnosis', 'notes.txt'])
+      assert.equal(await execute(`(() => {
+        const a = ${visible('.conversation-tab button')}.getBoundingClientRect(), b = ${visible('.diagnosis-tab button')}.getBoundingClientRect();
+        return a.height >= 40 && b.height >= 40 && Math.abs(a.top - b.top) < 1 && Math.abs(a.right - b.left) <= 1
+          && getComputedStyle(${visible('.diagnosis-tab button')}).borderRadius === '0px'
+          && !document.querySelector('.diagnosis-toggle');
+      })()`), true, `${theme}: fixed square tabs share a baseline and a full-height target`)
+    }
+    await click('.document-tabs [role="tab"]')
+    await click('.diagnosis-tab button')
+    assert.equal(await execute(`${visible('.session-diagnosis')} === window.__retainedDiagnosis && ${visible('[id$="diagnosis-prompt-tab"]')}.getAttribute('aria-selected') === 'true'`), true)
+    await click('[id$="diagnosis-trace-tab"]')
+    await captureDiagnosis('desktop')
+    await click('.conversation-tab button')
+    await key('ArrowRight')
+    assert.equal(await execute(`${visible('.diagnosis-tab button')}.getAttribute('aria-selected')`), 'true')
+    assert.equal(await execute(`document.activeElement === ${visible('.diagnosis-tab button')}`), true)
+    await key('Delete')
+    await key('w', true)
+    assert.equal(await execute(`${visible('.diagnosis-tab button')}.getAttribute('aria-selected')`), 'true', 'The pinned diagnosis view cannot be closed')
+    await key('Tab', true)
+    assert.equal(await execute(`${visible('.document-tabs [role="tab"]')}.getAttribute('aria-selected')`), 'true')
+    await key('Tab', true, true)
+    assert.equal(await execute(`${visible('.diagnosis-tab button')}.getAttribute('aria-selected')`), 'true')
+    await key('w', true, true)
+    assert.deepEqual(await execute(`[...document.querySelectorAll('.document-tablist [role="tab"]')].filter(window.__isVisible).map(el => el.textContent.trim())`), ['Conversation', 'Diagnosis'])
+    assert.equal(await execute(`${visible('.diagnosis-tab button')}.getAttribute('aria-selected')`), 'true', 'Close all removes files without closing or deselecting Diagnosis')
+    assert.equal(await execute(`[...document.querySelectorAll('.document-tablist [role="tab"]')].filter(window.__isVisible).every(tab => document.getElementById(tab.getAttribute('aria-controls'))?.getAttribute('aria-labelledby') === tab.id)`), true)
+    await key('Home')
+    assert.equal(await execute(`${visible('textarea')} === window.__retainedComposer && window.__retainedComposer.value === 'Unsent investigation draft'`), true)
     for (const width of [700, 701, 1100, 390]) {
       await resize(width)
       const mobile = width <= 700
@@ -293,6 +361,12 @@ async function main() {
         assert.equal(await execute(`getComputedStyle(${visible('.chat-messages')}).scrollbarGutter`), 'stable both-edges')
       }
     }
+    await execute(`window.__mobileFixture.router.push('/projects/work/chat')`)
+    await wait(`!!${visible('.draft-heading')}`)
+    await click('[aria-label="Switch view"]')
+    assert.equal(await execute(`[...document.querySelectorAll('.mobile-view-row button')].filter(window.__isVisible).some(el => el.textContent.trim() === 'Diagnosis')`), false, 'Blank conversations do not expose Diagnosis')
+    assert.equal(await execute(`!!${visible('.diagnosis-tab')}`), false)
+    await escape()
     assert.deepEqual(await execute('window.__mobileFixture.errors'), [], 'No uncaught page errors')
     assert.deepEqual(errors, [], 'No renderer console errors')
     assert.deepEqual(external, [], 'No external network requests')

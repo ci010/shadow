@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
-import { documentTabKeys, KNOWLEDGE_TAB_KEY, openKnowledgeTab } from './file-workbench.ts'
+import { documentTabKeys, DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, openKnowledgeTab, withDiagnosisTab } from './file-workbench.ts'
 
 const file = (path: string) => ({ path, entry: { name: path.split('/').at(-1)!, ext: '.md', type: 'file' as const, size: 12, mtime: null } })
 test('opening files retains existing tabs, deduplicates by full path and selects without replacing state', () => {
@@ -53,6 +53,28 @@ const available = {
   active: true, keyboardActive: true, visible: true, explorerEnabled: true,
   overlayOpen: false, composing: false,
 }
+
+test('optional Diagnosis is a permanent peer of Conversation, including keyboard navigation', () => {
+  const state = withDiagnosisTab(openKnowledgeTab(openFileTab({ files: [], selected: '' }, file('notes.md'))), true)
+  assert.deepEqual(documentTabKeys(state), ['', DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, 'notes.md'])
+  assert.equal(cycleDocumentTab({ ...state, selected: '' }, 1, available), DIAGNOSIS_TAB_KEY)
+  assert.equal(cycleDocumentTab({ ...state, selected: DIAGNOSIS_TAB_KEY }, 1, available), KNOWLEDGE_TAB_KEY)
+  const selected = { ...state, selected: DIAGNOSIS_TAB_KEY }
+  assert.equal(selectedFileToClose(selected, available), undefined)
+  assert.equal(closeFileTab(selected, DIAGNOSIS_TAB_KEY), selected)
+  assert.deepEqual(closeAllFileTabs(selected), { files: [], diagnosis: true, selected: DIAGNOSIS_TAB_KEY })
+  assert.equal(closeOtherFileTabs(selected, 'notes.md').diagnosis, true)
+  assert.equal(closeOtherFileTabs(selected, KNOWLEDGE_TAB_KEY).diagnosis, true)
+  assert.equal(closeAllFileTabs(state).selected, '')
+  const pinned = closeAllFileTabs(selected)
+  assert.equal(canCloseAllDocuments(pinned, available), false)
+  assert.equal(cycleDocumentTab(pinned, 1, available), '')
+  assert.equal(cycleDocumentTab({ ...pinned, selected: '' }, -1, available), DIAGNOSIS_TAB_KEY)
+  const draft = withDiagnosisTab(pinned, false)
+  assert.deepEqual(draft, { files: [], selected: '' })
+  assert.deepEqual(documentTabKeys(draft), [''])
+  assert.equal(withDiagnosisTab({ ...state, selected: 'notes.md' }, false).selected, 'notes.md')
+})
 
 test('Knowledge shares document navigation and closing without impersonating a file or discarding other tabs', () => {
   const initial = openFileTab({ files: [], selected: '' }, file('notes.md'))

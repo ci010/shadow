@@ -21,7 +21,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/nodes', name: 'nodes', component: NodesView },
   { path: '/providers', name: 'providers', redirect: '/settings/providers' },
   { path: '/settings/channels', redirect: '/projects/default/settings/bots' },
-  { path: '/settings/:section(providers|models|web-search)?', name: 'settings', component: SettingsView },
+  { path: '/settings/:section(providers|models|web-search|sounds)?', name: 'settings', component: SettingsView },
   { path: '/approvals', redirect: '/nodes' },
   { path: '/agents/:agentName?', redirect: to => ({ name: 'agents', params: { projectId: 'default', agentName: to.params.agentName } }) },
   { path: '/projects/:projectId/agents/:agentName?', name: 'agents', component: AgentsTab },

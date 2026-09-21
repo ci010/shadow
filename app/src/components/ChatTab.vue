@@ -31,8 +31,10 @@
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
+      :diagnosis-enabled="!!activeSessionId"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
+      @diagnosis-visible="diagnosisVisibilityChanged"
       @knowledge-navigation="knowledgeNavigation"
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
@@ -40,7 +42,6 @@
       <template v-if="activeSessionId">
         <button @click="close(); showMobileSessionDetails()">Session details</button>
         <button v-if="installation.uiScopes.includes('chat:write')" @click="close(); renameMobileSession()">Rename session</button>
-        <button @click="close(); workbench?.showConversation(); switchPanel(activePanel === 'diagnosis' ? 'conversation' : 'diagnosis')">{{ activePanel === 'diagnosis' ? 'Back to conversation' : 'Diagnosis' }}</button>
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">Back to owning execution</button>
         <details v-if="historyMarkers.length && conversationDocumentVisible && activePanel === 'conversation'" class="mobile-history">
           <summary>Message history</summary>
@@ -76,16 +77,7 @@
             :name="activeSessionName" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :can-rename="installation.uiScopes.includes('chat:write')" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
-          <button :id="domId('diagnosis-toggle')" class="diagnosis-toggle" :aria-controls="domId('diagnosis-panel')"
-            :aria-pressed="activePanel === 'diagnosis'" :title="activePanel === 'diagnosis' ? 'Back to conversation' : 'Open diagnosis'"
-            @click="switchPanel(activePanel === 'diagnosis' ? 'conversation' : 'diagnosis')">
-            <span class="i-lucide-activity" aria-hidden="true" />Diagnosis
-          </button>
         </div>
-        <SessionDiagnosis v-if="diagnosisOpened" v-show="activePanel === 'diagnosis'" :id="domId('diagnosis-panel')" role="region" aria-label="Session diagnosis" :id-prefix="embedded || managed ? paneId : undefined"
-          :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
-          :active="visible && conversationDocumentVisible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
-          :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
 
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history" :aria-busy="loadingHistory">
@@ -207,6 +199,12 @@
         </div>
       </template>
     </div>
+    <template #diagnosis>
+      <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" aria-label="Session diagnosis" :id-prefix="embedded || managed ? paneId : undefined"
+        :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
+        :active="visible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
+        :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
+    </template>
     <template #composer>
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible }">
         <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
@@ -1017,7 +1015,7 @@ const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
 const knowledgeDocumentVisible = ref(false)
-const composerVisible = computed(() => !knowledgeDocumentVisible.value && (!conversationDocumentVisible.value || activePanel.value === 'conversation'))
+const composerVisible = computed(() => !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
 function knowledgeNavigation(active: boolean, entryId?: string) {
   knowledgeDocumentVisible.value = active
   emit('knowledge-navigation', active, entryId)
@@ -1026,7 +1024,11 @@ const canQuoteSelection = computed(() => (!activeSessionId.value || isDirectChat
 function switchPanel(panel: ConversationPanel): void {
   activePanel.value = panel
   if (panel === 'diagnosis') diagnosisOpened.value = true
-  else if (activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && !historyRequest) void loadReadonlySession(true)
+  else if (conversationDocumentVisible.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && !historyRequest) void loadReadonlySession(true)
+}
+function diagnosisVisibilityChanged(visible: boolean) {
+  const panel = visible ? 'diagnosis' : 'conversation'
+  if (panel !== activePanel.value) switchPanel(panel)
 }
 interface ChatMsg {
   role: string
@@ -2411,11 +2413,6 @@ function resendLastMessage() {
   min-height: 0;
   height: 100%;
 }
-.diagnosis-toggle { display: inline-flex; align-items: center; flex-shrink: 0; gap: 6px; min-height: 32px; padding: 6px 8px; margin-right: 12px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
-.diagnosis-toggle > span { display: block; width: 16px; height: 16px; }
-.diagnosis-toggle:hover { background: var(--c-bg-muted); color: var(--c-text); }
-.diagnosis-toggle[aria-pressed="true"] { background: var(--c-selection-bg); color: var(--c-blue); }
-.diagnosis-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .chat-panel { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .conversation-heading-row { display: flex; align-items: center; flex-shrink: 0; min-width: 0; }
 .conversation-heading-row > :deep(.session-heading) { flex: 1; }

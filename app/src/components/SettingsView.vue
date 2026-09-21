@@ -12,6 +12,7 @@
       <div class="settings-section">
         <ModelDefaultsForm v-if="section === 'models'" :api-base="apiBase" scope="app" />
         <WebSearchSettings v-if="section === 'web-search'" :api-base="apiBase" />
+        <SoundSettings v-if="section === 'sounds'" />
         <ProvidersView v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
           @configured="$emit('configured')" @retry="$emit('retry')" @close="$emit('close')" />
       </div>
@@ -26,6 +27,7 @@ import type { ProviderSetupStatus } from '../provider-setup.ts'
 import ProvidersView from './ProvidersView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
 import WebSearchSettings from './WebSearchSettings.vue'
+import SoundSettings from './SoundSettings.vue'
 
 const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean }>()
 defineEmits<{ configured: []; retry: []; close: [] }>()
@@ -34,6 +36,7 @@ const sections = [
   { id: 'providers', label: 'Providers', icon: 'i-lucide-cpu' },
   { id: 'models', label: 'Models', icon: 'i-lucide-sliders-horizontal' },
   { id: 'web-search', label: 'Web search', icon: 'i-lucide-search' },
+  { id: 'sounds', label: 'Sounds', icon: 'i-lucide-volume-2' },
 ]
 const section = computed(() => sections.find(item => item.id === route.params.section)?.id ?? 'providers')
 </script>

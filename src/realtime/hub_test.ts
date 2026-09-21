@@ -67,6 +67,25 @@ test('shared route authorizes before revealing projects and rejects unknown/dupl
   } finally { hub.close() }
 })
 
+test('session invalidations optionally carry a completed turn identity without changing ordinary refresh events', async () => {
+  const hub = new RealtimeHub()
+  const publisher = hub.registerProject('one')
+  const stream = read(hub.connect([{ kind: 'sessions', projectId: 'one' }], new AbortController().signal))
+  try {
+    await stream.next()
+    await stream.next()
+    publisher.invalidateSessions('web:chat', 'completed-turn')
+    const finished = await stream.next()
+    assert.equal(finished.type, 'event')
+    if (finished.type !== 'event') throw new Error('Expected session event')
+    assert.deepEqual(finished.payload, { event: 'invalidate', sessionId: 'web:chat', completedTurnId: 'completed-turn' })
+    publisher.invalidateSessions('web:chat')
+    const ordinary = await stream.next()
+    if (ordinary.type !== 'event') throw new Error('Expected session event')
+    assert.deepEqual(ordinary.payload, { event: 'invalidate', sessionId: 'web:chat' })
+  } finally { await stream.cancel(); hub.close() }
+})
+
 test('ordered replay excludes already consumed cursor and isolates projects', async () => {
   const hub = new RealtimeHub()
   const one = hub.registerProject('one')
