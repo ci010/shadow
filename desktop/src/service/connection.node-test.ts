@@ -1,21 +1,26 @@
 import assert from 'node:assert/strict'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { loadServiceConnection, parseServiceConnectionDescriptor, selectServiceConnectionPath } from './connection.js'
 
+const controlPath = resolve('fixtures', 'Shadow Service', 'control')
+const connectionPath = join(controlPath, 'connection.v1.json')
 const descriptor = {
   version: 1, serviceName: 'ShadowService', role: 'main',
   apiBase: 'http://127.0.0.1:18800', port: 18800,
-  credentialPath: 'C:\\ProgramData\\ShadowService\\control\\launch-token',
-  configPath: 'C:\\ProgramData\\ShadowService\\control\\runtime-config.v1.json',
+  credentialPath: join(controlPath, 'launch-token'),
+  configPath: join(controlPath, 'runtime-config.v1.json'),
 }
 
 test('service attachment requires explicit absolute opt-in and rejects conflicting selections', () => {
   assert.equal(selectServiceConnectionPath(undefined, undefined), undefined)
-  assert.equal(selectServiceConnectionPath(descriptor.configPath, undefined), descriptor.configPath)
+  assert.equal(selectServiceConnectionPath(connectionPath, undefined), connectionPath)
+  assert.equal(selectServiceConnectionPath(undefined, connectionPath), connectionPath)
+  assert.equal(selectServiceConnectionPath(connectionPath, connectionPath), connectionPath)
   assert.throws(() => selectServiceConnectionPath('', undefined), /absolute/)
   assert.throws(() => selectServiceConnectionPath('relative.json', undefined), /absolute/)
   assert.throws(() => selectServiceConnectionPath('\\\\server\\share\\connection.json', undefined), /absolute/)
-  assert.throws(() => selectServiceConnectionPath('C:\\a', 'C:\\b'), /Conflicting/)
+  assert.throws(() => selectServiceConnectionPath(connectionPath, join(controlPath, 'other.json')), /Conflicting/)
 })
 
 test('validates exact versioned service metadata and loopback/port/role binding', () => {
@@ -36,12 +41,12 @@ test('validates exact versioned service metadata and loopback/port/role binding'
 test('loads credentials only in main process and never echoes sensitive malformed input', async () => {
   const secret = 'a'.repeat(43)
   const read = async (path: string) => path === descriptor.credentialPath ? secret : JSON.stringify(descriptor)
-  assert.deepEqual(await loadServiceConnection('C:\\connection.json', read), { descriptor, launchToken: secret })
+  assert.deepEqual(await loadServiceConnection(connectionPath, read), { descriptor, launchToken: secret })
   for (const token of ['', 'short', 'secret\r\nheader: value', JSON.stringify({ secret })]) {
     await assert.rejects(
-      loadServiceConnection('C:\\connection.json', async (path) => path === descriptor.credentialPath ? token : JSON.stringify(descriptor)),
+      loadServiceConnection(connectionPath, async (path) => path === descriptor.credentialPath ? token : JSON.stringify(descriptor)),
       (error: Error) => !error.message.includes(secret) && error.message.includes('could not be loaded'),
     )
   }
-  await assert.rejects(loadServiceConnection('C:\\missing.json', async () => { throw new Error(secret) }), (error: Error) => !error.message.includes(secret))
+  await assert.rejects(loadServiceConnection(join(controlPath, 'missing.json'), async () => { throw new Error(secret) }), (error: Error) => !error.message.includes(secret))
 })

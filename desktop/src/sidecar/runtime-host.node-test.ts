@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   createRuntimeLaunchToken,
@@ -15,11 +16,12 @@ import type {
   SidecarSupervisor,
 } from './supervisor.js'
 
+const fixtureRoot = resolve('fixtures', 'Shadow Desktop')
 const paths = {
-  executablePath: 'C:\\Program Files\\Shadow\\Shadow.exe',
-  appPath: 'C:\\repo\\desktop',
-  resourcesPath: 'C:\\Program Files\\Shadow\\resources',
-  userDataPath: 'C:\\Users\\test\\AppData\\Roaming\\Shadow',
+  executablePath: join(fixtureRoot, 'installed', 'shadow'),
+  appPath: join(fixtureRoot, 'repo', 'desktop'),
+  resourcesPath: join(fixtureRoot, 'installed', 'resources'),
+  userDataPath: join(fixtureRoot, 'user-data'),
   packaged: true,
 } as const
 
@@ -70,15 +72,13 @@ function createHost(
 test('resolves packaged and development paths only from explicit inputs', () => {
   assert.deepEqual(resolveRuntimePaths(paths), {
     executablePath: paths.executablePath,
-    entryPath: 'C:\\Program Files\\Shadow\\resources\\backend\\dist\\src\\index.js',
-    configPath:
-      'C:\\Users\\test\\AppData\\Roaming\\Shadow\\bootstrap\\runtime-config.v1.json',
+    entryPath: join(paths.resourcesPath, 'backend', 'dist', 'src', 'index.js'),
+    configPath: join(paths.userDataPath, 'bootstrap', 'runtime-config.v1.json'),
   })
   assert.deepEqual(resolveRuntimePaths({ ...paths, packaged: false }), {
     executablePath: paths.executablePath,
-    entryPath: 'C:\\repo\\dist\\src\\index.js',
-    configPath:
-      'C:\\Users\\test\\AppData\\Roaming\\Shadow\\bootstrap\\runtime-config.v1.json',
+    entryPath: join(fixtureRoot, 'repo', 'dist', 'src', 'index.js'),
+    configPath: join(paths.userDataPath, 'bootstrap', 'runtime-config.v1.json'),
   })
 })
 
@@ -114,9 +114,8 @@ test('constructs one authenticated launch, publishes after ready, and clears on 
   assert.deepEqual(supervisor.starts, [{
     role: 'main',
     executablePath: paths.executablePath,
-    entryPath: 'C:\\Program Files\\Shadow\\resources\\backend\\dist\\src\\index.js',
-    configPath:
-      'C:\\Users\\test\\AppData\\Roaming\\Shadow\\bootstrap\\runtime-config.v1.json',
+    entryPath: join(paths.resourcesPath, 'backend', 'dist', 'src', 'index.js'),
+    configPath: join(paths.userDataPath, 'bootstrap', 'runtime-config.v1.json'),
     launchToken: 'launch-token',
     port: 43123,
     localExecutor: true,
@@ -131,6 +130,27 @@ test('constructs one authenticated launch, publishes after ready, and clears on 
   await host.stop()
   assert.equal(supervisor.stopCount, 1)
   assert.equal(authorizations.at(-1), null)
+})
+
+test('development launch uses the repository backend and explicit user data directory', async () => {
+  const supervisor = new DeferredSupervisor()
+  const host = new RuntimeHost({
+    paths: { ...paths, packaged: false },
+    supervisorFactory: () => supervisor,
+    tokenFactory: () => 'launch-token',
+  })
+  const starting = host.start({ role: 'main', port: 43123 })
+  assert.deepEqual(supervisor.starts, [{
+    role: 'main',
+    executablePath: paths.executablePath,
+    entryPath: join(fixtureRoot, 'repo', 'dist', 'src', 'index.js'),
+    configPath: join(paths.userDataPath, 'bootstrap', 'runtime-config.v1.json'),
+    launchToken: 'launch-token',
+    port: 43123,
+  }])
+  supervisor.ready()
+  await starting
+  await host.stop()
 })
 
 test('rejects non-loopback readiness and clears authorization after failed start', async () => {

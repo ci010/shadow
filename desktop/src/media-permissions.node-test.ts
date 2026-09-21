@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { resolve } from 'node:path'
 import test from 'node:test'
 import type { BrowserWindow, IpcMainInvokeEvent, Session } from 'electron'
 import { MEDIA_CAPTURE_CHANNELS, DISPLAY_PICKER_EVENT, MAX_MEDIA_CAPTURE_DURATION_MS, parseMediaCaptureGrant, parseDisplayPickerResponse, parseDisplayPickerState, type DisplayPickerState } from './media-capture-contract.js'
@@ -9,7 +10,7 @@ import { installMediaPermissions, isTrustedMediaUrl, MediaCaptureGrants } from '
 import { resolveRendererTarget, type RendererTarget } from './renderer-target.js'
 
 const target = resolveRendererTarget({ rendererDistPath: 'unused', developmentUrl: 'http://127.0.0.1:5173/' })
-const fileTarget = resolveRendererTarget({ rendererDistPath: 'C:\\shadow\\app-dist' })
+const fileTarget = resolveRendererTarget({ rendererDistPath: resolve('fixtures', 'Shadow Desktop', 'app-dist') })
 const valid = { runId: 'io-run-1', capabilities: ['microphone', 'screen'], durationMs: 1000 }
 type Check = NonNullable<Parameters<Session['setPermissionCheckHandler']>[0]>
 type Request = NonNullable<Parameters<Session['setPermissionRequestHandler']>[0]>

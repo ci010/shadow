@@ -32,6 +32,8 @@ dependency deployment, packaging, and `test:packaged`, in that order. A failure
 stops the pipeline. `test:release` covers build/packaging helpers, service-mode
 contracts, Vite integration and the Electron lifecycle suite; it is not a
 replacement for the broader `pnpm test` feature suite.
+The desktop test glob is quoted so Node discovers root and nested tests
+consistently on Windows, macOS and Linux instead of relying on shell expansion.
 
 Nested pnpm commands reuse `npm_execpath`: JavaScript entrypoints run through
 Node, while native executables (including extensionless macOS/Linux pnpm 12

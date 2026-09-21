@@ -125,7 +125,7 @@ test('Vite never serves a local PIN file through filesystem or raw module URLs',
   }
 })
 
-test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes page', async (t) => {
+test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes page', { timeout: 90_000 }, async (t) => {
   const backend = createHttpServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify({ path: request.url }))
@@ -160,7 +160,8 @@ test('Vite 8 transforms Vue and proxies inventory without intercepting the Nodes
   await vite.listen()
   const base = vite.resolvedUrls?.local[0]
   assert.ok(base)
-  const signal = AbortSignal.timeout(15_000)
+  // Cold UnoCSS/Vue transforms share this budget on slower native CI runners.
+  const signal = AbortSignal.timeout(60_000)
   const icons = await fetch(new URL('/@id/__x00__/__uno.css', base), { signal })
   assert.equal(icons.status, 200)
   const iconCss = await icons.text()
