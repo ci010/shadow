@@ -41,10 +41,12 @@ async function main() {
   }
   const visible = (selector: string) => `window.__visible(${JSON.stringify(selector)})`
   const click = async (selector: string) => {
+    await wait(`!!${visible(selector)}`)
     await execute(`(() => { const el = ${visible(selector)}; if (!el) throw new Error('Missing visible control: ' + ${JSON.stringify(selector)}); el.focus(); el.click(); })()`)
     await frame()
   }
   const text = async (label: string, scope = 'button') => {
+    await wait(`[...document.querySelectorAll(${JSON.stringify(scope)})].some(el => window.__isVisible(el) && el.textContent.trim() === ${JSON.stringify(label)})`)
     await execute(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(scope)})].find(el => window.__isVisible(el) && el.textContent.trim() === ${JSON.stringify(label)});
       if (!el) throw new Error('Missing visible button: ' + ${JSON.stringify(label)}); el.focus(); el.click(); })()`)
     await frame()
@@ -240,7 +242,13 @@ async function main() {
     assert.ok(await execute(`${visible('.history-list .history-marker')}.getBoundingClientRect().height >= 44`))
     await click('.history-list .history-marker')
     await wait(`!${visible('.mobile-sheet[aria-label="Conversation and document actions"]')}`)
-    await wait(`Math.abs(${visible('[data-msg-idx="0"]')}.getBoundingClientRect().top - ${visible('.chat-messages')}.getBoundingClientRect().top) < 1`)
+    await wait(`(() => {
+      const container = ${visible('.chat-messages')}, message = ${visible('[data-msg-idx="0"]')};
+      const bounds = container.getBoundingClientRect(), target = message.getBoundingClientRect();
+      const aligned = container.scrollTop + target.top - bounds.top;
+      const clamped = Math.max(0, Math.min(container.scrollHeight - container.clientHeight, aligned));
+      return Math.abs(container.scrollTop - clamped) < 1 && target.top >= bounds.top - 1 && target.top < bounds.bottom;
+    })()`)
     await execute(`{ const input = ${visible('textarea')}; input.value='Unsent investigation draft'; input.dispatchEvent(new Event('input',{bubbles:true})); }`)
     await open()
     await text('Nodes', '.mobile-global-navigation button')

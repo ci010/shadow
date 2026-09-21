@@ -63,12 +63,16 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - name: Install Linux renderer test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes xvfb xauth libgtk-3-0 libnss3 libasound2 libgbm1
       - run: pnpm install --frozen-lockfile
+      - name: Prepare Electron before parallel renderer tests
+        run: pnpm --filter @shadow/desktop exec node -e "console.log(require('electron'))"
       - run: pnpm typecheck
       - run: pnpm mobile:build
       - name: Run mobile tests with an actual virtual display
@@ -99,6 +103,8 @@ jobs:
           node-version: '24'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Prepare Electron before parallel renderer tests
+        run: pnpm --filter @shadow/desktop exec node -e "console.log(require('electron'))"
       - run: pnpm typecheck
       - run: pnpm mobile:build
       - run: pnpm test:mobile
@@ -138,6 +144,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: pnpm install --frozen-lockfile
       - run: pnpm mobile:build
