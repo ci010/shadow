@@ -268,6 +268,26 @@ h3 {
   cursor: wait;
 }
 
+.node-removal {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+}
+.node-removal p, .removed-devices p { max-width: 70ch; margin-top: 0.5rem; color: var(--c-text-secondary); }
+.node-removal-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; grid-column: 1 / -1; }
+.node-removal .node-removal-actions { margin-top: 0.75rem; }
+.remove-confirm { color: var(--c-error); }
+.removed-devices { margin-top: 1.25rem; }
+.removed-devices summary { cursor: pointer; }
+.removed-devices summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
+.removed-devices ul { padding: 0; list-style: none; }
+.removed-devices li { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; padding: 0.75rem 0; border-bottom: 1px solid var(--c-border); }
+.removed-devices code { flex-basis: 100%; }
+@media (max-width: 680px), (pointer: coarse) {
+  .node-removal-actions button, .removed-devices summary { min-height: 44px; }
+}
+
 .node-capabilities,
 .node-capabilities-empty {
   min-width: 0;

@@ -118,8 +118,19 @@ delete identity data as an ordinary troubleshooting step.
 
 **Turn off listener** stops this listener and disconnects its attached
 Children. It is not device revocation: the trusted identity remains persisted,
-so re-enabling the same endpoint permits reconnect. No revocation UI is
-claimed by this milestone.
+so re-enabling the same endpoint permits reconnect.
+
+To revoke a Child, use **Nodes > Remove device** in the authorized Main desktop
+and confirm the device name. Main saves the revocation, disconnects that device,
+and rejects its existing credentials on reconnect, including after Main restarts.
+Removed devices leave the active list and remain under **Removed devices**.
+Conversation history and files on Child are retained. In-flight remote work may
+be interrupted; disconnecting does not guarantee that OS commands already
+started on Child have stopped.
+
+If removal cannot be saved, the device is still revoked in memory and disconnected.
+Retry removal before restarting Main so the revocation becomes durable.
+Removal is not a reset/re-pair flow; that recovery UI remains unimplemented.
 
 ## Troubleshooting
 

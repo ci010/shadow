@@ -109,6 +109,7 @@ test('device approval needs owner authentication and identity confirmation, not 
   nodeAdministrationApiPlugin({
     registry,
     authorize: () => authorized,
+    revoke: async () => { throw new Error('Unexpected revocation') },
     approve: async (approval, time) => {
       approvals++
       registry.approve(approval, time)

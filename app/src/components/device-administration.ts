@@ -126,6 +126,11 @@ export function validateDeviceApproval(value: unknown, pending: PendingDevice): 
     || value.nodeId !== pending.nodeId || value.credentialId !== pending.credentialId) throw invalid()
 }
 
+export async function revokeDevice(apiBase: string, nodeId: string, signal: AbortSignal): Promise<void> {
+  const value = await deviceAdminRequest(apiBase, `/nodes/v1/${encodeURIComponent(nodeId)}/revoke`, signal, 'POST')
+  if (!record(value) || value.version !== 1 || value.nodeId !== nodeId || value.state !== 'revoked') throw invalid()
+}
+
 export async function deviceAdminRequest(
   apiBase: string,
   path: string,
@@ -145,6 +150,10 @@ export async function deviceAdminRequest(
   const json = response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'application/json'
   if (response.status === 404 && path.includes('/pending/')) {
     throw new Error('This pairing request is no longer pending. Refresh devices before trying again.')
+  }
+  if (path.endsWith('/revoke')) {
+    if (response.status === 404) throw new Error('This device or the removal endpoint is unavailable. Refresh devices and check that Main is up to date.')
+    if (response.status === 503) throw new Error('Device removal could not be saved or completed. It may already be disconnected. Retry removal before restarting Main.')
   }
   if (response.status === 404 || response.status === 501 || (response.ok && !json)) {
     throw new Error('Device administration is unavailable. Restart Main after updating Shadow, then retry.')

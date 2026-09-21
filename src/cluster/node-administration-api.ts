@@ -14,6 +14,7 @@ export interface NodeAdministrationApiOptions {
     approval: ApprovalV1,
     now: Date,
   ) => Promise<DeviceAuthenticationV1>
+  readonly revoke: (nodeId: string, now: Date) => Promise<void>
   readonly now?: () => Date
   readonly maxBodyBytes?: number
 }
@@ -27,6 +28,22 @@ export function nodeAdministrationApiPlugin(
     throw new TypeError('maxBodyBytes must be a positive safe integer')
   }
   return (app: Hono) => {
+    app.post('/nodes/v1/:nodeId/revoke', async (context) => {
+      if (!await options.authorize(context.req.raw)) return unauthorized(context)
+      const nodeId = context.req.param('nodeId')
+      if (!isClusterIdentifier(nodeId)) return context.json({ error: 'invalid_node_id' }, 400)
+      if (!options.registry.listNodes().some(node => node.nodeId === nodeId)) {
+        return context.json({ error: 'node_not_found' }, 404)
+      }
+      try {
+        await options.revoke(nodeId, now())
+        return context.json({ version: 1, nodeId, state: 'revoked' }, 200, { 'Cache-Control': 'no-store' })
+      } catch (error) {
+        console.error('[cluster] Device removal could not be completed', error)
+        return context.json({ error: 'node_revocation_failed' }, 503, { 'Cache-Control': 'no-store' })
+      }
+    })
+
     app.get('/nodes/v1/pending', async (context) => {
       if (!await options.authorize(context.req.raw)) return unauthorized(context)
       return context.json({

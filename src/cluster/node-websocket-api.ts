@@ -57,6 +57,7 @@ export interface NodeWebSocketApi extends RemoteNodeJobDispatcher {
   readonly activeSessionCount: number
   isNodeConnected(nodeId: string): boolean
   hasAdvertisedCapability(nodeId: string, capabilityId: string): boolean
+  closeNode(nodeId: string, reason: string): Promise<void>
   closeAll(reason?: string): Promise<void>
 }
 
@@ -69,7 +70,7 @@ const shutdownCloseInfo = (reason: string): DuplexCloseInfo => ({
 export function createNodeWebSocketApi(
   options: NodeWebSocketApiOptions,
 ): NodeWebSocketApi {
-  const sessions = new Set<MainNodeSession>()
+  const sessions = new Map<MainNodeSession, string>()
   const sessionsByNode = new Map<string, MainNodeSession>()
   const jobs = new Map<string, {
     readonly nodeId: string
@@ -117,7 +118,7 @@ export function createNodeWebSocketApi(
       }
 
       const attach = (socket: WebSocket) => {
-        if (closing) {
+        if (closing || options.registry.getNodeState(verified.authentication.nodeId) === 'revoked') {
           socket.close(1001, 'Main node listener is shutting down')
           return
         }
@@ -126,8 +127,8 @@ export function createNodeWebSocketApi(
           options.transport,
         )
         const session = createSession(transport, verified.authentication)
-        sessions.add(session)
         const nodeId = verified.authentication.nodeId
+        sessions.set(session, nodeId)
         const previous = sessionsByNode.get(nodeId)
         sessionsByNode.set(nodeId, session)
         if (previous && previous !== session) {
@@ -178,11 +179,18 @@ export function createNodeWebSocketApi(
     hasAdvertisedCapability(nodeId, capabilityId): boolean {
       return sessionsByNode.get(nodeId)?.hasAdvertisedCapability?.(capabilityId) === true
     },
+    async closeNode(nodeId, reason): Promise<void> {
+      sessionsByNode.delete(nodeId)
+      await Promise.all([...sessions].filter(([, id]) => id === nodeId).map(async ([session]) => {
+        disconnectSessionJobs(session, reason)
+        await session.close({ code: 'revoked', reason, clean: true })
+      }))
+    },
     closeAll(reason = 'Main node listener is shutting down'): Promise<void> {
       if (closePromise) return closePromise
       closing = true
       closePromise = Promise.all(
-        [...sessions].map((session) =>
+        [...sessions.keys()].map((session) =>
           session.close(shutdownCloseInfo(reason))
         ),
       ).then(() => undefined)

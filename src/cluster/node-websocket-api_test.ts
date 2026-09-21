@@ -172,6 +172,22 @@ test('node WebSocket route fails closed after shutdown begins', async () => {
   assertEquals(await response.json(), { error: 'cluster_stopping' })
 })
 
+test('removing one node closes its session without stopping the listener', async () => {
+  const { api, app, session } = createApi()
+  const connect = () => app.request('/cluster/v1/node', {
+    headers: { Upgrade: 'websocket', Authorization: 'Proof valid' },
+  })
+  await connect()
+  await api.closeNode('unrelated-node', 'not this device')
+  assertEquals(session.closes, [])
+  assertEquals(api.isNodeConnected('node-1'), true)
+  await api.closeNode('node-1', 'Device removed by Main')
+  assertEquals(api.isNodeConnected('node-1'), false)
+  assertEquals(session.closes, [{ code: 'revoked', reason: 'Device removed by Main', clean: true }])
+  assertEquals((await connect()).status, 200)
+  await api.closeAll()
+})
+
 test('node WebSocket owner routes jobs by node and disconnects owned work', async () => {
   const { api, app, session } = createApi()
   await app.request('/cluster/v1/node', {

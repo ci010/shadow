@@ -61,6 +61,7 @@ export interface MainCluster {
   readonly workdirCapabilityLookup: WorkdirCapabilityLookup
   getNodeInventory(): NodeInventoryResponse
   approve(approval: ApprovalV1, now?: Date): Promise<DeviceAuthenticationV1>
+  revoke(nodeId: string, now?: Date): Promise<void>
   closeNodeConnections(reason?: string): Promise<void>
   save(now?: Date): Promise<void>
 }
@@ -146,6 +147,15 @@ export async function createMainCluster(
     await persistence.save(approvalTime)
     return authentication
   }
+  const revoke = async (nodeId: string, revokedAt = now()): Promise<void> => {
+    if (nodeId === options.localNodeInventory?.().nodeId) throw new TypeError('Main cannot remove itself')
+    const node = registry.listNodes().find(node => node.nodeId === nodeId)
+    if (!node) throw new TypeError('Device is not registered')
+    const reason = 'Device removed by Main'
+    if (node.state !== 'revoked') registry.revoke(node, reason, revokedAt)
+    // Fail closed in memory, disconnect even if persistence fails, and allow retry.
+    await Promise.all([persistence.save(revokedAt), nodeApi.closeNode(nodeId, reason)])
+  }
   let stopping = false
   const stoppingGate: GatewayPlugin = (app) => {
     const rejectWhenStopping = async (
@@ -182,6 +192,7 @@ export async function createMainCluster(
         registry,
         authorize: options.authorizeOfferCreation,
         approve,
+        revoke,
         now,
       }),
       ...(options.localNodeInventory ? [nodeInventoryApiPlugin({
@@ -198,6 +209,7 @@ export async function createMainCluster(
     workdirCapabilityLookup,
     getNodeInventory,
     approve,
+    revoke,
     closeNodeConnections: (reason) => {
       stopping = true
       return nodeApi.closeAll(reason)

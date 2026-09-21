@@ -1,4 +1,4 @@
-import { deepEqual as assertEquals } from 'node:assert/strict'
+import { deepEqual as assertEquals, throws as assertThrows } from 'node:assert/strict'
 import { test } from 'node:test'
 import { Hono } from 'hono'
 import { registerGatewayRoutes } from '../gateway/server.ts'
@@ -181,4 +181,50 @@ test('Main cluster exposes structured remote execution failure while a node is o
     'remote-node-unavailable',
   )
   await cluster.closeNodeConnections()
+})
+
+test('Main removal persists revocation, requires authorization and supports retry after a save failure', async t => {
+  const adapter = new InMemoryRegistrySnapshotAdapter()
+  const cluster = await createCluster(adapter)
+  const publicKey = new Uint8Array(32).fill(7)
+  const fingerprint = await devicePublicKeyFingerprint(publicKey)
+  cluster.registry.createOffer('remove-offer', baseTime, new Date(baseTime.getTime() + 60_000))
+  cluster.registry.presentOffer({
+    offerId: 'remove-offer', pendingId: 'remove-pending', deviceId: 'remove-device',
+    nodeId: 'remove-node', credentialId: 'remove-credential', displayName: 'Removable Child',
+    deviceIdentityFingerprint: fingerprint, devicePublicKey: encodeBase64Url(publicKey),
+  }, baseTime)
+  const authentication = await cluster.approve({
+    pendingId: 'remove-pending', expectedDeviceIdentityFingerprint: fingerprint,
+    credentialId: 'remove-credential',
+  })
+  cluster.registry.advertiseCapability(authentication, {
+    version: 1, nodeId: authentication.nodeId, capabilityId: 'folder',
+    kind: 'workdir', displayName: 'Folder', displayPath: '/child/folder', permissions: [], online: true,
+  })
+  const app = new Hono()
+  registerGatewayRoutes(app, [...cluster.plugins], { launchCredential })
+  const remove = (nodeId = authentication.nodeId, authorized = true) => app.request(`/nodes/v1/${nodeId}/revoke`, {
+    method: 'POST', headers: authorized ? { Authorization: `Bearer ${launchCredential}` } : {},
+  })
+  assertEquals((await remove(authentication.nodeId, false)).status, 401)
+  assertEquals(cluster.registry.getNodeState(authentication.nodeId), 'approved')
+  assertEquals((await remove('missing-node')).status, 404)
+  const save = t.mock.method(adapter, 'save', async () => { throw new Error('synthetic disk failure') })
+  const errors = t.mock.method(console, 'error', () => {})
+  assertEquals((await remove()).status, 503)
+  assertEquals(errors.mock.callCount(), 1)
+  assertEquals(cluster.registry.getNodeState(authentication.nodeId), 'revoked')
+  assertEquals(cluster.registry.listCapabilities(authentication.nodeId), [])
+  assertThrows(() => cluster.registry.authenticate(authentication), /revoked/)
+  save.mock.restore()
+  const response = await remove()
+  assertEquals(response.status, 200)
+  assertEquals(await response.json(), { version: 1, nodeId: authentication.nodeId, state: 'revoked' })
+  assertEquals((await remove()).status, 200)
+  const restored = await createCluster(adapter)
+  assertEquals(restored.getNodeInventory().nodes[0].connection, 'revoked')
+  assertThrows(() => restored.registry.authenticate(authentication), /revoked/)
+  assertThrows(() => restored.authority.issue(authentication, 'ws://main.example.test/cluster/v1/node', baseTime))
+  await Promise.all([cluster.closeNodeConnections(), restored.closeNodeConnections()])
 })

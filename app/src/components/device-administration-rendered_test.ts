@@ -21,11 +21,12 @@ interface Element {
   options: Element[]
   addEventListener: (name: string, handler: Function) => void
   removeEventListener: () => void
+  focus: () => void
 }
 const element = (tag: string, text = ''): Element => ({
   tag, tagName: tag.toUpperCase(), text, props: {}, children: [], checked: false,
   get options() { return this.children.filter(child => child.tag === 'option') },
-  addEventListener() {}, removeEventListener() {},
+  addEventListener() {}, removeEventListener() {}, focus() {},
 })
 const text = (node: Element): string => node.tag === '#comment' ? '' : [node.text, ...node.children.map(text)].join(' ')
 const compiled = new Map<string, Component>()
@@ -126,7 +127,7 @@ const pending: PendingDevice = {
 }
 function backend(t: TestContext, network = disabledNetwork, devices: PendingDevice[] = []) {
   const calls: Array<{ path: string; method: string; body?: any; signal?: AbortSignal | null }> = []
-  const state = { network: structuredClone(network), pending: structuredClone(devices), offerExpiry: Date.now() + 300_000, fail: false, failListener: false, denied: false }
+  const state = { network: structuredClone(network), pending: structuredClone(devices), nodes: [] as NodeInventoryEntry[], offerExpiry: Date.now() + 300_000, fail: false, failListener: false, failRemoval: false, denied: false }
   t.mock.method(globalThis, 'fetch', async (input: string | URL, init?: RequestInit) => {
     const path = new URL(input).pathname
     const method = init?.method ?? 'GET'
@@ -148,11 +149,42 @@ function backend(t: TestContext, network = disabledNetwork, devices: PendingDevi
       state.pending = []
       return Response.json({ version: 1, deviceId: pending.deviceId, nodeId: pending.nodeId, credentialId: pending.credentialId })
     }
-    if (path === '/local/v1/nodes' || path === '/nodes/v1') return Response.json({ version: 1, nodes: [] })
+    if (path.endsWith('/revoke')) {
+      assert.equal(method, 'POST')
+      const nodeId = path.split('/').at(-2)!
+      state.nodes = state.nodes.map(node => node.nodeId === nodeId ? { ...node, connection: 'revoked', capabilities: [] } : node)
+      return state.failRemoval ? Response.json({ error: 'node_revocation_failed' }, { status: 503 })
+        : Response.json({ version: 1, nodeId, state: 'revoked' })
+    }
+    if (path === '/local/v1/nodes' || path === '/nodes/v1') return Response.json({ version: 1, nodes: state.nodes })
     throw new Error(`Unexpected request: ${method} ${path}`)
   })
   return { calls, state }
 }
+
+test('rendered removal confirms intent, retains failed-save retry and moves devices out of the active list', async t => {
+  const { state, calls } = backend(t)
+  state.nodes = [{ nodeId: 'node-1', displayName: 'Workshop Child', role: 'child', connection: 'connected', capabilities: [] }]
+  const view = mount(t, 'NodesView', createLocalMainAdminContext('http://127.0.0.1:3123'))
+  await flush()
+  await view.click('Remove device')
+  assert.match(view.text(), /Remove Workshop Child\?/)
+  assert.equal(calls.some(call => call.path.endsWith('/revoke')), false)
+  await view.click('Cancel')
+  assert.equal(calls.some(call => call.path.endsWith('/revoke')), false)
+  await view.click('Remove device')
+  state.failRemoval = true
+  await view.click('Remove device')
+  assert.match(view.text(), /Retry removal before restarting Main/)
+  assert.match(view.text(), /Remove Workshop Child\?/)
+  state.failRemoval = false
+  await view.click('Remove device')
+  assert.match(view.text(), /Workshop Child removed/)
+  assert.match(view.text(), /Removed devices \(1\)/)
+  assert.doesNotMatch(view.text(), /Remove Workshop Child\?/)
+  assert.equal(view.nodes().filter(node => node.tag === 'article').length, 0)
+  assert.equal(calls.filter(call => call.path.endsWith('/revoke')).length, 2)
+})
 
 test('rendered Main requires explicit HTTP acknowledgement, creates an invitation, and stops the listener', async t => {
   const { calls } = backend(t)
