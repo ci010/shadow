@@ -1,0 +1,256 @@
+name: Mobile client validation and release
+
+on:
+  push:
+    paths:
+      - 'app/**'
+      - 'mobile/**'
+      - 'src/**'
+      - 'scripts/mobile*.ts'
+      - 'desktop/package.json'
+      - 'desktop/tests/fixtures/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.json'
+      - '.github/workflows/mobile-release.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'mobile/**'
+      - 'src/**'
+      - 'scripts/mobile*.ts'
+      - 'desktop/package.json'
+      - 'desktop/tests/fixtures/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.json'
+      - '.github/workflows/mobile-release.yml'
+  workflow_dispatch:
+    inputs:
+      signed_android:
+        description: Build signed Android AAB using mobile-release environment secrets
+        type: boolean
+        default: false
+      signed_ios:
+        description: Build App Store signed IPA using mobile-release environment secrets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-validation:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Linux renderer test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb xauth libgtk-3-0 libnss3 libasound2 libgbm1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm mobile:build
+      - name: Run mobile tests with an actual virtual display
+        run: xvfb-run --auto-servernum pnpm test:mobile
+      - name: Compile unsigned validation APK and device-test APK, run lint
+        working-directory: mobile/android
+        run: bash gradlew --no-daemon :app:assembleRelease :app:assembleDebugAndroidTest :app:lintRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-unsigned-validation-apk
+          path: mobile/android/app/build/outputs/apk/release/*-unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  ios-validation:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm mobile:build
+      - run: pnpm test:mobile
+      - name: Compile unsigned iOS simulator app (not device distribution)
+        run: |
+          xcodebuild -project mobile/ios/App/App.xcodeproj -scheme App \
+            -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath mobile/ios/DerivedData CODE_SIGNING_ALLOWED=NO build
+          mkdir -p mobile/release
+          ditto -c -k --sequesterRsrc --keepParent \
+            mobile/ios/DerivedData/Build/Products/Release-iphonesimulator/App.app \
+            mobile/release/Shadow-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-validation
+          path: mobile/release/Shadow-simulator.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  android-signed:
+    if: github.event_name == 'workflow_dispatch' && inputs.signed_android
+    needs: android-validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: mobile-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm mobile:build
+      - name: Sign Android App Bundle
+        env:
+          SHADOW_ANDROID_KEYSTORE_BASE64: ${{ secrets.SHADOW_ANDROID_KEYSTORE_BASE64 }}
+          SHADOW_ANDROID_STORE_PASSWORD: ${{ secrets.SHADOW_ANDROID_STORE_PASSWORD }}
+          SHADOW_ANDROID_KEY_ALIAS: ${{ secrets.SHADOW_ANDROID_KEY_ALIAS }}
+          SHADOW_ANDROID_KEY_PASSWORD: ${{ secrets.SHADOW_ANDROID_KEY_PASSWORD }}
+          SHADOW_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          : "${SHADOW_ANDROID_KEYSTORE_BASE64:?Missing keystore}"
+          : "${SHADOW_ANDROID_STORE_PASSWORD:?Missing store password}"
+          : "${SHADOW_ANDROID_KEY_ALIAS:?Missing key alias}"
+          : "${SHADOW_ANDROID_KEY_PASSWORD:?Missing key password}"
+          umask 077
+          mkdir -p mobile/.signing
+          printf '%s' "$SHADOW_ANDROID_KEYSTORE_BASE64" | base64 --decode > mobile/.signing/release.jks
+          export SHADOW_ANDROID_KEYSTORE_PATH="$GITHUB_WORKSPACE/mobile/.signing/release.jks"
+          cd mobile/android
+          bash gradlew --no-daemon :app:bundleRelease
+          jarsigner -verify app/build/outputs/bundle/release/app-release.aab
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-signed-release-aab
+          path: mobile/android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+          retention-days: 14
+      - if: always()
+        run: rm -rf mobile/.signing
+
+  ios-signed:
+    if: github.event_name == 'workflow_dispatch' && inputs.signed_ios
+    needs: ios-validation
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment: mobile-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm mobile:build
+      - name: Import signing material and archive App Store IPA
+        env:
+          SHADOW_IOS_CERTIFICATE_BASE64: ${{ secrets.SHADOW_IOS_CERTIFICATE_BASE64 }}
+          SHADOW_IOS_CERTIFICATE_PASSWORD: ${{ secrets.SHADOW_IOS_CERTIFICATE_PASSWORD }}
+          SHADOW_IOS_PROFILE_BASE64: ${{ secrets.SHADOW_IOS_PROFILE_BASE64 }}
+          SHADOW_IOS_TEAM_ID: ${{ secrets.SHADOW_IOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          : "${SHADOW_IOS_CERTIFICATE_BASE64:?Missing distribution certificate}"
+          : "${SHADOW_IOS_CERTIFICATE_PASSWORD:?Missing certificate password}"
+          : "${SHADOW_IOS_PROFILE_BASE64:?Missing App Store profile}"
+          : "${SHADOW_IOS_TEAM_ID:?Missing Apple team ID}"
+          umask 077
+          mkdir -p mobile/.signing mobile/release
+          printf '%s' "$SHADOW_IOS_CERTIFICATE_BASE64" | base64 --decode > mobile/.signing/distribution.p12
+          printf '%s' "$SHADOW_IOS_PROFILE_BASE64" | base64 --decode > mobile/.signing/app.mobileprovision
+          security cms -D -i mobile/.signing/app.mobileprovision > mobile/.signing/profile.plist
+          python3 - <<'PY'
+          import os, plistlib, pathlib
+          directory = pathlib.Path("mobile/.signing")
+          profile = plistlib.loads((directory / "profile.plist").read_bytes())
+          team = os.environ["SHADOW_IOS_TEAM_ID"]
+          bundle = "app.shadow.mobile"
+          assert profile["TeamIdentifier"] == [team], "Provisioning team mismatch"
+          assert profile["Entitlements"]["application-identifier"].endswith("." + bundle), "Bundle ID mismatch"
+          assert not profile["Entitlements"].get("get-task-allow"), "Development profile not allowed"
+          assert "ProvisionedDevices" not in profile and not profile.get("ProvisionsAllDevices"), "App Store profile required"
+          options = {"method": "app-store-connect", "signingStyle": "manual", "teamID": team,
+                     "signingCertificate": "Apple Distribution", "manageAppVersionAndBuildNumber": False,
+                     "provisioningProfiles": {bundle: profile["UUID"]}}
+          (directory / "ExportOptions.plist").write_bytes(plistlib.dumps(options))
+          (directory / "profile-uuid").write_text(profile["UUID"])
+          PY
+          PROFILE_UUID="$(cat mobile/.signing/profile-uuid)"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp mobile/.signing/app.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          KEYCHAIN="$GITHUB_WORKSPACE/mobile/.signing/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import mobile/.signing/distribution.p12 -P "$SHADOW_IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          xcodebuild -project mobile/ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath mobile/release/Shadow.xcarchive \
+            DEVELOPMENT_TEAM="$SHADOW_IOS_TEAM_ID" CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY='Apple Distribution' PROVISIONING_PROFILE_SPECIFIER="$PROFILE_UUID" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" archive
+          xcodebuild -exportArchive -archivePath mobile/release/Shadow.xcarchive \
+            -exportOptionsPlist mobile/.signing/ExportOptions.plist -exportPath mobile/release/export
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-store-signed-ipa
+          path: mobile/release/export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - if: always()
+        run: |
+          if [ -f mobile/.signing/profile-uuid ]; then
+            rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$(cat mobile/.signing/profile-uuid).mobileprovision"
+          fi
+          security delete-keychain "$GITHUB_WORKSPACE/mobile/.signing/release.keychain-db" || true
+          rm -rf mobile/.signing

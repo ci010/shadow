@@ -32,6 +32,7 @@ import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { StartupTimings } from '../startup-timings.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
 import { MainDeviceNetwork } from './device-network.ts'
+import { MobileAccess, mobileGatewayConfig } from '../../gateway/mobile-access.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -75,7 +76,12 @@ export async function startProjectHost(
   const launchCredential = resolveLaunchCredential(options.gateway?.launchCredential, process.env.GATEWAY_LAUNCH_CREDENTIAL, process.env.WINDOWS_USE_LAUNCH_TOKEN)
   const browserAuth = new BrowserAuth({ launchCredential, pinHash: options.gateway?.browserPinHash, clientAddresses, developmentUrl: process.env.VITE_DEV_URL })
   cleanup.push(() => browserAuth.close())
-  const authorize = (request: Request) => browserAuth.authorize(request)
+  const mobileConfig = mobileGatewayConfig(process.env)
+  const mobileAccess = mobileConfig ? new MobileAccess({
+    publicOrigin: mobileConfig.publicOrigin, launchCredential: launchCredential ?? '', clientAddresses,
+  }) : undefined
+  if (mobileAccess) cleanup.push(() => mobileAccess.close())
+  const authorize = (request: Request) => !!mobileAccess?.authorizeMain(request) || browserAuth.authorize(request)
     || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
@@ -188,8 +194,9 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [browserAuth.plugin(), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
-    launchCredential, browserAuth, clientAddresses, launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
+  registerGatewayRoutes(app, [browserAuth.plugin(), ...(mobileAccess ? [mobileAccess.managementPlugin()] : []), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
+    launchCredential, browserAuth, clientAddresses, authorizeClient: request => !!mobileAccess?.authorizeMain(request),
+    launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
   })
   registerRealtimeRoute(app, realtimeHub, authorize)
   const hostDiagnostics = new Hono()
@@ -220,10 +227,15 @@ export async function startProjectHost(
   }
   const gateway = serveGateway(app, { ...options.gateway, clientAddresses })
   cleanup.push(() => gateway.shutdown())
+  const mobileGateway = mobileAccess && mobileConfig
+    ? serveGateway(mobileAccess.createGateway(app), { host: '127.0.0.1', port: mobileConfig.port, clientAddresses })
+    : undefined
+  if (mobileGateway) cleanup.push(() => mobileGateway.shutdown())
   let shutdownPromise: Promise<void> | undefined
   shutdown = () => shutdownPromise ??= (async () => {
     stopping = true
     browserAuth.close()
+    mobileAccess?.close()
     realtimeHub.close()
     localControl.markStopping()
     const errors: unknown[] = []
@@ -245,12 +257,13 @@ export async function startProjectHost(
     await clean(() => deviceNetwork.shutdown())
     await clean(() => mainCluster.closeNodeConnections())
     await clean(() => gateway.shutdown())
+    if (mobileGateway) await clean(() => mobileGateway.shutdown())
     await clean(() => mainCluster.save())
     await clean(closeTelemetry)
     if (errors.length) throw new AggregateError(errors, 'Main shutdown failed')
   })()
   try {
-    await startup.measure('gateway', () => gateway.ready)
+    await startup.measure('gateway', () => Promise.all([gateway.ready, ...(mobileGateway ? [mobileGateway.ready] : [])]))
     await startup.measure('projects', async () => {
       // Bound disk/watcher pressure while avoiding one slow Project delaying every other start.
       const projects = catalog.list()[Symbol.iterator]()
@@ -265,6 +278,6 @@ export async function startProjectHost(
     await shutdown().catch(cleanup => console.error('[projects] Host cleanup failed', cleanup))
     throw error
   }
-  return { ready: Promise.resolve(), finished: gateway.finished, shutdown }
+  return { ready: Promise.resolve(), finished: mobileGateway ? Promise.race([gateway.finished, mobileGateway.finished]) : gateway.finished, shutdown }
   }
 }

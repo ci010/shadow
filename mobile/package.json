@@ -1,0 +1,28 @@
+{
+  "name": "@shadow/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "scripts": {
+    "build": "node --import tsx ../scripts/mobile.ts build",
+    "sync": "node --import tsx ../scripts/mobile.ts sync",
+    "check": "node --import tsx ../scripts/mobile.ts check",
+    "android": "node --import tsx ../scripts/mobile.ts android",
+    "ios": "node --import tsx ../scripts/mobile.ts ios",
+    "build:android": "node --import tsx ../scripts/mobile.ts build:android",
+    "build:ios": "node --import tsx ../scripts/mobile.ts build:ios",
+    "test": "node --import tsx --test ../scripts/mobile_test.ts"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/app": "8.1.1",
+    "@capacitor/core": "8.5.2",
+    "@capacitor/ios": "8.5.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2"
+  }
+}

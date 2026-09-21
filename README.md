@@ -11,6 +11,20 @@ not imply a production-ready distributed system.
 The [frontend I/O guide](docs/io.md) describes user-approved browser capture panels
 connected to agent-started adhoc services, with backend-driven controls and files.
 
+## iOS and Android client
+
+The Capacitor mobile package bundles the Vue app and connects to an existing
+Main over HTTPS. It does **not** run the Node backend or advertise execution
+Child capabilities. Main keeps running accepted work while the phone is offline.
+
+Use `pnpm mobile:build`, `pnpm mobile:sync`, and `pnpm mobile:check` for the
+mobile bundle and native projects. `pnpm mobile:android` and `pnpm mobile:ios`
+drive the platform builds; iOS requires macOS/Xcode. See
+[mobile access and pairing](docs/mobile.md) before exposing an endpoint, and
+[native builds, CI artifacts and signing](mobile/README.md) for release steps.
+Signed store distribution and physical-device acceptance are separate from
+compilation checks; no signing credentials are included in the repository.
+
 ## Projects
 
 Projects are persistent ownership boundaries, not just sidebar folders.

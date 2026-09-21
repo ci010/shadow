@@ -1,0 +1,8 @@
+.signing/
+release/
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+*.ipa
+*.xcarchive/

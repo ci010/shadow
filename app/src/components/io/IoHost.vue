@@ -22,6 +22,7 @@ import { IoExecution } from '../../io/execution.ts'
 import { ioRunKey, type IoBridge } from '../../io/bridge.ts'
 import { IoRequestError, ioRequest } from '../../io/transport.ts'
 import { desktopIoIssue } from '../../io/desktop.ts'
+import { mobileCaptureIssue } from '../../io/mobile-policy.ts'
 import DisplaySourcePicker from './DisplaySourcePicker.vue'
 
 const { bridge } = defineProps<{ bridge: IoBridge }>()
@@ -140,7 +141,7 @@ async function prepare(run: IoRun, base: string) {
     if (token !== generation || disposed) return
     putRun(base, snapshot)
     if (snapshot.status !== 'awaiting_consent') return
-    const issue = desktopIoIssue(snapshot.definition)
+    const issue = mobileCaptureIssue(snapshot.definition.sources) ?? desktopIoIssue(snapshot.definition)
     if (issue) throw new Error(issue)
     const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(snapshot.sessionId)}/details`), { signal: AbortSignal.timeout(10_000) })
     if (!response.ok) throw new Error('Could not check the conversation workdir. Retry the connection.')

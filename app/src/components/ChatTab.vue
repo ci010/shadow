@@ -381,6 +381,8 @@
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
+import { useMobileResources } from '../mobile-resources.ts'
+const mobileResources = useMobileResources()
 import { Marked } from 'marked'
 import katex from 'katex'
 import MessageAttachments from './MessageAttachments.vue'
@@ -2255,10 +2257,10 @@ function renderMarkdown(text: string): string {
   // Restore rendered math blocks
   html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)])
 
-  return imagePreviewMarkup(DOMPurify.sanitize(html, {
+  return imagePreviewMarkup(mobileResources.html(DOMPurify.sanitize(html, {
     ADD_TAGS: [...KATEX_TAGS, 'img'],
     ADD_ATTR: [...KATEX_ATTRS, 'target', 'rel', 'src', 'alt', 'loading', 'class'],
-  }))
+  })))
 }
 
 function clearSelection(): void {

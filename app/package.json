@@ -10,6 +10,8 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@capacitor/core": "8.5.2",
+    "@capacitor/app": "8.1.1",
     "@monaco-editor/loader": "^1.7.0",
     "dompurify": "3.4.14",
     "katex": "^0.18.5",

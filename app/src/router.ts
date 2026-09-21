@@ -32,7 +32,7 @@ const routes: RouteRecordRaw[] = [
 ]
 
 const router = createRouter({
-  history: location.protocol === 'file:' ? createWebHashHistory() : createWebHistory(),
+  history: import.meta.env.MODE === 'mobile' || location.protocol === 'file:' ? createWebHashHistory() : createWebHistory(),
   routes,
 })
 

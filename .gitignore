@@ -9,6 +9,7 @@ node_modules/
 # Build outputs
 build/
 dist/
+/app/dist-mobile/
 desktop/release/
 desktop/backend/
 desktop/service/ShadowService.exe

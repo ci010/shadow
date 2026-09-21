@@ -10,7 +10,7 @@
           <span :class="actualSize ? 'i-lucide-minimize' : 'i-lucide-scan'" aria-hidden="true" />
           <span class="viewer-control-label">{{ actualSize ? 'Fit' : '100%' }}</span>
         </button>
-        <a v-if="image.downloadUrl" class="viewer-control" :href="image.downloadUrl" :download="image.name" :aria-label="`Download ${image.name}`">
+        <a v-if="image.downloadUrl" class="viewer-control" :href="resources.resolve(image.downloadUrl)" :download="image.name" :aria-label="`Download ${image.name}`" referrerpolicy="no-referrer">
           <span class="i-lucide-download" aria-hidden="true" />
         </a>
         <button ref="closeButton" type="button" class="viewer-control" aria-label="Close image viewer" autofocus @click="close">
@@ -20,7 +20,7 @@
       <div ref="viewport" class="image-viewer-viewport" :class="{ 'actual-size': actualSize }" tabindex="0" role="region"
         aria-label="Image preview" :aria-busy="status === 'loading'">
         <div v-if="status !== 'error'" class="image-viewer-canvas">
-          <img :key="attempt" :src="image.src" :alt="image.name" :class="{ loading: status === 'loading' }"
+          <img :key="attempt" :src="resources.resolve(image.src)" :alt="image.name" :class="{ loading: status === 'loading' }" referrerpolicy="no-referrer"
             @load="status = 'ready'" @error="status = 'error'">
         </div>
         <p v-if="status === 'loading'" class="image-viewer-status" role="status">Loading image...</p>
@@ -36,8 +36,10 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue'
 import type { ImagePreview } from '../image-viewer.ts'
+import { useMobileResources } from '../mobile-resources.ts'
 
 const props = defineProps<{ image: ImagePreview }>()
+const resources = useMobileResources()
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement>()
 const closeButton = ref<HTMLButtonElement>()

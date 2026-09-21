@@ -39,6 +39,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import DOMPurify from 'dompurify'
+import { useMobileResources } from '../mobile-resources.ts'
+const mobileResources = useMobileResources()
 import { marked } from 'marked'
 import katex from 'katex'
 
@@ -125,10 +127,10 @@ function renderMarkdown(text: string): string {
   let html = marked.parse(src, { async: false }) as string
   html = html.replace(/\x00MATH(\d+)\x00/g, (_, i) => mathBlocks[parseInt(i)])
 
-  return DOMPurify.sanitize(html, {
+  return mobileResources.html(DOMPurify.sanitize(html, {
     ADD_TAGS: KATEX_TAGS,
     ADD_ATTR: KATEX_ATTRS,
-  })
+  }))
 }
 
 const rendered = computed(() => renderMarkdown(props.prompt))

@@ -9,8 +9,9 @@
     <p v-if="!terminal" class="request-scope">{{ sourceNames }} · Up to {{ durationLabel }}</p>
     <p v-if="failure" class="request-error" role="alert">{{ failureSummary }}</p>
     <p v-if="live?.execution.notice" class="request-note" role="status">{{ live.execution.notice }}</p>
+    <p v-if="!terminal && unsupportedCapture" class="request-note" role="status">{{ unsupportedCapture }}</p>
 
-    <div v-if="!terminal && microphones.length" class="input-devices">
+    <div v-if="!terminal && microphones.length && !unsupportedCapture" class="input-devices">
       <label v-for="source in microphones" :key="source.id" class="input-device">
         <span>{{ microphones.length > 1 ? `Microphone · ${source.id}` : 'Microphone' }}</span>
         <select :value="selectedDevice(source.id)" :aria-label="`Audio input · ${source.id}`"
@@ -49,9 +50,9 @@
 
     <div v-if="!terminal" class="request-actions">
       <template v-if="phase === 'ready' || phase === 'awaiting_consent'">
-        <button v-if="connectionError" type="button" class="request-button primary" :disabled="busy || otherActive" @click="bridge?.actions.value?.prepare(run, base)">Retry connection</button>
-        <button v-else type="button" class="request-button primary" :disabled="busy || phase !== 'ready' || otherActive" @click="bridge?.actions.value?.start(run.id, base, { ...inputs })">
-          <span v-if="busy" class="i-lucide-loader-circle loading-icon" aria-hidden="true" />{{ busy ? 'Preparing…' : startLabel }}
+        <button v-if="connectionError && !unsupportedCapture" type="button" class="request-button primary" :disabled="busy || otherActive" @click="bridge?.actions.value?.prepare(run, base)">Retry connection</button>
+        <button v-else type="button" class="request-button primary" :disabled="!!unsupportedCapture || busy || phase !== 'ready' || otherActive" @click="bridge?.actions.value?.start(run.id, base, { ...inputs })">
+          <span v-if="busy" class="i-lucide-loader-circle loading-icon" aria-hidden="true" />{{ unsupportedCapture ? 'Unavailable on mobile' : busy ? 'Preparing…' : startLabel }}
         </button>
         <button type="button" class="request-button quiet" :disabled="busy" @click="bridge?.actions.value?.cancel(run, base, true)">Not now</button>
       </template>
@@ -68,7 +69,7 @@
       <span class="i-lucide-file-audio" aria-hidden="true" />
       <div><strong>{{ artifact.name }}</strong><small>{{ formatBytes(artifact.size) }}{{ artifact.complete ? '' : ' · Partial recording' }}</small></div>
       <button v-if="playableMime(artifact.mime) && artifact.size <= IO_MAX_BUFFER_BYTES && artifactPreview?.id !== artifact.id" type="button" class="request-button quiet" :disabled="loadingArtifact" @click="previewArtifact(artifact)">Open</button>
-      <a :href="artifactUrl(artifact)" :download="artifact.name" class="request-button quiet">Download</a>
+      <a :href="resources.resolve(artifactUrl(artifact))" :download="artifact.name" class="request-button quiet" referrerpolicy="no-referrer">Download</a>
     </div>
     <IoMedia v-if="artifactPreview" :mime="artifactPreview.mime" :url="artifactPreview.url" :text="artifactPreview.text" :label="artifactPreview.name" />
     <p v-if="artifactError" class="request-error" role="alert">{{ artifactError }}</p>
@@ -98,6 +99,9 @@ import { ioBridgeKey, ioRunKey } from '../../io/bridge.ts'
 import { listAudioInputs, sourceCaptureLabel } from '../../io/adapters.ts'
 import { playableMime } from '../../io/execution.ts'
 import { apiUrl } from '../../api-url.ts'
+import { useMobileResources } from '../../mobile-resources.ts'
+import { mobileCaptureIssue, mobileCaptureRestricted } from '../../io/mobile-policy.ts'
+const resources = useMobileResources()
 import IoMedia from './IoMedia.vue'
 import IoNodes from './IoNodes.vue'
 
@@ -110,6 +114,7 @@ const live = computed(() => {
   return execution?.run.id === props.run.id && bridge?.executionBase.value === props.base ? { execution, now } : undefined
 })
 const run = computed(() => live.value ? { ...live.value.execution.run } : props.run)
+const unsupportedCapture = computed(() => mobileCaptureIssue(run.value.definition.sources))
 const phase = computed(() => live.value?.execution.phase === 'closed' ? run.value.status : live.value?.execution.phase ?? run.value.status)
 const terminal = computed(() => IO_TERMINAL.has(run.value.status))
 const busy = computed(() => bridge?.busy.value === ioRunKey(props.base, run.value.id))
@@ -144,7 +149,7 @@ let disposed = false
 let listing = 0
 function selectedDevice(id: string) { return inputs.value[id] ?? live.value?.execution.captures?.audioInputs?.get(id) ?? '' }
 async function refreshDevices() {
-  if (!microphones.value.length) return
+  if (!microphones.value.length || unsupportedCapture.value) return
   const request = ++listing
   try {
     const available = await listAudioInputs()
@@ -164,7 +169,7 @@ async function selectDevice(id: string, event: Event) {
   } finally { switching.value[id] = false; if (!disposed) void refreshDevices() }
 }
 watch(phase, value => { if (value === 'recording') void refreshDevices() })
-onMounted(() => { void refreshDevices(); navigator.mediaDevices?.addEventListener('devicechange', refreshDevices) })
+onMounted(() => { void refreshDevices(); if (!mobileCaptureRestricted()) navigator.mediaDevices?.addEventListener('devicechange', refreshDevices) })
 
 const loadingArtifact = ref(false)
 const artifactError = ref('')

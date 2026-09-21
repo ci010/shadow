@@ -30,6 +30,13 @@
     "desktop:dev": "node --env-file-if-exists=.env --import tsx scripts/desktop.ts dev",
     "pair:child": "node --import tsx scripts/pair-child.ts",
     "web:pair": "node --import tsx scripts/web-pair.ts",
+    "mobile:pair": "node --import tsx scripts/mobile-pair.ts",
+    "mobile:build": "pnpm --filter @shadow/mobile build",
+    "mobile:sync": "pnpm --filter @shadow/mobile sync",
+    "mobile:check": "pnpm --filter @shadow/mobile check",
+    "mobile:android": "pnpm --filter @shadow/mobile android",
+    "mobile:ios": "pnpm --filter @shadow/mobile ios",
+    "test:mobile": "node --import tsx --test src/gateway/mobile-access_test.ts src/runtime/mobile-pairing-cli_test.ts src/runtime/main/mobile-integration_test.ts app/src/mobile*_test.ts scripts/mobile_test.ts",
     "migrate:sessions": "node --import tsx scripts/migrate-sessions-to-sqlite.ts"
   },
   "dependencies": {

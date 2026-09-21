@@ -1,5 +1,6 @@
 import { IO_MAX_BUFFER_BYTES, IO_MAX_CHUNK_BYTES, type IoCapability, type IoPacket, type IoSource } from '../../../src/io/contracts.ts'
 import { encodeBytes, ResourceScope } from './transport.ts'
+import { MOBILE_CAPTURE_UNAVAILABLE, mobileCaptureIssue, mobileCaptureRestricted } from './mobile-policy.ts'
 
 export function sourceCaptureLabel(source: IoSource): string {
   if (source.kind === 'camera' && source.audio) return 'camera + microphone'
@@ -8,13 +9,14 @@ export function sourceCaptureLabel(source: IoSource): string {
 }
 
 export function browserIoCapabilities(): IoCapability[] {
+  const mobile = mobileCaptureRestricted()
   const secure = globalThis.isSecureContext === true
   const devices = globalThis.navigator?.mediaDevices
   return [
     ...(['microphone', 'camera', 'screen', 'file', 'form'] as const).map(id => ({
       id, kind: 'source' as const, requiresGesture: id !== 'form',
-      available: id === 'file' || id === 'form' || (secure && !!(id === 'screen' ? devices?.getDisplayMedia : devices?.getUserMedia)),
-      reason: id === 'file' || id === 'form' || secure ? undefined : 'A secure local browser context is required.',
+      available: id === 'file' || id === 'form' || (!mobile && secure && !!(id === 'screen' ? devices?.getDisplayMedia : devices?.getUserMedia)),
+      reason: id === 'file' || id === 'form' ? undefined : mobile ? MOBILE_CAPTURE_UNAVAILABLE : secure ? undefined : 'A secure local browser context is required.',
     })),
   ]
 }
@@ -34,6 +36,7 @@ export interface CaptureSet {
 export interface CaptureOptions { audioInputDevices?: Readonly<Record<string, string>> }
 
 export async function listAudioInputs(): Promise<Array<{ deviceId: string; label: string }>> {
+  if (mobileCaptureRestricted()) throw new Error(MOBILE_CAPTURE_UNAVAILABLE)
   const devices = await navigator.mediaDevices.enumerateDevices()
   return devices.filter(device => device.kind === 'audioinput' && device.deviceId !== '')
     .map(device => ({ deviceId: device.deviceId, label: device.label }))
@@ -77,6 +80,8 @@ function pickFile(source: IoSource, scope: ResourceScope): Promise<File> {
 
 /** Must be called directly within the trusted Start click, before any await/RPC. */
 export function acquireIoSources(sources: IoSource[], options: CaptureOptions = {}): CaptureSet {
+  const issue = mobileCaptureIssue(sources)
+  if (issue) throw new Error(issue)
   for (const [id, deviceId] of Object.entries(options.audioInputDevices ?? {})) {
     if (typeof deviceId !== 'string') throw new TypeError('Audio input device IDs must be strings.')
     if (!sources.some(source => source.id === id && source.kind === 'microphone')) throw new Error(`Audio device selection is only supported for standalone microphones (${id}).`)

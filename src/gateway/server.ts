@@ -41,6 +41,7 @@ export interface GatewayRouteOptions {
   allowedOrigins?: string[]
   launchCredential?: string
   browserAuth?: BrowserAuth
+  authorizeClient?: (request: Request) => boolean
   clientAddresses?: GatewayClientAddressRegistry
   launchCredentialExemptions?: readonly {
     readonly method: string
@@ -219,6 +220,7 @@ function registerGatewayRoutes(
       !launchCredentialExempt &&
       !opts.browserAuth?.isPublicRequest(c.req.raw) &&
       !browserSession &&
+      !opts.authorizeClient?.(c.req.raw) &&
       !(launchCredential && await validateLaunchCredential(
         c.req.header('Authorization'),
         launchCredential,

@@ -4,11 +4,13 @@
       <button v-if="item.kind === 'image' && item.url && !failed.has(item.path)" type="button" class="attachment-image-link"
         aria-haspopup="dialog" :aria-label="`View image: ${item.name}`"
         @click="$emit('preview', { src: item.url, name: item.name, downloadUrl: item.downloadUrl ?? undefined, trigger: $event.currentTarget as HTMLButtonElement })">
-        <img :src="item.url" :alt="item.name" loading="lazy" class="attachment-image" @error="failed.add(item.path)">
+        <img :src="item.url" :alt="item.name" loading="lazy" class="attachment-image" referrerpolicy="no-referrer" @error="failed.add(item.path)">
       </button>
       <video v-else-if="item.kind === 'video' && item.url && !failed.has(item.path)"
+        v-mobile-media="resources.native ? item.path : undefined"
         :src="item.url" controls playsinline preload="none" :aria-label="item.name" @error="failed.add(item.path)" />
       <audio v-else-if="item.kind === 'audio' && item.url && !failed.has(item.path)"
+        v-mobile-media="resources.native ? item.path : undefined"
         :src="item.url" controls preload="none" :aria-label="item.name" @error="failed.add(item.path)" />
       <div v-if="item.kind !== 'image' || !item.url || failed.has(item.path)" class="attachment-details">
         <span class="attachment-icon" :class="item.kind === 'video' ? 'i-lucide-file-video' : item.kind === 'audio' ? 'i-lucide-file-audio' : 'i-lucide-file'" aria-hidden="true" />
@@ -16,7 +18,7 @@
           <span class="attachment-name" :title="item.name">{{ item.name }}</span>
           <span class="attachment-type">{{ item.extension ? item.extension.toUpperCase() + ' file' : 'File' }}</span>
         </div>
-        <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="`Download ${item.name}`" :title="`Download ${item.name}`">
+        <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="`Download ${item.name}`" :title="`Download ${item.name}`" referrerpolicy="no-referrer">
           <span class="i-lucide-download" aria-hidden="true" /><span>Download</span>
         </a>
       </div>
@@ -29,16 +31,18 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue'
 import { buildMediaUrl } from '../media-url.ts'
+import { useMobileResources, vMobileMedia } from '../mobile-resources.ts'
 import { attachmentExtension, attachmentKind, attachmentName } from '../message-attachments.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 
 const props = defineProps<{ paths: string[]; apiBase: string; sessionId: string }>()
 defineEmits<{ preview: [image: ImagePreview] }>()
 const failed = reactive(new Set<string>())
+const resources = useMobileResources()
 const items = computed(() => props.paths.map(path => ({
   path, name: attachmentName(path), kind: attachmentKind(path), extension: attachmentExtension(path),
-  url: buildMediaUrl(props.apiBase, props.sessionId, path),
-  downloadUrl: buildMediaUrl(props.apiBase, props.sessionId, path, true),
+  url: resources.resolve(buildMediaUrl(props.apiBase, props.sessionId, path)),
+  downloadUrl: resources.resolve(buildMediaUrl(props.apiBase, props.sessionId, path, true)),
 })))
 </script>
 

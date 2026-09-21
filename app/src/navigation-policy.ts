@@ -30,7 +30,7 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
     label: 'Chat',
     group: 'primary',
     scopes: ['chat:read'],
-    modes: ['main', 'child'],
+    modes: ['main', 'child', 'client'],
   },
   {
     name: 'nodes',
@@ -45,28 +45,28 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
     label: 'Settings',
     group: 'primary',
     scopes: ['main:admin'],
-    modes: ['main'],
+    modes: ['main', 'client'],
   },
   {
     name: 'agents',
     label: 'Agents',
     group: 'diagnostics',
     scopes: ['main:admin'],
-    modes: ['main', 'child'],
+    modes: ['main', 'child', 'client'],
   },
   {
     name: 'spans',
     label: 'Spans',
     group: 'diagnostics',
     scopes: ['audit:read'],
-    modes: ['main', 'child'],
+    modes: ['main', 'child', 'client'],
   },
   {
     name: 'logs',
     label: 'Logs',
     group: 'diagnostics',
     scopes: ['audit:read'],
-    modes: ['main', 'child'],
+    modes: ['main', 'child', 'client'],
   },
 ]
 

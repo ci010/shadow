@@ -15,7 +15,7 @@
       <template v-else-if="kind === 'audio'">
         <span class="file-tile-glyph">{{ glyph }}</span>
       </template>
-      <template v-else-if="kind === 'html'">
+      <template v-else-if="kind === 'html' && !resources.native">
         <iframe
           :src="staticSrc"
           class="file-tile-frame"
@@ -43,6 +43,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useMobileResources } from '../../mobile-resources.ts'
+const resources = useMobileResources()
 import {
   type FileEntry,
   fileGlyph,
@@ -67,7 +69,7 @@ const fullPath = computed(() => joinPath(props.dir, props.entry.name))
 const kind = computed(() => (props.entry.type === 'dir' ? 'other' : fileKind(props.entry.ext)))
 const glyph = computed(() => fileGlyph(props.entry))
 const sizeLabel = computed(() => formatSize(props.entry.size))
-const raw = computed(() => files.rawUrl(props.sessionId, fullPath.value))
+const raw = computed(() => resources.resolve(files.rawUrl(props.sessionId, fullPath.value)))
 const staticSrc = computed(() => files.staticUrl(props.sessionId, fullPath.value))
 
 const textPreview = ref('')

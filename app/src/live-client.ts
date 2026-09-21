@@ -19,6 +19,11 @@ export interface LiveSubscription {
   close: () => void
 }
 type Source = { addEventListener: (type: string, listener: EventListener) => void; close: () => void }
+let mobileSource: ((url: string) => Source) | undefined
+export function installMobileLiveSource(factory: (url: string) => Source) {
+  mobileSource = factory
+  return () => { if (mobileSource === factory) mobileSource = undefined }
+}
 type Subscriber = { topic: RealtimeTopic; observer: LiveObserver; closed: boolean; initialized: boolean }
 type Waiter = { owner: Subscriber; resolve: () => void; reject: (error: unknown) => void }
 
@@ -136,7 +141,7 @@ export function createLiveClient(base: string, options: {
     const nextTopics = new Set(selected.map(realtimeTopicKey))
     const url = apiUrl(hostBase(base), '/api/live', { topics: JSON.stringify(selected), ...(cursor ? { cursor } : {}) })
     try {
-      const current = (options.source ?? (url => new EventSource(url)))(url.toString())
+      const current = (options.source ?? mobileSource ?? (url => new EventSource(url)))(url.toString())
       source = current
       connectedTopics = nextTopics
       unavailableTopics.clear()

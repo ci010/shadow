@@ -56,7 +56,7 @@ const props = defineProps<{ apiBase: string; hostApiBase: string; projectId: str
 defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
 const installation = useInstallationContext()
-const available = computed(() => installation.value.mode === 'main' && installation.value.uiScopes.includes('main:admin'))
+const available = computed(() => installation.value.mode !== 'child' && installation.value.uiScopes.includes('main:admin'))
 const sections = [{ id: 'general', label: 'General' }, { id: 'models', label: 'Models' }, { id: 'bots', label: 'Bots' }, { id: 'learning', label: 'Learning' }]
 const section = computed(() => typeof route.params.section === 'string' ? route.params.section : 'general')
 const botsOpened = ref(false)

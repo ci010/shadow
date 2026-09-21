@@ -1,6 +1,7 @@
 packages:
   - app
   - desktop
+  - mobile
 
 # Nearest stable versions available from the required Microsoft npm proxy.
 overrides:

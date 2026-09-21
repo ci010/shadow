@@ -2066,6 +2066,15 @@ inventory to public channel conversations.
 
 ### Not complete
 
+The Capacitor mobile client uses a separate, opt-in remote UI gateway, not the
+Child device listener. Main composes it from `src/gateway/mobile-access.ts` when
+`SHADOW_MOBILE_ORIGIN` is set. Its loopback upstream requires operator-managed
+HTTPS termination, single-use owner pairing, bounded twelve-hour sessions, and
+exact-resource short-lived read tickets. Browser cookies and device identities
+remain separate. Mobile app lifecycle does not own agent execution or persistence.
+See [mobile access and release boundaries](mobile.md); native-device acceptance,
+signed distribution and any future mobile execution Child remain separate work.
+
 Binary artifact transfer/staging, full remote tool parity, general remote UI
 proxy/admin flows, device revocation UI, automatic endpoint migration,
 recovery/retention semantics,

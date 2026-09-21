@@ -9,8 +9,8 @@
               <option v-for="option in textEncodings" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
           </label>
-          <button v-if="isMarkdown || isMemoryEvents || kind === 'html'" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? 'Preview' : 'Source' }}</button>
-          <HoverInfo v-if="kind === 'html' && !sourceView" text="Reload preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Reload preview" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
+          <button v-if="isMarkdown || isMemoryEvents || (kind === 'html' && !resources.native)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? 'Preview' : 'Source' }}</button>
+          <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native" text="Reload preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Reload preview" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
           <HoverInfo v-if="!inline" :text="fullscreen ? 'Exit fullscreen' : 'Fullscreen'" v-slot="{ triggerProps }">
           <button
             class="file-modal-btn"
@@ -28,14 +28,14 @@
         <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || 'Loading…' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
         </div>
-        <ImageAnnotationPreview v-else-if="kind === 'image'" :key="`image:${raw}`" :src="raw" :name="entry.name"
+        <ImageAnnotationPreview v-else-if="kind === 'image'" :key="`image:${rawSource}`" :src="rawSource" :name="entry.name"
           :source-key="JSON.stringify([apiBase, sessionId, folderId, path])" :context-key="contextKey"
           :active="active" :editable="canQuote" :keyboard-active="selectionActive"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
-        <video v-else-if="kind === 'video' && active" :key="`video:${raw}`" :src="raw" class="file-modal-media" controls autoplay />
-        <audio v-else-if="kind === 'audio' && active" :key="`audio:${raw}`" :src="raw" controls class="file-modal-audio" />
+        <video v-else-if="kind === 'video' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${rawSource}`" :src="raw" class="file-modal-media" controls autoplay />
+        <audio v-else-if="kind === 'audio' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`audio:${rawSource}`" :src="raw" controls class="file-modal-audio" />
         <iframe
-          v-else-if="kind === 'html' && active && !sourceView"
+          v-else-if="kind === 'html' && active && !sourceView && !resources.native"
           :key="frameNonce"
           :src="staticSrc"
           class="file-modal-frame"
@@ -45,6 +45,7 @@
         ></iframe>
         <iframe v-else-if="kind === 'pdf' && active" :key="`pdf:${raw}`" :src="raw" :title="entry.name" class="file-modal-frame"></iframe>
         <div v-else-if="textMode" class="file-modal-text-wrap">
+          <p v-if="kind === 'html' && resources.native" class="file-modal-note">HTML source is shown on mobile. Interactive HTML previews and their linked assets require the browser app.</p>
           <p v-if="loaded && encodingWarning" class="file-encoding-warning" role="status">{{ encodingWarning }}</p>
           <div v-if="loading" class="file-modal-note">Loading…</div>
           <div v-else-if="error" class="file-modal-note" role="alert">{{ error }} <button class="file-modal-btn" @click="loadText">Retry</button></div>
@@ -73,6 +74,8 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
+import { useMobileResources, vMobileMedia } from '../../mobile-resources.ts'
+const resources = useMobileResources()
 import SelectionMenu from '../SelectionMenu.vue'
 import HoverInfo from '../HoverInfo.vue'
 import FileHighlightText from './FileHighlightText.vue'
@@ -114,8 +117,9 @@ const kind = computed(() => fileKind(props.entry.ext))
 const isMarkdown = computed(() => ['.md', '.markdown'].includes(props.entry.ext.toLowerCase()))
 const isMemoryEvents = computed(() => isMemoryEventFile(path.value))
 const sourceView = ref(false)
-const textMode = computed(() => kind.value === 'text' || (kind.value === 'html' && sourceView.value))
-const raw = computed(() => files.value.rawUrl(props.sessionId, path.value))
+const textMode = computed(() => kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native)))
+const rawSource = computed(() => files.value.rawUrl(props.sessionId, path.value))
+const raw = computed(() => resources.resolve(rawSource.value))
 const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.value))
 
 // Bumping this recreates the preview iframe, forcing a fresh reload.
@@ -178,7 +182,7 @@ function sanitizeMarkdown(html: string): string {
   }
   const container = document.createElement('div')
   container.append(fragment)
-  return container.innerHTML
+  return resources.html(container.innerHTML)
 }
 let request: AbortController | undefined
 

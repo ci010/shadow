@@ -5,6 +5,7 @@ import { IoEventQueue, type IoCredentials } from './channel.ts'
 import { desktopCapabilities, desktopIoIssue, desktopMediaBridge, desktopSourceIssue } from './desktop.ts'
 import { decodeOutput, IoBudget, ioRequest } from './transport.ts'
 import { withinIoFinalization } from './lifecycle.ts'
+import { mobileCaptureIssue } from './mobile-policy.ts'
 
 export type IoGrant = IoCredentials
 export interface IoPreview { mime: string; url?: string; text?: string; bytes: number }
@@ -90,6 +91,8 @@ export class IoExecution {
 
   start(audioInputDevices: Record<string, string> = {}): Promise<void> {
     if (this.phase !== 'ready' || this.run.backendStatus !== 'ready') return Promise.reject(new Error('Connect a ready backend before starting input.'))
+    const mobileIssue = mobileCaptureIssue(this.run.definition.sources)
+    if (mobileIssue) return this.fail(new Error(mobileIssue))
     this.audioInputDevices = { ...audioInputDevices }
     this.phase = 'starting'
     this.sourceDeadline = performance.now() + this.run.definition.limits.durationMs

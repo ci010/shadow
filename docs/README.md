@@ -6,6 +6,7 @@
 | --- | --- |
 | [Project README](../README.md) | Node/pnpm setup, running, builds, and deployment cautions |
 | [Desktop release verification](release.md) | Native Windows/macOS/Linux build gates, Actions artifacts, package identity and installation acceptance boundaries |
+| [Mobile client](mobile.md) | Capacitor client architecture, HTTPS gateway, pairing/revocation, native release and operational boundaries |
 | [Two-device Electron pairing](desktop-pairing.md) | Trusted-LAN/VPN Main/Child setup, fingerprint approval, remote-work verification, reconnect and test boundaries |
 | [Contributor guide](../AGENTS.md) | Repository conventions and change boundaries |
 | [Architecture](architecture.md) | Features, project ownership/storage/routing, execution flow, persistence, and known limitations |

@@ -18,6 +18,7 @@
     <template #actions>
       <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
           <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
+          <MobileConnection v-if="mobileSession" :session="mobileSession" connected />
           <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">Sign out</button>
           <button class="theme-toggle" :aria-pressed="sounds.preferences.value.enabled"
             :aria-label="sounds.preferences.value.enabled ? 'Mute notification sounds' : 'Enable notification sounds'"
@@ -83,6 +84,8 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
 import { browserSessionKey } from './web-auth.ts'
+import { mobileSessionKey } from './mobile-client.ts'
+import MobileConnection from './MobileConnection.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from './composables/useInstallationContext.ts'
 import { useTheme } from './composables/useTheme'
@@ -120,6 +123,7 @@ const { sounds, monitoringError, toggle: toggleSounds } = useAppNotificationSoun
 const livePool = useLiveClientPool()
 const liveStatuses = ref<readonly LiveStatus[]>([])
 const browserSession = inject(browserSessionKey, null)
+const mobileSession = inject(mobileSessionKey, null)
 const desktopWebPairing = window.shadowDesktop?.webPairing
 let liveInterrupted = false
 const stopLiveStatus = livePool.observe(statuses => {
@@ -146,7 +150,7 @@ const recoveryTitle = computed(() =>
 const logCount = ref(0)
 
 // ── Model selector ──────────────────────────────────────────
-const isMain = computed(() => installationContext.value.mode === 'main')
+const isMain = computed(() => installationContext.value.mode === 'main' || installationContext.value.mode === 'client')
 const providerStatus = ref<ProviderSetupStatus | null>(null)
 const checkingProvider = ref(true)
 const providerError = ref('')

@@ -1,4 +1,4 @@
-export type InstallationMode = 'main' | 'child'
+export type InstallationMode = 'main' | 'child' | 'client'
 
 export type MainConnectionState =
   | 'connected'
@@ -32,6 +32,15 @@ export const LOCAL_MAIN_ADMIN_SCOPES: readonly UiScope[] = [
   'nodes:admin',
   'audit:read',
 ]
+
+export function createMobileClientContext(apiBase: string): InstallationContextV1 {
+  return {
+    version: 1, mode: 'client', localNodeId: 'mobile-client',
+    mainConnection: 'connected', mainLatencyMs: null,
+    uiScopes: LOCAL_MAIN_ADMIN_SCOPES.filter(scope => scope !== 'nodes:admin'),
+    apiBase,
+  }
+}
 
 export function createLocalMainAdminContext(
   apiBase: string,

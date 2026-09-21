@@ -20,7 +20,7 @@ import {
 import type { InstallationContextV1 } from './installation-context.ts'
 import { registerBrowserPwa } from './pwa.ts'
 
-void registerBrowserPwa({
+if (import.meta.env.MODE !== 'mobile') void registerBrowserPwa({
 	production: import.meta.env.PROD,
 	desktop: !!window.shadowDesktop,
 	secureContext: window.isSecureContext,
@@ -103,7 +103,11 @@ async function startDesktopApp(api: ShadowDesktopApi): Promise<void> {
 }
 
 const desktopApi = window.shadowDesktop
-if (desktopApi) {
+if (import.meta.env.MODE === 'mobile') {
+	const { startMobileClient } = await import('./mobile-bootstrap.ts')
+	const dispose = await startMobileClient()
+	if (import.meta.hot) import.meta.hot.dispose(dispose)
+} else if (desktopApi) {
 	await startDesktopApp(desktopApi)
 } else {
 	const session = createBrowserSession(apiBase)

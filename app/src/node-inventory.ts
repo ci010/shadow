@@ -65,10 +65,11 @@ export function parseNodeInventory(value: unknown): NodeInventoryResponse {
 
 export async function fetchNodeInventory(
   apiBase: string,
-  mode: 'main' | 'child',
+  mode: 'main' | 'child' | 'client',
   signal: AbortSignal,
   request: typeof fetch = fetch,
 ): Promise<NodeInventoryResponse> {
+  if (mode === 'client') throw new Error('Device administration is not available to mobile clients.')
   const response = await request(apiUrl(hostBase(apiBase), mode === 'child' ? '/local/v1/nodes' : '/nodes/v1'), {
     signal, cache: 'no-store',
   })
