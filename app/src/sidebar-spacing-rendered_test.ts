@@ -31,6 +31,9 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
   ]
   const unexpected: string[] = []
   let empty = false
+  let holdFolders = false
+  let failFolders = false
+  const pendingFolders: (() => void)[] = []
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error',
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
@@ -38,10 +41,25 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
       enforce: 'pre',
       resolveId(id, importer) {
         if (id === '/sidebar-fixture.ts') return '\0sidebar-fixture'
+        if (id === '/folder-loading-fixture.ts') return '\0folder-loading-fixture'
         if (importer?.replaceAll('\\', '/').split('?')[0].endsWith('/ProjectsWorkspace.vue')
           && /(?:^|\/)(?:ProjectConversation|AutomationDetail)\.vue$/.test(id.replaceAll('\\', '/'))) return '\0sidebar-content'
       },
       load(id) {
+        if (id === '\0folder-loading-fixture') return `import 'uno.css'; import '/src/styles.css';
+          import { createApp, h, ref } from 'vue';
+          import FoldersSidebar from '/src/components/FoldersSidebar.vue';
+          const revision = ref(0), grouped = ref(true);
+          window.__folderFixture = {refresh:() => revision.value++, group:value => grouped.value = value};
+          const app = createApp({render:() => h(FoldersSidebar, {
+            apiBase:location.origin + '/projects/work/', grouped:grouped.value, projectName:'Workspace',
+            folderRevision:revision.value, sessions:[], activeSessionId:'', collapsed:new Set(), stages:{},
+            sessionsLoading:false, sessionsError:'',
+          })});
+          app.provide(Symbol.for('shadow.live-client-pool'), {
+            client:() => ({subscribe:() => ({close(){}})}),
+          });
+          app.mount('#app');`
         if (id === '\0sidebar-content') return `import { defineComponent, h } from 'vue';
           export default defineComponent({
             props:['sessionId', 'projectId', 'automationId'], emits:['navigate'],
@@ -77,6 +95,19 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
           const url = new URL(request.url!, 'http://fixture')
           const scope = url.pathname.match(/^\/projects\/([^/]+)(\/api\/.*)$/)
           const path = scope?.[2] ?? url.pathname
+          if (path === '/__folders/hold') { holdFolders = true; response.end('OK'); return }
+          if (path === '/__folders/release' || path === '/__folders/fail') {
+            holdFolders = false
+            failFolders = path.endsWith('/fail')
+            pendingFolders.splice(0).forEach(send => send())
+            response.end('OK')
+            return
+          }
+          if (path === '/__folder-loading') {
+            response.setHeader('Content-Type', 'text/html')
+            response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="app"></div><script type="module" src="/folder-loading-fixture.ts"></script></body></html>')
+            return
+          }
           if (path === '/__empty') { empty = true; response.end('OK'); return }
           if (path === '/__sidebar') {
             response.setHeader('Content-Type', 'text/html')
@@ -105,8 +136,16 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
             id: name, name, source: 'learning', session: 'fresh', schedule: 'daily', enabled: true,
           })) : [] }
           else { unexpected.push(path); response.statusCode = 404; data = { error: 'Unstubbed fixture endpoint' } }
-          response.setHeader('Content-Type', 'application/json')
-          response.end(JSON.stringify(data))
+          const send = () => {
+            if (response.destroyed) return
+            response.setHeader('Content-Type', 'application/json')
+            if (path === '/api/folders' && failFolders) {
+              response.statusCode = 503
+              response.end(JSON.stringify({ error: 'Synthetic folder loading failure' }))
+            } else response.end(JSON.stringify(data))
+          }
+          if (path === '/api/folders' && holdFolders) pendingFolders.push(send)
+          else send()
         })
       },
     }],

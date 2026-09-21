@@ -1676,6 +1676,11 @@ instead of changing row height. `FoldersSidebar` supplies these dimensions to
 `TreeRow` through scoped variables, leaving the file workbench's tree density
 independent.
 
+Folder registry loading does not insert a sidebar text row. Existing folder
+icons become same-size loading indicators, with a header indicator for initial
+loads, an accessible status announcement, and reduced-motion support. Refreshes
+retain the current rows; load failures still expose the error and retry action.
+
 Project navigation has pinned and hidden states, not a persistent initials rail.
 When hidden, the content toolbar shows the current project and opens the full
 navigation as a temporary overlay without resizing the work area. Selecting a

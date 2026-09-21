@@ -6,14 +6,14 @@
       <button v-if="grouped" type="button" class="project-toggle"
         :aria-label="`${groupExpanded ? 'Collapse' : 'Expand'} project ${projectName}`"
         :aria-expanded="groupExpanded" :aria-controls="domId('folders-navigation')" @click="groupExpanded = !groupExpanded">
-        <span class="i-lucide-chevron-right w-3.5 h-3.5" :class="{ 'org-expanded': groupExpanded }" aria-hidden="true" />
+        <span class="w-3.5 h-3.5" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : ['i-lucide-chevron-right', { 'org-expanded': groupExpanded }]" aria-hidden="true" />
       </button>
-      <h2 v-if="!isRail"><slot v-if="grouped" name="project-name">{{ projectName }}</slot><template v-else>Folders</template></h2>
+      <h2 v-if="!isRail"><slot v-if="grouped" name="project-name">{{ projectName }}</slot><template v-else><span class="folders-heading-icon w-4 h-4" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : 'i-lucide-folder'" aria-hidden="true" />Folders</template></h2>
       <div class="folders-header-actions">
         <slot name="project-actions" />
         <HoverInfo v-if="!grouped && desktop" :text="isRail ? 'Expand folders' : 'Collapse folders'"><template #default="{ triggerProps }">
           <button class="folder-action-button folders-rail-toggle" v-bind="triggerProps" :aria-label="isRail ? 'Expand folders' : 'Collapse folders'" :aria-expanded="!isRail" aria-controls="folders-navigation" @click="railCollapsed = !railCollapsed">
-            <span :class="isRail ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="w-4 h-4" aria-hidden="true" />
+            <span :class="isRail && loading ? 'i-lucide-loader-circle folder-loading-icon' : isRail ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="w-4 h-4" aria-hidden="true" />
           </button>
         </template></HoverInfo>
         <HoverInfo text="Add folder"><template #default="{ triggerProps }">
@@ -21,8 +21,8 @@
         </template></HoverInfo>
       </div>
     </header>
+    <span class="rail-visually-hidden" role="status">{{ loading ? 'Loading folders…' : '' }}</span>
     <div v-show="!grouped || groupExpanded" :id="domId('folders-navigation')" class="folders-scroll" :aria-busy="loading || sessionsLoading">
-      <p v-if="loading" class="sidebar-note" :class="{ 'rail-note': isRail }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading folders…</span></p>
       <div v-if="error && !isRail" class="sidebar-error" role="alert">
         <p>{{ error }}</p>
         <button class="text-action" @click="loadFolders">Retry folders</button>
@@ -36,7 +36,7 @@
           :toggle-label="`${expandedFolders.has(group.folder.id) ? 'Collapse' : 'Expand'} folder ${group.folder.name}`"
           @toggle="toggleFolder(group.folder.id)" @select="selectFolder(group.folder.id)"
           @contextmenu.prevent="grouped && openFolderActions(group.folder, $event)">
-          <template #icon><span v-if="isRail" class="folder-initial">{{ railInitial(group.folder.name) }}</span><span v-else :class="group.folder.kind === 'remote' ? 'i-lucide-monitor' : expandedFolders.has(group.folder.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
+          <template #icon><span v-if="loading" class="i-lucide-loader-circle folder-loading-icon" /><span v-else-if="isRail" class="folder-initial">{{ railInitial(group.folder.name) }}</span><span v-else :class="group.folder.kind === 'remote' ? 'i-lucide-monitor' : expandedFolders.has(group.folder.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
           <template #meta><SessionActivity v-if="folderWorkingStage(group.sessions)" :stage="folderWorkingStage(group.sessions)" compact :icon-only="isRail" :title="undefined" /></template>
           <template #actions>
             <HoverInfo :text="`New conversation in ${group.folder.name}`"><template #default="{ triggerProps }"><button class="folder-action-button folder-add" v-bind="triggerProps" :aria-label="`New conversation in ${group.folder.name}`" @click="startFolderDraft(group.folder)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
@@ -352,6 +352,10 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .org-expanded { transform: rotate(90deg); }
 .folders-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 48px; padding: 8px 12px; }
 .folders-header h2 { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; }
+.folders-heading-icon { display: inline-block; margin-inline-end: 8px; vertical-align: -2px; }
+.folder-loading-icon { animation: folder-loading-spin 1s linear infinite; }
+@keyframes folder-loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .folder-loading-icon { animation: none; } }
 .folders-header-actions { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
 .folder-action-button { display: grid; place-items: center; flex: 0 0 var(--sidebar-action-size); width: var(--sidebar-action-size); height: var(--sidebar-action-size); padding: 0; border: 0; border-radius: var(--radius-control); color: var(--c-text-secondary); background: transparent; font-size: 21px; line-height: 1; }
 .folder-action-button:hover { color: var(--c-text); background: var(--c-bg-muted); }
