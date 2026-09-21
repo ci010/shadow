@@ -58,19 +58,27 @@
 				</div>
 
 				<div v-else-if="state.mode === 'child'" class="setup-content">
-					<p class="lead">On Main, open Nodes, enable the device listener and create a pairing offer. Enter those details here. Main must approve this device before it can connect.</p>
+					<p class="lead">On Main, open Nodes and copy a pairing invitation. Paste it here, then approve this device on Main.</p>
 					<div v-if="childFingerprint" class="notice" role="status">
 						<strong>This device's fingerprint</strong><code class="pairing-fingerprint">{{ childFingerprint }}</code>
 						<span>If Main already shows this pending device, compare this fingerprint, approve it there, then retry here. Retrying keeps the same identity even if the first response was lost.</span>
 					</div>
 					<form class="child-form" @submit.prevent="pairChild">
-						<label class="field-label" for="child-endpoint">Main device endpoint</label>
-						<input id="child-endpoint" v-model="child.endpoint" class="directory-input" type="url" placeholder="http://192.168.1.10:3124" required :disabled="busy" autocomplete="off">
+						<template v-if="!manualPairing">
+							<label class="field-label" for="child-invitation">Pairing invitation</label>
+							<textarea id="child-invitation" v-model="invitationText" class="directory-input invitation-input" rows="3" placeholder="Paste the invitation copied from Main" required :disabled="busy" autocomplete="off" spellcheck="false" aria-describedby="child-invitation-help" :aria-invalid="!!invitationPreview.error"></textarea>
+							<p id="child-invitation-help" class="field-help" :role="invitationPreview.error ? 'alert' : undefined">{{ invitationPreview.error || (invitationPreview.endpoint ? `Main: ${invitationPreview.endpoint}` : 'One paste includes Main’s address and pairing details. Keep the invitation private.') }}</p>
+						</template>
+						<template v-else>
+							<label class="field-label" for="child-endpoint">Main device endpoint</label>
+							<input id="child-endpoint" v-model="child.endpoint" class="directory-input" type="url" placeholder="http://192.168.1.10:3124" required :disabled="busy" autocomplete="off">
+							<div class="child-fields">
+								<div><label class="field-label" for="child-offer">Offer ID</label><input id="child-offer" v-model="child.offerId" class="directory-input" required :disabled="busy" autocomplete="off"></div>
+								<div><label class="field-label" for="child-pin">Six-digit PIN</label><input id="child-pin" v-model="child.pin" class="directory-input" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required :disabled="busy" autocomplete="off"></div>
+							</div>
+						</template>
+						<button type="button" class="secondary-button" :disabled="busy" @click="togglePairingMode">{{ manualPairing ? 'Paste invitation instead' : 'Enter details manually' }}</button>
 						<label class="consent-row"><input v-model="child.allowInsecureLocalTransport" type="checkbox" :disabled="busy"><span>Use HTTP on a trusted LAN/VPN for testing only. Traffic and the PIN are not encrypted. Never use this on the public internet; device authentication remains required.</span></label>
-						<div class="child-fields">
-							<div><label class="field-label" for="child-offer">Offer ID</label><input id="child-offer" v-model="child.offerId" class="directory-input" required :disabled="busy" autocomplete="off"></div>
-							<div><label class="field-label" for="child-pin">Six-digit PIN</label><input id="child-pin" v-model="child.pin" class="directory-input" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required :disabled="busy" autocomplete="off"></div>
-						</div>
 						<label class="field-label" for="child-name">Device name</label>
 						<input id="child-name" v-model="child.displayName" class="directory-input" required maxlength="128" :disabled="busy">
 						<label class="field-label" for="child-home">Child home — protected identity and managed session data</label>
@@ -172,6 +180,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import shadowLogo from './assets/shadow-logo.png'
+import { decodeChildInvitation } from './device-pairing-invitation.ts'
 import {
 	commitMainDirectoryChoice,
 	loadMainDirectorySelection,
@@ -212,7 +221,22 @@ const actionError = ref('')
 const executionConsent = ref(false)
 const childSaved = ref(false)
 const childFingerprint = ref('')
+const manualPairing = ref(false)
+const invitationText = ref('')
+const invitationPreview = computed(() => {
+	if (!invitationText.value.trim()) return { endpoint: '', error: '' }
+	try { return { endpoint: decodeChildInvitation(invitationText.value).endpoint, error: '' } }
+	catch (error) { return { endpoint: '', error: error instanceof Error ? error.message : 'Invalid Child invitation.' } }
+})
 const child = ref({ endpoint: '', offerId: '', pin: '', displayName: '', dataDir: '', workdir: '', allowInsecureLocalTransport: false })
+
+function togglePairingMode() {
+	manualPairing.value = !manualPairing.value
+	invitationText.value = ''
+	child.value.offerId = ''
+	child.value.pin = ''
+	actionError.value = ''
+}
 
 const mainSteps = ['choose-data-directory', 'initialize-main', 'configure-provider', 'choose-local-capabilities', 'launch-main'] as const
 const showRoleChoice = computed(() => state.value?.mode === null)
@@ -280,7 +304,9 @@ async function pairChild(): Promise<void> {
 	actionError.value = ''
 	try {
 		if (!props.api.bootstrap.pairChild) throw new Error('Child pairing requires a current desktop build.')
-		const result = await props.api.bootstrap.pairChild({ ...child.value, executionConsent: true })
+		const invitation = manualPairing.value ? child.value : decodeChildInvitation(invitationText.value)
+		const result = await props.api.bootstrap.pairChild({ ...child.value,
+			endpoint: invitation.endpoint, offerId: invitation.offerId, pin: invitation.pin, executionConsent: true })
 		if (!result.ok) throw new Error('Child setup could not be saved. Retry this step.')
 		state.value = result.state
 		emit('complete')
@@ -289,6 +315,7 @@ async function pairChild(): Promise<void> {
 		await loadChild()
 	} finally {
 		child.value.pin = ''
+		invitationText.value = ''
 		busy.value = false
 	}
 }
@@ -392,6 +419,7 @@ h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.2; }
 .progress-track { height: 3px; margin: 22px 0 30px; overflow: hidden; background: var(--c-bg-muted); }
 .progress-track span { display: block; height: 100%; background: var(--accent); }
 .setup-content { margin-top: 30px; animation: enter .22s ease-out; }
+.invitation-input { box-sizing: border-box; width: 100%; resize: vertical; font: inherit; }
 .progress-track + .setup-content { margin-top: 0; }
 .lead { max-width: 65ch; margin: 0 0 24px; color: var(--c-text-secondary); font-size: 15px; line-height: 1.55; }
 .role-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

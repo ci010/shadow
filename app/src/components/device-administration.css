@@ -38,7 +38,7 @@ p + p, p + button, .consent + button { margin-top: 0.65rem; }
 .device-button.primary { background: var(--c-primary-bg); border-color: var(--c-primary-bg); color: var(--c-text-on-primary); }
 .device-button.primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
 .device-button:disabled { cursor: not-allowed; opacity: 0.55; }
-:is(button, input, select, summary):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
+:is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
 .device-error { margin: 0.75rem 0; padding: 0.65rem; background: var(--c-error-bg); color: var(--c-error); }
 .device-error-text { color: var(--c-error); }
 .network-state { justify-content: flex-start; }
@@ -53,6 +53,13 @@ p + p, p + button, .consent + button { margin-top: 0.65rem; }
 .network-fields input { width: 8rem; }
 .network-fields details { padding-top: 0.2rem; }
 summary { cursor: pointer; }
+.invitation-manual { margin: 0.75rem 0; }
+.invitation-manual label { display: block; margin-top: 0.5rem; }
+.invitation-manual textarea {
+  box-sizing: border-box; width: 100%; resize: vertical; padding: 0.5rem;
+  border: 1px solid var(--c-control-border); border-radius: var(--radius-control);
+  background: var(--c-bg-input); color: var(--c-text); font: inherit;
+}
 .consent { display: flex; align-items: flex-start; gap: 0.6rem; max-width: 75ch; margin-top: 0.85rem; cursor: pointer; }
 .consent input { flex: 0 0 auto; margin-top: 0.25rem; width: 16px; height: 16px; accent-color: var(--c-primary-bg); }
 .invitation-section, .pending-section, .pending-device, .approval-progress { border-top: 1px solid var(--c-border); padding-top: 1rem; }

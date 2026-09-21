@@ -387,6 +387,13 @@ decorative device types. Main's Nodes page introduces network configuration,
 then a short-lived invitation, then a pending fingerprint comparison. Keep the
 inventory available rather than replacing it with a full-page setup wizard.
 
+Pairing uses one copy on Main and one paste on Child. The primary invitation
+action copies the address, offer ID, PIN and expiry together; Child shows the
+parsed Main address for review. Protocol fields belong behind manual-transfer
+or manual-entry controls, not in the default form. Clipboard failure keeps a
+selectable invitation available. Invitations remain private, short-lived and
+single-use; pasting does not grant transport or execution consent.
+
 Use the existing neutral card/input surfaces, quiet structural borders and
 square controls. The next deliberate action uses interaction blue; an actual
 authenticated connection uses success ink. Pending human approval and the

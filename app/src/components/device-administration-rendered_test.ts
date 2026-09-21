@@ -246,6 +246,8 @@ test('rendered expired invitation hides its PIN and disables copying while allow
   assert.match(view.text(), /invitation expired/)
   assert.doesNotMatch(view.text(), /000012/)
   assert.equal(view.button('Copy PIN').props.disabled, true)
+  assert.equal(view.button('Copy pairing invitation').props.disabled, true)
+  assert.equal(view.nodes().find(node => node.props.id === 'device-invitation-text')?.props.value, '')
   assert.equal(view.button('Create another invitation').props.disabled, false)
 })
 

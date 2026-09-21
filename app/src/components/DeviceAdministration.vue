@@ -49,17 +49,24 @@
 
       <div v-if="network.state === 'listening'" class="invitation-section">
         <template v-if="invitation">
-          <h3>Enter these details in the Child setup</h3>
-          <dl class="invitation-values">
-            <div><dt>Main endpoint</dt><dd><code>{{ invitationEndpoint }}</code><button type="button" class="device-button" :disabled="!remaining" @click="copy(invitationEndpoint, 'Endpoint')">Copy endpoint</button></dd></div>
-            <div><dt>Invitation ID</dt><dd><code>{{ invitation.offerId }}</code><button type="button" class="device-button" :disabled="!remaining" @click="copy(invitation.offerId, 'Invitation ID')">Copy ID</button></dd></div>
-            <div><dt>PIN</dt><dd><code>{{ remaining ? invitation.pin : 'Expired' }}</code><button type="button" class="device-button" :disabled="!remaining" @click="copy(invitation.pin, 'PIN')">Copy PIN</button></dd></div>
-          </dl>
+          <h3>Paste this invitation in the Child setup</h3>
+          <p class="device-hint">Includes Main’s address and pairing details. Treat it like a password.</p>
+          <button type="button" class="device-button primary" :disabled="!remaining || !!loadError" @click="copy(invitationText, 'Pairing invitation')">Copy pairing invitation</button>
+          <details class="invitation-manual">
+            <summary>Manual transfer</summary>
+            <label for="device-invitation-text">Complete invitation</label>
+            <textarea id="device-invitation-text" :value="remaining ? invitationText : ''" readonly rows="3" spellcheck="false" @focus="($event.target as HTMLTextAreaElement).select()"></textarea>
+            <dl class="invitation-values">
+              <div><dt>Main endpoint</dt><dd><code>{{ invitationEndpoint }}</code><button type="button" class="device-button" :disabled="!remaining" @click="copy(invitationEndpoint, 'Endpoint')">Copy endpoint</button></dd></div>
+              <div><dt>Invitation ID</dt><dd><code>{{ invitation.offerId }}</code><button type="button" class="device-button" :disabled="!remaining" @click="copy(invitation.offerId, 'Invitation ID')">Copy ID</button></dd></div>
+              <div><dt>PIN</dt><dd><code>{{ remaining ? invitation.pin : 'Expired' }}</code><button type="button" class="device-button" :disabled="!remaining" @click="copy(invitation.pin, 'PIN')">Copy PIN</button></dd></div>
+            </dl>
+          </details>
           <p v-if="remaining" class="device-hint">Expires at {{ new Date(invitation.expiresAt).toLocaleTimeString() }} ({{ Math.ceil(remaining / 60) }} min remaining). Single use. Share only with the person at your Child device.</p>
           <p v-else class="device-hint" role="status">This invitation expired. Create another to try again; a request already submitted can still be verified below.</p>
         </template>
         <p v-else>Create a single-use invitation, then enter it in the other machine’s Child setup.</p>
-        <button type="button" class="device-button primary" :disabled="!!action || !!loadError" @click="createInvitation">
+        <button type="button" class="device-button" :class="{ primary: !remaining }" :disabled="!!action || !!loadError" @click="createInvitation">
           {{ action === 'invitation' ? 'Creating invitation…' : invitation ? 'Create another invitation' : 'Create invitation' }}
         </button>
         <p v-if="invitation" class="device-hint">A new invitation does not cancel an unused earlier one; it remains valid until its expiry.</p>
@@ -86,6 +93,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { NodeInventoryEntry } from '../node-inventory.ts'
+import { encodeChildInvitation } from '../device-pairing-invitation.ts'
 import PendingDeviceApproval from './PendingDeviceApproval.vue'
 import {
   defaultDeviceHost, deviceAdminRequest, deviceHostChoices, DeviceAdministrationAccessError, invitationRemaining,
@@ -112,6 +120,7 @@ const copyStatus = ref('')
 const now = ref(Date.now())
 const choices = computed(() => network.value ? deviceHostChoices(network.value) : [])
 const remaining = computed(() => invitation.value ? invitationRemaining(invitation.value, now.value) : 0)
+const invitationText = computed(() => invitation.value ? encodeChildInvitation(invitationEndpoint.value, invitation.value) : '')
 const canEnable = computed(() => !action.value && !loadError.value && httpAcknowledged.value
   && choices.value.some(choice => choice.address === host.value) && Number.isInteger(port.value) && port.value >= 1024 && port.value <= 65535)
 let poll: ReturnType<typeof setTimeout> | undefined
@@ -276,7 +285,7 @@ async function copy(value: string, label: string) {
     await navigator.clipboard.writeText(value)
     if (mounted) copyStatus.value = `${label} copied.`
   } catch {
-    if (mounted) copyStatus.value = `Could not copy ${label.toLowerCase()}. Select and copy the value above instead.`
+    if (mounted) copyStatus.value = `Could not copy ${label.toLowerCase()}. Open Manual transfer and select and copy the value instead.`
   }
 }
 

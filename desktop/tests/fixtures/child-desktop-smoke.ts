@@ -19,22 +19,45 @@ async function main() {
     await run(`new Promise((resolve,reject)=>{const timer=setInterval(()=>{if(window.fixture&&document.querySelector('.role-option')){clearInterval(timer);resolve()}},20);setTimeout(()=>{clearInterval(timer);reject(new Error('Wizard did not mount'))},10000)})`)
     await run(`(async()=>{const sleep=()=>new Promise(r=>setTimeout(r,50));document.querySelectorAll('.role-option')[1].click();await sleep();document.querySelector('.primary-button').click();await sleep()})()`)
     assert.equal(await run(`document.querySelector('.child-form button[type=submit]').disabled`), true)
+    assert.equal(await run(`document.getElementById('child-offer') === null && document.getElementById('child-pin') === null`), true)
+    const invitation = 'shadow-child:v1:' + btoa(JSON.stringify({
+      version: 1, endpoint: 'http://192.168.1.5:43125', offerId: 'offer-1', pin: '000012',
+      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    }))
+    const paste = (value: string) => run(`(async()=>{
+      const el=document.getElementById('child-invitation');el.value=${JSON.stringify(value)};
+      el.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,30));
+    })()`)
+    await paste(invitation)
+    assert.match(await run(`document.getElementById('child-invitation-help').textContent`), /192\.168\.1\.5:43125/)
     for (const width of [1100, 400]) {
       window.setSize(width, 900)
       for (const theme of ['light', 'dark']) {
         assert.equal(await run(`(async()=>{document.documentElement.classList.toggle('dark',${theme === 'dark'});await new Promise(r=>setTimeout(r,60));return document.documentElement.scrollWidth<=innerWidth+1})()`), true, `Wizard overflow at ${width}/${theme}`)
       }
     }
-    await run(`(async()=>{function input(id,value){const el=document.getElementById(id);el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}))}
-      input('child-offer','offer-1');input('child-pin','123456');document.querySelectorAll('.consent-row input')[1].click();
+    await paste('not-an-invitation')
+    await run(`(async()=>{document.querySelectorAll('.consent-row input')[1].click();
       await new Promise(r=>setTimeout(r,30));document.querySelector('.child-form').requestSubmit();await new Promise(r=>setTimeout(r,100))})()`)
-    const failed = await run(`({pairs:fixture.pairs,pin:document.getElementById('child-pin').value,error:document.querySelector('.action-error')?.textContent})`)
+    assert.equal(await run('fixture.pairs.length'), 0, 'Invalid invitation must not reach IPC')
+    assert.match(await run(`document.querySelector('.action-error').textContent`), /Invalid Child invitation/)
+    await paste(invitation)
+    await run(`document.querySelector('.child-form').requestSubmit();new Promise(r=>setTimeout(r,100))`)
+    const failed = await run(`({pairs:fixture.pairs,invitation:document.getElementById('child-invitation').value,error:document.querySelector('.action-error')?.textContent})`)
     assert.equal(failed.pairs.length, 1)
     assert.equal(failed.pairs[0].executionConsent, true)
     assert.equal(Object.hasOwn(failed.pairs[0], 'saved'), false)
-    assert.equal(failed.pin, '')
+    assert.equal(failed.pairs[0].pin, '000012')
+    assert.equal(failed.pairs[0].offerId, 'offer-1')
+    assert.equal(failed.pairs[0].endpoint, 'http://192.168.1.5:43125')
+    assert.equal(Object.hasOwn(failed.pairs[0], 'expiresAt'), false)
+    assert.equal(failed.invitation, '')
     assert.match(failed.error, /Pairing failed/)
-    await run(`(async()=>{fixture.fail=false;const el=document.getElementById('child-pin');el.value='123456';el.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,20));document.querySelector('.child-form').requestSubmit();await new Promise(r=>setTimeout(r,100))})()`)
+    await run(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Enter details manually').click();new Promise(r=>setTimeout(r,30))`)
+    assert.equal(await run(`!!document.getElementById('child-offer') && document.getElementById('child-invitation') === null`), true)
+    await run(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Paste invitation instead').click();new Promise(r=>setTimeout(r,30))`)
+    await paste(invitation)
+    await run(`fixture.fail=false;document.querySelector('.child-form').requestSubmit();new Promise(r=>setTimeout(r,100))`)
     assert.equal(await run('fixture.completed'), true)
     await run(`fixture.openChild();new Promise(r=>setTimeout(r,100))`)
     const offline = await run(`document.body.innerText`)

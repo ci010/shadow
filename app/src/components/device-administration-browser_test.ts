@@ -36,6 +36,10 @@ test('device administration browser verifies desktop/mobile layout, native conse
               allowInsecureLocalTransport:false, state:'disabled', endpoint:null, error:null,
               addresses:[{name:'Loopback',address:'127.0.0.1'},{name:'Trusted VPN adapter',address:'192.168.20.12'}] }
           };
+          Object.defineProperty(navigator, 'clipboard', {value:{writeText:async text=>{
+            if(state.copyFails) throw new Error('Clipboard unavailable');
+            state.copied=text;
+          }}});
           window.fetch = async (input, init) => {
             const path = new URL(input, location.href).pathname;
             if (init?.method === 'PUT' || init?.method === 'POST') state.mutations.push({path, body:init.body ? JSON.parse(init.body) : null});
@@ -122,6 +126,18 @@ test('device administration browser verifies desktop/mobile layout, native conse
               {version:1,enabled:true,host:'192.168.20.12',port:3124,allowInsecureLocalTransport:true});
             await click('Create invitation');
             await wait('!!document.querySelector(".pending-device")');
+            assert.equal(await execute('document.querySelector(".invitation-manual").open'),false);
+            await click('Copy pairing invitation');
+            const copied = await execute('JSON.parse(atob(window.fixture.copied.slice("shadow-child:v1:".length)))');
+            assert.equal(copied.endpoint,'http://192.168.20.12:3124');
+            assert.equal(copied.pin,'000012');
+            assert.equal(copied.offerId,'invitation-0123456789-abcdefghijklmnopqrstuv');
+            await execute('window.fixture.copyFails=true');
+            await click('Copy pairing invitation');
+            await wait('document.body.innerText.includes("Open Manual transfer")');
+            await execute('document.querySelector(".invitation-manual").open=true');
+            assert.equal(await execute('document.querySelector("#device-invitation-text").value===window.fixture.copied'),true);
+            await execute('document.querySelector(".invitation-manual").open=false');
             for(const dark of [false,true]) {
               await execute('document.documentElement.classList.toggle("dark",'+dark+')');
               for(const width of [1200,390]) {
@@ -131,7 +147,7 @@ test('device administration browser verifies desktop/mobile layout, native conse
                 assert.equal(await execute('Array.from(document.querySelectorAll(".pending-device input")).every(el=>el.labels.length===1 && !el.checked)'),true);
                 assert.equal(await execute('document.querySelector(".fingerprint").getBoundingClientRect().right <= innerWidth'),true);
                 assert.equal(await execute('getComputedStyle(document.querySelector(".device-administration")).backgroundColor'),dark?'rgb(32, 32, 32)':'rgb(255, 255, 255)');
-                if(width===390) assert.equal(await execute('Array.from(document.querySelectorAll(".device-button")).every(el=>el.getBoundingClientRect().height>=44)'),true);
+                if(width===390) assert.equal(await execute('Array.from(document.querySelectorAll(".device-button")).filter(el=>el.checkVisibility()).every(el=>el.getBoundingClientRect().height>=44)'),true);
                 const image=await window.webContents.capturePage();
                 assert.equal(image.isEmpty(),false);
                 if(process.env.DEVICE_UI_SCREENSHOT_DIR) {

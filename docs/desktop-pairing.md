@@ -34,17 +34,23 @@ a web UI; it does not register a Child or make that browser an execution node.
    Acknowledge the trusted-network HTTP warning, then select **Enable device
    connection**. The regular app/admin gateway remains on its existing
    address; this action opens a separate device-only listener.
-2. Select **Create invitation** on Main. Use **Copy endpoint**, **Copy ID** and
-   **Copy PIN** to transfer the three values to Child before expiry. Keep these
-   details private. The endpoint must use Main's address, not `localhost` on
-   the Child device.
+2. Select **Create invitation** on Main, then **Copy pairing invitation**.
+   Transfer this single value privately to Child before expiry. It contains
+   Main's address, invitation ID, PIN and expiry; encoding does not encrypt it.
+   If clipboard access fails, open **Manual transfer** and select the complete
+   invitation to copy it yourself.
 3. On the second Electron installation, choose **Child > Continue as Child**.
-   Enter Main's endpoint, offer ID, six-digit PIN and the device name. Choose
+   Paste it into **Pairing invitation**. Main's address appears for review;
+   there is no need to enter an ID or PIN separately. Confirm the device name. Choose
    separate **Child home** and **Shared work folder** paths and acknowledge
    the execution/transport scope. Select **Pair and open local status**.
    The Child creates its identity through its OS credential store, not in the
    renderer. The shared folder is advertised as the `desktop-workdir`
    capability after authentication.
+   **Enter details manually** remains available for older Main builds with
+   separate endpoint, offer ID and PIN fields. Pasting never grants HTTP or
+   execution consent automatically. Invalid or expired invitations show an
+   error before submission; invitation text is cleared after every attempt.
 4. Under **Verify pending devices** on Main, compare the full **Device identity
    fingerprint** with Child. Check both the fingerprint and execution-consent
    boxes, then choose **Approve device**. Do not approve a mismatched or
