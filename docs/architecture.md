@@ -765,6 +765,14 @@ listed as ordinary conversations.
 the objective/summary/recent context, with a fallback when synthesis fails.
 The next physical segment starts with that continuation and a rebuilt system
 prompt. Tool-pair boundaries are respected before automatic compaction.
+After a successful handoff, context usage is cleared and persisted with the new
+segment so subsequent messages cannot trigger another handoff from stale usage.
+The triggering response retains its own usage in history and outbound events.
+
+Context-window resolution prefers a provider's per-model `modelContextWindows`
+override, then the built-in model registry. Unknown models default to 400,000
+tokens, giving default thresholds of 380,000 in-loop and 300,000 during sleep.
+Registered model limits and explicit overrides are unchanged.
 
 Session memory, scoped conventions, file tracking, and learning events are
 separate mechanisms. A handoff is not a distributed transfer to another node.

@@ -12,7 +12,7 @@
  *   3. DEFAULT_CONTEXT_WINDOW                         — fallback
  */
 
-export const DEFAULT_CONTEXT_WINDOW = 131_072
+export const DEFAULT_CONTEXT_WINDOW = 400_000
 
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // ── Anthropic Claude ──────────────────────────────────────────────

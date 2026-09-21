@@ -289,7 +289,6 @@ export class Session extends BaseSession {
           break
         } else if (event.type === 'compact') {
           await this.compact(event.llm)
-          await this.saveState()
         } else {
           this.turn = new SessionTurn(event.msg)
           await this.processInput(
@@ -481,8 +480,6 @@ export class Session extends BaseSession {
       }
       if (this.handoffManager.shouldHandoff(usage, false)) {
         await this.compact(llm)
-        this.state.lastKnownTokens = 0
-        await this.store.saveState(this.id, this.state)
         console.info(`[sleep] Session compacted (cold): ${this.id}`)
       }
 
@@ -610,6 +607,10 @@ export class Session extends BaseSession {
     }
     newMessages.push({ role: 'user', content: handoff.prompt })
     this.messages = newMessages
+    // Previous usage describes the old segment, not the continuation prompt.
+    this.usage = undefined
+    this.state.lastKnownTokens = 0
+    await this.saveState()
 
     this.bus.emit('session.handoff', {
       sessionId: this.id,

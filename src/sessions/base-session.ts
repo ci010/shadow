@@ -121,7 +121,7 @@ export abstract class BaseSession {
         tool_call_id: e.tool_call_id,
         name: e.name,
         timestamp: now,
-        usage: e.role === 'assistant' ? this.usage : undefined,
+        usage: e.role === 'assistant' ? e.usage ?? this.usage : undefined,
       }))
       await this.store.appendMessages(this.physicalSessionId, stored)
       for (const message of stampedMessages) {
@@ -273,6 +273,8 @@ export abstract class BaseSession {
       if (response.usage) {
         this.usage = response.usage
       }
+      // Appending the response can compact and reset context usage.
+      const responseUsage = this.usage
 
       await this.appendMessages(llm, {
         role: 'assistant',
@@ -285,7 +287,7 @@ export abstract class BaseSession {
           type: 'function' as const,
           function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
         })),
-        usage: response.usage,
+        usage: responseUsage,
       })
 
       const done = response.toolCalls.length === 0
@@ -300,7 +302,7 @@ export abstract class BaseSession {
           content: text,
           media,
           done,
-          usage: done ? this.usage : undefined,
+          usage: done ? responseUsage : undefined,
         })
       }
 
