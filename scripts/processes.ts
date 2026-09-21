@@ -2,14 +2,21 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 
 export function runPnpm(args: string[]): Promise<void> {
-  const cli = process.env.npm_execpath
-  if (!cli) throw new Error('Run this script through pnpm.')
-  const command = cli.endsWith('.exe') ? cli : process.execPath
-  const commandArgs = cli.endsWith('.exe') ? args : [cli, ...args]
+  const { command, commandArgs } = pnpmInvocation(process.env.npm_execpath, args)
   const child = spawn(command, commandArgs, { stdio: 'inherit', shell: false })
   return waitForExit(child).then((code) => {
     if (code !== 0) throw new Error(`pnpm ${args.join(' ')} exited with code ${code}`)
   })
+}
+
+export function pnpmInvocation(cli: string | undefined, args: readonly string[]) {
+  if (!cli) throw new Error('Run this script through pnpm.')
+  // pnpm 12 ships extensionless native executables on macOS and Linux.
+  const nodeScript = /\.(?:cjs|mjs|js)$/i.test(cli)
+  return {
+    command: nodeScript ? process.execPath : cli,
+    commandArgs: nodeScript ? [cli, ...args] : [...args],
+  }
 }
 
 export function startNode(

@@ -3,7 +3,52 @@ import { once } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
-import { manageChildren, startNode, waitForExit } from './processes.ts'
+import { manageChildren, pnpmInvocation, runPnpm, startNode, waitForExit } from './processes.ts'
+
+test('pnpm launches native Windows and extensionless Unix executables directly', () => {
+  const args = ['--filter', '@shadow/desktop', 'build', 'a path with spaces', 'literal;argument']
+  for (const cli of [
+    'C:\\Program Files\\pnpm\\pnpm.exe',
+    '/home/runner/setup-pnpm/node_modules/pnpm/pnpm',
+    '/Users/runner/setup-pnpm/node_modules/pnpm/pnpm',
+  ]) {
+    assert.deepEqual(pnpmInvocation(cli, args), { command: cli, commandArgs: args })
+  }
+})
+
+test('pnpm JavaScript and Corepack entrypoints still use the current Node runtime', () => {
+  for (const extension of ['js', 'cjs', 'mjs', 'CJS']) {
+    const cli = join(process.cwd(), 'path with spaces', `pnpm.${extension}`)
+    assert.deepEqual(pnpmInvocation(cli, ['typecheck']), {
+      command: process.execPath, commandArgs: [cli, 'typecheck'],
+    })
+  }
+  assert.throws(() => pnpmInvocation(undefined, []), /through pnpm/)
+  assert.throws(() => pnpmInvocation('', []), /through pnpm/)
+})
+
+test('pnpm runner executes native and script entrypoints and propagates failures', async t => {
+  await mkdir('.test-data', { recursive: true })
+  const cwd = await mkdtemp(join(process.cwd(), '.test-data', 'pnpm entry-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const previous = process.env.npm_execpath
+  try {
+    process.env.npm_execpath = process.execPath
+    await runPnpm(['-e', 'process.exit(0)'])
+    await assert.rejects(runPnpm(['-e', 'process.exit(7)']), /exited with code 7/)
+    const cli = join(cwd, 'pnpm fixture.cjs')
+    const argument = 'spaces and ; shell & characters'
+    await writeFile(cli, `process.exit(process.argv[2] === ${JSON.stringify(argument)} ? 0 : 9)\n`)
+    process.env.npm_execpath = cli
+    await runPnpm([argument])
+    await assert.rejects(runPnpm(['wrong']), /exited with code 9/)
+    process.env.npm_execpath = join(cwd, 'missing-pnpm')
+    await assert.rejects(runPnpm([]), { code: 'ENOENT' })
+  } finally {
+    if (previous === undefined) delete process.env.npm_execpath
+    else process.env.npm_execpath = previous
+  }
+})
 
 test('desktop development loads the optional root env file and passes it to child processes', async (t) => {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))

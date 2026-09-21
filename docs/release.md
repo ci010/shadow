@@ -33,6 +33,10 @@ stops the pipeline. `test:release` covers build/packaging helpers, service-mode
 contracts, Vite integration and the Electron lifecycle suite; it is not a
 replacement for the broader `pnpm test` feature suite.
 
+Nested pnpm commands reuse `npm_execpath`: JavaScript entrypoints run through
+Node, while native executables (including extensionless macOS/Linux pnpm 12
+binaries) run directly without a shell.
+
 The **Desktop release check** workflow (`.github/workflows/release-check.yml`)
 runs this same command on pull requests and manual dispatch, on each native
 runner. Linux uses Xvfb for the hidden Electron checks without disabling the
