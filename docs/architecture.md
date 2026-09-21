@@ -624,8 +624,10 @@ Graph parentage comes from delegation ownership, not a historical context parent
   Event defaults and trailing-debounce flushes are explicitly queued, including
   during LLM/tool work; they cannot accidentally take the human-interruption path.
   Silent inputs only record content after any active turn; they neither inject
-  into its context nor start a later model turn. The `message` tool defaults to
-  queued, non-interrupting delivery regardless of its descriptive `intent`.
+  into its context nor start a later model turn. The `message` tool queues requests
+  without interrupting active work. Routine progress/acknowledgements archive by
+  default; explicit `silent:false` retains queued delivery. `attention` marks
+  blockers, decisions, corrections and milestones; these cannot use `silent:true`.
   Required materials and unblocking instructions need a non-silent request;
   multi-part context must end with one, not with silent follow-ups.
   Retry/cancel/compact are distinct controls;
@@ -705,6 +707,9 @@ is request/question/progress/handoff/acknowledgement. Project-validated
 initiativeId/itemId references appear in the first trusted sender envelope as
 context only. Receipt is not acceptance of responsibility, completion, or an
 ownership transfer; use explicit guarded Initiative release/handoff/claim.
+Runtime work-revision references also travel in the trusted envelope. Messages
+already obsolete at admission, or found obsolete when dequeued, are archived as
+historical evidence rather than waking a new execution turn.
 
 The conversation's right-hand message history rail includes human turns, incoming
 session messages, and session-sourced events (including execution completions).
@@ -958,6 +963,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `topic` | Project peer-topic creation/full-brief updates and Main-local folder registration |
 | `message`, `subagent` | Authorized session messaging and temporary task/call execution |
 | `yield` | Three-option decision requests, actual-parent routing, correlated answers and configurable waiting |
+| `work` | Versioned agreements, executor adoption, factual checkpoints and controlled context transitions |
 | `plan_write`, `update_convention`, `log` | Planning documents, scoped constraints, structured knowledge logging |
 | `event_subscribe` | Subscribe to normalized system events |
 | Lazy tools | Cron, Initiative SQL, search/MCP/tool factories |
@@ -1153,6 +1159,97 @@ and are not resurrected after restart. An opening with no saved outcome
 means no confirmed answer, not a live wait. Normal interrupted-tool history
 recovery still applies and may produce a new request; an old answer is not
 automatically replayed against that new request.
+
+### Versioned work alignment
+
+`src/initiatives/work-contract.ts`, `InitiativeStore`, and
+`src/sessions/work-alignment.ts` separate the outcome/acceptance, existing boundary
+descriptions, source evidence and the executor's chosen next phase. Contracts
+attach to an existing topic or Initiative item; they are not another assignment
+queue. They live in the Project's existing `initiatives.sqlite` (schema version 5),
+independently of whether session history uses JSONL or SQLite. Migration retains
+old assignments and does not invent historical goals, contracts or human approval.
+New TopicService-created topics and Initiative items start with explicit,
+unadopted agreements. Ordinary work-enabled sessions must explicitly register
+untracked work before side-effecting tools; historical scope is not reconstructed
+or assumed unrestricted. Read-only investigation, questions, coordination and
+existing permission-checked cancellation remain available during realignment.
+Agent-authored interpretation is labeled separately from authenticated human edits.
+Boundary text is not an access grant or an OS sandbox.
+Custom roles used for durable, tracked work must allow `work` so their executor
+can adopt agreements; role restrictions are not bypassed. Bounded task/call
+executions cannot manage contracts themselves, but inherit their durable
+owner's fence. Standalone bounded tasks retain their existing capability limits.
+
+`work action=context` returns the current records, proposal/revision history,
+in-flight/unknown tool invocations and action schemas. `update` uses an exact
+semantic `expectedRevision`; ordinary item progress does not increment this
+revision. An item controller is its current Initiative owner; a topic controls
+its own agreement. Reporting responsibility and creation provenance grant no
+control rights. Peers can `propose`; material goal/authorization changes and
+agent changes to human-confirmed agreements require human review. An executor
+may always pause its unchanged agreement. Only the actual executor can `adopt`,
+recording understanding, stopped actions, retained evidence and chosen next steps.
+SQL/topic-brief edits cannot silently replace a tracked agreement's goals.
+
+The normal LLM loop injects current agreement facts before each inference and
+captures runtime work stamps. The registry rechecks them immediately before
+managed non-read-only tool execution, including nested script/dynamic calls and
+borrowed call snapshots. Adopting/changing a contract cannot authorize other
+actions already generated in the same tool round. Restored pending tool calls
+without a captured basis fail closed and require fresh inference. A session
+with several assignments can explicitly `select` an unaffected work key; without
+a selection, the fence conservatively covers all assigned agreements. Selection
+does not isolate files or prove that arbitrary shell code implements that task.
+
+Tool admissions with tracked effects persist before invocation. Late results
+are retained with their original revision and marked stale, not treated as new
+completion. A final model response generated against a superseded agreement is
+historical too: durable sessions re-evaluate, while bounded executions fail rather
+than report successful completion of the changed assignment.
+Interrupted invocations become unknown on restart and require
+explicit evidence/human `settle`; startup never replays them as confirmed work.
+A returned background-process receipt is not proof that the external process
+finished: the executor must include ongoing jobs and uncertainties in its
+checkpoint. Already-running external effects are not rolled back or cancelled.
+
+`checkpoint` separates completed facts/artifacts from in-flight work, unknown
+outcomes and retired premises. `transition` requires a current executor-authored
+inventory and no unresolved invocations. Fresh-context replacement runs between
+turns, preserves admitted inputs and logical identity, and publishes a new
+physical segment linked to its prior history. Its `work_transition_id` makes
+recovery after pointer publication idempotent. A pending transition on an inactive
+session waits for an explicit admission; startup alone does not wake work.
+The new context contains the current agreement and factual inventory, not an
+old continuity narrative, and requires executor adoption again. Transition
+failures remain visible/pending rather than pretending the context was replaced.
+
+A successor transition prepares a distinct **idle** topic and retires old
+execution. It does not transfer an Initiative item. The old assignee must
+explicitly `release`, and the Initiative owner must explicitly assign the prepared
+successor with the existing guarded SQL update. The successor's execution stays
+blocked until that assignment is real. Files, external jobs and long-term memory
+are not erased. Both intentional realignment and ordinary compaction explicitly
+treat old summaries/memory conclusions as evidence to revalidate, not authority.
+
+Yield records pin their work revisions. Changed agreements invalidate historical
+decision applicability without deleting answers; live wait invalidation returns
+a non-approval continuation. Custom human answers are also preserved as genuine
+input evidence and require renewed work interpretation/adoption, not automatic
+approval of the original framing.
+
+The lazy conversation **Work alignment** panel uses
+`GET/POST /api/sessions/:key/work` for review, proposals, exact-revision edits,
+checkpoint requests, explicit context-transition confirmation and unknown-effect
+reconciliation. It shows human-confirmed versus agent-interpreted goals separately
+from the executor's plan, preserves editing drafts on conflicts, and never sends
+an ordinary user chat message to impersonate adoption.
+
+These controls enforce provenance, version boundaries and explicit adoption,
+not semantic understanding. The regression provider is deterministic; passing
+tests does not establish live-model alignment reliability or autonomous remote
+job cancellation. Routine reports archive by default, while important attention
+events still wake their recipient; content classification remains a model duty.
 
 The `write` tool returns a bounded success report after the filesystem operation
 completes: path, mode, UTF-8 bytes written, resulting line count, and line-numbered

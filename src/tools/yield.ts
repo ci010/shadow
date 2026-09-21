@@ -65,6 +65,6 @@ export class YieldTool implements Tool {
     }
     return JSON.stringify(await this.yields.ask(ctx.sessionId, question, ctx.signal,
       ctx.inputSource === 'user' ? { channel: ctx.channel, senderId: ctx.senderId } : undefined,
-      ctx.inputSource === 'user' ? ctx.platformMessageId : undefined, ctx.toolCallId))
+      ctx.inputSource === 'user' ? ctx.platformMessageId : undefined, ctx.toolCallId, ctx.workStamps))
   }
 }

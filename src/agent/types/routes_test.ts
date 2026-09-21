@@ -26,6 +26,6 @@ test('agent role API exposes default execution mode rather than a lifetime flag'
     assert(verify && 'allowedTools' in verify)
     assert.equal(verify.defaultMode, 'task')
     assert.equal(listed.find(role => role.name === 'general')?.defaultMode, 'session')
-    assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'yield'])
+    assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'yield', 'work'])
   })
 })

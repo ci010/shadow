@@ -1,5 +1,6 @@
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
+import { parseSql } from '../initiatives/sql.ts'
 
 export interface InitiativeDatabase {
   query(sql: string, actorSessionId: string, signal?: AbortSignal): unknown | Promise<unknown>
@@ -7,6 +8,10 @@ export interface InitiativeDatabase {
 
 export class InitiativeTool implements Tool {
   readonly name = 'initiative'
+  readonly readonly = (args: Record<string, unknown>) => {
+    try { return typeof args.query === 'string' && parseSql(args.query).every(statement => statement.operation === 'SELECT') }
+    catch { return false }
+  }
   readonly optIn = true
   readonly supportsRemoteWorkdir = true
   readonly parameters: ToolParameters = {

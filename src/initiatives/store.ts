@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path'
 import { constants, DatabaseSync } from 'node:sqlite'
 import { HANDOFF_VIEW, ITEM_ACTIVITY_VIEW, SCHEMA, TABLE_COLUMNS } from './schema.ts'
 import { parseSql, type Statement, type Value } from './sql.ts'
+import { WORK_SCHEMA, WorkConflict, workKey, workRecordSchema, workSubjectSchema,
+  type WorkSubject, type WorkAuthority, type WorkRecord } from './work-contract.ts'
 
 export type InitiativeRow = Record<string, string | number | null>
 export interface InitiativeQueryResult {
@@ -11,6 +13,7 @@ export interface InitiativeQueryResult {
   changes: number
 }
 export interface InitiativeStoreOptions {
+  trackWork?: boolean
   /** Informative only, never releases work. True is live, false inactive, undefined unknown. */
   isSessionActive?: (sessionId: string) => boolean | undefined
   /** If supplied, new owner/assignee targets must belong to this Project runtime. */
@@ -53,7 +56,7 @@ export class InitiativeStore {
     try {
       this.#db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL;')
       const version = this.#db.prepare('PRAGMA user_version').get() as { user_version: number }
-      if (![0, 1, 2, 3].includes(version.user_version)) throw new Error('Unsupported initiative database version')
+      if (![0, 1, 2, 3, 4, 5].includes(version.user_version)) throw new Error('Unsupported initiative database version')
       if (version.user_version === 0) {
         const tables = this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
         if (tables.length) throw new Error('Unrecognized initiative database schema')
@@ -62,6 +65,9 @@ export class InitiativeStore {
         this.#db.exec(`BEGIN IMMEDIATE; DROP VIEW IF EXISTS initiative_item_activity;
           DROP VIEW IF EXISTS initiative_handoffs; ${HANDOFF_VIEW} ${ITEM_ACTIVITY_VIEW}
           PRAGMA user_version=3; COMMIT;`)
+      }
+      if (version.user_version < 5) {
+        this.#db.exec(`BEGIN IMMEDIATE; ${WORK_SCHEMA} PRAGMA user_version=5; COMMIT;`)
       }
       const integrity = this.#db.prepare('PRAGMA quick_check').all()
       if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok' || this.#db.prepare('PRAGMA foreign_key_check').all().length) {
@@ -81,6 +87,95 @@ export class InitiativeStore {
   close(): void {
     if (this.#busy) throw new Error('Cannot close InitiativeStore during an operation')
     if (!this.#closed) { this.#db.close(); this.#closed = true }
+  }
+
+  workAuthority(subject: WorkSubject): WorkAuthority {
+    subject = workSubjectSchema.parse(subject)
+    if (subject.kind === 'topic') {
+      if (!this.#options.isSessionKnown?.(subject.sessionId)) return { manager: subject.sessionId, executor: null, active: false }
+      return { manager: subject.sessionId, executor: subject.sessionId, active: true }
+    }
+    const itemSubject = subject
+    return this.#transaction('', () => {
+      const parent = this.#one('initiatives', itemSubject.initiativeId)
+      const item = this.#one('initiative_items', itemSubject.itemId)
+      if (!parent || !item || item.initiative_id !== parent.id) throw new WorkConflict('Work item is not available in this Initiative.')
+      return { manager: parent.owner_session_id as string | null, executor: item.assignee_session_id as string | null,
+        active: parent.status === 'active' && !['done', 'cancelled'].includes(String(item.status)) }
+    }, undefined, true)
+  }
+
+  workRecords(): WorkRecord[] {
+    return this.#transaction('', () => this.#all('SELECT data FROM work_contracts ORDER BY id')
+      .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))), undefined, true)
+  }
+
+  saveWork(record: WorkRecord, expectedSequence: number, actor: string, kind: string): void {
+    const parsed = workRecordSchema.parse(record)
+    if (parsed.key !== workKey(parsed.subject) || parsed.sequence !== expectedSequence + 1) throw new WorkConflict('Invalid work contract identity or sequence.')
+    this.#transaction(actor, () => {
+      const prior = this.#one('work_contracts', parsed.key)
+      if ((Number(prior?.sequence) || 0) !== expectedSequence) throw new WorkConflict('Work contract changed; reload before applying.')
+      if (!prior && this.#all('SELECT id FROM work_contracts').length >= MAX_TABLE_ROWS) throw new WorkConflict('Work contract limit exceeded.')
+      if (prior) this.#write('UPDATE work_contracts SET sequence=?, data=? WHERE id=?', [parsed.sequence, JSON.stringify(parsed), parsed.key])
+      else this.#insert('work_contracts', { id: parsed.key, sequence: parsed.sequence, data: JSON.stringify(parsed) })
+      this.#workEvent(parsed.key, actor, kind, parsed)
+    })
+  }
+
+  workEvent(key: string, actor: string, kind: string, data: unknown): void {
+    this.#transaction(actor, () => this.#workEvent(key, actor, kind, data))
+  }
+
+  #workEvent(key: string, actor: string, kind: string, data: unknown): void {
+    const serialized = JSON.stringify(data)
+    if (Buffer.byteLength(serialized) > MAX_RESULT_BYTES) throw new WorkConflict('Work event is too large.')
+    this.#insert('work_contract_events', { id: randomUUID(), work_key: key, actor, kind,
+      created_at: new Date().toISOString(), data: serialized })
+  }
+
+  workHistory(key: string): { kind: string; actor: string; at: string; data: unknown }[] {
+    return this.#transaction('', () => this.#all(
+      'SELECT kind, actor, created_at, data FROM work_contract_events WHERE work_key=? ORDER BY created_at DESC, id DESC LIMIT 100', [key],
+    ).map(row => ({ kind: String(row.kind), actor: String(row.actor), at: String(row.created_at), data: JSON.parse(String(row.data)) })), undefined, true)
+  }
+
+  workEffects(): { id: string; sessionId: string; tool: string; status: string; stamps: import('./work-contract.ts').WorkStamp[] }[] {
+    return this.#transaction('', () => this.#all('SELECT * FROM work_effects').map(row => ({
+      id: String(row.id), sessionId: String(row.session_id), tool: String(row.tool),
+      status: String(row.status), stamps: JSON.parse(String(row.stamps)),
+    })), undefined, true)
+  }
+
+  startWorkEffect(id: string, sessionId: string, tool: string, stamps: import('./work-contract.ts').WorkStamp[]): void {
+    this.#transaction(sessionId, () => this.#insert('work_effects', {
+      id, session_id: sessionId, tool, status: 'running', stamps: JSON.stringify(stamps),
+    }))
+  }
+
+  finishWorkEffect(id: string, failed: boolean): void {
+    this.#transaction('', () => {
+      if (failed) this.#write("UPDATE work_effects SET status='unknown' WHERE id=?", [id])
+      else this.#write('DELETE FROM work_effects WHERE id=?', [id])
+    })
+  }
+
+  recoverWorkEffects(): void {
+    this.#transaction('', () => { this.#write("UPDATE work_effects SET status='unknown'", []) })
+  }
+
+  workFocus(sessionId: string): string | undefined {
+    return this.#transaction('', () => {
+      const value = this.#all('SELECT work_key FROM work_focus WHERE session_id=?', [sessionId])[0]?.work_key
+      return typeof value === 'string' ? value : undefined
+    }, undefined, true)
+  }
+
+  setWorkFocus(sessionId: string, key?: string): void {
+    this.#transaction(sessionId, () => {
+      this.#write('INSERT INTO work_focus (session_id,work_key) VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET work_key=excluded.work_key', [sessionId, key ?? null])
+      if (key) this.#workEvent(key, sessionId, 'selected', { key })
+    })
   }
 
   query(sql: string, actorSessionId: string, signal?: AbortSignal): InitiativeQueryResult {
@@ -264,13 +359,14 @@ export class InitiativeStore {
     const db = this.#db as DatabaseSync & { setAuthorizer?: (callback: (action: number, arg1: string | null, arg2: string | null, database: string | null) => number) => void }
     if (!db.setAuthorizer) throw new Error('InitiativeStore requires node:sqlite setAuthorizer (use Node 24.15+)')
     const codes = constants as unknown as Record<string, number>
-    const readable = new Set([...Object.keys(TABLE_COLUMNS), 'initiative_legacy_imports'])
+    const workTables = ['work_contracts', 'work_contract_events', 'work_effects', 'work_focus']
+    const readable = new Set([...Object.keys(TABLE_COLUMNS), 'initiative_legacy_imports', ...workTables])
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!
       if (action === codes.SQLITE_SELECT || action === codes.SQLITE_TRANSACTION) return codes.SQLITE_OK!
       if (action === codes.SQLITE_READ && arg1 && readable.has(arg1)) return codes.SQLITE_OK!
       if (action === codes.SQLITE_FUNCTION && ['actor_session_id', 'session_is_inactive', 'session_activity', 'count', 'sum', 'length', 'coalesce', 'trim'].includes(arg2 ?? '')) return codes.SQLITE_OK!
-      if (this.#writeAccess && [codes.SQLITE_INSERT, codes.SQLITE_UPDATE, codes.SQLITE_DELETE].includes(action) && arg1 && [...BASE_TABLES, 'initiative_legacy_imports'].includes(arg1)) return codes.SQLITE_OK!
+      if (this.#writeAccess && [codes.SQLITE_INSERT, codes.SQLITE_UPDATE, codes.SQLITE_DELETE].includes(action) && arg1 && [...BASE_TABLES, 'initiative_legacy_imports', ...workTables].includes(arg1)) return codes.SQLITE_OK!
       return codes.SQLITE_DENY!
     })
   }
@@ -377,6 +473,20 @@ export class InitiativeStore {
       }
       this.#validateRow(table, row)
       this.#insert(table, row)
+      if (table === 'initiative_items' && this.#options.trackWork) {
+        const parent = this.#one('initiatives', String(row.initiative_id))!
+        const subject = { kind: 'item' as const, initiativeId: String(parent.id), itemId: String(row.id) }
+        const record: WorkRecord = {
+          key: workKey(subject), subject, revision: 1, sequence: 1,
+          definition: { objective: String(parent.goal || row.title),
+            acceptance: [String(row.title)], boundaries: [], evidence: [] },
+          origin: 'agent_interpretation', changedBy: this.#actor, changedAt: now,
+          change: 'understanding', reason: 'Initial assigned work; clarify acceptance and existing boundaries before execution.', paused: false,
+        }
+        workRecordSchema.parse(record)
+        this.#insert('work_contracts', { id: record.key, sequence: 1, data: JSON.stringify(record) })
+        this.#workEvent(record.key, this.#actor, 'created', record)
+      }
       const parentId = table === 'initiatives' ? row.id : table === 'initiative_item_deps' ? this.#one('initiative_items', String(row.item_id))!.initiative_id : row.initiative_id
       this.#entry(String(parentId), table === 'initiative_items' ? String(row.id) : typeof row.item_id === 'string' ? row.item_id : null, 'audit', JSON.stringify({ operation: 'insert', table, after: row }))
       return 1
@@ -394,6 +504,13 @@ export class InitiativeStore {
         continue
       }
       const fields = Object.fromEntries(Object.entries(statement.assignments!).map(([key, value]) => [key, this.#value(value)]))
+      if ((table === 'initiatives' && ('goal' in fields || 'context' in fields)) || (table === 'initiative_items' && 'title' in fields)) {
+        const contracts = this.#all('SELECT data FROM work_contracts').map(row => workRecordSchema.parse(JSON.parse(String(row.data))))
+        if (contracts.some(record => record.subject.kind === 'item' &&
+          (table === 'initiatives' ? record.subject.initiativeId === before.id : record.subject.itemId === before.id))) {
+          throw new WorkConflict('This work has versioned agreements. Revise goals/acceptance through work; SQL cannot silently replace their basis.')
+        }
+      }
       const after = { ...before, ...fields, updated_at: new Date().toISOString(), revision: Number(before.revision) + 1 }
       const parent = table === 'initiatives' ? before : this.#requireParent(before.initiative_id)
       if (table === 'initiatives') this.#authorizeInitiative(before, after, fields, statement)

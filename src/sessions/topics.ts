@@ -5,6 +5,7 @@ import type { SessionState } from './session-store.ts'
 import { localFolderWorkdirRef } from './locality.ts'
 import { absoluteDirectoryPath, type FolderRegistry } from '../folders/registry.ts'
 import type { InputSource } from './input.ts'
+import type { TopicMetadata } from './topic-contract.ts'
 
 export const ORCHESTRATOR_SESSION_ID = 'web:orchestrator'
 const briefFields = {
@@ -60,6 +61,9 @@ export interface TopicServiceOptions {
   folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess'>
   resolveAgent: (name: string) => { defaultMode: string } | undefined
   changed: (sessionId?: string) => void
+  created?: (state: SessionState, creator?: string) => void
+  assertBriefChange?: (sessionId: string, brief: z.infer<typeof updateRequest>) => void
+  currentTopic?: (sessionId: string) => TopicMetadata | undefined
 }
 
 function topicSummary(projectId: string, state: SessionState, firstMessage?: string | null): TopicSummary {
@@ -130,7 +134,9 @@ export class TopicService {
     const summaries: TopicSummary[] = []
     for (const state of states) {
       const firstMessage = !state.topic && !state.description ? await this.options.firstMessage?.(state.sessionId) : undefined
-      summaries.push(topicSummary(this.options.projectId, state, firstMessage))
+      summaries.push(topicSummary(this.options.projectId, {
+        ...state, topic: this.options.currentTopic?.(state.sessionId) ?? state.topic,
+      }, firstMessage))
     }
     const entries = summaries
       .filter(topic => {
@@ -177,6 +183,7 @@ export class TopicService {
           workdir: folder ? folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
           description: title,
         })
+        this.options.created?.(this.options.sessions.getSessionState(sessionId)!, createdBySessionId)
         this.options.changed(sessionId)
         if (parsed.initialMessage) {
           const inputId = randomUUID()
@@ -203,6 +210,7 @@ export class TopicService {
 
   async update(request: unknown, actorSessionId?: string) {
     const { sessionId, ...topic } = updateRequest.parse(request)
+    this.options.assertBriefChange?.(sessionId, { sessionId, ...topic })
     const state = this.options.sessions.getSessionState(sessionId)
     if (!state) throw new TopicError('Topic not found in this Project.', 404)
     if (actorSessionId) {
@@ -228,7 +236,9 @@ export class TopicService {
   private requireSummary(sessionId: string) {
     const state = this.options.sessions.getSessionState(sessionId)
     if (!state) throw new TopicError('Topic no longer exists.', 404)
-    return topicSummary(this.options.projectId, state)
+    return topicSummary(this.options.projectId, {
+      ...state, topic: this.options.currentTopic?.(sessionId) ?? state.topic,
+    })
   }
 
   private existing(sessionId: string, hash: string, hasInitialMessage: boolean) {

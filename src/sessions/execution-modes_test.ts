@@ -15,6 +15,7 @@ import { YieldTool } from '../tools/yield.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
 import { EventService } from '../events/service.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
+import { decisionBrief } from '../testing/decision.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import type { SessionStore } from './session-store.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
@@ -31,7 +32,7 @@ import { parseTopicMetadata } from './topic-contract.ts'
 import { physicalSessionId } from './session-identity.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
-const question = { question: 'Choose a path', options: ['A', 'B', 'C'], default_option: 'A' }
+const question = { question: 'Choose a path', options: ['A', 'B', 'C'], default_option: 'A', brief: decisionBrief }
 const done = (content = 'Final'): LLMResponse => ({ content, toolCalls: [] })
 const invoke = (name: string, args: Record<string, unknown>, id: string = crypto.randomUUID()): LLMResponse =>
   ({ content: '', toolCalls: [{ name, arguments: args, id }] })
@@ -205,11 +206,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const role = resolve(name)
         return name === 'orchestrator' && role ? { ...role, allowedTools: ['exec', 'invoke_tool', 'subagent'] } : role
       }
-      for (const name of ['search', 'topic', 'initiative', 'project_config', 'skill_read', 'skill_save']) {
+      for (const name of ['search', 'topic', 'work', 'initiative', 'project_config', 'skill_read', 'skill_save']) {
         f.tools.register({ name, description: name, optIn: name === 'initiative',
           parameters: { type: 'object', properties: {} }, execute: async () => name })
       }
-      const allowed = ['initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic']
+      const allowed = ['initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic', 'work', 'yield']
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })

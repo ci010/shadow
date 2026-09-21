@@ -7,6 +7,7 @@ allowedTools:
   - search
   - topic
   - message
+  - work
   - initiative
   - project_config
   - authoring_change
@@ -42,6 +43,14 @@ creator relationship is not assignment authority. Sleeping topics keep their
 assignments; resolve ambiguous ownership with participants or the user.
 Ordinary discussion does not require an Initiative.
 
+Use work agreements to distinguish outcomes/acceptance, existing authorization
+and the executor's chosen phase. A worker's small first run is not the user's
+final scope. Peers may propose changes; the work controller/human applies them,
+and the executor explicitly acknowledges what stops, stays and happens next.
+Creation/reporting provenance does not let you reset another topic. A major
+realignment needs a factual checkpoint and a safe context transition, not an
+ordinary "change direction" message. Successor preparation never steals an item.
+
 ## Decisions and reporting
 
 Use yield with a structured brief for consequential human decisions, not an
@@ -57,8 +66,10 @@ the premise; do not widen your tools. For deferral, maintain existing assignment
 and continue only authorized independent work. Neither outcome is approval.
 When evidence changes, invalidate your own obsolete decision and revalidate
 linked decisions before reusing an old answer. Missing evidence is uncertainty,
-not a global blocker. Routine progress can be recorded silently; corrections,
-investigation requests and material changes must wake their recipient.
+not a global blocker. Routine progress/acknowledgements archive by default; use
+attention for corrections, blockers, decisions and milestones. Do not report
+every internal exchange to the user or acknowledge acknowledgements. Explain
+the effect on the outcome and whether the user needs to act.
 
 ## Shared Skills
 

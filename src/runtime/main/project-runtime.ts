@@ -81,6 +81,9 @@ import { PlanWriteTool } from '../../tools/plan-write.ts'
 import { ProcessManager } from '../../execution/processes/manager.ts'
 import { InitiativeTool } from '../../tools/initiative.ts'
 import { InitiativeStore } from '../../initiatives/store.ts'
+import { WorkAlignment } from '../../sessions/work-alignment.ts'
+import { WorkTool } from '../../tools/work.ts'
+import { workKey } from '../../initiatives/work-contract.ts'
 import { INITIATIVE_SCHEMA_PROMPT } from '../../initiatives/schema.ts'
 import { ReadTool } from '../../tools/read.ts'
 import { Tools } from '../../tools/registry.ts'
@@ -549,6 +552,7 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('io_surface', new IoSurfaceTool(io, project.id))
 
   const initiatives = new InitiativeStore(workspace, {
+    trackWork: true,
     isSessionKnown: id => sessions.getSessionState(id) !== null,
     isSessionActive: id => {
       if (sessions.getSessionState(id)?.recovery) return false
@@ -557,7 +561,7 @@ export async function createProjectRuntime(
       return false
     },
   })
-  cleanup.push(() => initiatives.close())
+  cleanup.push(async () => { await sessions.stop(); initiatives.close() })
   initiatives.migrateLegacyMarkdown()
   const topics = new TopicService({
     projectId: project.id,
@@ -568,8 +572,79 @@ export async function createProjectRuntime(
     firstMessage: id => sessions.getFirstUserMessage(id),
     resolveAgent: name => agentTypes.resolve(name),
     changed: id => realtime.invalidateSessions(id),
+    currentTopic: id => sessions.currentTopic(id),
+    created: (state, creator) => {
+      const subject = { kind: 'topic' as const, sessionId: state.sessionId }
+      initiatives.saveWork({
+        key: workKey(subject), subject, revision: 1, sequence: 1,
+        definition: { objective: state.topic!.goal,
+          acceptance: [state.topic!.scope || state.topic!.goal],
+          boundaries: state.topic!.nonGoals ? [state.topic!.nonGoals] : [], evidence: [] },
+        origin: creator ? 'agent_interpretation' : 'human', changedBy: creator ?? 'human',
+        changedAt: new Date().toISOString(), change: 'understanding',
+        reason: 'Initial topic brief; execution requires an explicit stop/retain/next acknowledgment.', paused: false,
+      }, 0, creator ?? 'human', 'created')
+    },
+    assertBriefChange: (id, brief) => {
+      const record = initiatives.workRecords().find(item => item.key === workKey({ kind: 'topic', sessionId: id }))
+      const old = sessions.getSessionState(id)?.topic
+      if (record && (old?.goal !== brief.goal || old?.scope !== brief.scope || old?.nonGoals !== brief.nonGoals)) {
+        throw new Error('This topic has a versioned work agreement. Revise it through work/the alignment panel, not an unversioned brief update.')
+      }
+    },
   })
   tools.register(new TopicTool(topics))
+  initiatives.recoverWorkEffects()
+  const alignment = new WorkAlignment(initiatives, {
+    state: id => sessions.getSessionState(id),
+    evidence: source => sessions.validateWorkEvidence(source),
+    changed: async record => {
+      realtime.invalidateSessions()
+      await sessions.notifyWorkChange(record)
+    },
+    fresh: (id, record) => sessions.requestWorkContext(id, record),
+    successor: async (id, record) => {
+      const source = sessions.getSessionState(id)
+      if (!source || source.mode !== 'session' || sessions.isManagedConversation(id)) throw new Error('Only ordinary durable sessions can prepare a successor.')
+      const createSuccessor = async () => {
+        const current = alignment.get(record.key)
+        if (current.transition?.id !== record.transition!.id) throw new Error('Successor transition was superseded.')
+        if (initiatives.workEffects().some(effect => effect.sessionId === id)) throw new Error('Unresolved effects prevent successor creation.')
+        const topic = await topics.create({
+          requestId: record.transition!.id, title: `Realigned: ${source.topic?.title ?? source.name ?? 'work'}`.slice(0, 160),
+          goal: record.definition.objective, scope: `Full acceptance is retained in the work agreement inherited from ${record.key}.`,
+          nonGoals: 'Existing boundaries are retained in the work agreement; no permissions or assignments transfer.',
+          folderId: source.folderId, agentType: source.agentType ?? 'general', initiativeId: source.initiativeId,
+        }, id)
+        const subject = { kind: 'topic' as const, sessionId: topic.sessionId }
+        const initial = initiatives.workRecords().find(item => item.key === workKey(subject))
+        if (!initial?.handoffFrom) {
+          initiatives.saveWork({
+            key: workKey(subject), subject, revision: 1, sequence: (initial?.sequence ?? 0) + 1, definition: record.definition,
+            origin: record.origin, changedBy: record.changedBy, changedAt: new Date().toISOString(),
+            change: 'understanding', reason: 'Prepared successor; acceptance and assignment are separate.',
+            paused: false, checkpoint: record.checkpoint, handoffFrom: { key: record.key, sessionId: id },
+          }, initial?.sequence ?? 0, id, 'successor_prepared')
+        }
+        realtime.invalidateSessions()
+        return topic.sessionId
+      }
+      const active = sessions.getActiveSession(id)
+      if (active) {
+        if (!('requestRealignment' in active)) throw new Error('Temporary executions cannot hand off a durable context.')
+        active.requestRealignment(async () => {
+          const successor = await createSuccessor()
+          alignment.finishTransition(record.key, record.transition!.id, successor)
+          realtime.invalidateSessions()
+        })
+        return undefined
+      }
+      return createSuccessor()
+    },
+  })
+  sessions.alignment = alignment
+  tools.setWorkGuard(alignment)
+  tools.register(new WorkTool(alignment))
 
   context.register(guidelineProvider())
   context.register(
@@ -594,7 +669,10 @@ export async function createProjectRuntime(
     workdirCapabilityLookup,
   })
   context.register(projectProvider(projectFolderDiscovery))
-  context.register(topicProvider(id => sessions.getSessionState(id)))
+  context.register(topicProvider(id => {
+    const state = sessions.getSessionState(id)
+    return state ? { ...state, topic: sessions.currentTopic(id) } : null
+  }))
   context.register(initiativeProvider(initiatives))
   context.register(memoryProvider(
     memory,
@@ -803,6 +881,7 @@ export async function createProjectRuntime(
       deliverInput,
       (source, target) => sessions.canSendSessionMessage(source, target),
       (initiativeId, itemId) => initiatives.assertWorkReference(initiativeId, itemId),
+      stamps => alignment.current(stamps),
     ),
   )
   tools.register(new YieldTool(sessions.yields))

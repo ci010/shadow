@@ -65,7 +65,9 @@ export function buildSenderTag(msg: SessionMessageInput): string {
       (coordination.initiativeId ? ` initiative-id="${escapeAttr(coordination.initiativeId)}"` : '') +
       (coordination.itemId ? ` item-id="${escapeAttr(coordination.itemId)}"` : '')
     : ''
-  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work} />`
+  const revisions = msg.source.kind === 'session' && msg.source.workStamps?.length
+    ? ` work-revisions="${escapeAttr(JSON.stringify(msg.source.workStamps.map(({ key, revision }) => ({ key, revision }))))}"` : ''
+  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work}${revisions} />`
 }
 
 /**

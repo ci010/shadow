@@ -7,6 +7,7 @@ import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { sessionReplyAddress, type DeliverInput, type SessionInputSource, type SessionMessageInput } from '../sessions/input.ts'
 import { buildSenderTag } from '../agent/message-builder.ts'
 import { z } from 'zod'
+import type { WorkStamp } from '../initiatives/work-contract.ts'
 
 const coordinationSchema = z.object({
   intent: z.enum(['request', 'question', 'progress', 'handoff', 'acknowledgement']).default('request'),
@@ -23,7 +24,7 @@ const coordinationSchema = z.object({
 export class MessageTool implements Tool {
   readonly name = 'message'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Send to a peer session in this Project. By default, queues a response after any active turn without interrupting it. Use this for tasks, required context and unblocking information. silent:true only archives: it neither updates the active turn nor wakes the recipient. A receipt confirms admission, not completion or transfer of Initiative assignment. Sleeping topics can receive messages; temporary executions cannot be reused.'
+  readonly description = 'Send to a peer session in this Project. Requests queue without interrupting active work. Routine progress/acknowledgements are archived by default to avoid report loops; attention marks milestones, blockers, decisions or corrections that need a response. Use work for versioned goal changes, not prose-only redirection. A receipt is admission, not adoption/completion/assignment transfer.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -36,9 +37,10 @@ export class MessageTool implements Tool {
       silent: {
         type: 'boolean',
         description:
-          'Default false: queue a response without interrupting active work. True only archives for a future turn; it does not update active context or wake an idle recipient. Never use true for required task materials, corrections, questions or instructions to continue.',
+          'False queues a response without interrupting active work; true only archives. Defaults to true for routine progress/acknowledgements, false otherwise. Archival does not update active context or wake a recipient. Never use true for required materials, corrections, questions or instructions.',
       },
-      intent: { type: 'string', enum: ['request', 'question', 'progress', 'handoff', 'acknowledgement'], description: 'Descriptive purpose only; does not control scheduling. Use request for actionable follow-ups and required materials; progress for status reports. handoff does not mutate work ownership.' },
+      intent: { type: 'string', enum: ['request', 'question', 'progress', 'handoff', 'acknowledgement'], description: 'Progress and acknowledgement default to routine archival; required action/materials use request. handoff does not mutate work ownership.' },
+      attention: { type: 'string', enum: ['routine', 'milestone', 'blocker', 'decision', 'correction'], description: 'Routine status is archived by default. Other values require a response and cannot be silent. Do not hide failures or corrections as routine progress.' },
       initiativeId: { type: 'string', description: 'Optional existing Initiative in this Project.' },
       itemId: { type: 'string', description: 'Optional existing work item in initiativeId.' },
     },
@@ -53,6 +55,7 @@ export class MessageTool implements Tool {
     private deliver: DeliverInput,
     private canSendSessionMessage?: (sourceId: string, targetId: string) => boolean,
     private assertWorkReference?: (initiativeId: string, itemId?: string) => void,
+    private workIsCurrent?: (stamps: WorkStamp[]) => boolean,
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -113,7 +116,12 @@ export class MessageTool implements Tool {
       }
     }
     const { text, media } = parseMediaFromContent(rawContent)
-    const silent = args.silent === true
+    const attention = args.attention === undefined ? undefined
+      : z.enum(['routine', 'milestone', 'blocker', 'decision', 'correction']).parse(args.attention)
+    if (attention && attention !== 'routine' && args.silent === true) throw new Error('Important work updates cannot be silently archived.')
+    const routine = attention === 'routine' || (!attention && ['progress', 'acknowledgement'].includes(coordination?.intent ?? ''))
+    const stale = !!context.workStamps?.length && this.workIsCurrent?.(context.workStamps) === false
+    const silent = stale || args.silent === true || (routine && args.silent !== false)
 
     const input: SessionMessageInput = {
       kind: 'message',
@@ -125,9 +133,10 @@ export class MessageTool implements Tool {
         inputId: context.messageId,
         senderName: context.senderName ?? 'Agent',
         ...(coordination ? { coordination } : {}),
+        ...(context.workStamps?.length ? { workStamps: context.workStamps } : {}),
       },
       policy: silent ? 'silent' : 'queue',
-      content: text,
+      content: stale ? `[Historical update from an obsolete work revision; not a new instruction or completion.]\n${text}` : text,
       media,
     }
     await this.deliver(targetSessionId, input)
@@ -138,12 +147,12 @@ export class MessageTool implements Tool {
       chatId: reply.chatId,
       ...(reply.channelAddress ? { channelAddress: reply.channelAddress } : {}),
       done: false,
-      content: text,
+      content: input.content,
       media,
       sessionMessage: {
         role: 'user', name: input.source.kind === 'session' ? input.source.senderName : undefined,
         timestamp: input.timestamp,
-        content: [{ type: 'text', text: buildSenderTag(input) }, { type: 'text', text }],
+        content: [{ type: 'text', text: buildSenderTag(input) }, { type: 'text', text: input.content }],
       },
     }
     this.bus.emit('message.outbound', outbound)
@@ -151,6 +160,6 @@ export class MessageTool implements Tool {
     const scheduling = silent
       ? 'Recorded only: not injected into the active turn and will not wake the recipient. A later non-silent message is required for processing; send a non-silent request if this needs action.'
       : 'Queued for a response after any active turn, without interrupting it.'
-    return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}. ${scheduling} Receipt confirms admission only; work ownership is unchanged.`
+    return `Message sent to ${targetSessionId}${silent ? ' (silent)' : ''}. ${scheduling} ${stale ? 'Obsolete work version: evidence only.' : ''} Receipt confirms admission only; work ownership is unchanged.`
   }
 }

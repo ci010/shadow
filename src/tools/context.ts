@@ -9,6 +9,8 @@ export interface ExecutionContext extends MessageContext {
   projectId?: string
   evalBridge?: ToolBridgeFactory
   inputSource?: 'user' | 'session' | 'event'
+  /** Runtime-captured before inference, never supplied in model tool arguments. */
+  workStamps?: import('../initiatives/work-contract.ts').WorkStamp[]
   /** Logical session ID (e.g. "discord:1234567890") */
   sessionId: string
   /** Physical session ID - the actual persisted session log identifier */

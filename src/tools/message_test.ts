@@ -153,7 +153,7 @@ test('message tool preserves silent policy and refuses self or another parent ch
   assert.match(receipt, /later non-silent message is required for processing/)
 })
 
-test('intent labels never silently change message scheduling or receipts', async () => {
+test('routine progress defaults to archival while explicit delivery remains available', async () => {
   const inputs: SessionInput[] = []
   const tool = new MessageTool(new Bus(), () => true, () => undefined, () => [], async (sessionId, input) => {
     inputs.push(input)
@@ -164,11 +164,27 @@ test('intent labels never silently change message scheduling or receipts', async
       const receipt = await tool.execute({ sessionId: 'web:target', content: 'Fixture context', intent, ...(silent === undefined ? {} : { silent }) }, context())
       const input = inputs.at(-1)!
       assert(input.kind === 'message' && input.source.kind === 'session')
-      assert.equal(input.policy, silent ? 'silent' : 'queue')
+      const archived = silent === true || silent === undefined && ['progress', 'acknowledgement'].includes(intent)
+      assert.equal(input.policy, archived ? 'silent' : 'queue')
       assert.equal(input.source.coordination?.intent, intent)
-      assert.match(receipt, silent ? /will not wake/ : /Queued for a response/)
+      assert.match(receipt, archived ? /will not wake/ : /Queued for a response/)
     }
   }
+})
+
+test('important reports cannot be hidden and stale work messages are archived with their basis', async () => {
+  const inputs: SessionInput[] = []
+  const tool = new MessageTool(new Bus(), () => true, () => undefined, () => [], async (sessionId, input) => {
+    inputs.push(input)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  }, undefined, undefined, () => false)
+  await assert.rejects(tool.execute({ sessionId: 'web:target', content: 'Failure', intent: 'progress', attention: 'blocker', silent: true }, context()), /cannot be silently/)
+  await tool.execute({ sessionId: 'web:target', content: 'Failure', intent: 'progress', attention: 'blocker' }, context())
+  assert.equal(inputs[0].kind === 'message' && inputs[0].policy, 'queue')
+  await tool.execute({ sessionId: 'web:target', content: 'Old completion', intent: 'request' },
+    { ...context(), workStamps: [{ key: 'item:old', revision: 1 }] })
+  assert.equal(inputs[1].kind === 'message' && inputs[1].policy, 'silent')
+  assert.match(inputs[1].kind === 'message' ? inputs[1].content : '', /obsolete work revision/)
 })
 
 test('message routes to actual parent and same-owner siblings, but never across unrelated owners', async () => {

@@ -236,6 +236,7 @@
           <span v-if="!isWaitingStage(sessionStage)" class="working-wave" aria-hidden="true"><i /><i /><i /></span>
         </div>
         <DecisionOwner v-if="activeSessionId && !isCall && !viewingPhysicalId && installation.uiScopes.includes('chat:write')" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId" />
+        <WorkAlignment v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="`work:${activeSessionId}`" :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" />
         <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled"
@@ -428,6 +429,7 @@ import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
 import YieldQuestion from './YieldQuestion.vue'
 import DecisionOwner from './DecisionOwner.vue'
+import WorkAlignment from './WorkAlignment.vue'
 import CollaborationMessage from './CollaborationMessage.vue'
 import YieldDecision from './YieldDecision.vue'
 import { inlineYieldDecisions, parseDecisionRecords } from '../yield-history.ts'

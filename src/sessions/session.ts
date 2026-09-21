@@ -2,7 +2,7 @@ import type { Executor } from '../execution/executor.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { cleanupTempFiles } from '../utils/paths.ts'
 import { physicalSessionId } from './session-identity.ts'
-import { inputContent, type SessionInput, type SessionMessageInput } from './input.ts'
+import { inputContent, sessionReplyAddress, type SessionInput, type SessionMessageInput } from './input.ts'
 import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
 import { Span } from '../otel/tracing.ts'
@@ -38,6 +38,7 @@ type LoopEvent =
   | { type: 'message'; msg: SessionInput; llm: LlmRuntimeConfig }
   | { type: 'sleep'; llm: LlmRuntimeConfig }
   | { type: 'compact'; llm: LlmRuntimeConfig }
+  | { type: 'realign'; apply: () => Promise<void> }
 
 export class Session extends BaseSession {
   private running = false
@@ -256,6 +257,42 @@ export class Session extends BaseSession {
     this.pushEvent({ type: 'compact', llm })
   }
 
+  /** Runs between turns, preserving already admitted inputs and in-flight tool results. */
+  requestRealignment(apply: () => Promise<void>): void {
+    if (!this.accepting) throw new Error('Session is stopping.')
+    const event: LoopEvent = { type: 'realign', apply }
+    if (this.inboxWaiter) this.pushEvent(event)
+    else this.inbox.unshift(event)
+  }
+
+  async replaceWorkContext(prompt: string, transitionId: string): Promise<void> {
+    if (this.turn) throw new Error('Work context replacement requires a tool-safe boundary.')
+    const previous = physicalSessionId(this.state)
+    const timestamp = new Date().toISOString()
+    const next = { ...this.state, segmentIndex: this.state.segmentIndex + 1, contextResetAt: timestamp,
+      lastKnownTokens: 0, lastActivityAt: timestamp, recovery: undefined, preloadTools: undefined }
+    const target = physicalSessionId(next)
+    const system = this.rebuildSystemPrompt ? await this.rebuildSystemPrompt()
+      : this.messages.find(message => message.role === 'system')?.content
+    if (typeof system !== 'string') throw new Error('Cannot rebuild the work context.')
+    await this.store.createSessionLog(target, [{
+      sessionId: this.id, physicalIdVersion: next.physicalIdVersion, previous_physical_id: previous,
+      timestamp, context_reset: true, work_transition_id: transitionId, summary_context: prompt,
+    }])
+    try { await this.store.saveState(this.id, next) }
+    catch (error) {
+      try { await this.store.deleteSessionLog(target) }
+      catch (cleanup) { throw new AggregateError([error, cleanup], 'Work context publication and cleanup failed.') }
+      throw error
+    }
+    Object.assign(this.state, next)
+    this.messages = [{ role: 'system', content: system }, { role: 'user', name: '__work_handoff__', content: prompt }]
+    this.usage = undefined
+    this.clearReadCache()
+    await this.tools.resetDynamicAndWait()
+    this.bus.emit('session.handoff', { sessionId: this.id, sourceSessionId: previous, targetSessionId: target })
+  }
+
   /** Cancel only the active turn; already queued inputs remain admitted. */
   cancel(): void {
     this.turn?.abort()
@@ -281,7 +318,9 @@ export class Session extends BaseSession {
       }
 
       try {
-        if (event.type === 'sleep') {
+        if (event.type === 'realign') {
+          await event.apply()
+        } else if (event.type === 'sleep') {
           await this.sleep(event.llm)
           // If messages arrived during compaction, keep running to process them.
           if (this.inbox.length > 0) continue
@@ -310,10 +349,18 @@ export class Session extends BaseSession {
         }
       } catch (err) {
         console.error(errDetail(err), `[session-loop] Error in ${this.id}`)
+        if (event.type === 'realign') {
+          const reply = sessionReplyAddress(this.id)
+          this.bus.emit('message.outbound', {
+            event: 'response', channel: reply?.channel ?? 'system', chatId: reply?.chatId ?? this.id,
+            channelAddress: reply?.channelAddress, done: true,
+            content: `Work transition remains pending: ${errMsg(err)}. Inspect work state and retry; no successful replacement is implied.`,
+          })
+        }
       }
 
       // After processing, if no queued messages remain start the sleep timer.
-      if (this.inbox.length === 0) {
+      if (this.inbox.length === 0 && event.type !== 'realign') {
         this.scheduleSleepCheck(event.llm)
       }
     }
@@ -565,7 +612,9 @@ export class Session extends BaseSession {
   private async compact(llm: LlmRuntimeConfig): Promise<CompactResult> {
     const sessionId = this.id
     const state = this.state
-    const messages = this.messages
+    const work = this.tools.getWorkGuard()?.prompt(this.id)
+    const messages = work ? this.messages.map((message, index) => index === 0 && message.role === 'system'
+      ? { ...message, content: `${message.content}\n\n${work}` } : message) : this.messages
 
     const sourcePhysicalId = physicalSessionId(state)
     const targetPhysicalId = physicalSessionId(state, state.segmentIndex + 1)

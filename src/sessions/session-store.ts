@@ -153,6 +153,7 @@ export interface SessionStartEvent {
   timestamp: string
   /** Compaction/handoff summary — present only on compacted session logs. */
   summary_context?: string
+  work_transition_id?: string
   [key: string]: unknown
 }
 

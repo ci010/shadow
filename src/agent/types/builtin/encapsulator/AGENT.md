@@ -165,7 +165,7 @@ Create `agents/<name>/AGENT.md` (hot-reloaded into the agent registry):
 ```markdown
 ---
 description: <one-line description shown in the agent-type summary>
-allowedTools: [read, search, exec, write]   # narrow the toolset to the mission
+allowedTools: [read, search, exec, write, work]   # include work for durable agreement adoption
 defaultMode: task
 ---
 # <Agent Name>

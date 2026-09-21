@@ -4,6 +4,8 @@ import { parseSessionName, SessionNameError } from './session-name.ts'
 import type { SessionManager } from './session-manager.ts'
 import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
+import { z } from 'zod'
+import { WorkConflict, workChangeSchema, workKey } from '../initiatives/work-contract.ts'
 import { parseYieldReference } from './yield-contract.ts'
 import { SessionResumeError } from './recovery.ts'
 import type { SessionRecovery } from './session-store.ts'
@@ -347,6 +349,56 @@ export function sessionsApiPlugin(
       const key = c.req.param('key')
       if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
       return c.json({ request: sessions.yields.get(key) })
+    })
+
+    app.get('/api/sessions/:key/work', c => {
+      if (!sessions?.alignment) return c.json({ error: 'work_unavailable' }, 501)
+      const id = c.req.param('key')
+      if (!sessions.getSessionState(id)) return c.json({ error: 'session_not_found' }, 404)
+      sessions.assertFolderAccess(id)
+      return c.json(sessions.alignment.context(id))
+    })
+
+    app.post('/api/sessions/:key/work', async c => {
+      if (!sessions?.alignment) return c.json({ error: 'work_unavailable' }, 501)
+      const id = c.req.param('key')
+      if (!sessions.getSessionState(id)) return c.json({ error: 'session_not_found' }, 404)
+      sessions.assertFolderAccess(id)
+      try {
+        const body = z.object({
+          action: z.enum(['update', 'transition', 'settle', 'request_checkpoint']),
+          key: z.string().optional(), revision: z.number().int().positive().optional(), data: z.unknown().optional(),
+        }).strict().parse(await c.req.json())
+        const visible = sessions.alignment.records(id)
+        if (body.action === 'update') {
+          const change = workChangeSchema.parse(body.data)
+          const key = workKey(change.subject)
+          const authority = sessions.alignment.store.workAuthority(change.subject)
+          if (!visible.some(record => record.key === key) && authority.manager !== id && authority.executor !== id) {
+            return c.json({ error: 'forbidden' }, 403)
+          }
+        } else if (!visible.some(record => record.key === body.key)) return c.json({ error: 'forbidden' }, 403)
+        if (body.action === 'request_checkpoint') {
+          const record = sessions.alignment.get(body.key!)
+          if (body.revision !== record.revision) throw new WorkConflict('Work revision changed.')
+          const target = sessions.alignment.store.workAuthority(record.subject).executor
+          if (!target) throw new WorkConflict('No executor is assigned.')
+          await sessions.deliver(target, {
+            kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), policy: 'steering',
+            source: { kind: 'event', eventId: record.key, type: 'work-checkpoint-request', source: 'human-work-review' },
+            content: `The human requests a factual checkpoint for ${record.key} revision ${record.revision}. At a safe boundary record completed work, artifacts, inFlight, unknown and retired premises with work action=checkpoint, then end the turn. Do not start new external work, claim cancellation, or change assignments.`,
+          })
+        } else {
+          await sessions.alignment.execute({ kind: 'user' }, body.action, body.key, body.revision, body.data, c.req.raw.signal)
+        }
+        return c.json(sessions.alignment.context(id))
+      } catch (error) {
+        if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof TypeError) {
+          return c.json({ error: 'invalid_request', message: error.message }, 400)
+        }
+        if (error instanceof WorkConflict) return c.json({ error: 'work_conflict', message: error.message }, 409)
+        throw error
+      }
     })
 
     app.get('/api/sessions/:key/decisions', async c => {

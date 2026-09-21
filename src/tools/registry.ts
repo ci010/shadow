@@ -9,8 +9,9 @@ import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
 import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
 import { redactMcpText } from '../mcp/errors.ts'
+import type { WorkToolGuard } from '../sessions/work-alignment.ts'
 
-const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'event_subscribe', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
+const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'work', 'event_subscribe', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
@@ -29,6 +30,9 @@ export function toolInvocationContract(tools: Tool[]): string {
  * Central registry of all available tools.
  */
 export class Tools {
+  private workGuard?: WorkToolGuard
+  setWorkGuard(guard: WorkToolGuard): void { this.workGuard = guard }
+  getWorkGuard(): WorkToolGuard | undefined { return this.workGuard }
   protected tools = new Map<string, Tool>()
   protected workspace: string
   private truncationThreshold: number
@@ -109,12 +113,17 @@ export class Tools {
     if (context.remoteWorkdir && tool.supportsRemoteWorkdir !== true) {
       return `Error: tool "${name}" does not support remote workdirs`
     }
+    let admission: ReturnType<WorkToolGuard['before']>
     try {
       context.signal?.throwIfAborted()
 
       await this.onBefore(name, args, context)
       context.signal?.throwIfAborted()
+      admission = context.tools.getWorkGuard()?.before(tool, args, context)
       let result = await tool.execute(args, context)
+      const receipt = admission
+      admission = undefined
+      result += receipt?.finish(/^(Error|Blocked):/.test(result)) ?? ''
       // Run post-execution hooks
       result = await this.onAfter(name, args, result, context)
 
@@ -128,6 +137,7 @@ export class Tools {
       }
       return result
     } catch (err) {
+      admission?.finish(true)
       // An interrupted invocation has no result to persist or send to the model.
       if (context.signal?.aborted) throw err
       // handle abort
@@ -252,6 +262,7 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  override getWorkGuard(): WorkToolGuard | undefined { return super.getWorkGuard() ?? this.base.getWorkGuard() }
   private borrowedOwner?: SessionTools
   private borrowedLifetime?: AbortSignal
   private dynamicLifetime = new AbortController()
@@ -286,7 +297,7 @@ export class SessionTools extends Tools {
 
   /** Check if a tool name passes the allow/block policy. */
   private isToolAllowed(name: string): boolean {
-    if (name === 'topic' && this.scope && this.scope.mode !== 'session') return false
+    if ((name === 'topic' || name === 'work') && this.scope && this.scope.mode !== 'session') return false
     if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
     if (this.allowed) return this.allowed.has(name)
@@ -493,6 +504,8 @@ export class SessionTools extends Tools {
   /** Blocking callers retain ownership of borrowed tool resources until the child returns. */
   snapshot(): SessionTools {
     const base = new Tools(this.workspace)
+    const guard = this.getWorkGuard()
+    if (guard) base.setWorkGuard(guard)
     for (const name of this.names()) {
       const tool = this.get(name)
       if (tool) base.register(tool)

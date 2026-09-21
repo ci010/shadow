@@ -58,6 +58,8 @@ import { delegationOwner, MAX_CALL_TIMEOUT_MS } from './execution-scope.ts'
 import { CallTools } from './call-tools.ts'
 import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
 import type { ExecutionContext } from '../tools/context.ts'
+import type { WorkAlignment } from './work-alignment.ts'
+import type { WorkRecord } from '../initiatives/work-contract.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import {
   channelMessageInput,
@@ -205,6 +207,7 @@ interface BlockingCallFrame {
 }
 
 export class SessionManager {
+  alignment?: WorkAlignment
   readonly yields: YieldManager
   readonly yieldDiscussions: YieldDiscussions
   private readonly decisionRecords: YieldRecords
@@ -555,7 +558,14 @@ export class SessionManager {
       throw new RangeError(`callTimeoutMs must be between 1 and ${MAX_CALL_TIMEOUT_MS}.`)
     }
     this.sleepInactivityMs = deps.sleep?.inactivityMs ?? 15 * 60 * 1_000
-    const decisionRecords = new YieldRecords(this.store, id => this.getSessionState(id))
+    const decisionRecords = new YieldRecords(this.store, id => this.getSessionState(id), request => {
+      if (!this.alignment || !request.workStamps?.length) return
+      if (!this.alignment.current(request.workStamps)) {
+        return 'The task agreement changed. This historical question/answer is not approval for the current revision.'
+      }
+    }, record => {
+      if (record.answer) this.alignment?.reviewAnswer(record.request.sessionId, record.answer.option, record.request.id)
+    })
     this.decisionRecords = decisionRecords
     this.yields = new YieldManager({
       assertCanYield: id => {
@@ -584,7 +594,8 @@ export class SessionManager {
     const reportingSessionId = state.decisionOwnerSessionId ?? sessionId
     const context = await this.decisionRecords.context(sessionId)
     const reporter = reportingSessionId === sessionId ? undefined : await this.decisionRecords.context(reportingSessionId)
-    return { ...context, userInputs: [...context.userInputs, ...(reporter?.userInputs ?? [])], reportingSessionId,
+    return { ...context, ...(this.alignment ? { work: this.alignment.context(sessionId) } : {}),
+      userInputs: [...context.userInputs, ...(reporter?.userInputs ?? [])], reportingSessionId,
       notice: `${context.notice} Reporting responsibility does not change who answers or assign Initiative work.` }
   }
 
@@ -1226,6 +1237,11 @@ ${JSON.stringify(request)}`,
       )
       if (promptRevision !== this.promptRevision) sess.invalidateSystemPrompt()
       this.sessions[sessionId] = sess
+      for (const record of this.alignment?.records(sessionId, true) ?? []) {
+        if (record.transition?.status === 'pending' && record.transition.sessionId === sessionId) {
+          await this.alignment!.resumeTransition(record)
+        }
+      }
       return sess
     }
   }
@@ -1759,8 +1775,22 @@ ${JSON.stringify(request)}`,
     return this.sessionStates[sessionId] ?? null
   }
 
+  currentTopic(sessionId: string): TopicMetadata | undefined {
+    const state = this.getSessionState(sessionId)
+    const work = this.alignment?.store.workRecords().find(record => record.subject.kind === 'topic' && record.subject.sessionId === sessionId)
+    if (!work) return state?.topic
+    const display = (values: string[]) => {
+      const full = values.join('\n')
+      return full.length <= 3800 ? full : `${full.slice(0, 3800)}\n[Display excerpt; open Work alignment for all criteria.]`
+    }
+    return { title: state?.topic?.title ?? state?.name ?? work.definition.objective.slice(0, 160),
+      goal: work.definition.objective,
+      scope: `Work agreement v${work.revision} (${work.origin === 'human' ? 'human-confirmed' : 'agent interpretation'}):\n${display(work.definition.acceptance)}`,
+      nonGoals: display(work.definition.boundaries) }
+  }
+
   async getYieldRecords(sessionId: string, physicalId?: string) {
-    return new YieldRecords(this.store, id => this.getSessionState(id)).read(sessionId, physicalId)
+    return this.decisionRecords.read(sessionId, physicalId)
   }
 
   assertInitiativeAccess(initiativeId: string): void {
@@ -1808,6 +1838,7 @@ ${JSON.stringify(request)}`,
     return {
       ...(state.projectId ? { projectId: state.projectId } : {}),
       ...parseTopicSessionFields(state),
+      ...(this.currentTopic(sessionId) ? { topic: this.currentTopic(sessionId) } : {}),
       sessionId,
       name: state.name ?? state.topic?.title ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
       workdir: {
@@ -1832,6 +1863,53 @@ ${JSON.stringify(request)}`,
 
   getActiveSession(sessionId: string): Session | EphemeralSession | undefined {
     return this.sessions[sessionId]
+  }
+
+  validateWorkEvidence(source: import('./decision-brief.ts').DecisionEvidence): Promise<void> {
+    this.assertFolderAccess(source.sessionId)
+    return this.decisionRecords.evidence(source)
+  }
+
+  async notifyWorkChange(record: WorkRecord): Promise<void> {
+    if (!this.alignment) throw new Error('Work alignment is not configured.')
+    const authority = this.alignment.store.workAuthority(record.subject)
+    if (!authority.executor) return
+    this.assertFolderAccess(authority.executor)
+    const pending = this.yields.get(authority.executor)
+    if (pending?.origin) await this.yields.invalidatePending({
+      sessionId: pending.sessionId, physicalId: pending.origin.physicalId, requestId: pending.id,
+    }, `Work contract ${record.key} changed to revision ${record.revision}.`)
+    await this.deliver(authority.executor, {
+      kind: 'message', id: `work:${record.key}:${record.revision}`, timestamp: new Date().toISOString(), policy: 'steering',
+      source: { kind: 'event', eventId: record.key, type: 'work-realignment', source: 'work-contract' },
+      content: `Work agreement changed. Stop obsolete actions and read work context; acknowledge stop/retain/next before execution. No new permission was granted.\n${JSON.stringify(record)}`,
+    })
+  }
+
+  async requestWorkContext(sessionId: string, record: WorkRecord): Promise<void> {
+    this.assertFolderAccess(sessionId)
+    this.assertHistoryWritable(sessionId)
+    const state = this.getSessionState(sessionId)
+    if (!state || state.mode !== 'session' || this.isManagedConversation(sessionId)) throw new Error('Only ordinary durable sessions support work context replacement.')
+    const active = this.sessions[sessionId]
+    if (!active) return // Persisted pending transition is applied on the next explicit admission.
+    if (!(active instanceof Session)) throw new Error('Temporary execution context cannot be replaced.')
+    active.requestRealignment(async () => {
+      const current = this.alignment?.get(record.key)
+      if (!current?.transition || current.transition.id !== record.transition?.id) throw new Error('Context transition was superseded.')
+      if (current.transition.status === 'applied') return
+      if (this.alignment!.store.workEffects().some(effect => effect.sessionId === sessionId)) throw new Error('Work effects remain unresolved; context was not replaced.')
+      const first = await this.store.readFirstRecord(physicalSessionId(state))
+      if (first?.work_transition_id !== current.transition.id) {
+        await active.replaceWorkContext(this.alignment!.handoff(current), current.transition.id)
+      }
+      this.alignment!.finishTransition(current.key, current.transition.id)
+      await this.deliver(sessionId, {
+        kind: 'message', id: `work-adopt:${current.transition.id}`, timestamp: new Date().toISOString(), policy: 'queue',
+        source: { kind: 'event', eventId: current.transition.id, type: 'work-context-ready', source: 'work-contract' },
+        content: 'Fresh work context is ready. Read work context and explicitly adopt the current agreement before resuming. Old summaries and memory conclusions need revalidation.',
+      })
+    })
   }
 
   /** Start a fresh context without summarizing, deleting history, or changing identity. */
@@ -2146,7 +2224,7 @@ ${JSON.stringify(request)}`,
       this.deps.agentTypes.resolve('general')!
 
     if (name === 'orchestrator' || sessionKind === 'orchestrator') {
-      const allowedTools = ['read', 'search', 'topic', 'message', 'initiative', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'yield']
+      const allowedTools = ['read', 'search', 'topic', 'message', 'work', 'initiative', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'yield']
       return {
         agentType: { ...resolved, allowedTools, blockedTools: undefined },
         allowedTools,

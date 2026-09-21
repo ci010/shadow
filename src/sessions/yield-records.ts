@@ -10,6 +10,8 @@ export class YieldRecords {
   constructor(
     private readonly store: SessionStore,
     private readonly getState: (id: string) => SessionState | null | undefined,
+    private readonly workValidity?: (request: YieldRequest) => string | undefined,
+    private readonly customAnswer?: (record: YieldDecisionRecord) => void,
   ) {}
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -54,7 +56,14 @@ export class YieldRecords {
       }
       records.set(record.request.id, record)
     }
-    return [...records.values()].map(record => ({ ...record, ...(invalidations.has(record.request.id) ? { invalidated: invalidations.get(record.request.id)! } : {}) }))
+    return [...records.values()].map(record => {
+      const reason = this.workValidity?.(record.request)
+      const invalidated = invalidations.get(record.request.id) ?? (reason ? {
+        reference: { sessionId, physicalId: selected, requestId: record.request.id },
+        at: record.request.createdAt, reason,
+      } : undefined)
+      return { ...record, ...(invalidated ? { invalidated } : {}) }
+    })
   }
 
   async read(sessionId: string, physicalId?: string): Promise<YieldDecisionRecord[]> {
@@ -175,6 +184,8 @@ export class YieldRecords {
   async write(record: YieldDecisionRecord): Promise<void> {
     const parsed = parseYieldDecisionRecord(record)
     await this.serialize(async () => {
+      const workError = this.workValidity?.(parsed.request)
+      if (workError && !parsed.closed) throw new YieldError('conflict', workError)
       if (!parsed.closed) {
         for (const source of parsed.request.sources ?? []) {
           const linked = (await this.read(source.sessionId, source.physicalId)).find(record => record.request.id === source.requestId)
@@ -184,6 +195,12 @@ export class YieldRecords {
       if (parsed.answer && (await this.read(parsed.request.sessionId, parsed.request.origin!.physicalId))
         .find(item => item.request.id === parsed.request.id)?.invalidated) throw new YieldError('conflict', 'Decision premises changed; this version cannot be answered.')
       await this.store.appendRawEvents(parsed.request.origin!.physicalId, [{ yield_decision: { version: 1, ...parsed } }])
+      if (parsed.answer?.custom && parsed.answer.answeredBy === 'user') {
+        await this.store.appendRawEvents(parsed.request.origin!.physicalId, [{
+          decision_input: { id: `yield:${parsed.request.id}`, text: parsed.answer.option, at: parsed.answer.answeredAt },
+        }])
+        this.customAnswer?.(parsed)
+      }
     })
   }
 

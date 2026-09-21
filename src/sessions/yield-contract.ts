@@ -1,4 +1,8 @@
 import { parseDecisionBrief, type DecisionBrief } from './decision-brief.ts'
+import { z } from 'zod'
+export const workStampsSchema = z.array(z.object({
+  key: z.string().min(1).max(600), revision: z.number().int().positive(), adoptionId: z.string().uuid().optional(),
+}).strict()).max(100)
 
 export const MAX_YIELD_TIMEOUT_MS = 2_147_483_647
 export const MAX_YIELD_CUSTOM_TEXT_LENGTH = 4000
@@ -23,6 +27,7 @@ export interface YieldReference {
 }
 
 export interface YieldRequest extends YieldQuestion {
+  workStamps?: import('../initiatives/work-contract.ts').WorkStamp[]
   id: string
   sessionId: string
   recipient: { kind: 'user' | 'parent'; sessionId: string }
@@ -206,6 +211,7 @@ export function parseYieldRequest(value: unknown, sessionId: string): YieldReque
     || !value.decisionId || !nonEmptyId(value.revisionSessionId))) throw new TypeError('Invalid decision revision origin.')
   return {
     ...parseYieldQuestion(value), id: value.id, sessionId,
+    ...(value.workStamps === undefined ? {} : { workStamps: workStampsSchema.parse(value.workStamps) }),
     recipient: { kind: value.recipient.kind, sessionId: value.recipient.sessionId },
     createdAt: value.createdAt, deadline: value.deadline,
     ...(origin ? { origin } : {}),

@@ -32,6 +32,20 @@ Arguments:
 If the transcript contains handoff context from a previous session, carefully
 preserve key knowledge and drop noise.
 
+Keep the current work contract's key/revision and its source classification.
+Separate final outcome/acceptance, existing authorization boundaries and the
+agent's current execution phase. Never relabel an agent recommendation or a
+small first phase as a user requirement. Session-origin messages are not human
+input merely because their chat role is user.
+
+List corrected or retired premises explicitly, along with completed artifacts,
+in-flight external operations and unknown outcomes. Preserve factual evidence;
+do not preserve superseded interpretations as current instructions. This
+continuity summary cannot approve a task revision, transfer an Initiative
+assignment, cancel an external operation or acknowledge for another executor.
+After resumption, the runtime's current work agreement supersedes conflicting
+summaries, memory conclusions and historical decision answers.
+
 ---
 
 ## Efficiency

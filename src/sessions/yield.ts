@@ -83,6 +83,7 @@ export class YieldManager {
     channelUser?: { channel: string; senderId: string },
     replyTo?: string,
     toolCallId?: string,
+    workStamps?: import('../initiatives/work-contract.ts').WorkStamp[],
   ): Promise<YieldOutcome> {
     signal.throwIfAborted()
     this.deps.assertCanYield?.(sessionId)
@@ -113,6 +114,7 @@ export class YieldManager {
     const now = Date.now()
     const request = snapshot({
       ...parsed, id: randomUUID(), sessionId, recipient, ...(reportingSessionId ? { reportingSessionId } : {}),
+      ...(workStamps?.length ? { workStamps } : {}),
       createdAt: new Date(now).toISOString(),
       deadline: policy.timeoutMs === null ? null : new Date(now + policy.timeoutMs).toISOString(),
     })

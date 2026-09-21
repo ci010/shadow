@@ -19,6 +19,7 @@ export interface SessionInputSource {
   sessionId: string
   inputId?: string
   senderName?: string
+  workStamps?: import('../initiatives/work-contract.ts').WorkStamp[]
   /** Work references are context, never an assignment or authorization grant. */
   coordination?: {
     intent: 'request' | 'question' | 'progress' | 'handoff' | 'acknowledgement'

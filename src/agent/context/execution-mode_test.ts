@@ -25,7 +25,7 @@ test('the same role retains tool guidance without generic safety in every execut
     assert(prompt?.includes('## Tools Guide'))
     assert(prompt?.includes(`## Execution Contract: ${mode[0].toUpperCase()}${mode.slice(1)}`))
     assert.equal(verify.defaultMode, 'task')
-    assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'yield'])
+    assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'yield', 'work'])
   }
 })
 
@@ -163,7 +163,7 @@ test('coordinator guidance cannot advertise worker tools even with broad role me
   assert.match(prompt, /### Project Topics/)
   assert.match(prompt, /### Coordinator Capability Boundary/)
   const normalized = prompt.replace(/\s+/g, ' ')
-  assert.match(normalized, /hard runtime cap permits only read\/search\/topic\/message\/initiative\/project_config\/authoring_change\/skill_read\/skill_save\/yield; never invoke_tool, exec, write, or subagent/)
+  assert.match(normalized, /hard runtime cap permits only read\/search\/topic\/message\/work\/initiative\/project_config\/authoring_change\/skill_read\/skill_save\/yield; never invoke_tool, exec, write, or subagent/)
   assert.match(normalized, /Use `skill_read` and `skill_save` for ordinary shared Skill edits/)
   assert.match(normalized, /Use `authoring_change` only for managed Bot prompt\/resources, saved check runs and owner review/)
   assert.match(normalized, /Do not bypass this boundary through skills, discovery, events, URLs or other tools/)
@@ -207,7 +207,8 @@ test('compact coordination guidance retains decision and completion routing prot
       assert.match(prompt, /without triggering a response, active-context injection or wakeup/)
       assert.match(prompt, /materials\/corrections\/unblockers need non-silent requests/)
       assert.match(prompt, /LAST message a non-silent request/)
-      assert.match(prompt, /purpose only, not scheduling/)
+      assert.match(prompt, /Routine progress\/acknowledgements archive by default/)
+      assert.match(prompt, /attention: "blocker".*these cannot be silent/)
       assert.match(prompt, /completion routing does not grant messaging permission/)
       if (mode === 'session') {
         assert.match(prompt, /action: "answer".*request_id.*one exact `option`/)

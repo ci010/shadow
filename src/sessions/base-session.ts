@@ -209,6 +209,14 @@ export abstract class BaseSession {
 
       // Hook: drain pending messages (e.g. steer queue in Session).
       await this.drainPendingMessages(llm)
+      const workGuard = this.tools.getWorkGuard()
+      executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
+      const workPrompt = workGuard?.prompt(this.id)
+      const inferenceMessages: ChatMessage[] = workPrompt
+        ? this.messages[0]?.role === 'system' ? this.messages.map((message, index) => index === 0
+          ? { ...message, content: `${message.content}\n\n${workPrompt}` } : message)
+          : [{ role: 'system', content: workPrompt }, ...this.messages]
+        : this.messages
 
       const traceAttributes = {
         sessionId: this.id,
@@ -229,9 +237,9 @@ export abstract class BaseSession {
             turnId,
             iteration: i,
             provider: this.provider.name,
-          }, this.messages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
+          }, inferenceMessages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
           if (captureId) chatSpan.setAttribute('prompt.capture.request_id', captureId)
-          const response = await this.provider.chat(this.messages, toolDefs, {
+          const response = await this.provider.chat(inferenceMessages, toolDefs, {
             model,
             maxTokens,
             temperature,
@@ -270,6 +278,17 @@ export abstract class BaseSession {
         throw response
       }
 
+      const priorWork = executionContext.workStamps ?? []
+      const workChanged = () => {
+        const latestWork = workGuard?.snapshot(this.id) ?? []
+        return latestWork.length !== priorWork.length
+          || latestWork.some(now => !priorWork.some(old => old.key === now.key && old.revision === now.revision))
+      }
+      const staleInference = workChanged()
+      if (staleInference && !response.toolCalls.length) {
+        response.content = `[Historical response from a superseded work agreement; not completion of current work.]\n${response.content ?? ''}`
+      }
+
       if (response.usage) {
         this.usage = response.usage
       }
@@ -291,6 +310,14 @@ export abstract class BaseSession {
       })
 
       const done = response.toolCalls.length === 0
+      if (done && (staleInference || workChanged())) {
+        if (this.state.mode && this.state.mode !== 'session') {
+          throw new Error('The bounded task work agreement changed during execution. Its partial results are historical, not completion of the new assignment.')
+        }
+        await this.appendMessages(llm, { role: 'user', name: '__work_realignment__',
+          content: 'The work agreement changed during the previous inference. Re-evaluate against current work context; adopt it or ask for clarification before further execution. The previous response did not complete current work.' })
+        continue
+      }
       if (response.content || done) {
         const { text, media } = parseMediaFromContent(response.content ?? '')
         this.bus.emit('message.outbound', {
@@ -421,6 +448,10 @@ export abstract class BaseSession {
     signal: AbortSignal,
   ): Promise<SessionTurnFact | undefined> {
     if (input.kind === 'control' && input.command.type !== 'retry' && input.command.type !== 'resume') return
+    if (input.kind === 'message' && input.source.kind === 'session' && input.source.workStamps?.length
+      && this.tools.getWorkGuard()?.current(input.source.workStamps) === false) {
+      input = { ...input, policy: 'silent', content: `[Historical input from an obsolete work revision; archive only, not new authority.]\n${input.content}` }
+    }
     const silent = input.kind === 'message' && input.policy === 'silent'
     const msg = inputContext(this.id, input)
     const senderName = msg.senderName ?? msg.senderId

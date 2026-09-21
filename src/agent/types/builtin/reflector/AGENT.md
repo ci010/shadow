@@ -1,6 +1,6 @@
 ---
 description: Reflect on session memories to build wiki items and write structured logs
-allowedTools: [read, search, exec, write, log, yield]
+allowedTools: [read, search, exec, write, log, yield, work]
 defaultMode: task
 soul: false
 root: true
