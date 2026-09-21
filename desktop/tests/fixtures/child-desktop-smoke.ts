@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
+import { installChildBackgroundWindow } from '../../src/child-background.js'
 
 app.setPath('userData', join(process.cwd(), 'profile'))
 app.commandLine.appendSwitch('disable-background-networking')
@@ -71,6 +72,16 @@ async function main() {
     }
     await run(`fixture.connection='connected';document.querySelector('.child-status button').click();new Promise(r=>setTimeout(r,100))`)
     assert.match(await run('document.body.innerText'), /Connected to Main/)
+    const disposeBackground = installChildBackgroundWindow(app, window, () => true)
+    window.show()
+    window.close()
+    assert.equal(window.isDestroyed(), false, 'Closing Child must not destroy its window or quit the owner')
+    assert.equal(window.isVisible(), false)
+    assert.match(await run('document.body.innerText'), /Connected to Main/)
+    app.emit('activate', {} as Electron.Event, false)
+    assert.equal(window.isVisible(), true, 'Dock activation must reopen the same Child window')
+    window.hide()
+    disposeBackground()
     await run(`fixture.statusFailure=true;document.querySelector('.child-status button').click();new Promise(r=>setTimeout(r,100))`)
     const failedStatus = await run('document.body.innerText')
     assert.match(failedStatus, /Main connection is unknown/)

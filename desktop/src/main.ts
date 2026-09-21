@@ -56,6 +56,7 @@ import { type WizardEvent } from './wizard/state-machine.js'
 import { resolveDesktopMainDirectory, resolveDesktopUserDataPath } from './development-profile.js'
 import { desktopIconPath, framelessWindowOptions, installWindowControls, removeNativeMenus } from './window-controls.js'
 import { installTrayMenu } from './tray.js'
+import { installChildBackgroundWindow } from './child-background.js'
 import { installFolderDirectoryPicker } from './folder-directories.js'
 import { installChatContextPickers } from './chat-context.js'
 import { installDocumentTabShortcuts } from './document-tabs.js'
@@ -350,7 +351,12 @@ async function start(): Promise<void> {
   mainWindow = createMainWindow(target)
   mainTray = new Tray(desktopIconPath())
   const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit())
+  const disposeBackground = installChildBackgroundWindow(app, mainWindow, () => {
+    const status = runtimeHost.status
+    return 'role' in status && status.role === 'child'
+  })
   app.once('will-quit', () => {
+    disposeBackground()
     disposeTray()
     mainTray = null
   })

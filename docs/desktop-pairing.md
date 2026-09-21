@@ -23,8 +23,13 @@ a web UI; it does not register a Child or make that browser an execution node.
   DPAPI, macOS Keychain, or Linux Secret Service with `secret-tool`. Linux
   normally needs an unlocked login keyring and a working user D-Bus session.
   A missing or locked store fails; there is no plaintext-key fallback.
-- Both applications must remain running. This does not install an autostart
-  service, configure the OS firewall, or wake a sleeping device.
+- Both applications must remain running. Closing an active Child window hides
+  it and keeps its runtime and connection running. Reopen it from the Shadow
+  system-tray/menu-bar icon (or the Dock on macOS); choose **Quit** in the tray
+  menu to stop it. Main's window-close behavior is unchanged.
+  This does not install an autostart service, configure the OS firewall, or wake
+  a sleeping device. Quitting Electron, ending the dev launcher, logout or
+  shutdown stops Child; window hiding is not an independent OS service.
 
 ## Pair the devices
 

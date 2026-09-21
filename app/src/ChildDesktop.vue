@@ -8,7 +8,8 @@
         <template v-if="status">
           <p role="status"><strong>{{ error ? 'Local status unavailable' : status.connection === 'connected' ? 'Connected to Main' : status.connection === 'connecting' ? 'Connecting to Main — approval may still be pending' : 'Not connected to Main' }}</strong></p>
           <p v-if="!error && status.error" class="status-error">{{ status.error }}</p>
-          <p v-if="status.connection !== 'connected'">Keep this window open. Connection retries automatically with the saved identity, including after restart. Check Main's pending devices before creating another offer.</p>
+          <p v-if="status.connection !== 'connected'">Connection retries automatically with the saved identity, including while this window is hidden and after restart. Check Main's pending devices before creating another offer.</p>
+          <p>Closing this window keeps Child running in the background. Reopen it from the Shadow tray/menu-bar icon. Choose Quit in that menu to stop the node.</p>
           <dl>
             <div><dt>Device fingerprint</dt><dd class="fingerprint">{{ status.fingerprint }}</dd></div>
             <div><dt>Main device endpoint</dt><dd>{{ status.mainEndpoint }}</dd></div>
