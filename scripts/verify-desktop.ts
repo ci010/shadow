@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { cp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { verifyReleaseManifest } from './release-manifest.ts'
 import { desktopTarget } from './desktop-target.ts'
 import {
-  assertOutsideRepository, backendCommand, backendResourceReport, bounded, descendants, fetchBounded,
+  assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded,
   killProcessTree, nodeModeProbe, packagedEvalCommand, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, snapshotProcesses,
   serviceEnvironment, startProcess, terminateProcess, verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
@@ -43,7 +42,7 @@ try {
   await verifyReleaseManifest(packaged, repository)
   stage = 'complete package relocation'
   // Deliberately outside the source tree: neither executable nor dependencies may fall back to the checkout.
-  scratch = await mkdtemp(join(tmpdir(), 'shadow-packaged-acceptance-'))
+  scratch = await createVerificationDirectory()
   assertOutsideRepository(await realpath(scratch), repository)
   const relocated = relocatedPackageRoot(scratch, target)
   // macOS frameworks contain relative symlinks; preserve the complete .app layout.

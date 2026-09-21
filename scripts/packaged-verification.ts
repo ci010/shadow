@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
@@ -54,6 +55,11 @@ export function isolatedEnvironment(scratch: string, token: string, port: number
 
 export function relocatedPackageRoot(scratch: string, target: DesktopTarget = desktopTarget()): string {
   return join(scratch, target.platform === 'darwin' ? 'Shadow.app' : 'application')
+}
+
+export async function createVerificationDirectory(parent = tmpdir()): Promise<string> {
+  // macOS /var is an OS alias; generated data paths must use /private/var.
+  return mkdtemp(join(await realpath(parent), 'shadow-packaged-acceptance-'))
 }
 
 export function backendCommand(
@@ -470,7 +476,13 @@ export async function killPosixTree(
         if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error
       }
     }
-    await new Promise(done => setTimeout(done, remainingBudget(deadline, 100)))
+    const settleDeadline = Math.min(deadline, Date.now() + (signal === 'SIGTERM' ? 1_000 : 5_000))
+    do {
+      const current = await control.snapshot(remainingBudget(deadline, 10_000))
+      if (!current.some(value => owned.some(candidate => matches(value, candidate)))) return
+      if (Date.now() >= settleDeadline) break
+      await new Promise(done => setTimeout(done, Math.min(100, settleDeadline - Date.now())))
+    } while (Date.now() < settleDeadline)
   }
   const remaining = await control.snapshot(remainingBudget(deadline, 10_000))
   assert.ok(!remaining.some(value => owned.some(candidate => matches(value, candidate))), 'Owned POSIX processes survived cleanup')

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { writeFileSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer, type RequestListener } from 'node:http'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createContext, runInContext, type Context } from 'node:vm'
 import { createProgram, ModuleKind, ModuleResolutionKind, ScriptTarget } from 'typescript'
 import {
-  assertOutsideRepository, backendCommand, backendResourceReport, bounded, descendants, fetchBounded, isolatedEnvironment,
+  assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded, isolatedEnvironment,
   killPosixTree, nodeModeProbe, packagedEvalCommand, parsePosixProcesses, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, serviceEnvironment, startProcess, terminateProcess,
   verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
@@ -19,6 +19,18 @@ import {
 import { desktopTarget } from './desktop-target.ts'
 
 const windows = desktopTarget('win32', 'x64')
+
+test('verification data paths canonicalize OS temporary-directory aliases', async t => {
+  const root = resolve('.test-data', `verification-paths-${randomUUID()}`)
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const physical = join(root, 'physical')
+  const alias = join(root, 'alias')
+  await mkdir(physical, { recursive: true })
+  await symlink(physical, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const scratch = await createVerificationDirectory(alias)
+  assert.equal(scratch, await realpath(scratch))
+  assert.ok(scratch.startsWith(join(await realpath(physical), 'shadow-packaged-acceptance-')))
+})
 
 test('backend command uses only relocated executable/resources and explicit service mode', () => {
   const root = resolve('relocated app')
@@ -447,9 +459,22 @@ test('POSIX cleanup escalates only matching identities and is bounded', async ()
   await assert.rejects(killPosixTree(root, Date.now() - 1, {
     snapshot: async () => [root], signal: () => { throw new Error('must not signal') },
   }), /cleanup deadline/)
-  await assert.rejects(killPosixTree(root, Date.now() + 3_000, {
+  await assert.rejects(killPosixTree(root, Date.now() + 1_500, {
     snapshot: async () => [root], signal: () => {},
-  }), /survived cleanup/)
+  }), /survived cleanup|cleanup deadline/)
+})
+
+test('POSIX cleanup waits for asynchronous termination after SIGKILL', async () => {
+  const root = { pid: 90123, parentPid: 1, created: '2026-09-16T00:00:02', gui: false }
+  let killed = false
+  let settlingSnapshots = 0
+  const signalled: string[] = []
+  await killPosixTree(root, Date.now() + 3_000, {
+    snapshot: async () => killed && ++settlingSnapshots >= 4 ? [] : [root],
+    signal: (_pid, signal) => { signalled.push(signal); if (signal === 'SIGKILL') killed = true },
+  })
+  assert.deepEqual(signalled, ['SIGTERM', 'SIGKILL'])
+  assert.equal(settlingSnapshots, 4)
 })
 
 test('renderer harness mock verifies isolation, narrow offline fonts, safe diagnostics and failure exits', async () => {

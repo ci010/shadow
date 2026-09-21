@@ -129,6 +129,8 @@ disposable configuration, a credential file, loopback networking and an isolated
 profile. It exercises backend readiness/authentication, telemetry, the eval
 runner and shutdown. It reports the empty Node-runtime memory baseline and
 separate backend working-set/cumulative-CPU samples.
+Generated data paths use the canonical temporary directory (including macOS's
+`/var` to `/private/var` alias), without relaxing resource-store symlink checks.
 
 A separate hidden/offscreen fixture loads the packaged renderer and preload,
 checking startup rendering, assets, IPC and sandboxing. It substitutes a test
@@ -137,7 +139,8 @@ the unchanged production application entry or a full UI regression suite.
 On macOS only the disposable relocated bundle is re-signed ad-hoc after this
 substitution, preserving its entitlements/runtime flags; the original packaged
 application is not modified. Unix process cleanup checks exact PID/start
-identity, while Windows retains its own process-census implementation.
+identity and waits within a bounded deadline for termination to complete,
+while Windows retains its own process-census implementation.
 The fixture substitutes inert local CSS for the application's exact optional
 Google Fonts stylesheet request; it verifies fallback rendering, not remote font
 availability. Other external requests remain blocked and fail acceptance.
