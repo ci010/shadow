@@ -1,9 +1,21 @@
-# Windows release verification
+# Desktop release verification
 
-The current distributable is one Windows x64 NSIS installer. It contains the
-Electron application, the Vue assets, the backend and its production dependencies,
-and a pinned WinSW service host. `desktop/release/win-unpacked` is a staging
-directory, not a second independently supported product.
+The release pipeline builds natively for the following targets. Each package
+contains Electron, the Vue assets, the backend and its production dependencies.
+Only Windows includes the pinned WinSW service host.
+
+| Platform | Architecture | Download | GitHub runner |
+| --- | --- | --- | --- |
+| Windows | x64 | NSIS `.exe` | `windows-latest` |
+| macOS | Apple Silicon arm64 | `.zip` containing `Shadow.app` | `macos-15` |
+| macOS | Intel x64 | `.zip` containing `Shadow.app` | `macos-15-intel` |
+| Linux | x64 | `.tar.gz` | `ubuntu-22.04` |
+
+Archives are named `Shadow-<version>-<os>-<arch>.<extension>`. The build output
+directories (`win-unpacked`, `mac`, `mac-arm64`, `linux-unpacked`) are staging
+locations, not additional distribution formats. macOS architectures are separate
+downloads, not a universal application. Cross-compiling and Linux arm64 are not
+part of this pipeline.
 
 ## Build gate
 
@@ -21,16 +33,49 @@ stops the pipeline. `test:release` covers build/packaging helpers, service-mode
 contracts, Vite integration and the Electron lifecycle suite; it is not a
 replacement for the broader `pnpm test` feature suite.
 
-The Windows release-check workflow runs this same command on pull requests
-and manual dispatch. It does not publish releases, install the application,
-elevate, or register a service.
+The **Desktop release check** workflow (`.github/workflows/release-check.yml`)
+runs this same command on pull requests and manual dispatch, on each native
+runner. Linux uses Xvfb for the hidden Electron checks without disabling the
+renderer sandbox. Successful jobs upload only their installer/archive as Actions
+artifacts, retained for 14 days; failed verification does not upload a package.
+It does not publish GitHub Releases or install applications/register services.
+The Linux job installs its display-library prerequisites on the ephemeral runner.
+
+Run `pnpm desktop` on the matching operating system and architecture; target
+selection follows the native Node host and rejects unsupported combinations.
+Do not substitute raw `electron-builder` for this command: it omits preparation
+and verification.
+
+### Portable package boundaries
+
+On macOS, extract the ZIP to obtain `Shadow.app`. The initial artifacts use
+**ad-hoc signing**, not an Apple Developer ID certificate, and are **not
+notarized**. The entitlements permit Electron's JIT and ad-hoc framework loading;
+this does not disable the renderer's sandbox/context isolation. These are
+test artifacts, not Gatekeeper-approved public releases. Trusted distribution
+requires a separate Developer ID/notarization setup; do not bypass OS security
+warnings as part of build verification.
+
+On Linux, extract the entire tarball and run its `shadow` executable as a regular
+desktop user, keeping the adjacent resources/libraries intact. The archive needs
+no FUSE or distribution package installer, but still requires compatible system
+GTK/NSS/ALSA/GBM libraries, a graphical session and working Chromium sandbox
+support. It does not register desktop shortcuts, autostart or a system service.
+macOS/Linux use the ordinary owned backend sidecar, not WinSW.
+
+Native CI smoke tests are not broad clean-machine certification, an OS-install
+test, or proof that every platform-specific tool is available. The macOS/Linux
+jobs must run on GitHub before claiming those packages passed native verification;
+Windows-hosted unit tests alone do not establish that.
 
 ## Download configuration
 
 Packaging reuses the installed Electron distribution and verifies its version
 against `desktop/package.json`, avoiding a second Electron download. Set
-`SHADOW_ELECTRON_DIST` to an existing Windows x64 Electron distribution to
-override it; its `version` and `electron.exe` must be present.
+`SHADOW_ELECTRON_DIST` to the root of an existing matching native Electron
+distribution to override it. Its `version` plus `electron.exe` (Windows),
+`Electron.app/Contents/MacOS/Electron` (macOS), or `electron` (Linux) must exist.
+Portable builds do not download or include WinSW.
 
 WinSW is fixed at **2.12.0 x64**, with SHA-256:
 
@@ -62,6 +107,10 @@ and Electron versions, a build ID, hashes of packaged backend/frontend/service
 files and Electron ASAR code/assets, and a fingerprint of the current build
 sources, including uncommitted changes. This does not require a clean Git tree.
 Source edits during release validation require a new build.
+The filename is retained for compatibility; new manifests use schema v2 and
+record the platform/architecture. Legacy v1 manifests are treated as Windows
+x64. macOS stores resources under `Shadow.app/Contents/Resources`. Service files
+are required on Windows and forbidden in macOS/Linux package inventories.
 
 `pnpm test:packaged` first compares that manifest to the current source and
 the actual packaged files, including ASAR contents. Missing, extra, modified or
@@ -79,6 +128,10 @@ A separate hidden/offscreen fixture loads the packaged renderer and preload,
 checking startup rendering, assets, IPC and sandboxing. It substitutes a test
 entry in the copied package while preserving the original ASAR; this is **not**
 the unchanged production application entry or a full UI regression suite.
+On macOS only the disposable relocated bundle is re-signed ad-hoc after this
+substitution, preserving its entitlements/runtime flags; the original packaged
+application is not modified. Unix process cleanup checks exact PID/start
+identity, while Windows retains its own process-census implementation.
 The fixture substitutes inert local CSS for the application's exact optional
 Google Fonts stylesheet request; it verifies fallback rendering, not remote font
 availability. Other external requests remain blocked and fail acceptance.

@@ -7,18 +7,23 @@ import { createServer, type RequestListener } from 'node:http'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createContext, runInContext, type Context } from 'node:vm'
+import { createProgram, ModuleKind, ModuleResolutionKind, ScriptTarget } from 'typescript'
 import {
   assertOutsideRepository, backendCommand, backendResourceReport, bounded, descendants, fetchBounded, isolatedEnvironment,
-  nodeModeProbe, prepareRendererSmoke, remainingBudget, rendererEnvironment, reservePort, runCommand, sanitizeLog, serviceEnvironment, startProcess, terminateProcess,
+  killPosixTree, nodeModeProbe, packagedEvalCommand, parsePosixProcesses, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, serviceEnvironment, startProcess, terminateProcess,
   verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
 } from './packaged-verification.ts'
+import { desktopTarget } from './desktop-target.ts'
+
+const windows = desktopTarget('win32', 'x64')
 
 test('backend command uses only relocated executable/resources and explicit service mode', () => {
   const root = resolve('relocated app')
   const bootstrap = resolve('isolated config', 'bootstrap.json')
-  const command = backendCommand(root, bootstrap)
+  const command = backendCommand(root, bootstrap, windows)
   assert.equal(command.executable, join(root, 'Shadow.exe'))
   assert.deepEqual(command.args, [
     join(root, 'resources', 'backend', 'dist', 'src', 'index.js'),
@@ -188,6 +193,8 @@ test('descendant census follows nested lineage but rejects reused parent PIDs an
   const grandchild = { pid: 3, parentPid: 2, created: '2026-09-16T00:00:04', gui: true }
   const old = { pid: 4, parentPid: 1, created: '2026-09-16T00:00:01', gui: false }
   assert.deepEqual(descendants([root, child, grandchild, old, { ...root, parentPid: 3 }], root), [child, grandchild])
+  assert.deepEqual(descendants([child, grandchild], root), [])
+  assert.deepEqual(descendants([{ ...root, created: '2026-09-16T00:00:05' }, child, grandchild], root), [])
 })
 
 test('Node-mode probe rejects ordinary Node and labels memory only as runtime baseline', async () => {
@@ -219,15 +226,15 @@ test('renderer references check rejects missing, empty and escaping assets witho
   try {
     await writeFile(join(resources, 'app-dist', 'index.html'), '<script type="module" src="./assets/index.js"></script>')
     await writeFile(join(assets, 'index.js'), 'console.log("renderer")')
-    await verifyRendererArtifacts(root)
+    await verifyRendererArtifacts(root, windows)
     await writeFile(join(assets, 'index.js'), '')
-    await assert.rejects(verifyRendererArtifacts(root), /Empty renderer asset/)
+    await assert.rejects(verifyRendererArtifacts(root, windows), /Empty renderer asset/)
     await rm(join(assets, 'index.js'))
-    await assert.rejects(verifyRendererArtifacts(root), /ENOENT/)
+    await assert.rejects(verifyRendererArtifacts(root, windows), /ENOENT/)
     await writeFile(join(resources, 'app-dist', 'index.html'), '<script src="./assets/../../escape.js"></script>')
-    await assert.rejects(verifyRendererArtifacts(root), /escapes package/)
+    await assert.rejects(verifyRendererArtifacts(root, windows), /escapes package/)
     await writeFile(join(resources, 'app-dist', 'index.html'), '<p>No renderer entry</p>')
-    await assert.rejects(verifyRendererArtifacts(root), /lacks a bundled JavaScript entry/)
+    await assert.rejects(verifyRendererArtifacts(root, windows), /lacks a bundled JavaScript entry/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -240,7 +247,7 @@ test('renderer fixture replaces only disposable entry and preserves original pro
   try {
     const original = Buffer.from('synthetic production archive')
     await writeFile(join(resources, 'app.asar'), original)
-    const command = await prepareRendererSmoke(join(root, 'application'), root, 'fixture source')
+    const command = await prepareRendererSmoke(join(root, 'application'), root, 'fixture source', windows)
     assert.equal(command.executable, join(root, 'application', 'Shadow.exe'))
     assert.ok(command.args.includes(`--acceptance-preload=${join(resources, 'acceptance-production.asar', 'dist', 'preload.cjs')}`))
     assert.ok(command.args.includes(`--acceptance-assets=${join(resources, 'app-dist')}`))
@@ -258,6 +265,191 @@ test('renderer fixture replaces only disposable entry and preserves original pro
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+for (const target of [windows, desktopTarget('darwin', 'arm64'), desktopTarget('darwin', 'x64'), desktopTarget('linux', 'x64')]) {
+  test(`${target.platform}/${target.arch} relocated executable, backend and renderer use platform resource layout`, async () => {
+    const scratch = join(process.cwd(), '.test-data', `platform-fixture-${randomUUID()}`)
+    const root = relocatedPackageRoot(scratch, target)
+    const resources = join(root, target.resourcesRelativePath)
+    await mkdir(join(resources, 'app-dist', 'assets'), { recursive: true })
+    try {
+      if (target.platform === 'darwin') assert.ok(root.endsWith('Shadow.app'))
+      const backend = backendCommand(root, join(scratch, 'bootstrap.json'), target)
+      assert.equal(backend.executable, join(root, target.executableRelativePath))
+      assert.equal(backend.args[0], join(resources, 'backend', 'dist', 'src', 'index.js'))
+      const script = join(scratch, 'eval-fixture.ts')
+      const evaluation = packagedEvalCommand(root, script, target)
+      assert.equal(evaluation.executable, backend.executable)
+      assert.deepEqual(evaluation.args.slice(-2), [
+        pathToFileURL(join(resources, 'backend', 'dist', 'src', 'script-runtime', 'runtime.js')).href, script,
+      ])
+      assert.ok(!evaluation.args.includes('--eval-runner'))
+      await writeFile(join(resources, 'app-dist', 'index.html'), '<script src="./assets/index.js"></script>')
+      await writeFile(join(resources, 'app-dist', 'assets', 'index.js'), 'renderer')
+      await verifyRendererArtifacts(root, target)
+      await writeFile(join(resources, 'app.asar'), 'unchanged production archive')
+      const renderer = await prepareRendererSmoke(root, scratch, 'fixture', target)
+      assert.equal(renderer.executable, backend.executable)
+      assert.ok(renderer.args.includes(`--acceptance-preload=${join(resources, 'acceptance-production.asar', 'dist', 'preload.cjs')}`))
+      assert.equal(await readFile(join(resources, 'acceptance-production.asar'), 'utf8'), 'unchanged production archive')
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
+  })
+}
+
+test('packaged eval invokes the compiled runtime/worker API on Node and Electron and transforms TypeScript to 42', async () => {
+  const scratch = join(process.cwd(), '.test-data', `packaged-eval-${randomUUID()}`)
+  const target = desktopTarget()
+  const root = relocatedPackageRoot(scratch, target)
+  const backend = join(root, target.resourcesRelativePath, 'backend')
+  await mkdir(backend, { recursive: true })
+  try {
+    const program = createProgram({
+      rootNames: ['runtime.ts', 'worker.ts'].map(name => fileURLToPath(new URL(`../src/script-runtime/${name}`, import.meta.url))),
+      options: {
+        target: ScriptTarget.ESNext, module: ModuleKind.NodeNext, moduleResolution: ModuleResolutionKind.NodeNext,
+        rewriteRelativeImportExtensions: true,
+        rootDir: fileURLToPath(new URL('../src', import.meta.url)), outDir: join(backend, 'dist', 'src'),
+        noCheck: true, types: [],
+      },
+    })
+    assert.equal(program.emit().emitSkipped, false)
+    await writeFile(join(backend, 'package.json'), '{"type":"module"}')
+    await writeFile(join(scratch, 'value.ts'), 'export enum Value { Answer = 42 }\n')
+    const script = join(scratch, 'eval-fixture.ts')
+    await writeFile(script, `
+      import { Value } from './value.ts'
+      class Result { constructor(public value: number) {} }
+      export default () => new Result(Value.Answer).value
+    `)
+    const command = packagedEvalCommand(root, script, target)
+    const desktopRequire = createRequire(new URL('../desktop/package.json', import.meta.url))
+    const executables = [process.execPath, desktopRequire('electron') as string]
+    for (const executable of executables) {
+      const output = await runCommand(executable, command.args, {
+        cwd: scratch, env: isolatedEnvironment(scratch, '', 0),
+      }, 15_000, 'packaged script runtime eval')
+      const report = output.split(/\r?\n/).find(line => line.startsWith('SHADOW_PACKAGED_EVAL_RESULT='))
+      assert.ok(report, output)
+      assert.deepEqual(JSON.parse(report.slice('SHADOW_PACKAGED_EVAL_RESULT='.length)), { result: 42 })
+    }
+    await rm(join(backend, 'dist', 'src', 'script-runtime', 'worker.js'))
+    await assert.rejects(runCommand(process.execPath, command.args, {
+      cwd: scratch, env: isolatedEnvironment(scratch, '', 0),
+    }, 15_000, 'missing packaged worker'), /failed/)
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
+
+test('macOS synthetic entry re-signs only the disposable bundle while preserving entitlements and runtime flags', () => {
+  const scratch = resolve('isolated')
+  for (const arch of ['arm64', 'x64']) {
+    const target = desktopTarget('darwin', arch)
+    const root = relocatedPackageRoot(scratch, target)
+    const commands = rendererSignatureCommands(root, scratch, target)
+    assert.deepEqual(commands, [
+      {
+        executable: '/usr/bin/codesign',
+        args: ['--force', '--sign', '-', '--timestamp=none',
+          '--preserve-metadata=identifier,entitlements,requirements,flags,runtime', root],
+      },
+      { executable: '/usr/bin/codesign', args: ['--verify', '--deep', '--strict', root] },
+    ])
+    assert.throws(() => rendererSignatureCommands(resolve('desktop', 'release', 'Shadow.app'), scratch, target), /Only the disposable renderer bundle/)
+  }
+  for (const target of [windows, desktopTarget('linux', 'x64')]) {
+    assert.deepEqual(rendererSignatureCommands(relocatedPackageRoot(scratch, target), scratch, target), [])
+  }
+})
+
+test('Linux renderer preserves Xvfb display authorization but isolates HOME, XDG and temp paths', () => {
+  const original = { DISPLAY: process.env.DISPLAY, XAUTHORITY: process.env.XAUTHORITY }
+  process.env.DISPLAY = ':99'
+  process.env.XAUTHORITY = '/runner/display-authority'
+  try {
+    const scratch = resolve('isolated')
+    const env = rendererEnvironment(scratch, desktopTarget('linux', 'x64'))
+    assert.equal(env.DISPLAY, ':99')
+    assert.equal(env.XAUTHORITY, '/runner/display-authority')
+    assert.equal(env.HOME, scratch)
+    assert.equal(env.TMPDIR, scratch)
+    assert.equal(env.XDG_CONFIG_HOME, join(scratch, 'profile', 'config'))
+    assert.equal(env.XDG_CACHE_HOME, join(scratch, 'profile', 'cache'))
+    assert.equal(env.XDG_DATA_HOME, join(scratch, 'profile', 'data'))
+    assert.equal(env.ELECTRON_RUN_AS_NODE, undefined)
+    assert.equal(env.ELECTRON_DISABLE_SANDBOX, undefined)
+    assert.equal(rendererEnvironment(scratch, windows).DISPLAY, undefined)
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('POSIX census parses macOS and Linux metrics without exporting command lines', () => {
+  const parsed = parsePosixProcesses(`
+  123 1 Wed Sep 16 02:03:04 2026 10240 00:00:01 /Applications/Shadow.app/Contents/MacOS/Shadow --secret=private
+  124 123 Wed Sep 16 02:03:05 2026 2048 0:00.25 /Applications/Shadow.app/Contents/Frameworks/Shadow Helper --type=renderer
+  125 124 Wed Sep 16 02:03:06 2026 4096 1-02:03:04 /opt/shadow --type=gpu-process
+  126 123 Wed Sep 16 02:03:07 2026 0 00:00:00 [defunct]
+`)
+  assert.equal(parsed[0]!.created, '2026-09-16T02:03:04.000Z')
+  assert.equal(parsed[0]!.workingSetBytes, 10240 * 1024)
+  assert.equal(parsed[0]!.cpuSeconds, 1)
+  assert.equal(parsed[1]!.cpuSeconds, 0.25)
+  assert.equal(parsed[2]!.cpuSeconds, 93784)
+  assert.deepEqual(parsed.map(row => row.gui), [false, true, true, false])
+  assert.ok(!JSON.stringify(parsed).includes('private'))
+  assert.deepEqual(descendants(parsed, parsed[0]!), [parsed[1], parsed[3], parsed[2]])
+  assert.match(backendResourceReport(parsed[0]!, 'darwin').label, /POSIX resident set/)
+  assert.throws(() => parsePosixProcesses('invalid private command'), /Invalid POSIX process census row/)
+  assert.throws(() => parsePosixProcesses('123 1 Wed Sep 16 02:03:04 2026 10 invalid private'), /Invalid POSIX process identity/)
+  assert.deepEqual(parsePosixProcesses(''), [])
+})
+
+test('POSIX cleanup signals exact descendants before root and refuses PID reuse', async () => {
+  const root = { pid: 90123, parentPid: 1, created: '2026-09-16T00:00:02', gui: false }
+  const child = { ...root, pid: 90124, parentPid: root.pid, created: '2026-09-16T00:00:03' }
+  const unrelated = { ...root, pid: 90125 }
+  let processes = [root, child, unrelated]
+  const signalled: Array<[number, string]> = []
+  await killPosixTree(root, Date.now() + 3_000, {
+    snapshot: async () => processes,
+    signal: (pid, signal) => { signalled.push([pid, signal]); processes = processes.filter(value => value.pid !== pid) },
+  })
+  assert.deepEqual(signalled, [[child.pid, 'SIGTERM'], [root.pid, 'SIGTERM']])
+  assert.deepEqual(processes, [unrelated])
+
+  signalled.length = 0
+  let snapshots = 0
+  await killPosixTree(root, Date.now() + 3_000, {
+    snapshot: async () => ++snapshots === 1 ? [root] : [{ ...root, created: '2026-09-16T00:00:04' }],
+    signal: (pid, signal) => { signalled.push([pid, signal]) },
+  })
+  assert.deepEqual(signalled, [])
+  await assert.rejects(killPosixTree({ ...root, pid: 1 }), /Unsafe owned process PID/)
+  await assert.rejects(killPosixTree({ ...root, pid: process.pid }), /Unsafe owned process PID/)
+})
+
+test('POSIX cleanup escalates only matching identities and is bounded', async () => {
+  const root = { pid: 90123, parentPid: 1, created: '2026-09-16T00:00:02', gui: false }
+  let alive = true
+  const signalled: string[] = []
+  await killPosixTree(root, Date.now() + 3_000, {
+    snapshot: async () => alive ? [root] : [],
+    signal: (_pid, signal) => { signalled.push(signal); if (signal === 'SIGKILL') alive = false },
+  })
+  assert.deepEqual(signalled, ['SIGTERM', 'SIGKILL'])
+  await assert.rejects(killPosixTree(root, Date.now() - 1, {
+    snapshot: async () => [root], signal: () => { throw new Error('must not signal') },
+  }), /cleanup deadline/)
+  await assert.rejects(killPosixTree(root, Date.now() + 3_000, {
+    snapshot: async () => [root], signal: () => {},
+  }), /survived cleanup/)
 })
 
 test('renderer harness mock verifies isolation, narrow offline fonts, safe diagnostics and failure exits', async () => {

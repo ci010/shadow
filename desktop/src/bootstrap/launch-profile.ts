@@ -9,15 +9,22 @@ export interface MainLaunchProfile {
   readonly localExecutor: boolean
 }
 
+export interface ChildLaunchProfile {
+  readonly version: 1
+  readonly role: 'child'
+  readonly port: number
+}
+export type LaunchProfile = MainLaunchProfile | ChildLaunchProfile
+
 export interface LaunchProfileStore {
-  load(): Promise<MainLaunchProfile | null>
-  save(profile: MainLaunchProfile): Promise<void>
+  load(): Promise<LaunchProfile | null>
+  save(profile: LaunchProfile): Promise<void>
 }
 
 export class AtomicLaunchProfileStore implements LaunchProfileStore {
   constructor(readonly filePath: string) {}
 
-  async load(): Promise<MainLaunchProfile | null> {
+  async load(): Promise<LaunchProfile | null> {
     let contents: string
     try {
       contents = await readFile(this.filePath, 'utf8')
@@ -25,11 +32,11 @@ export class AtomicLaunchProfileStore implements LaunchProfileStore {
       if (isNodeError(error) && error.code === 'ENOENT') return null
       throw error
     }
-    return parseMainLaunchProfile(JSON.parse(contents))
+    return parseLaunchProfile(JSON.parse(contents))
   }
 
-  async save(profile: MainLaunchProfile): Promise<void> {
-    const value = parseMainLaunchProfile(profile)
+  async save(profile: LaunchProfile): Promise<void> {
+    const value = parseLaunchProfile(profile)
     const directory = dirname(this.filePath)
     await mkdir(directory, { recursive: true })
     const temporaryPath = join(directory, `.${randomUUID()}.tmp`)
@@ -47,6 +54,17 @@ export class AtomicLaunchProfileStore implements LaunchProfileStore {
       throw error
     }
   }
+}
+
+export function parseLaunchProfile(value: unknown): LaunchProfile {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const candidate = value as Record<string, unknown>
+    if (candidate.role === 'child' && candidate.version === 1 && Object.keys(candidate).length === 3
+      && Number.isSafeInteger(candidate.port) && (candidate.port as number) >= 1 && (candidate.port as number) <= 65_535) {
+      return { version: 1, role: 'child', port: candidate.port as number }
+    }
+  }
+  return parseMainLaunchProfile(value)
 }
 
 export function parseMainLaunchProfile(value: unknown): MainLaunchProfile {

@@ -204,6 +204,22 @@ test('gateway preflight permits the credential header without validating it', as
   )
 })
 
+test('gateway permits PUT preflight for authenticated device network settings', async () => {
+  const response = await createApp(['http://localhost:5273'], 'expected-credential').request(
+    '/nodes/v1/network',
+    {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:5273',
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'Content-Type, Authorization',
+      },
+    },
+  )
+  assertEquals(response.status, 204)
+  assert(response.headers.get('Access-Control-Allow-Methods')?.includes('PUT'))
+})
+
 test('gateway requires a configured credential on every non-preflight route', async () => {
   const credential = 'expected-credential'
   const app = createApp([], credential)

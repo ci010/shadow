@@ -1,4 +1,4 @@
-name: Windows release check
+name: Desktop release check
 
 on:
   pull_request:
@@ -26,3 +26,76 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Validate, package and verify the fresh application
         run: pnpm desktop
+      - name: Upload verified Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-windows-x64
+          path: desktop/release/Shadow-*-win-x64.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  portable-release:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+            artifact: shadow-macos-arm64
+            pattern: desktop/release/Shadow-*-mac-arm64.zip
+          - name: macOS Intel
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+            artifact: shadow-macos-x64
+            pattern: desktop/release/Shadow-*-mac-x64.zip
+          - name: Linux
+            runner: ubuntu-22.04
+            platform: linux
+            arch: x64
+            artifact: shadow-linux-x64
+            pattern: desktop/release/Shadow-*-linux-x64.tar.gz
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+          architecture: ${{ matrix.arch }}
+      - name: Confirm native build target
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: node -e "if (process.platform !== process.env.EXPECTED_PLATFORM || process.arch !== process.env.EXPECTED_ARCH) throw new Error('Release requires a native runner matching the target')"
+      - name: Install Linux display dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb libgtk-3-0 libnss3 libasound2 libgbm1
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Validate, package and verify macOS application
+        if: runner.os == 'macOS'
+        run: pnpm desktop
+      - name: Validate, package and verify Linux application
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum pnpm desktop
+      - name: Upload verified portable application
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.pattern }}
+          if-no-files-found: error
+          retention-days: 14

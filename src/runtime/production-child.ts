@@ -115,17 +115,18 @@ export async function startProductionChildRuntime(
     capabilities,
     webSocketFactory: options.webSocketFactory,
     authenticationProtocol: async ({ endpoint, authentication, signal }) => {
+      const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(8_000)])
       const credential = await resolveDeviceCredentialForConnect(
         credentialProvider,
         reference,
-        { endpoint, localNodeId: config.localNodeId, signal },
+        { endpoint, localNodeId: config.localNodeId, signal: boundedSignal },
       )
       return await requestDeviceChallengeProtocol(
         endpoint,
         authentication,
         credential.proof,
         options.fetchChallenge,
-        signal,
+        boundedSignal,
       )
     },
     session: { maxOutboundQueue: 128, heartbeatTimeoutMs: 90_000 },
@@ -133,11 +134,19 @@ export async function startProductionChildRuntime(
   workdirs.onCapability = capability => connector.advertiseCapability(capability)
 
   let runtime: ChildRuntimeHandle | undefined
+  let connection: 'connecting' | 'connected' | 'offline' = 'connecting'
+  let connectionError: string | null = null
   const localControl = options.localControl
     ? new ChildLocalControlService({
       ...options.localControl,
       requestShutdown: () => runtime?.shutdown(),
-      nodeInventory: () => childLocalNodeInventory(config, capabilities(), '0.1.0'),
+      nodeInventory: () => childLocalNodeInventory(config, capabilities(), '0.1.0', connection === 'connected' ? 'connected' : 'offline'),
+      childStatus: () => ({
+        version: 1, nodeId: config.localNodeId, mainEndpoint: config.mainEndpoint,
+        connection, error: connectionError, fingerprint: reference.deviceIdentityFingerprint,
+        dataDir: paths.dataDir, workdirs: config.workdirs ?? [],
+        allowInsecureLocalTransport: config.allowInsecureLocalTransport ?? false,
+      }),
     })
     : undefined
   runtime = startChildRuntime(config, {
@@ -145,7 +154,7 @@ export async function startProductionChildRuntime(
     localExecutors: new LocalExecutorService(processManager, workdirs),
     mainConnector: connector,
     localControl,
-  })
+  }, { connectionChanged: (state, error) => { connection = state; connectionError = error } })
   if (localControl) {
     runtime.ready.then(() => localControl.markReady(), () => {})
   }

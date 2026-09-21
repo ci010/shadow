@@ -28,8 +28,10 @@ import {
 } from './bootstrap/launch-profile.js'
 import { AtomicMainAgentConfigInitializer } from './bootstrap/main-agent-config.js'
 import { BootstrapCoordinator } from './bootstrap/coordinator.js'
+import { createBackendPairingCommand, FileChildBootstrap } from './bootstrap/child.js'
 import {
   handleEnsureRuntime,
+  handlePairChild,
   handleGetMainDirectorySelection,
   handleInitializeMain,
   handleOpenCopilotLogin,
@@ -86,6 +88,20 @@ export function enforceNavigationPolicy(
 }
 
 export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
+  const assertBootstrapSender = (event: Electron.IpcMainInvokeEvent): void => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+      throw new Error('Bootstrap commands require the desktop main frame')
+    }
+  }
+  ipcMain.handle(IPC_CHANNELS.childSetup, (event, ...args: unknown[]) => {
+    assertBootstrapSender(event)
+    parseNoArguments(args)
+    return coordinator.childSetup()
+  })
+  ipcMain.handle(IPC_CHANNELS.pairChild, (event, ...args: unknown[]) => {
+    assertBootstrapSender(event)
+    return handlePairChild(coordinator, args)
+  })
   ipcMain.handle(IPC_CHANNELS.loadWizard, () => coordinator.load())
   ipcMain.handle(
     IPC_CHANNELS.dispatchWizard,
@@ -292,6 +308,10 @@ async function start(): Promise<void> {
       : { type: 'shadow:runtime-stopped' })
     void publication.setAuthorization(activityAuthorization)
   }, serviceConnection)
+  const childPairingCommand = createBackendPairingCommand({
+    executablePath: process.execPath, appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath, userDataPath, packaged: app.isPackaged,
+  })
   const coordinator = serviceConnection
     ? createServiceBootstrapCoordinator(serviceConnection.descriptor, runtimeHost)
     : new BootstrapCoordinator(
@@ -306,10 +326,11 @@ async function start(): Promise<void> {
       app.isPackaged,
       process.env.SHADOW_DESKTOP_DEV_MAIN_DIRECTORY,
     ),
+    new FileChildBootstrap(configPath, childPairingCommand),
   )
   registerRuntimeHostQuitLifecycle(app, {
     stop: async () => {
-      try { await runtimeHost.stop() } finally { await publication.close() }
+      try { await Promise.all([runtimeHost.stop(), childPairingCommand.stop()]) } finally { await publication.close() }
     },
   })
   if (serviceConnection) {

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { extractFile, listPackage } from '@electron/asar'
+import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 
 const sourceInputs = [
   'src', 'scripts', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service',
@@ -12,7 +13,9 @@ const sourceInputs = [
 ]
 
 export interface ReleaseManifest {
-  version: 1
+  version: 2
+  platform: DesktopTarget['platform']
+  arch: DesktopTarget['arch']
   buildId: string
   sourceHash: string
   packageVersion: string
@@ -73,7 +76,9 @@ export async function sourceFingerprint(root: string): Promise<string> {
   return hash(JSON.stringify(entries.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)))
 }
 
-export async function createReleaseManifest(root: string, expectedSourceHash: string): Promise<ReleaseManifest> {
+export async function createReleaseManifest(
+  root: string, expectedSourceHash: string, target: DesktopTarget = desktopTarget(),
+): Promise<ReleaseManifest> {
   const sourceHash = await sourceFingerprint(root)
   if (sourceHash !== expectedSourceHash) throw new Error('Source changed during release validation; rebuild before packaging.')
   const manifest = JSON.parse(await readFile(join(root, 'desktop', 'package.json'), 'utf8'))
@@ -81,7 +86,7 @@ export async function createReleaseManifest(root: string, expectedSourceHash: st
   for (const [input, prefix] of [
     ['desktop/backend', 'resources/backend'],
     ['app/dist', 'resources/app-dist'],
-    ['desktop/service', 'resources/service'],
+    ...(target.platform === 'win32' ? [['desktop/service', 'resources/service']] : []),
     ['desktop/dist', 'asar/dist'],
     ['desktop/assets', 'asar/assets'],
   ]) {
@@ -93,10 +98,11 @@ export async function createReleaseManifest(root: string, expectedSourceHash: st
     }
   }
   const result: ReleaseManifest = {
-    version: 1, buildId: randomUUID(), sourceHash,
+    version: 2, platform: target.platform, arch: target.arch, buildId: randomUUID(), sourceHash,
     packageVersion: manifest.version, electronVersion: manifest.devDependencies.electron, files,
   }
   parseReleaseManifest(result)
+  // Keep the resource filename stable; the schema version and target are in the document.
   await writeFile(join(root, 'desktop', 'release-manifest.v1.json'), `${JSON.stringify(result, null, 2)}\n`)
   return result
 }
@@ -105,12 +111,15 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid release manifest')
   const data = value as Record<string, unknown>
   const hex = (item: unknown): item is string => typeof item === 'string' && /^[a-f0-9]{64}$/.test(item)
-  if (Object.keys(data).length !== 6 || data.version !== 1 || typeof data.buildId !== 'string' ||
+  const legacy = data.version === 1
+  if (Object.keys(data).length !== (legacy ? 6 : 8) || (!legacy && data.version !== 2) || typeof data.buildId !== 'string' ||
     !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(data.buildId) ||
     !hex(data.sourceHash) || typeof data.packageVersion !== 'string' ||
     typeof data.electronVersion !== 'string' || !data.files || typeof data.files !== 'object' || Array.isArray(data.files)) {
     throw new Error('Invalid release manifest')
   }
+  if (!legacy && (typeof data.platform !== 'string' || typeof data.arch !== 'string')) throw new Error('Invalid release manifest target')
+  const target = legacy ? desktopTarget('win32', 'x64') : desktopTarget(data.platform as string, data.arch as string)
   const files: Record<string, string> = {}
   for (const [name, checksum] of Object.entries(data.files)) {
     if (!/^(resources\/(?:backend|app-dist|service)|asar\/(?:dist|assets))\//.test(name) ||
@@ -119,18 +128,28 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
     }
     files[name] = checksum
   }
+  if (target.platform !== 'win32' && Object.keys(files).some(name => name.startsWith('resources/service/'))) {
+    throw new Error('Non-Windows release manifest must not contain service resources')
+  }
   for (const required of ['resources/backend/dist/src/index.js', 'resources/app-dist/index.html',
-    'resources/service/ShadowService.exe', 'asar/dist/main.js', 'asar/dist/preload.cjs']) {
+    ...(target.platform === 'win32' ? ['resources/service/ShadowService.exe'] : []),
+    'asar/dist/main.js', 'asar/dist/preload.cjs']) {
     if (!(required in files)) throw new Error(`Release manifest is missing ${required}`)
   }
   return {
-    version: 1, buildId: data.buildId, sourceHash: data.sourceHash,
+    version: 2, platform: target.platform, arch: target.arch, buildId: data.buildId, sourceHash: data.sourceHash,
     packageVersion: data.packageVersion, electronVersion: data.electronVersion, files,
   }
 }
 
-export async function verifyReleaseManifest(packagedRoot: string, repositoryRoot: string): Promise<void> {
-  const manifest = parseReleaseManifest(JSON.parse(await readFile(join(packagedRoot, 'resources', 'release-manifest.v1.json'), 'utf8')))
+export async function verifyReleaseManifest(
+  packagedRoot: string, repositoryRoot: string, target: DesktopTarget = desktopTarget(),
+): Promise<void> {
+  const resources = join(packagedRoot, target.resourcesRelativePath)
+  const manifest = parseReleaseManifest(JSON.parse(await readFile(join(resources, 'release-manifest.v1.json'), 'utf8')))
+  if (manifest.platform !== target.platform || manifest.arch !== target.arch) {
+    throw new Error(`Packaged application target ${manifest.platform}/${manifest.arch} does not match ${target.platform}/${target.arch}`)
+  }
   if (manifest.sourceHash !== await sourceFingerprint(repositoryRoot)) {
     throw new Error('Packaged application does not match current source. Run pnpm desktop to create a fresh release.')
   }
@@ -138,14 +157,17 @@ export async function verifyReleaseManifest(packagedRoot: string, repositoryRoot
   if (manifest.packageVersion !== desktopPackage.version || manifest.electronVersion !== desktopPackage.devDependencies.electron) {
     throw new Error('Packaged application version does not match the release configuration')
   }
-  const archive = join(packagedRoot, 'resources', 'app.asar')
+  const archive = join(resources, 'app.asar')
   const packagedManifest = JSON.parse(extractFile(archive, 'package.json').toString('utf8'))
   if (packagedManifest.version !== manifest.packageVersion || packagedManifest.main !== 'dist/main.js') {
     throw new Error('Packaged Electron entry or version does not match the release configuration')
   }
   const actual = new Map<string, Buffer>()
-  for (const directory of ['backend', 'app-dist', 'service']) {
-    for (const [name, bytes] of await tree(join(packagedRoot, 'resources', directory))) {
+  if (target.platform !== 'win32' && (await readdir(resources)).includes('service')) {
+    throw new Error('Non-Windows package must not contain service resources')
+  }
+  for (const directory of ['backend', 'app-dist', ...(target.platform === 'win32' ? ['service'] : [])]) {
+    for (const [name, bytes] of await tree(join(resources, directory))) {
       actual.set(`resources/${directory}/${name}`, bytes)
     }
   }

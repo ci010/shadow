@@ -16,6 +16,7 @@ import { runWebPair } from '../web-pairing-cli.ts'
 import { loadBrowserPinHash } from '../../gateway/browser-pin.ts'
 import type { MainRuntimeOptions } from './contracts.ts'
 import type { Config } from '../../config/schema.ts'
+import { runChildPairingCli } from '../child-pairing-cli.ts'
 
 async function startLocalMainRuntime(config: Config, options: MainRuntimeOptions) {
   const browserPinHash = await loadBrowserPinHash(resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin'))
@@ -42,8 +43,13 @@ export async function runBackendCli(
 
 export async function runRootProcessEntry(
   hooks: BackendProcessHooks = nodeProcessHooks,
-): Promise<ProcessEntryResult | { readonly route: 'web-pair' }> {
+): Promise<ProcessEntryResult | { readonly route: 'web-pair' | 'child-pair' }> {
   const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'web' ? 1 : 2)
+  if (runtimeArgs[0] === 'child' && runtimeArgs[1] === 'pair') {
+    try { await runChildPairingCli(runtimeArgs.slice(2)) }
+    catch { throw new Error('Child pairing failed; verify the offer, endpoint and protected OS key store, then retry') }
+    return { route: 'child-pair' }
+  }
   if (runtimeArgs[0] === 'web') {
     if (runtimeArgs[1] !== 'pair') throw new Error('Use web pair --connection <absolute descriptor> or web pair --url <loopback origin> --credential-file <absolute file>')
     await runWebPair(runtimeArgs.slice(2))

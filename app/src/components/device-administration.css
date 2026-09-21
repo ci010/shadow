@@ -1,0 +1,75 @@
+.device-administration {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+  color: var(--c-text);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+h2, h3, p, dl, dd { margin: 0; }
+h2 { font-size: 1rem; line-height: 1.4; }
+h3 { font-size: 0.85rem; line-height: 1.5; }
+p { max-width: 75ch; }
+p + p, p + button, .consent + button { margin-top: 0.65rem; }
+.device-section-header, .network-state, .invitation-values dd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+.device-section-header { align-items: flex-start; margin-bottom: 1rem; }
+.device-section-header p, .device-hint, .pending-device p { color: var(--c-text-secondary); }
+.device-button {
+  min-height: 34px;
+  max-width: 100%;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--c-control-border);
+  border-radius: var(--radius-control);
+  background: var(--c-bg-card);
+  color: var(--c-text);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.device-button:hover:not(:disabled) { background: var(--c-bg-soft); border-color: var(--c-border-hover); }
+.device-button.primary { background: var(--c-primary-bg); border-color: var(--c-primary-bg); color: var(--c-text-on-primary); }
+.device-button.primary:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
+.device-button:disabled { cursor: not-allowed; opacity: 0.55; }
+:is(button, input, select, summary):focus-visible { outline: 2px solid var(--c-blue); outline-offset: 3px; }
+.device-error { margin: 0.75rem 0; padding: 0.65rem; background: var(--c-error-bg); color: var(--c-error); }
+.device-error-text { color: var(--c-error); }
+.network-state { justify-content: flex-start; }
+.network-state + p, .network-setup, .invitation-section, .pending-section { margin-top: 0.8rem; }
+.network-fields { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.75rem 1.5rem; margin-top: 0.75rem; }
+.network-fields label { display: grid; gap: 0.25rem; min-width: 0; max-width: 100%; }
+.network-fields input, .network-fields select {
+  max-width: 100%; min-width: 0; min-height: 36px; padding: 0.35rem 0.5rem;
+  border: 1px solid var(--c-control-border); border-radius: var(--radius-control);
+  background: var(--c-bg-input); color: var(--c-text); font: inherit;
+}
+.network-fields input { width: 8rem; }
+.network-fields details { padding-top: 0.2rem; }
+summary { cursor: pointer; }
+.consent { display: flex; align-items: flex-start; gap: 0.6rem; max-width: 75ch; margin-top: 0.85rem; cursor: pointer; }
+.consent input { flex: 0 0 auto; margin-top: 0.25rem; width: 16px; height: 16px; accent-color: var(--c-primary-bg); }
+.invitation-section, .pending-section, .pending-device, .approval-progress { border-top: 1px solid var(--c-border); padding-top: 1rem; }
+.invitation-values { display: grid; gap: 0.6rem; margin: 0.75rem 0; max-width: 48rem; }
+.invitation-values dt, .pending-device dt { color: var(--c-text-secondary); font-size: 0.75rem; }
+.invitation-values dd { justify-content: flex-start; }
+code, .fingerprint { font-family: var(--font-mono, 'IBM Plex Mono', ui-monospace, monospace); overflow-wrap: anywhere; word-break: break-word; }
+.fingerprint { margin-top: 0.25rem; padding: 0.5rem; background: var(--c-bg-soft); user-select: all; }
+.pending-device { margin-top: 1rem; }
+.pending-device p, .pending-device dl { margin-top: 0.5rem; }
+.approval-progress { margin-top: 1rem; }
+@media (max-width: 600px) {
+  .device-administration { padding: 0.8rem; }
+  .device-button, .network-fields select, .network-fields input { min-height: 44px; }
+  .network-fields { display: grid; }
+  .network-fields select, .network-fields input { font-size: 16px; }
+  .invitation-values dd { align-items: flex-start; }
+  .invitation-values code { flex-basis: 100%; }
+  .consent { min-height: 44px; }
+}

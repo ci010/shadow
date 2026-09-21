@@ -4,7 +4,6 @@
 			<header class="setup-header">
 				<img class="brand-mark" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
 				<div>
-					<p class="eyebrow">Shadow setup</p>
 					<h1 id="setup-title">{{ heading }}</h1>
 				</div>
 				<span v-if="state?.mode === 'main'" class="step-count">{{ progressLabel }}</span>
@@ -48,25 +47,40 @@
 							<span class="role-icon" aria-hidden="true">
 								<svg viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2"/><path d="M9 18h6"/></svg>
 							</span>
-							<span><strong>Child</strong><small>Connects to an existing Main with limited capabilities.</small></span>
+							<span><strong>Child</strong><small>Runs remote tasks for an existing Main. You review execution access before pairing.</small></span>
 						</button>
 					</div>
-					<div v-if="selectedRole === 'child'" class="notice pending-notice" role="status">
-						<strong>Child setup is not available yet.</strong>
-						<span>Pairing is still being implemented. This setup will not create or simulate a connection.</span>
-					</div>
 					<div class="actions">
-						<button class="primary-button" :disabled="busy || selectedRole !== 'main'" @click="chooseMain">
-							{{ busy ? 'Saving…' : 'Continue as Main' }}
+						<button class="primary-button" :disabled="busy || !selectedRole" @click="chooseRole">
+							{{ busy ? 'Saving…' : selectedRole === 'child' ? 'Continue as Child' : 'Continue as Main' }}
 						</button>
 					</div>
 				</div>
 
 				<div v-else-if="state.mode === 'child'" class="setup-content">
-					<div class="notice pending-notice" role="status">
-						<strong>Child setup is pending implementation.</strong>
-						<span>No pairing data has been sent. Install a future update to continue this setup.</span>
+					<p class="lead">On Main, open Nodes, enable the device listener and create a pairing offer. Enter those details here. Main must approve this device before it can connect.</p>
+					<div v-if="childFingerprint" class="notice" role="status">
+						<strong>This device's fingerprint</strong><code class="pairing-fingerprint">{{ childFingerprint }}</code>
+						<span>If Main already shows this pending device, compare this fingerprint, approve it there, then retry here. Retrying keeps the same identity even if the first response was lost.</span>
 					</div>
+					<form class="child-form" @submit.prevent="pairChild">
+						<label class="field-label" for="child-endpoint">Main device endpoint</label>
+						<input id="child-endpoint" v-model="child.endpoint" class="directory-input" type="url" placeholder="http://192.168.1.10:3124" required :disabled="busy" autocomplete="off">
+						<label class="consent-row"><input v-model="child.allowInsecureLocalTransport" type="checkbox" :disabled="busy"><span>Use HTTP on a trusted LAN/VPN for testing only. Traffic and the PIN are not encrypted. Never use this on the public internet; device authentication remains required.</span></label>
+						<div class="child-fields">
+							<div><label class="field-label" for="child-offer">Offer ID</label><input id="child-offer" v-model="child.offerId" class="directory-input" required :disabled="busy" autocomplete="off"></div>
+							<div><label class="field-label" for="child-pin">Six-digit PIN</label><input id="child-pin" v-model="child.pin" class="directory-input" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required :disabled="busy" autocomplete="off"></div>
+						</div>
+						<label class="field-label" for="child-name">Device name</label>
+						<input id="child-name" v-model="child.displayName" class="directory-input" required maxlength="128" :disabled="busy">
+						<label class="field-label" for="child-home">Child home — protected identity and managed session data</label>
+						<div class="directory-field"><input id="child-home" v-model="child.dataDir" class="directory-input" required :disabled="busy || childSaved"><button type="button" class="secondary-button" :disabled="busy || childSaved" @click="pickChildFolder('dataDir')">Browse…</button></div>
+						<label class="field-label" for="child-workdir">Shared work folder — files, Git and commands</label>
+						<div class="directory-field"><input id="child-workdir" v-model="child.workdir" class="directory-input" required :disabled="busy"><button type="button" class="secondary-button" :disabled="busy" @click="pickChildFolder('workdir')">Browse…</button></div>
+						<p class="field-help">Use separate folders, not a drive root. Child home stays fixed after the first attempt so retries retain this device's identity. You can correct the endpoint and work folder until pairing succeeds. No existing data is moved or deleted.</p>
+						<label class="consent-row"><input v-model="executionConsent" type="checkbox" :disabled="busy" required><span>I allow the approved Main to read/write the work folder, create managed workdirs under Child home, and execute commands as my OS account. <strong>Shell access is not a sandbox and can access other host files.</strong> Pair only with a Main you trust with this access.</span></label>
+						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || !executionConsent">{{ busy ? 'Submitting pairing request…' : 'Pair and open local status' }}</button></div>
+					</form>
 				</div>
 
 				<div v-else-if="state.step === 'choose-data-directory'" class="setup-content">
@@ -195,6 +209,10 @@ const directoryPath = ref('')
 const localExecutor = ref(loadLocalExecutorChoice())
 const busy = ref(false)
 const actionError = ref('')
+const executionConsent = ref(false)
+const childSaved = ref(false)
+const childFingerprint = ref('')
+const child = ref({ endpoint: '', offerId: '', pin: '', displayName: '', dataDir: '', workdir: '', allowInsecureLocalTransport: false })
 
 const mainSteps = ['choose-data-directory', 'initialize-main', 'configure-provider', 'choose-local-capabilities', 'launch-main'] as const
 const showRoleChoice = computed(() => state.value?.mode === null)
@@ -230,11 +248,50 @@ async function run(
 	}
 }
 
-async function chooseMain(): Promise<void> {
-	await run(() => props.api.bootstrap.dispatch({ type: 'select-role', mode: 'main' }))
+async function chooseRole(): Promise<void> {
+	if (!selectedRole.value) return
+	await run(() => props.api.bootstrap.dispatch({ type: 'select-role', mode: selectedRole.value! }))
 	await loadDirectory()
+	await loadChild()
 }
 
+async function loadChild(): Promise<void> {
+	if (state.value?.mode !== 'child') return
+	try {
+		if (!props.api.bootstrap.childSetup) throw new Error('unsupported')
+		const info = await props.api.bootstrap.childSetup()
+		child.value = { ...child.value, endpoint: info.endpoint, dataDir: info.dataDir,
+			workdir: info.workdir, displayName: child.value.displayName || info.displayName, allowInsecureLocalTransport: info.allowInsecureLocalTransport }
+		childSaved.value = info.saved
+		childFingerprint.value = info.fingerprint ?? ''
+	} catch { actionError.value = 'Child settings could not be loaded. Restart Shadow and retry; existing identity data is retained.' }
+}
+
+async function pickChildFolder(field: 'dataDir' | 'workdir'): Promise<void> {
+	try {
+		const path = await props.api.folders?.selectDirectory()
+		if (path) child.value[field] = path
+	} catch { actionError.value = 'The directory picker failed. Enter a full absolute path or retry Browse.' }
+}
+
+async function pairChild(): Promise<void> {
+	if (busy.value || !executionConsent.value) return
+	busy.value = true
+	actionError.value = ''
+	try {
+		if (!props.api.bootstrap.pairChild) throw new Error('Child pairing requires a current desktop build.')
+		const result = await props.api.bootstrap.pairChild({ ...child.value, executionConsent: true })
+		if (!result.ok) throw new Error('Child setup could not be saved. Retry this step.')
+		state.value = result.state
+		emit('complete')
+	} catch (error) {
+		actionError.value = error instanceof Error ? error.message : 'Pairing failed. Check Main and retry.'
+		await loadChild()
+	} finally {
+		child.value.pin = ''
+		busy.value = false
+	}
+}
 function useDirectorySelection(selection: NativeDirectorySelection): void {
 	directorySelection.value = selection
 	directoryPath.value = selection.displayPath ?? selection.displayName
@@ -253,7 +310,7 @@ async function loadDirectory(): Promise<void> {
 	}
 }
 
-onMounted(loadDirectory)
+onMounted(async () => { await loadDirectory(); await loadChild() })
 
 async function pickDirectory(): Promise<void> {
 	actionError.value = ''
@@ -314,35 +371,34 @@ async function launchMain(): Promise<void> {
 
 <style scoped>
 .setup-shell {
-	--ink: #18211d;
-	--muted: #66706b;
-	--line: #d8ddd9;
-	--accent: #147a57;
-	--accent-dark: #0f6246;
+	--ink: var(--c-text);
+	--muted: var(--c-text-muted);
+	--line: var(--c-border);
+	--accent: var(--c-primary-bg);
+	--accent-dark: var(--c-primary-bg-hover);
 	min-height: 100%;
 	display: grid;
 	place-items: center;
 	padding: 32px;
 	color: var(--ink);
-	background: radial-gradient(circle at 15% 15%, rgba(31, 132, 96, .11), transparent 30%), linear-gradient(145deg, #f8faf8, #eef2ef);
-	font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+	background: var(--c-bg);
+	font-family: inherit;
 }
-.setup-panel { width: min(640px, 100%); min-height: 470px; padding: 34px 38px; border: 1px solid #cdd5d0; border-radius: var(--radius-overlay); background: rgba(255, 255, 255, .94); box-shadow: 0 20px 60px rgba(25, 49, 39, .12); }
+.setup-panel { width: min(700px, 100%); min-height: 470px; padding: 34px 38px; border: 1px solid var(--line); border-radius: var(--radius-overlay); background: var(--c-bg-card); }
 .setup-header { display: grid; grid-template-columns: 44px 1fr auto; gap: 14px; align-items: center; }
 .brand-mark { width: 44px; height: 44px; display: block; object-fit: contain; }
-.eyebrow { margin: 0 0 2px; color: var(--accent); font-size: 12px; font-weight: 700; text-transform: uppercase; }
-h1 { margin: 0; font: 600 25px/1.2 Georgia, "Times New Roman", serif; letter-spacing: 0; }
+h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.2; }
 .step-count { color: var(--muted); font-size: 12px; }
-.progress-track { height: 3px; margin: 22px 0 30px; overflow: hidden; background: #e8ece9; }
-.progress-track span { display: block; height: 100%; background: var(--accent); transition: width .25s ease; }
+.progress-track { height: 3px; margin: 22px 0 30px; overflow: hidden; background: var(--c-bg-muted); }
+.progress-track span { display: block; height: 100%; background: var(--accent); }
 .setup-content { margin-top: 30px; animation: enter .22s ease-out; }
 .progress-track + .setup-content { margin-top: 0; }
-.lead { max-width: 520px; margin: 0 0 24px; color: #4e5953; font-size: 15px; line-height: 1.55; }
+.lead { max-width: 65ch; margin: 0 0 24px; color: var(--c-text-secondary); font-size: 15px; line-height: 1.55; }
 .role-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.role-option { display: grid; grid-template-columns: 38px 1fr; gap: 12px; min-height: 108px; padding: 16px; text-align: left; color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-surface); background: #fff; cursor: pointer; }
-.role-option:hover, .role-option:focus-visible { border-color: #8ba99b; outline: none; }
-.role-option.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: #f4faf7; }
-.role-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--radius-control); background: #edf2ef; }
+.role-option { display: grid; grid-template-columns: 38px 1fr; gap: 12px; min-height: 108px; padding: 16px; text-align: left; color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-surface); background: var(--c-bg-input); cursor: pointer; }
+.role-option:hover { border-color: var(--c-border-hover); }
+.role-option.selected { border-color: var(--accent); background: var(--c-bg-muted); }
+.role-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--radius-control); background: var(--c-bg-muted); }
 .role-icon svg { width: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .role-option strong, .role-option small { display: block; }
 .role-option strong { margin: 2px 0 6px; font-size: 15px; }
@@ -350,29 +406,28 @@ h1 { margin: 0; font: 600 25px/1.2 Georgia, "Times New Roman", serif; letter-spa
 .actions { display: flex; justify-content: flex-end; margin-top: 26px; }
 button { font: inherit; }
 .primary-button, .secondary-button { min-height: 40px; padding: 0 18px; border-radius: var(--radius-control); font-size: 13px; font-weight: 650; cursor: pointer; }
-.primary-button { color: white; border: 1px solid var(--accent); background: var(--accent); }
+.primary-button { color: var(--c-text-on-primary); border: 1px solid var(--accent); background: var(--accent); }
 .primary-button:hover:not(:disabled) { background: var(--accent-dark); }
 .primary-button:disabled, button:disabled { cursor: not-allowed; opacity: .52; }
-.secondary-button { align-self: start; color: var(--ink); border: 1px solid #bac4be; background: white; }
+.secondary-button { align-self: start; color: var(--ink); border: 1px solid var(--c-control-border); background: var(--c-bg-input); }
 .notice { display: grid; gap: 5px; padding: 14px 16px; border-radius: var(--radius-surface); font-size: 13px; line-height: 1.45; }
-.notice span { color: #59645e; }
-.pending-notice { margin-top: 18px; border: 1px solid #dfd3a8; background: #fffbec; }
-.error-notice { margin-top: 30px; border: 1px solid #e5bbb4; background: #fff5f3; }
+.notice span { color: var(--c-text-secondary); }
+.error-notice { margin-top: 30px; border: 1px solid var(--c-error); background: var(--c-error-bg); color: var(--c-error); }
 .error-notice .secondary-button { margin-top: 8px; }
 .action-error { margin-top: 20px; }
 .field-label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 700; }
 .directory-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
-.directory-input { min-width: 0; width: 100%; min-height: 40px; padding: 8px 10px; color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-control); background: white; font: inherit; font-size: 13px; }
+.directory-input { min-width: 0; width: 100%; min-height: 40px; padding: 8px 10px; color: var(--ink); border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); font: inherit; font-size: 13px; }
 .directory-input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.directory-input:disabled { color: var(--muted); background: #f4f6f4; }
-.field-help { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.summary-row, .toggle-row { display: flex; justify-content: space-between; gap: 20px; align-items: center; min-height: 62px; padding: 0 16px; border: 1px solid var(--line); border-radius: var(--radius-surface); background: #fafcfa; font-size: 13px; }
+.directory-input:disabled { color: var(--muted); background: var(--c-bg-muted); }
+.field-help { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.summary-row, .toggle-row { display: flex; justify-content: space-between; gap: 20px; align-items: center; min-height: 62px; padding: 0 16px; border: 1px solid var(--line); border-radius: var(--radius-surface); background: var(--c-bg-soft); font-size: 13px; }
 .summary-row span, .launch-summary span { color: var(--muted); }
-.provider-options { margin: 0; padding-left: 20px; color: #48534d; font-size: 14px; line-height: 1.55; }
+.provider-options { margin: 0; padding-left: 20px; color: var(--c-text-secondary); font-size: 14px; line-height: 1.55; }
 .provider-options li + li { margin-top: 12px; }
 input[type="checkbox"] { accent-color: var(--accent); }
 .toggle-row span strong, .toggle-row span small { display: block; }
-.toggle-row span small { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.toggle-row span small { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .toggle-row input[role="switch"] { width: 38px; height: 20px; }
 .launch-summary { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: var(--radius-surface); overflow: hidden; }
 .launch-summary div { display: grid; gap: 6px; padding: 14px 16px; border-right: 1px solid var(--line); font-size: 12px; }
@@ -389,4 +444,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 	.launch-summary div:last-child { border-bottom: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .setup-content { animation: none; } }
+.child-form > .field-label { margin-top: 18px; }
+.pairing-fingerprint { overflow-wrap: anywhere; user-select: all; }
+.child-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; margin-top: 18px; }
+.consent-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; font-size: 13px; line-height: 1.5; }
+.consent-row input { flex-shrink: 0; margin-top: 4px; }
+@media (max-width: 620px) { .child-fields { grid-template-columns: 1fr; } }
 </style>

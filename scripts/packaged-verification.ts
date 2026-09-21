@@ -3,6 +3,8 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { isAbsolute, join, relative, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 
 export function sanitizeLog(value: unknown, secrets: readonly string[] = [], limit = 12_000): string {
   let text = String(value)
@@ -35,7 +37,11 @@ export function isolatedEnvironment(scratch: string, token: string, port: number
     WINDIR: process.env.WINDIR,
     TEMP: scratch,
     TMP: scratch,
+    TMPDIR: scratch,
     HOME: scratch,
+    XDG_CONFIG_HOME: join(scratch, 'profile', 'config'),
+    XDG_CACHE_HOME: join(scratch, 'profile', 'cache'),
+    XDG_DATA_HOME: join(scratch, 'profile', 'data'),
     USERPROFILE: scratch,
     APPDATA: join(scratch, 'profile', 'roaming'),
     LOCALAPPDATA: join(scratch, 'profile', 'local'),
@@ -46,13 +52,40 @@ export function isolatedEnvironment(scratch: string, token: string, port: number
   }
 }
 
-export function backendCommand(packagedRoot: string, bootstrap: string): { executable: string; args: string[] } {
+export function relocatedPackageRoot(scratch: string, target: DesktopTarget = desktopTarget()): string {
+  return join(scratch, target.platform === 'darwin' ? 'Shadow.app' : 'application')
+}
+
+export function backendCommand(
+  packagedRoot: string, bootstrap: string, target: DesktopTarget = desktopTarget(),
+): { executable: string; args: string[] } {
   return {
-    executable: join(packagedRoot, 'Shadow.exe'),
+    executable: join(packagedRoot, target.executableRelativePath),
     args: [
-      join(packagedRoot, 'resources', 'backend', 'dist', 'src', 'index.js'),
+      join(packagedRoot, target.resourcesRelativePath, 'backend', 'dist', 'src', 'index.js'),
       'server', 'start', '--config', bootstrap, '--service',
     ],
+  }
+}
+
+export function packagedEvalCommand(
+  packagedRoot: string, script: string, target: DesktopTarget = desktopTarget(),
+): { executable: string; args: string[] } {
+  const runtime = join(packagedRoot, target.resourcesRelativePath, 'backend', 'dist', 'src', 'script-runtime', 'runtime.js')
+  return {
+    executable: join(packagedRoot, target.executableRelativePath),
+    args: ['--input-type=module', '-e', `
+      import { readFile } from 'node:fs/promises';
+      import { dirname } from 'node:path';
+      const { executeScript } = await import(process.argv[1]);
+      const filename = process.argv[2];
+      const result = await executeScript({
+        code: await readFile(filename, 'utf8'), filename, cwd: dirname(filename),
+        args: [], entry: 'run', policy: { kind: 'host' },
+        signal: AbortSignal.timeout(10_000), timeoutMs: 10_000, env: process.env,
+      });
+      console.log('SHADOW_PACKAGED_EVAL_RESULT=' + JSON.stringify({ result: result.value }));
+    `, pathToFileURL(runtime).href, script],
   }
 }
 
@@ -215,8 +248,8 @@ export function assertOutsideRepository(directory: string, repository: string): 
     'Packaged acceptance must relocate the entire application outside the repository')
 }
 
-export async function verifyRendererArtifacts(packagedRoot: string): Promise<void> {
-  const renderer = join(packagedRoot, 'resources', 'app-dist')
+export async function verifyRendererArtifacts(packagedRoot: string, target: DesktopTarget = desktopTarget()): Promise<void> {
+  const renderer = join(packagedRoot, target.resourcesRelativePath, 'app-dist')
   const html = await readFile(join(renderer, 'index.html'), 'utf8')
   const assets = [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)]
     .map((match) => match[1]!).filter((path) => path.startsWith('./assets/') || path.startsWith('/assets/') || path.startsWith('assets/'))
@@ -229,8 +262,10 @@ export async function verifyRendererArtifacts(packagedRoot: string): Promise<voi
   }
 }
 
-export async function prepareRendererSmoke(packagedRoot: string, scratch: string, fixture: string) {
-  const resources = join(packagedRoot, 'resources')
+export async function prepareRendererSmoke(
+  packagedRoot: string, scratch: string, fixture: string, target: DesktopTarget = desktopTarget(),
+) {
+  const resources = join(packagedRoot, target.resourcesRelativePath)
   const originalArchive = join(resources, 'acceptance-production.asar')
   // The verified production archive stays byte-for-byte intact. Only this disposable copy gets a synthetic entry.
   await rename(join(resources, 'app.asar'), originalArchive)
@@ -240,7 +275,7 @@ export async function prepareRendererSmoke(packagedRoot: string, scratch: string
   await writeFile(join(entry, 'fixture.cjs'), fixture)
   const control = join(scratch, 'renderer-control')
   return {
-    executable: join(packagedRoot, 'Shadow.exe'),
+    executable: join(packagedRoot, target.executableRelativePath),
     args: [
       `--acceptance-assets=${join(resources, 'app-dist')}`,
       `--acceptance-preload=${join(originalArchive, 'dist', 'preload.cjs')}`,
@@ -251,12 +286,32 @@ export async function prepareRendererSmoke(packagedRoot: string, scratch: string
   }
 }
 
-export function rendererEnvironment(scratch: string): NodeJS.ProcessEnv {
+export function rendererSignatureCommands(
+  packagedRoot: string, scratch: string, target: DesktopTarget = desktopTarget(),
+): Array<{ executable: string; args: string[] }> {
+  if (target.platform !== 'darwin') return []
+  assert.equal(resolve(packagedRoot), resolve(relocatedPackageRoot(scratch, target)), 'Only the disposable renderer bundle may be re-signed')
+  // The synthetic entry changes the resource seal. Keep nested binaries and JIT entitlements intact.
+  return [
+    {
+      executable: '/usr/bin/codesign',
+      args: ['--force', '--sign', '-', '--timestamp=none',
+        '--preserve-metadata=identifier,entitlements,requirements,flags,runtime', packagedRoot],
+    },
+    { executable: '/usr/bin/codesign', args: ['--verify', '--deep', '--strict', packagedRoot] },
+  ]
+}
+
+export function rendererEnvironment(scratch: string, target: DesktopTarget = desktopTarget()): NodeJS.ProcessEnv {
   const env = isolatedEnvironment(scratch, '', 0)
   delete env.ELECTRON_RUN_AS_NODE
   delete env.WINDOWS_USE_LAUNCH_TOKEN
   delete env.GATEWAY_PORT
   delete env.GATEWAY_HOST
+  if (target.platform === 'linux') {
+    env.DISPLAY = process.env.DISPLAY
+    env.XAUTHORITY = process.env.XAUTHORITY
+  }
   return env
 }
 
@@ -284,18 +339,20 @@ export interface ProcessIdentity {
   cpuSeconds?: number
 }
 
-export function backendResourceReport(identity: ProcessIdentity) {
+export function backendResourceReport(identity: ProcessIdentity, platform = process.platform) {
   assert.ok(Number.isFinite(identity.workingSetBytes) && identity.workingSetBytes! > 0, 'Backend working set unavailable')
   assert.ok(Number.isFinite(identity.cpuSeconds) && identity.cpuSeconds! >= 0, 'Backend cumulative CPU time unavailable')
   return {
     pid: identity.pid,
     workingSetBytes: identity.workingSetBytes,
     cumulativeCpuSeconds: identity.cpuSeconds,
-    label: 'Actual backend PID sample; Windows working set and lifetime CPU time, not CPU utilization or a memory budget. Descendants excluded.',
+    label: `Actual backend PID sample; ${platform === 'win32' ? 'Windows working set' : 'POSIX resident set'} and lifetime CPU time, not CPU utilization or a memory budget. Descendants excluded.`,
   }
 }
 
 export function descendants(snapshot: ProcessIdentity[], root: ProcessIdentity): ProcessIdentity[] {
+  // A departed/reused parent PID cannot establish ownership of newly observed processes.
+  if (!snapshot.some(value => value.pid === root.pid && value.created === root.created)) return []
   const result: ProcessIdentity[] = []
   const queue = [root]
   const seen = new Set([root.pid])
@@ -311,7 +368,20 @@ export function descendants(snapshot: ProcessIdentity[], root: ProcessIdentity):
 }
 
 export async function snapshotProcesses(milliseconds = 10_000): Promise<ProcessIdentity[]> {
-  assert.equal(process.platform, 'win32')
+  if (process.platform !== 'win32') {
+    assert.ok(process.platform === 'darwin' || process.platform === 'linux', 'Unsupported process census platform')
+    // Never return/log other applications' command lines, including on ps failure.
+    let text: string
+    const outputLimit = 4_000_000
+    try {
+      text = await runCommand('/bin/ps', ['-ww', '-axo', 'pid=,ppid=,lstart=,rss=,time=,args='],
+        { env: { PATH: '/usr/bin:/bin', LC_ALL: 'C', TZ: 'UTC' } }, milliseconds, 'POSIX process census', [], outputLimit)
+    } catch {
+      throw new Error('POSIX process census failed')
+    }
+    assert.ok(text.length < outputLimit, 'POSIX process census exceeded output limit')
+    return parsePosixProcesses(text)
+  }
   const executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const script = `@(
     Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $null -ne $_.CreationDate } | ForEach-Object {
@@ -345,8 +415,68 @@ export function remainingBudget(deadline: number, maximum: number): number {
 }
 
 export async function killWindowsTree(identity: ProcessIdentity, deadline = Date.now() + 18_000): Promise<void> {
+  assert.equal(process.platform, 'win32')
   const current = await snapshotProcesses(remainingBudget(deadline, 10_000))
   if (!current.some((value) => value.pid === identity.pid && value.created === identity.created)) return
   const executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
   await runCommand(executable, ['/PID', String(identity.pid), '/T', '/F'], {}, remainingBudget(deadline, 8_000), `Terminate owned process tree ${identity.pid}`)
+}
+
+export function parsePosixProcesses(text: string): ProcessIdentity[] {
+  const seen = new Set<number>()
+  return text.split(/\r?\n/).filter(line => line.trim()).map(line => {
+    const match = /^\s*(\d+)\s+(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\d+)\s+(\S+)(?:\s+(.*))?$/.exec(line)
+    assert.ok(match, 'Invalid POSIX process census row')
+    const [, pidText, parentText, started, rss, time, command = ''] = match
+    const pid = Number(pidText)
+    const parentPid = Number(parentText)
+    const timestamp = Date.parse(`${started} UTC`)
+    const cpu = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(time!)
+    assert.ok(Number.isSafeInteger(pid) && pid > 0 && Number.isSafeInteger(parentPid) &&
+      !seen.has(pid) && Number.isFinite(timestamp) && cpu, 'Invalid POSIX process identity')
+    const [, days, hours, minutes, seconds] = cpu
+    const cpuSeconds = Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds)
+    const workingSetBytes = Number(rss) * 1024
+    assert.ok(Number.isSafeInteger(workingSetBytes) && Number.isFinite(cpuSeconds), 'Invalid POSIX process metrics')
+    seen.add(pid)
+    return {
+      pid, parentPid, created: new Date(timestamp).toISOString(),
+      gui: /(?:^|\s)--type=(?:renderer|gpu-process|utility)(?:\s|$)/.test(command),
+      workingSetBytes, cpuSeconds,
+    }
+  })
+}
+
+interface PosixProcessControl {
+  snapshot(milliseconds: number): Promise<ProcessIdentity[]>
+  signal(pid: number, signal: NodeJS.Signals): void
+}
+
+export async function killPosixTree(
+  identity: ProcessIdentity, deadline = Date.now() + 18_000,
+  control: PosixProcessControl = { snapshot: snapshotProcesses, signal: (pid, signal) => { process.kill(pid, signal) } },
+): Promise<void> {
+  assert.ok(Number.isSafeInteger(identity.pid) && identity.pid > 1 && identity.pid !== process.pid, 'Unsafe owned process PID')
+  const matches = (value: ProcessIdentity, owned: ProcessIdentity) => value.pid === owned.pid && value.created === owned.created
+  const initial = await control.snapshot(remainingBudget(deadline, 10_000))
+  if (!initial.some(value => matches(value, identity))) return
+  const owned = [...descendants(initial, identity).reverse(), identity]
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    for (const value of owned) {
+      assert.ok(value.pid > 1 && value.pid !== process.pid, 'Unsafe owned process PID')
+      const current = await control.snapshot(remainingBudget(deadline, 10_000))
+      if (!current.some(candidate => matches(candidate, value))) continue
+      try { control.signal(value.pid, signal) } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error
+      }
+    }
+    await new Promise(done => setTimeout(done, remainingBudget(deadline, 100)))
+  }
+  const remaining = await control.snapshot(remainingBudget(deadline, 10_000))
+  assert.ok(!remaining.some(value => owned.some(candidate => matches(value, candidate))), 'Owned POSIX processes survived cleanup')
+}
+
+export async function killProcessTree(identity: ProcessIdentity, deadline?: number): Promise<void> {
+  if (process.platform === 'win32') await killWindowsTree(identity, deadline)
+  else await killPosixTree(identity, deadline)
 }

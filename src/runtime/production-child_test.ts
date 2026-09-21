@@ -168,7 +168,7 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals(body.nodes.length, 1)
   assertEquals(body.nodes[0].nodeId, 'node-1')
   assertEquals(body.nodes[0].role, 'child')
-  assertEquals(body.nodes[0].connection, 'connected')
+  assertEquals(body.nodes[0].connection, 'offline')
   assertEquals(body.nodes[0].supportsManagedSessions, true)
   assertEquals(body.nodes[0].capabilities, [{
     capabilityId: 'process-execute', kind: 'shell', displayName: 'Local shell', online: true,

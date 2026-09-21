@@ -402,10 +402,21 @@ For the installed Electron Node runtime, see the
 [installed pairing command](docs/release.md#opt-in-headless-windows-service).
 
 The packaging command runs typechecks and the
-focused release tests, builds the production UI, creates a Windows NSIS
-installer in `desktop/release`, and verifies that fresh package. See
+focused release tests, builds the production UI, creates the native package
+in `desktop/release`, and verifies that fresh package: Windows x64 NSIS,
+macOS arm64/x64 ZIP (separate builds), or Linux x64 tar.gz. The
+**Desktop release check** GitHub Action builds all four variants on native
+runners and uploads successful artifacts for 14 days, without publishing a Release.
+macOS builds are ad-hoc signed and not notarized; they are test artifacts, not
+trusted public releases. See
 [release verification](docs/release.md) for download mirrors/caches, artifact
-identity checks, and the remaining Windows installation/service acceptance boundary.
+identity checks, platform prerequisites and installation/service acceptance boundaries.
+
+For one Electron **Main** and another Electron **Child**, follow the
+[two-device pairing guide](docs/desktop-pairing.md). Main's **Nodes** view
+provides an explicitly enabled, device-only trusted-LAN/VPN listener and pairing
+approval. This is separate from **Connect browser**. HTTP test transport is
+unencrypted, and pairing does not make remote execution an OS sandbox.
 
 On Windows, the taskbar icon shows an indeterminate progress indicator while
 any Project has an active agent turn (thinking, using tools, or waiting).
@@ -804,7 +815,8 @@ Navigation (including Providers) and window controls share one Shadow header.
 The header, setup, and recovery screens use `app/src/assets/shadow-logo.png`.
 The matching browser favicon is `app/public/favicon.png`; the multi-resolution
 Windows icon in `desktop/assets/icon.ico` is used by both the desktop window and
-the installer build. Renderer branding updates through Vite during development;
+the installer build. macOS/Linux use `desktop/assets/icon.png`, copied from the
+same shared logo. Renderer branding updates through Vite during development;
 native window icon changes require restarting Electron.
 Content begins directly below navigation without a persistent runtime status row;
 device roles, connection status, and node IDs remain available in **Nodes**.
@@ -1677,7 +1689,7 @@ performed by the build or automatically by ordinary desktop startup.
 | `pnpm test:release` | Focused build, packaging, service-mode and Electron release checks |
 | `pnpm test:packaged` | Exercise a built Windows package after relocating it outside the repository |
 | `pnpm typecheck` | Backend/scripts, desktop and Vue application typechecks |
-| `pnpm desktop:dev` / `pnpm desktop` | Desktop development / Windows installer |
+| `pnpm desktop:dev` / `pnpm desktop` | Desktop development / native Windows, macOS or Linux package |
 | `pnpm web:pair --connection <absolute-path>` | Issue a short-lived code for a browser session on a protected local backend |
 | `pnpm migrate:sessions <directory>` | Explicit JSONL-to-SQLite history migration; retains source files |
 | `pnpm dev:docker:compose` | Development container with Chrome/Xpra |

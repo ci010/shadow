@@ -13,6 +13,7 @@ import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from './document-ta
 import { createMediaCaptureApi } from './media-capture-preload.js'
 import { createStartupDiagnosticsApi } from './startup-diagnostics-ipc.js'
 import { createWebPairingApi } from './web-pairing-preload.js'
+import type { ChildPairInput } from './bootstrap/child.js'
 
 const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction) => {
   window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
@@ -40,6 +41,8 @@ const api: ShadowDesktopApi = Object.freeze({
     launchMain: (options: LaunchMainOptions) =>
       ipcRenderer.invoke(IPC_CHANNELS.launchMain, options),
     ensureRuntime: () => ipcRenderer.invoke(IPC_CHANNELS.ensureRuntime),
+    childSetup: () => ipcRenderer.invoke(IPC_CHANNELS.childSetup),
+    pairChild: (input: ChildPairInput) => ipcRenderer.invoke(IPC_CHANNELS.pairChild, input),
   }),
   selectDirectory: () =>
     ipcRenderer.invoke(IPC_CHANNELS.selectDirectory) as Promise<

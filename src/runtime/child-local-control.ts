@@ -15,6 +15,7 @@ export interface ChildLocalControlOptions {
   readonly launchCredential: string
   readonly requestShutdown: () => void | Promise<void>
   readonly nodeInventory?: () => NodeInventoryEntry | Promise<NodeInventoryEntry>
+  readonly childStatus?: () => unknown
 }
 
 export class ChildLocalControlService implements ChildRuntimeService {
@@ -58,6 +59,9 @@ export class ChildLocalControlService implements ChildRuntimeService {
         }),
       })] : []),
     ], { launchCredential: this.options.launchCredential })
+    if (this.options.childStatus) {
+      app.get('/local/v1/child', (context) => context.json(this.options.childStatus!() as Record<string, unknown>, 200, { 'Cache-Control': 'no-store' }))
+    }
     this.#server = serveGateway(app, {
       host: '127.0.0.1',
       port: this.options.port,

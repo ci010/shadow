@@ -5,6 +5,7 @@ import test from 'node:test'
 import { IPC_CHANNELS } from './ipc-contract.js'
 import {
   framelessWindowOptions,
+  desktopIconPath,
   installWindowControls,
   removeNativeMenus,
   type WindowControlTarget,
@@ -48,7 +49,11 @@ test('desktop windows are frameless with no overlay or native application menu',
   assert.equal(options.frame, false)
   assert.equal(options.titleBarOverlay, undefined)
   assert.equal(options.autoHideMenuBar, undefined)
-  assert.equal(options.icon, fileURLToPath(new URL('../assets/icon.ico', import.meta.url)))
+  assert.equal(options.icon, desktopIconPath())
+  assert.equal(desktopIconPath('win32'), fileURLToPath(new URL('../assets/icon.ico', import.meta.url)))
+  for (const platform of ['darwin', 'linux'] as const) {
+    assert.equal(desktopIconPath(platform), fileURLToPath(new URL('../assets/icon.png', import.meta.url)))
+  }
   assert.deepEqual(options.webPreferences, {
     preload: 'C:\\test\\preload.cjs',
     contextIsolation: true,

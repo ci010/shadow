@@ -9,6 +9,7 @@ import { createLocalMainAdminContext } from './installation-context.ts'
 import FirstRunWizard from './FirstRunWizard.vue'
 import RuntimeRecovery from './RuntimeRecovery.vue'
 import DesktopFrame from './DesktopFrame.vue'
+import ChildDesktop from './ChildDesktop.vue'
 import BrowserAuth from './BrowserAuth.vue'
 import { browserSessionKey, createBrowserSession, mountBrowserSession } from './web-auth.ts'
 import {
@@ -36,6 +37,12 @@ function desktopRoot(component: Component, props?: Record<string, unknown>) {
 }
 
 function mountMainApp(installationContext: InstallationContextV1): void {
+	if (installationContext.mode === 'child') {
+		createApp(ChildDesktop, { apiBase: installationContext.apiBase })
+			.use(createInstallationContextProvider(installationContext))
+			.mount('#app')
+		return
+	}
 	createApp(App)
 		.use(router)
 		.use(createInstallationContextProvider(installationContext))
@@ -67,8 +74,9 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 	}
 
 	const clearSetup = api.bootstrap.clear
+	const canReset = typeof clearSetup === 'function' && outcome.role !== 'child'
 	const recovery = createApp(desktopRoot(RuntimeRecovery, {
-		canReset: typeof clearSetup === 'function',
+		canReset,
 		role: outcome.role,
 		code: outcome.code,
 		failure: outcome.failure,
@@ -78,7 +86,7 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 			recovery.unmount()
 			renderDesktopOutcome(api, next)
 		},
-		reset: typeof clearSetup === 'function'
+		reset: canReset
 			? async () => {
 				await api.bootstrap.clear?.()
 				const next = await resolveDesktopBootstrap(api)

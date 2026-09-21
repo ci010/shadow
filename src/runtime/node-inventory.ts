@@ -66,12 +66,13 @@ export async function childLocalNodeInventory(
   config: ChildBootstrapConfigV1,
   capabilities: readonly CapabilityDescriptorV1[],
   implementationVersion: string,
+  connection: 'connected' | 'offline' = 'connected',
 ): Promise<NodeInventoryEntry> {
   return {
     nodeId: config.localNodeId,
     displayName: hostname(),
     role: 'child',
-    connection: 'connected',
+    connection,
     supportsManagedSessions: capabilities.some(capability => capability.capabilityId === MANAGED_SESSION_CAPABILITY &&
       capability.kind === 'shell' && capability.online && capability.permissions.includes(MANAGED_SESSION_OPERATION)),
     implementationVersion,

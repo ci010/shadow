@@ -4,16 +4,17 @@ import { cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { verifyReleaseManifest } from './release-manifest.ts'
+import { desktopTarget } from './desktop-target.ts'
 import {
   assertOutsideRepository, backendCommand, backendResourceReport, bounded, descendants, fetchBounded,
-  killWindowsTree, nodeModeProbe, prepareRendererSmoke, remainingBudget, rendererEnvironment, reservePort, runCommand, sanitizeLog, snapshotProcesses,
+  killProcessTree, nodeModeProbe, packagedEvalCommand, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, snapshotProcesses,
   serviceEnvironment, startProcess, terminateProcess, verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
 } from './packaged-verification.ts'
 
-if (process.platform !== 'win32') throw new Error('The current desktop package target is Windows.')
+const target = desktopTarget()
 const repository = await realpath(resolve('.'))
-const packaged = resolve(process.argv[2] ?? 'desktop/release/win-unpacked')
+const packaged = resolve(process.argv[2] ?? join('desktop', 'release', target.unpackedDirectory))
 const token = randomBytes(32).toString('hex')
 let scratch: string | undefined
 let backendProcess: ManagedProcess | undefined
@@ -44,13 +45,14 @@ try {
   // Deliberately outside the source tree: neither executable nor dependencies may fall back to the checkout.
   scratch = await mkdtemp(join(tmpdir(), 'shadow-packaged-acceptance-'))
   assertOutsideRepository(await realpath(scratch), repository)
-  const relocated = join(scratch, 'application')
-  await cp(packaged, relocated, { recursive: true, dereference: true })
+  const relocated = relocatedPackageRoot(scratch, target)
+  // macOS frameworks contain relative symlinks; preserve the complete .app layout.
+  await cp(packaged, relocated, { recursive: true, dereference: target.platform === 'win32', verbatimSymlinks: target.platform !== 'win32' })
   stage = 'relocated release manifest'
   await verifyReleaseManifest(relocated, repository)
   stage = 'renderer artifact references'
   await verifyRendererArtifacts(relocated)
-  console.log('Artifact checks: release manifest verified ASAR main/preload and backend/renderer/service hashes; referenced renderer assets present (not UI execution).')
+  console.log(`Artifact checks (${target.platform}/${target.arch}): release manifest verified ASAR main/preload and backend/renderer hashes; ${target.platform === 'win32' ? 'Windows service resources verified' : 'Windows service resources absent'}; referenced renderer assets present (not UI execution).`)
 
   const dataDir = join(scratch, 'data')
   const bootstrap = join(scratch, 'bootstrap.json')
@@ -82,7 +84,7 @@ try {
   assert.ok(Number.isFinite(report.memoryUsage?.rss) && report.memoryUsage.rss > 0)
   console.log(`Node runtime baseline (NOT backend RSS or a memory budget): ${JSON.stringify(report)}`)
 
-  stage = 'relocated backend startup (--service, file credential, Electron Node mode)'
+  stage = 'relocated headless backend startup (--service process mode, file credential, Electron Node mode; no OS service registration)'
   backendProcess = startProcess(command.executable, command.args, options, [token])
   const origin = `http://127.0.0.1:${port}`
   const headers = { Authorization: `Bearer ${token}` }
@@ -102,11 +104,11 @@ try {
     class Result { constructor(public value: number) {} }
     export default () => new Result(Value.Answer).value
   `)
-  const payload = Buffer.from(JSON.stringify({ module: script, cwd: scratch, args: [] })).toString('base64')
-  const evaluated = await runCommand(command.executable, [
-    join(relocated, 'resources', 'backend', 'dist', 'src', 'script-runtime', 'child.js'), '--eval-runner', payload,
-  ], options, 15_000, stage, [token])
-  assert.ok(evaluated.includes('"result":42'), evaluated)
+  const evalCommand = packagedEvalCommand(relocated, script, target)
+  const evaluated = await runCommand(evalCommand.executable, evalCommand.args, options, 15_000, stage, [token])
+  const evalReport = evaluated.split(/\r?\n/).find(line => line.startsWith('SHADOW_PACKAGED_EVAL_RESULT='))
+  assert.ok(evalReport, 'Packaged script runtime returned no evaluation report')
+  assert.deepEqual(JSON.parse(evalReport.slice('SHADOW_PACKAGED_EVAL_RESULT='.length)), { result: 42 })
 
   stage = 'graceful backend shutdown'
   await inspectBackendTree('before shutdown')
@@ -125,6 +127,11 @@ try {
   stage = 'synthetic hidden packaged renderer/preload entry'
   const fixture = await readFile(join(repository, 'scripts', 'fixtures', 'packaged-renderer-smoke.cjs'), 'utf8')
   const renderer = await prepareRendererSmoke(relocated, scratch, fixture)
+  for (const signing of rendererSignatureCommands(relocated, scratch, target)) {
+    stage = 'ad-hoc signing of disposable synthetic renderer bundle (not release signing acceptance)'
+    await runCommand(signing.executable, signing.args, { cwd: scratch, env: rendererEnvironment(scratch) }, 30_000, stage)
+  }
+  stage = 'synthetic hidden packaged renderer/preload execution'
   rendererProcess = startProcess(renderer.executable, renderer.args, { cwd: scratch, env: rendererEnvironment(scratch) })
   await waitForOutput(rendererProcess, 'SHADOW_RENDERER_WAITING', 12_000)
   const rendererStart = await snapshotProcesses()
@@ -150,7 +157,10 @@ try {
     [rendererIdentity!, ...rendererDescendants.values()].some((owned) => value.pid === owned.pid && value.created === owned.created)),
   'Hidden renderer fixture left owned processes running')
   console.log(`Packaged renderer/preload smoke: ${JSON.stringify(rendered)}`)
-  console.log('Coverage boundary: process census is sampled, not job-object containment. Hidden renderer/preload used synthetic bootstrap/window IPC and a test-only entry, NOT unmodified production main. Complete UI flows and SCM install/start/stop/recovery/uninstall still require Windows VM acceptance. No service registered or elevated.')
+  console.log('Coverage boundary: process census is sampled, not OS process containment. Hidden renderer/preload used synthetic bootstrap/window IPC and a test-only entry in a disposable package copy, NOT unmodified production main or signature/notarization acceptance. Complete UI flows still require native acceptance. No service registered or elevated.')
+  console.log(target.platform === 'win32'
+    ? 'Windows SCM install/start/stop/recovery/uninstall still require Windows VM acceptance.'
+    : 'Unix verification covers headless processes only, NOT launchd/systemd installation, lifecycle or recovery.')
 } catch (error) {
   failures.push(`Packaged verification FAILED at ${stage}: ${sanitizeLog(error, [token])}\n${backendProcess?.logs() ?? ''}\n${rendererProcess?.logs() ?? ''}`)
 } finally {
@@ -166,9 +176,9 @@ try {
       const identity = ownedProcess.identity ?? snapshot.find((value) => value.pid === managed.child.pid)
       if (identity) {
         for (const child of descendants(snapshot, identity)) ownedProcess.descendants.set(child.pid, child)
-        await killWindowsTree(identity, deadline)
+        await killProcessTree(identity, deadline)
       }
-      for (const child of ownedProcess.descendants.values()) await killWindowsTree(child, deadline)
+      for (const child of ownedProcess.descendants.values()) await killProcessTree(child, deadline)
       await terminateProcess(managed.child, remainingBudget(deadline, 5_000))
       const remaining = await snapshotProcesses(remainingBudget(deadline, 10_000))
       const tracked = [...ownedProcess.descendants.values(), ...(identity ? [identity] : [])]

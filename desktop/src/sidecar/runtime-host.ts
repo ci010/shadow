@@ -97,6 +97,14 @@ export class RuntimeHost {
 
   start(options: RuntimeLaunchOptions): Promise<SidecarStatus> {
     if (this.stopping) throw new Error('Runtime host is stopping')
+    if (this.launchRequest && this.status.phase === 'failed') {
+      this.assertSameLaunch(options)
+      const previous = this.launchRequest
+      return this.supervisor!.stop().then(() => {
+        this.clearFailedStart(previous)
+        return this.start(options)
+      })
+    }
     if (this.launchRequest) {
       this.assertSameLaunch(options)
       if (this.startPromise) return this.startPromise

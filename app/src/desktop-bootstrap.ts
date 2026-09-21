@@ -1,6 +1,7 @@
 import type { InstallationContextV1 } from './installation-context.ts'
 import { parseRuntimeFailure, type RuntimeFailure } from './runtime-recovery.ts'
 import type { DesktopWebPairingApi } from '../../desktop/src/web-pairing-contract.ts'
+import type { ChildPairInput, ChildSetupInfo } from '../../desktop/src/bootstrap/child.ts'
 
 export type InstallationMode = 'main' | 'child'
 
@@ -79,6 +80,8 @@ export interface ShadowDesktopApi {
 		initializeMain(): Promise<BootstrapCommandResult>
 		launchMain(options: { readonly localExecutor: boolean; readonly port: number }): Promise<BootstrapCommandResult>
 		ensureRuntime(): Promise<EnsureRuntimeResult>
+		childSetup?(): Promise<ChildSetupInfo>
+		pairChild?(input: ChildPairInput): Promise<BootstrapCommandResult>
 	}
 	selectDirectory(): Promise<NativeDirectorySelection | null>
 	getMainDirectorySelection?(): Promise<NativeDirectorySelection>

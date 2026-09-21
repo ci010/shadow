@@ -75,6 +75,11 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       await runtime.ready
       assert.equal((await fetch(base + '/api/projects')).status, 401)
       assert.equal((await fetch(base + '/api/live?topics=[]')).status, 401)
+      assert.equal((await fetch(base + '/nodes/v1/network')).status, 401)
+      const deviceNetwork = await json<{ enabled: boolean; state: string; endpoint: string | null }>('/nodes/v1/network')
+      assert.equal(deviceNetwork.enabled, false)
+      assert.equal(deviceNetwork.state, 'disabled')
+      assert.equal(deviceNetwork.endpoint, null)
       assert.equal((await fetch(base + '/')).status, 200)
       assert.equal((await fetch(base + '/projects/default/chat')).status, 200)
       assert.equal((await fetch(base + '/assets/fixture.js')).status, 200)
@@ -88,6 +93,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const browserHeaders = { origin: base, cookie: paired.headers.get('set-cookie')!.split(';')[0]!, 'content-type': 'application/json' }
       assert.equal((await fetch(base + '/api/projects', { headers: browserHeaders })).status, 200)
       assert.equal((await fetch(base + '/local/v1/readiness', { headers: browserHeaders })).status, 401)
+      assert.equal((await fetch(base + '/nodes/v1/network', { headers: browserHeaders })).status, 401)
       const initial = await json<{ projects: ProjectRecord[] }>('/api/projects')
       assert.deepEqual(initial.projects.map(org => org.id), ['default'])
       const created = await json<{ project: ProjectRecord; runtime: { state: string } }>(

@@ -4,6 +4,8 @@ import type { EnsureRuntimeResult } from './bootstrap/coordinator.js'
 import { normalizeMainDirectoryPath } from './bootstrap/runtime-config.js'
 import type { DesktopMediaCaptureApi } from './media-capture-contract.js'
 import type { DesktopWebPairingApi } from './web-pairing-contract.js'
+import type { ChildPairInput, ChildSetupInfo } from './bootstrap/child.js'
+import { parseChildPairInput } from './bootstrap/child.js'
 
 export const IPC_CHANNELS = {
   loadWizard: 'shadow:bootstrap:load',
@@ -13,6 +15,8 @@ export const IPC_CHANNELS = {
   initializeMain: 'shadow:bootstrap:initialize-main',
   launchMain: 'shadow:bootstrap:launch-main',
   ensureRuntime: 'shadow:bootstrap:ensure-runtime',
+  childSetup: 'shadow:bootstrap:child-setup',
+  pairChild: 'shadow:bootstrap:pair-child',
   selectDirectory: 'shadow:native:select-directory',
   selectFolderDirectory: 'shadow:folders:select-directory',
   selectChatContextFiles: 'shadow:chat-context:select-files',
@@ -75,6 +79,8 @@ export interface ShadowDesktopApi {
     initializeMain(): Promise<BootstrapCommandResult>
     launchMain(options: LaunchMainOptions): Promise<BootstrapCommandResult>
     ensureRuntime(): Promise<EnsureRuntimeResult>
+    childSetup(): Promise<ChildSetupInfo>
+    pairChild(input: ChildPairInput): Promise<BootstrapCommandResult>
   }
 
   selectDirectory(): Promise<NativeDirectorySelection | null>
@@ -82,6 +88,14 @@ export interface ShadowDesktopApi {
   selectMainDirectoryPath(path: string): Promise<NativeDirectorySelection>
   openExternal(url: string): Promise<void>
   openCopilotLogin(): Promise<void>
+}
+
+export function handlePairChild(
+  coordinator: { pairChild(input: ChildPairInput): Promise<BootstrapCommandResult> },
+  rawArguments: readonly unknown[],
+): Promise<BootstrapCommandResult> {
+  if (rawArguments.length !== 1) throw new TypeError('Child pairing requires one options object')
+  return coordinator.pairChild(parseChildPairInput(rawArguments[0]))
 }
 
 export function parseDesktopWindowState(value: unknown): DesktopWindowState {

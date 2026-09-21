@@ -7,10 +7,12 @@
       </div>
       <div class="context-strip" aria-label="Administration access">
         <span class="role-mark">{{ context.mode === 'main' ? 'Main' : 'Child' }}</span>
-        <span>Read only</span>
+        <span>{{ canAdministerDevices(context) ? 'Device administration' : 'Read only' }}</span>
         <button type="button" class="inventory-refresh" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing…' : error ? 'Retry' : 'Refresh' }}</button>
       </div>
     </header>
+
+    <DeviceAdministration v-if="canAdministerDevices(context)" :api-base="apiBase" :nodes="nodes" @changed="refresh" />
 
     <p v-if="error" class="inventory-error" role="alert">{{ error }}</p>
     <p v-else-if="loading && !loaded" class="inventory-status" role="status">Loading devices…</p>
@@ -68,6 +70,8 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { CAPABILITY_LABELS, capabilityAvailability, capabilitySummary, fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
+import DeviceAdministration from './DeviceAdministration.vue'
+import { canAdministerDevices } from './device-administration.ts'
 
 const props = defineProps<{ apiBase: string }>()
 const context = useInstallationContext()

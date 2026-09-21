@@ -2,8 +2,8 @@ import type { BrowserWindowConstructorOptions, WebPreferences } from 'electron'
 import { join } from 'node:path'
 import { IPC_CHANNELS, type DesktopWindowState } from './ipc-contract.js'
 
-export function desktopIconPath(): string {
-  return join(import.meta.dirname, '..', 'assets', 'icon.ico')
+export function desktopIconPath(platform = process.platform): string {
+  return join(import.meta.dirname, '..', 'assets', platform === 'win32' ? 'icon.ico' : 'icon.png')
 }
 
 export function secureWebPreferences(preloadPath: string): WebPreferences {

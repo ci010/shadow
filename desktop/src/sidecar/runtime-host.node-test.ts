@@ -89,6 +89,21 @@ test('creates unique base64url launch tokens with 256 bits of randomness', () =>
   assert.notEqual(first, second)
 })
 
+test('a crashed Child can restart instead of returning a cached ready promise', async () => {
+  const { host, supervisor, factoryCount } = createHost()
+  const first = host.start({ role: 'child', port: 43124 })
+  supervisor.ready('http://127.0.0.1:43124')
+  await first
+  supervisor.status = { phase: 'failed', role: 'child', kind: 'crash', message: 'exited' }
+  const retry = host.start({ role: 'child', port: 43124 })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(supervisor.starts.length, 2)
+  supervisor.ready('http://127.0.0.1:43124')
+  assert.equal((await retry).phase, 'ready')
+  assert.equal(factoryCount(), 2)
+  await host.stop()
+})
+
 test('constructs one authenticated launch, publishes after ready, and clears on stop', async () => {
   const { host, supervisor, authorizations } = createHost()
   const starting = host.start({

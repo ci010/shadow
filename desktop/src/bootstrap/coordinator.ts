@@ -4,7 +4,8 @@ import type { BootstrapStateStorage } from './storage.js'
 import { isMissingRuntimeConfig, normalizeMainDirectoryPath, type RuntimeConfigReader, type RuntimeConfigWriter } from './runtime-config.js'
 import { defaultMainDirectory } from './main-directory.js'
 import type { NativeDirectorySelection } from '../ipc-contract.js'
-import type { LaunchProfileStore, MainLaunchProfile } from './launch-profile.js'
+import type { LaunchProfileStore, LaunchProfile } from './launch-profile.js'
+import type { ChildBootstrap, ChildPairInput, ChildSetupInfo } from './child.js'
 import type { MainAgentConfigInitializer } from './main-agent-config.js'
 import { startupFailure, type StartupFailure } from '../sidecar/startup-diagnostics.js'
 import {
@@ -15,9 +16,9 @@ import {
 } from '../wizard/state-machine.js'
 
 export interface MainRuntimeStartOptions {
-  readonly role: 'main'
+  readonly role: 'main' | 'child'
   readonly port: number
-  readonly localExecutor: boolean
+  readonly localExecutor?: boolean
 }
 
 export interface MainRuntimeStatus {
@@ -47,9 +48,18 @@ export interface MainRuntimeContext {
 }
 
 export type EnsureRuntimeResult =
-  | { readonly ok: true; readonly context: MainRuntimeContext }
+  | { readonly ok: true; readonly context: MainRuntimeContext | ChildRuntimeContext }
   | { readonly ok: false; readonly code: 'invalid-state' | 'profile-missing' | 'runtime-unavailable'; readonly failure?: StartupFailure }
 
+export interface ChildRuntimeContext {
+  readonly version: 1
+  readonly mode: 'child'
+  readonly localNodeId: string
+  readonly mainConnection: 'connecting'
+  readonly mainLatencyMs: null
+  readonly uiScopes: readonly []
+  readonly apiBase: string
+}
 const MAIN_UI_SCOPES = [
   'chat:read',
   'chat:write',
@@ -63,6 +73,10 @@ const PRIVILEGED_EVENTS = new Set<WizardEvent['type']>([
   'data-directory-selected',
   'main-initialized',
   'sidecar-ready',
+  'pairing-offer-entered',
+  'fingerprint-verified',
+  'device-named',
+  'child-capabilities-selected',
 ])
 
 export class BootstrapCoordinator {
@@ -78,6 +92,7 @@ export class BootstrapCoordinator {
     private readonly launchProfiles: LaunchProfileStore,
     private readonly configReader: RuntimeConfigReader,
     private readonly getDefaultDirectory: () => string = defaultMainDirectory,
+    private readonly childBootstrap?: ChildBootstrap,
   ) {}
 
   registerDirectorySelection(selectionId: string, absolutePath: string): void {
@@ -139,7 +154,31 @@ export class BootstrapCoordinator {
   }
 
   clear(): Promise<void> {
-    return this.serialize(() => this.storage.clear())
+    return this.serialize(async () => {
+      if ((await this.load()).mode === 'child') throw new Error('Child identity is retained; retry setup or runtime instead of resetting')
+      await this.storage.clear()
+    })
+  }
+
+  childSetup(): Promise<ChildSetupInfo> {
+    return this.serialize(async () => {
+      if ((await this.load()).mode !== 'child' || !this.childBootstrap) throw new Error('Child setup is unavailable')
+      return this.childBootstrap.info()
+    })
+  }
+
+  pairChild(input: ChildPairInput): Promise<BootstrapCommandResult> {
+    return this.serialize(async () => {
+      const current = await this.load()
+      if (current.mode !== 'child' || current.step === 'complete' || !this.childBootstrap) {
+        return { ok: false, code: 'invalid-state', state: current }
+      }
+      await this.childBootstrap.pair(input)
+      await this.launchProfiles.save({ version: 1, role: 'child', port: 43124 })
+      const next: WizardState = { ...current, step: 'complete', revision: current.revision + 1 }
+      await this.storage.save(next)
+      return { ok: true, state: next }
+    })
   }
 
   commitMainDirectory(selectionId: string): Promise<BootstrapCommandResult> {
@@ -203,24 +242,33 @@ export class BootstrapCoordinator {
   ensureRuntime(): Promise<EnsureRuntimeResult> {
     return this.serialize(async () => {
       const current = await this.load()
-      if (current.mode !== 'main' || (current.step !== 'launch-main' && current.step !== 'complete')) {
+      if (current.mode === null || (current.step !== 'launch-main' && current.step !== 'complete')) {
         return { ok: false, code: 'invalid-state' }
       }
 
-      let profile: MainLaunchProfile | null
+      let profile: LaunchProfile | null
       try {
         profile = await this.launchProfiles.load()
       } catch {
         return { ok: false, code: 'runtime-unavailable' }
       }
       if (profile === null) return { ok: false, code: 'profile-missing' }
+      if (profile.role !== current.mode) return { ok: false, code: 'runtime-unavailable' }
 
       try {
-        const config = await this.configReader.readMain()
+        const config = current.mode === 'child'
+          ? await this.childBootstrap?.readConfig()
+          : await this.configReader.readMain()
+        if (!config) return { ok: false, code: 'runtime-unavailable' }
         const status = await this.runtimeHost.start(profile)
         if (status.phase !== 'ready' || status.apiBase === undefined) {
           const failure = startupFailure(status)
           return { ok: false, code: 'runtime-unavailable', ...(failure ? { failure } : {}) }
+        }
+        if (current.mode === 'child') return {
+          ok: true,
+          context: { version: 1, mode: 'child', localNodeId: config.localNodeId,
+            mainConnection: 'connecting', mainLatencyMs: null, uiScopes: [], apiBase: status.apiBase },
         }
         return {
           ok: true,

@@ -230,6 +230,30 @@ test('Child runtime module is import-safe and excludes brain, channel, cron, and
   }
 })
 
+test('pending approval keeps local readiness and retries into real connected then offline state', async () => {
+  const timers = new ControlledTimers()
+  const connection = controlledConnection()
+  const states: Array<{ state: string; error: string | null }> = []
+  let attempts = 0
+  const runtime = startChildRuntime(config, dependenciesWith({
+    connect: async () => {
+      if (++attempts === 1) throw new Error('Main challenge request failed with status 401')
+      return connection.connection
+    },
+  }), { timers, connectionChanged: (state, error) => states.push({ state, error }) })
+  await runtime.ready
+  await until(() => timers.delays.length === 1)
+  assertEquals(states.map(value => value.state), ['connecting', 'offline'])
+  assertEquals(states[1].error?.includes('not authorized'), true)
+  timers.releaseNext()
+  await until(connection.observed)
+  assertEquals(states.at(-1), { state: 'connected', error: null })
+  connection.disconnect.resolve()
+  await until(() => timers.delays.length === 2)
+  assertEquals(states.at(-1)?.state, 'offline')
+  await runtime.shutdown()
+})
+
 function recordingService(events: string[]) {
   return (name: string): ChildRuntimeService => ({
     start: () => {

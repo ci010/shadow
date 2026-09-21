@@ -48,7 +48,7 @@ export interface GatewayRouteOptions {
   }[]
 }
 
-const CORS_METHODS = ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] as const
+const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
 const CORS_HEADERS = ['Content-Type', 'Authorization'] as const
 
 // A 32 KiB live-topic JSON query can occupy 96 KiB after percent encoding.

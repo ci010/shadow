@@ -46,7 +46,7 @@ dependency, JSR import scheme, or a compatibility shim to emulate Deno.
 | `pnpm test:release` | Focused build, package, service-mode and Electron release checks |
 | `pnpm typecheck` | Backend/scripts, desktop and Vue application typechecks |
 | `pnpm desktop:dev` | Build and launch the development desktop path |
-| `pnpm desktop` | Validate, build and verify the current Windows installer target |
+| `pnpm desktop` | Validate, build and verify the native Windows x64, macOS x64/arm64 or Linux x64 package |
 
 For a focused test, use, for example:
 

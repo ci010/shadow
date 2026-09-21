@@ -5,7 +5,8 @@
 | Document | Read it for |
 | --- | --- |
 | [Project README](../README.md) | Node/pnpm setup, running, builds, and deployment cautions |
-| [Windows release verification](release.md) | Build gates, verified downloads, package identity and installation acceptance boundaries |
+| [Desktop release verification](release.md) | Native Windows/macOS/Linux build gates, Actions artifacts, package identity and installation acceptance boundaries |
+| [Two-device Electron pairing](desktop-pairing.md) | Trusted-LAN/VPN Main/Child setup, fingerprint approval, remote-work verification, reconnect and test boundaries |
 | [Contributor guide](../AGENTS.md) | Repository conventions and change boundaries |
 | [Architecture](architecture.md) | Features, project ownership/storage/routing, execution flow, persistence, and known limitations |
 | [Visual design system](../DESIGN.md) | Quiet Workbench light/dark color roles, message hierarchy, components, and implementation guardrails |

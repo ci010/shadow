@@ -7,32 +7,32 @@ import { manageChildren, runPnpm } from './processes.ts'
 import { forwardDesktopEndpoint } from './desktop-endpoint.ts'
 import { createReleaseManifest, sourceFingerprint } from './release-manifest.ts'
 import { prepareReleaseDownloads } from './release-downloads.ts'
+import { desktopTarget } from './desktop-target.ts'
 
 const mode = process.argv[2] ?? 'build'
 if (mode !== 'build' && mode !== 'dev') {
   throw new TypeError(`Unknown desktop mode "${mode}". Use "build" or "dev".`)
 }
 
-const sourceHash = mode === 'build' ? await sourceFingerprint(process.cwd()) : undefined
-if (mode === 'build') {
-  if (process.platform !== 'win32') throw new Error('The release target is Windows x64.')
-  if (process.arch !== 'x64') throw new Error('The release target currently requires a Windows x64 build host.')
+const target = mode === 'build' ? desktopTarget() : undefined
+const sourceHash = target ? await sourceFingerprint(process.cwd()) : undefined
+if (target) {
   await runPnpm(['typecheck'])
   await runPnpm(['test:release'])
 }
 await runPnpm(['build'])
 await runPnpm(['--filter', '@shadow/desktop', 'build'])
 
-if (mode === 'build') {
+if (target) {
   await runPnpm(['build:app'])
   await rm('desktop/backend', { recursive: true, force: true })
   await runPnpm([
     '--filter', '@shadow/shadow', 'deploy', '--prod',
     '--node-linker', 'hoisted', 'desktop/backend',
   ])
-  const electronDist = await prepareReleaseDownloads(process.cwd())
+  const electronDist = await prepareReleaseDownloads(process.cwd(), process.env, target)
   await createReleaseManifest(process.cwd(), sourceHash!)
-  await runPnpm(['--filter', '@shadow/desktop', 'dist', `--config.electronDist=${electronDist}`])
+  await runPnpm(['--filter', '@shadow/desktop', 'dist', target.builderFlag, target.format, `--${target.arch}`, `--config.electronDist=${electronDist}`])
   await runPnpm(['test:packaged'])
 } else {
   const port = process.env.VITE_DEV_PORT ?? '5273'

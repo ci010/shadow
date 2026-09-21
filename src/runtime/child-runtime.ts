@@ -44,6 +44,7 @@ export interface ChildReconnectPolicy {
 export interface ChildRuntimeOptions {
   readonly reconnect?: Partial<ChildReconnectPolicy>
   readonly timers?: ChildRuntimeTimers
+  readonly connectionChanged?: (state: 'connecting' | 'connected' | 'offline', error: string | null) => void
 }
 
 const defaultReconnectPolicy: ChildReconnectPolicy = {
@@ -137,6 +138,7 @@ export function startChildRuntime(
     let delayMs = reconnect.initialDelayMs
     while (!abortController.signal.aborted) {
       try {
+        options.connectionChanged?.('connecting', null)
         const connection = await dependencies.mainConnector.connect({
           endpoint: config.mainEndpoint,
           localNodeId: config.localNodeId,
@@ -148,11 +150,17 @@ export function startChildRuntime(
         }
 
         activeConnection = connection
+        options.connectionChanged?.('connected', null)
         delayMs = reconnect.initialDelayMs
         await waitForDisconnect(connection, abortController.signal)
         activeConnection = undefined
+        options.connectionChanged?.('offline', 'Main disconnected. Retrying automatically.')
       } catch (error) {
         if (abortController.signal.aborted) return
+        options.connectionChanged?.('offline',
+          error instanceof Error && /status (401|403)/.test(error.message)
+            ? 'Main has not authorized this device. Compare the fingerprint and approve on Main; a rejected or revoked device also cannot connect.'
+            : 'Main is unavailable or authentication failed. Check Main, the endpoint and trusted network; retrying automatically.')
         console.warn('[child] Main connection failed; retrying:', error instanceof Error ? error.message : 'unknown connection error')
       }
 

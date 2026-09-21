@@ -43,9 +43,9 @@ current references from historical proposals.
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus project-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by project runtimes |
 | Browser automation | Lazy Chrome DevTools MCP with session-local launch/attach instances; requires a usable browser/CDP target and MCP process |
-| Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory from the backend; paired nodes execute without operation approvals |
-| Electron | Main bootstrap, persisted launch profile, backend supervision, narrow preload API, renderer setup/recovery; Child/product integration remains incomplete |
-| Device execution | Pairing/challenge/WebSocket code and bounded remote UTF-8 workdir operations exist; full remote tools, artifacts, UI administration, and release hardening remain WIP |
+| Web application | Vue chat/session/files UI, agent views, logs and traces; Nodes reads device/capability inventory and provides Main desktop pairing controls; paired nodes execute without operation approvals |
+| Electron | Main/Child bootstrap, persisted launch profile, backend supervision, narrow preload API and renderer setup/recovery; separate-device/native-platform acceptance remains required |
+| Device execution | Explicit trusted-network device listener, pairing/challenge/WebSocket and bounded remote workdir operations; full remote tools, artifacts, revocation UI and release hardening remain WIP |
 
 “Implemented” means a source path exists and is composed into the application
 where noted. It is not a claim that every external integration was exercised on a
@@ -1754,7 +1754,8 @@ Installation context and route policy distinguish Main/Child and UI scope.
 These client-side policies are presentation rules, not server authorization.
 The former Workspaces page is consolidated into each node's capability details;
 `/workspaces` redirects to `/nodes`. Nodes consumes a versioned, allowlisted
-read-only inventory, not product fixtures. The renderer validates responses,
+read-only inventory alongside separate Main desktop administration commands,
+not product fixtures. The renderer validates responses,
 polls every five seconds while visible, aborts requests on navigation, and
 displays errors without stale online statuses or synthetic fallback devices.
 Unsupported fields (including remote filesystem paths) are omitted.
@@ -1767,18 +1768,24 @@ connection, not a persisted `online` flag. Remote versions and last-seen times
 are not currently reported. The route requires the launch credential when
 configured; credentialless development permits only a verified loopback TCP
 peer with a loopback request hostname, under the gateway's origin policy.
-Pairing and administration authorization are unchanged.
+Device pairing and network administration require the launch credential;
+browser-login cookies do not grant these permissions.
 
 Child's authenticated `GET /local/v1/nodes` reports only its local executor
-capabilities and configured workdir paths. Its connected status describes the
-reachable local runtime, not connectivity to Main. Local workdir availability
-reflects the current directory state. These endpoints are read-only and do not
-expose device credentials, public keys, or permission lists.
+capabilities and configured workdir paths. Its connection state now follows the
+actual authenticated Main transport; a locally ready runtime can still be
+offline or waiting for approval. Local workdir availability also reflects the
+current directory state. The separate authenticated `/local/v1/child` status
+supports the Child-only desktop shell and fingerprint comparison without
+pretending Main chat/API proxying exists. Inventory endpoints remain read-only
+and expose no device credentials, public keys, or permission lists.
 
 The application no longer installs approval fixtures or displays an Approvals
 tab. The legacy `/approvals` route redirects to Nodes. Paired nodes are trusted
-to run supported operations without extra prompts or grants. A live inventory
-does not imply working pairing/revocation UI or complete multi-device support.
+to run supported operations without extra prompts or grants. Main's Nodes
+pairing flow confirms device identity and execution trust, not per-operation
+approval. Device revocation UI and complete multi-device release acceptance
+remain outside this slice.
 
 ## Programmable browser I/O
 
@@ -1838,10 +1845,13 @@ The shared renderer shows minimize/maximize/close only when the native window
 capability exists. A normal browser bootstraps its own backend session and has no
 native window controls; setup/runtime recovery remains an Electron concern.
 
-The bootstrap coordinator persists setup state and a launch profile, initializes
-Main configuration, and starts/resumes the backend before mounting the product
-UI. The renderer can show first-run setup or recovery rather than pretending the
-backend is ready.
+The bootstrap coordinator persists setup state and a Main/Child launch profile,
+initializes the selected role, and starts/resumes its backend before mounting
+the product UI. Child onboarding invokes the existing production pairing code
+in the backend, keeps the PIN out of process arguments and saved configuration,
+and uses OS-protected identity storage. Local runtime readiness and connectivity
+to Main are separate states. The renderer can show first-run setup, pending
+approval or recovery rather than pretending the device is connected.
 
 The runtime host/supervisor launches the backend module in a separate process
 using `ELECTRON_RUN_AS_NODE=1`, checks authenticated loopback readiness, and
@@ -1860,10 +1870,13 @@ without suppressing known activity in another Project. Revoked authorization,
 window closure, or a lost Main connection clears stale activity and cancels
 pending observation. Child hosts are not polled for Main session state.
 
-`pnpm desktop:dev` is the local desktop development path; `pnpm desktop` targets
-the current Windows installer pipeline. Build configuration and artifacts are
+`pnpm desktop:dev` is the local desktop development path; `pnpm desktop` selects
+the native Windows x64 NSIS, macOS x64/arm64 ZIP, or Linux x64 tar.gz pipeline.
+The release workflow runs native jobs and uploads only verified artifacts; WinSW
+resources remain Windows-only. macOS test builds use ad-hoc signing without
+notarization. Build configuration and artifacts are
 not evidence of clean-machine certification, signing/notarization, automated
-updates, or completed Child onboarding. Those require their own validation.
+updates, or real-device pairing acceptance. Those require their own validation.
 
 ## Multi-device infrastructure — WIP
 
@@ -1883,6 +1896,20 @@ session's execution locality are distinct concepts.
 - Production Child composition with Ed25519 credential references, protected
   key-store adapters, challenge-based connection/reconnection, advertised shell
   and configured workdir capabilities.
+- Electron Child first-run pairing and role-aware restart, plus Main Nodes
+  invitation/fingerprint-approval controls. See the
+  [two-device setup guide](desktop-pairing.md) for the trusted-network test path
+  and OS credential-store prerequisites.
+- `runtime/main/device-network.ts` provides an opt-in private-IPv4 HTTP listener,
+  independent of the regular app gateway. It allowlists only PIN presentation,
+  device challenges and node WebSocket upgrades; UI, provider, project and
+  administration routes are not reachable through it. Requests carrying a
+  browser Origin are rejected. Main's launch-authenticated
+  `GET/PUT /nodes/v1/network` configures it and reports actual listener state.
+  Settings persist beside the cluster registry. A stale interface/port error
+  remains visible without preventing Main from starting. Disable closes
+  attached transports without revoking identities. HTTP remains unencrypted
+  and requires explicit trusted-LAN/VPN consent, not public exposure.
 - Versioned jobs with acceptance/status/events, cancellation/deadline handling,
   and node/capability/job ownership checks.
 - Cluster owns device trust and routing, not session permission policy.
@@ -2006,7 +2033,8 @@ inventory to public channel conversations.
 ### Not complete
 
 Binary artifact transfer/staging, full remote tool parity, general remote UI
-proxy/admin flows, pairing/revocation UI, recovery/retention semantics,
+proxy/admin flows, device revocation UI, automatic endpoint migration,
+recovery/retention semantics,
 version-skew deployment policy, and release hardening remain incomplete.
 Unimplemented roles are not represented by successful no-op lifecycle services.
 Job/process state includes in-memory components; a persisted node

@@ -379,6 +379,29 @@ Diagnosis USER, SESSION, ASSISTANT, TOOL, and CONTEXT badges are neutral text la
 
 The ten examples in `.impeccable/design.json` are dependency-free visual excerpts from these existing patterns, not replacement Vue implementations. They inherit live theme variables; interactive controls include hover/focus styles, while static cards do not acquire fake interaction.
 
+### Device setup and pairing
+
+Device setup is an **Operate** surface: reach a real connected execution
+location with minimal ceremony. Main and Child remain explicit roles, not
+decorative device types. Main's Nodes page introduces network configuration,
+then a short-lived invitation, then a pending fingerprint comparison. Keep the
+inventory available rather than replacing it with a full-page setup wizard.
+
+Use the existing neutral card/input surfaces, quiet structural borders and
+square controls. The next deliberate action uses interaction blue; an actual
+authenticated connection uses success ink. Pending human approval and the
+unencrypted-network warning use attention ink with explanatory text. Offline
+is neutral, and failed setup is an explicit error with a retry path. Neither a
+submitted PIN nor a locally started backend earns a green connected state.
+
+Identity and invitation values use the existing monospace treatment and must
+wrap without horizontal overflow. Fingerprint verification and execution trust
+are explicit user decisions, never preselected checkboxes. Keep HTTP risk copy
+adjacent to its opt-in, explain OS-user execution privileges, and distinguish
+device pairing from browser login. Do not imply a sandbox or per-command
+permission system. Controls preserve keyboard focus, labelled fields and the
+shared narrow/coarse-pointer touch sizes.
+
 ## Do's and Don'ts
 
 ### Do

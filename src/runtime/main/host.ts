@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { stat } from 'node:fs/promises'
 import type { MainRuntimeHandle, MainRuntimeOptions } from './contracts.ts'
 import { resolveUiDistDirectory } from './paths.ts'
@@ -31,6 +31,7 @@ import { ChromePortAllocator } from '../../browser/chrome-manager.ts'
 import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { StartupTimings } from '../startup-timings.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
+import { MainDeviceNetwork } from './device-network.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -107,6 +108,14 @@ export async function startProjectHost(
     clientKey: request => clientAddresses.resolve(request),
   }))
   cleanup.push(() => mainCluster.closeNodeConnections())
+  const deviceNetwork = new MainDeviceNetwork({
+    configPath: resolve(options.clusterSnapshotPath ? dirname(options.clusterSnapshotPath) : resolve(baseHome, '.cluster'), 'device-network.v1.json'),
+    cluster: mainCluster,
+    clientAddresses,
+    authorize: request => launchCredential ? validateLaunchCredential(request.headers.get('Authorization') ?? undefined, launchCredential) : false,
+  })
+  cleanup.push(() => deviceNetwork.shutdown())
+  await deviceNetwork.init()
   const sharedConfigStore = new AppProviderConfigStore({
     configPath: options.configPath,
     getConfig: () => activeConfig,
@@ -179,7 +188,7 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [browserAuth.plugin(), ...mainCluster.plugins, localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
+  registerGatewayRoutes(app, [browserAuth.plugin(), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
     launchCredential, browserAuth, clientAddresses, launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
   })
   registerRealtimeRoute(app, realtimeHub, authorize)
@@ -233,6 +242,7 @@ export async function startProjectHost(
     runtimes.clear()
     stores.clear()
     await clean(() => providerSetup.dispose())
+    await clean(() => deviceNetwork.shutdown())
     await clean(() => mainCluster.closeNodeConnections())
     await clean(() => gateway.shutdown())
     await clean(() => mainCluster.save())
