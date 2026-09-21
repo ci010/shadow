@@ -8,23 +8,27 @@ import { forwardDesktopEndpoint } from './desktop-endpoint.ts'
 import { createReleaseManifest, sourceFingerprint } from './release-manifest.ts'
 import { prepareReleaseDownloads } from './release-downloads.ts'
 import { desktopTarget } from './desktop-target.ts'
+import { verifyPreparedBuild } from './prepared-build.ts'
 
 const mode = process.argv[2] ?? 'build'
-if (mode !== 'build' && mode !== 'dev') {
-  throw new TypeError(`Unknown desktop mode "${mode}". Use "build" or "dev".`)
+if (mode !== 'build' && mode !== 'dev' && mode !== 'package') {
+  throw new TypeError(`Unknown desktop mode "${mode}". Use "build", "package" or "dev".`)
 }
 
-const target = mode === 'build' ? desktopTarget() : undefined
-const sourceHash = target ? await sourceFingerprint(process.cwd()) : undefined
-if (target) {
+const target = mode !== 'dev' ? desktopTarget() : undefined
+const sourceHash = mode === 'package' ? await verifyPreparedBuild(process.cwd(), 'desktop')
+  : target ? await sourceFingerprint(process.cwd()) : undefined
+if (mode === 'build') {
   await runPnpm(['typecheck'])
   await runPnpm(['test:release'])
 }
-await runPnpm(['build'])
-await runPnpm(['--filter', '@shadow/desktop', 'build'])
+if (mode !== 'package') {
+  await runPnpm(['build'])
+  await runPnpm(['--filter', '@shadow/desktop', 'build'])
+}
 
 if (target) {
-  await runPnpm(['build:app'])
+  if (mode !== 'package') await runPnpm(['build:app'])
   await rm('desktop/backend', { recursive: true, force: true })
   await runPnpm([
     '--filter', '@shadow/shadow', 'deploy', '--prod',

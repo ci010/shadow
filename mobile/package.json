@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "node --import tsx ../scripts/mobile.ts build",
+    "build:web": "node --import tsx ../scripts/mobile.ts build:web",
     "sync": "node --import tsx ../scripts/mobile.ts sync",
     "check": "node --import tsx ../scripts/mobile.ts check",
     "android": "node --import tsx ../scripts/mobile.ts android",

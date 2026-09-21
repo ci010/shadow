@@ -1,0 +1,45 @@
+name: Set up Shadow build
+description: Install locked dependencies and cache native Electron downloads, never application outputs.
+inputs:
+  electron:
+    description: Prepare Electron for native tests and desktop packaging
+    default: "true"
+  packaging:
+    description: Cache electron-builder helpers for desktop packaging
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Select native download cache locations
+      shell: bash
+      run: |
+        echo "electron_config_cache=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+        echo "ELECTRON_BUILDER_CACHE=$RUNNER_TEMP/electron-builder-cache" >> "$GITHUB_ENV"
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24.18.0
+        cache: pnpm
+    - uses: actions/cache@v4
+      if: inputs.electron == 'true'
+      with:
+        path: ${{ runner.temp }}/electron-cache
+        key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/package.json', 'pnpm-lock.yaml') }}
+        restore-keys: |
+          electron-v1-${{ runner.os }}-${{ runner.arch }}-
+    - uses: actions/cache@v4
+      if: inputs.packaging == 'true'
+      with:
+        path: ${{ runner.temp }}/electron-builder-cache
+        key: electron-builder-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/package.json', 'pnpm-lock.yaml') }}
+        restore-keys: |
+          electron-builder-v1-${{ runner.os }}-${{ runner.arch }}-
+    - name: Install locked dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+    - name: Prepare Electron once before parallel tests
+      if: inputs.electron == 'true'
+      shell: bash
+      env:
+        electron_config_cache: ${{ runner.temp }}/electron-cache
+      run: pnpm --filter @shadow/desktop exec node -e "console.log(require('electron'))"

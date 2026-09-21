@@ -39,18 +39,69 @@ Nested pnpm commands reuse `npm_execpath`: JavaScript entrypoints run through
 Node, while native executables (including extensionless macOS/Linux pnpm 12
 binaries) run directly without a shell.
 
-The **Desktop release check** workflow (`.github/workflows/release-check.yml`)
-runs this same command on pull requests and manual dispatch, on each native
-runner. Linux uses Xvfb for the hidden Electron checks without disabling the
-renderer sandbox. Successful jobs upload only their installer/archive as Actions
-artifacts, retained for 14 days; failed verification does not upload a package.
-It does not publish GitHub Releases or install applications/register services.
-The Linux job installs its display-library prerequisites on the ephemeral runner.
+The **Shadow release build** workflow (`.github/workflows/release-check.yml`)
+is the single desktop/mobile entrypoint. Relevant pull requests validate **all**
+targets; manual dispatch selects `desktop`, `mobile`, or `all` (default).
+There is no additional push-triggered release run: to get a branch test build,
+dispatch this workflow with that branch selected. Mobile jobs are called through
+`mobile-release.yml`, which no longer has a separate dispatch or push trigger.
+New runs cancel older runs for the same PR/ref and target selection.
+
+A shared Ubuntu job runs typechecks once and builds the selected portable
+JS/assets in parallel. Desktop consumers download backend JS, Electron host JS
+and the ordinary Vue bundle; mobile consumers use a **separate mobile-mode**
+Vue bundle. Native jobs still install their own dependencies and run their
+existing platform tests. Desktop jobs deploy native production dependencies,
+package, and run the full packaged verification; mobile jobs sync Capacitor and
+compile with the native SDK. No installed `node_modules` crosses platforms.
+
+Linux uses Xvfb for Electron checks without disabling the renderer sandbox and
+installs its display-library prerequisites on the ephemeral runner. Successful
+native jobs upload their installer/archive as Actions artifacts, retained for
+14 days; failed verification does not upload a package. The intermediate shared
+artifact is retained for 3 days and is **not an installable release**.
+The workflow does not publish GitHub Releases or install/register applications.
 
 Run `pnpm desktop` on the matching operating system and architecture; target
 selection follows the native Node host and rejects unsupported combinations.
 Do not substitute raw `electron-builder` for this command: it omits preparation
 and verification.
+
+### Shared build and cache boundaries
+
+The split commands are intended for CI:
+
+```sh
+pnpm release:prepare all                  # typechecks, then selected JS/Web builds
+pnpm release:verify-prepared desktop      # verifies current source and output bytes
+pnpm test:release                        # run on the native desktop host
+pnpm desktop:package                     # verified shared outputs -> native package + smoke
+```
+
+`desktop:package` refuses missing/stale prepared output but **does not run
+typechecks or `test:release`**; CI runs those gates explicitly. For an ordinary
+local release, keep using `pnpm desktop`, which retains the complete build gate.
+Mobile consumers verify `mobile`, then run `mobile:sync`, mobile tests and native
+compilation. `release:prepare` also accepts `desktop` or `mobile` individually.
+
+The ignored `release-prepared.json` binds outputs to their source fingerprint.
+Consumers download from the **same workflow run**, never from a previous run's
+build-output cache, and reject changed, extra or missing output files. Checkout
+disables automatic CRLF conversion so source bytes match on Windows and Unix.
+Tar preserves output permissions during artifact transfer. This receipt is a
+consistency check, not a signing/provenance attestation.
+
+Caches cover pnpm's dependency store; Electron and electron-builder downloads
+keyed by OS/architecture and dependency inputs; Gradle user home/local build
+cache; and Swift package downloads keyed by OS/architecture, Xcode and dependency
+inputs. Electron is resolved once before parallel tests to avoid concurrent
+lazy extraction. Signed jobs only read native build caches; signing material and
+Xcode DerivedData are not cached. Already-compressed native archives use upload
+compression level zero.
+
+This removes repeated typechecking and JS/Web compilation but adds a shared-job
+dependency and artifact transfer. Compare cold and warm CI runs before claiming
+a wall-time improvement; native compilation, tests and packaged smoke still run.
 
 ### Portable package boundaries
 
@@ -101,6 +152,7 @@ For restricted/offline environments:
 - `ELECTRON_BUILDER_BINARIES_MIRROR`: electron-builder's HTTPS mirror for its own
   packaging helpers. This is distinct from the npm package registry.
 - `ELECTRON_BUILDER_CACHE`: electron-builder's cache location.
+- `electron_config_cache`: the Electron npm installer's download cache location.
 
 Mirror URLs must not embed credentials. Download errors and hash mismatches fail
 the build rather than falling back to an unverified binary. The generated

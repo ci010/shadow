@@ -1,31 +1,110 @@
-name: Desktop release check
+name: Shadow release build
 
 on:
   pull_request:
+    paths:
+      - 'src/**'
+      - 'app/**'
+      - 'desktop/**'
+      - 'mobile/**'
+      - 'scripts/**'
+      - '*json'
+      - '*yaml'
+      - '*.ts'
+      - '.pnpmfile.cjs'
+      - '.github/actions/**'
+      - '.github/workflows/release-check.yml'
+      - '.github/workflows/mobile-release.yml'
   workflow_dispatch:
+    inputs:
+      target:
+        description: Platforms to build
+        type: choice
+        options: [desktop, mobile, all]
+        default: all
+      signed_android:
+        description: Build signed Android AAB using mobile-release environment secrets
+        type: boolean
+        default: false
+      signed_ios:
+        description: Build App Store signed IPA using mobile-release environment secrets
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}-${{ inputs.target || 'all' }}
+  cancel-in-progress: true
+
+env:
+  # Identical source bytes across native checkouts are required by the shared receipt.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+  CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
 jobs:
+  prepare:
+    name: Check source and build shared application
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+        with:
+          electron: "false"
+      - name: Check selection
+        env:
+          BUILD_TARGET: ${{ inputs.target || 'all' }}
+          SIGNED_ANDROID: ${{ inputs.signed_android || false }}
+          SIGNED_IOS: ${{ inputs.signed_ios || false }}
+        run: |
+          if [ "$BUILD_TARGET" = desktop ] && { [ "$SIGNED_ANDROID" = true ] || [ "$SIGNED_IOS" = true ]; }; then
+            echo "::error::Select mobile or all when requesting mobile signing."
+            exit 1
+          fi
+      - name: Typecheck once and build selected shared outputs
+        env:
+          BUILD_TARGET: ${{ inputs.target || 'all' }}
+        run: pnpm release:prepare "$BUILD_TARGET"
+      - name: Archive shared outputs with permissions preserved
+        env:
+          BUILD_TARGET: ${{ inputs.target || 'all' }}
+        run: |
+          paths=(release-prepared.json)
+          if [ "$BUILD_TARGET" != mobile ]; then paths+=(dist desktop/dist app/dist); fi
+          if [ "$BUILD_TARGET" != desktop ]; then paths+=(app/dist-mobile); fi
+          tar -cf "$RUNNER_TEMP/prepared-build.tar" "${paths[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prepared-application
+          path: ${{ runner.temp }}/prepared-build.tar
+          if-no-files-found: error
+          retention-days: 3
+
   windows-release:
+    needs: prepare
+    if: inputs.target != 'mobile'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: ./.github/actions/setup-build
         with:
-          version: 12.3.1
-      - uses: actions/setup-node@v4
+          packaging: "true"
+      - uses: ./.github/actions/restore-prepared
         with:
-          node-version: 24.18.0
-          cache: pnpm
-      - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Validate, package and verify the fresh application
-        run: pnpm desktop
+          target: desktop
+      - name: Native Windows release tests
+        run: pnpm test:release
+      - name: Package and verify shared application on Windows
+        run: pnpm desktop:package
       - name: Upload verified Windows installer
         uses: actions/upload-artifact@v4
         with:
@@ -33,8 +112,11 @@ jobs:
           path: desktop/release/Shadow-*-win-x64.exe
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
 
   portable-release:
+    needs: prepare
+    if: inputs.target != 'mobile'
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -60,20 +142,13 @@ jobs:
             arch: x64
             artifact: shadow-linux-x64
             pattern: desktop/release/Shadow-*-linux-x64.tar.gz
-    env:
-      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: ./.github/actions/setup-build
         with:
-          version: 12.3.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.18.0
-          cache: pnpm
-          architecture: ${{ matrix.arch }}
+          packaging: "true"
       - name: Confirm native build target
         env:
           EXPECTED_PLATFORM: ${{ matrix.platform }}
@@ -83,15 +158,22 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes xvfb libgtk-3-0 libnss3 libasound2 libgbm1
-      - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Validate, package and verify macOS application
+          sudo apt-get install --yes xvfb xauth libgtk-3-0 libnss3 libasound2 libgbm1
+      - uses: ./.github/actions/restore-prepared
+        with:
+          target: desktop
+      - name: Native macOS release tests
         if: runner.os == 'macOS'
-        run: pnpm desktop
-      - name: Validate, package and verify Linux application
+        run: pnpm test:release
+      - name: Native Linux release tests
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum pnpm desktop
+        run: xvfb-run --auto-servernum pnpm test:release
+      - name: Package and verify shared application on macOS
+        if: runner.os == 'macOS'
+        run: pnpm desktop:package
+      - name: Package and verify shared application on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum pnpm desktop:package
       - name: Upload verified portable application
         uses: actions/upload-artifact@v4
         with:
@@ -99,3 +181,13 @@ jobs:
           path: ${{ matrix.pattern }}
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
+
+  mobile-release:
+    needs: prepare
+    if: inputs.target != 'desktop'
+    uses: ./.github/workflows/mobile-release.yml
+    with:
+      signed_android: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_android == true }}
+      signed_ios: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_ios == true }}
+    secrets: inherit

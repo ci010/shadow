@@ -1,0 +1,20 @@
+name: Restore prepared application
+description: Consume only this workflow run's shared outputs, bound to current source and output hashes.
+inputs:
+  target:
+    description: desktop or mobile
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: prepared-application
+        path: ${{ runner.temp }}/prepared
+    - name: Restore and verify shared outputs
+      shell: bash
+      env:
+        BUILD_TARGET: ${{ inputs.target }}
+      run: |
+        tar -xf "$RUNNER_TEMP/prepared/prepared-build.tar"
+        pnpm release:verify-prepared "$BUILD_TARGET"

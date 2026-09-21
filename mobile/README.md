@@ -39,6 +39,8 @@ mobile-only build marker in `app/dist-mobile`, then runs `cap sync` for both
 projects. Capacitor's `webDir` is `../app/dist-mobile`. This output is isolated
 from `app/dist`, which Main serves to normal browser clients: a mobile build must
 never replace that web application. No backend build is included.
+CI can use `pnpm --filter @shadow/mobile build:web` to generate only this
+mode-specific web bundle, then sync it on each native runner.
 `pnpm mobile:sync` accepts only a marked mobile bundle. `sync` must run after every renderer/dependency change
 and before native compilation. It regenerates Capacitor config, plugin lists,
 web assets, Gradle dependency paths, and the SPM package. Never commit copied web
@@ -117,21 +119,34 @@ around self-signed or expired certificates by weakening TLS.
 
 ## CI artifacts and signing
 
-`.github/workflows/mobile-release.yml` validates relevant pushes, pull requests
-and manual runs. GitHub-hosted runners supply the native SDKs; local Android or
-iOS toolchains are not required for this CI path:
+Use the **Shadow release build** workflow (`.github/workflows/release-check.yml`)
+and select `mobile` or `all` for a branch test build. Relevant pull requests
+automatically validate all targets; ordinary pushes do not start a second
+release run. `mobile-release.yml` now contains reusable native jobs, not a
+separate manual entrypoint. GitHub-hosted runners supply the native SDKs; local
+Android or iOS toolchains are not required for this CI path:
 
 * Ubuntu compiles the unsigned release APK and Android device-test APK, and runs
   lint. The device tests cover actual Keystore storage, round trips, removal,
   UTF-8 limits, corrupt records, and missing keys; run them on a disposable
   device/emulator with `:app:connectedDebugAndroidTest` (not run by CI).
 * macOS/Xcode 26 compiles a release simulator app without code signing.
-* Both platforms run typechecks and the mobile suite. Linux uses Xvfb so the
+* Typechecks and the mobile-mode Vite build run once in shared preparation.
+  Both native platforms verify that same-run bundle, sync Capacitor and run the
+  mobile suite. Linux uses Xvfb so the
   renderer tests execute instead of silently skipping for a missing display.
 * Artifacts are accurately named `android-unsigned-validation-apk` and
   `ios-simulator-validation`, retained for 14 days. Neither is store distribution.
 
-Only an explicit manual dispatch with `signed_android` or `signed_ios` enables a
+pnpm/Electron downloads, Gradle's user home/build cache and Swift package
+downloads are cached. Gradle validation enables `--build-cache`; signed jobs
+only read native caches. Swift's cache does not include compiled Xcode
+DerivedData, credentials, profiles or signed products. Installed `node_modules`
+and mobile/desktop web bundles are never interchanged. See the
+[shared build and cache boundaries](../docs/release.md#shared-build-and-cache-boundaries).
+
+Only an explicit manual dispatch of **Shadow release build**, selecting
+`mobile`/`all` with `signed_android` or `signed_ios`, enables a
 signed job after its native validation passes. Configure the GitHub environment
 **`mobile-release` with protected reviewers and trusted branch restrictions**;
 PR validation never receives signing secrets. Missing secrets fail the requested

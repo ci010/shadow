@@ -118,9 +118,12 @@ function requireMobileBundle(): void {
 export function main(action = process.argv[2]): void {
   switch (action) {
     case 'build':
+      main('build:web');
+      main('sync');
+      break;
+    case 'build:web':
       run('pnpm', ['--filter', '@shadow/app', 'exec', 'vite', 'build', '--mode', 'mobile', '--outDir', 'dist-mobile', '--logLevel', 'warn']);
       writeFileSync(resolve(root, 'app/dist-mobile/shadow-mobile-build.json'), '{"mode":"mobile"}\n');
-      main('sync');
       break;
     case 'sync':
       requireMobileBundle();
@@ -154,7 +157,7 @@ export function main(action = process.argv[2]): void {
       console.log('Unsigned iOS simulator app built under mobile/ios/DerivedData/Build/Products/Release-iphonesimulator (not device distribution).');
       break;
     default:
-      throw new Error('Usage: mobile.ts build|sync|check|android|ios|build:android|build:ios');
+      throw new Error('Usage: mobile.ts build|build:web|sync|check|android|ios|build:android|build:ios');
   }
 }
 

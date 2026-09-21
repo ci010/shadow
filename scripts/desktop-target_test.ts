@@ -80,7 +80,8 @@ test('CI builds all requested architectures natively and uploads only packaged a
     [job.runner, job.platform, job.arch]), [
     ['macos-15', 'darwin', 'arm64'], ['macos-15-intel', 'darwin', 'x64'], ['ubuntu-22.04', 'linux', 'x64'],
   ])
-  assert(portable.steps.some((step: { run?: string }) => step.run === 'xvfb-run --auto-servernum pnpm desktop'))
+  assert(portable.steps.some((step: { run?: string }) => step.run === 'xvfb-run --auto-servernum pnpm test:release'))
+  assert(portable.steps.some((step: { run?: string }) => step.run === 'xvfb-run --auto-servernum pnpm desktop:package'))
   for (const job of [workflow.jobs['windows-release'], portable]) {
     const upload = job.steps.find((step: { uses?: string }) => step.uses === 'actions/upload-artifact@v4')
     assert.equal(upload.with['if-no-files-found'], 'error')

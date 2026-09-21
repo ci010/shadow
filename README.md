@@ -419,8 +419,9 @@ The packaging command runs typechecks and the
 focused release tests, builds the production UI, creates the native package
 in `desktop/release`, and verifies that fresh package: Windows x64 NSIS,
 macOS arm64/x64 ZIP (separate builds), or Linux x64 tar.gz. The
-**Desktop release check** GitHub Action builds all four variants on native
-runners and uploads successful artifacts for 14 days, without publishing a Release.
+**Shadow release build** GitHub Action accepts `desktop`, `mobile`, or `all`.
+It shares platform-independent builds, keeps native tests/packaging on each
+runner, and uploads successful artifacts for 14 days without publishing a Release.
 macOS builds are ad-hoc signed and not notarized; they are test artifacts, not
 trusted public releases. See
 [release verification](docs/release.md) for download mirrors/caches, artifact

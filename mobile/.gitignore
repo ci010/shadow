@@ -6,3 +6,4 @@ release/
 *.mobileprovision
 *.ipa
 *.xcarchive/
+/ios/SourcePackages/

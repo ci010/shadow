@@ -14,6 +14,7 @@ desktop/release/
 desktop/backend/
 desktop/service/ShadowService.exe
 desktop/release-manifest.v1.json
+/release-prepared.json
 
 # IDE
 .vscode/settings.json

@@ -10,6 +10,7 @@ const sourceInputs = [
   'tsconfig.json', 'tsconfig.build.json', 'app/package.json', 'app/tsconfig.json',
   'app/index.html', 'app/vite.config.ts', 'app/unocss.config.ts',
   'desktop/package.json', 'desktop/tsconfig.json', 'desktop/tsconfig.build.json',
+  'mobile/package.json', 'mobile/capacitor.config.ts',
 ]
 
 export interface ReleaseManifest {
@@ -56,6 +57,10 @@ async function tree(directory: string): Promise<Map<string, Buffer>> {
   }
   await visit(directory, new Set())
   return result
+}
+
+export async function directoryFingerprint(directory: string): Promise<string> {
+  return hash(JSON.stringify([...await tree(directory)].map(([name, bytes]) => [name, hash(bytes)])))
 }
 
 export async function sourceFingerprint(root: string): Promise<string> {
