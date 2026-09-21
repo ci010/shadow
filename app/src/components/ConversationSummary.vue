@@ -32,7 +32,7 @@ function onToggle(event: Event) {
   align-items: center;
   gap: 8px;
   min-height: 40px;
-  padding: 8px 0;
+  padding: 8px;
   box-sizing: border-box;
   list-style: none;
   cursor: pointer;
@@ -40,8 +40,7 @@ function onToggle(event: Event) {
   line-height: 20px;
 }
 .compaction-summary-header::-webkit-details-marker { display: none; }
-.compaction-summary-header::after { content: ''; flex: 1; min-width: 16px; border-top: 1px solid var(--c-border); }
-.compaction-summary-header:hover { color: var(--c-text); }
+.compaction-summary-header:hover { background: var(--c-bg-soft); color: var(--c-text); }
 .compaction-summary-header:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .summary-chevron { display: block; width: 14px; height: 14px; flex: 0 0 14px; }
 .compaction-summary[open] > summary .summary-chevron { transform: rotate(90deg); }
@@ -49,8 +48,9 @@ function onToggle(event: Event) {
 .compaction-summary-body {
   box-sizing: border-box;
   max-width: 76ch;
-  margin: 0 0 16px;
-  padding: 4px 0 12px 22px;
+  margin: 0 8px 16px 15px;
+  padding: 4px 0 12px 14px;
+  border-left: 1px solid var(--c-border);
   color: var(--c-text);
   font-size: 13px;
   line-height: 1.7;
@@ -72,4 +72,7 @@ function onToggle(event: Event) {
 .compaction-summary-body :deep(table) { display: block; max-width: 100%; overflow-x: auto; font-size: 12px; }
 .compaction-summary-body :deep(> :first-child) { margin-top: 0; }
 .compaction-summary-body :deep(> :last-child) { margin-bottom: 0; }
+@media (pointer: coarse) {
+  .compaction-summary-header { min-height: 44px; }
+}
 </style>

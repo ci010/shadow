@@ -1,5 +1,5 @@
 <template>
-  <header class="session-heading" :class="{ 'has-topic': topic || coordinator }">
+  <header class="session-heading">
     <MobileSheet v-if="mobileLayout" :open="editing" label="Rename session" @update:open="cancelRename"><div ref="mobileRenameTarget" /></MobileSheet>
     <Teleport :to="mobileRenameTarget || 'body'" :disabled="!mobileLayout || !mobileRenameTarget">
     <form v-if="editing" class="session-rename" aria-label="Rename session" :aria-busy="saving" @submit.prevent="saveName" @keydown.esc.prevent.stop="cancelRename">
@@ -15,7 +15,7 @@
       <p v-if="renameError" class="details-error" role="alert">{{ renameError }}</p>
     </form>
     </Teleport>
-    <ComposerPopover v-if="!editing" ref="detailsPopover" label="Session details" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="360" @opened="loadDetails">
+    <ComposerPopover v-if="!editing" ref="detailsPopover" label="Session details" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="520" @opened="loadDetails">
       <template #trigger>
         <span class="heading-name">{{ name }}</span>
         <span class="heading-separator" aria-hidden="true">&middot;</span>
@@ -24,14 +24,18 @@
       </template>
       <template #default>
         <div class="session-details">
-          <template v-if="mobileLayout">
+          <section v-if="coordinator || topic" class="details-topic" aria-label="Initiative context">
+            <h3>{{ coordinator ? 'Project coordination' : 'Initiative' }}</h3>
             <p v-if="coordinator" class="details-note">Coordinate this Project here. Topics are independent conversations in the sidebar, not tasks or child chats.</p>
-            <dl v-else-if="topic" class="details-identity">
-              <dt>Goal</dt><dd>{{ topic.goal }}</dd>
-              <dt>Scope</dt><dd>{{ topic.scope }}</dd>
-              <template v-if="topic.nonGoals"><dt>Out of scope</dt><dd>{{ topic.nonGoals }}</dd></template>
-            </dl>
-          </template>
+            <template v-else-if="topic">
+              <p class="details-topic-title">{{ topic.title }}</p>
+              <dl>
+                <dt>Goal</dt><dd>{{ topic.goal }}</dd>
+                <dt>Scope</dt><dd>{{ topic.scope }}</dd>
+                <template v-if="topic.nonGoals"><dt>Out of scope</dt><dd>{{ topic.nonGoals }}</dd></template>
+              </dl>
+            </template>
+          </section>
           <p v-if="loading" class="details-note" role="status">Loading session details...</p>
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>
           <dl class="details-identity">
@@ -66,15 +70,6 @@
     </ComposerPopover>
     <button v-if="canRename && !editing" ref="renameButton" type="button" class="rename-button" aria-label="Rename session"
       title="Rename session" @click="startRename"><span class="i-lucide-pencil w-3.5 h-3.5" aria-hidden="true" /></button>
-    <p v-if="coordinator" class="coordination-description">Coordinate this Project here. Topics are independent conversations in the sidebar, not tasks or child chats.</p>
-    <details v-else-if="topic" class="topic-metadata">
-      <summary>{{ topic.goal || 'Topic details' }}</summary>
-      <dl>
-        <dt>Goal</dt><dd>{{ topic.goal }}</dd>
-        <dt>Scope</dt><dd>{{ topic.scope }}</dd>
-        <template v-if="topic.nonGoals"><dt>Out of scope</dt><dd>{{ topic.nonGoals }}</dd></template>
-      </dl>
-    </details>
   </header>
 </template>
 
@@ -214,7 +209,6 @@ onUnmounted(() => { cancel(); stopRename() })
 
 <style scoped>
 .session-heading { display: flex; flex: 0 0 auto; align-items: center; min-width: 0; min-height: 52px; padding: 4px 16px; color: var(--c-text); }
-.session-heading.has-topic { flex-wrap: wrap; }
 .session-rename { display: flex; flex: 1; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; padding: 6px 0; }
 .rename-field { display: flex; flex: 1 1 180px; min-width: 0; flex-direction: column; gap: 4px; font-size: 12px; }
 .rename-field input { width: 100%; box-sizing: border-box; min-width: 0; padding: 6px 8px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 14px; }
@@ -223,10 +217,6 @@ onUnmounted(() => { cancel(); stopRename() })
 .rename-button { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .rename-button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .rename-button:focus-visible, .rename-field input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-.coordination-description, .topic-metadata { flex-basis: 100%; margin: 0 8px 8px; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.topic-metadata summary { cursor: pointer; max-height: 3em; overflow: hidden; }
-.topic-metadata dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; max-height: 180px; overflow: auto; }
-.topic-metadata dd { margin: 0; white-space: pre-wrap; user-select: text; }
 .session-heading :deep(.composer-control) { min-height: 36px; gap: 10px; max-width: 100%; padding: 7px 8px; text-align: left; }
 .heading-name { min-width: 0; max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 14px; font-weight: 600; }
 .heading-folder { min-width: min(80px, 25vw); max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 13px; }
@@ -236,11 +226,15 @@ onUnmounted(() => { cancel(); stopRename() })
 .session-details dl { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px 10px; margin: 0; }
 .session-details dt, .context-heading { color: var(--c-text-secondary); }
 .session-details dd { margin: 0; min-width: 0; color: var(--c-text); overflow-wrap: anywhere; user-select: text; cursor: text; }
+.details-topic { margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--c-border); }
+.details-topic h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
+.details-topic-title { margin: 0 0 12px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+.details-topic dd { white-space: pre-wrap; }
 .detail-id { font-size: 12px; }
 .details-usage { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--c-border); }
 .token-counts { display: flex; flex-direction: column; gap: 3px; font-variant-numeric: tabular-nums; }
 .token-counts > span { display: flex; align-items: center; gap: 6px; }
-.token-counts small, .details-note { color: var(--c-text-secondary); font-size: 11px; }
+.token-counts small, .details-note { color: var(--c-text-secondary); font-size: 12px; }
 .context-heading, .context-counts { display: flex; justify-content: space-between; gap: 12px; }
 .context-heading { margin-top: 18px; }
 .context-counts { margin: 8px 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; }

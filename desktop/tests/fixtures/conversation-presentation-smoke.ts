@@ -206,6 +206,85 @@ async function main() {
     await execute(`window.__conversationFixture.messages[2].toolCall.arguments.sessionId = ''`)
     await wait(`!document.querySelector('.message-recipient')`)
     assert.match(await execute(`document.querySelector('.message-action').textContent`), /Unknown recipient/)
+    await execute(`window.__showCompaction()`)
+    await wait(`!!document.querySelector('.history-disclosure') && document.querySelector('.heading-folder')?.textContent === 'review'`)
+    assert.equal(await execute(`!!document.querySelector('.compaction-summary-body')`), false, 'Summary Markdown stays lazy')
+    assert.equal(await execute(`!!document.querySelector('.topic-metadata, .coordination-description')`), false)
+    for (const width of [1100, 390]) {
+      window.setContentSize(width, 844)
+      for (const dark of [false, true]) {
+        await execute(`document.documentElement.classList.toggle('dark', ${dark}); document.querySelector('.history-disclosure').open = false`)
+        await frame()
+        assert.equal(await execute(`document.querySelector('.session-heading').getBoundingClientRect().height <= 60`), true, 'Initiative context must not add a heading row')
+        await screenshot(`compaction-${width}-${dark ? 'dark' : 'light'}-collapsed`)
+        await execute(`document.querySelector('.history-disclosure').open = true; document.querySelector('.compaction-summary-header').click()`)
+        await wait(`!!document.querySelector('.compaction-summary-body h3')`)
+        const continuity = await execute(`(() => {
+          const nav = document.querySelector('.segment-nav');
+          const traces = document.querySelector('.history-disclosure');
+          const summary = document.querySelector('.compaction-summary');
+          const body = document.querySelector('.compaction-summary-body');
+          return {
+            widths:[nav, traces, summary].map(el => el.getBoundingClientRect().width),
+            lefts:[nav, traces, summary].map(el => el.getBoundingClientRect().left),
+            backgrounds:[nav, ...document.querySelectorAll('.segment-nav-btn, .history-execution')].map(el => getComputedStyle(el).backgroundColor),
+            fontSizes:[traces.querySelector('summary'), summary.querySelector('summary')].map(el => getComputedStyle(el).fontSize),
+            overflow:document.documentElement.scrollWidth > innerWidth,
+            rowsOverflow:[...document.querySelectorAll('.history-execution')].some(el => el.scrollWidth > el.clientWidth + 1),
+            summaryOverflow:body.scrollWidth > body.clientWidth + 1,
+            summaryMaxHeight:getComputedStyle(body).maxHeight,
+            icons:[...document.querySelectorAll('.history-chevron, .history-execution > .i-lucide-arrow-up-right')].every(el => getComputedStyle(el).maskImage !== 'none'),
+          };
+        })()`)
+        assert(continuity.widths.every((value: number) => Math.abs(value - continuity.widths[0]) < 1), 'All history controls share the conversation rail')
+        assert(continuity.lefts.every((value: number) => Math.abs(value - continuity.lefts[0]) < 1))
+        assert(continuity.backgrounds.every((value: string) => value === 'rgba(0, 0, 0, 0)'), 'History navigation is not a primary blue action')
+        assert.deepEqual(continuity.fontSizes, ['12px', '12px'])
+        assert.equal(continuity.overflow, false)
+        assert.equal(continuity.rowsOverflow, false)
+        assert.equal(continuity.summaryOverflow, false)
+        assert.equal(continuity.summaryMaxHeight, 'none')
+        assert.equal(continuity.icons, true)
+        await screenshot(`compaction-${width}-${dark ? 'dark' : 'light'}-expanded`)
+        await execute(`document.querySelector('.compaction-summary-header').click(); document.querySelector('.session-heading .composer-control').click()`)
+        await wait(`!!document.querySelector('.details-topic')`)
+        assert.equal(await execute(`document.querySelector('.composer-popover').getBoundingClientRect().width === Math.min(520, innerWidth - 24)`), true, 'Session details use a wider reading measure without overflowing narrow viewports')
+        assert.match(await execute(`document.querySelector('.details-topic').textContent`), /Initiative.*Goal.*Scope.*Out of scope/s)
+        assert.match(await execute(`document.querySelector('.details-topic').textContent`), /Do not publish or change the source materials/)
+        assert.equal(await execute(`(() => {
+          const panel = document.querySelector('.composer-popover'); const rect = panel.getBoundingClientRect();
+          return rect.left >= 0 && rect.right <= innerWidth && panel.scrollWidth <= panel.clientWidth + 1;
+        })()`), true)
+        await screenshot(`compaction-${width}-${dark ? 'dark' : 'light'}-details`)
+        await execute(`document.querySelector('.composer-popover').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}))`)
+        await wait(`!document.querySelector('.composer-popover')`)
+        assert.equal(await execute(`document.activeElement.matches('.session-heading .composer-control')`), true)
+      }
+    }
+    await execute(`document.querySelector('.history-execution').focus()`)
+    assert.equal(await execute(`document.activeElement.matches('.history-execution')`), true)
+    window.webContents.debugger.attach('1.3')
+    await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+    await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+    await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+    await wait(`window.__conversationFixture.navigation.length === 1`)
+    window.webContents.debugger.detach()
+    assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[0]))`), { event: 'navigate', id: 'web:peer' })
+    await execute(`document.querySelector('.segment-nav-btn').click()`)
+    await wait(`document.querySelector('.segment-nav-label')?.textContent === 'Viewing previous session'`)
+    await execute(`document.querySelector('.segment-nav-btn').click()`)
+    await wait(`document.querySelector('.segment-nav-btn')?.textContent.includes('View previous session')`)
+    await execute(`window.__conversationFixture.activeSessionId = 'web:orchestrator'; window.__conversationFixture.headingTopic = undefined`)
+    await frame()
+    await execute(`document.querySelector('.session-heading .composer-control').click()`)
+    await wait(`document.querySelector('.details-topic')?.textContent.includes('Coordinate this Project here')`)
+    assert.equal(await execute(`document.querySelector('.session-heading').textContent.includes('Topics are independent')`), false)
+    await execute(`document.querySelector('.composer-popover').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true})); window.__conversationFixture.activeSessionId = 'web:plain'`)
+    await frame()
+    await execute(`document.querySelector('.session-heading .composer-control').click()`)
+    await wait(`!!document.querySelector('.session-details')`)
+    assert.equal(await execute(`!!document.querySelector('.details-topic')`), false, 'Ordinary sessions have no empty Initiative section')
+    assert.deepEqual(errors, [])
     console.log('CONVERSATION_SMOKE_OK')
   } finally { window.destroy() }
 }

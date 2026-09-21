@@ -90,14 +90,22 @@
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
           <!-- Segment navigation: view previous (top) -->
-          <div v-if="previousPhysicalId && !viewingPhysicalId" class="segment-nav">
-            <button class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" /> View previous session</button>
-          </div>
-          <details v-if="unlinkedExecutions.length" class="unlinked-executions">
-            <summary>Other execution traces · {{ unlinkedExecutions.length }}</summary>
-            <p>These executions have no matching tool call in this loaded history.</p>
-            <button v-for="execution in unlinkedExecutions" :key="execution.sessionId" class="btn btn-sm"
-              @click="inspectExecution(execution.sessionId)">{{ execution.label }} <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
+          <nav v-if="previousPhysicalId && !viewingPhysicalId" class="segment-nav" aria-label="Conversation segments">
+            <button type="button" class="segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left" aria-hidden="true" /> View previous session</button>
+          </nav>
+          <details v-if="unlinkedExecutions.length" class="unlinked-executions history-disclosure">
+            <summary><span class="history-chevron i-lucide-chevron-right" aria-hidden="true" /><span>Other execution traces</span><span class="history-count">{{ unlinkedExecutions.length }}</span></summary>
+            <div class="history-executions">
+              <p>These executions have no matching tool call in this loaded history.</p>
+              <ul>
+                <li v-for="execution in unlinkedExecutions" :key="execution.sessionId">
+                  <button type="button" class="history-execution" @click="inspectExecution(execution.sessionId)">
+                    <span class="history-execution-label">{{ execution.label }}</span>
+                    <span class="i-lucide-arrow-up-right" aria-hidden="true" />
+                  </button>
+                </li>
+              </ul>
+            </div>
           </details>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${idx}`">
             <CommandResult v-if="msg.commandReceipt" :receipt="msg.commandReceipt">
@@ -199,11 +207,11 @@
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
           <!-- Segment navigation: back to current + view older (bottom) -->
-          <div v-if="viewingPhysicalId" class="segment-nav">
-            <button class="btn btn-sm segment-nav-btn" @click="goBackToCurrentSegment">Back to current <span class="i-lucide-arrow-right w-3.5 h-3.5" aria-hidden="true" /></button>
+          <nav v-if="viewingPhysicalId" class="segment-nav" aria-label="Conversation segments">
+            <button type="button" class="segment-nav-btn" @click="goBackToCurrentSegment">Back to current <span class="i-lucide-arrow-right" aria-hidden="true" /></button>
             <span class="segment-nav-label">Viewing previous session</span>
-            <button v-if="previousPhysicalId" class="btn btn-sm segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" /> View older session</button>
-          </div>
+            <button v-if="previousPhysicalId" type="button" class="segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left" aria-hidden="true" /> View older session</button>
+          </nav>
           </div>
         </div>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
@@ -2736,7 +2744,7 @@ function resendLastMessage() {
 .mobile-message-settings :deep(.composer-control), .mobile-message-settings .context-action { width: 100%; min-height: 44px; justify-content: flex-start; font-size: 14px; }
 .conversation-empty { color: var(--c-text-secondary); font-size: 14px; user-select: none; }
 
-.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card, .message-action)) {
+.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card, .message-action, .segment-nav, .history-disclosure)) {
   min-width: 0;
   max-width: var(--conversation-item-max-width);
   align-self: flex-start;
@@ -2780,30 +2788,59 @@ button.chat-session-source:focus-visible { outline: 2px solid var(--c-blue); out
 
 .unlinked-executions { margin: 8px 0 16px; color: var(--c-text-secondary); font-size: 12px; }
 .unlinked-executions summary { cursor: pointer; }
-.unlinked-executions button { display: flex; margin: 6px 0; max-width: 100%; text-align: left; overflow-wrap: anywhere; }
 .unlinked-executions summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.history-disclosure { width: 100%; margin: 0; }
+.history-disclosure > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px; box-sizing: border-box; list-style: none; font-size: 12px; line-height: 20px; font-weight: 500; }
+.history-disclosure > summary::-webkit-details-marker { display: none; }
+.history-disclosure > summary:hover { background: var(--c-bg-soft); color: var(--c-text); }
+.history-chevron { flex: 0 0 14px; width: 14px; height: 14px; }
+.history-disclosure[open] > summary .history-chevron { transform: rotate(90deg); }
+.history-count { color: var(--c-text-muted); font-variant-numeric: tabular-nums; font-weight: 400; }
+.history-executions { margin: 0 8px 12px 15px; padding: 0 0 0 14px; border-left: 1px solid var(--c-border); }
+.history-executions > p { margin: 0; padding: 4px 0 8px; font-size: 12px; line-height: 1.6; }
+.history-executions ul { list-style: none; margin: 0; padding: 0; }
+.history-executions li + li { border-top: 1px solid var(--c-border-soft); }
+.history-execution { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 40px; padding: 9px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; font-size: 13px; line-height: 1.6; text-align: left; cursor: pointer; }
+.history-execution-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.history-execution > .i-lucide-arrow-up-right { flex: 0 0 14px; width: 14px; height: 14px; color: var(--c-text-secondary); }
+.history-execution:hover { background: var(--c-bg-muted); }
+.history-execution:focus-visible, .segment-nav-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 
 .segment-nav {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.5rem;
-  background: var(--c-bg-muted);
-  border: 1px solid var(--c-border-soft);
-  border-radius: var(--radius-surface);
-  font-size: 0.75rem;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  width: 100%;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--c-border);
+  font-size: 12px;
 }
 
 .segment-nav-btn {
-  font-size: 0.75rem;
-  padding: 0.2rem 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--c-text-secondary);
+  font: inherit;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
 }
+.segment-nav-btn > span { flex: 0 0 14px; width: 14px; height: 14px; }
+.segment-nav-btn:hover { background: var(--c-bg-soft); color: var(--c-text); }
 
 .segment-nav-label {
-  color: var(--c-info, #6366f1);
-  font-weight: 600;
-  font-size: 0.75rem;
+  color: var(--c-text-muted);
+  padding-inline: 8px;
+}
+@media (pointer: coarse) {
+  .segment-nav-btn, .history-disclosure > summary, .history-execution { min-height: 44px; }
 }
 
 .chat-sender {

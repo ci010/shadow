@@ -307,6 +307,8 @@ The shared breakpoint is `max-width: 700px`; sidebar density and shared button t
 
 Desktop conversation rows form a centered column of `calc(100cqw - 112px)` with a (0.5rem) gap. Bubbles and message actions are content-fitting with a maximum of (80%); user bubbles align right, assistant/action rows align left. The shared `--conversation-item-max-width` caps assistant, system, compaction, tool, execution, and action rows. Some structural rows, including execution cards, request full available width **within** that cap; do not force every row to have identical intrinsic width.
 
+Compacted-history navigation, unlinked execution traces, and the conversation summary share that same capped rail. Use transparent secondary navigation, (12px) disclosure labels, (40px) minimum rows, and (44px) touch targets on coarse pointers. Expanded execution lists and summary Markdown share a one-pixel neutral guide; execution titles wrap in quiet full-width rows rather than filled primary buttons. Summaries remain collapsed and render Markdown only when opened, with no nested vertical scroller. Initiative title, goal, scope, and non-goals live in the session-title details popover (or mobile sheet), not in a second heading row; Project coordination guidance follows the same rule.
+
 The composer is `calc(100% - 40px)` wide, capped at (860px), changing to `calc(100% - 24px)` on narrow viewports. It owns a measured trailing history allowance through `--composer-height`. Preserve stable scrollbar gutters and the scroll container's own geometry; do not use the prose measure as the workbench's outer width.
 
 ### Phone navigation and composition

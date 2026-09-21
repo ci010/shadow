@@ -18,7 +18,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('conversation skeleton, incoming alignment and outgoing message navigation render across themes and viewport sizes', {
+test('conversation presentation and compacted history render across themes and viewport sizes', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -32,10 +32,18 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
   assert(start >= 0 && end > start)
   const skeleton = template.match(/<ConversationSkeleton[\s\S]*?\/>/)?.[0]
   assert.ok(skeleton, 'Use the actual loading condition and activity binding')
+  const continuityStart = template.indexOf('<nav v-if="previousPhysicalId && !viewingPhysicalId"')
+  assert(continuityStart >= 0 && continuityStart < start)
+  const previousNavigation = template.match(/<nav v-if="viewingPhysicalId"[\s\S]*?<\/nav>/)?.[0]
+  assert.ok(previousNavigation)
   const compiled = compileTemplate({
-    source: `<div class="chat-history"><div class="chat-message-list">${skeleton}${template.slice(start, end)}
+    source: `<div>
+      <SessionHeading v-if="compactionFixture" :api-base="apiBase" :session-id="activeSessionId"
+        name="Daily preliminary review" project-name="Default" :topic="headingTopic" :physical-id="viewingPhysicalId"
+        :revision="0" :active="true" :can-rename="true" />
+      <div class="chat-history"><div class="chat-message-list">${skeleton}${template.slice(continuityStart, end)}${previousNavigation}
       <div class="fixture-stages"><SessionActivity v-for="stage in ['idle', 'llm', 'tool', 'waiting', 'completed', 'failed']" :key="stage" :stage="stage" /></div>
-      </div></div>`,
+      </div></div></div>`,
     filename: 'ConversationRows.vue', id: 'data-v-fixture', scoped: true,
   })
   assert.deepEqual(compiled.errors, [])
@@ -66,6 +74,8 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
           import { inlineYieldDecisions } from '/src/yield-history.ts';
           import MessageTimestamp from '/src/components/MessageTimestamp.vue';
           import SessionActivity from '/src/components/SessionActivity.vue';
+          import SessionHeading from '/src/components/SessionHeading.vue';
+          import ConversationSummary from '/src/components/ConversationSummary.vue';
           import { inlineMessageActions } from '/src/message-actions.ts';
           import { groupToolActivity } from '/src/tool-activity.ts';
           import { messageAttachments } from '/src/message-attachments.ts';
@@ -75,7 +85,11 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
           const state = reactive({ loadingHistory:true, messages:[], visible:true, conversationDocumentVisible:true,
             activePanel:'conversation', route:{name:'chat'}, viewingPhysicalId:null, activeSessionId:'web:owner',
             streaming:false, streamContent:'', isDirectChat:true, requestBusy:false, currentRecovery:null,
-            embedded:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]} });
+            embedded:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
+            compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[],
+            headingTopic:{ title:'Daily preliminary review', goal:'Preserve independently verifiable review results.',
+              scope:'Review the current theme and brand kit.\\nDocument changes since the previous review.',
+              nonGoals:'Do not publish or change the source materials.' } });
           const samples = [
             { role:'user', content:'Please ask the reviewer to check the changes.' },
             { role:'user', content:'I will review the changes and send feedback shortly.',
@@ -93,11 +107,24 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
               content:JSON.stringify({requestId:'budget',option:'Four runs',answeredBy:'timeout',answeredAt:'2026-09-21T10:00:00Z'}) },
           ];
           Object.assign(window, { __conversationFixture:state, __showConversation:() => { state.messages = samples; state.loadingHistory = false } });
+          window.__showCompaction = () => {
+            state.compactionFixture = true; state.previousPhysicalId = 'previous-segment'; state.streaming = false;
+            state.decisionRecords = []; state.decisionRecordError = ''; state.embedded = false; state.navigation = [];
+            state.messages = [{role:'user', isSummary:true, content:'## Previous Conversation Summary\\n\\n' +
+              'Earlier context is preserved for this conversation.\\n\\n### Review outcome\\n\\n' +
+              '- Review of the theme is complete.\\n- Follow-up findings remain available in the execution traces.\\n\\n' +
+              '### Reference\\n\\n' + 'LongReference'.repeat(35)}];
+            state.unlinkedExecutions = [
+              {sessionId:'web:peer',label:'Theme preliminary review with a deliberately long execution title'},
+              {sessionId:'web:peer-2',label:'Verify the review deliverables and scope'},
+              {sessionId:'web:peer-3',label:'Brand kit review / ' + 'UnbrokenTitle'.repeat(24)},
+            ];
+          };
           const empty = { render:() => null };
           createApp({
             __scopeId:'data-v-fixture',
             components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, CollaborationMessage,
-              CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty, ConversationSummary:empty,
+              SessionHeading, ConversationSummary, CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
             setup() {
@@ -114,12 +141,24 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
                 inlineExecutions:{entries:new Map()}, ioAfter:new Map(), expandedThinking:new Set(),
                 toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded]))),
                 inspectExecution:nav.inspectExecution, clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
+                viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },
+                goBackToCurrentSegment(){ state.viewingPhysicalId = null },
                 renderMarkdown:text => DOMPurify.sanitize(marked.parse(text)), isErrorMessage:() => false };
             },
           }).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
+          const details = request.url?.match(/^\/api\/sessions\/([^/]+)\/details(?:\?|$)/)
+          if (details) {
+            response.setHeader('Content-Type', 'application/json')
+            response.end(JSON.stringify({
+              sessionId: decodeURIComponent(details[1]), name: null,
+              workdir: { kind: 'local', displayPath: 'C:\\synthetic\\review' },
+              usage: null, usageScope: 'session', context: { usedTokens: 2400, windowTokens: 100000 },
+            }))
+            return
+          }
           if (request.url?.startsWith('/api/sessions/web%3Aowner/decisions')) {
             response.setHeader('Content-Type', 'application/json')
             response.end(JSON.stringify(request.url.includes('/reviews') ? { reviews: [] } : { records: [{
