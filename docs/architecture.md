@@ -574,7 +574,8 @@ ancestry establishes coordination authority.
 
 Each Project has exactly one `web:orchestrator`, pinned as the default UI routing
 entry. Its built-in role and canonical runtime guard permit only
-read/search/topic/message/initiative, excluding invoke_tool/exec/write/subagent.
+read/search/topic/message/initiative, Project configuration and skill-authoring
+controls, and `yield`, excluding invoke_tool/exec/write/subagent.
 It routes to reusable topics and lets users continue there, rather than owning
 their session hierarchy. Ensuring its existence never automatically runs an LLM.
 
@@ -1048,9 +1049,110 @@ chooses a default. This workflow is not an authorization or capability
 approval mechanism.
 
 Calls, results and policy overrides persist through the normal JSONL/SQLite
-paths. Waiters/timers are process-local, are cancelled on shutdown/deletion,
-and are not resurrected after restart; normal interrupted-tool history
-recovery still applies.
+paths. `YieldRecords` also appends versioned `yield_decision` facts to the
+request's physical segment. The server assigns the request ID and pins its
+segment/tool-call origin before publication. Answers (including timeout
+defaults) are saved before acknowledging or resuming the suspended call;
+concurrent responses cannot replace an in-flight settlement. A persistence
+failure rejects the operation rather than approving work. Cancellation and
+delivery failure record a separate closed outcome. These facts are excluded
+from provider messages and model-history fork offsets.
+
+The optional `sources` argument cites up to three existing decisions by
+`{sessionId, physicalId, requestId}`. Each reference must resolve in this
+Project's session store and belong to the named session segment. The server
+checks existence/identity, not the agent's causal interpretation; linking a
+record neither answers it nor changes routing or permissions. The read-only
+`GET /api/sessions/:key/decisions?physicalId=...` endpoint exposes records for
+one owned segment. JSONL-to-SQLite migration preserves the raw facts; old logs
+without them remain readable through their tool-call/result pairs.
+New answer receipts include a complete `reference` for later citations;
+pending parent notifications expose the same identity through the request's
+`id`, `sessionId` and `origin.physicalId`.
+
+New `yield(action="ask")` calls require a structured `brief`: original goal,
+reason for human judgment, recommendation, tradeoff, blocked/unaffected work,
+and separately typed user constraints, observations, assumptions and proposals.
+`yield(action="context")` provides the on-demand schema and recent attributable
+human inputs from the session and its reporting owner, including older segments.
+Runtime `decision_input` facts record actual human-input envelopes; provider
+role `user`, sender markup and a worker's claim about the user are not proof of
+human authorship. Evidence names its logical session, physical segment,
+input/tool ID and exact quote. A user constraint must equal its human quote;
+observations need a recorded source, otherwise they must remain assumptions.
+This validates provenance, not the truth, completeness or interpretation of
+the source. Older traces without these facts cannot retroactively prove authorship.
+
+Users can set `decisionOwnerSessionId` through the reporting-responsibility
+control (`GET/POST /api/sessions/:key/decisions/owner`). The setting persists
+in both stores, targets an existing durable root in this Project, and is
+captured in each question as `reportingSessionId`. It does not reparent a
+session, delegate answering rights or transfer Initiative assignments.
+Changing it while a question is pending is rejected. A separate normal
+SessionManager input asks that reporter to check premises and synthesize a
+self-contained explanation rather than forward worker jargon.
+
+`POST /api/sessions/:key/yield/follow-up` accepts an investigation or deferral
+instruction from the original user-addressed session. Unlike clarification,
+it closes the old wait durably and returns `approved:false`, a disposition,
+reason and blocked/unaffected scope to the original tool call. It never selects
+an option. Investigation uses that session's existing tools and permissions;
+deferral permits only already-authorized independent work. The old request
+cannot subsequently be answered. A later question may use `reconsiders` to
+link the earlier version without inheriting it as a still-valid premise.
+
+`yield(action="invalidate")` can invalidate the agent's own recorded premise;
+the authenticated UI can mark a decision obsolete through
+`POST /api/sessions/:key/decisions/invalidate`. An append-only
+`yield_invalidation` fact preserves past answers while read-time traversal
+marks transitive `sources` dependents for revalidation. Missing source records
+also require revalidation rather than implying approval. Dependency traversal
+is bounded to 1000 records; larger closures fail explicitly. New requests and
+answer commits reject obsolete premises. Affected live waits close with an
+explicit non-approval result; durable sessions/reporters receive notifications,
+and resumed contexts include saved restrictions. Scan/notification failures
+are returned explicitly even when the root invalidation is already saved.
+These events do not roll back completed side effects or automatically mutate
+Initiative items. Assignees must maintain their existing guarded work records;
+scope text is not a new per-item scheduler or sandbox.
+
+For a live user-addressed request, `POST /api/sessions/:key/yield/reviews`
+accepts an idempotent clarification or revision request. `YieldDiscussions`
+persists `yield_review` facts in the original segment and keeps one job per
+owner session. Accepted discussion pauses the automatic default for the
+remainder of that wait; failure does not silently restore it. Clarification
+does not select an option, send an ordinary chat input, or resume the blocked
+yield tool. `GET /api/sessions/:key/decisions/reviews` reads that version's
+discussion history. These facts are excluded from provider history/fork offsets.
+
+`SessionManager` runs the explanation through a separate server-owned
+`EphemeralSession`, using the normal model loop but an empty tool registry and
+allowlist. It receives the saved request, direct cited records, up to six earlier
+discussions of this version (agent responses capped at 4000 characters), and at
+most twelve recent conversation messages (1600 characters each). A fixed prompt
+requires distinguishing user constraints, observations, assumptions and missing
+context. This is an explanation of supplied context, not an investigation or
+independent fact check. Work is bounded to three model rounds, 3072 output
+tokens per round and two minutes of model execution. The helper cannot answer
+the original decision or report a task completion to its owner. Shutdown and
+owner deletion abort/drain discussions; persisted running reviews without an
+active job are shown as interrupted, never automatically replayed.
+
+A successful revision records the old request as `superseded` and opens a new
+immutable request in the same segment, retaining owner, recipient, tool-call
+origin and citations. Both versions link to each other; the new version records
+the user's revision instruction and the explanation session. A new request ID
+invalidates old answer controls without resolving the original tool promise.
+Only an explicit answer to the current version resumes it; its receipt includes
+`revisedQuestion` so the model sees the question actually answered. A late
+revision cannot overwrite an already answered or cancelled request. This path
+does not change parent-answer authority or assign cross-topic ownership.
+
+Waiters/timers remain process-local, are cancelled on shutdown/deletion,
+and are not resurrected after restart. An opening with no saved outcome
+means no confirmed answer, not a live wait. Normal interrupted-tool history
+recovery still applies and may produce a new request; an old answer is not
+automatically replayed against that new request.
 
 The `write` tool returns a bounded success report after the filesystem operation
 completes: path, mode, UTF-8 bytes written, resulting line count, and line-numbered
@@ -1735,8 +1837,9 @@ reusing the same markers and scroll navigation instead of covering message text.
 
 Message presentation distinguishes human input from session-to-session handoffs
 and background events using recorded source envelopes, independently of the
-model protocol's `user` role. Incoming session messages are right-aligned like
-human input, with a dashed border and a labelled source-session link; they remain
+model protocol's `user` role. Human input uses a blue-tinted surface and border;
+incoming session messages stay right-aligned but use a neutral surface, dashed
+border and labelled source-session link. They remain
 excluded from human resend actions. Trace provides a separate `SESSION` filter and keeps the original
 envelope available as raw evidence. Missing legacy provenance is not inferred
 from a sender name or session-like ID; these labels do not grant permissions.
@@ -1745,7 +1848,65 @@ projections, so progress and request cards do not wait for a history reload to
 show their origin. Their headings open the source conversation (or its read-only
 execution trace). Human-history markers scroll to the corresponding rendered
 message in the current pane, suspending automatic bottom jumps until the user
-returns to the bottom or sends another message. Sidebar yields show a highlighted **Needs reply**
+returns to the bottom or sends another message. Explicit peer progress and
+acknowledgement updates are grouped
+in the rail across intervening assistant/tool activity; the group expands into
+individually navigable messages. Human input, explicit peer requests/questions/
+handoffs, unclassified peer messages, decisions, completion events and context boundaries are not folded into
+these groups. Blue human marks, neutral collaboration marks and thicker horizontal rectangular decision
+marks distinguish sources and decisions without relying on color alone; the
+mobile history list exposes the same grouping. Long explicit progress and
+acknowledgement messages (over 600 characters) show a deterministic excerpt
+with lazy full-content expansion; requests/questions and unclassified messages
+are not automatically folded.
+
+`yield` calls render as decision records rather than generic tool activity, with
+the question, choices, paired answer and raw receipt available. User answers,
+parent answers and timeout defaults remain distinct. Failed or unconfirmed
+receipts never imply approval or an active wait. Only the validated live yield
+endpoint marks a record as **Needs your reply** or **Waiting for parent**, including
+when the matching tool call has not loaded yet. Decision previews and history
+anchors use the same presentation as the conversation. Existing composer controls
+remain the only answering surface; historical cards cannot answer old questions.
+Authorized users may mark historical premises obsolete without rewriting answers. Durable
+records retain identities and distinguish cancelled requests from failed
+or unconfirmed requests, even before ordinary tool results have been saved.
+Unanchored records remain navigable instead of disappearing with an incomplete
+tool pair. Web decision cards can expand agent-selected source references to
+read the original question, choices and recorded outcome from its pinned
+segment, or open that source session. Lookup failures are explicit and cannot
+leave stale source content visible. This preview never provides answer controls
+or claims that an unresolved historical source is currently waiting.
+
+Current user-addressed questions provide separate explanation/revision and
+investigation/deferral controls,
+without consuming the ordinary composer draft. Historical discussions remain
+read-only except for the explicit premise-invalidation action. A lazy decision
+relationship graph follows citations, recorded revisions and historical
+reconsideration links, retaining shared references and cycles without duplicating
+nodes. Reads stay within the current Project API base and validate full
+session/segment/request identities. Graph expansion is bounded to 16 nodes and
+five reference steps; missing sources and truncation remain explicit. Selecting
+a node exposes the original question/options, recorded outcome, recipient and
+identity, never answer controls. Dashed citations are agent-selected references,
+not verified causes or reporting relationships; solid edges record revisions.
+The graph is a refreshed historical snapshot, not proof of a live wait.
+Its inspector renders the structured goal/evidence/assumption/recommendation/
+impact flow, with exact source excerpts and distinct unverified proposal nodes.
+Old records without briefs say so; the UI does not fabricate a rationale.
+
+Decision guidance asks agents to verify premises and investigate alternatives
+before escalating, distinguish user constraints from worker recommendations, and
+write self-contained questions covering the original goal, evidence/uncertainty,
+the reason for human input, recommendation/tradeoffs and blocked/unaffected work.
+The brief shape and source authorship are validated, but abstraction quality,
+comprehension and causal interpretation remain agent responsibilities, not
+enforced proof or permission. Cross-topic reporting ownership is independent of
+answer authority. Synthetic grader replay tests cover recommendation-versus-
+user-constraint provenance and lifecycle behavior; they do not establish the
+reliability of an unconstrained model's reasoning or independently verify causes.
+
+Sidebar yields show a highlighted **Needs reply**
 badge; folded folder, bot, automation and conversation-family indicators
 prioritize those waits over running work, without treating blocking calls as
 requests for a reply.

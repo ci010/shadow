@@ -111,6 +111,8 @@
               :running="streaming && !viewingPhysicalId" @inspect="inspectExecution" @interact="clearSelection">
               <div class="prose" v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
             </MessageAction>
+            <YieldDecision v-else-if="yieldDecisions.entries.has(idx)" :decision="yieldDecisions.entries.get(idx)!"
+              :api-base="apiBase" :data-msg-idx="idx" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!"
               :running="streaming && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
               @interact="clearSelection" />
@@ -155,7 +157,10 @@
                 </div>
                 <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
               </div>
-              <div v-if="msg.attachmentBody.text" class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
+              <CollaborationMessage v-if="msg.sessionSource && ['progress', 'acknowledgement'].includes(msg.sessionSource.intent || '') && msg.attachmentBody.text.length > 600" :content="msg.attachmentBody.text">
+                <div class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
+              </CollaborationMessage>
+              <div v-else-if="msg.attachmentBody.text" class="chat-content prose" v-html="renderMarkdown(msg.attachmentBody.text)" />
               <div
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
@@ -174,6 +179,12 @@
             </div>
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </template>
+          <YieldDecision v-for="[index, decision] in [...yieldDecisions.entries].filter(([index]) => index >= displayMessages.length)"
+            :key="decision.requestId" :decision="decision" :api-base="apiBase"
+            :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
+          <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
+            <button type="button" @click="refreshDecisionRecords">Retry decision history</button>
+          </p>
           <IoRequestCard v-for="run in ioAfter.get(-1)" :key="run.id" :run="run" :base="apiBase" />
           <details v-if="ioEarlier.length" class="unlinked-executions">
             <summary>Earlier captures · {{ ioEarlier.length }}</summary>
@@ -216,9 +227,11 @@
           <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
           <span v-if="!isWaitingStage(sessionStage)" class="working-wave" aria-hidden="true"><i /><i /><i /></span>
         </div>
+        <DecisionOwner v-if="activeSessionId && !isCall && !viewingPhysicalId && installation.uiScopes.includes('chat:write')" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId" />
         <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
-          :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled" />
+          :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled"
+          @request="handleYieldRequest" @inspect="inspectExecution" />
         <CredentialRequest v-if="activeSessionId === 'web:orchestrator'" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
@@ -406,6 +419,11 @@ import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
 import YieldQuestion from './YieldQuestion.vue'
+import DecisionOwner from './DecisionOwner.vue'
+import CollaborationMessage from './CollaborationMessage.vue'
+import YieldDecision from './YieldDecision.vue'
+import { inlineYieldDecisions, parseDecisionRecords } from '../yield-history.ts'
+import type { YieldRequest, YieldDecisionRecord } from '../../../src/sessions/yield-contract.ts'
 import CredentialRequest from './CredentialRequest.vue'
 import PublicationRequest from './PublicationRequest.vue'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
@@ -434,7 +452,7 @@ import type { SessionDetails } from '../session-details.ts'
 import { appendChatAttachments, canSendChatMessage, clipboardImageFiles, droppedChatFiles, composeImageReferenceMessage, revokeChatAttachmentPreviews, updateImageAttachment, uploadChatAttachments, type PendingChatAttachment } from '../chat-attachments.ts'
 import { hasImageReference, readImageReference, type ImageContextBusy, type ImageContextUpdate } from '../image-context.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
-import { isUserMessage, resendableUserMessage, messageHistoryMarkers } from '../message-history.ts'
+import { isUserMessage, resendableUserMessage, messageHistoryMarkers, groupMessageHistoryMarkers } from '../message-history.ts'
 import CommandResult from './CommandResult.vue'
 import { mergeCommandResults } from '../command-results.ts'
 import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-commands/receipt.ts'
@@ -1071,8 +1089,54 @@ const unlinkedExecutions = computed(() => {
   return ownedExecutions(allSessions.value, activeSessionId.value).filter(execution => !linked.has(execution.sessionId))
 })
 const messageActions = computed(() => inlineMessageActions(displayMessages.value, allSessions.value))
+const pendingYield = shallowRef<YieldRequest | null>(null)
+const decisionRecords = shallowRef<YieldDecisionRecord[]>([])
+const decisionRecordError = ref('')
+let decisionRecordRequest: AbortController | undefined
+const yieldDecisions = computed(() => inlineYieldDecisions(
+  displayMessages.value, !viewingPhysicalId.value && sessionStage.value === 'waiting'
+    && pendingYield.value?.sessionId === activeSessionId.value ? pendingYield.value : null, decisionRecords.value,
+))
+
+function handleYieldRequest(request: YieldRequest | null) {
+  if (disposed) return
+  const previous = pendingYield.value
+  pendingYield.value = request
+  if (request?.sessionId === activeSessionId.value && request.origin && !viewingPhysicalId.value) {
+    if (!decisionRecords.value.some(record => record.request.id === request.id)) {
+      decisionRecords.value = [...decisionRecords.value, { request }]
+    }
+    if (previous && previous.id !== request.id) void refreshDecisionRecords()
+  } else if (!request && previous?.origin && previous.sessionId === activeSessionId.value && !viewingPhysicalId.value) {
+    void refreshDecisionRecords()
+  }
+}
+
+async function refreshDecisionRecords() {
+  decisionRecordRequest?.abort()
+  const controller = new AbortController()
+  decisionRecordRequest = controller
+  const sessionId = activeSessionId.value
+  const physicalId = viewingPhysicalId.value
+  if (!sessionId) return
+  try {
+    const response = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/decisions`,
+      physicalId ? { physicalId } : undefined), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) })
+    if (!response.ok) throw new Error('Could not refresh decision history.')
+    const data = await response.json()
+    const records = parseDecisionRecords(data.records)
+    if (!controller.signal.aborted && activeSessionId.value === sessionId && viewingPhysicalId.value === physicalId) {
+      decisionRecords.value = records
+      decisionRecordError.value = ''
+    }
+  } catch (cause) {
+    if (!controller.signal.aborted && activeSessionId.value === sessionId && viewingPhysicalId.value === physicalId) {
+      decisionRecordError.value = cause instanceof Error ? cause.message : 'Could not refresh decision history.'
+    }
+  }
+}
 const toolActivity = computed(() => groupToolActivity(displayMessages.value, new Set([
-  ...inlineExecutions.value.excluded, ...messageActions.value.excluded,
+  ...inlineExecutions.value.excluded, ...messageActions.value.excluded, ...yieldDecisions.value.excluded,
 ])))
 const allSessions = ref<SidebarSession[]>([])
 const sessionsLoading = ref(false)
@@ -1626,6 +1690,9 @@ function resetConversation(): void {
   clearSelection()
   disconnectEventStream()
   messages.value = []
+  decisionRecordRequest?.abort()
+  decisionRecords.value = []
+  decisionRecordError.value = ''
   historyBrowsing = false
   historyLeftBottom = false
   streamContent.value = ''
@@ -1674,6 +1741,8 @@ async function loadDirectChat(background = false): Promise<void> {
     const container = messagesContainer.value
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     messages.value = mergeCommandResults(collapseHistory(data.history ?? []), data.commandResults)
+    decisionRecords.value = parseDecisionRecords(data.decisionRecords ?? [])
+    decisionRecordError.value = ''
     if (!sendRequest && !streaming.value) {
       streaming.value = false
       streamContent.value = ''
@@ -1733,6 +1802,8 @@ async function loadReadonlySession(background = false): Promise<void> {
     followBottom = !container || container.scrollHeight - container.scrollTop - container.clientHeight < 32
     const rawMessages: RawMessage[] = histData.messages ?? []
     messages.value = mergeCommandResults(collapseHistory(rawMessages), histData.commandResults)
+    decisionRecords.value = parseDecisionRecords(histData.decisionRecords ?? [])
+    decisionRecordError.value = ''
     previousPhysicalId.value = histData.previousPhysicalId ?? null
     if (!background) {
       viewingPhysicalId.value = null
@@ -1776,6 +1847,8 @@ async function viewPreviousSegment(): Promise<void> {
     const rawMessages: RawMessage[] = data.messages ?? []
     physicalIdStack.value.push(viewingPhysicalId.value ?? '')
     messages.value = mergeCommandResults(collapseHistory(rawMessages), data.commandResults)
+    decisionRecords.value = parseDecisionRecords(data.decisionRecords ?? [])
+    decisionRecordError.value = ''
     viewingPhysicalId.value = physId
     previousPhysicalId.value = data.previousPhysicalId ?? null
     composerError.value = ''
@@ -2307,6 +2380,7 @@ const onGlobalConfigChanged = (event: Event) => {
 window.addEventListener('shadow:config-changed', onGlobalConfigChanged)
 onUnmounted(() => {
   disposed = true
+  decisionRecordRequest?.abort()
   dockObserver?.disconnect()
   settingsRequest?.abort()
   sessionSelectionGeneration++
@@ -2394,7 +2468,9 @@ watch(composerDock, element => {
 }, { flush: 'post' })
 const resendCandidate = computed(() => resendableUserMessage(messages.value))
 const canResend = computed(() => !requestBusy.value && !currentRecovery.value && !!resendCandidate.value)
-const historyMarkers = computed(() => messageHistoryMarkers(messages.value, allSessions.value))
+const historyMarkers = computed(() => groupMessageHistoryMarkers(
+  messageHistoryMarkers(messages.value, allSessions.value, yieldDecisions.value.entries), messages.value,
+))
 
 function resendLastMessage() {
   const message = resendCandidate.value
@@ -2683,7 +2759,7 @@ function resendLastMessage() {
   align-self: flex-end;
   background: var(--c-chat-user-bg);
   color: var(--c-text);
-  border-color: var(--c-chat-border);
+  border-color: var(--c-selection-border);
 }
 
 .chat-assistant {
@@ -2692,7 +2768,7 @@ function resendLastMessage() {
   color: var(--c-text);
 }
 
-.chat-session { box-shadow: none; border-style: dashed; }
+.chat-session { box-shadow: none; border-style: dashed; border-color: var(--c-chat-border); background: var(--c-bg-soft); }
 .chat-session-source { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 12px; text-align: left; }
 button.chat-session-source { cursor: pointer; }
 button.chat-session-source:hover { color: var(--c-text); text-decoration: underline; }

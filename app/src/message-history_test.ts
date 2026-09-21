@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formatMessageTime, messageTime, resendableUserMessage, messageHistoryMarkers } from './message-history.ts'
+import { formatMessageTime, messageTime, resendableUserMessage, messageHistoryMarkers, groupMessageHistoryMarkers, type HistoryMessage } from './message-history.ts'
 import { parseLiveSessionMessage } from './chat-events.ts'
 
 test('resend targets only a trailing human message and preserves its attachments', () => {
@@ -128,4 +128,49 @@ test('missing or invalid historical timestamps never turn into current time', ()
     assert.equal(time.dateTime, undefined)
     assert.equal(time.label, 'Time unavailable')
   }
+})
+
+test('routine collaboration groups across assistant and tool activity while preserving per-message anchors', () => {
+  const messages: HistoryMessage[] = [
+    { role: 'user', content: 'Start' },
+    { role: 'user', content: 'Checking', sessionSource: { id: 'a', intent: 'progress' } },
+    { role: 'assistant', content: 'Continue investigating' },
+    { role: 'assistant', content: 'read({})', event: 'tool_call' },
+    { role: 'tool', content: 'Read result', event: 'tool_result' },
+    { role: 'user', content: 'Acknowledged', sessionSource: { id: 'b', intent: 'acknowledgement' } },
+    { role: 'user', content: 'Checking again', sessionSource: { id: 'a', intent: 'progress' } },
+    { role: 'user', content: 'My next instruction' },
+  ]
+  const grouped = groupMessageHistoryMarkers(messageHistoryMarkers(messages), messages)
+  assert.deepEqual(grouped.map(marker => marker.kind), ['user', 'collaboration', 'user'])
+  assert.deepEqual(grouped[1].members?.map(member => member.index), [1, 5, 6])
+  assert.equal(grouped[1].source, '3 messages · 2 sessions')
+  assert.equal(grouped[1].preview, 'Checking again')
+})
+
+test('decisions, explicit requests, completion events and context boundaries break collaboration groups', () => {
+  const progress: HistoryMessage = { role: 'user', content: 'Update', sessionSource: { id: 'a', intent: 'progress' } }
+  const decision: HistoryMessage = { role: 'assistant', event: 'tool_call', content: '', toolCallId: 'ask',
+    toolCall: { name: 'yield', arguments: { question: 'Increase budget?', options: ['Yes', 'No'], default_option: 'No' } } }
+  for (const boundary of [
+    { role: 'user', content: 'Question', sessionSource: { id: 'b', intent: 'question' } },
+    { role: 'user', content: 'Request', sessionSource: { id: 'b', intent: 'request' } },
+    { role: 'user', content: 'Handoff', sessionSource: { id: 'b', intent: 'handoff' } },
+    { role: 'user', content: 'Unclassified update or decision request', sessionSource: { id: 'b' } },
+    { role: 'user', content: 'Done', isSystemEvent: true, eventMeta: { type: 'subagent-complete', source: 'a', attrs: {} } },
+    { role: 'user', content: 'Context', isSummary: true },
+    { role: 'command', content: 'Mode changed' },
+    decision,
+  ]) {
+    const messages = [progress, boundary, progress]
+    const markers = groupMessageHistoryMarkers(messageHistoryMarkers(messages), messages)
+    assert.equal(markers.some(marker => marker.kind === 'collaboration'), false)
+  }
+  const messages = [decision, { role: 'tool', event: 'tool_result', toolCallId: 'ask',
+    content: JSON.stringify({ requestId: 'r', option: 'No', answeredBy: 'timeout', answeredAt: '2026-09-21T10:00:00Z' }) }]
+  const markers = messageHistoryMarkers(messages)
+  assert.equal(markers.length, 1)
+  assert.equal(markers[0].kind, 'decision')
+  assert.match(markers[0].label, /timeout/)
+  assert.match(markers[0].preview, /Increase budget\?.*Response: No/s)
 })

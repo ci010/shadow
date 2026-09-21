@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { decisionBrief } from '../testing/decision.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
@@ -27,7 +29,7 @@ import type { OutboundMessage } from '../bus/events.ts'
 const question = { question: 'Which approach?', options: ['Continue', 'Change approach', 'Stop'], default_option: 'Continue' }
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
-const ask = (input = question): LLMResponse => ({ content: '', toolCalls: [{ id: 'ask-call', name: 'yield', arguments: input }] })
+const ask = (input = question, brief = decisionBrief): LLMResponse => ({ content: '', toolCalls: [{ id: 'ask-call', name: 'yield', arguments: { ...input, brief } }] })
 const message = (id: string): SessionMessageInput => ({
   kind: 'message', id, content: 'Start', timestamp: new Date().toISOString(), policy: 'queue',
   source: { kind: 'event', eventId: id, type: 'test', source: 'fixture' },
@@ -41,7 +43,7 @@ async function waitFor(predicate: () => boolean) {
 }
 
 function fixture(workspace: string, store: SessionStore, deliverYield?: (message: OutboundMessage) => Promise<void>) {
-  const calls: Array<{ sessionId: string; messages: ChatMessage[]; resolve: (response: LLMResponse) => void }> = []
+  const calls: Array<{ sessionId: string; messages: ChatMessage[]; toolCount: number; resolve: (response: LLMResponse) => void }> = []
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => ['fixture'],
     async chat(messages, _tools, options) {
@@ -50,7 +52,7 @@ function fixture(workspace: string, store: SessionStore, deliverYield?: (message
       assert.ok(signal)
       const abort = () => pending.reject(signal.reason)
       signal.addEventListener('abort', abort, { once: true })
-      calls.push({ sessionId: String(messages[0]?.content), messages: structuredClone(messages), resolve: pending.resolve })
+      calls.push({ sessionId: String(messages[0]?.content), messages: structuredClone(messages), toolCount: _tools?.length ?? 0, resolve: pending.resolve })
       try { signal.throwIfAborted(); return await pending.promise }
       finally { signal.removeEventListener('abort', abort) }
     },
@@ -93,6 +95,143 @@ async function answer(app: Hono, sessionId: string, requestId: string, option: s
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: reporting ownership and non-answer follow-up use normal session execution without granting peer answer rights`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.prepareCommandSession('web:coordinator')
+        await f.sessions.prepareCommandSession('web:worker')
+        const owner = await f.app.request('/api/sessions/web%3Aworker/decisions/owner', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reportingSessionId: 'web:coordinator' }) })
+        assert.equal(owner.status, 200)
+        assert.equal((await store.getState('web:worker'))?.decisionOwnerSessionId, 'web:coordinator')
+        const goal = "Run fresh Off/On using Herman's existing grader pipeline, within four runs."
+        await f.sessions.deliver('web:worker', channelMessageInput({ channel: 'web', chatId: 'worker', senderId: 'alice',
+          messageId: 'scoped-work', content: goal, timestamp: new Date().toISOString(), isGroup: false }))
+        await waitFor(() => f.calls.length === 1)
+        const evidence = (await f.sessions.decisionContext('web:worker')).userInputs[0]!
+        assert.equal(evidence.quote, goal)
+        f.calls[0]!.resolve(ask(question, { ...decisionBrief, claims: [
+          { kind: 'user_constraint', text: goal, evidence }, { kind: 'proposal', text: 'Consider a v6 adapter, only if no existing path works.' },
+        ] }))
+        await waitFor(() => !!f.sessions.yields.get('web:worker'))
+        await waitFor(() => f.calls.length === 2)
+        const request = f.sessions.yields.get('web:worker')!
+        assert.equal(request.reportingSessionId, 'web:coordinator')
+        assert.deepEqual(request.recipient, { kind: 'user', sessionId: 'web:worker' })
+        assert.match(JSON.stringify(f.calls[1]!.messages), /human-selected reporting owner/)
+        assert.match(JSON.stringify(f.calls[1]!.messages), /user_constraint/)
+        assert.equal((await f.sessions.decisionContext('web:coordinator')).userInputs.length, 0, 'Session reports never become human-input evidence')
+        assert.throws(() => f.sessions.yields.answerParent('web:coordinator', request.id, 'Continue'), /stored parent/)
+        f.calls[1]!.resolve(done())
+        const response = await f.app.request('/api/sessions/web%3Aworker/yield/follow-up', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: request.id, kind: 'investigation', reason: 'Check the existing pipeline instead of expanding scope.' }) })
+        assert.equal(response.status, 200)
+        assert.equal((await response.json()).continuation.approved, false)
+        await waitFor(() => f.calls.length === 3)
+        const result = JSON.parse(String(f.calls[2]!.messages.find(item => item.tool_call_id === 'ask-call')?.content))
+        assert.equal(result.disposition, 'investigation')
+        assert.equal(result.option, undefined)
+        assert.deepEqual(result.unaffected, decisionBrief.unaffected)
+        f.calls[2]!.resolve(done())
+        await waitFor(() => f.facts.some(fact => fact.sessionId === 'web:worker'))
+        await f.sessions.stop()
+        await f.sessions.start()
+        await f.sessions.deliver('web:worker', message('continue-independent'))
+        await waitFor(() => f.calls.length === 4)
+        assert.match(String(f.calls[3]!.messages[0]?.content), /Recorded decision restrictions/)
+        assert.match(String(f.calls[3]!.messages[0]?.content), /investigation/)
+        f.calls[3]!.resolve(done())
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  for (const operation of ['stop', 'delete'] as const) test(`${Store.name}: ${operation} aborts and drains a running explanation without resuming its owner`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver('web:review-stop', message('review-stop'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0]!.resolve(ask())
+        await waitFor(() => !!f.sessions.yields.get('web:review-stop'))
+        const request = f.sessions.yields.get('web:review-stop')!
+        const review = await f.sessions.yieldDiscussions.start('web:review-stop', request.id, randomUUID(), 'clarify', 'Explain')
+        await waitFor(() => f.calls.length === 2)
+        if (operation === 'stop') {
+          await f.sessions.stop()
+          assert.equal((await f.sessions.yieldDiscussions.read(review.reference))[0]?.status, 'failed')
+          assert.equal((await f.sessions.getYieldRecords('web:review-stop'))[0]?.answer, undefined)
+        } else {
+          const deleted = await f.sessions.deleteSession('web:review-stop')
+          assert.ok(deleted.includes(review.sessionId), 'Owner deletion also removes its drained explanation trace')
+          assert.equal(f.sessions.getSessionState(review.sessionId), null)
+        }
+        assert.equal(f.sessions.yieldDiscussions.active, false)
+        assert.equal(f.calls.length, 2)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: HTTP discussions use a tool-free session while the original tool waits for the revised answer`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver('web:review', message('review-input'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0]!.resolve(ask())
+        await waitFor(() => !!f.sessions.yields.get('web:review'))
+        const original = f.sessions.yields.get('web:review')!
+        const post = (kind: string, requestId = original.id) => f.app.request('/api/sessions/web%3Areview/yield/reviews', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: randomUUID(), requestId, kind, question: 'Explain the original constraint and remove the expansion assumption.' }),
+        })
+        const response = await post('clarify')
+        assert.equal(response.status, 202)
+        const review = (await response.json()).review
+        await waitFor(() => f.calls.length === 2)
+        assert.equal(f.calls[1]!.toolCount, 0)
+        assert.match(String(f.calls[1]!.messages[0]!.content), /Neither clarification nor revision is approval/)
+        f.calls[1]!.resolve({ content: '', toolCalls: [{ id: 'not-available', name: 'yield',
+          arguments: { action: 'answer', request_id: original.id, option: 'Continue' } }] })
+        await waitFor(() => f.calls.length === 3)
+        assert.equal(f.sessions.yields.get('web:review')?.id, original.id)
+        assert.equal(f.calls[2]!.toolCount, 0)
+        f.calls[2]!.resolve({ content: 'The expansion was an agent suggestion, not a user requirement.', toolCalls: [] })
+        await waitFor(() => !f.sessions.yieldDiscussions.active)
+        const history = await f.app.request(`/api/sessions/web%3Areview/decisions/reviews?physicalId=${encodeURIComponent(review.reference.physicalId)}&requestId=${original.id}`)
+        assert.equal(history.status, 200)
+        assert.equal((await history.json()).reviews[0].status, 'completed')
+        assert.equal(f.calls.length, 3, 'Explanation must not resume the original model')
+        assert.equal(f.sessions.yields.get('web:review')?.timeoutPaused, true)
+        assert.equal((await post('revise')).status, 202)
+        await waitFor(() => f.calls.length === 4)
+        assert.match(JSON.stringify(f.calls[3]!.messages), /The expansion was an agent suggestion, not a user requirement/,
+          'Follow-up discussion must retain the earlier explanation without treating it as user instruction')
+        f.calls[3]!.resolve({ content: JSON.stringify({ question: 'Keep the existing budget?', options: ['Keep it', 'Stop'], brief: decisionBrief,
+          defaultOption: 'Stop', explanation: 'Removed the unsupported assumption.' }), toolCalls: [] })
+        await waitFor(() => !f.sessions.yieldDiscussions.active)
+        const revised = f.sessions.yields.get('web:review')!
+        assert.notEqual(revised.id, original.id)
+        assert.equal((await answer(f.app, 'web:review', original.id, 'Continue')).status, 404)
+        assert.equal((await answer(f.app, 'web:review', revised.id, 'Keep it')).status, 200)
+        await waitFor(() => f.calls.length === 5)
+        const result = f.calls[4]!.messages.find(item => item.tool_call_id === 'ask-call')
+        assert.equal(JSON.parse(String(result?.content)).revisedQuestion.question, 'Keep the existing budget?')
+        f.calls[4]!.resolve(done())
+        await waitFor(() => f.facts.some(fact => fact.sessionId === 'web:review'))
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: custom HTTP and channel replies resume and persist the same tool call`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -216,6 +355,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         f.calls[0]!.resolve(ask())
         await waitFor(() => !!f.sessions.yields.get('web:root'))
         const request = f.sessions.yields.get('web:root')!
+        assert.equal(request.origin?.toolCallId, 'ask-call')
+        assert.deepEqual(await (await f.app.request('/api/sessions/web:root/decisions')).json(), { records: [{ request }] })
+        assert.equal((await f.app.request('/api/sessions/web:root/decisions?physicalId=foreign-segment')).status, 404)
         await delay(35)
         assert.equal(f.calls.length, 1, 'Explicit infinite session policy overrides a finite global default')
         assert.equal(request.deadline, null)
@@ -224,6 +366,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal((await answer(f.app, 'web:root', request.id, 'invalid')).status, 400)
         assert.equal(f.sessions.yields.get('web:root')?.id, request.id)
         assert.equal((await answer(f.app, 'web:root', request.id, 'Change approach')).status, 200)
+        const recorded = (await (await f.app.request('/api/sessions/web:root/decisions')).json()).records
+        assert.equal(recorded[0]?.answer?.option, 'Change approach', 'HTTP success includes a durable answer even before the ordinary tool receipt')
+        assert.deepEqual(recorded[0]?.answer?.reference, {
+          sessionId: request.sessionId, physicalId: request.origin!.physicalId, requestId: request.id,
+        }, 'Resolved decisions supply a complete reference for later escalation')
         assert.equal((await answer(f.app, 'web:root', request.id, 'Stop')).status, 404)
         await waitFor(() => f.calls.length === 2)
         const result = f.calls[1]!.messages.find(item => item.role === 'tool' && item.tool_call_id === 'ask-call')
@@ -355,6 +502,37 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 }
+
+test('peer decision references give context without granting parent answer authority', async () => {
+  await withTempWorkspace(async workspace => {
+    const store = new JsonlSessionStore(join(workspace, 'sessions'))
+    await store.init()
+    const f = fixture(workspace, store)
+    try {
+      await f.sessions.start()
+      for (const id of ['web:worker', 'web:coordinator']) await f.sessions.buildSession(id)
+      const input = { question: question.question, options: ['Continue', 'Stop'] as [string, string], defaultOption: 'Stop' }
+      const first = f.sessions.yields.ask('web:worker', input, new AbortController().signal)
+      await waitFor(() => !!f.sessions.yields.get('web:worker'))
+      const source = f.sessions.yields.get('web:worker')!
+      const sources = [{ sessionId: source.sessionId, physicalId: source.origin!.physicalId, requestId: source.id }]
+      const next = f.sessions.yields.ask('web:coordinator', { ...input, sources }, new AbortController().signal)
+      await waitFor(() => !!f.sessions.yields.get('web:coordinator'))
+      const coordinator = f.sessions.yields.get('web:coordinator')!
+      assert.deepEqual(coordinator.recipient, { kind: 'user', sessionId: 'web:coordinator' })
+      assert.throws(() => f.sessions.yields.answerParent('web:coordinator', source.id, 'Stop'), /stored parent/)
+      await f.sessions.yields.answerUser('web:coordinator', coordinator.id, 'Stop')
+      await next
+      assert.equal(f.sessions.yields.get('web:worker')?.id, source.id, 'A linked decision is not implicitly answered')
+      const cancelled = assert.rejects(first, { name: 'AbortError' })
+      await f.sessions.yields.cancelUser('web:worker', source.id)
+      await cancelled
+      const records = await f.sessions.getYieldRecords('web:coordinator')
+      assert.deepEqual(records[0]?.request.sources, sources)
+      assert.equal((await f.sessions.getYieldRecords('web:worker'))[0]?.closed?.reason, 'cancelled')
+    } finally { await f.sessions.stop() }
+  })
+})
 
 test('yield configuration, channel commands and parent-routing edge cases', async t => {
   assert.deepEqual(ToolsSchema.parse({ yield: {} }).yield, { timeoutMs: null })

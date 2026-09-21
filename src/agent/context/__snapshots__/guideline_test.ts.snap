@@ -169,6 +169,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -531,6 +542,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -700,6 +722,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -961,6 +994,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -1190,6 +1234,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -1509,6 +1564,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -1788,6 +1854,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -1973,6 +2050,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -2150,6 +2238,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -2362,6 +2461,17 @@ started: inspect the outcome before any retry, especially writes.
 ### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.

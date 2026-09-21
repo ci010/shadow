@@ -5,6 +5,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
 import { LiveFixture } from './live-fixture.ts'
+import type { YieldDecisionRecord, YieldRequest, YieldReview } from '../../../src/sessions/yield-contract.ts'
+import { decisionBrief } from '../../../src/testing/decision.ts'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -31,7 +33,7 @@ const child = 'sub:yield-fixture'
 const sessions = [root, reflector, child].map((sessionId, index) => ({
   sessionId, title: ['Yield root', 'Yield reflector', 'Yield child'][index], current: `physical-${index}`,
 }))
-const question = (sessionId: string, id: string, parent = false) => ({
+const question = (sessionId: string, id: string, parent = false): YieldRequest => ({
   id, sessionId, question: 'Which approach should continue this task?',
   options: ['Make the smallest safe change', 'Refactor the implementation with focused tests', 'Leave the existing implementation unchanged'],
   defaultOption: 'Make the smallest safe change',
@@ -39,6 +41,11 @@ const question = (sessionId: string, id: string, parent = false) => ({
   createdAt: '2026-09-13T12:00:00.000Z', deadline: null as string | null,
 })
 const pending = new Map<string, ReturnType<typeof question>>()
+const decisionRecords = new Map<string, YieldDecisionRecord>()
+const reviews: YieldReview[] = []
+const owners = new Map<string, string>()
+const followUps: { requestId: string; kind: string }[] = []
+const recordsFor = (sessionId: string) => [...decisionRecords.values()].filter(record => record.request.sessionId === sessionId)
 const live = new LiveFixture()
 const failures: string[] = []
 const answers: { requestId: string; option?: string; customText?: string }[] = []
@@ -72,11 +79,68 @@ const server = createServer(async (request, response) => {
       sessions, nodes: sessions.map(item => ({ physicalId: item.current, logicalId: item.sessionId, parentPhysicalId: null, isCurrent: true })),
     })
     if (path === '/api/sessions/stages') return json({ stages: Object.fromEntries(sessions.map(item => [item.sessionId, pending.has(item.sessionId) ? 'waiting' : 'idle'])) })
-    if (path === '/api/chat/session') return json({ history: [{ role: 'user', content: 'Synthetic question test' }, ...live.history(`web:${url.searchParams.get('chatId')}`)], tools: [], systemPrompt: '' })
+    if (path === '/api/chat/session') return json({ history: [{ role: 'user', content: 'Synthetic question test' }, ...live.history(`web:${url.searchParams.get('chatId')}`)],
+      decisionRecords: recordsFor(`web:${url.searchParams.get('chatId')}`), tools: [], systemPrompt: '' })
     if (path === '/api/chat/send') { sends++; return json({ error: 'forbidden' }, 403) }
     const match = path.match(/^\/api\/sessions\/([^/]+)(?:\/(.*))?$/)
     if (match) {
       const id = match[1]!
+      if (match[2] === 'decisions/owner') {
+        if (request.method === 'POST') {
+          let body = ''
+          for await (const chunk of request) body += chunk
+          owners.set(id, JSON.parse(body).reportingSessionId)
+        }
+        return json({ reportingSessionId: owners.get(id) ?? id,
+          candidates: sessions.filter(item => item.sessionId !== child).map(item => ({ sessionId: item.sessionId, label: item.title })) })
+      }
+      if (match[2] === 'yield/follow-up' || match[2] === 'decisions/invalidate') {
+        let body = ''
+        for await (const chunk of request) body += chunk
+        const input = JSON.parse(body)
+        if (match[2] === 'decisions/invalidate') {
+          const record = decisionRecords.get(input.reference.requestId)!
+          assert.equal(record.request.sessionId, id)
+          record.invalidated = { reference: input.reference, reason: input.reason, at: new Date().toISOString() }
+          return json({ approved: false, affected: [{ sessionId: id, requestId: record.request.id }], notificationErrors: [] })
+        }
+        const current = pending.get(id)!
+        assert.equal(input.requestId, current.id)
+        assert.ok(input.kind === 'investigation' || input.kind === 'deferred')
+        followUps.push(input)
+        decisionRecords.set(current.id, { request: current, closed: { reason: input.kind, at: new Date().toISOString(), message: input.reason } })
+        pending.delete(id)
+        json({ continuation: { requestId: current.id, disposition: input.kind, approved: false,
+          reason: input.reason, blocked: current.brief?.blocked, unaffected: current.brief?.unaffected } })
+        live.finish(id)
+        return
+      }
+      if (match[2] === 'decisions/reviews') return json({ reviews: reviews.filter(review => review.reference.requestId === url.searchParams.get('requestId')) })
+      if (match[2] === 'yield/reviews') {
+        let body = ''
+        for await (const chunk of request) body += chunk
+        const input = JSON.parse(body)
+        const current = pending.get(id)!
+        assert.equal(current.id, input.requestId)
+        assert.ok(current.origin)
+        const reference = { sessionId: id, physicalId: current.origin.physicalId, requestId: current.id }
+        const review: YieldReview = { id: input.id, reference, kind: input.kind, question: input.question,
+          sessionId: `decision-review:${input.id}`, createdAt: new Date().toISOString(), status: 'completed',
+          response: 'The larger refactor is an agent suggestion, not a user requirement.' }
+        if (input.kind === 'revise') {
+          const revised: YieldRequest = { ...current, id: `${current.id}-v2`, decisionId: current.id, supersedes: reference,
+            revisionReason: input.question, revisionSessionId: review.sessionId, question: 'Choose a bounded change without expanding scope.',
+            options: [current.options[0], current.options[1]], timeoutPaused: true }
+          review.replacement = { ...reference, requestId: revised.id }
+          decisionRecords.set(current.id, { request: current, closed: { reason: 'superseded', at: revised.createdAt,
+            message: input.question, replacement: review.replacement } })
+          decisionRecords.set(revised.id, { request: revised })
+          pending.set(id, revised)
+        } else pending.set(id, { ...current, timeoutPaused: true })
+        reviews.push(review)
+        return json({ review }, 202)
+      }
+      if (match[2] === 'decisions') return json({ records: recordsFor(id) })
       if (match[2] === 'background-tasks') return json({ sessionId: id, total: 0, tasks: [] })
       if (match[2] === 'yield') {
         if (request.method === 'GET') { reads++; return json({ request: pending.get(id) ?? null }) }
@@ -102,8 +166,10 @@ const server = createServer(async (request, response) => {
         assert.ok(custom ? input.customText.trim() && input.customText.length <= 4000 : current.options.includes(input.option))
         assert.equal(current.recipient.kind, 'user')
         pending.delete(id)
-        json({ answer: { requestId: input.requestId, option: custom ? input.customText.trim() : input.option,
-          ...(custom ? { custom: true } : {}), answeredBy: 'user', answeredAt: new Date().toISOString() } })
+        const answer = { requestId: input.requestId, option: custom ? input.customText.trim() : input.option,
+          ...(custom ? { custom: true as const } : {}), answeredBy: 'user' as const, answeredAt: new Date().toISOString() }
+        if (current.origin) decisionRecords.set(current.id, { request: current, answer })
+        json({ answer })
         live.chat(id, { event: 'response', content: 'Answer received.', done: true })
         live.finish(id)
         return
@@ -112,7 +178,8 @@ const server = createServer(async (request, response) => {
       if (match[2] === 'context') return json({ systemPrompt: '', tools: [] })
       if (match[2] === 'files') return json({ path: '', entries: [], workdir: { kind: 'local', displayPath: directory } })
       if (match[2] === 'git/status') return json({ available: false, entries: [], reason: 'not_repository' })
-      if (!match[2]) return json({ messages: [{ role: 'assistant', content: 'Synthetic read-only history.' }], previousPhysicalId: null, systemPrompt: '', tools: [] })
+      if (!match[2]) return json({ messages: [{ role: 'assistant', content: 'Synthetic read-only history.' }],
+        decisionRecords: recordsFor(id), previousPhysicalId: null, systemPrompt: '', tools: [] })
     }
     if (path.startsWith('/api/') || path.startsWith('/debug/')) {
       failures.push(`Unstubbed ${request.method} ${path}`)
@@ -172,6 +239,9 @@ async function inspect(window: BrowserWindow, label: string) {
 
 async function runViewport(origin: string, width: number, height: number) {
   pending.clear()
+  decisionRecords.clear()
+  reviews.length = 0
+  owners.clear()
   live.histories.clear()
   const isolated = session.fromPartition(`yield-${width}`, { cache: false })
   isolated.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith(`${origin}/`) }))
@@ -191,9 +261,23 @@ async function runViewport(origin: string, width: number, height: number) {
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(reads, beforeReads, 'Ordinary idle chats must not query a potentially unsupported yield endpoint')
     await evaluate(window, `(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Keep my unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
-    pending.set(root, question(root, `root-${width}`))
+    await evaluate(window, `document.querySelector('.decision-owner').open = true`)
+    await waitFor(window, `!!document.querySelector('.decision-owner select')`)
+    await evaluate(window, `(() => { const input = document.querySelector('.decision-owner select'); input.value = ${JSON.stringify(reflector)}; input.dispatchEvent(new Event('change', {bubbles:true})); })()`)
+    await evaluate(window, `document.querySelector('.decision-owner button').click()`)
+    await waitFor(window, `document.querySelector('.decision-owner').textContent.includes('Assigned to: ${reflector}')`)
+    assert.equal(owners.get(root), reflector)
+    await evaluate(window, `document.querySelector('.decision-owner').open = false`)
+    const initial = { ...question(root, `root-${width}`), brief: decisionBrief, reportingSessionId: reflector,
+      origin: { physicalId: 'physical-0', toolCallId: 'fixture-call' } }
+    pending.set(root, initial)
+    decisionRecords.set(initial.id, { request: initial })
     live.publisher.invalidateSessions(root)
     await waitFor(window, `!!document.querySelector('.yield-question input')`)
+    await waitFor(window, `!!document.querySelector('.yield-decision.waiting-user')`)
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-decision').length`), 1, 'The pending endpoint supplies an anchor before the tool call loads')
+    assert.match(await evaluate<string>(window, `document.querySelector('.yield-decision .decision-status').textContent`), /Needs your reply/)
+    assert.match(await evaluate<string>(window, `document.querySelector('.yield-question .decision-brief').textContent`), /Original goal.*Unverified assumption.*Blocked until decided/s)
     live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'yield', arguments: {} } })
     await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
     assert.match(await evaluate<string>(window, `document.querySelector('.chat-working').textContent`), /Waiting for a response/)
@@ -205,8 +289,34 @@ async function runViewport(origin: string, width: number, height: number) {
     assert.equal(await evaluate(window, `document.querySelector('.yield-question').textContent.includes('No time limit')`), false, 'Indefinite waits do not repeat redundant status copy')
     assert.equal(await evaluate(window, `document.querySelector('.yield-question input:checked').value`), 'Make the smallest safe change')
     const beforeAnswers = answers.length
+    if (width > 600) {
+      await evaluate(window, `document.querySelector('.history-marker.waiting-user').dispatchEvent(new MouseEvent('mouseenter'))`)
+      await waitFor(window, `document.querySelector('.history-preview.decision')?.textContent.includes('Needs your reply')`)
+    }
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(answers.length, beforeAnswers)
+    if (width > 600) {
+      assert.equal(await evaluate(window, `!!document.querySelector('.history-preview.decision')`), true, 'Polling the same immutable request must not dismiss the preview')
+      await evaluate(window, `document.querySelector('.history-marker.waiting-user').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}))`)
+    }
+    const discussion = '.yield-question .decision-discussion'
+    await evaluate(window, `document.querySelector('${discussion}').open = true`)
+    await waitFor(window, `!!document.querySelector('${discussion} textarea')`)
+    await evaluate(window, `(() => { const input = document.querySelector('${discussion} textarea'); input.value = 'Where did the refactor requirement come from?'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
+    await evaluate(window, `document.querySelector('${discussion} .discussion-actions button').click()`)
+    await waitFor(window, `document.querySelector('${discussion}').textContent.includes('not a user requirement')`)
+    assert.equal(answers.length, beforeAnswers)
+    assert.equal(pending.get(root)?.id, initial.id)
+    assert.match(await evaluate<string>(window, `document.querySelector('.yield-question').textContent`), /Automatic default paused/)
+    await evaluate(window, `(() => { const input = document.querySelector('${discussion} textarea'); input.value = 'Preserve the original scope and revise the question.'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
+    await evaluate(window, `document.querySelectorAll('${discussion} .discussion-actions button')[1].click()`)
+    await waitFor(window, `document.querySelector('.yield-question').textContent.includes('Choose a bounded change')`)
+    assert.equal(answers.length, beforeAnswers)
+    assert.equal(sends, 0)
+    assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input[type="radio"]').length`), 2)
+    assert.equal(await evaluate(window, `document.documentElement.scrollWidth > innerWidth`), false)
+    await evaluate(window, `document.querySelector('${discussion}').open = false`)
     await evaluate(window, `document.querySelectorAll('.yield-question input')[1].click()`)
     rejectNext = true
     await evaluate(window, `document.querySelector('.yield-continue').click()`)
@@ -215,8 +325,43 @@ async function runViewport(origin: string, width: number, height: number) {
     assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
     await evaluate(window, `document.querySelector('.yield-continue').click()`)
     await waitFor(window, `!document.querySelector('.yield-question') && !document.querySelector('.composer-input textarea').disabled`)
+    assert.equal(await evaluate(window, `!!document.querySelector('.yield-decision.waiting-user')`), false)
+    await waitFor(window, `document.querySelector('.yield-decision.user')?.textContent.includes('Refactor the implementation')`)
+    assert.match(await evaluate<string>(window, `document.querySelector('.yield-decision.user').textContent`), new RegExp(`root-${width}`), 'The original request identity survives response and history refresh')
     assert.equal(answers.at(-1)?.option, 'Refactor the implementation with focused tests')
     assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+
+    await evaluate(window, `document.querySelector('.yield-decision.user .decision-graph').open = true`)
+    await waitFor(window, `!!document.querySelector('.graph-inspector .basis-graph')`)
+    assert.match(await evaluate<string>(window, `document.querySelector('.graph-inspector .basis-graph').textContent`), /Original goal.*Unverified assumption.*Agent recommendation.*Blocked until decided/s)
+    assert.equal(await evaluate(window, `document.documentElement.scrollWidth > innerWidth`), false)
+    await evaluate(window, `document.querySelector('.yield-decision.user .decision-graph').open = false`)
+    const historical = '.yield-decision.user .decision-discussion'
+    await evaluate(window, `document.querySelector('${historical}').open = true`)
+    await waitFor(window, `!!document.querySelector('${historical} textarea')`)
+    await evaluate(window, `(() => { const input = document.querySelector('${historical} textarea'); input.value = 'The existing pipeline disproves the adapter premise.'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
+    await evaluate(window, `Array.from(document.querySelectorAll('${historical} button')).find(button => button.textContent.includes('Mark premise obsolete')).click()`)
+    await waitFor(window, `!!document.querySelector('.yield-decision.invalidated .decision-answer')`)
+    assert.match(await evaluate<string>(window, `document.querySelector('.yield-decision.invalidated .decision-answer').textContent`), /Refactor the implementation/)
+    assert.equal(await evaluate(window, `document.querySelector('.yield-decision.invalidated').textContent.includes('No option was selected')`), false)
+
+    for (const kind of ['investigation', 'deferred'] as const) {
+      const next = { ...initial, id: `${kind}-${width}`, reconsiders: { sessionId: root, physicalId: 'physical-0', requestId: `${initial.id}-v2` } }
+      pending.set(root, next)
+      decisionRecords.set(next.id, { request: next })
+      live.publisher.invalidateSessions(root)
+      await waitFor(window, `!!document.querySelector('.yield-question')`)
+      await evaluate(window, `document.querySelector('${discussion}').open = true`)
+      await waitFor(window, `!!document.querySelector('${discussion} textarea')`)
+      await evaluate(window, `(() => { const input = document.querySelector('${discussion} textarea'); input.value = 'Investigate the original pipeline; do not expand scope.'; input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
+      const beforeFollowUp = answers.length
+      await evaluate(window, `document.querySelectorAll('${discussion} .discussion-actions button')[${kind === 'investigation' ? 2 : 3}].click()`)
+      await waitFor(window, `!document.querySelector('.yield-question') && !!document.querySelector('.yield-decision.${kind}')`)
+      assert.equal(followUps.at(-1)?.kind, kind)
+      assert.equal(answers.length, beforeFollowUp)
+      assert.equal(sends, 0)
+      assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
+    }
 
     for (const count of [2, 3]) {
       const current = question(root, `custom-${count}-${width}`)
@@ -264,7 +409,7 @@ async function runViewport(origin: string, width: number, height: number) {
       console.log(`LAYOUT_YIELD_CUSTOM ${JSON.stringify({ width, count, bounds })}`)
     }
 
-    const binaryOptions = ['Build both Apple Silicon arm64 and Intel x64 archives (recommended)', 'Build only the Apple Silicon arm64 archive']
+    const binaryOptions: [string, string] = ['Build both Apple Silicon arm64 and Intel x64 archives (recommended)', 'Build only the Apple Silicon arm64 archive']
     pending.set(root, { ...question(root, `binary-${width}`), question: 'Which macOS architectures should the first release support? Each architecture will have its own archive.', options: binaryOptions, defaultOption: binaryOptions[1]! })
     live.publisher.invalidateSessions(root)
     await waitFor(window, `document.querySelectorAll('label.yield-option').length === 2`)
@@ -338,6 +483,8 @@ async function runViewport(origin: string, width: number, height: number) {
     pending.set(child, question(child, `child-${width}`, true))
     await window.loadURL(`${origin}/chat/${encodeURIComponent(child)}`)
     await waitFor(window, `document.querySelector('.yield-question')?.textContent.includes('Only that session can answer')`)
+    await waitFor(window, `!!document.querySelector('.yield-decision.waiting-parent')`)
+    assert.equal(await evaluate(window, `!!document.querySelector('.yield-decision.waiting-user')`), false)
     assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input:disabled').length`), 3)
     assert.equal(await evaluate(window, `document.querySelector('.yield-custom-toggle').matches(':disabled')`), true)
     assert.equal(await evaluate(window, `!!document.querySelector('.yield-continue')`), false)

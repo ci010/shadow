@@ -13,7 +13,7 @@ import { validateOwnership, OwnershipValidationError } from '../projects/ownersh
 import { normalizeInitiativeMetadata, InitiativeMetadataError } from './initiative-metadata.ts'
 import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
 import { parsePhysicalIdVersion, SessionIdentityError } from './session-identity.ts'
-import { parseContextResetAt, ContextResetMetadataError } from './session-store.ts'
+import { parseContextResetAt, ContextResetMetadataError, parseDecisionOwner, DecisionOwnerMetadataError } from './session-store.ts'
 
 /**
  * JSONL-file-backed session store.
@@ -43,11 +43,12 @@ export class JsonlSessionStore implements SessionStore {
       if (state.name !== undefined) state.name = parseSessionName(state.name)
       parsePhysicalIdVersion(state.physicalIdVersion)
       parseContextResetAt(state.contextResetAt)
+      parseDecisionOwner(state.decisionOwnerSessionId)
       if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
       Object.assign(state, parseTopicSessionFields(state))
       return state
     } catch (error) {
-      if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error
+      if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
       return null
     }
   }
@@ -58,6 +59,7 @@ export class JsonlSessionStore implements SessionStore {
     parseAutomationSessionRef(state.automation)
     parsePhysicalIdVersion(state.physicalIdVersion)
     parseContextResetAt(state.contextResetAt)
+    parseDecisionOwner(state.decisionOwnerSessionId)
     state = { ...state, ...parseTopicSessionFields(state) }
     const contents = JSON.stringify(state, null, 2)
     await this.queueStateWrite(sessionKey, async () => {

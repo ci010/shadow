@@ -10,6 +10,15 @@ import type { TopicMetadata } from './topic-contract.ts'
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
 export class ContextResetMetadataError extends Error {}
+export class DecisionOwnerMetadataError extends Error {}
+
+export function parseDecisionOwner(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !value.trim() || value !== value.trim() || value.length > 512) {
+    throw new DecisionOwnerMetadataError('Invalid decision reporting owner')
+  }
+  return value
+}
 
 export function parseContextResetAt(value: unknown): string | undefined {
   if (value === undefined) return undefined
@@ -72,6 +81,8 @@ export interface SessionState {
   createdBySessionId?: string
   /** Immutable original creation request fingerprint for durable idempotency. */
   topicRequestHash?: string
+  /** Human-selected reporting responsibility, not parenthood or answer authority. */
+  decisionOwnerSessionId?: string
   /** Persisted v2: projectId is the runtime owner, folderId the directory resource. */
   ownershipVersion?: 2
   automation?: AutomationSessionRef

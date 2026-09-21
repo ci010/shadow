@@ -1,12 +1,27 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { MAX_YIELD_TIMEOUT_MS, MAX_YIELD_CUSTOM_TEXT_LENGTH, parseYieldCustomText, parseYieldPolicy, parseYieldQuestion, parseYieldRequest } from './yield-contract.ts'
+import { MAX_YIELD_TIMEOUT_MS, MAX_YIELD_CUSTOM_TEXT_LENGTH, parseYieldCustomText, parseYieldPolicy, parseYieldQuestion, parseYieldRequest, parseYieldReview } from './yield-contract.ts'
 
 const question = { question: 'Choose?', options: ['A', 'B', 'C'], defaultOption: 'B' }
 const request = {
   ...question, id: 'request-1', sessionId: 'root', recipient: { kind: 'user', sessionId: 'root' },
   createdAt: '2026-09-13T12:00:00.000Z', deadline: null,
 }
+
+test('discussion contracts reject fabricated completion or cross-owner replacement metadata', () => {
+  const reference = { sessionId: 'root', physicalId: 'segment', requestId: 'request-1' }
+  const review = { id: 'review', reference, kind: 'clarify', question: 'Explain?', sessionId: 'review-session',
+    createdAt: request.createdAt, status: 'running' }
+  assert.equal(parseYieldReview(review).status, 'running')
+  for (const fields of [
+    { status: 'completed' }, { status: 'failed' }, { status: 'running', response: 'Done' },
+    { status: 'completed', kind: 'revise', response: 'Revised' },
+    { status: 'completed', response: 'Explained', replacement: { ...reference, requestId: 'new' } },
+    { status: 'completed', kind: 'revise', response: 'Revised', replacement: { ...reference, sessionId: 'other', requestId: 'new' } },
+  ]) assert.throws(() => parseYieldReview({ ...review, ...fields }), TypeError)
+  assert.equal(parseYieldReview({ ...review, kind: 'revise', status: 'completed', response: 'Revised',
+    replacement: { ...reference, requestId: 'new' } }).replacement?.requestId, 'new')
+})
 
 test('custom answers trim edges, preserve multiline text and enforce the shared length limit', () => {
   assert.equal(parseYieldCustomText('  A different approach\nwith details  '), 'A different approach\nwith details')
@@ -69,4 +84,19 @@ test('request parser validates recipient, session identity and timestamp shape a
   input.recipient.sessionId = 'other'
   assert.equal(parsed.options[0], 'A')
   assert.equal(parsed.recipient.sessionId, 'root')
+})
+
+test('decision references are bounded, distinct and copied without accepting a routing override', () => {
+  const source = { sessionId: 'child', physicalId: 'child-0', requestId: 'question' }
+  for (const sources of [null, [], [source, source], [source, source, source, source],
+    [{}], [{ ...source, recipient: 'other' }], [{ ...source, requestId: '' }], [, source]]) {
+    assert.throws(() => parseYieldQuestion({ ...question, sources }), TypeError)
+  }
+  const input = { ...request, sources: [source], origin: { physicalId: 'root-0', toolCallId: 'ask' } }
+  const parsed = parseYieldRequest(input, 'root')
+  source.requestId = 'changed'
+  input.origin.physicalId = 'changed'
+  assert.equal(parsed.sources?.[0]?.requestId, 'question')
+  assert.equal(parsed.origin?.physicalId, 'root-0')
+  assert.deepEqual(parsed.recipient, request.recipient)
 })

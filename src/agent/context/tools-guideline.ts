@@ -19,10 +19,31 @@ ${mode === 'call'
 - With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.`)
   }
 
-  if (!coordinator && mode !== 'call' && isToolAllowed(ctx.agent, 'yield')) {
+  if (mode !== 'call' && isToolAllowed(ctx.agent, 'yield')) {
     sections.push(`### Decisions
 
 - **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
+  Verify the premise and investigate available alternatives before escalating.
+  Separate user-stated constraints, verified facts, assumptions and agent proposals;
+  never turn a worker's recommendation into "the user required it".
+  Resolve implementation choices within existing scope yourself. Escalate unresolved
+  changes to goals, acceptance criteria, budget, permissions or material risk.
+  When relaying a blocker, check it against the original goal; do not just forward it.
+  Make each human question understandable without reading inter-session messages:
+  state the goal, relevant new evidence/uncertainty, why the human must decide,
+  your recommendation and tradeoffs, and what waits versus what can continue.
+  Explain technical labels by their effect on the outcome, not version names alone.
+  Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
+  Read \`action: "context"\` for the required brief schema and genuine input references.
+  Quote user constraints exactly; observations need evidence. Keep assumptions and proposals labeled.
+  A result with \`approved: false\` is not an answer: investigate the requested premise or
+  defer the blocked scope; continue only listed unaffected work already authorized.
+  Maintain blocked items and independent ready work through Initiative's guarded assignments.
+  Do not make a second todo store or take another session's assignment.
+  After investigation, ask a new question with \`reconsiders\` pointing to the prior record.
+  Unlike \`sources\`, this historical link does not inherit obsolete premises. Invalidate your own
+  disproven decision with \`action: "invalidate"\`, its \`reference\` and \`reason\`;
+  downstream citations will require revalidation, not inherit a stale approval.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
@@ -75,7 +96,7 @@ ${modes.some(candidate => candidate !== 'call')
     sections.push(`### Coordinator Capability Boundary
 
 The single Project coordinator is web:orchestrator. Its hard runtime
-cap permits only read/search/topic/message/initiative/project_config/authoring_change/skill_read/skill_save; never invoke_tool, exec, write,
+cap permits only read/search/topic/message/initiative/project_config/authoring_change/skill_read/skill_save/yield; never invoke_tool, exec, write,
 or subagent. Use initiative directly for guarded shared-work operations.
 Implementation, builds, MCP configuration and tool installation belong in a topic.
 Do not bypass this boundary through skills, discovery, events, URLs or other tools.

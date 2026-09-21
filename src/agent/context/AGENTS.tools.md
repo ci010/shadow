@@ -2,7 +2,7 @@
 
 Run independent tools in parallel. Prefer `search` over shell for files/content.
 All guidance below is subject to runtime capabilities. The Project coordinator
-`web:orchestrator` permits only read/search/topic/message/initiative/project_config/authoring_change/skill_read/skill_save, never
+`web:orchestrator` permits only read/search/topic/message/initiative/project_config/authoring_change/skill_read/skill_save/yield, never
 invoke_tool/exec/write/subagent. Do not use discovery or a skill to bypass that cap.
 
 ### Project Coordination

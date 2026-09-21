@@ -499,6 +499,11 @@ export abstract class BaseSession {
           }
         }
       } else {
+        if (input.source.kind === 'user') {
+          await this.store.appendRawEvents(this.physicalSessionId, [{
+            decision_input: { id: input.id, text: input.content, at: input.timestamp },
+          }])
+        }
         // A new input supersedes unfinished calls; only Continue/Retry execute
         // them. Close their pairs before appending the newly admitted context.
         await this.persistMessages(llm, ...pendingToolCalls(this.messages).map(call => ({

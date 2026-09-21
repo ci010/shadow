@@ -5,8 +5,9 @@ import type { SessionState } from '../sessions/session-store.ts'
 import { YieldError, YieldManager } from '../sessions/yield.ts'
 import { Tools } from './registry.ts'
 import { YieldTool } from './yield.ts'
+import { decisionBrief } from '../testing/decision.ts'
 
-const question = { question: 'Choose?', options: ['A', 'B', 'C'], default_option: 'B' }
+const question = { question: 'Choose?', options: ['A', 'B', 'C'], default_option: 'B', brief: decisionBrief }
 const context = (sessionId: string, signal = new AbortController().signal) => ({ sessionId, signal }) as ExecutionContext
 const invalid = (error: unknown) => error instanceof YieldError && error.code === 'invalid_request'
 
@@ -39,7 +40,7 @@ test('unified yield tool asks human by default and returns a JSON answer receipt
   assert.equal(settled, false)
   const request = yields.get('root')!
   assert.deepEqual(request.recipient, { kind: 'user', sessionId: 'root' })
-  const receipt = yields.answerUser('root', request.id, 'C')
+  const receipt = await yields.answerUser('root', request.id, 'C')
   assert.deepEqual(JSON.parse(await waiting), receipt)
 })
 
@@ -86,7 +87,7 @@ test('tool validates action-specific inputs and forbids model overrides of routi
 
 test('binary decisions wait for an explicit authorized answer without an artificial third option', async () => {
   const { tool, yields } = fixture()
-  const waiting = tool.execute({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' }, context('root'))
+  const waiting = tool.execute({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No', brief: decisionBrief }, context('root'))
   const request = yields.get('root')!
   assert.deepEqual(request.options, ['Yes', 'No'])
   await assert.rejects(tool.execute({ action: 'answer', request_id: request.id, option: 'Yes' }, context('root')),

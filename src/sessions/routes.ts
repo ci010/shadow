@@ -4,6 +4,7 @@ import { parseSessionName, SessionNameError } from './session-name.ts'
 import type { SessionManager } from './session-manager.ts'
 import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
+import { parseYieldReference } from './yield-contract.ts'
 import { SessionResumeError } from './recovery.ts'
 import type { SessionRecovery } from './session-store.ts'
 import { FolderError } from '../folders/registry.ts'
@@ -348,6 +349,107 @@ export function sessionsApiPlugin(
       return c.json({ request: sessions.yields.get(key) })
     })
 
+    app.get('/api/sessions/:key/decisions', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      try {
+        return c.json({ records: await sessions.getYieldRecords(c.req.param('key'), c.req.query('physicalId')) })
+      } catch (error) {
+        if (!(error instanceof YieldError)) throw error
+        return c.json({ error: error.code, message: error.message }, error.code === 'not_found' ? 404 : 503)
+      }
+    })
+
+    app.get('/api/sessions/:key/decisions/context', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      try { return c.json(await sessions.decisionContext(c.req.param('key'))) }
+      catch (error) {
+        if (!(error instanceof YieldError)) throw error
+        return c.json({ error: error.code, message: error.message }, error.code === 'not_found' ? 404 : 503)
+      }
+    })
+
+    app.get('/api/sessions/:key/decisions/owner', c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      try { return c.json(sessions.decisionOwners(c.req.param('key'))) }
+      catch (error) {
+        if (!(error instanceof YieldError)) throw error
+        return c.json({ error: error.code, message: error.message }, 404)
+      }
+    })
+
+    app.post('/api/sessions/:key/decisions/owner', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const body: unknown = await c.req.json().catch(() => null)
+      if (!isConfigObject(body) || Object.keys(body).length !== 1 || typeof body.reportingSessionId !== 'string') return c.json({ error: 'invalid_request' }, 400)
+      try {
+        await sessions.setDecisionOwner(c.req.param('key'), body.reportingSessionId)
+        return c.json(sessions.decisionOwners(c.req.param('key')))
+      } catch (error) {
+        if (!(error instanceof YieldError)) throw error
+        return c.json({ error: error.code, message: error.message }, error.code === 'conflict' ? 409 : 400)
+      }
+    })
+
+    app.post('/api/sessions/:key/yield/follow-up', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const body: unknown = await c.req.json().catch(() => null)
+      if (!isConfigObject(body) || Object.keys(body).some(key => !['requestId', 'kind', 'reason'].includes(key))
+        || typeof body.requestId !== 'string' || typeof body.reason !== 'string'
+        || (body.kind !== 'investigation' && body.kind !== 'deferred')) return c.json({ error: 'invalid_request' }, 400)
+      try {
+        return c.json({ continuation: await sessions.yields.continueUser(c.req.param('key'), body.requestId, body.kind, body.reason) })
+      } catch (error) {
+        if (error instanceof TypeError) return c.json({ error: 'invalid_request', message: error.message }, 400)
+        if (!(error instanceof YieldError)) throw error
+        return c.json({ error: error.code, message: error.message }, error.code === 'forbidden' ? 403 : error.code === 'not_found' ? 404 : 409)
+      }
+    })
+
+    app.post('/api/sessions/:key/decisions/invalidate', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const body: unknown = await c.req.json().catch(() => null)
+      if (!isConfigObject(body) || Object.keys(body).some(key => !['reference', 'reason'].includes(key)) || typeof body.reason !== 'string') return c.json({ error: 'invalid_request' }, 400)
+      try {
+        const reference = parseYieldReference(body.reference)
+        if (reference.sessionId !== c.req.param('key')) return c.json({ error: 'forbidden' }, 403)
+        return c.json(await sessions.invalidateDecision(reference, body.reason))
+      } catch (error) {
+        if (error instanceof TypeError) return c.json({ error: 'invalid_request', message: error.message }, 400)
+        if (!(error instanceof YieldError)) throw error
+        return c.json({ error: error.code, message: error.message }, error.code === 'not_found' ? 404 : 409)
+      }
+    })
+
+    app.get('/api/sessions/:key/decisions/reviews', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const physicalId = c.req.query('physicalId')
+      const requestId = c.req.query('requestId')
+      if (!physicalId || !requestId) return c.json({ error: 'invalid_request' }, 400)
+      try {
+        return c.json({ reviews: await sessions.yieldDiscussions.read({ sessionId: c.req.param('key'), physicalId, requestId }) })
+      } catch (error) {
+        if (!(error instanceof YieldError)) throw error
+        return c.json({ error: error.code, message: error.message }, error.code === 'not_found' ? 404 : 503)
+      }
+    })
+
+    app.post('/api/sessions/:key/yield/reviews', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      let body: unknown
+      try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
+      if (!isConfigObject(body) || Object.keys(body).some(key => !['requestId', 'id', 'kind', 'question'].includes(key))
+        || typeof body.requestId !== 'string' || typeof body.id !== 'string' || typeof body.question !== 'string'
+        || (body.kind !== 'clarify' && body.kind !== 'revise')) return c.json({ error: 'invalid_request' }, 400)
+      try {
+        return c.json({ review: await sessions.yieldDiscussions.start(c.req.param('key'), body.requestId, body.id, body.kind, body.question) }, 202)
+      } catch (error) {
+        if (!(error instanceof YieldError)) throw error
+        const status = error.code === 'not_found' ? 404 : error.code === 'forbidden' ? 403 : error.code === 'conflict' ? 409
+          : error.code === 'invalid_request' ? 400 : 503
+        return c.json({ error: error.code, message: error.message }, status)
+      }
+    })
+
     app.on(['POST', 'DELETE'], '/api/sessions/:key/yield', async (c) => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       const key = c.req.param('key')
@@ -363,15 +465,15 @@ export function sessionsApiPlugin(
       }
       try {
         if (cancel) {
-          sessions.yields.cancelUser(key, body.requestId)
+          await sessions.yields.cancelUser(key, body.requestId)
           sessions.getActiveSession(key)?.cancel()
           return c.json({ cancelled: true })
         }
         if (typeof body.customText === 'string') {
-          return c.json({ answer: sessions.yields.answerUserText(key, body.requestId, body.customText) })
+          return c.json({ answer: await sessions.yields.answerUserText(key, body.requestId, body.customText) })
         }
         if (typeof body.option !== 'string') return c.json({ error: 'invalid_request' }, 400)
-        return c.json({ answer: sessions.yields.answerUser(key, body.requestId, body.option) })
+        return c.json({ answer: await sessions.yields.answerUser(key, body.requestId, body.option) })
       } catch (error) {
         if (!(error instanceof YieldError)) throw error
         const status = error.code === 'not_found' ? 404 : error.code === 'forbidden' ? 403
@@ -739,6 +841,7 @@ export function sessionsApiPlugin(
           pageSize,
           messages,
           commandResults: await sessions.getCommandResults(key),
+          decisionRecords: await sessions.getYieldRecords(key),
           segmentIndex,
           currentPhysicalId,
           previousPhysicalId,
@@ -757,6 +860,10 @@ export function sessionsApiPlugin(
             previousPhysicalId = String(firstRecord.previous_physical_id)
           }
         } catch { /* ignore */ }
+        const owner = chain.find(item => {
+          const state = sessions.getSessionState(item.sessionId)
+          return state && Array.from({ length: state.segmentIndex + 1 }, (_, index) => physicalSessionId(state, index)).includes(key)
+        })
         return c.json({
           key,
           total,
@@ -764,6 +871,7 @@ export function sessionsApiPlugin(
           pageSize,
           messages,
           commandResults: await sessions.getCommandResults(key, key),
+          decisionRecords: owner ? await sessions.getYieldRecords(owner.sessionId, key) : [],
           previousPhysicalId,
         })
       } catch {

@@ -452,7 +452,9 @@ export class WebChannel extends AbstractChannel {
           sessionId,
         )
         const commandResults = await this.sessionManager!.getCommandResults(sessionId)
-        return c.json({ chatId, systemPrompt, history: history || [], commandResults, tools })
+        const decisionRecords = this.sessionManager!.getSessionState(sessionId)
+          ? await this.sessionManager!.getYieldRecords(sessionId) : []
+        return c.json({ chatId, systemPrompt, history: history || [], commandResults, decisionRecords, tools })
       } catch (error) {
         console.error('[web] Failed to retrieve session:', error)
         return c.json({ error: 'Failed to retrieve session' }, 500)

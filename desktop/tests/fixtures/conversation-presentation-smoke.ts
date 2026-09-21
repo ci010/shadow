@@ -55,6 +55,19 @@ async function main() {
     assert.match(await execute(`document.querySelector('.tool-activity').textContent`), /View file.ts/)
     assert.equal(await execute(`document.querySelector('.message-action-status').textContent`), 'Queued')
     assert.equal(await execute(`document.querySelector('.message-action strong').textContent`), 'the changes')
+    assert.equal(await execute(`document.querySelectorAll('.yield-decision').length`), 1)
+    assert.match(await execute(`document.querySelector('.yield-decision').textContent`), /Default selected by timeout/)
+    assert.equal(await execute(`document.querySelector('.yield-decision').getAttribute('data-msg-idx')`), '7')
+    assert.equal(await execute(`document.querySelectorAll('.yield-decision button, .yield-decision input').length`), 0, 'Historical decisions cannot submit answers')
+    await execute(`window.__conversationFixture.messages[1].content = 'Routine progress. '.repeat(60)`)
+    await wait(`!!document.querySelector('.collaboration-message')`)
+    assert.equal(await execute(`!!document.querySelector('.collaboration-message .prose')`), false, 'Long routine progress does not mount hidden Markdown')
+    await execute(`document.querySelector('.collaboration-message').open = true`)
+    await wait(`!!document.querySelector('.collaboration-message .prose')`)
+    await execute(`window.__conversationFixture.messages[1].sessionSource.intent = 'question'`)
+    await wait(`!document.querySelector('.collaboration-message')`)
+    assert.match(await execute(`document.querySelector('.chat-session').textContent`), /Routine progress/)
+    await execute(`window.__conversationFixture.messages[1].content = 'I will review the changes and send feedback shortly.'; window.__conversationFixture.messages[1].sessionSource.intent = 'acknowledgement'`)
     for (const width of [1800, 1100, 390]) {
       window.setContentSize(width, 844)
       for (const dark of [false, true]) {
@@ -91,7 +104,9 @@ async function main() {
           return {
             foreground:style('.chat-assistant').color, expectedForeground:token('--c-text'),
             assistant:style('.chat-assistant').backgroundColor, expectedAssistant:token('--c-bg-card'),
-            user:style('.chat-user').backgroundColor, expectedUser:token('--c-bg-muted'),
+            user:style('.chat-user').backgroundColor, expectedUser:token('--c-info-bg'),
+            peer:style('.chat-session').backgroundColor, expectedPeer:token('--c-bg-soft'),
+            decision:style('.yield-decision').borderLeftColor, expectedDecision:token('--c-purple'),
             action:style('.message-action').backgroundColor, expectedAction:token('--c-bg-soft'),
             source:style('.chat-session-source strong').color, secondary:token('--c-text-secondary'),
             thinking:style('.thinking-header').color,
@@ -103,6 +118,9 @@ async function main() {
         assert.equal(colors.foreground, colors.expectedForeground)
         assert.equal(colors.assistant, colors.expectedAssistant)
         assert.equal(colors.user, colors.expectedUser)
+        assert.equal(colors.peer, colors.expectedPeer)
+        assert.notEqual(colors.user, colors.peer, 'Human input and peer coordination have distinct surfaces')
+        assert.equal(colors.decision, colors.expectedDecision)
         assert.equal(colors.action, colors.expectedAction)
         assert.equal(colors.source, colors.secondary)
         assert.equal(colors.thinking, colors.secondary)
@@ -114,6 +132,14 @@ async function main() {
         await screenshot(`conversation-${width}-${dark ? 'dark' : 'light'}`)
       }
     }
+    await execute(`window.__conversationFixture.messages[8].content = JSON.stringify({requestId:'budget',option:'Only investigate for now',custom:true,answeredBy:'user',answeredAt:'2026-09-21T10:00:00Z'})`)
+    await wait(`document.querySelector('.yield-decision').textContent.includes('Custom response')`)
+    assert.match(await execute(`document.querySelector('.decision-status').textContent`), /Answered by user/)
+    assert.match(await execute(`document.querySelector('.decision-answer').textContent`), /Only investigate for now/)
+    await execute(`window.__conversationFixture.messages[8].content = 'Error: Yield cancelled by user.'`)
+    await wait(`document.querySelector('.decision-status').textContent.includes('did not complete')`)
+    await execute(`void window.__conversationFixture.messages.splice(8, 1)`)
+    await wait(`document.querySelector('.decision-status').textContent.includes('No confirmed answer')`)
     const target = '.message-recipient'
     await execute(`document.querySelector('${target}').focus()`)
     assert.equal(await execute(`document.activeElement.matches('${target}')`), true)
@@ -132,6 +158,39 @@ async function main() {
     assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[1]))`), { event: 'child-navigation', id: 'web:peer' })
     await execute(`document.querySelector('.chat-session-source').click()`)
     assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[2]))`), { event: 'child-navigation', id: 'web:peer' })
+    await execute(`window.__conversationFixture.decisionRecords = [{
+      request: { id:'budget', sessionId:'web:owner', question:'Increase the experiment budget?',
+        options:['Six runs','Four runs'], defaultOption:'Four runs', recipient:{kind:'user',sessionId:'web:owner'},
+        createdAt:'2026-09-21T10:00:00Z', deadline:null, origin:{physicalId:'owner-0',toolCallId:'decision'},
+        sources:[{sessionId:'web:peer',physicalId:'worker-segment-0',requestId:'worker-budget'}] }
+    }]`)
+    await wait(`!!document.querySelector('.decision-source summary')`)
+    await execute(`document.querySelector('.decision-source').open = true`)
+    await wait(`document.querySelector('.source-question')?.textContent.includes('exceeding the four-run budget')`)
+    assert.match(await execute(`document.querySelector('.decision-source').textContent`), /not proof of causation or permission/)
+    assert.equal(await execute(`document.querySelectorAll('.decision-source input').length`), 0)
+    assert.equal(await execute(`document.querySelector('.decision-source button').textContent`), 'Open source session')
+    assert.match(await execute(`document.querySelector('.decision-source').textContent`), /does not indicate an active wait/)
+    assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
+    await execute(`document.querySelector('.decision-source button').click()`)
+    assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[3]))`), { event: 'child-navigation', id: 'web:peer' })
+    assert.equal(await execute(`document.querySelectorAll('.graph-node').length`), 0, 'Graphs stay lazy until opened')
+    await execute(`document.querySelector('.decision-graph').open = true`)
+    await wait(`document.querySelectorAll('.graph-node').length === 2`)
+    assert.match(await execute(`document.querySelector('.decision-graph').textContent`), /not a verified cause/)
+    await execute(`const node = document.querySelectorAll('.graph-node')[1]; node.focus(); node.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true}))`)
+    await wait(`document.querySelector('.graph-inspector').textContent.includes('exceeding the four-run budget')`)
+    assert.equal(await execute(`document.querySelectorAll('.decision-graph input, .decision-graph textarea').length`), 0)
+    assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false, 'Expanded graph remains bounded on mobile')
+    assert.equal(await execute(`document.querySelector('.decision-graph-scroll').scrollWidth > document.querySelector('.decision-graph-scroll').clientWidth`), true)
+    await execute(`document.querySelector('.decision-discussion').open = true`)
+    await wait(`document.querySelector('.decision-discussion').textContent.includes('No discussions have been recorded')`)
+    assert.equal(await execute(`document.querySelectorAll('.decision-discussion textarea').length`), 0, 'Historical discussion is read-only')
+    await execute(`window.__conversationFixture.decisionRecords[0].request.sources[0].requestId = 'missing-record'`)
+    await frame()
+    await execute(`document.querySelector('.decision-source').open = true`)
+    await wait(`document.querySelector('.decision-source [role="alert"]')?.textContent.includes('does not match')`)
+    assert.equal(await execute(`!!document.querySelector('.source-question')`), false, 'A failed source lookup must not display a stale question')
     await execute(`window.__conversationFixture.messages[3].content = 'Message sent to web:peer (silent). Recorded only.'`)
     await wait(`document.querySelector('.message-action-status').textContent === 'Recorded silently'`)
     assert.match(await execute(`document.querySelector('.message-action-note').textContent`), /will not be woken/)

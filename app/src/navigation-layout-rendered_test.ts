@@ -25,12 +25,12 @@ test('Knowledge and conversation controls preserve layout, navigation and global
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const { descriptor } = parse(readFileSync(resolve(root, 'app', 'src', 'components', 'ChatTab.vue'), 'utf8'))
-  const actions = descriptor.template!.content.match(/<button\s+v-if="requestBusy"[\s\S]*?<\/button>\s*<button[\s\S]*?<\/button>/)?.[0]
+  const actions = descriptor.template!.content.match(/<button\s+v-if="requestBusy"\s+class="composer-send composer-stop"[\s\S]*?<\/button>\s*<button[\s\S]*?<\/button>/)?.[0]
   assert.ok(actions, 'Use the actual composer action templates, not a fixture copy')
   const compiledActions = compileTemplate({ source: `<div class="composer-submit">${actions}</div>`, filename: 'ComposerActions.vue', id: 'fixture' })
   assert.deepEqual(compiledActions.errors, [])
   const server = await createServer({
-    configFile: false, root: resolve(root, 'app'), logLevel: 'error',
+    configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-navigation',
       resolveId: id => ['/navigation-fixture.ts', '/composer-actions.js', '/composer-style.css'].includes(id) ? `\0${id}` : undefined,
@@ -40,12 +40,14 @@ test('Knowledge and conversation controls preserve layout, navigation and global
         if (id !== '\0/navigation-fixture.ts') return
         return `import 'uno.css'; import '/src/styles.css';
           import '/composer-style.css';
-          import { createApp, h, ref, reactive, toRefs } from 'vue';
+          import { createApp, computed, h, ref, reactive, toRefs } from 'vue';
           import Knowledge from '/src/components/KnowledgeView.vue';
           import KnowledgeGraph from '/src/components/KnowledgeGraph.vue';
           import Rail from '/src/components/MessageHistoryRail.vue';
           import ConversationEvent from '/src/components/ConversationEvent.vue';
-          import { messageHistoryMarkers } from '/src/message-history.ts';
+          import YieldDecision from '/src/components/YieldDecision.vue';
+          import { inlineYieldDecisions } from '/src/yield-history.ts';
+          import { messageHistoryMarkers, groupMessageHistoryMarkers } from '/src/message-history.ts';
           import { render } from '/composer-actions.js';
           const state = reactive({ requestBusy:false, currentRequest:{state:{stopping:false}},
             installation:{uiScopes:['chat:write']}, canSend:true, submissionBusy:false, sent:0, stopped:0 });
@@ -55,16 +57,19 @@ test('Knowledge and conversation controls preserve layout, navigation and global
           const catalogEntries = ['memory', 'wiki', 'skill'].map(kind => ({
             id:kind, path:kind + '.md', title:kind, kind, source:'project', deletable:true, revision:'r1',
           }));
-          const messages = [
+          const messages = reactive([
             { role: 'user', content: 'Human request', senderName: 'Alice' },
             { role: 'assistant', content: 'Reply' },
             { role: 'user', content: 'Review progress', sessionSource: { id: 'web:reviewer', intent: 'progress' } },
             { role: 'user', content: 'Review complete', isSystemEvent: true,
               eventMeta: { type: 'subagent-complete', source: 'Worker', attrs: { 'source-session-id': 'task:worker' } } },
-          ];
+          ]);
           createApp({ setup() {
             const mode = ref('knowledge'); const container = ref();
-            const entries = messageHistoryMarkers(messages, [{ sessionId: 'web:reviewer', label: 'Reviewer' }]);
+            const pending = ref(null); const list = ref(false);
+            Object.assign(window, { __navigationMessages:messages, __setPending:request => pending.value = request, __setHistoryList:value => list.value = value });
+            const decisions = computed(() => inlineYieldDecisions(messages, pending.value));
+            const entries = computed(() => groupMessageHistoryMarkers(messageHistoryMarkers(messages, [{ sessionId: 'web:reviewer', label: 'Reviewer' }], decisions.value.entries), messages));
             return () => h('div', { style: 'height:100vh;display:flex;flex-direction:column;min-width:0' }, [
               h('button', { id:'switch', onClick: () => mode.value = mode.value === 'knowledge' ? 'chat' : 'composer' }, 'Next surface'),
               mode.value === 'knowledge'
@@ -75,11 +80,13 @@ test('Knowledge and conversation controls preserve layout, navigation and global
                     h(ComposerActions),
                   ]) : h('div', { class:'fixture-chat', style:'position:relative;flex:1;min-height:0' }, [
                     h('div', { ref:container, class:'fixture-messages', style:'height:100%;overflow:auto' },
-                      [...messages.map((msg, index) => msg.eventMeta
+                      [...messages.map((msg, index) => decisions.value.entries.has(index)
+                        ? h(YieldDecision, {decision:decisions.value.entries.get(index),'data-msg-idx':index})
+                        : msg.eventMeta
                         ? h(ConversationEvent, { meta: msg.eventMeta, 'data-msg-idx':index }, () => msg.content)
                         : h('article', { 'data-msg-idx':index, style:'min-height:700px' }, msg.content)),
                        h('div', { style:'height:900px' })]),
-                    h(Rail, { entries, container:container.value }),
+                    h(Rail, { entries:entries.value, container:container.value, list:list.value }),
                   ]),
             ]);
           } }).mount('#app');`

@@ -84,7 +84,7 @@ test('custom human answers use an explicit validated path without relaxing paren
   assert.throws(() => f.manager.answerUser('root', request.id, 'Custom approach'), code('invalid_request'))
   assert.throws(() => f.manager.answerUserText('other', request.id, 'Custom approach'), code('forbidden'))
   assert.equal(f.manager.get('root')?.id, request.id)
-  const answer = f.manager.answerUserText('root', request.id, '  Custom approach\nwith details  ')
+  const answer = await f.manager.answerUserText('root', request.id, '  Custom approach\nwith details  ')
   assert.equal(await waiting, answer)
   assert.equal(answer.option, 'Custom approach\nwith details')
   assert.equal(answer.custom, true)
@@ -113,7 +113,7 @@ test('root waits for its human; child uses real stored parent, never reportTo', 
   const request = f.manager.get('root')!
   assert.match(request.id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/)
   assert.notEqual(request.id, f.parents[0]!.id)
-  const receipt = f.manager.answerUser('root', request.id, 'Change')
+  const receipt = await f.manager.answerUser('root', request.id, 'Change')
   assert.equal(await root, receipt)
   assert.ok(Object.isFrozen(receipt))
   assert.equal(receipt.answeredBy, 'user')
@@ -130,7 +130,7 @@ test('publishes waiting state before invoking delivery, allowing immediate answe
   const f = fixture({
     notifyUser: async request => {
       assert.deepEqual(manager.get('root'), request)
-      receipt = manager.answerUser('root', request.id, 'Stop')
+      receipt = await manager.answerUser('root', request.id, 'Stop')
     },
   })
   manager = f.manager

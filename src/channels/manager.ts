@@ -356,12 +356,12 @@ export class ChannelManager {
     const request = this.sessionManager.yields.get(sessionId)
     if (!request || request.id !== decision.requestId) throw new YieldError('not_found', 'This question is no longer pending.')
     if (decision.option === 'cancel') {
-      this.sessionManager.yields.cancelChannel(sessionId, request.id, channel.name, decision.senderId)
+      await this.sessionManager.yields.cancelChannel(sessionId, request.id, channel.name, decision.senderId)
       this.sessionManager.getActiveSession(sessionId)?.cancel()
       return 'Question cancelled.'
     }
     if (![1, 2, 3].includes(decision.option)) throw new YieldError('invalid_request', 'Invalid choice.')
-    const answer = this.sessionManager.yields.answerChannel(
+    const answer = await this.sessionManager.yields.answerChannel(
       sessionId, request.id, request.options[decision.option - 1]!, channel.name, decision.senderId,
     )
     return `Selected: ${answer.option}`

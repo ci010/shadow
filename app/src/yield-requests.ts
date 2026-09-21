@@ -11,6 +11,7 @@ export function parseYieldResponse(value: unknown, sessionId: string): YieldRequ
 }
 
 export function yieldDeadlineText(request: YieldRequest, now: number): string {
+  if (request.timeoutPaused) return 'Automatic default paused because you requested an explanation or revision. An explicit answer is required.'
   if (!request.deadline) return 'No time limit. Waiting for a response.'
   const deadline = Date.parse(request.deadline)
   if (deadline <= now) return 'Time limit reached. Waiting for the server to confirm the default choice.'

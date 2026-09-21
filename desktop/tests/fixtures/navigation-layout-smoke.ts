@@ -63,6 +63,36 @@ async function main() {
       await execute(`document.querySelectorAll('.history-marker')[0].click()`)
       await wait(`document.querySelector('.fixture-messages').scrollTop < 2`)
     }
+    await execute(`window.__navigationMessages.push(
+      {role:'user',content:'First investigation',sessionSource:{id:'web:reviewer',intent:'progress'}},
+      {role:'assistant',content:'Checking the evidence'},
+      {role:'user',content:'Second investigation',sessionSource:{id:'web:other',intent:'progress'}},
+      {role:'assistant',event:'tool_call',toolCallId:'budget',content:'',toolCall:{name:'yield',arguments:{question:'Allow six runs?',options:['Yes','No'],default_option:'No'}}},
+      {role:'tool',event:'tool_result',toolCallId:'budget',content:JSON.stringify({requestId:'budget',option:'No',answeredBy:'timeout',answeredAt:'2026-09-21T10:00:00Z'})},
+      {role:'assistant',event:'tool_call',toolCallId:'next',content:'',toolCall:{name:'yield',arguments:{question:'Continue local investigation?',options:['Yes','No'],default_option:'No'}}}
+    ); window.__setPending({id:'next',sessionId:'web:owner',question:'Continue local investigation?',options:['Yes','No'],defaultOption:'No',recipient:{kind:'user',sessionId:'web:owner'},createdAt:'2026-09-21T10:01:00Z',deadline:null})`)
+    await wait(`document.querySelectorAll('.history-marker').length === 6`)
+    assert.equal(await execute(`document.querySelectorAll('.history-marker.collaboration').length`), 1)
+    assert.equal(await execute(`document.querySelectorAll('.history-marker.decision').length`), 2)
+    assert.equal(await execute(`Array.from(document.querySelectorAll('.history-marker.decision > span')).every(el => { const box = el.getBoundingClientRect(); const matrix = new DOMMatrix(getComputedStyle(el).transform); return box.width >= box.height * 3 && matrix.b === 0 && matrix.c === 0 })`), true, 'Decisions use horizontal rectangles, never rotated squares')
+    assert.match(await execute(`document.querySelector('.history-marker.waiting-user').getAttribute('aria-label')`), /Needs your reply/)
+    window.setContentSize(1100, 844)
+    await execute(`document.querySelector('.history-marker.collaboration').click()`)
+    await wait(`document.querySelectorAll('.history-preview .history-members button').length === 2`)
+    assert.match(await execute(`document.querySelector('.history-preview-source').textContent`), /2 messages/)
+    await execute(`document.querySelectorAll('.history-preview .history-members button')[1].click()`)
+    await wait(`Math.abs(document.querySelector('[data-msg-idx="6"]').getBoundingClientRect().top - document.querySelector('.fixture-messages').getBoundingClientRect().top) < 2`)
+    await execute(`document.querySelector('.history-marker.timeout').dispatchEvent(new MouseEvent('mouseenter'))`)
+    await wait(`document.querySelector('.history-preview.decision')?.textContent.includes('Default selected by timeout')`)
+    await execute(`document.querySelector('.history-marker.waiting-user').click()`)
+    await wait(`Math.abs(document.querySelector('[data-msg-idx="9"]').getBoundingClientRect().top - document.querySelector('.fixture-messages').getBoundingClientRect().top) < 2`)
+    await execute(`window.__setHistoryList(true)`)
+    window.setContentSize(390, 844)
+    await wait(`!!document.querySelector('.history-list')`)
+    await execute(`document.querySelector('.history-list .collaboration').click()`)
+    await wait(`document.querySelectorAll('.history-list .history-members button').length === 2`)
+    await execute(`document.querySelectorAll('.history-list .history-members button')[0].click()`)
+    await wait(`Math.abs(document.querySelector('[data-msg-idx="4"]').getBoundingClientRect().top - document.querySelector('.fixture-messages').getBoundingClientRect().top) < 2`)
     await execute(`document.querySelector('#switch').click()`)
     await wait(`document.querySelectorAll('.node rect').length === 3 && !!document.querySelector('.composer-send')`)
     for (const width of [1100, 390]) {

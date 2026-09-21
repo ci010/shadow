@@ -58,7 +58,7 @@ test('coordinator cannot activate dynamic tools; topics retain lazy Initiative a
   base.register(initiative)
   base.register(new InvokeTool(importer))
   base.register(new SearchTool('.', undefined, undefined, importer))
-  for (const name of ['exec', 'write', 'subagent', 'read', 'topic', 'message', 'project_config', 'authoring_change', 'skill_read', 'skill_save']) {
+  for (const name of ['exec', 'write', 'subagent', 'read', 'topic', 'message', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'yield']) {
     base.register({ name, description: name, parameters: { type: 'object', properties: {} }, execute: async () => name })
   }
   const tools = new SessionTools(base, '.', agent.allowedTools, agent.blockedTools)
@@ -68,7 +68,7 @@ test('coordinator cannot activate dynamic tools; topics retain lazy Initiative a
     signal: new AbortController().signal, tools,
   }
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('unexpected connection') })
-  assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['authoring_change', 'initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic'])
+  assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['authoring_change', 'initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic', 'yield'])
   assert.match(await tools.execute('search', { space: 'tools:fixture' }, context), /not available/)
   assert.match(await tools.execute('invoke_tool', { name: 'fixture__execute', args: {} }, context), /not found|not available|not allowed/i)
   assert.equal(connect.mock.callCount(), 0)

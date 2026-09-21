@@ -45,7 +45,7 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
   })
   assert.deepEqual(styles.errors, [])
   const server = await createServer({
-    configFile: false, root: resolve(root, 'app'), logLevel: 'error',
+    configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-conversation',
       resolveId: id => ['/conversation-fixture.ts', '/conversation-rows.js', '/conversation-style.css'].includes(id) ? `\0${id}` : undefined,
@@ -61,6 +61,9 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
           import MessageAction from '/src/components/MessageAction.vue';
           import ConversationSkeleton from '/src/components/ConversationSkeleton.vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
+          import YieldDecision from '/src/components/YieldDecision.vue';
+          import CollaborationMessage from '/src/components/CollaborationMessage.vue';
+          import { inlineYieldDecisions } from '/src/yield-history.ts';
           import MessageTimestamp from '/src/components/MessageTimestamp.vue';
           import SessionActivity from '/src/components/SessionActivity.vue';
           import { inlineMessageActions } from '/src/message-actions.ts';
@@ -72,7 +75,7 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
           const state = reactive({ loadingHistory:true, messages:[], visible:true, conversationDocumentVisible:true,
             activePanel:'conversation', route:{name:'chat'}, viewingPhysicalId:null, activeSessionId:'web:owner',
             streaming:false, streamContent:'', isDirectChat:true, requestBusy:false, currentRecovery:null,
-            embedded:false, navigation:[] });
+            embedded:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]} });
           const samples = [
             { role:'user', content:'Please ask the reviewer to check the changes.' },
             { role:'user', content:'I will review the changes and send feedback shortly.',
@@ -84,34 +87,60 @@ test('conversation skeleton, incoming alignment and outgoing message navigation 
               toolCall:{ name:'read', arguments:{ path:'file.ts' } } },
             { role:'tool', event:'tool_result', toolCallId:'read', content:'File contents' },
             { role:'assistant', content:'Review complete. The changes preserve existing behavior.', reasoningText:'Checking the affected paths.' },
+            { role:'assistant', event:'tool_call', content:'', toolCallId:'decision',
+              toolCall:{ name:'yield', arguments:{question:'Increase the experiment budget?',options:['Six runs','Four runs'],default_option:'Four runs'} } },
+            { role:'tool', event:'tool_result', toolCallId:'decision',
+              content:JSON.stringify({requestId:'budget',option:'Four runs',answeredBy:'timeout',answeredAt:'2026-09-21T10:00:00Z'}) },
           ];
           Object.assign(window, { __conversationFixture:state, __showConversation:() => { state.messages = samples; state.loadingHistory = false } });
           const empty = { render:() => null };
           createApp({
             __scopeId:'data-v-fixture',
-            components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity,
+            components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, CollaborationMessage,
               CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty, ConversationSummary:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
             setup() {
               const sessions = [{ sessionId:'web:peer', label:'Reviewer with a deliberately long name', mode:'session' }];
               const messageActions = computed(() => inlineMessageActions(state.messages, sessions));
+              const yieldDecisions = computed(() => inlineYieldDecisions(state.messages, null, state.decisionRecords));
               const nav = useConversationNavigation({
                 props:{ managed:true, get embedded() { return state.embedded }, projectId:'fixture' },
                 router:{replace(){}}, emit:(event, id) => state.navigation.push({event,id}),
                 sessions:() => sessions, reset(){}, refresh(){}, mounted:() => true, newDraft(){},
               });
-              return { ...toRefs(state), messageActions,
+              return { ...toRefs(state), messageActions, yieldDecisions,
                 displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
                 inlineExecutions:{entries:new Map()}, ioAfter:new Map(), expandedThinking:new Set(),
-                toolActivity:computed(() => groupToolActivity(state.messages, messageActions.value.excluded)),
-                inspectExecution:nav.inspectExecution, clearSelection(){}, openImagePreview(){}, sessionMessageTitle,
+                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded]))),
+                inspectExecution:nav.inspectExecution, clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
                 renderMarkdown:text => DOMPurify.sanitize(marked.parse(text)), isErrorMessage:() => false };
             },
           }).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use((request, response, next) => {
+          if (request.url?.startsWith('/api/sessions/web%3Aowner/decisions')) {
+            response.setHeader('Content-Type', 'application/json')
+            response.end(JSON.stringify(request.url.includes('/reviews') ? { reviews: [] } : { records: [{
+              request: { id: 'budget', sessionId: 'web:owner', question: 'Increase the experiment budget?',
+                options: ['Six runs', 'Four runs'], defaultOption: 'Four runs', recipient: { kind: 'user', sessionId: 'web:owner' },
+                createdAt: '2026-09-21T10:00:00Z', deadline: null, origin: { physicalId: 'owner-0', toolCallId: 'decision' },
+                sources: [{ sessionId: 'web:peer', physicalId: 'worker-segment-0', requestId: 'worker-budget' }] },
+            }] }))
+            return
+          }
+          if (request.url?.startsWith('/api/sessions/web%3Apeer/decisions')) {
+            const url = new URL(request.url, 'http://127.0.0.1')
+            assert.equal(url.searchParams.get('physicalId'), 'worker-segment-0')
+            response.setHeader('Content-Type', 'application/json')
+            response.end(JSON.stringify({ records: [{
+              request: { id: 'worker-budget', sessionId: 'web:peer', question: 'The runner can retry up to six times, exceeding the four-run budget. Should retries be capped?',
+                options: ['Cap retries', 'Expand budget'], defaultOption: 'Cap retries', recipient: { kind: 'user', sessionId: 'web:peer' },
+                createdAt: '2026-09-21T09:00:00Z', deadline: null, origin: { physicalId: 'worker-segment-0', toolCallId: 'worker-call' } },
+            }] }))
+            return
+          }
           if (request.url !== '/__conversation') return next()
           response.setHeader('Content-Type', 'text/html')
           response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="app"></div><script type="module" src="/conversation-fixture.ts"></script></body></html>')

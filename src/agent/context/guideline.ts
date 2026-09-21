@@ -29,7 +29,7 @@ export function executionModeGuideline(ctx: SessionPromptContext): string {
   const hasDelegationParent = !!ctx.parentSessionId
   const modes = ctx.agent.name !== 'orchestrator' && isToolAllowed(ctx.agent, 'subagent')
     ? allowedSubagentModes(mode, hasDelegationParent) : []
-  const decision = ctx.agent.name !== 'orchestrator' && isToolAllowed(ctx.agent, 'yield')
+  const decision = isToolAllowed(ctx.agent, 'yield')
     ? 'Use yield for blockers or decisions requiring input.'
     : 'Report blockers or missing input explicitly; do not invent an answer.'
   if (mode === 'call') {

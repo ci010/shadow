@@ -62,7 +62,7 @@
   --c-primary-bg-hover: #1e4c9f;
 
   /* Conversation roles are independent of sender identity and execution status. */
-  --c-chat-user-bg: var(--c-bg-muted);
+  --c-chat-user-bg: var(--c-info-bg);
   --c-chat-assistant-bg: var(--c-bg-card);
   --c-chat-action-bg: var(--c-bg-soft);
   --c-chat-border: var(--c-border-soft);

@@ -2,10 +2,12 @@
   <section v-if="enabled && (request || error)" class="yield-question" :class="{ 'yield-question-custom': customMode }" aria-label="Pending question">
     <form v-if="request" @submit.prevent="submit" @keydown="handleKeydown">
       <header class="yield-heading">
-        <span>Question</span>
-        <span class="i-lucide-message-circle" aria-hidden="true" />
+        <span>{{ request.recipient.kind === 'user' ? 'Decision · Needs your reply' : 'Decision · Waiting for parent' }}</span>
+        <span class="i-lucide-signpost" aria-hidden="true" />
       </header>
       <div class="yield-body">
+        <DecisionBrief v-if="request.brief" :brief="request.brief" @inspect="emit('inspect', $event)" />
+        <p v-if="request.reportingSessionId" class="yield-status">Reporting responsibility: {{ request.reportingSessionId }}. Answer authority is unchanged.</p>
         <fieldset :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">
           <legend>{{ request.question }}</legend>
           <div class="yield-options">
@@ -33,7 +35,11 @@
         <p :id="`${id}-status`" class="yield-status" :class="{ 'yield-sr-only': answerable }">{{ request.recipient.kind === 'parent'
           ? 'Waiting for the parent session. Only that session can answer.'
           : canAnswer ? 'Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.' : 'Waiting for an authorized user. You have read-only access.' }}</p>
-        <p v-if="request.deadline" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
+        <p v-if="request.deadline || request.timeoutPaused" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
+        <p v-if="request.supersedes" class="yield-status">Revised in response to your feedback: {{ request.revisionReason }}. This is a new unanswered version.</p>
+        <DecisionDiscussion v-if="request.origin && answerable"
+          :key="request.id" :reference="{ sessionId: request.sessionId, physicalId: request.origin.physicalId, requestId: request.id }"
+          :api-base="apiBase" :can-request="answerable && !busy" @updated="refresh" />
       </div>
       <div class="yield-actions">
         <button v-if="error" class="btn yield-reload" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? 'Reloading…' : 'Reload question' }}</button>
@@ -50,11 +56,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText } from '../yield-requests.ts'
+import type { YieldRequest } from '../../../src/sessions/yield-contract.ts'
+import DecisionDiscussion from './DecisionDiscussion.vue'
+import DecisionBrief from './DecisionBrief.vue'
 
 const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean }>()
-const emit = defineEmits<{ cancelled: [sessionId: string] }>()
+const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: YieldRequest | null]; inspect: [sessionId: string] }>()
 const id = `yield-${useId()}`
 const documentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const enabled = computed(() => props.active && documentVisible.value)
@@ -62,6 +71,9 @@ const customInput = ref<HTMLTextAreaElement>()
 const { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh, submit, cancelQuestion: cancelPendingQuestion } = useYieldRequest(
   () => ({ ...props, active: enabled.value }),
 )
+watch(request, (value, previous) => {
+  if (value?.id !== previous?.id) emit('request', value)
+}, { immediate: true })
 function optionLetter(index: number) { return String.fromCharCode(65 + index) }
 function handleKeydown(event: KeyboardEvent) {
   if (!answerable.value || busy.value || event.defaultPrevented || event.isComposing || event.repeat
@@ -100,11 +112,14 @@ async function cancelQuestion() {
 }
 function updateVisibility() { documentVisible.value = document.visibilityState !== 'hidden' }
 onMounted(() => document.addEventListener('visibilitychange', updateVisibility))
-onUnmounted(() => document.removeEventListener('visibilitychange', updateVisibility))
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', updateVisibility)
+  emit('request', null)
+})
 </script>
 
 <style scoped>
-.yield-question { box-sizing: border-box; display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; width: calc(100% - 40px); max-width: 860px; max-height: min(50dvh, 420px); overflow: hidden; margin: 8px auto 0; padding: 16px; border: 1px solid var(--c-border); border-radius: 0; background: var(--c-bg-card); color: var(--c-text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.yield-question { box-sizing: border-box; display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; width: calc(100% - 40px); max-width: 860px; max-height: min(50dvh, 420px); overflow: hidden; margin: 8px auto 0; padding: 16px; border: 1px solid var(--c-border); border-left: 3px solid var(--c-warn); border-radius: 0; background: var(--c-bg-card); color: var(--c-text); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .yield-question:last-child { margin-bottom: 16px; }
 .yield-question-custom { max-height: min(60dvh, 540px); }
 .yield-question form { display: flex; flex-direction: column; min-height: 0; }
