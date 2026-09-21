@@ -9,7 +9,7 @@ class FakeWindow extends EventEmitter {
   messages: unknown[] = []
   webContents = Object.assign(new EventEmitter(), {
     isDestroyed: () => this.destroyed,
-    send: (channel: string, direction: number | 'close' | 'close-all') => { this.messages.push([channel, direction]) },
+    send: (channel: string, direction: number | 'close' | 'close-all' | 'toggle-explorer') => { this.messages.push([channel, direction]) },
   })
   isDestroyed = () => this.destroyed
 }
@@ -56,16 +56,16 @@ test('native dispatch preserves other modifiers, plain Tab, key-up and compositi
 
 test('preload only relays validated directions and removes its listener on disposal', () => {
   const ipc = new EventEmitter()
-  const directions: Array<number | 'close' | 'close-all'> = []
+  const directions: Array<number | 'close' | 'close-all' | 'toggle-explorer'> = []
   const dispose = receiveDocumentTabShortcuts(ipc, direction => { directions.push(direction) })
-  for (const value of [1, -1, 'close', 'close-all', 'delete', 0, '1', null, {}, true, undefined]) {
+  for (const value of [1, -1, 'close', 'close-all', 'toggle-explorer', 'delete', 0, '1', null, {}, true, undefined]) {
     ipc.emit(DOCUMENT_TAB_CHANNEL, {}, value)
   }
-  assert.deepEqual(directions, [1, -1, 'close', 'close-all'])
+  assert.deepEqual(directions, [1, -1, 'close', 'close-all', 'toggle-explorer'])
   dispose()
   dispose()
   ipc.emit(DOCUMENT_TAB_CHANNEL, {}, 1)
-  assert.deepEqual(directions, [1, -1, 'close', 'close-all'])
+  assert.deepEqual(directions, [1, -1, 'close', 'close-all', 'toggle-explorer'])
   assert.equal(ipc.listenerCount(DOCUMENT_TAB_CHANNEL), 0)
 })
 
@@ -114,4 +114,29 @@ test('native Ctrl+Shift+W closes all files once without triggering window close'
   assert.equal(prevented, 2)
   assert.deepEqual(window.messages, [[DOCUMENT_TAB_CHANNEL, 'close-all']])
   dispose()
+})
+
+test('native Ctrl+Shift+E toggles the explorer once and suppresses duplicate DOM events and repeats', () => {
+  const window = new FakeWindow()
+  const dispose = installDocumentTabShortcuts(window)
+  let prevented = 0
+  const toggle = { ...input, key: 'E', code: 'KeyE', shift: true }
+  for (const isAutoRepeat of [false, true]) {
+    window.webContents.emit('before-input-event', { preventDefault: () => { prevented++ } },
+      { ...toggle, isAutoRepeat })
+  }
+  assert.equal(prevented, 2)
+  assert.deepEqual(window.messages, [[DOCUMENT_TAB_CHANNEL, 'toggle-explorer']])
+  window.webContents.emit('before-input-event', { preventDefault: () => { prevented++ } }, { ...toggle, key: 'e' })
+  assert.equal(prevented, 3)
+  assert.equal(window.messages.length, 2)
+  for (const patch of [{ shift: false }, { control: false }, { alt: true }, { meta: true },
+    { isComposing: true }, { type: 'keyUp' }, { key: 'Process' }]) {
+    window.webContents.emit('before-input-event', { preventDefault: () => assert.fail('unrelated shortcut consumed') },
+      { ...toggle, ...patch })
+  }
+  assert.equal(window.messages.length, 2)
+  dispose()
+  window.webContents.emit('before-input-event', { preventDefault: () => assert.fail('disposed shortcut consumed') }, toggle)
+  assert.equal(window.webContents.listenerCount('before-input-event'), 0)
 })

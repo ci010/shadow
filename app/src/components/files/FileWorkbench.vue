@@ -16,7 +16,7 @@
         <button v-if="tabs.knowledge" class="mobile-view-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="file in tabs.files" :key="fileTabKey(file)" class="mobile-view-row">
-        <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : 'i-lucide-file'" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span></button>
+        <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span></button>
         <button class="mobile-view-close" :aria-label="`Close ${file.path}`" @click="closeFile(fileTabKey(file), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
     </MobileSheet>
@@ -43,8 +43,8 @@
     </aside>
     <div class="workbench-editor">
       <div v-show="!mobileLayout" class="document-toolbar">
-        <HoverInfo v-if="explorerAvailable" text="Toggle files" v-slot="{ triggerProps }">
-        <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" aria-label="Toggle files" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
+        <HoverInfo v-if="explorerAvailable" text="Toggle files (Ctrl+Shift+E)" v-slot="{ triggerProps }">
+        <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" aria-label="Toggle files" aria-keyshortcuts="Control+Shift+E" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
           <span class="i-lucide-panel-left" aria-hidden="true" />
         </button>
         </HoverInfo>
@@ -73,7 +73,7 @@
           <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))" @contextmenu.prevent.stop="openTabMenu($event, fileTabKey(file))">
             <HoverInfo :text="`${file.path}${file.view === 'diff' ? '\nChanges from HEAD' : ''}`" v-slot="{ triggerProps }">
             <button v-bind="triggerProps" :id="tabId(fileTabKey(file))" role="tab" :aria-selected="tabs.selected === fileTabKey(file)" :tabindex="tabs.selected === fileTabKey(file) ? 0 : -1" :aria-controls="panelId(fileTabKey(file))" :aria-label="`${file.path}${file.view === 'diff' ? ' changes' : ''}`" @click="selectTab(fileTabKey(file))" @keydown="tabKey($event, fileTabKey(file))">
-              <span class="document-icon" :class="file.view === 'diff' ? 'i-lucide-file-diff' : 'i-lucide-file'" aria-hidden="true" /><span class="document-name">{{ file.entry.name }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span>
+              <span class="document-icon" :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span class="document-name">{{ file.entry.name }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span>
             </button>
             </HoverInfo>
             <HoverInfo :text="`Close ${file.entry.name}${file.view === 'diff' ? ' changes' : ''}`" v-slot="{ triggerProps }">
@@ -127,6 +127,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'v
 import FileTree from './FileTree.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
 import FileDiffPreview from './FileDiffPreview.vue'
+import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
 import KnowledgeView from '../KnowledgeView.vue'
 import MobileSheet from '../MobileSheet.vue'
@@ -135,7 +136,7 @@ import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
-import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile } from '../../file-workbench.ts'
+import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile } from '../../file-workbench.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false })
 const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
@@ -328,7 +329,18 @@ function cycleTab(direction: DocumentTabDirection): boolean {
   })
   return true
 }
+function toggleExplorerShortcut(): boolean {
+  if (!explorerAvailable.value || !canHandleDocumentShortcut(shortcutContext())) return false
+  if (expanded.value && root.value?.querySelector('.workbench-explorer')?.contains(document.activeElement)) collapseExplorer()
+  else toggleExplorer()
+  return true
+}
 function documentKey(event: KeyboardEvent) {
+  if (isToggleExplorerKey(event) && toggleExplorerShortcut()) {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   if (isCloseAllDocumentsKey(event) && closeAllDocuments()) {
     event.preventDefault()
     event.stopPropagation()
@@ -348,6 +360,7 @@ function nativeDocumentKey(event: Event) {
   const direction: unknown = (event as CustomEvent).detail
   if (direction === 'close') closeCurrentFile()
   else if (direction === 'close-all') closeAllDocuments()
+  else if (direction === 'toggle-explorer') toggleExplorerShortcut()
   else if (direction === -1 || direction === 1) cycleTab(direction)
 }
 function compositionStart() { composing = true }

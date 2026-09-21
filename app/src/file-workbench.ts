@@ -123,6 +123,11 @@ export function isCloseAllDocumentsKey(event: DocumentTabKey & { repeat?: boolea
   return event.shiftKey && isDocumentCloseKey(event)
 }
 
+export function isToggleExplorerKey(event: DocumentTabKey & { repeat?: boolean }): boolean {
+  return event.key.toLowerCase() === 'e' && event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey
+    && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented && !event.repeat
+}
+
 export interface DocumentShortcutContext {
   active: boolean
   keyboardActive: boolean
@@ -132,7 +137,7 @@ export interface DocumentShortcutContext {
   composing: boolean
 }
 
-function canHandleDocumentShortcut(context: DocumentShortcutContext): boolean {
+export function canHandleDocumentShortcut(context: DocumentShortcutContext): boolean {
   return context.active && context.keyboardActive && context.visible && context.explorerEnabled
     && !context.overlayOpen && !context.composing
 }

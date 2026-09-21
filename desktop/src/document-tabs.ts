@@ -2,7 +2,7 @@ import type { Input } from 'electron'
 
 export const DOCUMENT_TAB_CHANNEL = 'shadow:cycle-document-tab'
 type Direction = -1 | 1
-type DocumentAction = Direction | 'close' | 'close-all'
+type DocumentAction = Direction | 'close' | 'close-all' | 'toggle-explorer'
 type BeforeInput = (event: { preventDefault(): void }, input: Input) => void
 
 interface DocumentTabWindow {
@@ -26,11 +26,12 @@ export function installDocumentTabShortcuts(window: DocumentTabWindow): () => vo
       || input.type !== 'keyDown' || !input.control
       || input.alt || input.meta || input.isComposing) return
     const close = input.key.toLowerCase() === 'w'
-    if (!close && input.key !== 'Tab') return
+    const toggleExplorer = input.key.toLowerCase() === 'e' && input.shift
+    if (!close && !toggleExplorer && input.key !== 'Tab') return
     // Suppress the DOM keydown so the renderer cannot cycle twice.
     event.preventDefault()
-    if (close && input.isAutoRepeat) return
-    contents.send(DOCUMENT_TAB_CHANNEL, close ? (input.shift ? 'close-all' : 'close') : input.shift ? -1 : 1)
+    if ((close || toggleExplorer) && input.isAutoRepeat) return
+    contents.send(DOCUMENT_TAB_CHANNEL, toggleExplorer ? 'toggle-explorer' : close ? (input.shift ? 'close-all' : 'close') : input.shift ? -1 : 1)
   }
   const dispose = () => {
     if (disposed) return
@@ -54,7 +55,7 @@ export function receiveDocumentTabShortcuts(
 ): () => void {
   let disposed = false
   const receive = (_event: unknown, value: unknown) => {
-    if (!disposed && (value === -1 || value === 1 || value === 'close' || value === 'close-all')) listener(value)
+    if (!disposed && (value === -1 || value === 1 || value === 'close' || value === 'close-all' || value === 'toggle-explorer')) listener(value)
   }
   ipc.on(DOCUMENT_TAB_CHANNEL, receive)
   return () => {

@@ -1786,6 +1786,21 @@ instead of changing row height. `FoldersSidebar` supplies these dimensions to
 `TreeRow` through scoped variables, leaving the file workbench's tree density
 independent.
 
+The file explorer and ordinary file tabs use Material Icon Theme via Iconify's
+`@iconify-json/material-icon-theme` collection. `app/src/file-icons.ts` maps
+file names, compound extensions, and common directory names to complete UnoCSS
+classes, with generic document/folder fallbacks and open/closed folder variants.
+UnoCSS embeds the selected colored SVGs in local CSS; no runtime icon service is
+needed. Loading spinners, remote-workspace indicators, Git decorations, and diff
+tab icons retain their existing meaning.
+
+`Ctrl+Shift+E` toggles the available file explorer in the active workbench,
+including its narrow-screen drawer and remote-workspace view. The shortcut
+ignores key repeats, IME composition, and open dialogs/menus. Closing it while
+focus is inside the tree returns focus to the explorer control.
+Electron forwards the same action through the existing document-shortcut bridge
+so editor iframe focus does not prevent toggling; the renderer owns eligibility.
+
 Folder registry loading does not insert a sidebar text row. Existing folder
 icons become same-size loading indicators, with a header indicator for initial
 loads, an accessible status announcement, and reduced-motion support. Refreshes

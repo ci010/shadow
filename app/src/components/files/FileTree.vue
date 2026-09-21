@@ -21,7 +21,7 @@
       <div ref="body" :id="`${id}-body`" class="file-tree-body" :role="treeOnly ? 'tabpanel' : undefined" :aria-labelledby="treeOnly ? `${id}-${changesOnly ? 'changes' : 'files'}-tab` : undefined" @scroll="saveScroll">
         <HoverInfo v-if="loaded" :text="workspaceInfo" v-slot="{ triggerProps }">
           <div v-bind="triggerProps" class="file-tree-root" tabindex="0" :aria-label="workspaceInfo">
-            <span :class="workdir?.kind === 'remote' ? 'i-lucide-cloud' : 'i-lucide-folder-open'" aria-hidden="true" />
+            <span :class="workdir?.kind === 'remote' ? 'i-lucide-cloud' : folderIcon(workspaceLabel, true)" aria-hidden="true" />
             <span class="file-tree-root-label">{{ workspaceLabel }}</span>
           </div>
         </HoverInfo>
@@ -60,6 +60,7 @@ import FileTreeNode from './FileTreeNode.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
 import HoverInfo from '../HoverInfo.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
+import { folderIcon } from '../../file-icons.ts'
 import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import { type DirListing, type FileEntry, useSessionFiles } from '../../composables/useSessionFiles'
 import { changedDirectory, gitUnavailableLabel, type GitStatus } from '../../git-files.ts'

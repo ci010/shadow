@@ -18,6 +18,7 @@ export default defineConfig({
     presetIcons({
       collections: {
         lucide: () => import('@iconify-json/lucide').then(module => module.icons),
+        'material-icon-theme': () => import('@iconify-json/material-icon-theme').then(module => module.icons),
         'simple-icons': () => import('@iconify-json/simple-icons').then(module => module.icons),
       },
       extraProperties: {

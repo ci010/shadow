@@ -21,3 +21,16 @@ test('all literal UI icons and brand icons generate locally as currentColor CSS 
   assert.match(result.css, /background-color:currentColor/)
   assert.doesNotMatch(result.css, /url\(["']?https?:/)
 })
+
+test('all file icon mappings generate locally with their original SVG colors', async () => {
+  const source = await readFile(new URL('./file-icons.ts', import.meta.url), 'utf8')
+  const icons = new Set([...source.matchAll(/\bi-material-icon-theme-[a-z0-9-]+/g)].map(match => match[0]))
+  assert.ok(icons.size > 0)
+  const generator = await createGenerator(config)
+  const result = await generator.generate(source, { preflights: false })
+  for (const icon of icons) assert.ok(result.matched.has(icon), `${icon} must be extracted and generated`)
+  assert.equal([...result.css.matchAll(/background(?:-image)?:url\("data:image\/svg\+xml/g)].length, icons.size)
+  assert.ok(/fill='%23[0-9a-f]+/i.test(result.css), 'SVG fill colors must be preserved')
+  assert.doesNotMatch(result.css, /(?:mask:|mask-image:|background-color:currentColor)/)
+  assert.doesNotMatch(result.css, /url\(["']?https?:/)
+})

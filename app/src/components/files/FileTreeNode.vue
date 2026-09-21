@@ -3,7 +3,7 @@
     <TreeRow button-class="tree-row" :button-attrs="{ 'data-path': fullPath, 'aria-busy': loading, 'aria-disabled': !active }" :label="entry.name" :depth="depth"
       :title="decoration ? `${fullPath}\n${entry.type === 'dir' ? 'Contains changes: ' : ''}${gitChangeLabel(decoration)}` : fullPath"
       :expanded="entry.type === 'dir' ? expanded : undefined" @select="onRowClick">
-      <template #icon><span :class="loading ? 'i-lucide-loader-circle animate-spin' : entry.type === 'dir' ? (expanded ? 'i-lucide-folder-open' : 'i-lucide-folder') : 'i-lucide-file'" /></template>
+      <template #icon><span :class="loading ? 'i-lucide-loader-circle animate-spin' : entry.type === 'dir' ? folderIcon(entry.name, expanded) : fileIcon(entry.name)" /></template>
       <template v-if="entry.type === 'file'" #meta>
         <span v-if="decoration" class="git-status" :aria-label="gitChangeLabel(decoration)">{{ gitChangeBadge(decoration) }}</span>
         <span v-else>{{ sizeLabel }}</span>
@@ -38,6 +38,7 @@
 import { computed, onMounted, onUnmounted, ref, toRefs, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import TreeRow from '../TreeRow.vue'
+import { fileIcon, folderIcon } from '../../file-icons.ts'
 import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import { fileEntryKey, fileWorkspaceKey, reconcileFileEntries } from '../../file-tree-state.ts'
 import { homeDirectoryState, type HomeTreeState } from '../../home-tree-cache.ts'

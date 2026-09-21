@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canCloseAllDocuments, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
+import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
 import { documentTabKeys, DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, openKnowledgeTab, withDiagnosisTab } from './file-workbench.ts'
 
 const file = (path: string) => ({ path, entry: { name: path.split('/').at(-1)!, ext: '.md', type: 'file' as const, size: 12, mtime: null } })
@@ -53,6 +53,25 @@ const available = {
   active: true, keyboardActive: true, visible: true, explorerEnabled: true,
   overlayOpen: false, composing: false,
 }
+
+test('Ctrl+Shift+E toggles the explorer only for an exact, unhandled, nonrepeating shortcut', () => {
+  const event = { ...tabKey, key: 'E', keyCode: 69, shiftKey: true }
+  assert.equal(isToggleExplorerKey(event), true)
+  assert.equal(isToggleExplorerKey({ ...event, key: 'e' }), true)
+  for (const patch of [{ key: 'w' }, { key: 'Process' }, { ctrlKey: false }, { shiftKey: false },
+    { altKey: true }, { metaKey: true }, { isComposing: true }, { keyCode: 229 },
+    { defaultPrevented: true }, { repeat: true }]) {
+    assert.equal(isToggleExplorerKey({ ...event, ...patch }), false)
+  }
+})
+
+test('explorer shortcut uses active workbench guards without requiring an open file', () => {
+  assert.equal(canHandleDocumentShortcut(available), true)
+  for (const patch of [{ active: false }, { keyboardActive: false }, { visible: false },
+    { explorerEnabled: false }, { overlayOpen: true }, { composing: true }]) {
+    assert.equal(canHandleDocumentShortcut({ ...available, ...patch }), false)
+  }
+})
 
 test('optional Diagnosis is a permanent peer of Conversation, including keyboard navigation', () => {
   const state = withDiagnosisTab(openKnowledgeTab(openFileTab({ files: [], selected: '' }, file('notes.md'))), true)
