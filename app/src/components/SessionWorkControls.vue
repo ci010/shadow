@@ -1,0 +1,147 @@
+<template>
+  <section ref="root" class="session-work-controls" aria-label="Session controls" @keydown.esc="closePanel">
+    <div class="session-work-triggers">
+      <button v-if="canWrite" :id="`${id}-reporting`" ref="reportingTrigger" type="button" data-session-work="reporting"
+        :aria-expanded="expanded === 'reporting'" :aria-controls="`${id}-panel`" aria-haspopup="dialog"
+        aria-label="Decision reporting responsibility" @click="toggle('reporting')">
+        <span>Decision reporting</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
+      </button>
+      <button :id="`${id}-work`" ref="workTrigger" type="button" data-session-work="work"
+        :aria-expanded="expanded === 'work'" :aria-controls="`${id}-panel`" aria-haspopup="dialog"
+        :aria-label="needsAttention ? 'Work alignment — review needed' : undefined" @click="toggle('work')">
+        <span>Work alignment</span>
+        <span v-if="needsAttention" class="session-work-attention" title="Review needed" aria-hidden="true">!</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
+      </button>
+    </div>
+    <Teleport to="body">
+      <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" role="dialog" tabindex="-1"
+        :aria-labelledby="`${id}-${expanded || 'work'}`" :style="position" @keydown="popupKeydown">
+        <DecisionOwner v-if="canWrite" :api-base="apiBase" :session-id="sessionId" embedded :expanded="expanded === 'reporting'" />
+        <WorkAlignment :api-base="apiBase" :session-id="sessionId" :can-write="canWrite"
+          embedded :expanded="expanded === 'work'" @attention="needsAttention = $event" />
+      </div>
+    </Teleport>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { nextTick, onDeactivated, ref, useId, watch } from 'vue'
+import DecisionOwner from './DecisionOwner.vue'
+import WorkAlignment from './WorkAlignment.vue'
+
+const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean }>()
+const id = useId()
+const expanded = ref<'reporting' | 'work' | null>(null)
+const needsAttention = ref(false)
+const reportingTrigger = ref<HTMLButtonElement>()
+const workTrigger = ref<HTMLButtonElement>()
+const root = ref<HTMLElement>()
+const popup = ref<HTMLElement>()
+const position = ref<Record<string, string>>({})
+
+function toggle(panel: 'reporting' | 'work') {
+  if (props.active === false) return
+  expanded.value = expanded.value === panel ? null : panel
+}
+function closePanel(event: KeyboardEvent) {
+  if (!expanded.value || event.defaultPrevented) return
+  event.preventDefault()
+  event.stopPropagation()
+  const trigger = expanded.value === 'reporting' ? reportingTrigger : workTrigger
+  expanded.value = null
+  trigger.value?.focus()
+}
+function popupKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') { closePanel(event); return }
+  if (event.key !== 'Tab') return
+  const controls = [...popup.value?.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), textarea:not(:disabled), input:not(:disabled), summary, a[href], [tabindex="0"]') ?? []]
+    .filter(element => element.getClientRects().length)
+  const edge = event.shiftKey ? controls[0] : controls.at(-1)
+  if (!controls.length || document.activeElement === edge || (event.shiftKey && document.activeElement === popup.value)) closePanel(event)
+}
+watch(expanded, async (panel, _previous, onCleanup) => {
+  if (!panel) return
+  const anchor = panel === 'reporting' ? reportingTrigger.value : workTrigger.value
+  if (!anchor) return
+  const viewport = window.visualViewport
+  const place = () => {
+    const rect = anchor.getBoundingClientRect()
+    const left = viewport?.offsetLeft ?? 0
+    const top = viewport?.offsetTop ?? 0
+    const width = Math.min(520, (viewport?.width ?? window.innerWidth) - 24)
+    position.value = {
+      width: `${width}px`,
+      left: `${Math.max(left + 12, Math.min(rect.left, left + (viewport?.width ?? window.innerWidth) - width - 12))}px`,
+      bottom: `${window.innerHeight - rect.top + 8}px`,
+      maxHeight: `${Math.max(0, Math.min(420, rect.top - top - 20))}px`,
+    }
+  }
+  const dismissOutside = (event: Event) => {
+    if (event.target instanceof Node && !root.value?.contains(event.target) && !popup.value?.contains(event.target)) expanded.value = null
+  }
+  const observer = new ResizeObserver(place)
+  if (root.value) observer.observe(root.value)
+  if (root.value?.parentElement) observer.observe(root.value.parentElement)
+  window.addEventListener('resize', place)
+  window.addEventListener('scroll', place, true)
+  viewport?.addEventListener('resize', place)
+  viewport?.addEventListener('scroll', place)
+  document.addEventListener('pointerdown', dismissOutside, true)
+  document.addEventListener('focusin', dismissOutside)
+  onCleanup(() => {
+    observer.disconnect()
+    window.removeEventListener('resize', place)
+    window.removeEventListener('scroll', place, true)
+    viewport?.removeEventListener('resize', place)
+    viewport?.removeEventListener('scroll', place)
+    document.removeEventListener('pointerdown', dismissOutside, true)
+    document.removeEventListener('focusin', dismissOutside)
+  })
+  place()
+  await nextTick()
+  if (expanded.value === panel) popup.value?.focus({ preventScroll: true })
+}, { flush: 'post' })
+watch(() => [props.apiBase, props.sessionId], () => {
+  expanded.value = null
+  needsAttention.value = false
+})
+watch(() => props.canWrite, canWrite => {
+  if (!canWrite && expanded.value === 'reporting') {
+    expanded.value = null
+    workTrigger.value?.focus()
+  }
+})
+watch(() => props.active, active => { if (active === false) expanded.value = null })
+onDeactivated(() => { expanded.value = null })
+</script>
+
+<style scoped>
+.session-work-controls { width: calc(100% - 40px); max-width: 860px; min-width: 0; margin: 8px auto 0; }
+.session-work-triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.session-work-triggers button {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px;
+  padding: 5px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control);
+  background: var(--c-bg-soft); color: var(--c-text-secondary); font: inherit; font-size: 12px; line-height: 20px; cursor: pointer;
+}
+.session-work-triggers button:hover { color: var(--c-text); background: var(--c-bg-muted); }
+.session-work-triggers button[aria-expanded="true"] { border-color: var(--c-selection-border); background: var(--c-selection-bg); color: var(--c-primary); }
+.session-work-triggers button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.session-work-triggers svg { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.session-work-triggers button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.session-work-attention { color: var(--c-warn); }
+.session-work-panel {
+  position: fixed; z-index: 950; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain;
+  margin: 0; padding: 12px 16px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay);
+  background: var(--c-bg-card); color: var(--c-text); box-shadow: 0 12px 36px var(--c-shadow);
+}
+.session-work-panel:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+@media (max-width: 700px) {
+  .session-work-controls { width: calc(100% - max(8px, env(safe-area-inset-left, 0px)) - max(8px, env(safe-area-inset-right, 0px))); }
+  .session-work-panel { padding: 12px; }
+}
+@media (max-width: 700px), (pointer: coarse) {
+  .session-work-triggers button { min-height: 44px; }
+}
+</style>

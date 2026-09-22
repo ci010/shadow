@@ -44,22 +44,9 @@
         Project
         <router-link :to="{ name: 'project-settings', params: { projectId: route.params.projectId, section: 'general' } }">{{ route.params.projectId }}</router-link>
       </div>
-      <aside v-if="showChildRecovery" class="recovery-panel" role="status">
-        <div class="recovery-copy">
-          <strong>{{ recoveryTitle }}</strong>
-          <span>Main-backed tools may be stale, but this Child's local controls remain available.</span>
-        </div>
-        <div class="recovery-links">
-          <router-link :to="{ name: 'nodes' }">Manage this node</router-link>
-        </div>
-      </aside>
-      <aside v-if="liveError" class="recovery-panel" role="status">
-        <div class="recovery-copy"><strong>Live updates interrupted</strong><span>{{ liveError }}</span></div>
-        <div class="recovery-links"><button type="button" class="btn primary" @click="livePool.retry()">Retry live updates</button></div>
-      </aside>
-      <aside v-if="monitoringError || sounds.error.value" class="recovery-panel" role="status">
-        <div class="recovery-copy"><strong>Notification sounds</strong><span>{{ monitoringError || sounds.error.value }}</span></div>
-      </aside>
+      <ConnectionStatus :child-title="showChildRecovery ? recoveryTitle : undefined" :live-error="liveError"
+        :notification-error="monitoringError || sounds.error.value"
+        @retry="livePool.retry()" @manage-node="router.push({ name: 'nodes' })" />
       <div
         class="route-content"
         :class="{ 'chat-route': route.name === 'chat' || route.name === 'projects' }"
@@ -95,6 +82,7 @@ import DesktopFrame from './DesktopFrame.vue'
 import MobileChrome from './components/MobileChrome.vue'
 import { provideMobileChrome } from './composables/useMobileChrome.ts'
 import DesktopBrowserAccess from './components/DesktopBrowserAccess.vue'
+import ConnectionStatus from './components/ConnectionStatus.vue'
 import IoHost from './components/io/IoHost.vue'
 import { createIoBridge, ioBridgeKey } from './io/bridge.ts'
 import { projectChatLocation } from './projects.ts'
@@ -299,6 +287,7 @@ onUnmounted(() => {
 .resource-scope a { color: var(--c-text); }
 
 .app-main {
+  position: relative;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -308,49 +297,6 @@ onUnmounted(() => {
 .route-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 .route-content.chat-route { display: flex; padding: 0; overflow: hidden; }
 .setup-content-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
-
-.recovery-panel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  width: min(1180px, 100%);
-  margin: 0 auto 0.75rem;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid var(--c-warn);
-  border-radius: var(--radius-overlay);
-  background: var(--c-warn-bg);
-  color: var(--c-text-secondary);
-  font-size: 0.72rem;
-}
-
-.recovery-copy,
-.recovery-links {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  min-width: 0;
-}
-
-.recovery-copy strong {
-  flex: 0 0 auto;
-  color: var(--c-warn);
-}
-
-.recovery-copy span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.recovery-links {
-  flex: 0 0 auto;
-}
-
-.recovery-links a {
-  color: var(--c-text);
-  font-weight: 600;
-  white-space: nowrap;
-}
 
 .tab-nav {
   display: flex;
@@ -418,16 +364,6 @@ onUnmounted(() => {
 @media (max-width: 760px) {
   @media (max-width: 1100px) { .tab-group-label { display: none; } .tab { padding-inline: 7px; font-size: 10px; } }
 
-  .recovery-panel,
-  .recovery-copy {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .recovery-links {
-    align-self: stretch;
-    justify-content: space-between;
-  }
 }
 
 .theme-toggle {

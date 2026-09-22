@@ -1,6 +1,6 @@
 <template>
-  <details class="work-alignment" @toggle="toggle">
-    <summary>Work alignment <span v-if="needsAttention">— review needed</span></summary>
+  <component :is="embedded ? 'section' : 'details'" v-show="!embedded || expanded" class="work-alignment" :class="{ 'is-embedded': embedded }" @toggle="toggle">
+    <summary v-if="!embedded">Work alignment <span v-if="needsAttention">— review needed</span></summary>
     <p>Goals, human boundaries and the agent's current phase are separate. A revision grants no permissions and does not cancel external work.</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <button type="button" :disabled="busy" @click="load">{{ busy ? 'Loading...' : 'Refresh work state' }}</button>
@@ -73,13 +73,14 @@
       <button type="button" :disabled="busy" @click="perform('settle', { effectId: settleId })">I verified the outcome</button>
       <button type="button" :disabled="busy" @click="settleId = ''">Cancel</button>
     </div>
-  </details>
+  </component>
 </template>
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
 import { parseWorkView, type WorkView } from '../work-alignment.ts'
-const props = defineProps<{ sessionId: string; apiBase: string; canWrite: boolean }>()
+const props = defineProps<{ sessionId: string; apiBase: string; canWrite: boolean; embedded?: boolean; expanded?: boolean }>()
+const emit = defineEmits<{ attention: [needed: boolean] }>()
 const view = ref<WorkView>({ records: [], effects: [] })
 const selected = ref('')
 const current = computed(() => view.value.records.find(record => record.key === selected.value))
@@ -114,6 +115,13 @@ async function request(body?: object) {
 }
 const load = () => request()
 function toggle(event: Event) { opened = (event.currentTarget as HTMLDetailsElement).open; if (opened) void load(); else controller?.abort() }
+watch(needsAttention, needed => emit('attention', !!needed), { immediate: true })
+watch(() => props.expanded, expanded => {
+  if (!props.embedded) return
+  opened = !!expanded
+  if (opened) void load()
+  else controller?.abort()
+}, { immediate: true })
 function edit() {
   const record = current.value
   expectedRevision = record?.revision ?? 0
@@ -153,6 +161,7 @@ onUnmounted(() => controller?.abort())
 </script>
 <style scoped>
 .work-alignment { margin: 4px 16px; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.work-alignment.is-embedded { margin: 0; }
 summary { cursor: pointer; color: var(--c-text-secondary); }
 p, dl { margin: 6px 0; }
 dd { margin: 0 0 8px 12px; }
@@ -161,7 +170,13 @@ textarea, select { display: block; width: 100%; box-sizing: border-box; color: v
 textarea { min-height: 64px; resize: vertical; }
 button, select, textarea { min-height: 36px; border: 1px solid var(--c-border); padding: 4px 8px; border-radius: var(--radius-control); }
 button { background: var(--c-bg-card); color: var(--c-text); cursor: pointer; }
+button:hover:not(:disabled) { background: var(--c-bg-muted); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.is-embedded > :first-child { margin-top: 0; }
+.is-embedded > :last-child { margin-bottom: 0; }
 .work-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 pre { white-space: pre-wrap; max-height: 260px; overflow: auto; }
 [role=alert] { color: var(--c-error); }
+@media (max-width: 700px), (pointer: coarse) { button, select { min-height: 44px; } }
 </style>

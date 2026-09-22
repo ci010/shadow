@@ -11,14 +11,14 @@
             <input id="pairing-code" v-model="code" :type="usePin ? 'password' : 'text'" autocomplete="off" autocapitalize="off" :spellcheck="false" required :disabled="session.busy.value" aria-describedby="pairing-help" autofocus>
             <p id="pairing-help" class="hint">This browser stays signed in for up to 12 hours. {{ usePin ? 'You can use the same PIN again after expiry or a backend restart.' : 'Your current page will open after pairing.' }}</p>
             <p v-if="session.error.value" class="auth-error" role="alert">{{ session.error.value }}</p>
-            <div class="auth-actions">
-              <button type="button" :disabled="session.busy.value" @click="session.refresh()">Check session</button>
-              <button class="primary" type="submit" :disabled="session.busy.value || !code.trim()">{{ session.busy.value ? 'Connecting…' : 'Connect browser' }}</button>
-            </div>
+            <button class="primary" type="submit" :disabled="session.busy.value || !code.trim()">{{ session.busy.value ? 'Connecting…' : 'Connect browser' }}</button>
           </form>
-          <button v-if="session.status.value?.pinAvailable" type="button" :disabled="session.busy.value" @click="code = ''; pairingCode = !pairingCode">
-            {{ usePin ? 'Use a one-use pairing code instead' : 'Use administrator PIN instead' }}
-          </button>
+          <div class="auth-alternatives">
+            <button type="button" :disabled="session.busy.value" @click="session.refresh()">Check session</button>
+            <button v-if="session.status.value?.pinAvailable" type="button" :disabled="session.busy.value" @click="code = ''; pairingCode = !pairingCode">
+              {{ usePin ? 'Use a one-use pairing code instead' : 'Use administrator PIN instead' }}
+            </button>
+          </div>
         </template>
         <template v-else-if="session.view.value === 'error'">
           <p class="auth-error" role="alert">{{ session.error.value }}</p>
@@ -49,21 +49,23 @@ async function pair() {
 </script>
 
 <style scoped>
-.auth-shell { min-height: 100%; display: grid; place-items: center; padding: 24px; background: var(--c-bg-soft); }
-.auth-panel { width: min(440px, 100%); padding: 28px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
+.auth-shell { box-sizing: border-box; min-height: 100%; display: grid; place-items: center; padding: 24px; background: var(--c-bg-soft); }
+.auth-panel { box-sizing: border-box; width: min(440px, 100%); min-width: 0; padding: 28px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text); }
 h1 { margin: 0 0 14px; font-size: 24px; line-height: 1.25; font-weight: 600; }
 p { margin: 0 0 24px; color: var(--c-text-secondary); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 form { display: grid; gap: 10px; }
 label { font-size: 13px; font-weight: 600; }
-input { width: 100%; min-width: 0; min-height: 42px; padding: 8px 12px; border: 1px solid var(--c-border-soft); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; }
+input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; }
 .hint { margin: 0 0 10px; font-size: 12px; }
 .auth-error { margin: 0 0 16px; color: var(--c-error); }
-.auth-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
-button { min-height: 40px; padding: 8px 14px; border: 1px solid var(--c-border-soft); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-card); font: inherit; font-size: 13px; cursor: pointer; }
+.auth-alternatives { display: grid; justify-items: center; gap: 4px; margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--c-border-soft); }
+button { min-height: 44px; max-width: 100%; padding: 8px 14px; border: 1px solid var(--c-border-soft); border-radius: var(--radius-control); color: var(--c-text); background: var(--c-bg-card); font: inherit; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
+.auth-alternatives button { border-color: transparent; background: transparent; color: var(--c-text-secondary); }
+.auth-alternatives button:not(:disabled):hover { color: var(--c-text); text-decoration: underline; text-underline-offset: 3px; }
 button.primary { background: var(--c-primary-bg); color: var(--c-text-on-primary); border-color: var(--c-primary-bg); }
 button:not(:disabled):hover { background: var(--c-bg-muted); }
 button.primary:not(:disabled):hover { background: var(--c-primary-bg-hover); }
 button:disabled, input:disabled { opacity: .55; cursor: not-allowed; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--c-primary); outline-offset: 3px; }
-@media (max-width: 480px) { .auth-shell { padding: 16px; } .auth-panel { padding: 22px 18px; } }
+@media (max-width: 480px) { .auth-shell { padding: 16px; } .auth-panel { padding: 24px 20px; } input { font-size: 16px; } }
 </style>

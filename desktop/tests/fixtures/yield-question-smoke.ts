@@ -261,13 +261,13 @@ async function runViewport(origin: string, width: number, height: number) {
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(reads, beforeReads, 'Ordinary idle chats must not query a potentially unsupported yield endpoint')
     await evaluate(window, `(() => { const input = document.querySelector('.composer-input textarea'); input.value = 'Keep my unsent draft'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
-    await evaluate(window, `document.querySelector('.decision-owner').open = true`)
+    await evaluate(window, `document.querySelector('[data-session-work="reporting"]').click()`)
     await waitFor(window, `!!document.querySelector('.decision-owner select')`)
     await evaluate(window, `(() => { const input = document.querySelector('.decision-owner select'); input.value = ${JSON.stringify(reflector)}; input.dispatchEvent(new Event('change', {bubbles:true})); })()`)
     await evaluate(window, `document.querySelector('.decision-owner button').click()`)
     await waitFor(window, `document.querySelector('.decision-owner').textContent.includes('Assigned to: ${reflector}')`)
     assert.equal(owners.get(root), reflector)
-    await evaluate(window, `document.querySelector('.decision-owner').open = false`)
+    await evaluate(window, `document.querySelector('[data-session-work="reporting"]').click()`)
     const initial = { ...question(root, `root-${width}`), brief: decisionBrief, reportingSessionId: reflector,
       origin: { physicalId: 'physical-0', toolCallId: 'fixture-call' } }
     pending.set(root, initial)

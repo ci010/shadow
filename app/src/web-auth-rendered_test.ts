@@ -11,6 +11,7 @@ interface Element {
   tag: string
   text: string
   props: Record<string, unknown>
+  style: Record<string, string>
   children: Element[]
   parent?: Element
   value?: string
@@ -18,7 +19,7 @@ interface Element {
   getRootNode: () => { activeElement: null }
 }
 const element = (tag: string, text = ''): Element => ({
-  tag, text, props: {}, children: [], addEventListener() {}, getRootNode: () => ({ activeElement: null }),
+  tag, text, props: {}, style: {}, children: [], addEventListener() {}, getRootNode: () => ({ activeElement: null }),
 })
 const text = (node: Element): string => node.tag === '#comment' ? '' : [node.text, ...node.children.map(text)].join(' ')
 
@@ -145,6 +146,9 @@ test('PIN-enabled browser login masks and clears the PIN and offers the existing
   await session.refresh()
   const view = mount(t, './BrowserAuth.vue', { session })
   assert.match(view.text(), /Administrator PIN/)
+  assert.equal(view.button('Connect browser').parent?.tag, 'form')
+  assert.equal(view.button('Check session').parent?.props.class, 'auth-alternatives')
+  assert.equal(view.button('Use a one-use pairing code instead').parent, view.button('Check session').parent)
   const input = view.nodes().find(node => node.tag === 'input')!
   assert.equal(input.props.type, 'password')
   ;(input.props['onUpdate:modelValue'] as (value: string) => void)('synthetic-pin')

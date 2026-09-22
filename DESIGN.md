@@ -365,6 +365,37 @@ Selected automation rows and model options use the same primary-ink/selection-ba
 
 Attached context uses a soft surface, structural border, secondary text, and padding (4px 5px 4px 8px), with a (6px) gap. These are square labels with explicit remove controls, not colored status pills. Preserve the remove control's focus treatment.
 
+Session work controls form one compact row above the composer, aligned to its
+width and gutters. Decision reporting and Work alignment are square disclosure
+buttons, not rounded status pills or separate permanent heading rows. Use an
+(8px) gap, (32px) desktop targets and (44px) narrow/coarse-pointer targets.
+Only the expanded entry uses selection color; review-needed state uses warning
+ink. Each entry opens a non-modal, square popover **above** its trigger, with
+the existing overlay shadow. It is teleported out of the composer layout and
+never changes the toolbar or input position. Its width is capped at (520px),
+with viewport gutters; height is capped at (420px) and the available space
+above the trigger. Long forms scroll inside it. Switching preserves unsaved
+work. Clicking outside dismisses it; Escape closes it and returns focus to its
+entry. Hidden chat panes dismiss their popover. Permission and session changes still reset their
+appropriate state; the toolbar does not grant backend access.
+
+### Connection and recovery
+
+Browser connection forms use one full-width primary submit action beneath the
+input and help text. Session checks and alternative pairing methods sit in a
+separate, centered column of quiet text buttons below a structural divider.
+All actions keep square corners and at least (44px) targets.
+
+Live-update, Child connection and notification-sound failures share a
+right-aligned status popover over the app content, below the window chrome.
+New failures reveal their recovery actions without stealing focus; clicking
+outside or pressing Escape collapses them to a persistent status entry.
+Repeated updates to the same failure do not reopen it. Recovery removes the
+entry. None of these states changes the route's height, scroll position or
+composer position. Use neutral overlay surfaces and the standard overlay
+shadow, reserving warning color for the status mark rather than a full-width
+banner.
+
 ### Conversation and action cards
 
 `ChatTab.vue` uses the chat aliases with a one-pixel border and padding (0.5rem 0.75rem). Peer messages preserve their source label and dashed border; source-label strong text is secondary neutral ink. An actionable source label underlines and uses normal ink on hover and exposes blue focus; sender identity itself is not teal or a success state.
