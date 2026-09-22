@@ -18,15 +18,14 @@ import { AgentApp } from '../../agent/app.ts'
 import { BackgroundTaskManager } from '../../agent/background-task.ts'
 import { backgroundTasksPlugin } from '../../agent/background-task-routes.ts'
 import { ContextBuilder } from '../../agent/context/builder.ts'
-import { guidelineProvider } from '../../agent/context/guideline.ts'
+import { executionContractProvider, guidelineProvider } from '../../agent/context/guideline.ts'
 import { initiativeProvider } from '../../agent/context/initiative.ts'
 import { memoryProvider } from '../../agent/context/memory-provider.ts'
-import { projectProvider } from '../../agent/context/project.ts'
 import { topicProvider } from '../../agent/context/topic.ts'
 import { TopicService } from '../../sessions/topics.ts'
 import { topicsPlugin } from '../../sessions/topic-routes.ts'
 import { TopicTool } from '../../tools/topic.ts'
-import { runtimeIdentityProvider } from '../../agent/context/runtime.ts'
+import { runtimeDiscoveryProvider, runtimeIdentityProvider, type RuntimeProviderDeps } from '../../agent/context/runtime.ts'
 import { workspaceProvider } from '../../agent/context/workspace.ts'
 import { IdentityManager } from '../../agent/identity.ts'
 import type { LlmRuntimeConfig } from '../../agent/llm-config.ts'
@@ -646,11 +645,7 @@ export async function createProjectRuntime(
   tools.setWorkGuard(alignment)
   tools.register(new WorkTool(alignment))
 
-  context.register(guidelineProvider())
-  context.register(
-    workspaceProvider(workspace, vfs, workdirCapabilityLookup),
-  )
-  context.register(runtimeIdentityProvider({
+  const runtimePrompt: RuntimeProviderDeps = {
     projectId: project.id,
     identity,
     getProjectNodeInventory: id => id === project.id ? sessions.getNodeInventory() : undefined,
@@ -660,7 +655,9 @@ export async function createProjectRuntime(
     isTrustedConversation: (channel, chatId, address) => channels.isTrustedConversation(channel, chatId, address),
     getActiveSubagents: (parentSessionId) =>
       sessions.getChildren(parentSessionId) ?? Promise.resolve([]),
-  }))
+  }
+  context.register(runtimeIdentityProvider(runtimePrompt))
+  context.register(executionContractProvider())
   const projectFolderDiscovery = new ProjectFolderDiscovery({
     projectId: project.id,
     workspace,
@@ -668,12 +665,14 @@ export async function createProjectRuntime(
     registry: folderRegistry,
     workdirCapabilityLookup,
   })
-  context.register(projectProvider(projectFolderDiscovery))
   context.register(topicProvider(id => {
     const state = sessions.getSessionState(id)
     return state ? { ...state, topic: sessions.currentTopic(id) } : null
   }))
   context.register(initiativeProvider(initiatives))
+  context.register(workspaceProvider(workspace, vfs, workdirCapabilityLookup, projectFolderDiscovery))
+  context.register(guidelineProvider())
+  context.register(runtimeDiscoveryProvider(runtimePrompt))
   context.register(memoryProvider(
     memory,
     (sid) => sessions.getSessionState(sid)?.initiativeId ?? undefined,

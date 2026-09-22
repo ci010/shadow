@@ -18,10 +18,13 @@ export function guidelineProvider(): SystemPromptProvider {
 
       if (agentType.name !== 'orchestrator') sections.push(TOOLS)
       sections.push(toolsGuideline(ctx))
-      sections.push(executionModeGuideline(ctx))
       return sections.join('\n\n')
     },
   }
+}
+
+export function executionContractProvider(): SystemPromptProvider {
+  return { name: 'execution-contract', getPromptSection: executionModeGuideline }
 }
 
 export function executionModeGuideline(ctx: SessionPromptContext): string {
@@ -72,9 +75,6 @@ ${modes.length
 
 This is a reusable conversation with its own context. Complete the current request and retain
 relevant context for later requests. A final response ends this turn, not the conversation.
-Durable topics are root peers, not reusable children of their creator or coordinator.
-The Project coordinator routes work; it is not your structural parent. Provenance and
-context ancestry do not transfer responsibility or confer delegation ownership.
 Allowed delegation modes:
 ${modes.join(', ') || 'none'}. Role tool restrictions still apply.
 ${decision}`

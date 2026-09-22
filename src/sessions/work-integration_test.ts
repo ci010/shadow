@@ -56,6 +56,7 @@ async function fixture(workspace: string, store: SessionStore) {
   const agentTypes = new AgentTypesManager(workspace)
   await agentTypes.load()
   context.register({ name: 'fixture', getPromptSection: ctx => `Test session ${ctx.sessionId}` })
+  context.register({ name: 'history', getPromptSection: () => '# Historical reference\n> Old planning notes' })
   const events = new EventService(workspace, bus, (target, input) => sessions.deliver(target, input))
   const backgroundTasks = new BackgroundTaskManager(bus, events)
   const sessions: SessionManager = new SessionManager({
@@ -118,6 +119,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert.equal(f.quiet(), false)
       assert.match(JSON.stringify(f.calls[1].messages), /Historical response from a superseded work agreement/)
       assert.match(String(f.calls[1].messages[0].content), /A corrected outcome/)
+      for (const call of f.calls) {
+        const prompt = String(call.messages[0].content)
+        const current = prompt.indexOf('# Current work contracts')
+        assert(current > prompt.indexOf(`Test session ${id}`))
+        assert(current < prompt.indexOf('# Historical reference'))
+        assert.equal(prompt.match(/# Current work contracts/g)?.length, 1)
+      }
+      assert.doesNotMatch(String(f.calls[1].messages[0].content), /Deliver both outcomes, not just smoke/)
       f.calls[1].resolve(done())
       await waitFor(f.quiet)
     } finally { await f.close(); store.close?.() }

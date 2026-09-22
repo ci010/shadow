@@ -1,5 +1,6 @@
 import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { withCurrentWork } from '../agent/context/builder.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
@@ -214,7 +215,7 @@ export abstract class BaseSession {
       const workPrompt = workGuard?.prompt(this.id)
       const inferenceMessages: ChatMessage[] = workPrompt
         ? this.messages[0]?.role === 'system' ? this.messages.map((message, index) => index === 0
-          ? { ...message, content: `${message.content}\n\n${workPrompt}` } : message)
+          ? { ...message, content: withCurrentWork(String(message.content ?? ''), workPrompt) } : message)
           : [{ role: 'system', content: workPrompt }, ...this.messages]
         : this.messages
 

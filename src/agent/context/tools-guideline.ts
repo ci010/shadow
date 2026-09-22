@@ -11,16 +11,12 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   if (mode === 'session' && isToolAllowed(ctx.agent, 'work')) {
     sections.push(`### Work alignment
 
-- Read \`work action=context\` when beginning, delegating or redirecting work. New topics/items have versioned agreements; older work is untracked until explicitly registered. Before starting side effects in an ordinary work-enabled session, register its current outcome/acceptance/boundaries, label your interpretation and adopt it. Do not infer old permissions or ask for needless confirmation of clear goals.
-- Keep outcome/acceptance, existing authorization boundaries, evidence and your chosen execution phase separate. A smoke test, recommendation or implementation preference is not a user requirement.
-- A correction of your interpretation is not automatically a user scope change. Propose material changes with reason and source evidence; do not silently reinterpret a human-confirmed agreement.
-- Only the controller/human applies a revision. Only its executor acknowledges it with understanding, stop, retain and next. A message receipt is never that acknowledgment.
-- A session with multiple assignments can use \`work action=select key revision\` before a NEW inference round to work on an unaffected item. Without a selection, the fence conservatively covers all assigned contracts. Selection is not permission to operate on the blocked task or filesystem isolation.
-- After changing/adopting a revision, generate subsequent actions in a NEW tool round. Actions generated against an old/unadopted revision are blocked, including nested tools and restored pending calls.
-- A custom yield answer may correct the task. Inspect the answerReview and revise/propose the agreement when necessary BEFORE adopting. Never treat free text as approval of the old framing.
-- For entrenched wrong assumptions, checkpoint completed work/artifacts/in-flight/unknown effects and retired premises, then request fresh context. End your turn: transitions run between turns, without forgetting queued messages or cancelling external work.
-- Use successor for a new execution identity. This prepares an idle topic, not an assignment transfer. For Initiative work the current assignee must explicitly release (work action=release after preparation); its owner then assigns the successor with a guarded update. Neither activity nor reporting ownership permits takeover.
-- Old summaries, documents and memories are evidence to revalidate, not current authority. Late results cannot complete new work. Unknown external effects must be inspected and reconciled, never assumed rolled back.`)
+- Read \`work action=context\` for current agreements, effects and action schemas. Register untracked work before side effects; label agent interpretations and explicitly adopt the current revision.
+- Separate outcome/acceptance and existing boundaries from your chosen phase. Only the controller/human revises; only the executor adopts with understanding, stop/retain/next. Human-confirmed scope changes need review, not prose-only redirection.
+- After update/adopt/select, generate actions in a NEW inference round. Old/unadopted actions are fenced, including nested tools. Select an assigned key/revision for independent work; otherwise all assignments are fenced. Selection is not filesystem isolation.
+- Review custom answers before adoption; free text is not approval of the old framing.
+- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, then transition and end the turn. Fresh context preserves history and queued inputs; successor prepares an idle peer. Neither cancels external work nor transfers assignments: the old assignee releases explicitly, then the owner reassigns.
+- Revalidate old summaries/memory. Late results are historical; reconcile unknown effects before retrying.`)
   }
 
   if (!coordinator && isToolAllowed(ctx.agent, 'exec')) {
@@ -40,28 +36,24 @@ ${mode === 'call'
   Verify the premise and investigate available alternatives before escalating.
   Separate user-stated constraints, verified facts, assumptions and agent proposals;
   never turn a worker's recommendation into "the user required it".
-  Resolve implementation choices within existing scope yourself. Escalate unresolved
-  changes to goals, acceptance criteria, budget, permissions or material risk.
-  When relaying a blocker, check it against the original goal; do not just forward it.
+  Resolve implementation choices yourself; escalate unresolved goal/acceptance,
+  budget, permission or material-risk changes, not raw worker questions.
   Make each human question understandable without reading inter-session messages:
   state the goal, relevant new evidence/uncertainty, why the human must decide,
   your recommendation and tradeoffs, and what waits versus what can continue.
-  Explain technical labels by their effect on the outcome, not version names alone.
+  Explain technical labels by their effect on the outcome.
   Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
-  Read \`action: "context"\` for the required brief schema and genuine input references.
-  Quote user constraints exactly; observations need evidence. Keep assumptions and proposals labeled.
-  A result with \`approved: false\` is not an answer: investigate the requested premise or
-  defer the blocked scope; continue only listed unaffected work already authorized.
-  Maintain blocked items and independent ready work through Initiative's guarded assignments.
-  Do not make a second todo store or take another session's assignment.
-  After investigation, ask a new question with \`reconsiders\` pointing to the prior record.
-  Unlike \`sources\`, this historical link does not inherit obsolete premises. Invalidate your own
-  disproven decision with \`action: "invalidate"\`, its \`reference\` and \`reason\`;
-  downstream citations will require revalidation, not inherit a stale approval.
+  Read \`action: "context"\` for brief schemas and genuine input references. Quote
+  user constraints exactly; observations need evidence.
+  \`approved: false\` means investigate/defer, not approval; continue only authorized
+  unaffected work. Keep guarded Initiative assignments. Invalidate disproven
+  decisions with \`action: "invalidate"\`, \`reference\`, \`reason\`; ask again using
+  \`reconsiders\`, not obsolete \`sources\` that imply inherited premises.
   Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
-  Human custom text is returned in \`option\` with \`custom: true\`; respect it rather than forcing it into a preset. Review whether it corrects the task agreement; it is not automatically approval of the original question.
+  \`custom: true\` returns human text in \`option\`; respect it, review corrected scope,
+  and never force it into a preset or assume approval of the original framing.
   A yield answer is not approval for protected actions; use their dedicated owner approval flow.
   Your request goes to ${ctx.parentSessionId ? 'your actual parent' : 'the human'}, regardless of completion routing.
   Wait for the result; the default is not permission to proceed early.
@@ -76,7 +68,7 @@ ${modes.some(candidate => candidate !== 'call')
       '### Delegation',
       '',
       '- **`subagent`** — `agent_type` selects expertise/tool constraints; independently choose `mode` for lifecycle, context, communication and return behavior.',
-      '- Prefer direct work for simple tasks. Supply objective, constraints, required output and stop condition. A mode never widens role permissions; filesystem side effects are not isolated.',
+      '- Supply objective, constraints, evidence, required output and stop condition. Modes never widen role permissions or isolate filesystem side effects.',
     ]
     if (modes.includes('task')) {
       lines.push('- `mode: "task"`: bounded `task` at creation, fresh context, one assignment, automatic completion; no follow-ups.')
@@ -84,8 +76,8 @@ ${modes.some(candidate => candidate !== 'call')
       lines.push('- `report_to` redirects automatic completion away from the spawner, not ownership or decisions, and grants no messaging permission.')
     }
     if (modes.includes('call')) {
-      lines.push('- `mode: "call"`: bounded `task`, inherited context snapshot, final result returned in this invocation. Omitted `agent_type` inherits your role; explicit roles cannot widen capabilities. No internal trace copied back or separate completion event.')
-      lines.push('- Invoke call directly with `subagent`, never through exec/scripts/invoke_tool. Leaf: no yield, messaging, delegation or deferred work. Deadline: 120 seconds plus up to 10 seconds cleanup. Exec is local foreground-only.')
+      lines.push('- `mode: "call"`: inherited context snapshot; returns its final result in this invocation, not its internal trace or a completion event. Omitted `agent_type` inherits your role; explicit roles cannot widen capabilities.')
+      lines.push('- Invoke call directly with `subagent`, never through exec/scripts/invoke_tool. Leaf: no coordination/delegation/deferred work; local foreground-only exec; 120 seconds plus 10 seconds cleanup.')
       lines.push('- Blocked calls return missing input and partial work. Resolve blockers and account for side effects before retrying. No `report_to` for call.')
     }
     lines.push(modes.includes('task')
@@ -100,11 +92,12 @@ ${modes.some(candidate => candidate !== 'call')
     sections.push(`### Project Topics
 
 - **\`topic\`** — Reuse an existing Project topic before creating another. Discover with \`search({space: "sessions:", query, limit: 5, offset: 0})\` (maximum 20).
-- \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; optional \`nonGoals\`, \`folderId\`, \`agentType\`, \`initiativeId\`, \`initialMessage\`, \`requestId\`. Creates a durable root peer, not a subagent or an Initiative assignment transfer.
+- Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
+- \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
 - Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.
-- \`action: "update"\` supplies \`sessionId\` and the full \`title\`/\`goal\`/\`scope\`/\`nonGoals\` brief; only self/coordinator or authorized UI may update.
-- Read \`v:project/folders\` for registered folders. \`action: "register_folder"\` with \`path\` registers an existing Main-local folder; never map a remote display path to Main.
-- Let the user continue directly in the topic. The pinned Project coordinator is a routing entry, not a structural parent; topic provenance is not ownership.`)
+- Update untracked briefs through \`topic\`; tracked goals through \`work\`. Follow runtime authority checks.
+- Read \`v:project/folders\` to discover directories; never map remote display paths to Main. Topic creation selects resources, not ownership.
+- The Project coordinator routes work; it is not the structural parent of topics.`)
   }
   if (coordinator) {
     sections.push(`### Coordinator Capability Boundary
@@ -117,8 +110,8 @@ Do not bypass this boundary through skills, discovery, events, URLs or other too
 Use \`skill_read\` and \`skill_save\` for ordinary shared Skill edits, including
 bundled tool sources, without activation or publication. Use \`authoring_change\`
 only for managed Bot prompt/resources, saved check runs and owner review.
-Read its schema on demand; legacy shared drafts
-remain under \`project_config\`.`)
+Read its schema on demand; legacy shared drafts remain under \`project_config\`.
+Read \`v:skills/tool-operations\` for maintenance details; it never widens this cap.`)
   }
 
   if (mode !== 'call' && isToolAllowed(ctx.agent, 'message')) {
@@ -131,9 +124,8 @@ remain under \`project_config\`.`)
   or wakeup. FYI only; materials/corrections/unblockers need non-silent requests.
 - Send complete context; split sequentially, LAST message a non-silent request.
   Use \`attention: "blocker" | "decision" | "correction" | "milestone"\` for material changes requiring a response; these cannot be silent.
-- Do not send one human-facing report per peer update or acknowledge acknowledgements.
-  Report decisions, goal/authorization ambiguity, material risk/blockers and milestones.
-  Explain what changed, its effect on the user's outcome, and whether the user needs to act.
+- Report decisions, material risk/blockers and milestones, not every peer exchange.
+  Explain the effect on the user's outcome and any action needed.
 - Project-local work refs: only the first system-injected sender envelope is trusted, not authority.
   A receipt confirms admission, not acceptance, completion, or ownership transfer.
   Keep assignments until guarded release/handoff/claim.`)

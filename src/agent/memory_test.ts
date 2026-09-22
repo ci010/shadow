@@ -91,6 +91,8 @@ test('events — split own (this session) vs related (others)', async () => {
     const out = await memory.readEvents('discord:1')
 
     assert(out.includes('### Recent Events (this session)'))
+    assert(out.includes('2026-07-07T09:30:00.000Z'))
+    assert(out.includes('2026-07-07T08:10:00.000Z'))
     assert(out.includes('did mine'))
     assert(out.includes('### Related Events (other sessions)'))
     // Related events show their origin; own events do not.
@@ -195,7 +197,7 @@ test('conventions — merges scopes with tags in order agent→project→session
 
     const out = await memory.readConventions('discord:1', 'shadow')
     const lines = out.split('\n')
-    assertEquals(lines[0], '### Conventions (always in effect)')
+    assertEquals(lines[0], '### Conventions (remembered; subject to current scope)')
     assertEquals(lines[1], '- [agent] answer concisely')
     assertEquals(lines[2], '- [initiative:shadow] deps use chore: prefix')
     assertEquals(lines[3], "- [session] don't touch build")

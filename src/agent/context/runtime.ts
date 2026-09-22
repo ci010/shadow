@@ -175,12 +175,7 @@ export function runtimeIdentityProvider(
             ctx.admin && !coordinator ? 'ALLOWED' : 'NOT ALLOWED'
           }`,
       )
-      if (coordinator) {
-        lines.push('- **Coordinator cap**: read/search/topic/message/initiative/project_config only. Resource mutations require direct owner input; publication requires owner review through Publish/Cancel (revision command only as fallback).')
-      }
-      if ((ctx.mode ?? ctx.agent.defaultMode) === 'session') {
-        lines.push('- Durable topics are root peers. The pinned web:orchestrator routes work, not structural parentage; creator provenance and context ancestry do not confer ownership.')
-      }
+      if (coordinator) lines.push('- Coordinator tool limits are enforced by the runtime; see Coordinator Capability Boundary. Resource publication requires owner review.')
 
       if (sharedAudience) {
         lines.push(
@@ -232,7 +227,21 @@ export function runtimeIdentityProvider(
         )
       }
 
-      // Skills summary
+      lines.push('')
+      return lines.join('\n')
+    },
+  }
+}
+
+export function runtimeDiscoveryProvider(deps: RuntimeProviderDeps): SystemPromptProvider {
+  return {
+    name: 'capability-discovery',
+    async getPromptSection(ctx) {
+      if (ctx.projectId !== deps.projectId) throw new Error('Runtime prompt project binding mismatch')
+      const coordinator = ctx.agent.name === 'orchestrator'
+      const delegationModes = !coordinator && isToolAllowed(ctx.agent, 'subagent')
+        ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId) : []
+      const lines: string[] = []
       if (!coordinator && ctx.agent.skills !== false) {
         const skillsSummary = deps.getSkillsSummary(ctx.admin ?? false, ctx.sessionId)
         if (skillsSummary) lines.push(skillsSummary, '')
@@ -261,8 +270,7 @@ export function runtimeIdentityProvider(
         }
       }
 
-      lines.push('')
-      return lines.join('\n')
+      return lines.length ? ['# Capability discovery', ...lines].join('\n') : null
     },
   }
 }

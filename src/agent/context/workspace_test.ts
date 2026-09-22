@@ -42,7 +42,7 @@ test('workspace prompt uses the same managed path as runtime locality', async ()
     throw new Error('expected local compatibility workdir')
   }
   assert((prompt ?? '').includes(
-    `**Workspace root (this session)**: \`${runtime.workdir.path}\``,
+    `**Working directory**: \`${runtime.workdir.path}\``,
   ))
   assertEquals(runtime.workdir.path, resolve(workspace, 'discord_owner'))
 })
@@ -54,7 +54,7 @@ test('folder workspace prompt distinguishes actual cwd from private uploads', as
     node: 'online',
     capability: { kind: 'workdir', online: true, path },
   })).getPromptSection(context({ workdir: localFolderWorkdirRef('folder') }))
-  assert(prompt?.includes(`**Workspace root (this session)**: \`${path}\``))
+  assert(prompt?.includes(`**Working directory**: \`${path}\``))
   assert(prompt?.includes(resolve(workspace, 'discord_top')))
   assert(prompt?.includes('**Session uploads**'))
   assert(prompt?.includes('not the registered folder'))
@@ -73,7 +73,7 @@ test('workspace prompt reports unavailable capability without a local path', asy
   const prompt = await workspaceProvider(workspace, new VirtualFs())
     .getPromptSection(ctx)
 
-  assert((prompt ?? '').includes('**Workspace root (this session)**: unavailable'))
+  assert((prompt ?? '').includes('**Working directory**: unavailable'))
   assert((prompt ?? '').includes('**Node**: `child-node`'))
   assert((prompt ?? '').includes('**Capability**: `folder-capability`'))
   assert((prompt ?? '').includes('**Unavailable reason**: `node-missing`'))
@@ -112,13 +112,13 @@ test('workspace owns upload guidance across local, remote and unavailable workdi
         node: 'online', capability: { kind: 'workdir', online: true, path: folder },
       }))
       assert(prompt.includes(resolve(locations.sessionDataDir, 'uploads')))
-      assert.match(prompt, /shared `\.tmp\/` name resolves from Home, not the workspace root/)
+      assert.match(prompt, /shared `\.tmp\/` name resolves from the Project data directory, not the working directory/)
     } else {
       assert.doesNotMatch(prompt, /\*\*Session uploads\*\*:/)
       assert(!prompt.includes(folder))
       assert.match(prompt, kind === 'remote'
-        ? /file and process operations must use the remote executor/
-        : /workspace capability is unavailable. Local file operations cannot use it/)
+        ? /File and process operations must use the remote executor/
+        : /workdir capability is unavailable. Do not fall back to the Project data directory/)
     }
   }
 })
@@ -151,7 +151,7 @@ test('coordinator workspace retains read context without worker resources or wri
   const prompt = (await provider.getPromptSection(context({
     agent: { ...agent, name: 'orchestrator' },
   })))!
-  assert.match(prompt, /Workspace root|Session uploads|absolute attachment paths/)
+  assert.match(prompt, /Working directory|Session uploads|absolute attachment paths/)
   for (const path of ['v:project', 'v:sessions', 'v:memory']) assert(prompt.includes(path))
   assert.doesNotMatch(prompt, /v:tools|v:bg|v:skills|v:config|v:events|write\(|read, search, and write|Write what you need|scratch\/ephemeral/)
   const ordinary = (await provider.getPromptSection(context()))!

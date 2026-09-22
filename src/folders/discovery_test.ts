@@ -73,7 +73,8 @@ test('live project-scoped registry provides complete read/search discovery and c
     const promptContext = { projectId: DEFAULT_PROJECT_ID } as SessionPromptContext
     const prompt = projectProvider(discovery).getPromptSection(promptContext) as string
     assert.match(prompt, /Renamed live project/)
-    assert.match(prompt, /3 more folders omitted/)
+    assert.match(prompt, /11 registered/)
+    assert.doesNotMatch(prompt, /displayPath=/)
     const addedPath = join(root, 'added-live')
     await mkdir(addedPath)
     await registry.register(addedPath)
@@ -117,7 +118,7 @@ test('remote discovery uses only capability state, preserves display metadata, a
   assert.deepEqual(offline.workdir, remote.workdir)
   const prompt = projectProvider(discovery).getPromptSection({ projectId: DEFAULT_PROJECT_ID, folderId: remote.id } as SessionPromptContext) as string
   assert.match(prompt, /kind=remote/)
-  assert.match(prompt, /Selected folder: id="remote-folder"/)
+  assert.match(prompt, /Selected registered resource \(metadata\): id="remote-folder"/)
   state = { node: 'online', capability: { kind: 'workdir', online: true, path: resolve('.must-not-be-used') } }
   const online = JSON.parse(await read('folders', executionContext())).folders[0]
   assert.deepEqual(online.availability, { available: true, locality: 'remote' })

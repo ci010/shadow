@@ -3,15 +3,19 @@ import { join } from 'node:path'
 import type { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import {
+  managedSessionWorkdirRef,
   resolveSessionLocations,
   type WorkdirCapabilityLookup,
 } from '../../sessions/locality.ts'
 import { readFileIfExists, workspacePath } from '../../utils/paths.ts'
+import type { ProjectFolderDiscovery } from '../../folders/discovery.ts'
+import { projectProvider } from './project.ts'
 
 export function workspaceProvider(
   workspace: string,
   virtualFs: VirtualFs,
   workdirCapabilityLookup?: WorkdirCapabilityLookup,
+  project?: ProjectFolderDiscovery,
 ): SystemPromptProvider {
   return {
     name: 'workspace-intro',
@@ -28,48 +32,52 @@ export function workspaceProvider(
         workdirCapabilityLookup,
       )
       const lines = [
-        '# Workspace',
+        '# Current environment',
         '',
-        `**Home**: \`${locations.home}\``,
+        ...(project ? [await projectProvider(project).getPromptSection(ctx) ?? '', ''] : []),
       ]
 
       if (
         locations.workdir.available && locations.workdir.locality === 'local'
       ) {
         lines.push(
-          `**Workspace root (this session)**: \`${locations.workdir.path}\``,
+          `**Working directory**: \`${locations.workdir.path}\``,
+          `**Directory source**: ${locations.workdir.workdir.capabilityId === managedSessionWorkdirRef(ctx.workspaceRoot ?? ctx.sessionId).capabilityId
+            ? ctx.workspaceRoot && ctx.workspaceRoot !== ctx.sessionId ? 'inherited session-managed directory' : 'session-managed directory'
+            : 'local workdir capability'}.`,
           '',
-          coordinator ? 'Relative file paths resolve from your workspace root.'
-            : 'Keep this folder tidy. Relative file paths resolve from your workspace root.',
+          coordinator ? 'Relative file paths resolve from the working directory.'
+            : 'Keep this directory tidy. Relative file paths resolve from the working directory.',
           `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the registered folder).`,
           ...(!coordinator ? [
-            'The shared `.tmp/` name resolves from Home, not the workspace root, for scratch/ephemeral data.',
-            '`write("notes.md")` writes into the workspace root; `write("v:memory/today.md")` into shared memory.',
+            'The shared `.tmp/` name resolves from the Project data directory, not the working directory, for scratch/ephemeral data.',
+            '`write("notes.md")` writes into the working directory; `write("v:memory/today.md")` into Project memory.',
           ] : []),
         )
       } else if (!locations.workdir.available) {
         const ref = locations.workdir.workdir
         lines.push(
-          '**Workspace root (this session)**: unavailable',
+          '**Working directory**: unavailable',
           `**Node**: \`${ref.nodeId}\``,
           `**Capability**: \`${ref.capabilityId}\``,
           `**Unavailable reason**: \`${locations.workdir.reason}\``,
           '',
-          'The workspace capability is unavailable. Local file operations cannot use it.',
+          'The workdir capability is unavailable. Do not fall back to the Project data directory or a display path.',
         )
       } else {
         const ref = locations.workdir.workdir
         lines.push(
-          '**Workspace root (this session)**: remote capability',
+          '**Working directory**: remote capability',
           `**Node**: \`${ref.nodeId}\``,
           `**Capability**: \`${ref.capabilityId}\``,
           '',
-          'Folder file and process operations must use the remote executor.',
+          'File and process operations must use the remote executor. Display paths are not Main filesystem paths.',
         )
       }
 
       lines.push(
         '',
+        `**Project data directory (Home; not the working directory)**: \`${locations.home}\``,
         'Files, attachments and images received on any channel are automatically saved in private session uploads, not the registered folder.',
         'Use the absolute attachment paths supplied in messages; they are not remote workdir paths.',
       )

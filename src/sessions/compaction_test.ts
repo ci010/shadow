@@ -35,12 +35,15 @@ class TestSession extends Session {
 class TestHandoffManager extends HandoffManager {
   calls = 0
   failure?: Error
+  inputs: ChatMessage[][] = []
 
   override async create(
     _id: string, _source: string, targetSessionId: string,
+    messages: ChatMessage[],
   ): Promise<CompactResult> {
     if (this.failure) throw this.failure
     this.calls++
+    this.inputs.push(structuredClone(messages))
     return {
       targetSessionId,
       timestamp: new Date().toISOString(),
@@ -61,7 +64,8 @@ for (const [name, createStore] of stores) {
     handoff: TestHandoffManager
     store: SessionStore
     bus: Bus
-  }) => Promise<void>): Promise<void> {
+    tools: Tools
+  }) => Promise<void>, rebuild?: () => Promise<string>): Promise<void> {
     await withTempWorkspace(async workspace => {
       const store = createStore(join(workspace, 'sessions'))
       await store.init()
@@ -73,18 +77,44 @@ for (const [name, createStore] of stores) {
       const handoff = new TestHandoffManager(provider, llm.contextWindow, {}, workspace, store)
       const bus = new Bus()
       const state: SessionState = { sessionId: 'test:compaction', segmentIndex: 4, mode: 'session' }
+      const tools = new Tools(workspace)
       const session = new TestSession(
         workspace, state.sessionId, state, [], provider,
-        new SessionTools(new Tools(workspace), workspace), bus, store, handoff, () => {},
+        new SessionTools(tools, workspace), bus, store, handoff, () => {}, rebuild,
       )
       try {
-        await run({ session, handoff, store, bus })
+        await run({ session, handoff, store, bus, tools })
       } finally {
         session.stop()
         await session.completion
         await handoff.stop()
         store.close?.()
       }
+    })
+  }
+
+  for (const fallback of ['no rebuilder', 'failed rebuild'] as const) {
+    test(`${name}: compaction with ${fallback} never caches a per-inference work agreement`, async () => {
+      await fixture(async ({ session, handoff, tools }) => {
+        const base = '# Runtime\nIdentity\n\n---\n\n# Historical reference\n> Old notes'
+        let work = '# Current work contracts\nRevision 1'
+        tools.setWorkGuard({
+          snapshot: () => [], prompt: () => work, current: () => true,
+          before: () => undefined,
+        })
+        await session.append({ role: 'system', content: base })
+        await session.forceCompact()
+        const first = String(handoff.inputs[0][0].content)
+        assert.equal(first, '# Runtime\nIdentity\n\n---\n\n' + work + '\n\n---\n\n# Historical reference\n> Old notes')
+        assert.equal(session.history[0].content, base)
+        work = '# Current work contracts\nRevision 2'
+        await session.forceCompact()
+        const second = String(handoff.inputs[1][0].content)
+        assert.match(second, /Revision 2/)
+        assert.doesNotMatch(second, /Revision 1/)
+        assert.equal(second.match(/# Current work contracts/g)?.length, 1)
+        assert.equal(session.history[0].content, base)
+      }, fallback === 'failed rebuild' ? async () => { throw new Error('Synthetic rebuild failure') } : undefined)
     })
   }
 

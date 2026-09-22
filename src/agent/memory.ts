@@ -48,7 +48,7 @@ function formatEventTime(value?: string): string {
   if (!value) return 'unknown time'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return sanitizeMarkdownInline(value)
-  return date.toISOString().slice(11, 16)
+  return date.toISOString()
 }
 
 function sanitizeMarkdownInline(value: string): string {
@@ -375,7 +375,7 @@ export class MemoryStore {
       }
     }
     if (!lines.length) return ''
-    return ['### Conventions (always in effect)', ...lines].join('\n')
+    return ['### Conventions (remembered; subject to current scope)', ...lines].join('\n')
   }
 
   // ── Long-term keyword index (lazy reference knowledge) ────────────

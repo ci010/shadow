@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getBuiltinAgentTypes } from '../types/builtins.ts'
-import { guidelineProvider } from './guideline.ts'
+import { guidelineProvider as behaviorProvider, executionModeGuideline } from './guideline.ts'
 import { workspaceProvider } from './workspace.ts'
 import { memoryProvider } from './memory-provider.ts'
 import type { SessionPromptContext } from './builder.ts'
@@ -11,6 +11,12 @@ import { EXECUTION_MODES, allowedSubagentModes } from '../../sessions/execution-
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
 import { MemoryStore } from '../memory.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
+
+function guidelineProvider() {
+  return { async getPromptSection(ctx: SessionPromptContext) {
+    return `${executionModeGuideline(ctx)}\n\n${await behaviorProvider().getPromptSection(ctx)}`
+  } }
+}
 
 test('the same role retains tool guidance without generic safety in every execution mode', async () => {
   const roles = await getBuiltinAgentTypes()
@@ -22,7 +28,7 @@ test('the same role retains tool guidance without generic safety in every execut
       agent: verify, mode,
     })
     assert(!prompt?.includes('## Safety'))
-    assert(prompt?.includes('## Tools Guide'))
+    assert(prompt?.includes('## Tool discovery and recovery'))
     assert(prompt?.includes(`## Execution Contract: ${mode[0].toUpperCase()}${mode.slice(1)}`))
     assert.equal(verify.defaultMode, 'task')
     assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'yield', 'work'])
@@ -102,8 +108,8 @@ test('durable peers delegate task/call independently of context ancestry', async
   const child = await guidelineProvider().getPromptSection({ ...context, parentSessionId: 'fixture:root' })
   assert(root?.includes('Allowed delegation modes:\ntask, call'))
   assert(child?.includes('Allowed delegation modes:\ntask, call'))
-  assert(root?.includes('Durable topics are root peers'))
-  assert(child?.includes('context ancestry do not transfer responsibility'))
+  assert(root?.includes('Creates a durable root peer'))
+  assert(child?.includes('Creation provenance is not ownership'))
   assert.equal(general.root, true)
 })
 

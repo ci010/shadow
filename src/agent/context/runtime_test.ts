@@ -2,13 +2,19 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { IdentityManager } from '../identity.ts'
 import type { SessionPromptContext } from './builder.ts'
-import { runtimeIdentityProvider } from './runtime.ts'
+import { runtimeIdentityProvider as identityProvider, runtimeDiscoveryProvider, type RuntimeProviderDeps } from './runtime.ts'
 import type { ExecutionMode } from '../../sessions/execution-mode.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from '../../channels/capabilities.ts'
 import type { NodeInventoryResponse } from '../../cluster/node-inventory.ts'
 import { getBuiltinAgentTypes } from '../types/builtins.ts'
 import { ContextBuilder } from './builder.ts'
 import { guidelineProvider } from './guideline.ts'
+
+function runtimeIdentityProvider(deps: RuntimeProviderDeps) {
+  return { name: 'combined-runtime-test', async getPromptSection(ctx: SessionPromptContext) {
+    return [await identityProvider(deps).getPromptSection(ctx), await runtimeDiscoveryProvider(deps).getPromptSection(ctx)].filter(Boolean).join('\n\n')
+  } }
+}
 
 test('Skill disclosure receives the logical session and current admin visibility', async () => {
   const requests: Array<[boolean, string | undefined]> = []
@@ -376,15 +382,15 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
       agent: { name: 'orchestrator', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
     }))!
     assert.match(prompt, /Allowed Delegation Modes\*\*: none/)
-    assert.match(prompt, /Coordinator cap.*read\/search\/topic\/message\/initiative\/project_config only/)
+    assert.match(prompt, /Coordinator tool limits are enforced by the runtime/)
     assert.match(prompt, /Self-code \(src\/\) writes\*\*: NOT ALLOWED/)
     assert.match(prompt, /Worker role catalog/)
     assert.doesNotMatch(prompt, /Ask decisions with yield|Managed Subagents|fixture:child/)
     assert.equal(activeLookups, 0)
     assert.equal(skillLookups, 0)
     assert.doesNotMatch(prompt, /Available Exec Shells|Default Exec Shell|inline TypeScript|Worker skill activation/)
-    assert.match(prompt, /Publish\/Cancel \(revision command only as fallback\)/)
-    assert.match(prompt, /creator provenance and context ancestry do not confer ownership/)
+    assert.match(prompt, /Resource publication requires owner review/)
+    assert.doesNotMatch(prompt, /project_config only/)
   })
   assert(restricted?.includes('**Allowed Delegation Modes**: none'))
   assert(!restricted?.includes('Fixture roles'))

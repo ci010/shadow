@@ -789,35 +789,45 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
 
 `ContextBuilder` concatenates providers in registration order:
 
-1. **Guideline:** selected agent prompt plus tool guides and the execution
-   contract. There is no generic Safety checklist. Delegation,
-   decision, messaging, and shell guidance is scoped by execution mode, structural
-   ownership, and role tool permissions. Root/topic sessions receive task/call
-   instructions, and tasks explicit call only, further
-   narrowed by the role. Leaf calls receive no coordination-tool usage guide or
-   background-execution advice. Tool descriptions and parameter schemas use the
-   same scope, rather than advertising unavailable modes. The coordinator's
-   hard capability cap excludes delegation and worker tools. The general role owns
-   work strategy, the scoped Tools Guide owns invocation instructions, and the
-   execution contract owns the current lifecycle and completion format.
-2. **Workspace:** Home, effective local workdir or remote/unavailable capability,
-   private session uploads and attachment paths, VFS entry points, memory usage
-   guidance, and `SOUL.md` according to agent-type policy.
-3. **Runtime/identity:** platform and shell information, channel/user/admin
-   metadata, role and conversation audience, identity lookup, skill summaries,
-   selectable agent types for either subagent or durable-topic creation, and
-   active temporary executions only for their delegation owner. Topic-only
-   coordinators see expertise/templates without gaining subagent capabilities.
-4. **Initiative:** bounded shared-work context associated with the session,
-   including its responsibility, dependencies, and actual execution activity.
-5. **Memory:** conventions, keyword index, recent/related events, working set,
-   and session memory.
+1. **Runtime identity and execution contract:** platform, shell, channel/audience,
+   role, permissions, and the session/task/call lifecycle. Role and mode limits
+   remain enforced by the runtime, not by prompt ordering.
+2. **Task context and Initiative snapshot:** topic scope separately from actual
+   assignments. Recorded goal/context prose is planning background, not fresh
+   human authorization.
+3. **Current environment:** Project identity and directory-resource selection,
+   one **Working directory** (local path, remote capability, or unavailable),
+   directory source, private uploads, and **Project data directory (Home)**.
+   Home is not the working directory. Registered folders are selectable resources,
+   not parallel working directories: only the selected resource's metadata is
+   included; the full catalog is discovered through `v:project/folders`.
+   VFS entry points, memory usage and role-gated `SOUL.md` remain here.
+4. **Behavior and scoped tool guidance:** the selected role owns work strategy;
+   compact tool protocols cover work revisions, decisions and coordination.
+   Session/task/call and role gating still suppress unavailable tool instructions.
+5. **Capability discovery:** bounded Skill metadata, selectable role templates,
+   and active temporary executions only for their delegation owner. Topic-only
+   coordinators see templates without acquiring subagent capabilities.
+6. **Historical reference:** quoted conventions, keyword index, dated events,
+   previously touched files and stored summaries. A summary's "Current Focus"
+   remains a historical claim, not the current task state. Stored files are not
+   rewritten or deleted. Conflicts require checking source, scope, version and
+   explicit supersession; a newer agent report cannot lift a human restriction.
 
-The dedicated topic context provider supplies the durable topic brief separately
-from Initiative responsibility and runtime delegation ownership.
+Before each inference, `withCurrentWork` inserts the current work agreement after
+runtime identity, ahead of cached topic/Initiative context and history. It also
+places agreement facts early in compaction input, without caching them in the
+next segment's base prompt even when prompt rebuilding fails. Stamps and the execution fence
+remain the enforcement mechanism; ordering and labels do not prove understanding.
 
-MCP recovery and execution protocols remain inline, not deferred to optional
-skills. Conversation guidance depends on actual audience context: direct and
+Critical MCP invocation/recovery boundaries stay inline: live schemas win,
+partial discovery is not absence, unknown execution must be reconciled before
+retry, and failures grant no new permissions or credential access. Configuration,
+indexing, Skill maintenance and managed Bot authoring details are available on
+demand through the bundled `tool-operations` and `mcp-config` Skills. Prompt
+snapshots and size budgets pin this deliberate division.
+
+Conversation guidance depends on actual audience context: direct and
 explicitly configured trusted groups use normal assistant behavior; other groups
 and unknown audiences receive a short shared-conversation reminder. Audience
 trust is descriptive context, not tool authorization or a verified member list.

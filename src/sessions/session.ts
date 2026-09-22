@@ -10,6 +10,7 @@ import { errDetail, errMsg } from '../utils/truncate.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { CompactResult, HandoffManager } from './handoff/manager.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { withCurrentWork } from '../agent/context/builder.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import type { SessionStore } from './session-store.ts'
 import type { SessionStartEvent, SessionState } from './session-store.ts'
@@ -614,7 +615,7 @@ export class Session extends BaseSession {
     const state = this.state
     const work = this.tools.getWorkGuard()?.prompt(this.id)
     const messages = work ? this.messages.map((message, index) => index === 0 && message.role === 'system'
-      ? { ...message, content: `${message.content}\n\n${work}` } : message) : this.messages
+      ? { ...message, content: withCurrentWork(String(message.content ?? ''), work) } : message) : this.messages
 
     const sourcePhysicalId = physicalSessionId(state)
     const targetPhysicalId = physicalSessionId(state, state.segmentIndex + 1)
@@ -644,14 +645,14 @@ export class Session extends BaseSession {
         newMessages.push({ role: 'system', content: systemPrompt })
       } catch (err) {
         // Fall back to preserving the existing system prompt
-        const existing = messages.find((m) => m.role === 'system')
+        const existing = this.messages.find((m) => m.role === 'system')
         if (existing) newMessages.push(existing)
         console.warn(
           `[session] Failed to rebuild system prompt: ${errMsg(err)}`,
         )
       }
     } else {
-      const existing = messages.find((m) => m.role === 'system')
+      const existing = this.messages.find((m) => m.role === 'system')
       if (existing) newMessages.push(existing)
     }
     newMessages.push({ role: 'user', content: handoff.prompt })

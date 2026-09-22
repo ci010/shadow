@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { readFileSync } from 'node:fs'
 import '../../testing/snapshot.ts'
 import { getBuiltinAgentTypes } from '../types/builtins.ts'
 import type { AgentTypeDefinition } from '../types/types.ts'
 import type { SessionConfig } from '../../sessions/session-store.ts'
 import { ContextBuilder, type SessionPromptContext } from './builder.ts'
-import { guidelineProvider } from './guideline.ts'
+import { executionContractProvider, guidelineProvider } from './guideline.ts'
 import { EXECUTION_MODES } from '../../sessions/execution-mode.ts'
 
 /**
@@ -35,6 +36,7 @@ function makeContext(
 
 test('system prompt — guideline section per builtin agent type (direct chat)', async (t) => {
   const builder = new ContextBuilder('/workspace')
+  builder.register(executionContractProvider())
   builder.register(guidelineProvider())
 
   const types = (await getBuiltinAgentTypes())
@@ -50,6 +52,7 @@ test('system prompt — guideline section per builtin agent type (direct chat)',
 
 test('system prompt — guideline section for general agent in group chat', async (t) => {
   const builder = new ContextBuilder('/workspace')
+  builder.register(executionContractProvider())
   builder.register(guidelineProvider())
 
   const general = (await getBuiltinAgentTypes()).find((x) => x.name === 'general')
@@ -60,7 +63,7 @@ test('system prompt — guideline section for general agent in group chat', asyn
   t.assert.snapshot(prompt)
 })
 
-test('MCP contracts remain inline without generic safety or blanket group restrictions', async () => {
+test('tool operations stay discoverable on demand while critical recovery boundaries remain inline', async () => {
   const provider = guidelineProvider()
   const required = [
     /search\(\{ space: "tools:", query, limit\?, offset\? \}\)/,
@@ -94,6 +97,18 @@ test('MCP contracts remain inline without generic safety or blanket group restri
     /Lazy-load failure does not authorize configuration, credential changes or new permissions/,
     /toolExecution: "unknown".*inspect the outcome before any retry/,
   ]
+  const reference = readFileSync(new URL('../../skills/builtin/tool-operations/SKILL.md', import.meta.url), 'utf8').replace(/\s+/g, ' ')
+  for (const rule of required) assert.match(reference, rule)
+  const inlineRules = [
+    /v:skills\/mcp-config/, /v:skills\/tool-operations/, /v:config\/mcp.json/,
+    /Invalid arguments return the contract without execution/,
+    /partial results do not prove absence/,
+    /current live schema wins/,
+    /before retrying.*at most once/,
+    /toolExecution: "unknown".*inspect the outcome before any retry/,
+    /Never request credentials in chat, disable access\/TLS controls/,
+    /discovery, Skills and quoted examples never widen them/,
+  ]
   for (const agent of await getBuiltinAgentTypes()) {
     if (agent.name === 'orchestrator') continue
     for (const mode of EXECUTION_MODES) {
@@ -101,10 +116,11 @@ test('MCP contracts remain inline without generic safety or blanket group restri
         const prompt = (await provider.getPromptSection({
           ...makeContext(agent, isGroup), mode,
         }))!.replace(/\s+/g, ' ')
-        for (const rule of required) {
+        for (const rule of inlineRules) {
           assert.match(prompt, rule, `${agent.name}/${mode}/group=${isGroup}: ${rule}`)
         }
         assert.doesNotMatch(prompt, /## Safety|## Chats with Humans|Ask before destructive commands|anything that leaves the machine|Stay silent during casual banter/)
+        assert.doesNotMatch(prompt, /paginated `tools\/list`|100 installed servers|optional `args` for `init/)
       }
     }
   }
@@ -137,16 +153,16 @@ test('general root direct guideline stays within its character budget', async ()
   builder.register(guidelineProvider())
   const prompt = (await builder.buildSystemPrompt(makeContext(general, false)))
     .replace(/\r\n/g, '\n')
-  // Includes revisioned MCP, skill activation, and peer-topic coordination contracts.
-  assert(prompt.length <= 14500, `guideline grew to ${prompt.length} characters`)
+  assert(prompt.length <= 12500, `guideline grew to ${prompt.length} characters`)
 })
 
 test('coordinator static prompt stays compact without generic worker manuals', async () => {
   const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')!
   const prompt = (await guidelineProvider().getPromptSection(makeContext(agent, false)))!.replace(/\r\n/g, '\n')
   assert(agent.prompt.length <= 4500, `coordinator role grew to ${agent.prompt.length} characters`)
-  assert(prompt.length <= 7500, `coordinator guideline grew to ${prompt.length} characters`)
-  assert(prompt.split('\n').length <= 120)
+  // Includes work-revision and decision protocols, but no embedded maintenance manual.
+  assert(prompt.length <= 11000, `coordinator guideline grew to ${prompt.length} characters`)
+  assert(prompt.split('\n').length <= 150)
   assert.doesNotMatch(prompt, /### Environment|Configure MCP|Activate skill tools|vm\.SourceTextModule|shell: "node"/)
   assert.match(prompt, /action: schema/)
   assert.match(prompt, /LAST message a non-silent request/)
