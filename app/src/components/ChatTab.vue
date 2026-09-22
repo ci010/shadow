@@ -2038,6 +2038,8 @@ async function sendMessage(overrideContent?: string, opts?: {
     || !installation.value.uiScopes.includes('chat:write') || retry && requestBusy.value
     || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
   const followUp = requestBusy.value
+  historyBrowsing = false
+  historyLeftBottom = false
   submittingMessage.value = true
   const generation = sessionSelectionGeneration
   const controller = new AbortController()
@@ -2136,7 +2138,6 @@ async function sendMessage(overrideContent?: string, opts?: {
       throw new Error('Main returned an invalid command result. Refresh the conversation before retrying.')
     }
     accepted = true
-    if (generation === sessionSelectionGeneration) historyBrowsing = false
     // Steered inputs are admitted before the tool boundary writes them to history.
     if (followUp && !isCommand && generation === sessionSelectionGeneration) deferActiveHistory = true
     if (!retry && generation === sessionSelectionGeneration) {
@@ -2238,10 +2239,13 @@ function browseHistory(): void {
 
 function trackHistoryScroll(): void {
   const container = messagesContainer.value
-  if (!historyBrowsing || !container) return
+  if (!container) return
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 32
   // A smooth jump starts at the bottom; only resume following after returning there.
-  if (!atBottom) historyLeftBottom = true
+  if (!atBottom) {
+    historyBrowsing = true
+    historyLeftBottom = true
+  }
   else if (historyLeftBottom) historyBrowsing = false
 }
 

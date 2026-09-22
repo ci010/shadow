@@ -12,6 +12,7 @@ import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { compileTemplate, parse } from 'vue/compiler-sfc'
+import ts from 'typescript'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -25,6 +26,13 @@ test('Knowledge and conversation controls preserve layout, navigation and global
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const { descriptor } = parse(readFileSync(resolve(root, 'app', 'src', 'components', 'ChatTab.vue'), 'utf8'))
+  const script = descriptor.scriptSetup!.content
+  const scrollStart = script.indexOf('function browseHistory(): void')
+  const scrollEnd = script.indexOf('/** Compute token delta', scrollStart)
+  assert.ok(scrollStart >= 0 && scrollEnd > scrollStart, 'Use the actual conversation scroll handlers')
+  const scrollHandlers = ts.transpileModule(script.slice(scrollStart, scrollEnd), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText
   const actions = descriptor.template!.content.match(/<button\s+v-if="requestBusy"\s+class="composer-send composer-stop"[\s\S]*?<\/button>\s*<button[\s\S]*?<\/button>/)?.[0]
   assert.ok(actions, 'Use the actual composer action templates, not a fixture copy')
   const compiledActions = compileTemplate({ source: `<div class="composer-submit">${actions}</div>`, filename: 'ComposerActions.vue', id: 'fixture' })
@@ -40,7 +48,7 @@ test('Knowledge and conversation controls preserve layout, navigation and global
         if (id !== '\0/navigation-fixture.ts') return
         return `import 'uno.css'; import '/src/styles.css';
           import '/composer-style.css';
-          import { createApp, computed, h, ref, reactive, toRefs } from 'vue';
+          import { createApp, computed, h, ref, reactive, toRefs, nextTick } from 'vue';
           import Knowledge from '/src/components/KnowledgeView.vue';
           import KnowledgeGraph from '/src/components/KnowledgeGraph.vue';
           import Rail from '/src/components/MessageHistoryRail.vue';
@@ -66,6 +74,20 @@ test('Knowledge and conversation controls preserve layout, navigation and global
           ]);
           createApp({ setup() {
             const mode = ref('knowledge'); const container = ref();
+            const messagesContainer = container;
+            const props = reactive({visible:true});
+            const conversationDocumentVisible = ref(true);
+            const activePanel = ref('conversation');
+            let historyBrowsing = false;
+            let historyLeftBottom = false;
+            ${scrollHandlers}
+            Object.assign(window, {
+              __appendLiveMessage:() => { messages.push({role:'assistant',content:'New live message'}); scrollToBottom() },
+              __streamLiveMessage:() => { messages[messages.length - 1].content += 'Streaming response. '.repeat(300); scrollToBottom() },
+              __followConversation:scrollToBottom,
+              __browseConversation:browseHistory,
+              __conversationScrollState:() => ({historyBrowsing,historyLeftBottom}),
+            });
             const pending = ref(null); const list = ref(false);
             Object.assign(window, { __navigationMessages:messages, __setPending:request => pending.value = request, __setHistoryList:value => list.value = value });
             const decisions = computed(() => inlineYieldDecisions(messages, pending.value));
@@ -79,14 +101,14 @@ test('Knowledge and conversation controls preserve layout, navigation and global
                     h('div', { class:'resume-bar' }, [h('p', 'Request stopped'), h('button', { class:'resume-button' }, 'Continue')]),
                     h(ComposerActions),
                   ]) : h('div', { class:'fixture-chat', style:'position:relative;flex:1;min-height:0' }, [
-                    h('div', { ref:container, class:'fixture-messages', style:'height:100%;overflow:auto' },
+                    h('div', { ref:container, class:'fixture-messages', style:'height:100%;overflow:auto', onScroll:trackHistoryScroll },
                       [...messages.map((msg, index) => decisions.value.entries.has(index)
                         ? h(YieldDecision, {decision:decisions.value.entries.get(index),'data-msg-idx':index})
                         : msg.eventMeta
                         ? h(ConversationEvent, { meta: msg.eventMeta, 'data-msg-idx':index }, () => msg.content)
                         : h('article', { 'data-msg-idx':index, style:'min-height:700px' }, msg.content)),
                        h('div', { style:'height:900px' })]),
-                    h(Rail, { entries:entries.value, container:container.value, list:list.value }),
+                    h(Rail, { entries:entries.value, container:container.value, list:list.value, onNavigate:browseHistory }),
                   ]),
             ]);
           } }).mount('#app');`

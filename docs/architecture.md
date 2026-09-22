@@ -1969,8 +1969,11 @@ The web channel preserves the same sender envelope on live peer-message
 projections, so progress and request cards do not wait for a history reload to
 show their origin. Their headings open the source conversation (or its read-only
 execution trace). Human-history markers scroll to the corresponding rendered
-message in the current pane, suspending automatic bottom jumps until the user
-returns to the bottom or sends another message. Explicit peer progress and
+message in the current pane. Manual scrolling away from the bottom also suspends
+automatic jumps during incoming messages, streaming output, and history refreshes.
+Following resumes when the user returns within 32px of the bottom or starts sending
+another message; a delayed send acknowledgement does not override subsequent
+scrolling. Explicit peer progress and
 acknowledgement updates are grouped
 in the rail across intervening assistant/tool activity; the group expands into
 individually navigable messages. Human input, explicit peer requests/questions/
