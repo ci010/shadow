@@ -68,7 +68,7 @@ export async function resolveSessionMediaPath(
  *  POST /api/chat/upload   — upload file/image, returns absolute private-session path
  *  GET  /api/chat/uploads/* — serve uploaded / outbound media files
  *  GET/HEAD /api/media — chatId for web workdir media, or an existing sessionId
- *    for private uploads only; path supports uploads/... and absolute upload refs.
+ *    for private uploads only; chatId also supports absolute refs within its workdir.
  *    Both file routes support byte ranges and download=1.
  */
 export class WebChannel extends AbstractChannel {
@@ -490,16 +490,18 @@ export class WebChannel extends AbstractChannel {
         return c.json({ error: 'Media unavailable' }, 404)
       }
 
-      const privateUpload = explicitSessionId !== undefined || isAbsolute(rawPath)
+      const uploadsRoot = join(locations.sessionDataDir, 'uploads')
+      const privateUpload = explicitSessionId !== undefined ||
+        (isAbsolute(rawPath) && !escapesRoot(uploadsRoot, rawPath))
       const mediaRoot = privateUpload
-        ? join(locations.sessionDataDir, 'uploads')
+        ? uploadsRoot
         : workdir.path
       if (privateUpload && !await resolveSessionMediaPath(locations.sessionDataDir, 'uploads')) {
         return c.json({ error: 'Media unavailable' }, 404)
       }
       const mediaPath = privateUpload
         ? relative(mediaRoot, isAbsolute(rawPath) ? rawPath : resolve(locations.sessionDataDir, rawPath))
-        : rawPath
+        : isAbsolute(rawPath) ? relative(mediaRoot, rawPath) : rawPath
       const resolved = await resolveSessionMediaPath(mediaRoot, mediaPath)
       if (!resolved) return c.json({ error: 'Media unavailable' }, 404)
 

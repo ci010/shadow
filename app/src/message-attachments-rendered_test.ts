@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +14,7 @@ import { Hono } from 'hono'
 import { WebChannel } from '../../src/channels/web.ts'
 import { Bus } from '../../src/bus/bus.ts'
 import type { SessionManager } from '../../src/sessions/session-manager.ts'
-import { saveToUploads } from '../../src/utils/paths.ts'
+import { saveToUploads, sessionWorkspacePath } from '../../src/utils/paths.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -29,13 +29,15 @@ test('chat images open an accessible viewer while media playback and authenticat
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const sessionId = 'qq:group-media-fixture'
   const sessionManager = {
-    getSessionState: (id: string) => id === sessionId ? { sessionId } : null,
+    getSessionState: (id: string) => id === sessionId ? { sessionId }
+      : id === 'web:chat-child' ? { sessionId: id, workspaceRoot: 'web:owner' } : null,
   } as unknown as SessionManager
   const channel = new WebChannel(new Bus(), { workspace: directory, sessionManager })
   const api = new Hono()
   let videoRequests = 0
   api.use('/api/media', async (c, next) => {
     if (c.req.header('cookie') !== 'fixture-auth=allowed') return c.json({ error: 'unauthorized' }, 401)
+    if (c.req.query('download') === '1' && c.req.header('X-Fixture-Renderer') !== 'allowed') return c.json({ error: 'renderer authorization required' }, 401)
     if (c.req.query('path')?.endsWith('.webm')) videoRequests++
     await next()
   })
@@ -43,6 +45,9 @@ test('chat images open an accessible viewer while media playback and authenticat
   t.after(() => channel.stop())
   await saveToUploads(directory, sessionId, 'logs.zip', Buffer.from('synthetic archive bytes'))
   await saveToUploads(directory, sessionId, 'photo.png', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==', 'base64'))
+  const output = resolve(sessionWorkspacePath(directory, 'web:owner'), 'runs', 'review notes', 'report.html')
+  await mkdir(resolve(output, '..'), { recursive: true })
+  await writeFile(output, '<html>Generated review report</html>')
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error',
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
@@ -58,7 +63,8 @@ test('chat images open an accessible viewer while media playback and authenticat
           import ImageViewer from '/src/components/ImageViewer.vue';
           import { imagePreviewFromEvent, imagePreviewMarkup } from '/src/image-viewer.ts';
           import { messageAttachments } from '/src/message-attachments.ts';
-          const body = messageAttachments('Attachments from SNS\\n[file: uploads/clip.webm]\\n[file: uploads/logs.zip]', ['uploads/photo.png']);
+          const body = messageAttachments('Attachments from SNS\\n[file: uploads/clip.webm]\\nArchive: MEDIA:uploads/logs.zip', ['uploads/photo.png']);
+          const report = messageAttachments(${JSON.stringify(`Report: MEDIA:${output}`)});
           const preview = ref();
           const markdown = ref('');
           const openImage = image => preview.value = image;
@@ -73,6 +79,7 @@ test('chat images open an accessible viewer while media playback and authenticat
             h(Attachments, { apiBase: location.origin, sessionId: ${JSON.stringify(sessionId)}, paths: body.paths, onPreview:openImage }),
             h(Attachments, { apiBase: location.origin, sessionId: ${JSON.stringify(sessionId)},
               paths: ['uploads/' + 'long-filename-'.repeat(14) + '.zip'] }),
+            h(Attachments, { apiBase: location.origin, sessionId:'web:chat-child', paths:report.paths }),
             h('div', {class:'fixture-markdown', innerHTML:markdown.value, onClick:fromEvent, onKeydown:fromEvent}),
             preview.value ? h(ImageViewer, {image:preview.value, onClose:() => preview.value = undefined}) : null,
           ]) }).mount('#app');`
@@ -120,13 +127,13 @@ test('chat images open an accessible viewer while media playback and authenticat
   }
   for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) env[key] = directory
   const child = spawn(desktopRequire('electron') as string, [resolve(directory, 'main.cjs')], { cwd: directory, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  let output = ''
-  child.stdout.setEncoding('utf8').on('data', chunk => { output += chunk })
-  child.stderr.setEncoding('utf8').on('data', chunk => { output += chunk })
+  let log = ''
+  child.stdout.setEncoding('utf8').on('data', chunk => { log += chunk })
+  child.stderr.setEncoding('utf8').on('data', chunk => { log += chunk })
   const timer = setTimeout(() => child.kill(), 75_000)
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })
   const [code] = await once(child, 'close')
-  assert.equal(code, 0, output)
-  assert.match(output, /MEDIA_SMOKE_OK/)
+  assert.equal(code, 0, log)
+  assert.match(log, /MEDIA_SMOKE_OK/)
   assert(videoRequests > 0)
 })

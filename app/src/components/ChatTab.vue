@@ -1212,8 +1212,6 @@ function toggleThinking(idx: number): void {
 
 /** Strip `<sender ... />` and `<event ... />` XML metadata tags from text. */
 const META_TAG_RE = /^<(?:sender|event)\s[^>]*\/>\s*/
-/** Match `MEDIA:<path-or-url>` lines in assistant content. */
-const MEDIA_LINE_RE = /^MEDIA:(\S+)$/gm
 
 interface RawMessage {
   role: string
@@ -1249,16 +1247,6 @@ function rawMediaContent(msg: RawMessage): string[] {
     part.type === 'image_url' && typeof part.image_url?.url === 'string' && part.image_url.url
       ? [part.image_url.url]
       : [])
-}
-
-/** Extract `MEDIA:<path>` lines from text, returning cleaned text + media array. */
-function extractMedia(text: string): { text: string; media: string[] } {
-  const media: string[] = []
-  const cleaned = text.replace(MEDIA_LINE_RE, (_match, path) => {
-    media.push(path)
-    return ''
-  }).replace(/^\s*\n|\n\s*$/g, '')
-  return { text: cleaned, media }
 }
 
 function collapseHistory(raw: RawMessage[]): ChatMsg[] {
@@ -1301,7 +1289,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           const rawText = rawTextContent(cur)
           const rawMedia = rawMediaContent(cur)
           if (rawText) {
-            const { text, media } = extractMedia(rawText)
+            const { text, paths: media } = messageAttachments(rawText)
             const entry: ChatMsg = { role: 'assistant', content: text, timestamp: cur.timestamp }
             if (cur.usage) entry.usage = cur.usage
             if (media.length > 0 || rawMedia.length > 0) entry.media = [...media, ...rawMedia]
@@ -1989,7 +1977,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
     streamPhase.value = undefined
     flushStreamingTool()
     if (state.accumulated) {
-      const { text, media } = extractMedia(state.accumulated)
+      const { text, paths: media } = messageAttachments(state.accumulated)
       const msg: ChatMsg = { role: 'assistant', content: text, timestamp: state.timestamp }
       if (payload.usage) msg.usage = payload.usage
       if (payload.media?.length) msg.media = [...(media.length ? media : []), ...payload.media]

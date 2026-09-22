@@ -18,18 +18,22 @@
           <span class="attachment-name" :title="item.name">{{ item.name }}</span>
           <span class="attachment-type">{{ item.extension ? item.extension.toUpperCase() + ' file' : 'File' }}</span>
         </div>
-        <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="`Download ${item.name}`" :title="`Download ${item.name}`" referrerpolicy="no-referrer">
-          <span class="i-lucide-download" aria-hidden="true" /><span>Download</span>
+        <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="`Download ${item.name}`" :title="`Download ${item.name}`" referrerpolicy="no-referrer"
+          :aria-busy="downloads.pending.has(item.downloadUrl)" :aria-disabled="downloads.pending.has(item.downloadUrl)"
+          @click="downloads.download($event, item.downloadUrl, item.name)">
+          <span :class="downloads.pending.has(item.downloadUrl) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" /><span>{{ downloads.pending.has(item.downloadUrl) ? 'Downloading...' : 'Download' }}</span>
         </a>
       </div>
       <p v-if="!item.url" class="attachment-error" role="status">Attachment unavailable in this conversation.</p>
       <p v-else-if="failed.has(item.path)" class="attachment-error" role="status">Preview unavailable. Download the file to open it on your device.</p>
+      <p v-if="item.downloadUrl && downloads.errors.has(item.downloadUrl)" class="attachment-error" role="alert">{{ downloads.errors.get(item.downloadUrl) }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, watch } from 'vue'
+import { useFileDownload } from '../composables/useFileDownload.ts'
 import { buildMediaUrl } from '../media-url.ts'
 import { useMobileResources, vMobileMedia } from '../mobile-resources.ts'
 import { attachmentExtension, attachmentKind, attachmentName } from '../message-attachments.ts'
@@ -39,6 +43,8 @@ const props = defineProps<{ paths: string[]; apiBase: string; sessionId: string 
 defineEmits<{ preview: [image: ImagePreview] }>()
 const failed = reactive(new Set<string>())
 const resources = useMobileResources()
+const downloads = useFileDownload()
+watch(() => JSON.stringify([props.apiBase, props.sessionId, props.paths]), () => { downloads.reset(); failed.clear() })
 const items = computed(() => props.paths.map(path => ({
   path, name: attachmentName(path), kind: attachmentKind(path), extension: attachmentExtension(path),
   url: resources.resolve(buildMediaUrl(props.apiBase, props.sessionId, path)),

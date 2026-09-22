@@ -25,6 +25,15 @@ test('literal attachment examples in code remain text, including unfinished code
   })
 })
 
+test('inline MEDIA markers become deduplicated cards in both persisted and live messages', () => {
+  const path = 'C:\\workspace\\runs\\review notes\\OWNER-INPUTS.md'
+  assert.deepEqual(messageAttachments(`材料清单：MEDIA:${path}`, [path]), { text: '材料清单：', paths: [path] })
+  assert.deepEqual(messageAttachments(`Report: MEDIA:"${path}"\n[file: ${path}]`), { text: 'Report:', paths: [path] })
+  assert.deepEqual(messageAttachments('`MEDIA:example.html`\nMEDIA:actual.html'), {
+    text: '`MEDIA:example.html`', paths: ['actual.html'],
+  })
+})
+
 test('attachment labels and kinds support local paths and signed URLs without exposing query data', () => {
   assert.equal(attachmentName('https://example.test/media/Screen%20Recording.MP4?token=private'), 'Screen Recording.MP4')
   assert.equal(attachmentKind('https://example.test/media/Screen%20Recording.MP4?token=private'), 'video')

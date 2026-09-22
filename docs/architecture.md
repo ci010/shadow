@@ -2051,6 +2051,22 @@ drags retain their source metadata, clipboard paste remains image-specific, and
 local attachments remain unavailable for remote workspaces. Directory drops are
 rejected explicitly rather than creating empty file attachments.
 
+Attachment parsing shares `src/utils/media-parse.ts` between channel delivery and
+the renderer. `MEDIA:` may follow a label at the end of a line; Windows paths,
+spaces, and quoted paths are supported. Inline/fenced code examples remain literal.
+The web media route accepts absolute generated-file paths only within the selected
+chat's resolved local workdir, alongside inherited private uploads. Realpath checks
+still reject traversal and symlink escapes; unrelated sessions, other Projects,
+and remote/unavailable workdirs do not gain filesystem access. Explicit `sessionId`
+media requests remain limited to that session's private uploads.
+
+Protected attachment downloads use renderer `fetch` followed by a temporary Blob
+URL so desktop request authorization stays attached. Failed HTTP responses show
+an inline error instead of navigating away or saving an error body. Download state
+prevents duplicate requests; requests and object URLs are cleaned up on disposal.
+Files are buffered only when Download is clicked; audio/video previews retain
+their range-capable streaming URLs, and external links keep native link behavior.
+
 Chat image attachments, Markdown images, and pending image thumbnails open the
 shared `ImageViewer` native modal dialog instead of navigating away. Images fit
 the viewport by default; actual-size mode provides a scrollable view of large

@@ -1,3 +1,5 @@
+import { parseMediaFromContent } from '../../src/utils/media-parse.ts'
+
 export type AttachmentKind = 'image' | 'video' | 'audio' | 'file'
 
 export function attachmentName(path: string): string {
@@ -25,8 +27,9 @@ export function attachmentKind(path: string): AttachmentKind {
 
 /** Keep literal code examples intact; file markers outside code represent message attachments. */
 export function messageAttachments(content: string, media: readonly string[] = []): { text: string; paths: string[] } {
-  const paths = new Set(media)
-  const text = content.replace(
+  const parsed = parseMediaFromContent(content)
+  const paths = new Set([...media, ...(parsed.media ?? [])])
+  const text = parsed.text.replace(
     /(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n\1[^\n]*(?=\n|$)|$)|(`+)[^\n]*?\2|\[file:\s*([^\]\r\n]+)\]/g,
     (match, _fence: string | undefined, _ticks: string | undefined, file: string | undefined) => {
       if (!file?.trim()) return match

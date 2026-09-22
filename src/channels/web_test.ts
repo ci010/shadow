@@ -247,7 +247,11 @@ test('folder media uses capability cwd while uploads stay in inherited private s
     assertEquals((await app.request('/api/media?chatId=child&path=main-only.txt')).status, 404)
     const nonUploadPrivateFile = join(sessionWorkspacePath(workspace, 'web:owner'), 'main-only.txt')
     assertEquals((await app.request(`/api/media?chatId=child&path=${encodeURIComponent(nonUploadPrivateFile)}`)).status, 404)
-    assertEquals((await app.request(`/api/media?chatId=child&path=${encodeURIComponent(join(folder, 'image.txt'))}`)).status, 404)
+    const absoluteFolderFile = await app.request(`/api/media?chatId=child&path=${encodeURIComponent(join(folder, 'image.txt'))}&download=1`)
+    assertEquals(absoluteFolderFile.status, 200)
+    assertEquals(await absoluteFolderFile.text(), 'folder image')
+    assert.match(absoluteFolderFile.headers.get('Content-Disposition')!, /^attachment;/)
+    assertEquals((await app.request(`/api/media?chatId=child&path=${encodeURIComponent(join(otherFolder, 'image.txt'))}`)).status, 404)
   } finally {
     await channel.stop()
     await rm(workspace, { recursive: true })
@@ -288,7 +292,7 @@ test('folder upload and media reject unavailable and remote workdirs without loc
   }
 })
 
-test('web media rejects missing identity, absolute paths, and traversal without path leaks', async () => {
+test('web media rejects missing identity, outside absolute paths, and traversal without path leaks', async () => {
   const workspace = await createTempWorkspace()
   const outside = join(workspace, 'outside.txt')
   await writeFile(outside, 'outside')
@@ -344,7 +348,35 @@ test('web media rejects links that escape the session workdir', async () => {
     assertEquals(body.includes(outsideDir), false)
     const privateEscape = join(sessionRoot, 'uploads', 'linked', 'secret.txt')
     assertEquals((await app.request(`/api/media?chatId=chat-a&path=${encodeURIComponent(privateEscape)}`)).status, 404)
+    const workdirEscape = join(sessionRoot, 'linked', 'secret.txt')
+    assertEquals((await app.request(`/api/media?chatId=chat-a&path=${encodeURIComponent(workdirEscape)}`)).status, 404)
     assertEquals((await app.request('/api/chat/uploads/linked/secret.txt?chatId=chat-a')).status, 404)
+  } finally {
+    await channel.stop()
+    await rm(workspace, { recursive: true })
+  }
+})
+
+test('generated absolute workdir attachments use inherited ownership, not arbitrary sibling sessions', async () => {
+  const workspace = await createTempWorkspace()
+  const file = join(sessionWorkspacePath(workspace, 'web:owner'), 'runs', 'review notes', 'report.html')
+  await mkdir(join(file, '..'), { recursive: true })
+  await writeFile(file, '<html>Generated report</html>')
+  const { app, channel } = await createWebApp(workspace, sessionId => ({
+    sessionId, ...(sessionId === 'web:child' ? { workspaceRoot: 'web:owner' } : {}),
+  }))
+  try {
+    for (const method of ['GET', 'HEAD']) {
+      const response = await app.request(`/api/media?chatId=child&path=${encodeURIComponent(file)}&download=1`, { method })
+      assert.equal(response.status, 200)
+      assert.match(response.headers.get('Content-Disposition')!, /^attachment;/)
+      assert.equal(await response.text(), method === 'HEAD' ? '' : '<html>Generated report</html>')
+    }
+    assert.equal((await app.request(`/api/media?chatId=sibling&path=${encodeURIComponent(file)}`)).status, 404)
+    assert.equal((await app.request(`/api/media?sessionId=web%3Achild&path=${encodeURIComponent(file)}`)).status, 404)
+    const ranged = await app.request(`/api/media?chatId=child&path=${encodeURIComponent(file)}`, { headers: { Range: 'bytes=0-5' } })
+    assert.equal(ranged.status, 206)
+    assert.equal(await ranged.text(), '<html>')
   } finally {
     await channel.stop()
     await rm(workspace, { recursive: true })

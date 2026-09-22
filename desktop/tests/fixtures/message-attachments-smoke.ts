@@ -11,11 +11,34 @@ async function main() {
   await app.whenReady()
   const window = new BrowserWindow({ show: false, width: 1100, height: 844,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
-  const execute = (code: string) => window.webContents.executeJavaScript(code)
+  window.webContents.session.webRequest.onBeforeSendHeaders({ urls: [new URL('*', process.env.MEDIA_SMOKE_URL).href] }, (details, callback) => {
+    callback({ requestHeaders: {
+      ...details.requestHeaders,
+      ...(details.webContentsId === window.webContents.id && details.resourceType === 'xhr' ? { 'X-Fixture-Renderer': 'allowed' } : {}),
+    } })
+  })
+  const execute = async (code: string) => {
+    const result = await window.webContents.executeJavaScript(`(async () => {
+      try { return { ok:true, value:await (0, eval)(${JSON.stringify(code)}) } }
+      catch (error) { return { ok:false, message:String(error), stack:error?.stack } }
+    })()`)
+    assert.equal(result.ok, true, `${result.message}\n${result.stack ?? ''}\nScript: ${code}`)
+    return result.value
+  }
   const wait = async (code: string) => {
     const deadline = Date.now() + 12_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
     throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}`)
+  }
+  const completeDownload = async (promise: Promise<string>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([promise, new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Download did not complete')), 10_000)
+      })])
+    } catch (cause) {
+      throw new Error(`${String(cause)}\n${await execute('document.body.innerText')}`)
+    } finally { clearTimeout(timer) }
   }
   try {
     await window.loadURL(new URL('__media', process.env.MEDIA_SMOKE_URL).href)
@@ -26,38 +49,78 @@ async function main() {
     assert.equal(await execute(`document.querySelector('video').controls && document.querySelector('video').playsInline`), true)
     await execute(`(async () => {
       const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;
-      const ctx = canvas.getContext('2d'); const stream = canvas.captureStream(12);
+      const ctx = canvas.getContext('2d');
+      // Feed frames directly and wait for encoded data rather than encoder startup timing.
+      const track = new MediaStreamTrackGenerator({kind:'video'});
+      const writer = track.writable.getWriter();
+      const stream = new MediaStream([track]);
       const chunks = []; const recorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp8'});
       const done = new Promise(resolve => { recorder.onstop = resolve });
-      recorder.ondataavailable = e => chunks.push(e.data); recorder.start();
-      for (let i = 0; i < 12; i++) {
+      recorder.ondataavailable = e => chunks.push(e.data); recorder.start(100);
+      for (let i = 0; i < 150 && (i < 12 || !chunks.some(chunk => chunk.size > 0)); i++) {
         ctx.fillStyle = i % 2 ? '#245a75' : '#214451'; ctx.fillRect(0, 0, 320, 180);
         ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.fillText('Video attachment', 65, 95);
+        const frame = new VideoFrame(canvas, {timestamp:i * 80_000});
+        await writer.write(frame); frame.close();
         await new Promise(resolve => setTimeout(resolve, 80));
       }
-      recorder.stop(); await done; stream.getTracks().forEach(track => track.stop());
-      const response = await fetch('/fixture-video', {method:'POST',body:new Blob(chunks,{type:'video/webm'})});
+      recorder.stop(); await done; await writer.close(); stream.getTracks().forEach(track => track.stop());
+      const video = new Blob(chunks,{type:'video/webm'});
+      if (!video.size) throw new Error('Synthetic video recorder produced no bytes');
+      const response = await fetch('/fixture-video', {method:'POST',body:video});
       if (!response.ok) throw new Error('Could not prepare synthetic video');
-      await document.querySelector('video').play();
+      const player = document.querySelector('video');
+      const mediaResponse = await fetch(player.src);
+      const saved = await mediaResponse.arrayBuffer();
+      if (!mediaResponse.ok || saved.byteLength !== video.size) throw new Error('Synthetic video did not round-trip: ' + mediaResponse.status + ', ' + saved.byteLength + '/' + video.size);
+      try { await player.play(); }
+      catch (error) { throw new Error(String(error) + '; recorded bytes=' + video.size + '; media error=' + player.error?.message); }
     })()`)
     await wait(`document.querySelector('video')?.currentTime > 0 && document.querySelector('video')?.videoWidth === 320`)
     await execute(`document.querySelector('video').pause()`)
     const download = Promise.withResolvers<string>()
     window.webContents.session.once('will-download', (_event, item) => {
       assert.equal(item.getFilename(), 'logs.zip')
+      assert.ok(item.getURL().startsWith('blob:'), 'Protected files are fetched with renderer authorization before saving')
       item.setSavePath(join(process.cwd(), 'download.zip'))
       item.once('done', (_event, state) => download.resolve(state))
     })
     await execute(`document.querySelector('[aria-label="Download logs.zip"]').click()`)
-    assert.equal(await download.promise, 'completed')
+    assert.equal(await completeDownload(download.promise), 'completed')
     assert.equal(await readFile(join(process.cwd(), 'download.zip'), 'utf8'), 'synthetic archive bytes')
     const originalUrl = window.webContents.getURL()
+    const reportDownload = Promise.withResolvers<string>()
+    window.webContents.session.once('will-download', (_event, item) => {
+      assert.equal(item.getFilename(), 'report.html')
+      item.setSavePath(join(process.cwd(), 'report.html'))
+      item.once('done', (_event, state) => reportDownload.resolve(state))
+    })
+    await execute(`document.querySelector('[aria-label="Download report.html"]').click()`)
+    assert.equal(await completeDownload(reportDownload.promise), 'completed')
+    assert.equal(await readFile(join(process.cwd(), 'report.html'), 'utf8'), '<html>Generated review report</html>')
+    await execute(`document.querySelector('[aria-label^="Download uploads"], [aria-label^="Download long-filename-"]').click()`)
+    await wait(`document.querySelector('.message-attachments [role="alert"]')?.textContent.includes('404')`)
+    assert.equal(window.webContents.getURL(), originalUrl, 'Failed downloads leave the conversation open')
+    assert.equal(await execute(`document.querySelector('[aria-label^="Download long-filename-"]').getAttribute('aria-busy')`), 'false')
     let popups = 0
     window.webContents.setWindowOpenHandler(() => { popups++; return { action: 'deny' } })
     const openPhoto = async () => {
       await execute(`document.querySelector('.attachment-image-link').click()`)
       await wait(`document.querySelector('.image-viewer')?.matches(':modal') && document.querySelector('.image-viewer img')?.naturalWidth > 0`)
     }
+    await openPhoto()
+    const imageDownload = Promise.withResolvers<string>()
+    window.webContents.session.once('will-download', (_event, item) => {
+      assert.equal(item.getFilename(), 'photo.png')
+      assert.ok(item.getURL().startsWith('blob:'))
+      item.setSavePath(join(process.cwd(), 'photo.png'))
+      item.once('done', (_event, state) => imageDownload.resolve(state))
+    })
+    await execute(`document.querySelector('.image-viewer [aria-label="Download photo.png"]').click()`)
+    assert.equal(await completeDownload(imageDownload.promise), 'completed')
+    assert.ok((await readFile(join(process.cwd(), 'photo.png'))).byteLength > 0)
+    await execute(`document.querySelector('[aria-label="Close image viewer"]').click()`)
+    await wait(`!document.querySelector('.image-viewer')`)
     for (const dark of [false, true]) {
       for (const width of [1100, 390]) {
         window.setContentSize(width, 844)

@@ -10,13 +10,16 @@
           <span :class="actualSize ? 'i-lucide-minimize' : 'i-lucide-scan'" aria-hidden="true" />
           <span class="viewer-control-label">{{ actualSize ? 'Fit' : '100%' }}</span>
         </button>
-        <a v-if="image.downloadUrl" class="viewer-control" :href="resources.resolve(image.downloadUrl)" :download="image.name" :aria-label="`Download ${image.name}`" referrerpolicy="no-referrer">
-          <span class="i-lucide-download" aria-hidden="true" />
+        <a v-if="downloadUrl" class="viewer-control" :href="downloadUrl" :download="image.name" :aria-label="`Download ${image.name}`" referrerpolicy="no-referrer"
+          :aria-busy="downloads.pending.has(downloadUrl)" :aria-disabled="downloads.pending.has(downloadUrl)"
+          @click="downloads.download($event, downloadUrl, image.name)">
+          <span :class="downloads.pending.has(downloadUrl) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" />
         </a>
         <button ref="closeButton" type="button" class="viewer-control" aria-label="Close image viewer" autofocus @click="close">
           <span class="i-lucide-x" aria-hidden="true" />
         </button>
       </header>
+      <p v-if="downloadUrl && downloads.errors.has(downloadUrl)" class="viewer-download-error" role="alert">{{ downloads.errors.get(downloadUrl) }}</p>
       <div ref="viewport" class="image-viewer-viewport" :class="{ 'actual-size': actualSize }" tabindex="0" role="region"
         aria-label="Image preview" :aria-busy="status === 'loading'">
         <div v-if="status !== 'error'" class="image-viewer-canvas">
@@ -34,12 +37,15 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue'
+import { useFileDownload } from '../composables/useFileDownload.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 import { useMobileResources } from '../mobile-resources.ts'
 
 const props = defineProps<{ image: ImagePreview }>()
 const resources = useMobileResources()
+const downloads = useFileDownload()
+const downloadUrl = computed(() => resources.resolve(props.image.downloadUrl))
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement>()
 const closeButton = ref<HTMLButtonElement>()
@@ -80,6 +86,7 @@ async function toggleSize() {
   viewport.value?.scrollTo(0, 0)
 }
 watch(() => props.image.src, () => {
+  downloads.reset()
   status.value = 'loading'
   actualSize.value = false
   attempt.value++
@@ -104,6 +111,7 @@ onBeforeUnmount(() => { closing = true; dialog.value?.close(); restoreFocus() })
 .viewer-control:hover:not(:disabled) { background: var(--c-bg-muted); }
 .viewer-control:disabled { opacity: .5; cursor: default; }
 .viewer-control:focus-visible, .image-viewer-viewport:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.viewer-download-error { margin: 0; padding: 8px 16px; color: var(--c-error); font-size: 13px; overflow-wrap: anywhere; }
 .image-viewer-viewport { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--c-bg-soft); }
 .image-viewer-canvas { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 16px; }
 .image-viewer-canvas img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
