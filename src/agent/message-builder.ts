@@ -1,39 +1,12 @@
 import { isAbsolute } from 'node:path'
-import { readFile } from 'node:fs/promises'
 import { inputSender, type EventInputSource, type SessionMessageInput } from '../sessions/input.ts'
 import type { ChatMessage, ContentPart } from '../providers/provider.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
+import { imageFromDataUrl, isImagePath, readImage } from '../utils/image-input.ts'
 
 // ---------------------------------------------------------------------------
 //  Helpers
 // ---------------------------------------------------------------------------
-
-const IMAGE_EXTENSIONS = new Set([
-  'jpg',
-  'jpeg',
-  'png',
-  'gif',
-  'webp',
-  'bmp',
-  'tiff',
-  'tif',
-  'svg',
-  'avif',
-  'heic',
-  'heif',
-])
-
-function isImagePath(src: string): boolean {
-  try {
-    const pathname = src.startsWith('data:') ? '' : new URL(src).pathname
-    const ext = pathname.split('.').pop()?.toLowerCase() ?? ''
-    return IMAGE_EXTENSIONS.has(ext) || src.startsWith('data:image/')
-  } catch {
-    // local file path
-    const ext = src.split('.').pop()?.toLowerCase() ?? ''
-    return IMAGE_EXTENSIONS.has(ext)
-  }
-}
 
 // ---------------------------------------------------------------------------
 //  XML envelope builders
@@ -166,7 +139,8 @@ async function buildMediaParts(
       src.startsWith('data:') || src.startsWith('http://') ||
       src.startsWith('https://')
     ) {
-      parts.push({ type: 'image_url', image_url: { url: src, detail: 'auto' } })
+      parts.push(src.startsWith('data:') ? imageFromDataUrl(src)
+        : { type: 'image_url', image_url: { url: src, detail: 'auto' } })
       continue
     }
 
@@ -174,19 +148,7 @@ async function buildMediaParts(
     const resolvedSrc = isAbsolute(src)
       ? src
       : resolveAgentPath(workspace, cwd, src)
-    try {
-      const bytes = await readFile(resolvedSrc)
-      const ext = resolvedSrc.split('.').pop()?.toLowerCase() ?? 'jpeg'
-      const mime = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`
-      const b64 = btoa(String.fromCharCode(...bytes))
-      parts.push({
-        type: 'image_url',
-        image_url: { url: `data:${mime};base64,${b64}`, detail: 'auto' },
-      })
-    } catch (e) {
-      console.warn(`[agent] Could not read media file ${resolvedSrc}:`, e)
-      parts.push({ type: 'text', text: `[file: ${src}]` })
-    }
+    parts.push((await readImage(resolvedSrc)).part)
   }
 
   return parts

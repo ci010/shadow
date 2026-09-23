@@ -1,5 +1,6 @@
 import type { ExecutionContext } from '../tools/context.ts'
 import { SessionTools } from '../tools/registry.ts'
+import type { ToolResult } from '../tools/tool.ts'
 
 /** Independent snapshot borrowing resources only while the caller awaits this leaf. */
 export class CallTools extends SessionTools {
@@ -23,13 +24,13 @@ export class CallTools extends SessionTools {
     const tools = new Map([...this.caller.activeDynamicTools(), ...super.activeDynamicTools()].map(tool => [tool.name, tool]))
     return [...tools.values()].filter(tool => this.canUseDynamic(tool.name))
   }
-  override async execute(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+  override async execute(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult> {
     const denial = this.executionDenial(name, args)
     if (denial) return denial
     if (!this.has(name)) return this.rejectExecution(`tool "${name}" is unavailable in the caller/role capability intersection.`)
     return super.execute(name, args, context)
   }
-  override async executeDynamic(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+  override async executeDynamic(name: string, args: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult> {
     const denial = this.executionDenial(name, args)
     if (denial) return denial
     if (!this.canUseDynamic(name)) return this.rejectExecution(`dynamic tool "${name}" is unavailable to this call.`)

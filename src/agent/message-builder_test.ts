@@ -8,6 +8,7 @@ import { JsonlSessionStore } from '../sessions/session-store-jsonl.ts'
 import { SqliteSessionStore } from '../sessions/session-store-sqlite.ts'
 import type { SessionStore } from '../sessions/session-store.ts'
 import { buildUserChatMessage } from './message-builder.ts'
+import { pngFixture } from '../testing/image.ts'
 
 test('channel adapter normalizes retry/silent and never trusts event-shaped sender metadata', async () => {
   const message = {
@@ -133,7 +134,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     t.after(async () => { store.close?.(); await rm(directory, { recursive: true, force: true }) })
     const uploadedPath = join(directory, 'uploaded-marked.png')
     const originalPath = join(directory, 'folder', 'original.png')
-    const bytes = Buffer.from('synthetic marked image')
+    const bytes = pngFixture(256, 256)
     await writeFile(uploadedPath, bytes)
     const content = 'Image references (source metadata):\n'
       + `- Attached image: ${JSON.stringify(uploadedPath)}\n`

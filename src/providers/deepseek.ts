@@ -2,9 +2,9 @@ import type { ToolDefinition } from '../tools/tool.ts'
 import { env } from 'node:process'
 import { OpenAICompatibleProvider, openaiChat } from './openai-compatible.ts'
 import { ProviderHttpError } from './provider.ts'
+import { chatCompletionImages } from './tool-images.ts'
 import type {
   ChatMessage,
-  ContentPart,
   LLMProviderOptions,
   LLMResponse,
   ModelInfo,
@@ -14,18 +14,9 @@ const MODELS = ['deepseek-flash', 'deepseek-v4-pro']
 const VISION_MODELS = new Set(['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'])
 
 function imageMessages(messages: ChatMessage[], model: string): ChatMessage[] {
-  const result: ChatMessage[] = []
-  let toolImages: ContentPart[] = []
-  const flushToolImages = () => {
-    if (!toolImages.length) return
-    result.push({ role: 'user', content: toolImages })
-    toolImages = []
-  }
   for (const message of messages) {
-    // Complete every tool result before adding the user-role images DeepSeek requires.
-    if (message.role !== 'tool') flushToolImages()
     const images = Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url') : []
-    if (!images.length) { result.push(message); continue }
+    if (!images.length) continue
     if (!VISION_MODELS.has(model)) throw new Error(`[deepseek] Model "${model}" does not support images. Select deepseek-flash.`)
     if (message.role !== 'user' && message.role !== 'tool') {
       throw new Error('[deepseek] Images are only supported in user messages or tool results.')
@@ -36,17 +27,8 @@ function imageMessages(messages: ChatMessage[], model: string): ChatMessage[] {
       if (url.length <= 8192 && URL.canParse(url) && ['http:', 'https:'].includes(new URL(url).protocol)) continue
       throw new Error('[deepseek] Images must be JPEG, PNG, GIF or WebP data URLs, or public HTTP(S) URLs up to 8192 characters.')
     }
-    if (message.role === 'tool' && Array.isArray(message.content)) {
-      if (!message.tool_call_id) throw new Error('[deepseek] Image tool result is missing its call ID.')
-      const text = message.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
-      result.push({ ...message, content: `${text}${text ? '\n' : ''}[Tool images are attached in the following user message.]` })
-      toolImages.push({ type: 'text', text: `Images returned by tool ${message.name ?? 'result'} (call ${message.tool_call_id}):` }, ...images)
-    } else {
-      result.push(message)
-    }
   }
-  flushToolImages()
-  return result
+  return chatCompletionImages(messages)
 }
 
 /** DeepSeek Chat Completions with thinking continuity and Flash image input. */

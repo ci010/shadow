@@ -1,5 +1,5 @@
 import type { ExecutionContext } from '../tools/context.ts'
-import type { Tool, ToolParameters } from '../tools/tool.ts'
+import type { Tool, ToolParameters, ToolResult } from '../tools/tool.ts'
 import type { McpConnection, McpToolInfo } from './client.ts'
 
 export function mcpToolContract(serverName: string, toolInfo: McpToolInfo) {
@@ -13,7 +13,7 @@ export function mcpToolContract(serverName: string, toolInfo: McpToolInfo) {
 /**
  * Wraps a single MCP tool as a local Tool instance.
  */
-export class McpToolAdapter implements Tool {
+export class McpToolAdapter implements Tool<ToolResult> {
   readonly name: string
   readonly description: string
   readonly parameters: ToolParameters
@@ -34,7 +34,7 @@ export class McpToolAdapter implements Tool {
     return `🔧 ${this.toolInfo.name}${summary ? ` (${summary})` : ''}`
   }
 
-  async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+  async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<ToolResult> {
     return this.connection.callTool(this.toolInfo.name, args, context.signal)
   }
 }

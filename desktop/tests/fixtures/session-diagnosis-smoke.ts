@@ -9,7 +9,10 @@ app.on('window-all-closed', () => {})
 async function main() {
   await app.whenReady()
   const window = new BrowserWindow({ show: false, width: 1200, height: 1100, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
-  const execute = (code: string) => window.webContents.executeJavaScript(code)
+  const execute = async (code: string) => {
+    try { return await window.webContents.executeJavaScript(code) }
+    catch (cause) { throw new Error(`Failed renderer expression: ${code}`, { cause }) }
+  }
   const wait = async (code: string) => {
     const deadline = Date.now() + 10_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
@@ -98,6 +101,10 @@ async function main() {
     await execute(`window.updateToolResult('Message sent.\\r\\n<script>not executable</script>')`)
     await wait(`document.querySelector('.tool-result-content') && !document.querySelector('.tool-result-content .file-highlight-content')`)
     assert.equal(await execute(`document.querySelector('.tool-result-content pre').textContent`), 'Message sent.\r\n<script>not executable</script>')
+    await execute(`window.showToolImage()`)
+    await wait(`document.querySelector('.tool-result-content img')?.naturalWidth === 2`)
+    assert.equal(await execute(`document.querySelector('.tool-result-content img').alt`), 'Tool output image 1')
+    assert.equal(await execute(`document.querySelector('.tool-result-content pre').textContent.includes('base64,')`), false)
     await click('.tool-call-header')
     await wait(`!document.querySelector('.tool-entry-content')`)
     await execute(`document.querySelectorAll('.tool-call-header')[1].click()`)
@@ -135,6 +142,8 @@ async function main() {
     assert.equal(call.id, 'call-1')
     assert.equal(JSON.parse(call.function.arguments).nested.value, 42)
     assert.match(await inspector(), /Synthetic tool result/)
+    await wait(`document.querySelector('.span-inspector .payload-image img')?.naturalWidth === 2`)
+    assert.equal(await execute(`document.querySelector('.span-inspector').innerText.includes('base64,')`), false)
     await wait(colored('.span-inspector .trace-payload'))
 
     await execute(`document.querySelector('.lane-bar.tools').parentElement.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }))`)
@@ -148,7 +157,7 @@ async function main() {
     await click('.lane-bar.model')
     assert.match(await inspector(), /Final model return/)
     assert.match(await inspector(), /Returned tool calls/)
-    assert.equal(JSON.parse(await execute(`document.querySelector('.span-inspector .trace-event-content pre:nth-of-type(2)').textContent`))[0].id, 'call-1')
+    assert.equal(JSON.parse(await execute(`Array.from(document.querySelectorAll('.span-inspector h4')).find(heading => heading.textContent === 'Returned tool calls').nextElementSibling.textContent`))[0].id, 'call-1')
     await execute(`document.querySelector('.span-inspector .trace-event-content details').open = true`)
     assert.match(await inspector(), /Synthetic model reasoning/)
     for (const state of ['live', 'failed', 'recorded']) {

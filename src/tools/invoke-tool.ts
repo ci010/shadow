@@ -1,6 +1,6 @@
 import type { ExecutionContext } from './context.ts'
 import type { SessionTools } from './registry.ts'
-import type { Tool, ToolParameters } from './tool.ts'
+import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 
 export interface DynamicToolImporter {
   canInvokeFromRemote?(toolName: string): boolean
@@ -15,7 +15,7 @@ export interface DynamicToolImporter {
 /**
  * Resolve a known tool lazily and validate its current schema before execution.
  */
-export class InvokeTool implements Tool {
+export class InvokeTool implements Tool<ToolResult> {
   readonly name = 'invoke_tool'
   readonly supportsRemoteWorkdir = true
   readonly description =
@@ -41,7 +41,7 @@ export class InvokeTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context: ExecutionContext,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     const name = typeof args.name === 'string' ? args.name : ''
     if (!name) return 'Error: name is required'
     if (context.remoteWorkdir && !this.importer?.canInvokeFromRemote?.(name)) {

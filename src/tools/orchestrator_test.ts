@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { getBuiltinAgentTypes } from '../agent/types/builtins.ts'
@@ -69,18 +70,18 @@ test('coordinator cannot activate dynamic tools; topics retain lazy Initiative a
   }
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('unexpected connection') })
   assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['authoring_change', 'initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic', 'yield'])
-  assert.match(await tools.execute('search', { space: 'tools:fixture' }, context), /not available/)
-  assert.match(await tools.execute('invoke_tool', { name: 'fixture__execute', args: {} }, context), /not found|not available|not allowed/i)
+  assert.match(requireToolText(await tools.execute('search', { space: 'tools:fixture' }, context)), /not available/)
+  assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'fixture__execute', args: {} }, context)), /not found|not available|not allowed/i)
   assert.equal(connect.mock.callCount(), 0)
   const borrowed = tools.snapshot()
   assert.equal(borrowed.has('invoke_tool'), false)
   assert.equal(borrowed.canUseDynamic('fixture__execute'), false)
   assert.equal(borrowed.has('initiative'), true)
-  assert.equal(JSON.parse(await tools.execute('initiative', { query: 'SELECT id FROM initiatives' }, context))[0].id, 'fixture')
+  assert.equal(JSON.parse(requireToolText(await tools.execute('initiative', { query: 'SELECT id FROM initiatives' }, context)))[0].id, 'fixture')
   const ordinary = new SessionTools(base, '.')
   assert.equal(ordinary.getDefinitions().some(definition => definition.function.name === 'initiative'), false)
   const ordinaryContext = { ...context, sessionId: 'web:topic', tools: ordinary }
-  assert.equal(JSON.parse(await ordinary.execute('invoke_tool', { name: 'initiative', args: { query: 'SELECT id FROM initiatives' } }, ordinaryContext))[0].id, 'fixture')
+  assert.equal(JSON.parse(requireToolText(await ordinary.execute('invoke_tool', { name: 'initiative', args: { query: 'SELECT id FROM initiatives' } }, ordinaryContext)))[0].id, 'fixture')
   ordinary.resetDynamic()
   tools.resetDynamic()
 })

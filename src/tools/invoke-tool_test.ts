@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ExecutionContext } from './context.ts'
@@ -27,7 +28,7 @@ test('invoke_tool executes active dynamic tools without exposing them', async ()
   const context = { tools: session } as ExecutionContext
 
   assertEquals(session.getDefinitions(), [])
-  assert((await session.execute('dynamic_echo', { value: 'hidden' }, context))
+  assert(requireToolText((await session.execute('dynamic_echo', { value: 'hidden' }, context)))
     .includes('unknown tool "dynamic_echo"'))
   assertEquals(
     await new InvokeTool().execute(
@@ -80,9 +81,9 @@ test('invoke_tool executes active dynamic tools without exposing them', async ()
   )
   blockedSession.registerDynamic(new DynamicEchoTool())
   assert(
-    (await new InvokeTool().execute(
+    requireToolText((await new InvokeTool().execute(
       { name: 'dynamic_echo', args: { value: 'blocked' } },
       { tools: blockedSession } as ExecutionContext,
-    )).includes('not available for this agent type'),
+    ))).includes('not available for this agent type'),
   )
 })

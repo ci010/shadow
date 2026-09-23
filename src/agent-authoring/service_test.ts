@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { randomUUID } from 'node:crypto'
@@ -317,11 +318,11 @@ test('read grants are confined, revocation rejects old tools, and publishing can
     const policy = f.service.resolve(id)!
     const tools = f.service.tools(policy, id)
     const context = { ...f.ownerContext, ...message(), projectId: address.projectId, sessionId: id, tools }
-    assert.match(await tools.execute('read', { path: `folder:${f.folder.id}/guide.txt` }, context), /Public project guide/)
-    const search = JSON.parse(await tools.execute('search', { path: `folder:${f.folder.id}/guide.txt`, query: 'duplicate' }, context))
+    assert.match(requireToolText(await tools.execute('read', { path: `folder:${f.folder.id}/guide.txt` }, context)), /Public project guide/)
+    const search = JSON.parse(requireToolText(await tools.execute('search', { path: `folder:${f.folder.id}/guide.txt`, query: 'duplicate' }, context)))
     assert.equal(search.matches[0].line, 2)
     for (const path of ['v:memory', 'https://example.com', `folder:foreign/guide.txt`, `folder:${f.folder.id}/../outside`, `folder:${f.folder.id}/.env`]) {
-      assert.match(await tools.execute('read', { path }, context), /Error|not permitted|authorized/)
+      assert.match(requireToolText(await tools.execute('read', { path }, context)), /Error|not permitted|authorized/)
     }
     for (const name of ['exec', 'write', 'invoke_tool', 'project_config', 'message', 'subagent']) assert.equal(tools.has(name), false)
     const release = f.hold()
@@ -337,7 +338,7 @@ test('read grants are confined, revocation rejects old tools, and publishing can
     await waitFor(() => f.requests.length === 2)
     await f.idle()
     assert.match((await f.publish())!, /Published/)
-    assert.match(await tools.execute('read', { path: `folder:${f.folder.id}/guide.txt` }, context), /disabled|no longer published/)
+    assert.match(requireToolText(await tools.execute('read', { path: `folder:${f.folder.id}/guide.txt` }, context)), /disabled|no longer published/)
     await assert.rejects(f.app.receiveChannelMessage(message()), /disabled|no longer published/)
     const rollback = await f.commands.dispatch(`/agent-rollback ${policy.revision} ${f.resources.snapshot().revision}`, { sessionId: 'web:orchestrator', msg: f.owner, admin: true, llm })
     assert.match(rollback!, /Restored/)
@@ -537,9 +538,9 @@ test('remote reads route through the granted capability and never open its local
     assert.deepEqual(jobs[0].args, { path: 'guide.txt' })
     assert.equal(jobs[0].sessionId, id)
     const unavailable = new AgentAuthoringService({ ...options, remoteExecutor: undefined }).tools(policy, id)
-    assert.match(await unavailable.execute('read', { path: `folder:${folder.id}/guide.txt` }, { ...context, tools: unavailable }), /no local path/)
+    assert.match(requireToolText(await unavailable.execute('read', { path: `folder:${folder.id}/guide.txt` }, { ...context, tools: unavailable })), /no local path/)
     folder.projectId = 'other-project'
-    assert.match(await tools.execute('read', { path: `folder:${folder.id}/guide.txt` }, context), /does not belong/)
+    assert.match(requireToolText(await tools.execute('read', { path: `folder:${folder.id}/guide.txt` }, context)), /does not belong/)
     assert.equal(jobs.length, 1)
   } finally { await f.close() }
 })
@@ -596,15 +597,15 @@ test('explicit native filesystem imports run in Project Home, never synthetic te
       getStatus: async () => { throw new Error('Unexpected remote status request') },
       cancel: async () => { throw new Error('Unexpected remote cancellation') },
     }
-    assert.match(await tools.execute('record', {}, {
+    assert.match(requireToolText(await tools.execute('record', {}, {
       ...context, remoteWorkdir: { nodeId: 'child', capabilityId: 'remote-folder', executor },
-    }), /does not support remote workdirs/)
+    })), /does not support remote workdirs/)
     await assert.rejects(readFile(output), { code: 'ENOENT' })
-    assert.equal(JSON.parse(await tools.execute('record', {}, context)), 'fixed fixture')
+    assert.equal(JSON.parse(requireToolText(await tools.execute('record', {}, context))), 'fixed fixture')
     assert.equal(await readFile(output, 'utf8'), 'fixed fixture')
     await f.stage(bundle(f.folder.id))
     await f.publish()
-    assert.match(await tools.execute('record', {}, context), /policy changed/)
+    assert.match(requireToolText(await tools.execute('record', {}, context)), /policy changed/)
   } finally { await f.close() }
 })
 
@@ -680,8 +681,8 @@ Collect sufficient context before submitting.
     const context = { ...f.ownerContext, ...message(), sessionId: id, tools, toolCallId: 'submit-1' }
     assert.deepEqual(tools.getDefinitions().map(tool => tool.function.name), ['submit'])
     const first = await tools.execute('submit', { title: 'A reproducible report', key: 'issue-1' }, context)
-    assert.doesNotMatch(first, /synthetic-auth-token/)
-    const result = JSON.parse(first)
+    assert.doesNotMatch(requireToolText(first), /synthetic-auth-token/)
+    const result = JSON.parse(requireToolText(first))
     assert.equal(result.process, 'undefined')
     assert.equal(result.require, 'undefined')
     assert.equal(result.fetch, 'undefined')
@@ -689,10 +690,10 @@ Collect sufficient context before submitting.
     assert.equal(sent.length, 1)
     assert.equal(sent[0].authorization, 'Bearer synthetic-auth-token')
     const replay = await tools.execute('submit', { title: 'A reproducible report', key: 'issue-1' }, { ...context, toolCallId: 'submit-2' })
-    assert.doesNotMatch(replay, /synthetic-auth-token/)
+    assert.doesNotMatch(requireToolText(replay), /synthetic-auth-token/)
     assert.equal(sent.length, 1)
     assert.equal(f.requests.filter(request => JSON.stringify(request.messages).includes('Investigate report')).length, 1)
-    assert.match(await tools.execute('submit', { title: 123, key: 'bad' }, context), /Invalid tool arguments/)
+    assert.match(requireToolText(await tools.execute('submit', { title: 123, key: 'bad' }, context)), /Invalid tool arguments/)
     assert.equal(sent.length, 1)
   } finally { await f.close() }
 })

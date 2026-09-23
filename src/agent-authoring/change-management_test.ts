@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -159,11 +160,11 @@ test('unaffected live tool contexts survive unrelated publication while changed 
       const next = await f.resources.stage({ expectedRevision: f.resources.draft().revision, bundle: unrelated })
       await f.resources.publish(next.revision)
       assert.notEqual(f.resources.snapshot().revision, policy.revision)
-      assert.equal(JSON.parse(await tools.execute('issue_list', { method: 'GET' }, context)).count, 1)
+      assert.equal(JSON.parse(requireToolText(await tools.execute('issue_list', { method: 'GET' }, context))).count, 1)
       unrelated.files[promptPath] += '\nChanged selected policy.'
       const affected = await f.resources.stage({ expectedRevision: next.revision, bundle: unrelated })
       await f.resources.publish(affected.revision)
-      assert.match(await tools.execute('issue_list', { method: 'GET' }, context), /policy changed/)
+      assert.match(requireToolText(await tools.execute('issue_list', { method: 'GET' }, context)), /policy changed/)
       assert.equal(f.calls.length, 1)
     } finally { f.stop() }
   })

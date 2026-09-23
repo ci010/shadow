@@ -8,6 +8,8 @@ import { ProviderHttpError, type ModelInfo } from './provider.ts'
 import { providerPlugin } from './routes.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 import { ConfigSchema } from '../config/schema.ts'
+import { pngFixture } from '../testing/image.ts'
+import { MAX_IMAGE_BYTES } from '../utils/image-input.ts'
 
 const astra = {
   id: 'gpt-6-astra',
@@ -45,9 +47,16 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
   let modelReads = 0
   let modelResponse = metadata
   let postResponse: Response | undefined
+  let imageResponse: Response | undefined
   t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
     init?.signal?.throwIfAborted()
     const path = new URL(String(url)).pathname
+    if (path === '/fixture.png') {
+      assert(imageResponse)
+      const response = imageResponse
+      imageResponse = undefined
+      return response
+    }
     if (path === '/models') {
       modelReads++
       return modelResponse instanceof Response ? modelResponse.clone() : Response.json(modelResponse)
@@ -65,8 +74,42 @@ function fixture(t: TestContext, metadata: unknown = { data: [astra, dual] }, ca
     reads: () => modelReads,
     metadata: (value: unknown) => { modelResponse = value },
     reply: (value: Response) => { postResponse = value },
+    image: (value: Response) => { imageResponse = value },
   }
 }
+
+test('Copilot inlines large external images without spread encoding and rejects download failures or excess bytes', async t => {
+  const f = fixture(t)
+  const bytes = pngFixture(256, 256)
+  const messages = [{ role: 'user' as const, content: [{
+    type: 'image_url' as const, image_url: { url: 'https://fixture.invalid/fixture.png' },
+  }] }]
+  f.image(new Response(new Uint8Array(bytes)))
+  await f.provider.chat(messages, [], { model: astra.id })
+  assert(JSON.stringify(f.posts[0].body).includes(`data:image/png;base64,${bytes.toString('base64')}`))
+  assert.equal(messages[0].content[0].image_url.url, 'https://fixture.invalid/fixture.png')
+  f.image(new Response('not found', { status: 404 }))
+  await assert.rejects(f.provider.chat(messages, [], { model: astra.id }), /Image download failed: HTTP 404/)
+  f.image(new Response(Buffer.alloc(MAX_IMAGE_BYTES + 1)))
+  await assert.rejects(f.provider.chat(messages, [], { model: astra.id }), /exceeds 5 MiB/)
+  assert.equal(f.posts.length, 1, 'Failed image preparation must not silently send an incomplete request')
+})
+
+test('Copilot rejects an explicitly nonvisual model without discarding image parts', async t => {
+  const f = fixture(t, { data: [{ id: 'text-only', capabilities: { supports: { vision: false } } }] })
+  await assert.rejects(f.provider.chat([{ role: 'user', content: [{
+    type: 'image_url', image_url: { url: 'https://fixture.invalid/fixture.png' },
+  }] }], [], { model: 'text-only' }), /does not accept image input/)
+  assert.equal(f.posts.length, 0)
+})
+
+test('missing Copilot vision metadata stays unknown rather than falsely rejecting images', async t => {
+  const f = fixture(t, { data: [dual] })
+  const url = `data:image/png;base64,${pngFixture().toString('base64')}`
+  await f.provider.chat([{ role: 'user', content: [{ type: 'image_url', image_url: { url } }] }], [], { model: dual.id })
+  assert.equal((await f.provider.listModelInfos())[0].vision, undefined)
+  assert(JSON.stringify(f.posts[0].body).includes(url))
+})
 
 test('default model and provider fallback both send Astra with configured medium effort', async t => {
   const f = fixture(t)

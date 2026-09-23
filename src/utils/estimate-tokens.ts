@@ -9,7 +9,8 @@ export function estimateTokens(messages: ChatMessage[]): number {
         ? msg.content.reduce(
           (len, part) =>
             len +
-            (part.type === 'text' ? part.text.length : part.image_url.url.length ?? 0),
+            // Image cost is provider-specific; never count base64 as text tokens.
+            (part.type === 'text' ? part.text.length : 4096 * 4),
           0,
         )
         : 0

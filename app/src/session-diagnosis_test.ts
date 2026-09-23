@@ -30,7 +30,9 @@ test('trace distinguishes delegated input from humans without losing raw evidenc
   assert.equal(events[3].content, 'Background check')
   assert.match(events[3].rawContent!, /^<event /)
   assert.match(events[4].content, /^Literal <sender source="session" \/> content/)
-  assert.match(events[4].content, /data:image\/png;base64,fixture/)
+  assert.match(events[4].content, /\[image\]/)
+  assert.doesNotMatch(events[4].content, /base64/)
+  assert.deepEqual(events[4].images, ['data:image/png;base64,fixture'])
 })
 
 test('history preserves genuine turns and distinguishes system and compaction context', () => {
@@ -48,6 +50,21 @@ test('history preserves genuine turns and distinguishes system and compaction co
   assert.equal(events[4].timestamp, undefined)
   assert.equal(events[4].reasoning, 'Reasoning')
   assert.match(events[4].usage!, /12/)
+})
+
+test('trace pairs visual tool results without dumping encoded image bytes into text', () => {
+  const image = 'data:image/png;base64,aW1hZ2U='
+  const { events } = parseDiagnosisHistory({ messages: [
+    { role: 'assistant', content: null, tool_calls: [{ id: 'image', function: { name: 'read', arguments: '{"path":"x.png"}' } }] },
+    { role: 'tool', tool_call_id: 'image', content: [
+      { type: 'text', text: 'Screenshot 10 x 10' }, { type: 'image_url', image_url: { url: image } },
+    ] },
+  ] })
+  const tool = events.find(event => event.callId === 'image')
+  assert(tool)
+  assert.equal(tool.kind, 'TOOL')
+  assert.equal(tool.result, 'Screenshot 10 x 10\n[image]')
+  assert.deepEqual(tool.images, [image])
 })
 
 test('parallel tool results are paired by ID rather than adjacent position or name', () => {

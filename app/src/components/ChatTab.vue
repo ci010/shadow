@@ -480,6 +480,8 @@ import { useConversationNavigation } from '../composables/useConversationNavigat
 import ToolActivityGroup from './ToolActivityGroup.vue'
 import ConversationSummary from './ConversationSummary.vue'
 import { groupToolActivity } from '../tool-activity.ts'
+import { toolImages } from '../tool-images.ts'
+import { buildMediaUrl } from '../media-url.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
 import { conversationLinkSession, isDirectConversation } from '../project-coordination.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
@@ -1281,7 +1283,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           }
           if (cur.tool_calls?.length) {
             // Look ahead to collect tool results keyed by tool_call_id
-            const toolResults: Array<{ content: string; name?: string; toolCallId?: string }> = []
+            const toolResults: Array<{ content: string; name?: string; toolCallId?: string; media: string[] }> = []
             let peek = i + 1
             while (peek < raw.length && raw[peek].role === 'tool') {
               const toolMsg = raw[peek]
@@ -1289,6 +1291,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                 content: rawTextContent(toolMsg),
                 name: toolMsg.name,
                 toolCallId: toolMsg.tool_call_id,
+                media: toolImages(toolMsg.content),
               })
               peek++
             }
@@ -1317,6 +1320,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
                 const entry: ChatMsg = {
                   role: 'assistant',
                   content: result.content,
+                  media: result.media,
                   event: 'tool_result',
                   toolName: result.name,
                   toolCallId: tc.id,
@@ -1331,6 +1335,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
             for (const result of toolResults) {
               if (!consumedResults.has(result)) out.push({
                 role: 'assistant', event: 'tool_result', content: result.content,
+                media: result.media,
                 toolName: result.name, toolCallId: result.toolCallId,
               })
             }
@@ -1341,12 +1346,14 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           }
         } else if (cur.role === 'tool') {
           const result = rawTextContent(cur)
-          if (result) {
+          if (result || toolImages(cur.content).length) {
             out.push({
               role: 'assistant',
               content: result,
               event: 'tool_result',
               toolName: cur.name,
+              toolCallId: cur.tool_call_id,
+              media: toolImages(cur.content),
             })
           }
         }
@@ -1924,6 +1931,10 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
   } else if (event === 'tool_result') {
     messages.value.push({
       role: 'assistant', event: 'tool_result', content: payload.content ?? '',
+      media: payload.media?.flatMap(path => {
+        const url = mobileResources.resolve(buildMediaUrl(props.apiBase, activeSessionId.value, path))
+        return url ? [url] : []
+      }),
       toolCallId: payload.toolCallId, toolName: payload.toolName,
     })
     if (payload.toolName === 'subagent' || streamingToolCallData.value?.name === 'subagent') void loadSessionList()

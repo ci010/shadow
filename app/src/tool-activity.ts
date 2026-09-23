@@ -3,6 +3,7 @@ import { isRecord } from './folders-sidebar.ts'
 export interface ToolActivityMessage {
   event?: string
   content: string
+  media?: string[]
   toolName?: string
   toolCallId?: string
   toolCall?: { name: string; arguments: Record<string, unknown> }
@@ -22,6 +23,7 @@ export interface ToolActivity {
   icon: 'write' | 'read' | 'search' | 'exec' | 'tool'
   arguments: string
   result?: string
+  images?: string[]
   usage?: ToolActivityMessage['usage']
   file?: string
   changes?: LineChanges
@@ -96,7 +98,7 @@ function activity(message: ToolActivityMessage, index: number, result?: ToolActi
   const text = result?.content
   const success = write && text !== undefined && /^Success: (?:write|edit|append) /.test(text)
   return {
-    index, name, title, summary, arguments: call.raw, result: text, usage: result?.usage,
+    index, name, title, summary, arguments: call.raw, result: text, usage: result?.usage, images: result?.media,
     icon: write ? 'write' : read ? 'read' : search ? 'search' : exec ? 'exec' : 'tool',
     file: success && path ? path : undefined,
     changes: success ? parseLineChanges(text) : undefined,
@@ -146,7 +148,7 @@ export function groupToolActivity(messages: readonly ToolActivityMessage[], excl
         index++
       } else {
         entries.push({ index, name: message.toolName || 'Tool', title: `${message.toolName || 'Tool'} result`,
-          summary: '', arguments: '', result: message.content, icon: 'tool', usage: message.usage,
+          summary: '', arguments: '', result: message.content, icon: 'tool', usage: message.usage, images: message.media,
           failed: /^Error:/i.test(message.content.trimStart()) })
         index++
       }

@@ -1,7 +1,8 @@
 import { trace } from '@opentelemetry/api'
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
-import type { Tool, ToolDefinition, ToolExecutionHook } from './tool.ts'
+import { toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
+import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
 import type { McpConnection } from '../mcp/client.ts'
 import type { ExecutionMode } from '../sessions/execution-mode.ts'
@@ -10,6 +11,7 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
 import { redactMcpText } from '../mcp/errors.ts'
 import type { WorkToolGuard } from '../sessions/work-alignment.ts'
+type Tool = TypedTool<ToolResult>
 
 const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'work', 'event_subscribe', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
 
@@ -96,7 +98,7 @@ export class Tools {
     name: string,
     args: Record<string, unknown>,
     context: ExecutionContext,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     const denial = context.tools?.executionDenial?.(name, args)
     if (denial) return denial
     const s = trace.getActiveSpan()
@@ -120,22 +122,30 @@ export class Tools {
       await this.onBefore(name, args, context)
       context.signal?.throwIfAborted()
       admission = context.tools.getWorkGuard()?.before(tool, args, context)
-      let result = await tool.execute(args, context)
+      const result = await tool.execute(args, context)
       const receipt = admission
       admission = undefined
-      result += receipt?.finish(/^(Error|Blocked):/.test(result)) ?? ''
+      let text = toolResultText(result)
+      if (typeof result !== 'string' && result.isError && !/^Error:/.test(text)) text = `Error: ${text}`
+      text += receipt?.finish((typeof result !== 'string' && result.isError === true) || /^(Error|Blocked):/.test(text)) ?? ''
+      const images = typeof result === 'string' ? [] : result.content.filter(part => part.type === 'image_url')
+      if (images.length > MAX_TOOL_IMAGES) throw new Error(`A tool result supports at most ${MAX_TOOL_IMAGES} images. Request fewer images.`)
+      for (const image of images) imageFromDataUrl(image.image_url.url)
       // Run post-execution hooks
-      result = await this.onAfter(name, args, result, context)
+      text = await this.onAfter(name, args, text, context)
 
       if (
-        result.length > this.truncationThreshold &&
+        text.length > this.truncationThreshold &&
         !EXEMPT_TOOLS.has(name) &&
         !(name === 'search' && typeof args.space === 'string' && args.space.split(':', 1)[0] === 'tools') &&
         !(context.remoteWorkdir && name === 'exec')
       ) {
-        result = await this.truncateAndSave(name, result)
+        text = await this.truncateAndSave(name, text)
       }
-      return result
+      return images.length ? {
+        content: [...(text ? [{ type: 'text' as const, text }] : []), ...images],
+        ...(typeof result !== 'string' && result.isError ? { isError: true } : {}),
+      } : text
     } catch (err) {
       admission?.finish(true)
       // An interrupted invocation has no result to persist or send to the model.
@@ -386,7 +396,7 @@ export class SessionTools extends Tools {
     name: string,
     args: Record<string, unknown>,
     context: ExecutionContext,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     const denial = this.executionDenial(name, args)
     if (denial) return denial
     if (!this.isDynamicToolAllowed(name)) {
@@ -616,7 +626,7 @@ export class SessionTools extends Tools {
     name: string,
     args: Record<string, unknown>,
     context: ExecutionContext,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     const denial = this.executionDenial(name, args)
     if (denial) return denial
     if (!this.isToolAllowed(name)) {

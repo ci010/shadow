@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
@@ -176,5 +177,5 @@ test('developer sessions can import the tester without granting it to the coordi
   const tools = new SessionTools(new Tools(home), home)
   assert.doesNotMatch(await importer.importSource({ source: 'v:tools/agent_tool_test' }, tools), /^Error/)
   const result = await new InvokeTool(importer).execute({ name: 'agent_tool_test', args: request() }, { ...context, tools })
-  assert.equal(JSON.parse(result).passed, true)
+  assert.equal(JSON.parse(requireToolText(result)).passed, true)
 })

@@ -9,7 +9,8 @@ import {
 import { NodeHtmlMarkdown } from 'node-html-markdown'
 import type { ExecutionContext } from './context.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
-import type { Tool, ToolParameters } from './tool.ts'
+import type { Tool, ToolParameters, ToolResult } from './tool.ts'
+import { isImageFile, isImagePath, readImage } from '../utils/image-input.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
@@ -44,9 +45,10 @@ async function readFileInRange(
   maxSizeBytes = MAX_SIZE_BYTES,
 ): Promise<{ lines: string[]; totalLines: number; clipped: boolean }> {
   const raw = await readFile(path)
-  const decoder = new TextDecoder()
+  if (raw.subarray(0, 8192).includes(0)) throw new Error('Binary file cannot be read as text. Use a tool for its format.')
+  const decoder = new TextDecoder('utf-8', { fatal: true })
   const text = raw.byteLength > maxSizeBytes && limit === undefined
-    ? decoder.decode(raw.subarray(0, maxSizeBytes))
+    ? decoder.decode(raw.subarray(0, maxSizeBytes), { stream: true })
     : decoder.decode(raw)
 
   const allLines = text.split('\n')
@@ -177,7 +179,7 @@ const nhm = new NodeHtmlMarkdown({
 
 // ── ReadTool ────────────────────────────────────────────────────────────────
 
-export class ReadTool implements Tool {
+export class ReadTool implements Tool<ToolResult> {
   private readCache = new Map<string, ReadCacheEntry>()
   readonly name = 'read'
   readonly readonly = (args: Record<string, unknown>) =>
@@ -185,7 +187,7 @@ export class ReadTool implements Tool {
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +
-    'Use `offset` and `limit` to page through content.'
+    'Text supports offset/limit. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -216,7 +218,7 @@ export class ReadTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context: ExecutionContext,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     const raw = String(args.path)
     const flags = typeof args.flag === 'string' ? args.flag : ''
     const showLineNumbers = flags.includes('n')
@@ -241,6 +243,7 @@ export class ReadTool implements Tool {
     if (URL_RE.test(raw)) return await this.fetchUrl(raw, rawFormat)
 
     if (context.remoteWorkdir) {
+      if (isImagePath(raw) && extname(raw).toLowerCase() !== '.svg') throw new Error('Remote image reads are not supported by this executor. No Main filesystem fallback is allowed.')
       return await this.readRemoteFile(
         raw,
         args,
@@ -253,6 +256,17 @@ export class ReadTool implements Tool {
     const resolved = this.resolve(raw, context)
     const stat = await nodeStat(resolved)
     if (stat.isDirectory()) return await this.listDir(resolved)
+    if (!stat.isFile()) throw new Error('Read requires a regular file or directory.')
+    if (await isImageFile(resolved)) {
+      if (args.offset !== undefined || args.limit !== undefined || flags) {
+        throw new Error('Images do not support line paging or flags. Read the image without offset, limit or flag.')
+      }
+      const image = await readImage(resolved, context.signal)
+      return { content: [
+        { type: 'text', text: `Image from ${JSON.stringify(resolved)} (${image.mime}, ${image.width} x ${image.height}).` },
+        image.part,
+      ] }
+    }
 
     // ── Dedup check: same file + same range + unchanged mtime? ──
     const offset = typeof args.offset === 'number'
@@ -442,7 +456,7 @@ export class ReadTool implements Tool {
         `Size: ${bytes.length} bytes`,
         `Saved to: .tmp/${filename}`,
         '',
-        'Use read to inspect if it is a supported format (images, PDFs).',
+        'Read PNG, JPEG, GIF or WebP images directly. Other binary formats require a format-specific tool.',
       ].join('\n')
     }
 

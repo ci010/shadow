@@ -7,8 +7,10 @@ import type { DecisionEvidence } from './decision-brief.ts'
 import { parseDecisionEvidence } from './decision-brief.ts'
 import type { SessionState } from './session-store.ts'
 import type { ExecutionContext } from '../tools/context.ts'
-import type { Tool } from '../tools/tool.ts'
+import type { Tool as TypedTool, ToolResult } from '../tools/tool.ts'
 import { delegationOwner } from './execution-scope.ts'
+
+type Tool = TypedTool<ToolResult>
 
 export interface WorkToolGuard {
   snapshot(sessionId: string): WorkStamp[]

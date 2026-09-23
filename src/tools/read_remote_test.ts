@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert, { deepEqual as assertEquals } from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ExecutionContext } from './context.ts'
@@ -99,5 +100,5 @@ test('Tools rejects local-only tools in a remote workdir context', async () => {
     {},
     context(new RecordingExecutor()),
   )
-  assert(result.includes('does not support remote workdirs'))
+  assert(requireToolText(result).includes('does not support remote workdirs'))
 })

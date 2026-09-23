@@ -1,6 +1,7 @@
 import type { SessionTraceResponse, SessionTraceSpan } from '../../src/otel/session-trace.ts'
 import { messageEnvelope, parseSessionMessage, sessionMessageTitle, type SessionMessageSource } from './message-author.ts'
 import { eventPresentation, parseChatEvent } from './chat-events.ts'
+import { toolImages } from './tool-images.ts'
 
 export type { SessionTraceSpan } from '../../src/otel/session-trace.ts'
 export type EventKind = 'SYSTEM' | 'USER' | 'SESSION' | 'CONTEXT' | 'ASSISTANT' | 'TOOL'
@@ -19,6 +20,7 @@ export interface DiagnosisEvent {
   inputMessageCount?: number
   arguments?: string
   result?: string
+  images?: string[]
   reasoning?: string
   usage?: string
 }
@@ -138,7 +140,10 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
   for (const [index, message] of value.messages.entries()) {
     if (!record(message) || typeof message.role !== 'string') throw new Error('Invalid session history message.')
     const parts = Array.isArray(message.content) ? message.content : undefined
-    const content = parts ? parts.map(part => record(part) && part.type === 'text' ? detailText(part.text) : detailText(part)).join('\n') : detailText(message.content)
+    const partText = (part: unknown) => record(part) && part.type === 'image_url'
+      ? '[image]' : record(part) && part.type === 'text' ? detailText(part.text) : detailText(part)
+    const images = toolImages(parts)
+    const content = parts ? parts.map(partText).join('\n') : detailText(message.content)
     const firstText = parts ? (record(parts[0]) && parts[0].type === 'text' ? detailText(parts[0].text) : '') : content
     const envelope = messageEnvelope(message)
     const sessionMessage = parseSessionMessage(message)
@@ -152,9 +157,10 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
       const call = callId ? calls.get(callId) : undefined
       if (call) {
         call.result = content
+        call.images = images
         if (callId) calls.delete(callId)
       } else {
-        events.push({ id: `message-${index}`, kind: 'TOOL', turn, title: String(message.name ?? 'Tool result'), content, result: content, timestamp: time, callId })
+        events.push({ id: `message-${index}`, kind: 'TOOL', turn, title: String(message.name ?? 'Tool result'), content, result: content, timestamp: time, callId, images })
       }
       continue
     }
@@ -170,9 +176,10 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
           : event ? eventPresentation(event.eventMeta).title : 'Session event') : kind.toLowerCase(),
       content: envelope ? (parts ? [
         detailText(parts[0].text).replace(/^<(?:sender|event)\s[^>]*\/>\s*/, ''),
-        ...parts.slice(1).map(part => record(part) && part.type === 'text' ? detailText(part.text) : detailText(part)),
+        ...parts.slice(1).map(partText),
       ].filter(Boolean).join('\n') : envelope.content) : content,
       rawContent: envelope ? content : undefined,
+      images,
       sessionSource: sessionMessage?.sessionSource, timestamp: time,
       reasoning: detailText(message.reasoning_text ?? message.reasoning_content) || undefined,
       usage: message.usage ? detailText(message.usage) : undefined,

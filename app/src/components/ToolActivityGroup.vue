@@ -30,7 +30,7 @@
           </div>
           <details v-if="entry.result !== undefined" class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
             <summary class="tool-result-header">Result</summary>
-            <ToolPayload v-if="!closedResults.has(entry.index)" class="tool-result-content" :source="entry.result || '(Empty result)'" />
+            <ToolPayload v-if="!closedResults.has(entry.index)" class="tool-result-content" :source="entry.result || '(Empty result)'" :images="entry.images" />
           </details>
           <p v-if="entry.usage" class="activity-usage">{{ entry.usage.promptTokens.toLocaleString() }} prompt · {{ entry.usage.completionTokens.toLocaleString() }} completion · {{ entry.usage.totalTokens.toLocaleString() }} total tokens</p>
           <p v-if="entry.result === undefined" class="activity-status">{{ running ? 'Waiting for result…' : 'No result recorded' }}</p>

@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -23,12 +24,12 @@ test('unified search keeps web dispatch, file/web query validation and source er
   const context = { tools, signal: new AbortController().signal } as ExecutionContext
   const result = await tools.execute('search', { space: 'web:example.com', query: 'docs' }, context)
   assert.deepEqual(calls, [{ query: 'docs site:example.com' }])
-  assert.match(result, /\[truncated:/)
+  assert.match(requireToolText(result), /\[truncated:/)
   for (const space of ['grep:*.ts', 'glob:src', 'web:']) {
-    assert.match(await tools.execute('search', { space }, context), /query must be a string/)
+    assert.match(requireToolText(await tools.execute('search', { space }, context)), /query must be a string/)
   }
-  assert.match(await tools.execute('search', { space: 'tools:' }, context), /discovery is not configured/)
-  assert.match(await tools.execute('search', { space: 'unknown:', query: '' }, context), /Unknown search space/)
+  assert.match(requireToolText(await tools.execute('search', { space: 'tools:' }, context)), /discovery is not configured/)
+  assert.match(requireToolText(await tools.execute('search', { space: 'unknown:', query: '' }, context)), /Unknown search space/)
 })
 
 test('only file and web search remain parallel reads; tool discovery keeps import ordering', () => {

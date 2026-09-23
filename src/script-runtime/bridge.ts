@@ -52,6 +52,7 @@ function createToolBinding(
           }
           return context.tools.execute('invoke_tool', { name, args: input }, nested)
         })
+        if (typeof result !== 'string') return result
         try { return JSON.parse(result) }
         catch { return result }
       })()

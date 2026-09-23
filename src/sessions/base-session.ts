@@ -18,7 +18,7 @@ import {
   TokenLimitExceededError,
 } from '../providers/provider.ts'
 import type { SessionTools } from '../tools/registry.ts'
-import type { ToolDefinition } from '../tools/tool.ts'
+import { toolResultText, type ToolDefinition, type ToolResult } from '../tools/tool.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { activeSpan, Span, spanAttributes, uspan } from '../otel/tracing.ts'
 import { physicalSessionId } from './session-identity.ts'
@@ -35,6 +35,7 @@ import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { ReadTool } from '../tools/read.ts'
 import { pendingToolCalls } from './recovery.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
+import { IMAGE_SNAPSHOT_LABEL, saveToolImages } from './tool-images.ts'
 
 /**
  * Shared base for all session types.
@@ -207,7 +208,7 @@ export abstract class BaseSession {
       }), executionContext, llm, signal)
     }
 
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 1000; i++) {
       const toolDefs = this.tools.getDefinitions()
       signal.throwIfAborted()
 
@@ -357,7 +358,24 @@ export abstract class BaseSession {
     const pendingResults = new Map(calls.map(call => [call.id, call]))
     const traceAttributes = { sessionId: this.id, physicalSessionId: this.physicalSessionId }
     using span = uspan('agent.tools', { attributes: traceAttributes })
-    const recordResult = async (call: ToolCall, content: string) => {
+    const recordResult = async (call: ToolCall, result: ToolResult) => {
+      let media: string[] = []
+      if (typeof result !== 'string') {
+        try {
+          media = await saveToolImages(
+            resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).sessionDataDir,
+            result.content, signal,
+          )
+        } catch (error) {
+          if (signal.aborted) throw error
+          // The tool already ran; close its pair rather than replaying side effects on Continue.
+          result = `Error: tool ${call.name} completed, but saving its image result failed: ${errMsg(error)}. Do not repeat side effects to recover this image.`
+        }
+      }
+      const snapshotText = media.length ? IMAGE_SNAPSHOT_LABEL + media.map(path => JSON.stringify(path)).join('\n') : ''
+      const content = typeof result === 'string' ? result : [
+        ...result.content, ...(snapshotText ? [{ type: 'text' as const, text: snapshotText }] : []),
+      ]
       await this.appendMessages(llm, { role: 'tool', content, tool_call_id: call.id, name: call.name })
       pendingResults.delete(call.id)
       this.bus.emit('message.outbound', {
@@ -366,7 +384,8 @@ export abstract class BaseSession {
         chatId: executionContext.chatId,
         channelAddress: executionContext.channelAddress,
         replyTo: executionContext.platformMessageId,
-        content,
+        content: toolResultText(result) + snapshotText,
+        media: media.length ? media : undefined,
         toolCallId: call.id,
         toolName: call.name,
         done: false,

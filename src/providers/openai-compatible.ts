@@ -9,6 +9,7 @@ import type {
   ToolCall,
 } from './provider.ts'
 import { ProviderHttpError, TokenLimitExceededError } from './provider.ts'
+import { chatCompletionImages } from './tool-images.ts'
 
 // ---------------------------------------------------------------------------
 //  Outbound message sanitization
@@ -25,7 +26,7 @@ import { ProviderHttpError, TokenLimitExceededError } from './provider.ts'
  * - `usage` and `timestamp` are local bookkeeping; not part of the API.
  */
 function sanitizeOutboundMessages(messages: ChatMessage[]): unknown[] {
-  return messages.map((msg) => {
+  return chatCompletionImages(messages).map((msg) => {
     const { reasoning_text: _rt, provider_state: _ps, usage: _u, timestamp: _ts, ...rest } = msg as any
     return rest
   })

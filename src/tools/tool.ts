@@ -1,4 +1,18 @@
 import type { ExecutionContext } from './context.ts'
+import type { ContentPart } from '../providers/provider.ts'
+
+export type ToolResult = string | { content: ContentPart[]; isError?: boolean }
+
+export function toolResultText(result: ToolResult): string {
+  return typeof result === 'string' ? result : result.content
+    .filter(part => part.type === 'text').map(part => part.text).join('\n')
+}
+
+/** Text-only integrations must not silently discard visual tool output. */
+export function requireToolText(result: ToolResult): string {
+  if (typeof result !== 'string') throw new Error('This consumer accepts text only. Invoke the tool directly to deliver its image result to the model.')
+  return result
+}
 
 /**
  * JSON-Schema-style parameter definition for a tool, compatible with
@@ -24,7 +38,7 @@ export interface ToolParameters {
 /**
  * A single tool that the agent can invoke.
  */
-export interface Tool {
+export interface Tool<Result extends ToolResult = string> {
   /** Unique tool name (snake_case). */
   readonly name: string
   /** Human-readable description for the LLM. */
@@ -45,7 +59,7 @@ export interface Tool {
   execute(
     args: Record<string, unknown>,
     context: ExecutionContext,
-  ): Promise<string>
+  ): Promise<Result>
 
   getChatTextDisplay?(args: Record<string, unknown>): string
 }

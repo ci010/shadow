@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -87,7 +88,7 @@ test('100 installed MCPs remain searchable after restart with zero search connec
   const fresh = session(f.home, importer)
   t.after(() => fresh.tools.resetDynamic())
   for (const space of ['tools:', 'tools:inventory-042']) {
-    const result = JSON.parse(await fresh.tools.execute('search', { space, query: 'inventory', limit: 3 }, fresh.context))
+    const result = JSON.parse(requireToolText(await fresh.tools.execute('search', { space, query: 'inventory', limit: 3 }, fresh.context)))
     assert.equal(result.tools.length, 3)
     assert.equal(result.totalMatches, space === 'tools:' ? 300 : 3)
     assert.deepEqual(result.errors, [])
@@ -121,7 +122,7 @@ test('failed batch indexing leaves configuration and catalog unchanged and does 
   })
   assert.equal(await readFile(f.configPath, 'utf8'), before)
   assert.deepEqual(f.store.current().mcp.servers.map(server => server.name), ['existing'])
-  const result = JSON.parse(await f.tools.execute('search', { space: 'tools:', query: '' }, f.context))
+  const result = JSON.parse(requireToolText(await f.tools.execute('search', { space: 'tools:', query: '' }, f.context)))
   assert.equal(result.totalMatches, 3)
   assert.deepEqual(result.searchedSources, ['v:tools/existing'])
   assert.equal(f.tools.activeDynamicTools().length, 0)
@@ -142,12 +143,12 @@ test('legacy config loads without connecting and a no-op save builds its missing
   })
   await legacy.init(config)
   await f.importer.updateMcpServers(legacy.current().mcp.servers)
-  const missing = JSON.parse(await f.tools.execute('search', { space: 'tools:' }, f.context))
+  const missing = JSON.parse(requireToolText(await f.tools.execute('search', { space: 'tools:' }, f.context)))
   assert.deepEqual(missing.tools, [])
   assert.match(missing.errors[0].message, /not indexed/)
   assert.equal(f.connect.mock.callCount(), 0)
   await legacy.update(raw => raw)
-  const indexed = JSON.parse(await f.tools.execute('search', { space: 'tools:' }, f.context))
+  const indexed = JSON.parse(requireToolText(await f.tools.execute('search', { space: 'tools:' }, f.context)))
   assert.equal(indexed.totalMatches, 3)
   assert.equal(f.connect.mock.callCount(), 1)
   assert.equal(f.disconnect.mock.callCount(), 1)
@@ -169,7 +170,7 @@ test('failed replacement preserves the previous index and its live session conne
   assert.equal(f.tools.getMcpConn('existing')?.conn, previousConnection)
   assert.equal(f.tools.hasDynamic('existing__find'), true)
   const connections = f.connect.mock.callCount()
-  const result = JSON.parse(await f.tools.execute('search', { space: 'tools:existing', query: '' }, f.context))
+  const result = JSON.parse(requireToolText(await f.tools.execute('search', { space: 'tools:existing', query: '' }, f.context)))
   assert.equal(result.totalMatches, 3)
   assert.deepEqual(result.errors, [])
   assert.equal(f.connect.mock.callCount(), connections)

@@ -2,6 +2,7 @@ import type { Bus } from '../bus/bus.ts'
 import { errMsg } from '../utils/truncate.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { Tools } from '../tools/registry.ts'
+import { requireToolText } from '../tools/tool.ts'
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import type { EventService } from '../events/service.ts'
 import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
@@ -134,7 +135,7 @@ export class BackgroundTaskManager {
         callback: options?.callback,
         onCancel: () => controller.abort(new Error('Background task cancelled')),
       },
-      this.runOwned(() => tools.execute(name, args, executionContext)),
+      this.runOwned(() => tools.execute(name, args, executionContext)).then(requireToolText),
     )
   }
 

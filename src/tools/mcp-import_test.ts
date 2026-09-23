@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -62,15 +63,15 @@ test('catalog discovery and config reload never connect or expose raw MCP functi
   assert.equal(await f.invoke(), 'answer')
   assert.equal(f.call.mock.callCount(), 2)
   assert.equal(f.session.getDefinitions().some(def => def.function.name === 'fixture__echo'), false)
-  assert.match(await f.session.execute('fixture__echo', { value: 'direct' }, f.context), /unknown tool/)
+  assert.match(requireToolText(await f.session.execute('fixture__echo', { value: 'direct' }, f.context)), /unknown tool/)
 })
 
 test('legacy explicit imports return complete contracts and valid invocations execute immediately', async t => {
   const f = await setup(t)
   f.list.mock.mockImplementation(async () => [{ ...echo, description: 'schema description '.repeat(1000) }])
   const contract = await f.importServer()
-  assert.match(contract, /"parameters"/)
-  assert.doesNotMatch(contract, /\.\.\.\[truncated/)
+  assert.match(requireToolText(contract), /"parameters"/)
+  assert.doesNotMatch(requireToolText(contract), /\.\.\.\[truncated/)
   assert.equal(await f.invoke(), 'answer')
   assert.equal(f.call.mock.callCount(), 1)
 })
@@ -103,7 +104,7 @@ test('changed and removed catalog entries invalidate sessions and borrowed snaps
   assert.equal(f.connect.mock.callCount(), 2)
   assert.equal(await f.invoke(), 'answer')
   await f.manager.load([])
-  assert.match(await f.invoke(), /could not be imported/)
+  assert.match(requireToolText(await f.invoke()), /could not be imported/)
   assert.equal(f.call.mock.callCount(), 2)
   assert.equal(f.importer.catalogEntries(f.session).length, 0)
 })
@@ -115,7 +116,7 @@ test('server tool-list notifications invalidate adapters and remove missing tool
   f.list.mock.mockImplementation(async () => [{ ...echo, name: 'replacement' }])
   f.handlers.get(conn)!()
   assert.equal(f.session.hasDynamic('fixture__echo'), false)
-  assert.match(await f.invoke(), /not advertised/)
+  assert.match(requireToolText(await f.invoke()), /not advertised/)
   assert.equal(await f.invoke('fixture__replacement'), 'answer')
   assert.equal(await f.invoke('fixture__replacement'), 'answer')
   assert.equal(f.connect.mock.callCount(), 1)
@@ -186,14 +187,14 @@ test('catalog changes during connection startup reject the obsolete import and r
 test('failed discovery is disclosed without hidden retries; an executing tool is never automatically retried', async t => {
   const f = await setup(t)
   f.list.mock.mockImplementation(async () => { throw new Error('synthetic list failure') })
-  assert.match(await f.importServer(), /synthetic list failure/)
+  assert.match(requireToolText(await f.importServer()), /synthetic list failure/)
   assert.equal(f.connect.mock.callCount(), 1)
   assert.equal(f.disconnect.mock.callCount(), 1)
   assert.equal(f.session.getMcpConn('fixture'), undefined)
   f.list.mock.mockImplementation(async () => [echo])
   await f.importServer()
   f.call.mock.mockImplementation(async () => { throw new Error('synthetic execution failure') })
-  assert.match(await f.invoke(), /synthetic execution failure/)
+  assert.match(requireToolText(await f.invoke()), /synthetic execution failure/)
   assert.equal(f.call.mock.callCount(), 1)
 })
 
@@ -201,10 +202,10 @@ test('implicit import preserves stage, HTTP code and user-action diagnostics rat
   const f = await setup(t)
   f.list.mock.mockImplementation(async () => { throw Object.assign(new Error('access expired'), { code: 401 }) })
   const result = await f.invoke()
-  assert.match(result, /"phase":"list_tools"/)
-  assert.match(result, /"httpStatus":401/)
-  assert.match(result, /"needsUserAction":true/)
-  assert.match(result, /access expired/)
+  assert.match(requireToolText(result), /"phase":"list_tools"/)
+  assert.match(requireToolText(result), /"httpStatus":401/)
+  assert.match(requireToolText(result), /"needsUserAction":true/)
+  assert.match(requireToolText(result), /access expired/)
   assert.equal(f.connect.mock.callCount(), 1)
   assert.equal(f.call.mock.callCount(), 0)
 })
@@ -214,10 +215,10 @@ test('import cleanup failure preserves the primary discovery failure', async t =
   f.list.mock.mockImplementation(async () => { throw Object.assign(new Error('discovery timeout'), { code: -32001 }) })
   f.disconnect.mock.mockImplementation(async () => { throw new Error('cleanup failed') })
   const result = await f.importServer()
-  assert.match(result, /discovery timeout/)
-  assert.match(result, /"rpcCode":-32001/)
-  assert.match(result, /"cleanupFailure"/)
-  assert.match(result, /cleanup failed/)
+  assert.match(requireToolText(result), /discovery timeout/)
+  assert.match(requireToolText(result), /"rpcCode":-32001/)
+  assert.match(requireToolText(result), /"cleanupFailure"/)
+  assert.match(requireToolText(result), /cleanup failed/)
   assert.equal(f.session.getMcpConn('fixture'), undefined)
 })
 
@@ -240,9 +241,9 @@ test('restricted agents cannot discover or invoke forbidden MCP tools', async t 
   const blocked = new SessionTools(f.base, f.home, undefined, ['fixture__echo'])
   t.after(() => { restricted.resetDynamic(); blocked.resetDynamic() })
   assert.deepEqual(f.importer.catalogEntries(restricted), [])
-  assert.match(await restricted.execute('import_tool', { source: 'v:tools/fixture' },
-    { ...f.context, tools: restricted }), /not available/)
-  assert.match(await blocked.execute('invoke_tool', { name: 'fixture__echo', args: {} },
-    { ...f.context, tools: blocked }), /could not be imported/)
+  assert.match(requireToolText(await restricted.execute('import_tool', { source: 'v:tools/fixture' },
+    { ...f.context, tools: restricted })), /not available/)
+  assert.match(requireToolText(await blocked.execute('invoke_tool', { name: 'fixture__echo', args: {} },
+    { ...f.context, tools: blocked })), /could not be imported/)
   assert.equal(f.connect.mock.callCount(), 0)
 })

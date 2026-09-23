@@ -10,10 +10,10 @@
     <template v-if="event.toolCall"><h4>Tool call JSON</h4><pre>{{ event.toolCall }}</pre></template>
     <template v-if="event.arguments !== undefined">
       <h4>Arguments</h4><ToolPayload class="trace-payload" :source="prettyArguments(event.arguments)" />
-      <h4>Result</h4><ToolPayload v-if="event.result !== undefined" class="trace-payload" :source="event.result" />
+      <h4>Result</h4><ToolPayload v-if="event.result !== undefined" class="trace-payload" :source="event.result" :images="event.images" />
       <p v-else class="missing-detail">No result recorded yet.</p>
     </template>
-    <template v-else><h4>Content</h4><pre>{{ event.content || 'No text content recorded.' }}</pre></template>
+    <template v-else><h4>Content</h4><ToolPayload class="trace-payload" :source="event.content || 'No text content recorded.'" :images="event.images" /></template>
     <details v-if="event.rawContent !== undefined"><summary>Raw content with source metadata</summary><pre>{{ event.rawContent }}</pre></details>
     <template v-if="event.toolCalls"><h4>Returned tool calls</h4><pre>{{ event.toolCalls }}</pre></template>
     <details v-if="event.reasoning"><summary>Reasoning</summary><pre>{{ event.reasoning }}</pre></details>

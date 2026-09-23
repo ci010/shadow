@@ -106,6 +106,31 @@ test('chat keeps outgoing message actions outside generic tools and routes recip
   assert.equal(view.state().inputText, 'Keep this exact unsent draft')
 })
 
+test('live and restored tool images stay attached to the tool result rather than becoming user messages', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  const state = view.state()
+  const image = 'data:image/png;base64,aW1hZ2U='
+  const call = { id: 'image-read', type: 'function', function: { name: 'read', arguments: '{"path":"image.png"}' } }
+  const raw = [
+    { role: 'assistant', content: null, tool_calls: [call] },
+    { role: 'tool', name: 'read', tool_call_id: call.id, content: [
+      { type: 'text', text: 'Image from image.png' }, { type: 'image_url', image_url: { url: image } },
+    ] },
+  ]
+  const restored = state.collapseHistory(raw)
+  assert.equal(restored.length, 2)
+  assert.equal(restored[1].event, 'tool_result')
+  assert.equal(restored[1].toolCallId, call.id)
+  assert.deepEqual(restored[1].media, [image])
+  assert(!restored.some((message: { role: string }) => message.role === 'user'))
+  state.messages = []
+  state.applyStreamPayload({ event: 'tool_call', content: 'read', toolCallId: call.id, toolCall: { name: 'read', arguments: { path: 'image.png' } } }, { accumulated: '' })
+  state.applyStreamPayload({ event: 'tool_result', content: 'Image from image.png', toolCallId: call.id, media: [image] }, { accumulated: '' })
+  await Vue.nextTick()
+  assert.deepEqual(state.toolActivity.get(0).entries[0].images, [image])
+})
+
 test('image preview survives message updates but closes when its conversation or pane is no longer visible', async t => {
   const f = fixture(t)
   const view = f.mount('a')

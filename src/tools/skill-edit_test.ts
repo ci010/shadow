@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { readFile, writeFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -52,19 +53,19 @@ test('ordinary Skills save directly; hidden baselines detect other sessions and 
     const a = f.context('web:a')
     const b = f.context('web:b')
     assert.deepEqual(a.tools.names(), ['invoke_tool', 'read'])
-    const saved = JSON.parse(await f.invoke(a, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('First') } }))
+    const saved = JSON.parse(requireToolText(await f.invoke(a, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('First') } })))
     assert.equal(saved.status, 'saved')
     assert.equal('revision' in saved, false)
-    assert.match(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('B') } }), /Read the existing Skill/)
-    const read = JSON.parse(await f.invoke(b, 'skill_read', { name: 'learned' }))
+    assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('B') } })), /Read the existing Skill/)
+    const read = JSON.parse(requireToolText(await f.invoke(b, 'skill_read', { name: 'learned' })))
     assert.equal(read.content, manifest('First'))
     assert.equal('revision' in read, false)
-    assert.match(await f.invoke(a, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Second') } }), /"saved"/)
-    assert.match(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale') } }), /conflict|changed|stale/i)
+    assert.match(requireToolText(await f.invoke(a, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Second') } })), /"saved"/)
+    assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale') } })), /conflict|changed|stale/i)
     assert.equal(f.skills.getSkill('learned')?.body, 'Second')
     await f.invoke(b, 'skill_read', { name: 'learned' })
     await writeFile(join(home, 'skills', 'learned', 'SKILL.md'), manifest('External'))
-    assert.match(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale again') } }), /conflict|changed|stale/i)
+    assert.match(requireToolText(await f.invoke(b, 'skill_save', { name: 'learned', files: { 'SKILL.md': manifest('Stale again') } })), /conflict|changed|stale/i)
     assert.equal(await readFile(join(home, 'skills', 'learned', 'SKILL.md'), 'utf8'), manifest('External'))
     a.tools.resetDynamic()
     b.tools.resetDynamic()
@@ -77,17 +78,17 @@ test('coordinator can edit tool-bearing Skills without activating or executing t
     const role = (await getBuiltinAgentTypes()).find(role => role.name === 'orchestrator')!
     const coordinator = f.context('web:orchestrator', new SessionTools(f.base, home, role.allowedTools))
     const text = `---\nname: learned\ntools:\n  learned_tool:\n    source: tools/run.ts\n    description: Synthetic tool\n    parameters: {type: object, properties: {}}\n---\nUse learned_tool.`
-    assert.match(await coordinator.tools.execute('skill_save', {
+    assert.match(requireToolText(await coordinator.tools.execute('skill_save', {
       name: 'learned', files: { 'SKILL.md': text, 'tools/run.ts': 'export function run() { return "fixture" }' },
-    }, coordinator), /"saved"/)
-    const raw = JSON.parse(await coordinator.tools.execute('skill_read', { name: 'learned' }, coordinator))
+    }, coordinator)), /"saved"/)
+    const raw = JSON.parse(requireToolText(await coordinator.tools.execute('skill_read', { name: 'learned' }, coordinator)))
     assert.equal(raw.content, text)
     assert.deepEqual(raw.files, ['SKILL.md', 'tools/run.ts'])
     assert.equal(coordinator.tools.has('invoke_tool'), false)
     assert.equal(coordinator.tools.has('write'), false)
     assert.deepEqual(coordinator.tools.activeDynamicTools(), [])
     const user = f.context('web:user')
-    assert.match(await f.invoke(user, 'learned_tool', {}), /could not be imported/)
+    assert.match(requireToolText(await f.invoke(user, 'learned_tool', {})), /could not be imported/)
     await user.tools.execute('read', { path: 'v:skills/learned' }, user)
     assert.equal(await f.invoke(user, 'learned_tool', {}), 'fixture')
     user.tools.resetDynamic()
@@ -112,7 +113,7 @@ test('editing rejects project, role, remote, temporary, malformed and aborted re
     task.tools.setExecutionScope('task', ['task', 'call'])
     await assert.rejects(f.editing.save(args, task), /durable local/)
     const restricted = f.context('web:restricted', new SessionTools(f.base, home, undefined, ['skill_save']))
-    assert.match(await f.invoke(restricted, 'skill_save', args), /not available|not allowed|could not be imported/i)
+    assert.match(requireToolText(await f.invoke(restricted, 'skill_save', args)), /not available|not allowed|could not be imported/i)
     await assert.rejects(f.editing.save({ ...args, revision: 'opaque' }, current), /unrecognized|Unrecognized/)
     await assert.rejects(f.editing.save({ ...args, files: {} }, current), /at least one/)
     await assert.rejects(f.editing.save(args, { ...current, signal: AbortSignal.abort() }), /abort/i)

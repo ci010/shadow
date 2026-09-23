@@ -12,6 +12,8 @@ import { loadDotEnv } from '../utils/env.ts'
 import { parseMcpServerConfig } from './config.ts'
 import { mcpCleanupFailure, mcpFailure, mcpSecrets, type McpPhase } from './errors.ts'
 import { readableMcpText } from './text.ts'
+import type { ToolResult } from '../tools/tool.ts'
+import type { ContentPart } from '../providers/provider.ts'
 
 export interface McpToolInfo {
   name: string
@@ -240,7 +242,7 @@ export class McpConnection {
     return tools
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
     signal?.throwIfAborted()
     if (this.state) this.state.transportError = undefined
     const raw = await this.connectedClient('call_tool').callTool({ name, arguments: args }, CallToolResultSchema, { signal })
@@ -248,6 +250,17 @@ export class McpConnection {
     const parsed = CallToolResultSchema.safeParse(raw)
     if (!parsed.success) throw this.safeFailure(new Error('Malformed MCP tool result'), 'call_tool', signal)
     const result = parsed.data
+    if (result.content.some(block => block.type === 'image')) {
+      const content: ContentPart[] = result.content.map(block => {
+        if (block.type === 'image') return {
+          type: 'image_url', image_url: { url: `data:${block.mimeType};base64,${block.data}`, detail: 'auto' },
+        }
+        return { type: 'text', text: block.type === 'text' ? readableMcpText(block.text) : JSON.stringify(publicContent(block)) }
+      })
+      if (result.structuredContent !== undefined) content.push({ type: 'text', text: JSON.stringify({ structuredContent: result.structuredContent }) })
+      if (result.isError) content.unshift({ type: 'text', text: 'Error: MCP tool reported failure.' })
+      return { content, isError: result.isError ?? false }
+    }
     if (!result.isError && result.structuredContent === undefined && result.content.every((block) => block.type === 'text')) {
       return result.content
         .filter((block) => block.type === 'text' && block.text)

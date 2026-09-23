@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -781,7 +782,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
               await assert.rejects(f.sessions.buildSession(id, { id: owner }, { mode, parentSessionId: owner }), /not allowed|Leaf calls/)
               if (mode === 'session') assert.match(await f.subagent.execute({ mode, task: 'Work', description: id }, context), /topic creation/)
               else await assert.rejects(f.subagent.execute({ mode, task: 'Work', description: id }, context), /not allowed|Leaf calls/)
-              assert.match(await f.tools.execute('bridge', { mode, task: 'Work', description: id }, context), /not allowed|Leaf calls|topic creation/)
+              assert.match(requireToolText(await f.tools.execute('bridge', { mode, task: 'Work', description: id }, context)), /not allowed|Leaf calls|topic creation/)
             } else {
               await f.sessions.buildSession(id, { id: owner }, { mode, parentSessionId: owner })
               assert.equal(f.sessions.getSessionState(id)?.mode, mode)
@@ -1182,22 +1183,22 @@ test('leaf coordination tools remain denied through direct registry, dynamic inv
   }
   for (const name of denied) {
     assert.equal(tools.has(name), false)
-    assert.match(await base.execute(name, {}, context), /Blocked:/)
+    assert.match(requireToolText(await base.execute(name, {}, context)), /Blocked:/)
     tools.registerDynamic({ name, description: '', parameters: { type: 'object', properties: {} },
       execute: async () => { executions++; return 'Unexpected dynamic execution' } })
-    assert.match(await tools.executeDynamic(name, {}, context), /Blocked:/)
-    assert.match(await base.execute('invoke_tool', { name, args: {} }, context), /Blocked:/)
+    assert.match(requireToolText(await tools.executeDynamic(name, {}, context)), /Blocked:/)
+    assert.match(requireToolText(await base.execute('invoke_tool', { name, args: {} }, context)), /Blocked:/)
   }
   assert.equal(executions, 0)
   assert.equal(reasons.length, denied.length * 3)
   assert.equal(tools.has('exec'), true)
-  assert.match(await base.execute('exec', { timeout_ms: 0 }, context), /background execution is forbidden/)
-  assert.match(await base.execute('invoke_tool', { name: 'exec', args: { timeout_ms: 0 } }, context), /background execution is forbidden/)
+  assert.match(requireToolText(await base.execute('exec', { timeout_ms: 0 }, context)), /background execution is forbidden/)
+  assert.match(requireToolText(await base.execute('invoke_tool', { name: 'exec', args: { timeout_ms: 0 } }, context)), /background execution is forbidden/)
   const narrowed = new CallTools(caller, '.', ['read'])
   narrowed.setExecutionScope('call', [])
   assert.deepEqual(narrowed.names(), ['read'])
   assert.equal(narrowed.canUseDynamic('anything'), false)
-  assert.match(await narrowed.execute('dangerous', {}, { ...context, tools: narrowed }), /Blocked:/)
+  assert.match(requireToolText(await narrowed.execute('dangerous', {}, { ...context, tools: narrowed })), /Blocked:/)
 })
 
 test('separate script invocations never share their outer provider admission key', async () => {

@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { randomUUID } from 'node:crypto'
@@ -82,21 +83,21 @@ test('registry fences old inference, same-batch adoption, nested tools, and rest
   f.base.register({ name: 'nested_fixture', description: '', parameters: { type: 'object', properties: {} },
     async execute(_, context) { return context.tools.execute('write_fixture', {}, context) } })
   try {
-    assert.match(await f.tools.execute('write_fixture', {}, f.context()), /Untracked execution/)
+    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /Untracked execution/)
     await f.apply()
     const clarification = { name: 'yield', description: '', parameters: { type: 'object' as const, properties: {} }, async execute() { return 'clarification' } }
     assert.equal(f.alignment.before(clarification, { action: 'ask' }, f.context()), undefined, 'Asking for clarification does not require adopting an unclear goal')
     const unadopted = f.context()
     await f.adopt()
-    assert.match(await f.tools.execute('write_fixture', {}, unadopted), /basis changed|not adopted/)
-    assert.match(await f.tools.execute('write_fixture', {}, { ...f.context(), workStamps: undefined }), /not adopted/)
+    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, unadopted)), /basis changed|not adopted/)
+    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, { ...f.context(), workStamps: undefined })), /not adopted/)
     const old = f.context()
     const snapshot = f.tools.snapshot()
     assert.equal(snapshot.getWorkGuard(), f.alignment, 'Call snapshots keep the runtime fence')
     assert.equal(await f.tools.execute('nested_fixture', {}, old), 'written')
     await f.apply(change(1), true)
     await f.adopt(undefined, 2)
-    assert.match(await f.tools.execute('nested_fixture', {}, old), /basis changed/)
+    assert.match(requireToolText(await f.tools.execute('nested_fixture', {}, old)), /basis changed/)
     assert.equal(writes, 1)
     assert.equal(await f.tools.execute('write_fixture', {}, f.context()), 'written')
     assert.equal(writes, 2)
@@ -115,7 +116,7 @@ test('late results stay attributable and unresolved effects survive restart with
     assert.equal(f.store.workEffects().length, 1)
     await f.apply(change(1), true)
     result.resolve('external result')
-    assert.match(await pending, /STALE WORK RESULT/)
+    assert.match(requireToolText(await pending), /STALE WORK RESULT/)
     const key = workKey(change().subject)
     const event = f.store.workHistory(key).find(item => item.kind === 'tool_result')
     assert.equal((event?.data as { stale: boolean }).stale, true)
@@ -147,9 +148,9 @@ test('bounded tasks cannot manage contracts but retain their durable owner execu
     f.states['task:child'] = { sessionId: 'task:child', mode: 'task', segmentIndex: 0, parentSessionId: worker }
     await f.apply()
     const pending = { ...f.context('task:child'), tools }
-    assert.match(await tools.execute('write_fixture', {}, pending), /not adopted/)
+    assert.match(requireToolText(await tools.execute('write_fixture', {}, pending)), /not adopted/)
     await f.adopt()
-    assert.match(await tools.execute('write_fixture', {}, pending), /basis changed|not adopted/)
+    assert.match(requireToolText(await tools.execute('write_fixture', {}, pending)), /basis changed|not adopted/)
     assert.equal(await tools.execute('write_fixture', {}, { ...f.context('task:child'), tools }), 'written')
     assert.equal(writes, 2)
   } finally { f.store.close() }
@@ -195,7 +196,7 @@ test('Initiative contracts reuse assignment authority and isolate selected unaff
     assert.throws(() => f.store.query("UPDATE initiatives SET goal='Only smoke' WHERE id='build'", owner), /versioned agreements/)
     f.base.register(new InitiativeTool(f.store, 'project', INITIATIVE_SCHEMA_PROMPT))
     const readTools = new SessionTools(f.base, workspace, ['initiative'])
-    assert.match(await readTools.execute('initiative', { query: 'SELECT * FROM initiative_items' }, { ...f.context(), tools: readTools, workStamps: [] }), /Output A/)
+    assert.match(requireToolText(await readTools.execute('initiative', { query: 'SELECT * FROM initiative_items' }, { ...f.context(), tools: readTools, workStamps: [] })), /Output A/)
   } finally { f.store.close() }
 }))
 

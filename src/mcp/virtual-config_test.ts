@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { readFile, rm, writeFile } from 'node:fs/promises'
@@ -72,10 +73,10 @@ test('virtual read and indexed overwrite roundtrip secrets and preserve Project 
   const f = await fixture(t)
   const before = await f.read()
   for (const secret of ['synthetic-env-secret', 'synthetic-url-secret', 'synthetic-header-secret', 'synthetic-custom-header', 'synthetic-shared-secret']) {
-    assert.ok(!before.includes(secret))
+    assert.ok(!requireToolText(before).includes(secret))
   }
   assert.equal(before, await f.read(), 'Redacted placeholders and revision are stable')
-  const document = JSON.parse(before)
+  const document = JSON.parse(requireToolText(before))
   document.mcpServers.local.command = 'different-synthetic-command'
   const result = await f.overwrite(document)
   assert.match(result, /config saved; catalog updated/)
@@ -111,7 +112,7 @@ test('exact contextual and global edits use a session read and reject fuzzy or a
 
 test('serialized revision checks reject stale overwrites and edits including secret-only changes', async t => {
   const f = await fixture(t)
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   await f.store.update(raw => {
     const mcp = raw.mcp as typeof initialMcp
     mcp.local.env.TOKEN = 'synthetic-rotated-secret'
@@ -122,7 +123,7 @@ test('serialized revision checks reject stale overwrites and edits including sec
     path, match: 'synthetic-nonexistent-command', content: 'stale-command',
   }, f.context), /revision conflict/)
   assert.equal((await f.saved()).mcp.local.env.TOKEN, 'synthetic-rotated-secret')
-  const fresh = JSON.parse(await f.read())
+  const fresh = JSON.parse(requireToolText(await f.read()))
   assert.notEqual(fresh.revision, document.revision)
   assert.equal(fresh.mcpServers.local.env.TOKEN, document.mcpServers.local.env.TOKEN)
   const results = await Promise.allSettled([
@@ -136,7 +137,7 @@ test('serialized revision checks reject stale overwrites and edits including sec
 
 test('invalid JSON, schema, reserved names, and batches leave disk and catalog unchanged', async t => {
   const f = await fixture(t)
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   const before = await readFile(f.configPath, 'utf8')
   await assert.rejects(
     f.writer.execute({ path, content: '{"synthetic-secret-in-invalid-json":' }, f.context),
@@ -155,7 +156,7 @@ test('invalid JSON, schema, reserved names, and batches leave disk and catalog u
 
 test('unsupported server properties reject the whole batch without leaking keys or values', async t => {
   const f = await fixture(t)
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   const before = await readFile(f.configPath, 'utf8')
   for (const extra of [
     { disabled: true },
@@ -182,7 +183,7 @@ test('unsupported server properties reject the whole batch without leaking keys 
 
 test('all supported server fields roundtrip with transport aliases normalized to type', async t => {
   const f = await fixture(t)
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   const config = {
     command: 'synthetic-supported-command',
     args: ['--option', 'value'],
@@ -203,7 +204,7 @@ test('all supported server fields roundtrip with transport aliases normalized to
     typeOnly: { type: 'streamable-http', url: config.url },
   }
   assert.deepEqual((await f.saved()).mcp, expected)
-  const reread = JSON.parse(await f.read())
+  const reread = JSON.parse(requireToolText(await f.read()))
   assert.equal(reread.mcpServers.both.command, config.command)
   assert.deepEqual(reread.mcpServers.both.args, config.args)
   assert.equal(reread.mcpServers.both.url, config.url)
@@ -216,7 +217,7 @@ test('all supported server fields roundtrip with transport aliases normalized to
 
 test('placeholders are bound to their field and explicit empty values clear credentials', async t => {
   const f = await fixture(t)
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   const invalid = structuredClone(document)
   invalid.mcpServers.local.env.OTHER = invalid.mcpServers.local.env.TOKEN
   await assert.rejects(f.overwrite(invalid), /Unknown credential placeholder/)
@@ -228,7 +229,7 @@ test('placeholders are bound to their field and explicit empty values clear cred
   await f.overwrite(document)
   assert.equal((await f.saved()).mcp.local.env.TOKEN, '')
   assert.deepEqual((await f.saved()).mcp.remote.headers, {})
-  const clear = JSON.parse(await f.read())
+  const clear = JSON.parse(requireToolText(await f.read()))
   clear.mcpServers.local.env = {}
   await f.overwrite(clear)
   assert.deepEqual((await f.saved()).mcp.local.env, {})
@@ -238,7 +239,7 @@ test('removing all servers also removes server names resembling credential field
   const f = await fixture(t, {
     ...initialMcp, token: { command: 'synthetic-command' }, apiKey: { command: 'synthetic-command' },
   })
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   document.mcpServers = {}
   await f.overwrite(document)
   assert.deepEqual((await f.saved()).mcp, {})
@@ -248,7 +249,7 @@ test('removing all servers also removes server names resembling credential field
 test('legacy reserved entries can roundtrip or be deleted, but cannot be modified or recreated', async t => {
   const builtin = { command: 'synthetic-legacy-command', env: { TOKEN: 'synthetic-legacy-secret' } }
   const f = await fixture(t, { ...initialMcp, builtin })
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   document.mcpServers.local.description = 'Unrelated change'
   document.mcpServers.builtin.transport = document.mcpServers.builtin.type
   delete document.mcpServers.builtin.type
@@ -256,7 +257,7 @@ test('legacy reserved entries can roundtrip or be deleted, but cannot be modifie
   assert.deepEqual((await f.saved()).mcp.builtin, { ...builtin, type: 'stdio' })
   assert.equal((await f.saved()).mcp.local.description, 'Unrelated change')
 
-  const fresh = JSON.parse(await f.read())
+  const fresh = JSON.parse(requireToolText(await f.read()))
   const before = await readFile(f.configPath, 'utf8')
   for (const change of [
     { command: 'synthetic-replacement-command' },
@@ -274,7 +275,7 @@ test('legacy reserved entries can roundtrip or be deleted, but cannot be modifie
   delete fresh.mcpServers.builtin
   await f.overwrite(fresh)
   assert.equal(Object.hasOwn((await f.saved()).mcp, 'builtin'), false)
-  const removed = JSON.parse(await f.read())
+  const removed = JSON.parse(requireToolText(await f.read()))
   removed.mcpServers.builtin = builtin
   await assert.rejects(f.overwrite(removed), /reserved by the runtime/)
   assert.equal(f.activations(), 2)
@@ -282,7 +283,7 @@ test('legacy reserved entries can roundtrip or be deleted, but cannot be modifie
 
 test('Project, call-mode, remote and unsupported virtual writes fail before execution', async t => {
   const f = await fixture(t)
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   await assert.rejects(f.overwrite(document, { ...f.context, projectId: 'foreign' }), /different Project/)
   await assert.rejects(f.overwrite(document, { ...f.context, projectId: undefined }), /different Project/)
   await assert.rejects(f.reader.execute({ path }, { ...f.context, projectId: 'foreign' }), /different Project/)
@@ -317,7 +318,7 @@ test('unknown and read-only virtual paths do not fall through to physical or rem
 
 test('external edits are preserved and activation failures roll back without leaking credentials', async t => {
   const f = await fixture(t)
-  const document = JSON.parse(await f.read())
+  const document = JSON.parse(requireToolText(await f.read()))
   const before = await readFile(f.configPath, 'utf8')
   f.failActivation(new Error('synthetic activation failure: synthetic-env-secret; new-secret-for-failure'))
   document.mcpServers.local.env.TOKEN = 'new-secret-for-failure'

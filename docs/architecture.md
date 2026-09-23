@@ -429,6 +429,10 @@ cross-node filesystem identity guarantees, or distributed release readiness.
    Tool calls are grouped according to read-only metadata: compatible read-only
    calls can run together; other calls are sequenced. Results are appended as
    paired tool messages before the next model call.
+   The shared loop permits at most 1,000 model iterations per turn, including
+   task/call executions; exhausting the limit fails the turn. This is not a
+   tool-call count. Blocking calls retain their separate 120-second default
+   cancellation deadline.
    `yield` holds that tool call while `SessionManager.yields` waits for a
    correlated human/parent answer or a configured default timeout. No separate
    provider loop is created; parent requests enter the normal session mailbox.
@@ -959,6 +963,43 @@ and optional read-only/opt-in/remote-workdir metadata. `Tools` owns base
 registration, execution hooks, error conversion, tracing, and large-output
 truncation to a Home-local scratch file. Hook failures are logged rather than
 treated as authorization failures.
+
+`ToolResult` is either a text string or typed text/image content, optionally
+marked `isError`. The registry validates image data separately from text limits;
+text hooks, truncation and work receipts do not stringify or discard pixels.
+Text-only internal consumers use `requireToolText` and fail explicitly on visual
+results. The script bridge can return structured results, but printing or
+JSON-stringifying them is not a visual input: invoke image tools directly.
+
+Local `read` recognizes PNG, JPEG, GIF and WebP from filenames or binary
+signatures and returns visual content with dimensions and source path. Images
+have no line paging or read-dedup suppression. SVG source remains text, not visual
+input. Limits are 5 MiB and 25 million
+pixels per image, and four images per tool result. Headers, MIME and dimensions
+are checked; this is not full raster decoding. Unsupported formats, malformed
+headers and excess limits fail explicitly, without OCR, resizing or model
+switching. Remote filesystem execution remains UTF-8-only; image paths never
+fall back to Main's filesystem.
+
+The normal session loop retains image parts and tool-call attribution in both
+JSONL and SQLite history. It also publishes content-addressed copies under the
+owning session's `uploads/tool-images/` directory. Live events carry these private
+media paths rather than large base64 frames; chat and diagnosis render images
+inside the tool result, never as a new human message. Snapshot failures record a
+paired error rather than making Continue replay an already completed tool.
+Compaction explicitly retains the latest four tool-image snapshot paths for
+direct rereading; the summary itself does not retain visual understanding.
+History still contains bounded data URLs, so snapshots duplicate some storage.
+
+Provider adapters preserve native image blocks for Responses and Anthropic.
+For Chat Completions, tool results remain paired and a wire-only user-role bundle
+carries the images, labeled with their originating tool/call and explicitly not
+a new human instruction. Stored roles do not change. Copilot rejects models
+explicitly marked nonvisual, and external-image inlining uses bounded downloads
+with explicit failures. Local uploads share image validation and Buffer-based
+encoding. Unknown provider capabilities still depend on the provider's response.
+Fallback context estimation charges 4096 tokens per image, a heuristic rather
+than an exact provider image-token calculation.
 
 `SessionTools` filters base tools by agent type and owns a session-only dynamic
 layer. **Dynamic tool schemas are not added to the base definitions sent to
@@ -1532,11 +1573,13 @@ Backend source decorators are handled by the build compiler instead.
 HTTP authentication can use configured headers; Shadow does not automatically
 authorize OAuth or retry an executing tool with another transport. Tool discovery
 follows pagination, and cancellation reaches startup and RPC requests.
-Text-only successful results remain text. Errors, structured
-results, and non-text content are preserved in a JSON envelope with `isError`,
-`content`, and `structuredContent`; protocol-private `_meta` is not projected.
-Shadow's tool-result interface is still a string: retaining image/audio/resource
-blocks is not native multimodal rendering or automatic resource fetching.
+Text-only successful results remain text. MCP image blocks become typed visual
+tool results; mixed text, error status and structured content remain available
+alongside them. Results without images retain the JSON envelope for errors,
+structured results and other non-text content, with `isError`, `content` and
+`structuredContent`; protocol-private `_meta` is not projected. Audio/resource
+blocks are preserved as data, not native audio rendering or automatic resource
+fetching.
 [`mcp/text.ts`](../src/mcp/text.ts) normalizes Unicode escapes in string tokens of
 complete JSON text, before tool-result truncation. It preserves exact numeric
 literals, duplicate keys and nested string values; it does not blindly unescape

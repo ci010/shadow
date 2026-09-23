@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert, {
   deepEqual as assertEquals,
   match as assertMatch,
@@ -416,7 +417,7 @@ test('call exec exposes foreground-only schema and rejects background, invalid l
   assertEquals(schema.maximum, MAX_CALL_TIMEOUT_MS)
   for (const timeout_ms of [0, -1, 0.5, NaN, Infinity, MAX_CALL_TIMEOUT_MS + 1, '1']) {
     assertMatch(await tool.execute({ script: 'must not spawn', timeout_ms }, ctx), /background execution is forbidden/)
-    assertMatch(await ctx.tools.execute('exec', { script: 'must not spawn', timeout_ms }, ctx), /background execution is forbidden/)
+    assertMatch(requireToolText(await ctx.tools.execute('exec', { script: 'must not spawn', timeout_ms }, ctx)), /background execution is forbidden/)
   }
   assertMatch(await tool.execute({ script: 'remote must not fall back' }, {
     ...ctx, remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque', executor: {} as any },

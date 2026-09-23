@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdir, rm } from 'node:fs/promises'
@@ -48,7 +49,7 @@ test('live project-scoped registry provides complete read/search discovery and c
     vfs.mount('v:project', 'current project metadata', handlers.read, handlers.list)
     const context = executionContext()
     const read = new ReadTool(workspace, vfs)
-    const all = JSON.parse(await read.execute({ path: 'v:project/folders' }, context))
+    const all = JSON.parse(requireToolText(await read.execute({ path: 'v:project/folders' }, context)))
     assert.equal(all.folders.length, 11)
     assert.deepEqual(JSON.parse((await handlers.list(context))[0].content), all)
     assert(all.folders.every((folder: { availability: { available: boolean } }) => folder.availability.available))
@@ -59,7 +60,7 @@ test('live project-scoped registry provides complete read/search discovery and c
     assert(glob.includes(`v:project/folders/${last.id}`))
     const grep = await new GrepTool(workspace, vfs).execute({ path: 'v:project', pattern: 'folder-10' }, context)
     assert(grep.includes(`v:project/folders/${last.id}`))
-    assert.equal(JSON.parse(await read.execute({ path: `v:project/folders/${last.id}` }, context)).folder.id, last.id)
+    assert.equal(JSON.parse(requireToolText(await read.execute({ path: `v:project/folders/${last.id}` }, context))).folder.id, last.id)
     await assert.rejects(read.execute({ path: `v:project/folders/${hidden.id}` }, context), /Unknown current-project/)
     await assert.rejects(read.execute({ path: 'v:project/folders' }, executionContext(other.id)), /current Project context/)
     assert.throws(() => handlers.list(executionContext(other.id)), /current Project context/)
@@ -67,7 +68,7 @@ test('live project-scoped registry provides complete read/search discovery and c
 
     await catalog.rename(DEFAULT_PROJECT_ID, 'Renamed live project')
     await rm(last.path, { recursive: true })
-    const updated = JSON.parse(await read.execute({ path: 'v:project/folders' }, context))
+    const updated = JSON.parse(requireToolText(await read.execute({ path: 'v:project/folders' }, context)))
     assert.equal(updated.project.name, 'Renamed live project')
     assert.deepEqual(updated.folders.at(-1).availability, { available: false, reason: 'capability-offline' })
     const promptContext = { projectId: DEFAULT_PROJECT_ID } as SessionPromptContext
@@ -78,12 +79,12 @@ test('live project-scoped registry provides complete read/search discovery and c
     const addedPath = join(root, 'added-live')
     await mkdir(addedPath)
     await registry.register(addedPath)
-    assert.equal(JSON.parse(await read.execute({ path: 'v:project/folders' }, context)).folders.length, 12)
+    assert.equal(JSON.parse(requireToolText(await read.execute({ path: 'v:project/folders' }, context))).folders.length, 12)
     const moved = registry.list()[0]
     await catalog.changeFolderProject(DEFAULT_PROJECT_ID, moved.id, other.id)
     const afterMove = await read.execute({ path: 'v:project/folders' }, context)
-    assert.equal(JSON.parse(afterMove).folders.length, 11)
-    assert(!afterMove.includes(moved.id))
+    assert.equal(JSON.parse(requireToolText(afterMove)).folders.length, 11)
+    assert(!requireToolText(afterMove).includes(moved.id))
     await assert.rejects(read.execute({ path: `v:project/folders/${moved.id}` }, context), /Unknown current-project/)
   })
 })

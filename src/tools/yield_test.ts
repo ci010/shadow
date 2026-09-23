@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ExecutionContext } from './context.ts'
@@ -132,5 +133,5 @@ test('remote workdir context uses local coordination without touching executor o
   const request = yields.get('child')!
   assert.ok(request)
   yields.answerParent('parent', request.id, 'C')
-  assert.equal(JSON.parse(await waiting).option, 'C')
+  assert.equal(JSON.parse(requireToolText(await waiting)).option, 'C')
 })

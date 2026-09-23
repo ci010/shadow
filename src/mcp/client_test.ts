@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -11,6 +12,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { McpConnection } from './client.ts'
 import { McpError } from './errors.ts'
+import { McpToolAdapter } from './adapter.ts'
+import { Tools, SessionTools } from '../tools/registry.ts'
+import { pngFixture } from '../testing/image.ts'
+import { withTempWorkspace } from '../testing/workspace.ts'
+import type { ExecutionContext } from '../tools/context.ts'
 
 async function connected(t: TestContext): Promise<McpConnection> {
   t.mock.method(Client.prototype, 'connect', async () => {})
@@ -107,17 +113,19 @@ test('text compatibility, tool errors, structured/media content and private meta
   ]
   t.mock.method(Client.prototype, 'callTool', async () => replies.shift())
   assert.equal(await connection.callTool('fixture', {}), 'one\ntwo')
-  assert.deepEqual(JSON.parse(await connection.callTool('fixture', {})), {
+  assert.deepEqual(JSON.parse(requireToolText(await connection.callTool('fixture', {}))), {
     isError: true, content: [{ type: 'text', text: 'failed' }],
   })
-  const media = JSON.parse(await connection.callTool('fixture', {}))
+  const media = await connection.callTool('fixture', {})
+  assert.notEqual(typeof media, 'string')
+  if (typeof media === 'string') throw new Error('Expected multimodal MCP output')
   assert.equal(media.isError, false)
-  assert.deepEqual(media.structuredContent, { answer: 42 })
-  assert.equal(media.content.length, 5)
-  assert.deepEqual(media.content[2], { type: 'resource', resource: { uri: 'fixture:///text', text: 'embedded' } })
-  assert.deepEqual(media.content[3].resource, { uri: 'fixture:///blob', blob: 'aGk=', mimeType: 'application/octet-stream' })
+  assert.equal(media.content.length, 6)
+  assert.deepEqual(media.content[0], { type: 'image_url', image_url: { url: 'data:image/png;base64,aGk=', detail: 'auto' } })
+  assert.deepEqual(media.content[2], { type: 'text', text: JSON.stringify({ type: 'resource', resource: { uri: 'fixture:///text', text: 'embedded' } }) })
+  assert.deepEqual(media.content[5], { type: 'text', text: JSON.stringify({ structuredContent: { answer: 42 } }) })
   assert.equal(JSON.stringify(media).includes('_meta'), false)
-  assert.deepEqual(JSON.parse(await connection.callTool('fixture', {})), { isError: false, content: [], structuredContent: { answer: 42 } })
+  assert.deepEqual(JSON.parse(requireToolText(await connection.callTool('fixture', {}))), { isError: false, content: [], structuredContent: { answer: 42 } })
 })
 
 test('malformed tool results fail explicitly', async (t) => {
@@ -128,6 +136,35 @@ test('malformed tool results fail explicitly', async (t) => {
     reply = result
     await assert.rejects(connection.callTool('fixture', {}), /Malformed MCP tool result/)
   }
+})
+
+test('MCP image output reaches the registry as validated visual content, retaining errors and mixed text', async t => {
+  const connection = await connected(t)
+  await withTempWorkspace(async home => {
+    const base = new Tools(home)
+    const adapter = new McpToolAdapter(connection, { name: 'screenshot', description: '', inputSchema: { type: 'object', properties: {} } })
+    base.register(adapter)
+    const tools = new SessionTools(base, home)
+    const context: ExecutionContext = {
+      sessionId: 'mcp-images', physicalSessionId: 'mcp-images-0', channel: 'web', chatId: 'fixture',
+      senderId: 'fixture', messageId: 'fixture', tools, signal: new AbortController().signal,
+    }
+    let data = pngFixture().toString('base64')
+    let isError = false
+    t.mock.method(Client.prototype, 'callTool', async () => ({
+      isError, content: [{ type: 'text', text: 'Screenshot evidence' }, { type: 'image', data, mimeType: 'image/png' }],
+    }))
+    for (const failed of [false, true]) {
+      isError = failed
+      const result = await tools.execute(adapter.name, {}, context)
+      assert(typeof result !== 'string')
+      assert.equal(result.isError === true, failed)
+      assert(result.content.some(part => part.type === 'image_url' && part.image_url.url === `data:image/png;base64,${data}`))
+      assert(result.content.some(part => part.type === 'text' && part.text.includes('Screenshot evidence')))
+    }
+    data = 'aGk='
+    assert.match(requireToolText(await tools.execute(adapter.name, {}, context)), /Invalid image header/)
+  })
 })
 
 test('aborting startup closes stalled SDK transport and permits reconnect', async (t) => {

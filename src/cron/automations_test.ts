@@ -1,3 +1,4 @@
+import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
@@ -186,7 +187,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(tools.activeDynamicTools(), [])
         assert.equal(await invoke('cron_list', {}), 'No scheduled jobs.')
         for (const space of ['tools:', 'tools:cron']) {
-          const result = JSON.parse(await tools.execute('search', { space, query: 'cron', limit: 10 }, ctx))
+          const result = JSON.parse(requireToolText(await tools.execute('search', { space, query: 'cron', limit: 10 }, ctx)))
           assert.deepEqual(result.tools.map((tool: { name: string }) => tool.name).sort(), names)
           assert(result.tools.every((tool: { parameters: { properties: object } }) => !Object.hasOwn(tool.parameters.properties, 'action')))
           assert.deepEqual(result.errors, [])
@@ -200,20 +201,20 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           ['cron_list', { schedule: 'every 1h' }],
           ['cron_remove', {}],
           ['cron_remove', { id: 'any', task: 'tick' }],
-        ] as const) assert.match(await invoke(name, args), /invalid arguments/)
+        ] as const) assert.match(requireToolText(await invoke(name, args)), /invalid arguments/)
         assert.equal(f.cron.listJobs().length, 0)
         const args = { schedule: 'every 1h', task: 'tick', targetSessionId: 'web:target' }
-        assert.match(await invoke('cron_add', args), /Created job/)
+        assert.match(requireToolText(await invoke('cron_add', args)), /Created job/)
         const job = f.cron.listJobs()[0]
-        assert.match(await invoke('cron_list', {}), new RegExp(job.id))
+        assert.match(requireToolText(await invoke('cron_list', {})), new RegExp(job.id))
         tools.resetDynamic()
         assert.equal(await invoke('cron_remove', { id: job.id }), `Removed job ${job.id}`)
         assert(f.manager.getSessionState('web:target'))
         assert.equal(await invoke('cron_list', {}), 'No scheduled jobs.')
-        assert.match(await invoke('cron', { action: 'add', ...args }), /^Error:/)
+        assert.match(requireToolText(await invoke('cron', { action: 'add', ...args })), /^Error:/)
         assert.equal(f.cron.listJobs().length, 0)
 
-        assert.match(await invoke('cron_add', { ...args, once: true }), /Created job/)
+        assert.match(requireToolText(await invoke('cron_add', { ...args, once: true })), /Created job/)
         await f.cron.runNow(f.cron.listJobs()[0].id)
         await until(() => f.manager.getSessionState('web:target')?.executionStatus === 'completed')
         assert.equal(f.cron.listJobs().length, 0)

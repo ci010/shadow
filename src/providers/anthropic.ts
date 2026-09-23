@@ -10,6 +10,18 @@ import { env } from 'node:process'
 
 const ANTHROPIC_VERSION = '2023-06-01'
 
+function imageContent(content: ChatMessage['content']) {
+  if (!Array.isArray(content)) return content ?? ''
+  return content.map(part => {
+    if (part.type === 'text') return part
+    const url = part.image_url.url
+    const data = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/s.exec(url)
+    if (data) return { type: 'image', source: { type: 'base64', media_type: data[1], data: data[2] } }
+    if (/^https?:\/\//.test(url)) return { type: 'image', source: { type: 'url', url } }
+    throw new Error('Anthropic image input requires PNG, JPEG, GIF or WebP data or an HTTP(S) URL.')
+  })
+}
+
 // ---------------------------------------------------------------------------
 //  Message / tool conversion (OpenAI → Anthropic shapes)
 // ---------------------------------------------------------------------------
@@ -26,7 +38,7 @@ function convertMessages(
       continue
     }
     if (msg.role === 'user') {
-      converted.push({ role: 'user', content: msg.content ?? '' })
+      converted.push({ role: 'user', content: imageContent(msg.content) })
       continue
     }
     if (msg.role === 'assistant') {
@@ -48,16 +60,16 @@ function convertMessages(
       continue
     }
     if (msg.role === 'tool') {
-      converted.push({
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: msg.tool_call_id!,
-            content: msg.content ?? '',
-          },
-        ],
-      })
+      const block = {
+        type: 'tool_result',
+        tool_use_id: msg.tool_call_id!,
+        content: imageContent(msg.content),
+      }
+      const previous = converted.at(-1)
+      if (previous?.role === 'user' && Array.isArray(previous.content) &&
+        previous.content.every((part: { type: string }) => part.type === 'tool_result')) {
+        previous.content.push(block)
+      } else converted.push({ role: 'user', content: [block] })
     }
   }
 

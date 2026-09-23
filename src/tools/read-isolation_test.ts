@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { writeFile } from 'node:fs/promises'
@@ -19,11 +20,11 @@ test('read deduplication and cleanup are instance-owned despite identical physic
     }))
     for (let i = 0; i < readers.length; i++) {
       assert.equal(await readers[i].execute({ path: file }, contexts[i]), 'shared read-only fixture')
-      assert.match(await readers[i].execute({ path: file }, contexts[i]), /already in context/)
+      assert.match(requireToolText(await readers[i].execute({ path: file }, contexts[i])), /already in context/)
     }
     readers[0].clearSession('same-physical')
     assert.equal(await readers[0].execute({ path: file }, contexts[0]), 'shared read-only fixture')
-    assert.match(await readers[1].execute({ path: file }, contexts[1]), /already in context/)
+    assert.match(requireToolText(await readers[1].execute({ path: file }, contexts[1])), /already in context/)
     const replacement = new ReadTool(join(root, 'a'))
     assert.equal(await replacement.execute({ path: file }, contexts[0]), 'shared read-only fixture')
   })

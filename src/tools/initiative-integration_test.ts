@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -40,25 +41,25 @@ for (const remote of [false, true]) {
         const invoke = (query: string, ctx = context) =>
           tools.execute('invoke_tool', { name: 'initiative', args: { query } }, ctx)
         const text = 'x'.repeat(14_000)
-        const created = JSON.parse(await invoke(
+        const created = JSON.parse(requireToolText(await invoke(
           `INSERT INTO initiatives (id,title,goal,context) VALUES ('work','Work','Finish','${text}');`,
-        ))
+        )))
         assert.equal(created.changes, 1)
-        assert.match(await invoke(
+        assert.match(requireToolText(await invoke(
           "INSERT INTO initiatives (id,title,goal) VALUES ('foreign','Foreign','Must reject')",
           { ...context, sessionId: 'web:foreign' },
-        ), /Owner\/assignee target session is not known in this Project/)
+        )), /Owner\/assignee target session is not known in this Project/)
         assert.deepEqual(store.query("SELECT id FROM initiatives WHERE id='foreign'", 'web:actor').results[0].rows, [])
-        const queried = JSON.parse(await invoke("SELECT context FROM initiatives WHERE id='work'"))
+        const queried = JSON.parse(requireToolText(await invoke("SELECT context FROM initiatives WHERE id='work'")))
         assert.equal(queried.results[0].rows[0].context, text)
         assert.equal(other.query('SELECT id FROM initiatives', 'web:actor').results[0].rows.length, 0)
-        assert.match(await invoke('SELECT id FROM initiatives', { ...context, projectId: 'two' }), /owning Project/)
+        assert.match(requireToolText(await invoke('SELECT id FROM initiatives', { ...context, projectId: 'two' })), /owning Project/)
         if (remote) {
-          assert.match(await tools.execute('import_tool', { source: 'module.ts' }, context), /only the built-in/)
-          assert.match(await tools.execute('invoke_tool', { name: 'other', args: {} }, context), /only the built-in/)
+          assert.match(requireToolText(await tools.execute('import_tool', { source: 'module.ts' }, context)), /only the built-in/)
+          assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'other', args: {} }, context)), /only the built-in/)
           await importer.updateMcpServers([{ name: 'initiative', transport: 'stdio', command: 'must-not-run' }])
           assert.equal(importer.canInvokeFromRemote('initiative'), false)
-          assert.match(await invoke('SELECT id FROM initiatives'), /only the built-in/)
+          assert.match(requireToolText(await invoke('SELECT id FROM initiatives')), /only the built-in/)
           await importer.updateMcpServers([])
           assert.equal(importer.canInvokeFromRemote('initiative'), true)
         }

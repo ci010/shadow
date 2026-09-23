@@ -1,3 +1,4 @@
+import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ExecutionContext } from './context.ts'
@@ -105,8 +106,8 @@ test('real Tools and SessionTools dispatch remote exec in session/task modes but
   assert.equal(requests.length, 3)
   const tools = new SessionTools(registry, process.cwd())
   tools.setExecutionScope('call', [])
-  assert.match(await registry.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools }), /remote workdirs/)
-  assert.match(await tools.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools }), /remote workdirs/)
+  assert.match(requireToolText(await registry.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools })), /remote workdirs/)
+  assert.match(requireToolText(await tools.execute('exec', { script: 'pwd', timeout_ms: 60000 }, { ...context, tools })), /remote workdirs/)
   assert.equal(requests.length, 3)
 })
 
