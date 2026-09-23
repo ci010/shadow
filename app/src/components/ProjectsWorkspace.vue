@@ -95,9 +95,11 @@ import { DEFAULT_PROJECT_SIDEBAR, projectSidebarStorageKey, restoreProjectSideba
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { useAutomationNavigation } from '../composables/useAutomationNavigation.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
+import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
 const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean }>(), { visible: true })
+const liveState = useProjectLiveState()
 const route = useRoute()
 const router = useRouter()
 const installation = useInstallationContext()
@@ -145,7 +147,7 @@ let sidebarObserver: ResizeObserver | undefined
 const folderRevision = ref(0)
 const notice = ref('')
 const folderOperation = shallowRef<{ project: ProjectRecord; folder: FolderRecord; action: 'remove' | 'move' }>()
-let request: AbortController | undefined
+let catalog: ReturnType<typeof liveState.acquireCatalog> | undefined
 let mutation: AbortController | undefined
 function measureSidebar() {
   desktop.value = window.innerWidth > 700
@@ -251,20 +253,17 @@ function syncRoute() {
   publish(resource)
 }
 async function refresh() {
-  request?.abort()
-  const controller = new AbortController()
-  request = controller
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await createProjectsClient(props.apiBase).list(controller.signal)
-    if (controller.signal.aborted) return
-    projects.value = result
-    syncRoute()
-  } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load projects. Retry.'
-  } finally { if (request === controller) { loading.value = false; request = undefined } }
+  await catalog?.refresh()
 }
+watch(() => props.apiBase, (base, _previous, onCleanup) => {
+  const current = catalog = liveState.acquireCatalog(base)
+  const stop = watch(() => [current.state.revision, current.state.loading, current.state.error], () => {
+    loading.value = current.state.loading && !current.state.value
+    error.value = current.state.error
+    if (current.state.value) { projects.value = [...current.state.value]; syncRoute() }
+  }, { immediate: true })
+  onCleanup(() => { stop(); current.release(); if (catalog === current) catalog = undefined })
+}, { immediate: true })
 async function createProject() {
   if (saving.value) return
   saving.value = true
@@ -274,7 +273,7 @@ async function createProject() {
   try {
     const project = await createProjectsClient(props.apiBase).save(name.value, undefined, controller.signal)
     if (controller.signal.aborted) return
-    projects.value.push(project)
+    if (!projects.value.some(item => item.id === project.id)) projects.value.push(project)
     name.value = ''
     creating.value = false
     startDraft(project.id)
@@ -364,14 +363,13 @@ onMounted(() => {
   sidebarObserver = new ResizeObserver(measureSidebar)
   if (workspaceElement.value) sidebarObserver.observe(workspaceElement.value)
   measureSidebar()
-  void refresh()
   window.addEventListener('resize', measureSidebar)
   window.addEventListener('shadow:projects-changed', onCatalogChanged)
   window.addEventListener('keydown', sidebarKeydown)
 })
 onDeactivated(() => { closeSidebar(false) })
 onUnmounted(() => {
-  request?.abort(); mutation?.abort(); sidebarObserver?.disconnect()
+  mutation?.abort(); sidebarObserver?.disconnect()
   window.removeEventListener('resize', measureSidebar)
   window.removeEventListener('shadow:projects-changed', onCatalogChanged)
   window.removeEventListener('keydown', sidebarKeydown)

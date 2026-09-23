@@ -818,6 +818,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await store.init()
         const f = fixture(workspace, store)
         let disconnects = 0
+        const callWaits: boolean[] = []
+        f.bus.on('session.activity.changed', ({ sessionId }) => {
+          if (sessionId === 'web:worker') callWaits.push(f.sessions.isWaitingForCall(sessionId))
+        })
         f.tools.register({ name: 'prepare', description: '', parameters: { type: 'object', properties: {} },
           execute: async (_args, context) => {
             context.tools.registerDynamic({ name: 'borrowed', description: '', parameters: { type: 'object', properties: {} },
@@ -847,6 +851,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           for (const denied of ['subagent', 'yield', 'message', 'cron', 'event_subscribe', 'continuation']) assert.ok(!leaf.names.includes(denied))
           assert.ok(leaf.names.includes('exec'))
           assert.equal(f.sessions.isWaitingForCall('web:worker'), true)
+          assert.equal(callWaits.at(-1), true, 'Entering a blocking call publishes its wait state')
           assert.equal(f.reports.length, 0)
           assert.equal(f.requests.filter(request => request.sessionId === 'web:worker' && !request.settled).length, 0)
           const app = new Hono()
@@ -861,6 +866,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           const finalResult = `Final leaf result ${'x'.repeat(12_500)}`
           afterTool.resolve(done(finalResult))
           const caller = await f.next('web:worker')
+          assert.equal(callWaits.at(-1), false, 'Finishing a blocking call publishes the cleared wait')
           const receipt = JSON.parse(String(caller.messages.find(message => message.tool_call_id === 'leaf-tool')!.content))
           assert.equal(receipt.status, 'completed')
           assert.equal(receipt.result, finalResult)

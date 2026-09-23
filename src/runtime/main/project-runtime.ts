@@ -207,13 +207,15 @@ export async function createProjectRuntime(
     if (!dependencies.realtimeHub) realtimeHub.close()
   }
   cleanup.push(closeRealtime)
-  for (const topic of ['session.input.accepted', 'session.message.appended', 'session.handoff', 'session.ended', 'session.renamed', 'background.task.changed'] as const) {
+  for (const topic of ['session.input.accepted', 'session.message.appended', 'session.handoff', 'session.ended', 'session.renamed', 'session.changed', 'background.task.changed'] as const) {
     const subscription = bus.on(topic, fact => realtime.invalidateSessions(fact.sessionId))
     cleanup.push(() => bus.off(subscription))
   }
   const finishedSubscription = bus.on('session.turn.finished', fact =>
     realtime.invalidateSessions(fact.sessionId, fact.status === 'completed' ? fact.turnId : undefined))
   cleanup.push(() => bus.off(finishedSubscription))
+  const activitySubscription = bus.on('session.activity.changed', fact => realtime.invalidateActivity(fact.sessionId))
+  cleanup.push(() => bus.off(activitySubscription))
   const telemetry = initializeNodeTelemetry(otelStore, { scope, projectId: project.id })
   let telemetryShutdown: Promise<void> | undefined
   const closeTelemetry = () => {

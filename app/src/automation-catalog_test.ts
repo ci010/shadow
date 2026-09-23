@@ -16,7 +16,7 @@ function fixture(t: TestContext) {
     client: base => ({
       subscribe: (topic, observer) => {
         assert.equal(topic.kind, 'sessions')
-        const entry = { base, projectId: 'projectId' in topic ? topic.projectId : '', observer, closes: 0 }
+        const entry = { base, projectId: topic.projectId ?? '', observer, closes: 0 }
         subscriptions.push(entry)
         return { ready: async () => {}, close: () => { entry.closes++ } }
       },
@@ -126,4 +126,18 @@ test('catalog failure is explicit for every consumer and retry keeps the last su
   await flush()
   assert.equal(detail.state.error, 'Access denied.')
   assert.equal(detail.state.jobs[0].name, 'Saved')
+})
+
+test('session activity does not refresh the unrelated automation catalog', async t => {
+  const { catalog, reads, subscriptions } = fixture(t)
+  catalog.acquire(base)
+  t.mock.timers.tick(50)
+  reads[0].finish([])
+  await flush()
+  subscriptions[0].observer.event({
+    type: 'event', cursor: 'fixture:1', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'activity', sessionId: 'web:one' },
+  })
+  t.mock.timers.tick(50)
+  assert.equal(reads.length, 1)
 })

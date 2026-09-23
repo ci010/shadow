@@ -18,6 +18,7 @@ export class YieldError extends Error {
 }
 
 interface YieldManagerDeps {
+  changed?: (sessionId: string) => void
   assertCanYield?: (id: string) => void
   getState: (id: string) => SessionState | null | undefined
   getPolicy: (id: string) => YieldPolicy
@@ -136,6 +137,7 @@ export class YieldManager {
         if (pending.prepareError) { void this.fail(pending, pending.prepareError); return }
         if (pending.phase === 'closing') return
         pending.phase = 'waiting'
+        this.deps.changed?.(sessionId)
         if (request.deadline !== null) {
           pending.timer = setTimeout(() => {
             if (signal.aborted) pending.onAbort()
@@ -223,6 +225,7 @@ export class YieldManager {
     const pending = this.userRequest(sessionId, requestId)
     pending.timeoutPaused = true
     if (pending.timer !== undefined) clearTimeout(pending.timer)
+    this.deps.changed?.(sessionId)
   }
 
   reviseUser(sessionId: string, requestId: string, question: YieldQuestion, reason: string, reviewerId: string): Promise<YieldRequest> {
@@ -245,6 +248,7 @@ export class YieldManager {
       pending.phase = 'waiting'
       pending.timeoutPaused = true
       this.requests.set(next.id, pending)
+      this.deps.changed?.(sessionId)
       if (pending.abortReason) {
         await this.fail(pending, pending.abortReason)
         throw pending.abortReason
@@ -456,5 +460,6 @@ export class YieldManager {
     this.requests.delete(pending.request.id)
     if (pending.timer !== undefined) clearTimeout(pending.timer)
     pending.signal.removeEventListener('abort', pending.onAbort)
+    this.deps.changed?.(pending.request.sessionId)
   }
 }

@@ -43,6 +43,53 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: committed creation, metadata, configuration and deletion invalidate the session catalog`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const bus = new Bus()
+      const changed: Array<{ id: string; exists: boolean }> = []
+      const sessions = makeManager(workspace, store, { bus })
+      bus.on('session.changed', ({ sessionId }) => changed.push({ id: sessionId, exists: !!sessions.getSessionState(sessionId) }))
+      try {
+        await sessions.start()
+        await sessions.buildSession('web:new')
+        assert.deepEqual(changed, [{ id: 'web:new', exists: true }])
+        await sessions.setSessionConfig('web:new', { model: 'fixture' })
+        await sessions.unsetSessionConfig('web:new', 'model')
+        await sessions.setSessionConfig('web:new', { model: 'fixture' })
+        await sessions.resetSessionConfig('web:new')
+        assert.equal(changed.length, 5)
+        await sessions.updateTopicMetadata('web:new', { title: 'Updated', goal: 'Refresh metadata', scope: 'local' })
+        assert.equal(changed.length, 6)
+        await sessions.deleteSession('web:new')
+        assert.deepEqual(changed.at(-1), { id: 'web:new', exists: false })
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: failed metadata saves do not publish session changes`, async t => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const bus = new Bus()
+      const sessions = makeManager(workspace, store, { bus })
+      try {
+        await sessions.start()
+        await sessions.buildSession('web:one')
+        let notifications = 0
+        bus.on('session.changed', () => notifications++)
+        const save = t.mock.method(store, 'saveState', async () => { throw new Error('synthetic disk failure') })
+        try {
+          await assert.rejects(sessions.setSessionConfig('web:one', { model: 'fixture' }), /synthetic disk failure/)
+          await assert.rejects(sessions.updateTopicMetadata('web:one', { title: 'Updated', goal: 'Goal', scope: 'local' }), /synthetic disk failure/)
+          await assert.rejects(sessions.buildSession('web:two'), /synthetic disk failure/)
+          assert.equal(notifications, 0)
+        } finally { save.mock.restore() }
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: rename persists display metadata without changing identity, topic or history`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

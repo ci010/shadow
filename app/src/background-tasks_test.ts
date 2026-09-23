@@ -105,6 +105,10 @@ test('running tasks update through shared invalidations and disappear after comp
   await settle()
   assert.equal(view.state().total, 2)
   view.invalidate('another-session')
+  view.subscriptions[0].observer.event({
+    type: 'event', cursor: 'fixture:2', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'activity', sessionId },
+  })
   await settle()
   assert.equal(view.requests.length, 1)
   for (let i = 0; i < 20; i++) view.invalidate()

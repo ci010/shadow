@@ -2,6 +2,7 @@
  * snapshots even when the connection cursor can be replayed. Persisted history,
  * not token deltas, is authoritative after a reset or completed turn. */
 export type RealtimeTopic =
+  | { kind: 'projects'; projectId?: never }
   | { kind: 'chat'; projectId: string; sessionId: string }
   | { kind: 'sessions' | 'logs' | 'spans' | 'io'; projectId: string }
 
@@ -31,7 +32,9 @@ function identifier(value: unknown, max: number): value is string {
 }
 
 export function isRealtimeTopic(value: unknown): value is RealtimeTopic {
-  if (!record(value) || !identifier(value.projectId, 128)) return false
+  if (!record(value)) return false
+  if (value.kind === 'projects') return Object.keys(value).every(key => key === 'kind')
+  if (!identifier(value.projectId, 128)) return false
   if (value.kind === 'chat') return identifier(value.sessionId, 512) &&
     Object.keys(value).every(key => ['kind', 'projectId', 'sessionId'].includes(key))
   return ['sessions', 'logs', 'spans', 'io'].includes(value.kind as string) &&
@@ -39,6 +42,7 @@ export function isRealtimeTopic(value: unknown): value is RealtimeTopic {
 }
 
 export function realtimeTopicKey(topic: RealtimeTopic): string {
+  if (topic.kind === 'projects') return JSON.stringify(['projects'])
   return JSON.stringify([topic.projectId, topic.kind, topic.kind === 'chat' ? topic.sessionId : ''])
 }
 

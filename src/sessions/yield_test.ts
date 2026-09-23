@@ -11,6 +11,34 @@ const question = (): YieldQuestion => ({
 const code = (expected: YieldError['code']) => (error: unknown) => error instanceof YieldError && error.code === expected
 const signal = () => new AbortController().signal
 
+test('waiting, answering, cancellation and timeout notify observers after visible state changes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const changes: Array<string | null> = []
+  const manager = new YieldManager({
+    getState: sessionId => ({ sessionId, segmentIndex: 0 }),
+    getPolicy: () => ({ timeoutMs: 100 }),
+    notifyUser: async () => {}, notifyParent: async () => {},
+    changed: id => changes.push(manager.get(id)?.id ?? null),
+  })
+  const waiting = manager.ask('root', question(), signal())
+  const first = manager.get('root')!.id
+  assert.deepEqual(changes, [first])
+  await manager.answerUser('root', first, 'Continue')
+  await waiting
+  assert.deepEqual(changes, [first, null])
+  const cancellation = new AbortController()
+  const cancelled = manager.ask('root', question(), cancellation.signal)
+  const rejected = assert.rejects(cancelled, { name: 'AbortError' })
+  cancellation.abort()
+  await rejected
+  assert.equal(changes.at(-1), null)
+  const timed = manager.ask('root', question(), signal())
+  assert.equal(changes.at(-1), manager.get('root')!.id)
+  t.mock.timers.tick(100)
+  assert.equal((await timed).answeredBy, 'timeout')
+  assert.equal(changes.at(-1), null)
+})
+
 test('channel decisions bind the initiating human, not anyone who can see or quote the request', async () => {
   const state: SessionState = { sessionId: 'discord:room', segmentIndex: 0 }
   const manager = new YieldManager({

@@ -1,9 +1,11 @@
+import { watch } from 'vue'
 import { projectBase } from './api-url.ts'
 import { isOneShot } from './subagent-executions.ts'
 import { isWorkingStage } from './session-activity.ts'
-import { createProjectsClient, fetchProjectConversations, projectJson, type ProjectConversationState } from './projects.ts'
+import { projectJson, type ProjectConversationState } from './projects.ts'
 import { parseYieldResponse } from './yield-requests.ts'
-import type { LiveClient, LiveSubscription } from './live-client.ts'
+import type { LiveClient } from './live-client.ts'
+import type { ProjectLiveState } from './project-live-state.ts'
 import type { NotificationSound } from './notification-sounds.ts'
 import { isRecord } from './folders-sidebar.ts'
 
@@ -46,7 +48,8 @@ export function createSessionSoundTracker() {
 /** App-owned observation keeps notifications independent of mounted chat panes. */
 export function startSessionSoundMonitor(options: {
   base: string
-  live: Pick<LiveClient, 'subscribe'> & Partial<Pick<LiveClient, 'isLive'>>
+  live: Partial<Pick<LiveClient, 'isLive'>>
+  state: ProjectLiveState
   notify: (kind: NotificationSound) => void
   error: (message: string) => void
   request?: typeof fetch
@@ -55,7 +58,6 @@ export function startSessionSoundMonitor(options: {
   const projects = new Map<string, { close: () => void }>()
   const errors = new Map<string, string>()
   const request = options.request ?? fetch
-  let catalogTimer: ReturnType<typeof setTimeout> | undefined
   function report(id: string, message: string) {
     if (message) errors.set(id, message)
     else errors.delete(id)
@@ -65,23 +67,25 @@ export function startSessionSoundMonitor(options: {
     const tracker = createSessionSoundTracker()
     const finished = new Map<string, string>()
     let controller: AbortController | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
     let dirty = false
     let closed = false
     let generation = 0
-    let subscription: LiveSubscription
     async function refresh() {
-      clearTimeout(timer)
       if (closed || lifetime.signal.aborted) return
+      const { graph, activity } = lease
+      if (graph.state.loading || activity.state.loading) return
       if (controller) { dirty = true; return }
+      if ((!graph.state.value || !activity.state.value) && !graph.state.error && !activity.state.error) return
       dirty = false
       const ownGeneration = generation
       const current = controller = new AbortController()
       const signal = AbortSignal.any([current.signal, lifetime.signal])
       try {
-        const snapshot = await fetchProjectConversations(options.base, projectId, signal, request)
-        if (signal.aborted || ownGeneration !== generation) return
-        if (snapshot.sessionsError || snapshot.stagesError) throw new Error(snapshot.sessionsError || snapshot.stagesError)
+        if (graph.state.error || activity.state.error) throw new Error(graph.state.error || activity.state.error)
+        if (!graph.state.value || !activity.state.value) return
+        const snapshot: ProjectConversationState = {
+          sessions: graph.state.value, stages: activity.state.value.stages, sessionsError: '', stagesError: '',
+        }
         if (options.live.isLive && !options.live.isLive()) { tracker.reset(); finished.clear() }
         const changes = tracker.observe(snapshot)
         let idle = changes.idle.length > 0
@@ -112,11 +116,11 @@ export function startSessionSoundMonitor(options: {
       } finally {
         if (controller === current) {
           controller = undefined
-          if (!closed && !lifetime.signal.aborted) timer = setTimeout(() => { void refresh() }, dirty ? 0 : 20_000)
+          if (dirty && !closed && !lifetime.signal.aborted) void refresh()
         }
       }
     }
-    subscription = options.live.subscribe({ kind: 'sessions', projectId }, {
+    const lease = options.state.acquireProject(options.base, projectId, {
       event: event => {
         const payload = event.payload
         if (options.live.isLive && !options.live.isLive()) {
@@ -127,7 +131,6 @@ export function startSessionSoundMonitor(options: {
           && typeof payload.completedTurnId === 'string' && payload.completedTurnId.length > 0 && payload.completedTurnId.length <= 512) {
           finished.set(payload.sessionId, payload.completedTurnId)
         }
-        void refresh()
       },
       reset: () => {
         generation++
@@ -135,29 +138,27 @@ export function startSessionSoundMonitor(options: {
         finished.clear()
         controller?.abort()
         controller = undefined
-        void refresh()
       },
     })
-    return { close() { closed = true; controller?.abort(); clearTimeout(timer); subscription.close(); errors.delete(`project:${projectId}`) } }
+    const stopWatching = watch(() => [
+      lease.graph.state.revision, lease.graph.state.loading, lease.graph.state.error,
+      lease.activity.state.revision, lease.activity.state.loading, lease.activity.state.error,
+    ], () => { void refresh() }, { immediate: true })
+    return { close() { closed = true; controller?.abort(); stopWatching(); lease.release(); errors.delete(`project:${projectId}`) } }
   }
-  async function catalog() {
-    try {
-      const catalog = await createProjectsClient(options.base, request).list(lifetime.signal)
-      if (lifetime.signal.aborted) return
-      const ids = new Set(catalog.map(project => project.id))
-      for (const [id, project] of projects) if (!ids.has(id)) { project.close(); projects.delete(id) }
-      for (const id of ids) if (!projects.has(id)) projects.set(id, monitor(id))
-      report('catalog', '')
-    } catch (cause) {
-      if (!lifetime.signal.aborted) report('catalog', `Session sounds are unavailable. ${cause instanceof Error ? cause.message : 'Could not load projects.'}`)
-    } finally {
-      if (!lifetime.signal.aborted) catalogTimer = setTimeout(() => { void catalog() }, 30_000)
-    }
-  }
-  void catalog()
+  const catalog = options.state.acquireCatalog(options.base)
+  const stopCatalog = watch(() => [catalog.state.revision, catalog.state.error], () => {
+    if (catalog.state.error) { report('catalog', `Session sounds are unavailable. ${catalog.state.error}`); return }
+    if (!catalog.state.value) return
+    const ids = new Set(catalog.state.value.map(project => project.id))
+    for (const [id, project] of projects) if (!ids.has(id)) { project.close(); projects.delete(id) }
+    for (const id of ids) if (!projects.has(id)) projects.set(id, monitor(id))
+    report('catalog', '')
+  }, { immediate: true })
   return () => {
     lifetime.abort()
-    clearTimeout(catalogTimer)
+    stopCatalog()
+    catalog.release()
     for (const project of projects.values()) project.close()
     projects.clear()
     options.error('')

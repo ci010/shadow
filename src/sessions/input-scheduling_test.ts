@@ -141,6 +141,34 @@ async function fixture(options: {
   }
 }
 
+for (const ephemeral of [false, true]) {
+  test(`${ephemeral ? 'ephemeral' : 'persistent'} session publishes intermediate phase transitions without polling`, async () => {
+    const f = await fixture({ manager: true, ephemeral })
+    const tool = Promise.withResolvers<string>()
+    const phases: string[] = []
+    f.bus.on('session.activity.changed', ({ sessionId }) => {
+      phases.push(f.manager.getActiveSession(sessionId)?.phase ?? 'inactive')
+    })
+    f.tools.register({
+      name: 'fixture_phase', description: '', parameters: { type: 'object', properties: {} },
+      execute: async () => tool.promise,
+    })
+    try {
+      await f.manager.deliver(f.state.sessionId, input('phase-turn'))
+      await waitFor(() => f.calls.length === 1)
+      assert(phases.includes('llm'))
+      f.calls[0].resolve({ content: null, toolCalls: [{ id: 'phase-tool', name: 'fixture_phase', arguments: {} }] })
+      await waitFor(() => phases.includes('tool'))
+      assert.equal(phases.at(-1), 'tool')
+      tool.resolve('Complete')
+      await waitFor(() => f.calls.length === 2)
+      assert.equal(phases.at(-1), 'llm')
+      f.calls[1].resolve(done())
+      await waitFor(() => phases.includes('idle'))
+    } finally { tool.resolve('Cleanup'); await f.close() }
+  })
+}
+
 test('invalidated reusable prompts refresh before the next model request, without rewriting history', async () => {
   let prompt = 'Trusted audience'
   const f = await fixture({ manager: true, buildSystemPrompt: async () => prompt })

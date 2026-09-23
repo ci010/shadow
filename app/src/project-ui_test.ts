@@ -11,6 +11,8 @@ import * as modelSelectionModule from './model-selection.ts'
 import type { BotInstanceStatus } from './bot-settings.ts'
 import * as projectsModule from './projects.ts'
 import { parseSessionGraph } from './folders-sidebar.ts'
+import { createProjectLiveState } from './project-live-state.ts'
+import type { LiveClient } from './live-client.ts'
 
 function mountScript(t: TestContext, filename: string, props: Record<string, unknown>, probe?: Component, mocks: Record<string, unknown> = {}) {
   const url = new URL(`./components/${filename}`, import.meta.url)
@@ -19,8 +21,23 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
   const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
   const module = { exports: {} as { default: Component & { render?: () => ReturnType<typeof h> | null } } }
   const require = createRequire(url)
+  const liveMock = mocks['../composables/useLiveClient.ts'] as { useLiveClientPool?: () => { client: (base: string) => Pick<LiveClient, 'subscribe'> } } | undefined
+  const projectMock = mocks['../projects.ts'] as typeof projectsModule | undefined
+  const liveState = createProjectLiveState(liveMock?.useLiveClientPool?.() ?? {
+    client: () => ({ subscribe: () => ({ ready: async () => {}, close() {} }) }),
+  }, {
+    delayMs: 0,
+    request: async (input, init) => {
+      if (new URL(String(input)).pathname === '/api/projects' && projectMock) {
+        return Response.json({ projects: await projectMock.createProjectsClient('http://fixture').list() })
+      }
+      return fetch(input, init)
+    },
+  })
+  t.after(() => liveState.dispose())
   new Function('require', 'module', 'exports', 'window', outputText)(
-    (id: string) => mocks[id] ?? (id.endsWith('.vue') ? {} : id === '../model-selection.ts' ? modelSelectionModule : require(id)),
+    (id: string) => mocks[id] ?? (id === '../composables/useProjectLiveState.ts' ? { useProjectLiveState: () => liveState }
+      : id.endsWith('.vue') ? {} : id === '../model-selection.ts' ? modelSelectionModule : require(id)),
     module, module.exports, new EventTarget(),
   )
   module.exports.default.render = () => probe ? h(probe) : null
@@ -39,7 +56,7 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
     return Reflect.get(instance.$, 'setupState')
   }
 }
-const settle = () => new Promise(resolve => setImmediate(resolve))
+const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const config = (model: string) => ({ agent: { model, workspace: 'C:\\synthetic', temperature: .7 }, learning: {} })
 
 test('App web search form retains failed edits, clears saved secrets and prevents duplicate saves', async t => {

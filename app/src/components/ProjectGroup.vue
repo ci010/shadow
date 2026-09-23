@@ -37,11 +37,11 @@ import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
 import { projectBase } from '../api-url.ts'
-import { createProjectsClient, fetchProjectConversations, type ProjectRecord, type ProjectRuntimeStatus } from '../projects.ts'
+import { createProjectsClient, type ProjectRecord, type ProjectRuntimeStatus } from '../projects.ts'
 import { automationSessionOwners, type SidebarSession } from '../folders-sidebar.ts'
 import type { FolderRecord } from '../folders-client.ts'
-import { useLiveClientPool } from '../composables/useLiveClient.ts'
-import type { LiveSubscription } from '../live-client.ts'
+import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
+import type { ProjectLiveLease } from '../project-live-state.ts'
 import { HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { createBotSettingsClient } from '../bot-settings.ts'
 import type { SidebarBot } from '../bot-sidebar.ts'
@@ -59,7 +59,7 @@ const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, 
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const installation = useInstallationContext()
 const canManageKnowledge = computed(() => installation.value.uiScopes.includes('main:admin'))
-const livePool = useLiveClientPool()
+const liveState = useProjectLiveState()
 const homeCache = inject(HomeTreeCacheKey, undefined)
 const sessions = ref<SidebarSession[]>([])
 const bots = ref<SidebarBot[]>([])
@@ -78,41 +78,43 @@ watch(() => [sessions.value, loading.value, props.selectedProjectId, props.selec
 })
 let controller: AbortController | undefined
 const lifetime = new AbortController()
-let timer: ReturnType<typeof setTimeout> | undefined
-let invalidationTimer: ReturnType<typeof setTimeout> | undefined
-let subscription: LiveSubscription | undefined
-let dirty = false
+let lease: ProjectLiveLease | undefined
+let stopWatching: (() => void) | undefined
 let active = true
 let disposed = false
 function toggle(id: string) { if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id) }
-function invalidate() {
-  dirty = true
-  if (!active || disposed || controller || invalidationTimer !== undefined) return
-  invalidationTimer = setTimeout(() => { invalidationTimer = undefined; void refresh() }, 250)
-}
 function subscribe() {
-  subscription?.close()
-  subscription = livePool.client(props.apiBase).subscribe({ kind: 'sessions', projectId: props.project.id }, {
-    event: invalidate, reset: invalidate,
-  })
+  const current = lease = liveState.acquireProject(props.apiBase, props.project.id)
+  let seenGraph = false
+  const stopGraph = watch(() => [current.graph.state.revision, current.graph.state.error], () => {
+    if (current.graph.state.value) {
+      if (seenGraph) liveFolderRevision.value++
+      seenGraph = true
+      sessions.value = current.graph.state.value
+      homeCache?.setSessions(scope.value, sessions.value)
+    }
+    if (current.graph.state.revision || current.graph.state.error) void refreshMetadata(current)
+  }, { immediate: true })
+  const stopActivity = watch(() => [current.activity.state.revision, current.activity.state.error], () => {
+    if (current.activity.state.value) stages.value = current.activity.state.value.stages
+    const detail = [...new Set([current.graph.state.error, current.activity.state.error].filter(Boolean))].join(' ')
+    error.value = detail && runtimeState.value === 'failed'
+      ? 'This project could not start. Use Retry project startup beside its name.' : detail
+  }, { immediate: true })
+  stopWatching = () => { stopGraph(); stopActivity() }
 }
 async function refresh() {
-  clearTimeout(timer)
-  if (controller) { dirty = true; return }
+  await lease?.refresh()
+}
+async function refreshMetadata(snapshot: ProjectLiveLease) {
   if (disposed || !active) return
-  if (dirty) liveFolderRevision.value++
-  dirty = false
+  controller?.abort()
   const current = new AbortController()
   controller = current
   try {
-    const next = await fetchProjectConversations(props.apiBase, props.project.id, current.signal)
+    await snapshot.activity.read()
     if (current.signal.aborted) return
-    if (!next.sessionsError) {
-      sessions.value = next.sessions
-      homeCache?.setSessions(scope.value, next.sessions)
-    }
-    if (!next.stagesError) stages.value = next.stages
-    if (!next.sessionsError && next.sessions.some(session => session.channelAddress)) {
+    if (!snapshot.graph.state.error && sessions.value.some(session => session.channelAddress)) {
       try {
         const catalog = await createBotSettingsClient(scope.value, props.project.id).list(current.signal)
         if (current.signal.aborted) return
@@ -123,8 +125,8 @@ async function refresh() {
         if (current.signal.aborted) return
         clearBotConnections()
       }
-    } else if (next.sessionsError) clearBotConnections()
-    error.value = [...new Set([next.sessionsError, next.stagesError].filter(Boolean))].join(' ')
+    } else if (snapshot.graph.state.error) clearBotConnections()
+    error.value = [...new Set([snapshot.graph.state.error, snapshot.activity.state.error].filter(Boolean))].join(' ')
     if (error.value) {
       try {
         const status = await createProjectsClient(props.apiBase).status(props.project.id, current.signal)
@@ -140,10 +142,6 @@ async function refresh() {
     if (controller === current) {
       controller = undefined
       loading.value = false
-      if (!disposed && active) {
-        if (dirty) invalidate()
-        else timer = setTimeout(refresh, 20_000)
-      }
     }
   }
 }
@@ -172,23 +170,21 @@ async function sessionsDeleted(ids: string[]) {
 }
 function stop() {
   clearBotConnections()
-  subscription?.close()
-  subscription = undefined
-  clearTimeout(timer)
-  clearTimeout(invalidationTimer)
-  invalidationTimer = undefined
+  stopWatching?.()
+  stopWatching = undefined
+  lease?.release()
+  lease = undefined
   controller?.abort()
   controller = undefined
 }
 function clearBotConnections() {
   bots.value = bots.value.map(({ connection: _connection, ...bot }) => bot)
 }
-onMounted(() => { subscribe(); void refresh() })
+onMounted(subscribe)
 onActivated(() => {
   if (active) return
   active = true
   subscribe()
-  void refresh()
 })
 onDeactivated(() => { active = false; stop() })
 watch(() => props.folderRevision, () => { void refresh() })
@@ -200,7 +196,7 @@ watch(() => [props.apiBase, props.project.id], () => {
   stages.value = {}
   error.value = ''
   loading.value = true
-  if (active) { subscribe(); void refresh() }
+  if (active) subscribe()
 })
 onUnmounted(() => { disposed = true; stop(); lifetime.abort() })
 </script>

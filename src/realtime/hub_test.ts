@@ -83,6 +83,44 @@ test('session invalidations optionally carry a completed turn identity without c
     const ordinary = await stream.next()
     if (ordinary.type !== 'event') throw new Error('Expected session event')
     assert.deepEqual(ordinary.payload, { event: 'invalidate', sessionId: 'web:chat' })
+    publisher.invalidateActivity('web:chat')
+    const activity = await stream.next()
+    assert(activity.type === 'event')
+    assert.deepEqual(activity.payload, { event: 'activity', sessionId: 'web:chat' })
+  } finally { await stream.cancel(); hub.close() }
+})
+
+test('host catalog topic is available without a project runtime and replays changes', async () => {
+  const hub = new RealtimeHub()
+  const topic: RealtimeTopic = { kind: 'projects' }
+  const stream = read(hub.connect([topic], new AbortController().signal))
+  try {
+    assert.equal((await stream.next()).type, 'reset')
+    assert.equal((await stream.next()).type, 'ready')
+    const cursor = hub.cursor
+    hub.invalidateProjects()
+    const event = await stream.next()
+    assert(event.type === 'event')
+    assert.deepEqual(event.topic, topic)
+    assert.deepEqual(event.payload, { event: 'invalidate' })
+    const replay = read(hub.connect([topic], new AbortController().signal, cursor))
+    assert.deepEqual(await replay.next(), event)
+    assert.equal((await replay.next()).type, 'ready')
+    await replay.cancel()
+    assert.throws(() => parseRealtimeTopics(JSON.stringify([{ kind: 'projects', projectId: 'one' }])))
+  } finally { await stream.cancel(); hub.close() }
+})
+
+test('published runtime readiness refreshes snapshots after the HTTP gateway becomes available', async () => {
+  const hub = new RealtimeHub()
+  hub.registerProject('one')
+  const stream = read(hub.connect([{ kind: 'sessions', projectId: 'one' }, { kind: 'projects' }], new AbortController().signal))
+  try {
+    await stream.next()
+    await stream.next()
+    hub.projectReady('one')
+    assert.deepEqual(await stream.next(), { type: 'reset', reason: 'project-restored', cursor: hub.cursor })
+    assert.equal((await stream.next()).type, 'ready')
   } finally { await stream.cancel(); hub.close() }
 })
 

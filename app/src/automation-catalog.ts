@@ -4,6 +4,7 @@ import { fetchAutomations, type AutomationSummary } from './automations.ts'
 import { liveProjectId } from './composables/useLiveClient.ts'
 import type { LiveClient } from './live-client.ts'
 import { createLiveRefresh } from './live-refresh.ts'
+import { isRecord } from './folders-sidebar.ts'
 
 export interface AutomationCatalogState {
   jobs: AutomationSummary[]
@@ -41,7 +42,8 @@ export function createAutomationCatalog(
       snapshot.refresh()
     }
     const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
-      event: refresh, reset: refresh,
+      event: event => { if (!isRecord(event.payload) || event.payload.event !== 'activity') refresh() },
+      reset: refresh,
     })
     const timer = setInterval(refresh, 20_000)
     snapshot.refresh()

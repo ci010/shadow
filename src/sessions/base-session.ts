@@ -155,6 +155,9 @@ export abstract class BaseSession {
 
   /** Drain any pending messages (e.g. steer queue) before each LLM call. No-op by default. */
   protected async drainPendingMessages(_llm: LlmRuntimeConfig): Promise<void> {}
+  protected activityChanged(): void {
+    this.bus.emit('session.activity.changed', { sessionId: this.id })
+  }
   protected async finishTurn(fact: SessionTurnFact): Promise<void> {
     this.state.executionStatus = fact.status
     if (this.state.mode === 'session' && fact.status !== 'completed'

@@ -331,6 +331,7 @@ export class Session extends BaseSession {
           await this.compact(event.llm)
         } else {
           this.turn = new SessionTurn(event.msg)
+          this.activityChanged()
           await this.processInput(
             this.turn.message,
             event.llm,
@@ -346,6 +347,7 @@ export class Session extends BaseSession {
               })))
             }
             this.turn = null
+            this.activityChanged()
           })
         }
       } catch (err) {
@@ -463,10 +465,12 @@ export class Session extends BaseSession {
 
   protected override onToolPhaseStart(): void {
     if (this.turn) this.turn.toolStartedAt = Date.now()
+    this.activityChanged()
   }
 
   protected override onToolPhaseEnd(): void {
     if (this.turn) this.turn.toolStartedAt = undefined
+    this.activityChanged()
   }
 
   protected override async handleTokenLimitExceeded(

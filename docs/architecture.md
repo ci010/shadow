@@ -499,9 +499,24 @@ This is not a durable token-event ledger. Replay is bounded and in memory.
 After a Main restart or replay gap, committed session history is authoritative;
 temporary generated output may be replaced during reconciliation. Reconnecting
 the UI never re-admits a command or implicitly resumes interrupted execution.
-Not every resource has push hooks: intermediate stages and Nodes still use
-visible-only polling, project lists have a 20-second reconciliation
-fallback, and provider configuration uses ordinary bounded HTTP reads.
+The host-wide `projects` topic invalidates the project catalog after committed
+creation or rename. Session phase transitions, blocking-call waits and yield
+changes publish `activity` invalidations on the owning `sessions` topic; these
+refresh only the lightweight stages snapshot, not the session graph. Committed
+session creation, metadata/configuration changes and deletion invalidate the graph.
+Runtime startup also resets affected subscriptions once its HTTP routes are ready.
+The renderer's `project-live-state.ts` shares one catalog per host and one graph
+and activity snapshot per Project across chat panes, sidebars and notification
+sounds. Reads start on subscription and subsequently on invalidation, explicit
+refresh or reset; reconnect recovery also refreshes these snapshots even when
+the cursor is replayable, so failed HTTP reads cannot leave them stale.
+Bursts coalesce and changes during a read get one serialized
+follow-up. Reset/disposal abort obsolete reads. There is no periodic HTTP polling
+of `projects`, `graph` or `stages`, including when a notification monitor keeps
+the shared state alive on another page. Snapshot failures remain visible until
+retry, a new event or reset; they are not presented as empty successful state.
+Not every other resource has push hooks: Nodes still use visible-only polling,
+and provider configuration uses ordinary bounded HTTP reads.
 
 `app/src/chat-request-control.ts` manages composer Stop state across preparation,
 admission, streaming and cancellation. The Send button becomes Stop in the same
@@ -2078,8 +2093,9 @@ the preview; background message updates do not.
 
 Notification sounds are owned once by the renderer application, not by individual
 chat panes or Electron business logic. After a user gesture unlocks Web Audio,
-the monitor uses project catalogs, session live invalidations and validated HTTP
-snapshots across Projects, including when another application page is open.
+the monitor observes the shared project catalog and session snapshots across
+Projects, including when another application page is open. It does not maintain
+its own graph/stages/catalog polling or duplicate the panes' snapshot reads.
 Observed work-to-idle transitions play a short descending cue; user-addressed yield
 requests play an ascending cue, deduplicated by question ID. Temporary tasks/calls,
 waiting-for-call transitions, initial snapshots and reconnect baselines do not

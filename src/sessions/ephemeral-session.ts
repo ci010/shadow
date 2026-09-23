@@ -21,8 +21,8 @@ export class EphemeralSession extends BaseSession {
   get phase(): 'idle' | 'llm' | 'tool' {
     return !this.active ? 'idle' : this.executingTools ? 'tool' : 'llm'
   }
-  protected override onToolPhaseStart(): void { this.executingTools = true }
-  protected override onToolPhaseEnd(): void { this.executingTools = false }
+  protected override onToolPhaseStart(): void { this.executingTools = true; this.activityChanged() }
+  protected override onToolPhaseEnd(): void { this.executingTools = false; this.activityChanged() }
   protected override async finishTurn(fact: SessionTurnFact): Promise<void> {
     this.result = fact
     await super.finishTurn(fact)
@@ -60,9 +60,11 @@ export class EphemeralSession extends BaseSession {
       while (this.inbox.length && !this.closed) {
         const { input, llm } = this.inbox.shift()!
         this.active = new AbortController()
+        this.activityChanged()
         if (this.cancelled) this.active.abort()
         await this.processInput(input, llm, this.active.signal)
         this.active = undefined
+        this.activityChanged()
       }
     } finally {
       try { await this.tools.waitForForeground() }

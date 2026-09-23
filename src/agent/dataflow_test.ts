@@ -124,7 +124,7 @@ test(`web admission, channel fanout, commands and retry follow one directed inpu
   const live: Array<{ sessionId: string; payload: unknown; requestId?: string }> = []
   const channel = new WebChannel(bus, { workspace, sessionManager: sessions, realtime: {
     chat(sessionId, payload, requestId) { live.push({ sessionId, payload, requestId }) },
-    invalidateSessions() {}, close() {},
+    invalidateSessions() {}, invalidateActivity() {}, close() {},
   } })
   channel.setReceiver((message) => agent.receiveChannelMessage(message))
   const app = new Hono()

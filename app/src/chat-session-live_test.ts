@@ -8,6 +8,8 @@ import ts from 'typescript'
 import { createLiveRefresh } from './live-refresh.ts'
 import type { LiveObserver } from './live-client.ts'
 import { sessionActivity } from './session-activity.ts'
+import { createProjectLiveState } from './project-live-state.ts'
+import type { LiveClient } from './live-client.ts'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const root = 'web:chat-parent'
@@ -23,6 +25,16 @@ function fixture(t: TestContext) {
   t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => {
     requests.push({ path: new URL(url).pathname, signal: init.signal!, finish: value => resolve(Response.json(value)) })
   }))
+  const pool = { client: (): Pick<LiveClient, 'subscribe'> => ({
+    subscribe: (topic, observer) => {
+      assert.notEqual(topic.kind, 'projects')
+      const subscription = { projectId: topic.projectId!, observer, closed: false }
+      subscriptions.push(subscription)
+      return { ready: async () => {}, close: () => { subscription.closed = true } }
+    },
+  }) }
+  const liveState = createProjectLiveState(pool, { delayMs: 0 })
+  t.after(() => liveState.dispose())
   const url = new URL('./components/ChatTab.vue', import.meta.url)
   const { descriptor } = parse(readFileSync(url, 'utf8'))
   const script = compileScript(descriptor, { id: 'chat-session-live' })
@@ -38,14 +50,9 @@ function fixture(t: TestContext) {
     if (id === '../composables/useInstallationContext.ts') return { useInstallationContext: () => Vue.ref({ mode: 'main', uiScopes: [] }) }
     if (id === '../composables/useLiveClient.ts') return {
       liveProjectId: (base: string) => new URL(base).pathname.split('/').at(-1),
-      useLiveClientPool: () => ({ client: () => ({
-        subscribe: (topic: { projectId: string }, observer: LiveObserver) => {
-          const subscription = { projectId: topic.projectId, observer, closed: false }
-          subscriptions.push(subscription)
-          return { ready: async () => {}, close: () => { subscription.closed = true } }
-        },
-      }) }),
+      useLiveClientPool: () => pool,
     }
+    if (id === '../composables/useProjectLiveState.ts') return { useProjectLiveState: () => liveState }
     if (id === '../live-refresh.ts') return {
       createLiveRefresh: (options: Parameters<typeof createLiveRefresh>[0]) => createLiveRefresh({ ...options, delayMs: 0 }),
     }
@@ -134,18 +141,16 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   f.invalidate('a')
   f.invalidate('b')
   await settle()
-  assert.equal(f.requests.length, 2)
-  for (const request of f.requests) request.finish(graph())
-  await settle()
   assert.equal(f.requests.length, 4)
-  for (const request of f.requests.slice(2)) request.finish({ stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: false } })
+  for (const request of f.requests) request.finish(request.path.endsWith('/graph') ? graph()
+    : { stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: false } })
   await settle()
   const stage = (view: typeof a) => sessionActivity(view.state().inlineExecutions.entries.get(0).stage).label
   assert.equal(stage(a), 'Waiting for a response')
   assert.equal(stage(b), 'Waiting for a response')
   f.invalidate('a')
   await settle()
-  assert.equal(f.requests.length, 5)
+  assert.equal(f.requests.length, 6)
   assert.match(f.requests[4].path, /^\/projects\/a\/api\/sessions\/graph$/)
   f.requests[4].finish(graph())
   await settle()
@@ -154,7 +159,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   assert.equal(stage(a), 'Waiting for call', 'The same mounted reducer observes a metadata-only change')
   assert.equal(stage(b), 'Waiting for a response')
   assert.equal(a.state().inputText, 'Keep this exact unsent draft')
-  const poll = a.state().pollSessionStages()
+  const poll = a.state().refreshSessionActivity()
   await settle()
   f.requests[6].finish({ stages: { [root]: 'idle', [task]: 'waiting' }, waitingForCalls: { [task]: false } })
   await poll
@@ -171,14 +176,12 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   f.requests[7].finish(stale)
   await settle()
   assert.equal(stage(a), 'Waiting for a response')
-  f.invalidate('c')
-  await settle()
-  f.requests[8].finish(graph())
+  f.requests[9].finish(graph())
   await settle()
   const state = a.state()
   a.unmount()
-  assert.equal(f.requests[9].signal.aborted, true)
-  f.requests[9].finish({ stages: { [task]: 'waiting' }, waitingForCalls: { [task]: true } })
+  assert.equal(f.requests[10].signal.aborted, true)
+  f.requests[10].finish({ stages: { [task]: 'waiting' }, waitingForCalls: { [task]: true } })
   await settle()
   assert.equal(state.allSessions.find((session: { sessionId: string }) => session.sessionId === task).waitingForCall, false)
   b.props.visible = false

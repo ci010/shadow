@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createSessionSoundTracker, startSessionSoundMonitor } from './session-sound-monitor.ts'
 import { parseSessionGraph } from './folders-sidebar.ts'
-import type { LiveObserver } from './live-client.ts'
+import type { LiveClient, LiveObserver } from './live-client.ts'
+import { createProjectLiveState } from './project-live-state.ts'
 import type { NotificationSound } from './notification-sounds.ts'
 import type { ProjectConversationState } from './projects.ts'
 
@@ -13,7 +14,7 @@ const snapshot = (stages: Record<string, string>): ProjectConversationState => (
     { sessionId: 'sub:call', mode: 'call', parentSessionId: 'web:root' },
   ], nodes: [] }),
 })
-const settle = () => new Promise(resolve => setImmediate(resolve))
+const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 
 test('tracker only reports observed work-to-idle transitions, not history, cancellations of yields, or child executions', () => {
   const tracker = createSessionSoundTracker()
@@ -65,13 +66,19 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
     } })
     throw new Error(`Unexpected ${path}`)
   }
-  const stop = startSessionSoundMonitor({
-    base: 'http://fixture', request, notify: kind => emitted.push(kind), error: message => { error = message },
-    live: { isLive: () => liveReady, subscribe(topic, observer) {
-      observers.set(topic.projectId, observer)
+  const live: Pick<LiveClient, 'subscribe' | 'isLive'> = {
+    isLive: () => liveReady, subscribe(topic, observer) {
+      const key = topic.kind === 'projects' ? 'catalog' : topic.projectId
+      observers.set(key, observer)
       queueMicrotask(() => observer.reset('subscription'))
-      return { ready: async () => {}, close: () => { observers.delete(topic.projectId) } }
-    } },
+      return { ready: async () => {}, close: () => { observers.delete(key) } }
+    },
+  }
+  const state = createProjectLiveState({ client: () => live }, { request, delayMs: 0 })
+  t.after(() => state.dispose())
+  const stop = startSessionSoundMonitor({
+    base: 'http://fixture', request, state, live,
+    notify: kind => emitted.push(kind), error: message => { error = message },
   })
   t.after(stop)
   const update = async (project: string, stage: string) => {
@@ -80,7 +87,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
     await settle()
   }
   await settle()
-  assert.equal(observers.size, 2)
+  assert.equal(observers.size, 3)
   assert.deepEqual(emitted, [])
   await update('a', 'llm')
   await update('a', 'idle')
@@ -127,18 +134,28 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   assert.equal(observers.size, 0)
 })
 
-test('disposing the monitor aborts its catalog request before it can install subscriptions', async () => {
+test('disposing the monitor aborts its catalog request before it can monitor projects', async () => {
   let signal: AbortSignal | null | undefined
   let finish!: (response: Response) => void
   let subscriptions = 0
-  const stop = startSessionSoundMonitor({
-    base: 'http://fixture', notify: () => assert.fail('No sound after disposal'), error() {},
+  const state = createProjectLiveState({ client: () => ({
+    subscribe(topic) {
+      assert.equal(topic.kind, 'projects')
+      subscriptions++
+      return { ready: async () => {}, close() { subscriptions-- } }
+    },
+  }) }, {
     request: async (_input, init) => { signal = init?.signal; return new Promise(resolve => { finish = resolve }) },
-    live: { subscribe() { subscriptions++; throw new Error('Must not subscribe after disposal') } },
+    delayMs: 0,
   })
+  const stop = startSessionSoundMonitor({
+    base: 'http://fixture', state, live: {}, notify: () => assert.fail('No sound after disposal'), error() {},
+  })
+  await settle()
   stop()
   assert.equal(signal?.aborted, true)
   finish(Response.json({ projects: [{ id: 'a', name: 'A', createdAt: '' }] }))
   await settle()
   assert.equal(subscriptions, 0)
+  state.dispose()
 })

@@ -5,7 +5,7 @@ import {
 import { apiUrl, hostBase } from './api-url.ts'
 
 export type LiveEvent = Extract<RealtimeEnvelope, { type: 'event' }>
-export type LiveResetReason = Extract<RealtimeEnvelope, { type: 'reset' }>['reason'] | 'subscription'
+export type LiveResetReason = Extract<RealtimeEnvelope, { type: 'reset' }>['reason'] | 'subscription' | 'reconnect'
 export interface LiveStatus {
   phase: 'idle' | 'connecting' | 'live' | 'reconnecting' | 'error'
   error?: string
@@ -13,6 +13,7 @@ export interface LiveStatus {
 export interface LiveObserver {
   event: (event: LiveEvent) => void
   reset: (reason: LiveResetReason) => void
+  reconnected?: () => void
 }
 export interface LiveSubscription {
   ready: (signal?: AbortSignal) => Promise<void>
@@ -43,6 +44,7 @@ export function createLiveClient(base: string, options: {
   let timer: ReturnType<typeof setTimeout> | undefined
   let watchdog: ReturnType<typeof setTimeout> | undefined
   let attempt = 0
+  let recovering = false
   let disposed = false
   let status: LiveStatus = { phase: 'idle' }
 
@@ -75,6 +77,7 @@ export function createLiveClient(base: string, options: {
   }
   function reconnect() {
     if (disposed || !subscribers.size) return
+    recovering = true
     stopSource()
     clearTimeout(timer)
     update({ phase: 'reconnecting', error: 'Live updates disconnected. Reconnecting to Main; saved history remains available.' })
@@ -116,6 +119,7 @@ export function createLiveClient(base: string, options: {
     cursor = envelope.cursor
     if (envelope.type === 'reset') {
       ready = false
+      recovering = false
       unavailableTopics.clear()
       for (const subscriber of [...subscribers]) if (!subscriber.closed) initialize(subscriber, envelope.reason)
     } else if (envelope.type === 'ready') {
@@ -123,9 +127,12 @@ export function createLiveClient(base: string, options: {
       attempt = 0
       update({ phase: 'live' })
       for (const subscriber of [...subscribers]) {
-        if (!subscriber.closed && !subscriber.initialized && connectedTopics.has(realtimeTopicKey(subscriber.topic))
-          && !unavailableTopics.has(realtimeTopicKey(subscriber.topic))) initialize(subscriber, 'subscription')
+        if (subscriber.closed || !connectedTopics.has(realtimeTopicKey(subscriber.topic))
+          || unavailableTopics.has(realtimeTopicKey(subscriber.topic))) continue
+        if (!subscriber.initialized) initialize(subscriber, 'subscription')
+        else if (recovering) subscriber.observer.reconnected?.()
       }
+      recovering = false
       for (const waiter of [...waiters]) {
         const key = realtimeTopicKey(waiter.owner.topic)
         if (unavailableTopics.has(key)) waiter.reject(projectUnavailable())

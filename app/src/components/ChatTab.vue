@@ -448,10 +448,11 @@ import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl } from '../api-url.ts'
 import { automationChatLocation } from '../automations.ts'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
-import { isRecord, parseSessionGraph, type SidebarSession } from '../folders-sidebar.ts'
+import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 import type { LiveSubscription } from '../live-client.ts'
-import { createLiveRefresh } from '../live-refresh.ts'
+import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
+import type { ProjectLiveLease } from '../project-live-state.ts'
 import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
 import { addChatContext, chatContextName, composeChatMessage, type ChatContextItem } from '../chat-draft.ts'
 import ExecutionLocationSelector from './ExecutionLocationSelector.vue'
@@ -465,7 +466,7 @@ import { isUserMessage, resendableUserMessage, messageHistoryMarkers, groupMessa
 import CommandResult from './CommandResult.vue'
 import { mergeCommandResults } from '../command-results.ts'
 import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-commands/receipt.ts'
-import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import { displayedSessionStages as resolveDisplayedStages, isWaitingStage, isWorkingStage, shouldRefreshReadonlyHistory, type SessionStage, type WorkingStage } from '../session-activity.ts'
 import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
 import { groupSenderNames, parseSessionMessage, sessionMessageTitle, type SessionMessageSource } from '../message-author.ts'
@@ -539,6 +540,8 @@ const props = withDefaults(defineProps<{
 const activated = ref(true)
 const paneActive = computed(() => props.visible && activated.value)
 const livePool = useLiveClientPool()
+const projectLiveState = useProjectLiveState()
+let projectLease: ProjectLiveLease | undefined
 onActivated(() => { activated.value = true })
 onDeactivated(() => { activated.value = false })
 const emit = defineEmits<{
@@ -656,7 +659,7 @@ async function completeSlashCommand(text: string) {
 }
 const mobileSidebarOpen = ref(false)
 
-// ── Session stage polling (batch) ────────────────────────────────────────────
+// ── Shared session activity ────────────────────────────────────────────────
 const sessionStages = ref<Record<string, SessionStage>>({})
 const activeRequestIds = ref<Record<string, string>>({})
 const sessionRecoveries = ref<Record<string, SessionRecovery>>({})
@@ -680,7 +683,7 @@ async function stopCurrentRequest(): Promise<void> {
     requestControls.set(activeSessionId.value, control)
   }
   await control?.stop()
-  void pollSessionStages()
+  void refreshSessionActivity()
 }
 async function resumeCurrentRequest(): Promise<void> {
   const sessionId = activeSessionId.value
@@ -708,14 +711,14 @@ async function resumeCurrentRequest(): Promise<void> {
       composerError.value = error instanceof Error ? error.message : 'Could not continue this conversation. Refresh and retry.'
     }
   } finally {
-    if (generation === sessionSelectionGeneration) void pollSessionStages()
+    if (generation === sessionSelectionGeneration) void refreshSessionActivity()
   }
 }
 function handleYieldCancelled(sessionId: string): void {
   if (activeSessionId.value !== sessionId) return
   // The yield endpoint has requested a real abort. Keep the reader and busy
   // state until the terminal event or a fresh server activity read confirms it.
-  void pollSessionStages()
+  void refreshSessionActivity()
 }
 const activeSession = computed(() => allSessions.value.find(session => session.sessionId === activeSessionId.value))
 const isExecution = computed(() => !!activeSessionId.value && isOneShot({ mode: activeSession.value?.mode ?? selectedMode.value }))
@@ -790,89 +793,55 @@ async function changeConversationSettings(patch: ConversationSettings): Promise<
     if (settingsRequest === controller) { settingsRequest = undefined; savingSettings.value = false }
   }
 }
-let stageInterval: ReturnType<typeof setInterval> | null = null
-let stageRequest: AbortController | undefined
 let lastReadonlyRefresh = 0
 
-async function pollSessionStages(): Promise<void> {
-  if (stageRequest || !paneActive.value && currentRequest.value?.state.phase !== 'active') return
-  if (!sessionListRequest && Date.now() - lastGraphRefresh >= 30_000) void loadSessionList()
-  const controller = new AbortController()
-  const observedRequest = currentRequest.value
-  const observedActive = observedRequest?.state.phase === 'active'
-  const observedSessionId = activeSessionId.value
-  stageRequest = controller
-  try {
-    const res = await fetch(buildUrl('/api/sessions/stages'), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]) })
-    if (!res.ok) throw new Error('Session activity is unavailable.')
-    const snapshot: unknown = await res.json()
-    const stages = parseSessionStages(snapshot)
-    const identities = parseActiveRequestIds(snapshot)
-    const recoveries = parseSessionRecoveries(snapshot)
-    if (!controller.signal.aborted) {
-      const previous = sessionStages.value[activeSessionId.value]
-      sessionStages.value = stages
-      const callWaits = isRecord(snapshot) && isRecord(snapshot.waitingForCalls) ? snapshot.waitingForCalls : undefined
-      if (callWaits) for (const session of allSessions.value) {
-        const waiting = callWaits[session.sessionId]
-        if (typeof waiting === 'boolean') session.waitingForCall = waiting
-      }
-      activeRequestIds.value = identities
-      sessionRecoveries.value = recoveries
-      stageError.value = ''
-      if (deferActiveHistory && !sendRequest
-        && (stages[activeSessionId.value] === 'idle' || stages[activeSessionId.value] === 'inactive')) {
-        deferActiveHistory = false
-        refreshDirectHistory()
-      }
-      if (observedActive && observedRequest === currentRequest.value && observedSessionId === activeSessionId.value
-        && (stages[observedSessionId] === 'idle' || stages[observedSessionId] === 'inactive')
-        && !sendRequest) {
-        observedRequest?.finish()
-        streaming.value = false
-        streamPhase.value = undefined
-        if (isDirectChat.value) refreshDirectHistory()
-      }
-      const identity = identities[activeSessionId.value]
-      const current = currentRequest.value
-      if (!sendRequest && identity && isWorkingStage(stages[activeSessionId.value])
-        && (!current || current.state.phase === 'finished'
-          || current.state.phase === 'active' && current.state.requestId !== identity)) {
-        // A different active input confirms the old one ended, even if its
-        // terminal SSE was missed. Never forward its pending Stop to this input.
-        const error = current?.state.error
-        current?.finish()
-        const restored = createChatRequestControl(props.apiBase, () => {}, fetch, activeSessionId.value, identity)
-        if (error) restored.state.error = error
-        requestControls.set(activeSessionId.value, restored)
-      }
-      if (conversationDocumentVisible.value && activeSessionId.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && activePanel.value === 'conversation' && !historyRequest
-        && shouldRefreshReadonlyHistory(stages[activeSessionId.value], previous, Date.now() - lastReadonlyRefresh)) {
-        void loadReadonlySession(true)
-      }
-    }
-  } catch {
-    if (!controller.signal.aborted) {
-      stageError.value = 'Session activity is unavailable. Retrying...'
-    }
-  } finally {
-    if (stageRequest === controller) stageRequest = undefined
+async function refreshSessionActivity(): Promise<void> {
+  await projectLease?.activity.refresh()
+}
+
+function applySessionActivity(
+  snapshot: NonNullable<ProjectLiveLease['activity']['state']['value']>,
+  observedRequest: typeof currentRequest.value, observedActive: boolean, observedSessionId: string,
+): void {
+  const { stages, activeRequestIds: identities, recoveries } = snapshot
+  const previous = sessionStages.value[activeSessionId.value]
+  sessionStages.value = { ...stages }
+  for (const session of allSessions.value) {
+    if (stages[session.sessionId]) session.waitingForCall = stages[session.sessionId] === 'waiting-for-call'
   }
-}
-
-function startStagePolling(): void {
-  stopStagePolling()
-  void pollSessionStages()
-  stageInterval = setInterval(pollSessionStages, 1500)
-}
-
-function stopStagePolling(): void {
-  if (stageInterval) { clearInterval(stageInterval); stageInterval = null }
-  stageRequest?.abort()
-  stageRequest = undefined
-  sessionStages.value = {}
-  activeRequestIds.value = {}
-  sessionRecoveries.value = {}
+  activeRequestIds.value = { ...identities }
+  sessionRecoveries.value = { ...recoveries }
+  stageError.value = ''
+  if (deferActiveHistory && !sendRequest
+    && (stages[activeSessionId.value] === 'idle' || stages[activeSessionId.value] === 'inactive')) {
+    deferActiveHistory = false
+    refreshDirectHistory()
+  }
+  if (observedActive && observedRequest === currentRequest.value && observedSessionId === activeSessionId.value
+    && (stages[observedSessionId] === 'idle' || stages[observedSessionId] === 'inactive')
+    && !sendRequest) {
+    observedRequest?.finish()
+    streaming.value = false
+    streamPhase.value = undefined
+    if (isDirectChat.value) refreshDirectHistory()
+  }
+  const identity = identities[activeSessionId.value]
+  const current = currentRequest.value
+  if (!sendRequest && identity && isWorkingStage(stages[activeSessionId.value])
+    && (!current || current.state.phase === 'finished'
+      || current.state.phase === 'active' && current.state.requestId !== identity)) {
+    // A different active input confirms the old one ended, even if its
+    // terminal SSE was missed. Never forward its pending Stop to this input.
+    const error = current?.state.error
+    current?.finish()
+    const restored = createChatRequestControl(props.apiBase, () => {}, fetch, activeSessionId.value, identity)
+    if (error) restored.state.error = error
+    requestControls.set(activeSessionId.value, restored)
+  }
+  if (conversationDocumentVisible.value && activeSessionId.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && activePanel.value === 'conversation' && !historyRequest
+    && shouldRefreshReadonlyHistory(stages[activeSessionId.value], previous, Date.now() - lastReadonlyRefresh)) {
+    void loadReadonlySession(true)
+  }
 }
 
 // Commands and cached panes share the application's one realtime connection.
@@ -917,7 +886,7 @@ function connectEventStream(chatId: string): void {
       streamRequestId = undefined
       streamContent.value = ''
       refreshDirectHistory()
-      void pollSessionStages()
+      void refreshSessionActivity()
     },
     event(envelope) {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}` || viewingPhysicalId.value) return
@@ -973,7 +942,7 @@ function connectEventStream(chatId: string): void {
           streamingToolCallData.value = null
         }
         refreshDirectHistory()
-        void pollSessionStages()
+        void refreshSessionActivity()
         return
       }
       if (!paneActive.value || historyRequest || directRefreshPending && !deferActiveHistory) {
@@ -1150,8 +1119,6 @@ const toolActivity = computed(() => groupToolActivity(displayMessages.value, new
 const allSessions = ref<SidebarSession[]>([])
 const sessionsLoading = ref(false)
 const sessionsError = ref('')
-let sessionListRequest: AbortController | undefined
-let lastGraphRefresh = 0
 const collapsedSessions = reactive(new Set<string>())
 const expandedThinking = reactive(new Set<number>())
 
@@ -1388,54 +1355,46 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
 
 // ── Session list ──────────────────────────────────────────────────────────────
 
-async function loadSessionList(signal?: AbortSignal): Promise<void> {
-  sessionListRequest?.abort()
-  const controller = new AbortController()
-  sessionListRequest = controller
-  lastGraphRefresh = Date.now()
-  sessionsLoading.value = true
-  sessionsError.value = ''
-  const requestSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(15_000)])
-  try {
-    const res = await fetch(buildUrl('/api/sessions/graph'), {
-      signal: requestSignal,
-    })
-    if (!res.ok) throw new Error('Cannot load conversations. Check Main and retry.')
-    const data = await res.json()
-    if (!requestSignal.aborted) {
-      const sessions = parseSessionGraph(data, props.projectId)
-      if (!props.managed) homeCache.setSessions(props.apiBase, sessions)
-      const selected = sessions.find(session => session.sessionId === activeSessionId.value)
-      if (activeSession.value && !selected) composerError.value = 'This conversation or execution is no longer available. Close it and refresh the conversation list.'
-      if (selected) selectedMode.value = selected.mode
-      allSessions.value = sessions
-    }
-  } catch (cause) {
-    if (!controller.signal.aborted && !signal?.aborted) sessionsError.value = cause instanceof Error && cause.message.startsWith('Cannot ')
-      ? cause.message : 'Cannot load conversations. Check Main and retry.'
-  } finally {
-    if (sessionListRequest === controller) {
-      sessionListRequest = undefined
-      sessionsLoading.value = false
-    }
-  }
+async function loadSessionList(): Promise<void> {
+  await projectLease?.refresh()
 }
 
 watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base, projectId, active], _previous, onCleanup) => {
   if (!active) return
-  const refresh = createLiveRefresh({
-    load: loadSessionList,
-    apply: () => { void pollSessionStages() },
-    onError: () => { sessionsError.value = 'Cannot load conversations. Check Main and retry.' },
-  })
-  const subscription = livePool.client(base).subscribe({
-    kind: 'sessions', projectId: projectId ?? liveProjectId(base),
-  }, { event: () => refresh.refresh(), reset: () => refresh.refresh() })
+  const lease = projectLease = projectLiveState.acquireProject(base, projectId ?? liveProjectId(base))
+  let observedRequest: typeof currentRequest.value
+  let observedActive = false
+  let observedSessionId = ''
+  const stopRead = watch(() => lease.activity.state.readRevision, () => {
+    observedRequest = currentRequest.value
+    observedActive = observedRequest?.state.phase === 'active'
+    observedSessionId = activeSessionId.value
+  }, { flush: 'sync' })
+  const stopGraph = watch(() => lease.graph.state.revision, () => {
+    const sessions = lease.graph.state.value
+    if (!sessions) return
+    if (!props.managed) homeCache.setSessions(base, sessions)
+    const selected = sessions.find(session => session.sessionId === activeSessionId.value)
+    if (activeSession.value && !selected) composerError.value = 'This conversation or execution is no longer available. Close it and refresh the conversation list.'
+    if (selected) selectedMode.value = selected.mode
+    allSessions.value = sessions.map(session => ({
+      ...session,
+      ...(sessionStages.value[session.sessionId] ? { waitingForCall: sessionStages.value[session.sessionId] === 'waiting-for-call' } : {}),
+    }))
+  }, { immediate: true, flush: 'sync' })
+  const stopActivity = watch(() => lease.activity.state.revision, () => {
+    if (lease.activity.state.value) applySessionActivity(lease.activity.state.value, observedRequest, observedActive, observedSessionId)
+  }, { immediate: true, flush: 'sync' })
+  const stopErrors = watch(() => [lease.graph.state.loading, lease.graph.state.error, lease.activity.state.error] as const,
+    ([loading, graphError, activityError]) => {
+      sessionsLoading.value = loading
+      sessionsError.value = graphError
+      stageError.value = activityError
+    }, { immediate: true })
   onCleanup(() => {
-    subscription.close()
-    refresh.dispose()
-    stageRequest?.abort()
-    stageRequest = undefined
+    stopRead(); stopGraph(); stopActivity(); stopErrors()
+    lease.release()
+    if (projectLease === lease) projectLease = undefined
   })
 }, { immediate: true })
 
@@ -2184,7 +2143,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       }
       scrollToBottom()
       if (directRefreshPending || accepted && !systemPrompt.value) refreshDirectHistory()
-      if (followUp) void pollSessionStages()
+      if (followUp) void refreshSessionActivity()
     }
   }
 }
@@ -2387,19 +2346,16 @@ onUnmounted(() => {
   sessionSelectionGeneration++
   if (!(currentRequest.value?.state.phase === 'submitting' && currentRequest.value.state.stopping)) sendRequest?.abort()
   historyRequest?.abort()
-  sessionListRequest?.abort()
   document.removeEventListener('keydown', handleTypingFocus)
   window.removeEventListener('shadow:config-changed', onGlobalConfigChanged)
-  stopStagePolling()
   disconnectEventStream()
   clearPendingAttachments()
 })
 
 onMounted(async () => {
-  await loadSessionList()
+  await projectLease?.graph.read()
   if (disposed) return
   mounted = true
-  if (paneActive.value) startStagePolling()
   if (props.embedded) {
     await loadEmbeddedSession(props.sessionId ?? '')
     return
@@ -2435,13 +2391,11 @@ watch(() => props.sessionId, id => {
 watch(paneActive, visible => {
   if (!mounted) return
   if (visible) {
-    startStagePolling()
     if (isDirectChat.value && !viewingPhysicalId.value) {
       connectEventStream(activeSessionId.value.replace('web:', ''))
       if (!sendRequest) refreshDirectHistory()
     }
   } else {
-    stopStagePolling()
     if (!wantsLiveChat()) closeEventStream()
     if (isDirectChat.value && !viewingPhysicalId.value) {
       historyRequest?.abort()

@@ -124,6 +124,27 @@ test('topic changes close before reopening and snapshot only new topics on valid
   assert.deepEqual(h.resets, ['subscription', 'subscription'])
 })
 
+test('snapshot observers recover after a replayable disconnect but not ordinary topic changes', t => {
+  const h = harness(t)
+  let reconnects = 0
+  h.client.subscribe({ kind: 'projects' }, { event() {}, reset() {}, reconnected() { reconnects++ } })
+  const source = h.open()
+  assert.equal(reconnects, 0)
+  source.dispatchEvent(new Event('error'))
+  t.mock.timers.tick(500)
+  h.open()
+  assert.equal(reconnects, 1)
+  h.subscribe()
+  const next = h.open()
+  assert.equal(reconnects, 1)
+  next.dispatchEvent(new Event('error'))
+  t.mock.timers.tick(500)
+  const resetSource = h.sources.at(-1)!
+  resetSource.send({ type: 'reset', reason: 'expired', cursor: cursor(10) })
+  resetSource.send({ type: 'ready', cursor: cursor(10) })
+  assert.equal(reconnects, 1, 'an explicit reset already resynchronizes snapshots')
+})
+
 test('expired or restarted journals explicitly resynchronize every active observer', async t => {
   const h = harness(t)
   h.subscribe()

@@ -85,7 +85,8 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
   refresh = () => { loading.value = true; snapshot.refresh() }
   const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId: liveProjectId(base) }, {
     event: envelope => {
-      if (!isRecord(envelope.payload) || (envelope.payload.sessionId !== undefined && envelope.payload.sessionId !== sessionId)) return
+      if (!isRecord(envelope.payload) || envelope.payload.event === 'activity'
+        || (envelope.payload.sessionId !== undefined && envelope.payload.sessionId !== sessionId)) return
       refresh()
     },
     reset: () => refresh(),

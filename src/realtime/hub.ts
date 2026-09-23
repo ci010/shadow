@@ -12,6 +12,7 @@ export interface RealtimeTelemetry {
 export interface RealtimePublisher {
   chat(sessionId: string, payload: unknown, requestId?: string): void
   invalidateSessions(sessionId?: string, completedTurnId?: string): void
+  invalidateActivity(sessionId: string): void
   invalidateIo?(runId: string): void
   close(): void
 }
@@ -26,7 +27,7 @@ interface Client {
   close(error?: Error): void
   refresh(reason: ResetReason): void
 }
-interface JournalEntry { sequence: number; projectId: string; key: string; frame: Uint8Array }
+interface JournalEntry { sequence: number; projectId?: string; key: string; frame: Uint8Array }
 
 /** One host-owned feed. Publishers are leased to trusted runtime instances;
  * closing a lease invalidates even callbacks already queued by that runtime. */
@@ -57,6 +58,16 @@ export class RealtimeHub {
   get cursor(): string { return `${this.epoch}:${this.sequence}` }
   get stats() { return { clients: this.clients.size, journalCount: this.journal.length, journalBytes: this.journalBytes, projects: this.projects.size } }
 
+  invalidateProjects(): void {
+    if (!this.closed) this.publish({ kind: 'projects' }, { event: 'invalidate' })
+  }
+
+  projectReady(projectId: string): void {
+    for (const client of this.clients) {
+      if (client.topics.some(topic => topic.projectId === projectId)) client.refresh('project-restored')
+    }
+  }
+
   registerProject(projectId: string, telemetry?: RealtimeTelemetry): RealtimePublisher {
     if (this.closed || !isRealtimeTopic({ kind: 'sessions', projectId }) || this.projects.has(projectId)) {
       throw new TypeError('Invalid or duplicate realtime project')
@@ -73,6 +84,9 @@ export class RealtimeHub {
       },
       invalidateSessions: (sessionId, completedTurnId) => {
         if (active()) this.publish({ kind: 'sessions', projectId }, { event: 'invalidate', sessionId, ...(completedTurnId ? { completedTurnId } : {}) })
+      },
+      invalidateActivity: sessionId => {
+        if (active()) this.publish({ kind: 'sessions', projectId }, { event: 'activity', sessionId })
       },
       invalidateIo: runId => {
         if (active()) this.publish({ kind: 'io', projectId }, { event: 'invalidate', runId })
@@ -160,7 +174,7 @@ export class RealtimeHub {
     if (this.closed) return Response.json({ error: 'realtime_stopping' }, { status: 503 })
     // Also validate direct callers; the HTTP route is not the trust boundary.
     topics = parseRealtimeTopics(JSON.stringify(topics))
-    if (topics.some(topic => !this.projects.has(topic.projectId) && !this.options.projectExists(topic.projectId))) {
+    if (topics.some(topic => topic.kind !== 'projects' && !this.projects.has(topic.projectId) && !this.options.projectExists(topic.projectId))) {
       return Response.json({ error: 'unknown_realtime_project' }, { status: 404 })
     }
     let reason: ResetReason | undefined
@@ -189,7 +203,7 @@ export class RealtimeHub {
           for (const topic of topics) releases.push(this.subscribeTelemetry(topic))
         }
         const sendAvailability = () => {
-          const unavailable = topics.filter(topic => !this.projects.has(topic.projectId))
+          const unavailable = topics.filter(topic => topic.kind !== 'projects' && !this.projects.has(topic.projectId))
           if (unavailable.length) client.send(this.frame({ type: 'unavailable', cursor: this.cursor, topics: unavailable }))
           client.send(this.frame({ type: 'ready', cursor: this.cursor }))
         }

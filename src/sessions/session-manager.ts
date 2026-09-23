@@ -359,6 +359,7 @@ export class SessionManager {
       callerId: context.sessionId, tools, cancelled: false, settled: settled.promise,
     }
     this.calls.set(sessionId, frame)
+    this.deps.bus.emit('session.activity.changed', { sessionId: context.sessionId })
     tools.setExecutionScope('call', [], reason => {
       frame.blockedReason = reason
       this.sessions[sessionId]?.cancel()
@@ -437,6 +438,7 @@ export class SessionManager {
       clearTimeout(timer)
       context.signal.removeEventListener('abort', cancel)
       this.calls.delete(sessionId)
+      this.deps.bus.emit('session.activity.changed', { sessionId: context.sessionId })
       tools.resetDynamic()
       settled.resolve()
     }
@@ -568,6 +570,7 @@ export class SessionManager {
     })
     this.decisionRecords = decisionRecords
     this.yields = new YieldManager({
+      changed: sessionId => this.deps.bus.emit('session.activity.changed', { sessionId }),
       assertCanYield: id => {
         if (this.sessionStates[id]?.mode === 'call') this.blockCall(id, 'Leaf calls cannot yield; the caller must decide and issue a new call.')
       },
@@ -1158,7 +1161,10 @@ ${JSON.stringify(request)}`,
     })
     this.preparations.set(sessionId, admission)
     const clean = () => {
-      if (this.preparations.get(sessionId) === admission) this.preparations.delete(sessionId)
+      if (this.preparations.get(sessionId) === admission) {
+        this.preparations.delete(sessionId)
+        this.deps.bus.emit('session.activity.changed', { sessionId })
+      }
     }
     void admission.then(clean, clean)
     return admission
@@ -1441,6 +1447,7 @@ ${JSON.stringify(request)}`,
       await this.store.createSessionLog(physicalSessionId, [startEvent])
       await this.store.saveState(sessionId, state)
       this.sessionStates[sessionId] = state
+      this.deps.bus.emit('session.changed', { sessionId })
     } finally {
       settled.resolve()
       pending?.delete(settled.promise)
@@ -1617,6 +1624,7 @@ ${JSON.stringify(request)}`,
       state.topic = next
       state.sessionKind = 'topic'
       this.invalidateSystemPrompts()
+      this.deps.bus.emit('session.changed', { sessionId })
     } finally { release() }
   }
 
@@ -1653,6 +1661,7 @@ ${JSON.stringify(request)}`,
       // Keep the active session's state reference, but only publish durable changes.
       await this.store.saveState(sessionId, { ...state, config: next })
       state.config = next
+      this.deps.bus.emit('session.changed', { sessionId })
     })
   }
 
@@ -1676,6 +1685,7 @@ ${JSON.stringify(request)}`,
       const next = Object.keys(config).length ? config : undefined
       await this.store.saveState(sessionId, { ...state, config: next })
       state.config = next
+      this.deps.bus.emit('session.changed', { sessionId })
     })
   }
 
@@ -1685,6 +1695,7 @@ ${JSON.stringify(request)}`,
       if (!state?.config) return
       await this.store.saveState(sessionId, { ...state, config: undefined })
       state.config = undefined
+      this.deps.bus.emit('session.changed', { sessionId })
     })
   }
 
@@ -1767,6 +1778,7 @@ ${JSON.stringify(request)}`,
     this.acceptedInputs.delete(sessionId)
 
     deleted.push(sessionId)
+    this.deps.bus.emit('session.changed', { sessionId })
   }
 
   // ── Queries (state, history, tools, context) ───────────────────────
@@ -1949,6 +1961,7 @@ ${JSON.stringify(request)}`,
       }
       Object.assign(state, next)
       this.acceptedInputs.delete(sessionId)
+      this.deps.bus.emit('session.changed', { sessionId })
       return 'cleared'
     }))
   }
@@ -2255,6 +2268,7 @@ ${JSON.stringify(request)}`,
     }
     this.sessionStates[sessionId] = state
     await this.store.saveState(sessionId, state)
+    this.deps.bus.emit('session.changed', { sessionId })
   }
 
   private async getOrCreateState(
@@ -2351,6 +2365,7 @@ ${JSON.stringify(request)}`,
     await this.ensureSessionDataDirectory(state)
     await this.store.saveState(sessionId, state)
     this.sessionStates[sessionId] = state
+    this.deps.bus.emit('session.changed', { sessionId })
 
     return state
   }

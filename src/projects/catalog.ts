@@ -93,6 +93,7 @@ export class ProjectCatalog {
   #reservations = new Map<string, { projectId: string; path: string }>()
   #access = new Map<string, number>()
   #lifecycle = new Map<string, FolderLifecycle>()
+  #observers = new Set<() => void>()
 
   constructor(hostHome: string, private readonly reservedHomes: readonly string[] = []) {
     this.hostHome = resolve(hostHome)
@@ -178,8 +179,15 @@ export class ProjectCatalog {
   }
 
   #commit(data: CatalogData): void {
+    const projectsChanged = this.#data?.projects !== data.projects
     writePrivateFile(this.filePath, JSON.stringify(data, null, 2) + '\n')
     this.#data = data
+    if (projectsChanged) for (const observer of this.#observers) observer()
+  }
+
+  observeProjects(observer: () => void): () => void {
+    this.#observers.add(observer)
+    return () => { this.#observers.delete(observer) }
   }
 
   #transaction<T>(operation: () => T | Promise<T>): Promise<T> {

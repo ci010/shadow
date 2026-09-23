@@ -2,6 +2,7 @@ import { onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { createNotificationSounds, notificationSoundsKey, SOUND_PREFERENCES_KEY } from '../notification-sounds.ts'
 import { startSessionSoundMonitor } from '../session-sound-monitor.ts'
 import { useLiveClientPool } from './useLiveClient.ts'
+import { useProjectLiveState } from './useProjectLiveState.ts'
 
 export function useAppNotificationSounds(source: () => { base: string; allowed: boolean }) {
   const sounds = createNotificationSounds({
@@ -12,6 +13,7 @@ export function useAppNotificationSounds(source: () => { base: string; allowed: 
   })
   provide(notificationSoundsKey, sounds)
   const live = useLiveClientPool()
+  const state = useProjectLiveState()
   const monitoringError = ref('')
   let stop: (() => void) | undefined
   const stopWatching = watch([
@@ -21,7 +23,7 @@ export function useAppNotificationSounds(source: () => { base: string; allowed: 
   ], ([base, enabled]) => {
     stop?.()
     stop = enabled ? startSessionSoundMonitor({
-      base, live: live.client(base), notify: sounds.notify, error: message => { monitoringError.value = message },
+      base, live: live.client(base), state, notify: sounds.notify, error: message => { monitoringError.value = message },
     }) : undefined
   }, { immediate: true })
   function unlock(event: Event) { if (event.isTrusted && !sounds.ready.value && !sounds.error.value) void sounds.unlock() }

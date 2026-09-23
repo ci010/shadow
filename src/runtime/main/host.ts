@@ -65,6 +65,7 @@ export async function startProjectHost(
   const app = new Hono()
   const realtimeHub = new RealtimeHub({ projectExists: id => !!catalog.get(id) })
   cleanup.push(() => realtimeHub.close())
+  cleanup.push(catalog.observeProjects(() => realtimeHub.invalidateProjects()))
   const hostOtelStore = new OtelStore(resolve(hostHome, '.host.otel.db'))
   let hostTelemetry: ReturnType<typeof initializeNodeTelemetry>
   try { hostTelemetry = initializeNodeTelemetry(hostOtelStore, { serviceName: 'shadow-host' }) }
@@ -180,6 +181,7 @@ export async function startProjectHost(
         stores.set(id, store)
         runtimes.set(id, runtime)
         failures.delete(id)
+        realtimeHub.projectReady(id)
       } catch (error) {
         if (runtime) await scope.run(() => runtime!.shutdown()).catch(cleanup => console.error(`[projects:${id}] Cleanup failed`, cleanup))
         scope.close()
