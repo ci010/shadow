@@ -1,5 +1,5 @@
 <template>
-  <nav v-if="entries.length" ref="rail" class="message-history-rail" :class="{ 'history-list': list }" aria-label="Message history" @mouseleave="scheduleHide" @keydown="navigate">
+  <nav v-if="entries.length" ref="rail" class="message-history-rail" :class="{ 'history-list': list, 'can-scroll-up': canScrollUp, 'can-scroll-down': canScrollDown }" aria-label="Message history" @scroll.passive="updateRailOverflow" @mouseleave="scheduleHide" @keydown="navigate">
     <div v-for="(entry, ordinal) in entries" :key="entry.index" class="history-entry">
     <button
       class="history-marker"
@@ -45,6 +45,8 @@ import { formatMessageTime, type MessageHistoryMarker } from '../message-history
 const props = withDefaults(defineProps<{ entries: readonly MessageHistoryMarker[]; container?: HTMLElement; active?: boolean; list?: boolean }>(), { active: true })
 const emit = defineEmits<{ navigate: [] }>()
 const rail = ref<HTMLElement>()
+const canScrollUp = ref(false)
+const canScrollDown = ref(false)
 const currentIndex = ref(-1)
 const preview = ref<MessageHistoryMarker>()
 const previewPosition = ref<Record<string, string>>({})
@@ -92,8 +94,14 @@ function jumpTo(index: number) {
   })
   currentIndex.value = index
 }
+function updateRailOverflow() {
+  const element = active && !props.list ? rail.value : undefined
+  canScrollUp.value = !!element && element.clientHeight > 0 && element.scrollTop > 1
+  canScrollDown.value = !!element && element.clientHeight > 0 && element.scrollHeight - element.scrollTop - element.clientHeight > 1
+}
 function updateCurrent() {
   frame = undefined
+  updateRailOverflow()
   const container = props.container
   if (!container || !props.entries.length) return
   if (container.scrollHeight - container.scrollTop - container.clientHeight < 8) {
@@ -122,7 +130,10 @@ function navigate(event: KeyboardEvent) {
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
     : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
   buttons[next]?.scrollIntoView({ block: 'nearest' })
+  if (rail.value && next === 0) rail.value.scrollTop = 0
+  else if (rail.value && next === buttons.length - 1) rail.value.scrollTop = rail.value.scrollHeight
   buttons[next]?.focus({ preventScroll: true })
+  updateRailOverflow()
 }
 function resize() { hidePreview(); scheduleUpdate() }
 function deactivate() {
@@ -141,15 +152,16 @@ function activate() {
   props.container?.addEventListener('scroll', scheduleUpdate, { passive: true })
   observer = new ResizeObserver(resize)
   if (props.container) observer.observe(props.container)
+  if (rail.value) observer.observe(rail.value)
   window.addEventListener('resize', resize)
   scheduleUpdate()
 }
-watch(() => props.container, (_container, previous) => {
-  previous?.removeEventListener('scroll', scheduleUpdate)
+watch([() => props.container, rail], (_values, previous) => {
+  previous?.[0]?.removeEventListener('scroll', scheduleUpdate)
   activate()
 }, { immediate: true, flush: 'post' })
 watch(() => props.active, activate)
-watch(() => props.entries, async () => {
+watch(() => [props.entries, props.entries.length, props.list], async () => {
   hidePreview()
   if (!props.entries.some(entry => entry.index === expandedGroup.value && entry.members)) expandedGroup.value = undefined
   await nextTick()
@@ -164,6 +176,7 @@ watch(currentIndex, async () => {
   else if (marker.offsetTop + marker.offsetHeight > container.scrollTop + container.clientHeight) {
     container.scrollTop = marker.offsetTop + marker.offsetHeight - container.clientHeight
   }
+  updateRailOverflow()
 })
 onActivated(activate)
 onDeactivated(deactivate)
@@ -173,6 +186,13 @@ onUnmounted(deactivate)
 <style scoped>
 .message-history-rail { position: absolute; top: calc((100% - var(--composer-height, 0px)) / 2); right: 8px; transform: translateY(-50%); z-index: 2; display: flex; flex-direction: column; align-items: flex-end; width: 42px; max-height: max(0px, min(340px, calc(100% - var(--composer-height, 0px) - 24px))); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; padding: 5px 0; }
 .message-history-rail::-webkit-scrollbar { display: none; }
+.message-history-rail:not(.history-list) {
+  --history-fade-top: 0px;
+  --history-fade-bottom: 0px;
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--history-fade-top), #000 calc(100% - var(--history-fade-bottom)), transparent);
+}
+.message-history-rail.can-scroll-up { --history-fade-top: min(24px, 25%); }
+.message-history-rail.can-scroll-down { --history-fade-bottom: min(24px, 25%); }
 .history-entry { width: 100%; flex-shrink: 0; }
 .history-marker { display: flex; align-items: center; justify-content: flex-end; flex: 0 0 15px; width: 100%; height: 15px; padding: 0 5px; border: 0; background: transparent; cursor: pointer; }
 .history-marker span { display: block; width: 30px; height: 3px; border-radius: var(--radius-sm); background: var(--c-text-muted); transform: scaleX(.333333); transform-origin: right; transition: transform .15s ease; }

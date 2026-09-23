@@ -14,6 +14,22 @@
         <span v-if="needsAttention" class="session-work-attention" title="Review needed" aria-hidden="true">!</span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
       </button>
+      <button v-if="backgroundStatus.total || backgroundStatus.error || expanded === 'background'" :id="`${id}-background`" ref="backgroundTrigger"
+        type="button" data-session-work="background" :aria-expanded="expanded === 'background'" :aria-controls="`${id}-panel`"
+        aria-haspopup="dialog" @click="toggle('background')">
+        <span class="i-lucide-terminal work-icon" aria-hidden="true" />
+        <span>Background tasks</span>
+        <span v-if="backgroundStatus.error" class="session-work-attention" aria-label="Status unavailable">!</span>
+        <span v-else>{{ backgroundStatus.total }}</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
+      </button>
+      <button v-if="subagents?.length || expanded === 'subagents'" :id="`${id}-subagents`" ref="subagentsTrigger"
+        type="button" data-session-work="subagents" :aria-expanded="expanded === 'subagents'" :aria-controls="`${id}-panel`"
+        aria-haspopup="dialog" :title="subagentActivityLabel(subagentStatus)" @click="toggle('subagents')">
+        <span class="i-lucide-git-branch work-icon" aria-hidden="true" />
+        <span>Subagents</span><span>{{ subagents?.length ?? 0 }}</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
+      </button>
     </div>
     <Teleport to="body">
       <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" role="dialog" tabindex="-1"
@@ -21,27 +37,52 @@
         <DecisionOwner v-if="canWrite" :api-base="apiBase" :session-id="sessionId" embedded :expanded="expanded === 'reporting'" />
         <WorkAlignment :api-base="apiBase" :session-id="sessionId" :can-write="canWrite"
           embedded :expanded="expanded === 'work'" @attention="needsAttention = $event" />
+        <div v-show="expanded === 'background'">
+          <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
+        </div>
+        <div v-show="expanded === 'subagents'" class="subagent-list" aria-label="Active subagents">
+          <p v-if="!subagents?.length">No subagents active.</p>
+          <button v-for="agent in subagents" :key="agent.sessionId" type="button" class="subagent-inspect"
+            :data-subagent-id="agent.sessionId" :aria-label="`Inspect subagent: ${agent.label}`" @click="inspect(agent.sessionId)">
+            <span class="i-lucide-git-branch work-icon" aria-hidden="true" />
+            <span class="subagent-copy"><strong>{{ agent.label }}</strong><span>{{ agent.mode === 'call' ? 'Blocking call' : 'Background task' }}<template v-if="agent.agentType"> · {{ agent.agentType }}</template></span></span>
+            <SessionActivity :stage="executionDisplayStage(agent, stages?.[agent.sessionId])" />
+          </button>
+        </div>
       </div>
     </Teleport>
   </section>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onDeactivated, ref, useId, watch } from 'vue'
+import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
 import DecisionOwner from './DecisionOwner.vue'
 import WorkAlignment from './WorkAlignment.vue'
+import BackgroundTasks from './BackgroundTasks.vue'
+import SessionActivity from './SessionActivity.vue'
+import type { SidebarSession } from '../folders-sidebar.ts'
+import { executionDisplayStage, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean; subagents?: SidebarSession[]; stages?: Record<string, string> }>()
+const emit = defineEmits<{ inspect: [sessionId: string] }>()
 const id = useId()
-const expanded = ref<'reporting' | 'work' | null>(null)
+type Panel = 'reporting' | 'work' | 'background' | 'subagents'
+const expanded = ref<Panel | null>(null)
 const needsAttention = ref(false)
+const backgroundStatus = ref({ total: 0, loading: false, error: '' })
+const subagentStatus = computed(() => summarizeSubagents(props.subagents ?? [], props.stages ?? {}))
 const reportingTrigger = ref<HTMLButtonElement>()
 const workTrigger = ref<HTMLButtonElement>()
+const backgroundTrigger = ref<HTMLButtonElement>()
+const subagentsTrigger = ref<HTMLButtonElement>()
 const root = ref<HTMLElement>()
 const popup = ref<HTMLElement>()
 const position = ref<Record<string, string>>({})
 
-function toggle(panel: 'reporting' | 'work') {
+function trigger(panel: Panel) {
+  return ({ reporting: reportingTrigger, work: workTrigger, background: backgroundTrigger, subagents: subagentsTrigger })[panel].value
+}
+function toggle(panel: Panel) {
   if (props.active === false) return
   expanded.value = expanded.value === panel ? null : panel
 }
@@ -49,9 +90,13 @@ function closePanel(event: KeyboardEvent) {
   if (!expanded.value || event.defaultPrevented) return
   event.preventDefault()
   event.stopPropagation()
-  const trigger = expanded.value === 'reporting' ? reportingTrigger : workTrigger
+  const anchor = trigger(expanded.value)
   expanded.value = null
-  trigger.value?.focus()
+  void nextTick(() => (anchor?.isConnected ? anchor : workTrigger.value)?.focus())
+}
+function inspect(sessionId: string) {
+  expanded.value = null
+  emit('inspect', sessionId)
 }
 function popupKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { closePanel(event); return }
@@ -63,7 +108,7 @@ function popupKeydown(event: KeyboardEvent) {
 }
 watch(expanded, async (panel, _previous, onCleanup) => {
   if (!panel) return
-  const anchor = panel === 'reporting' ? reportingTrigger.value : workTrigger.value
+  const anchor = trigger(panel)
   if (!anchor) return
   const viewport = window.visualViewport
   const place = () => {
@@ -106,6 +151,7 @@ watch(expanded, async (panel, _previous, onCleanup) => {
 watch(() => [props.apiBase, props.sessionId], () => {
   expanded.value = null
   needsAttention.value = false
+  backgroundStatus.value = { total: 0, loading: false, error: '' }
 })
 watch(() => props.canWrite, canWrite => {
   if (!canWrite && expanded.value === 'reporting') {
@@ -131,6 +177,15 @@ onDeactivated(() => { expanded.value = null })
 .session-work-triggers svg { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .session-work-triggers button[aria-expanded="true"] svg { transform: rotate(180deg); }
 .session-work-attention { color: var(--c-warn); }
+.work-icon { width: 14px; height: 14px; flex: 0 0 14px; }
+.subagent-list > p { margin: 8px 0; color: var(--c-text-secondary); }
+.subagent-inspect { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 0; border: 0; background: transparent; color: var(--c-text); text-align: left; font: inherit; cursor: pointer; }
+.subagent-inspect + .subagent-inspect { border-top: 1px solid var(--c-border-soft); }
+.subagent-inspect:hover { background: var(--c-bg-muted); }
+.subagent-inspect:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.subagent-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.subagent-copy strong { display: block; font-size: 13px; font-weight: 500; }
+.subagent-copy > span { color: var(--c-text-secondary); font-size: 12px; }
 .session-work-panel {
   position: fixed; z-index: 950; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain;
   margin: 0; padding: 12px 16px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay);

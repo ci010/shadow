@@ -11,7 +11,7 @@
       :icon-only="rail"
       :info-disabled="!showInfo"
       :label="session.label"
-      :ariaLabel="`${session.label}${activityStage(session) === 'waiting' ? ' (needs reply)' : ''}${session.isDirectChat ? '' : ' (read-only)'}`"
+      :ariaLabel="`${session.label}${activityStage(session) === 'waiting' ? ' (needs reply)' : ''}${delegatedLabel(session) ? ` (${delegatedLabel(session)})` : ''}${session.isDirectChat ? '' : ' (read-only)'}`"
       :current="activeSessionId === session.sessionId ? 'page' : undefined"
       :title="[session.label, session.sessionId, session.description, session.parentSessionId ? `Parent: ${session.parentSessionId}` : session.contextParentSessionId ? `Forked from: ${session.contextParentSessionId}` : ''].filter(Boolean).join('\n')"
       separate-toggle
@@ -23,7 +23,7 @@
       @select="$emit('select', session.sessionId)"
     >
       <template #icon><span :class="session.isDirectChat ? 'i-lucide-message-square' : 'i-lucide-bot'" /></template>
-      <template #meta><SessionActivity :stage="activityStage(session)" compact :icon-only="rail" :title="undefined" /></template>
+      <template #meta><SessionActivity :stage="activityStage(session)" :subagents="delegatedActivity(session)" compact :icon-only="rail" :title="undefined" /></template>
       <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="`Delete conversation ${session.label}`" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">
@@ -33,11 +33,12 @@
           <p v-if="session.topic?.scope" class="session-info-description"><strong>Scope:</strong> {{ session.topic.scope }}</p>
           <p class="session-info-id">{{ session.sessionId }}</p>
           <p>{{ sessionActivity(stages[session.sessionId]).label }}<span v-if="!session.isDirectChat"> · Read-only</span></p>
+          <p v-if="delegatedLabel(session)">{{ delegatedLabel(session) }}</p>
           <button class="session-info-open" @click="$emit('select', session.sessionId); close()">Open conversation</button>
           <template v-if="descendants(session).length">
             <h4>Related conversations</h4>
             <FolderSessionList class="session-info-related" :sessions="descendants(session)" :active-session-id="activeSessionId" :collapsed="collapsed"
-              :stages="stages" :show-info="false" @select="$emit('select', $event); close()" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+              :stages="stages" :executions-by-owner="executionsByOwner" :show-info="false" @select="$emit('select', $event); close()" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
           </template>
         </div>
       </template>
@@ -53,11 +54,13 @@ import TreeRow from './TreeRow.vue'
 import HoverInfo from './HoverInfo.vue'
 import { rootSessionFamilies } from '../folder-rail.ts'
 import { isWorkingStage, prominentWorkingStage, sessionActivity } from '../session-activity.ts'
+import { subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 const props = withDefaults(defineProps<{
   sessions: SidebarSession[]
   activeSessionId: string
   collapsed: ReadonlySet<string>
   stages: Record<string, string>
+  executionsByOwner?: ReadonlyMap<string, readonly SidebarSession[]>
   depth?: number
   rail?: boolean
   showInfo?: boolean
@@ -76,7 +79,12 @@ function isSelected(session: SidebarSession) {
 function activityStage(session: SidebarSession) {
   return props.rail ? prominentWorkingStage(family(session).map(item => props.stages[item.sessionId])) ?? props.stages[session.sessionId] : props.stages[session.sessionId]
 }
-function isWorking(session: SidebarSession) { return isWorkingStage(activityStage(session)) }
+function delegatedActivity(session: SidebarSession) {
+  const members = props.rail ? family(session) : [session]
+  return summarizeSubagents(members.flatMap(item => props.executionsByOwner?.get(item.sessionId) ?? []), props.stages)
+}
+function delegatedLabel(session: SidebarSession) { return subagentActivityLabel(delegatedActivity(session)) }
+function isWorking(session: SidebarSession) { return isWorkingStage(activityStage(session)) || delegatedActivity(session).running > 0 }
 </script>
 
 <style scoped>

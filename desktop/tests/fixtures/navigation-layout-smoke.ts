@@ -14,7 +14,7 @@ async function main() {
   const wait = async (code: string) => {
     const deadline = Date.now() + 12_000
     while (Date.now() < deadline) { if (await execute(code)) return; await delay(50) }
-    throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\nActive: ${await execute('document.activeElement.outerHTML')}`)
+    throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}\nActive: ${await execute('document.activeElement.outerHTML')}\nRail: ${await execute(`JSON.stringify((() => { const rail = document.querySelector('.message-history-rail'); return rail && {top:rail.scrollTop,height:rail.clientHeight,content:rail.scrollHeight,classes:rail.className}; })())`)}`)
   }
   try {
     await window.loadURL(new URL('__navigation', process.env.NAVIGATION_SMOKE_URL).href)
@@ -120,6 +120,38 @@ async function main() {
     await wait(`document.querySelectorAll('.history-list .history-members button').length === 2`)
     await execute(`document.querySelectorAll('.history-list .history-members button')[0].click()`)
     await wait(`Math.abs(document.querySelector('[data-msg-idx="4"]').getBoundingClientRect().top - document.querySelector('.fixture-messages').getBoundingClientRect().top) < 2`)
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.message-history-rail')).maskImage`), 'none', 'Mobile history lists remain unmasked')
+    await execute(`window.__setHistoryList(false); window.__navigationMessages.push(...Array.from({length:50}, (_,index) => ({role:'user',content:'Older message '+index})))`)
+    await wait(`document.querySelectorAll('.history-marker').length > 50`)
+    const rail = `document.querySelector('.message-history-rail')`
+    await frame()
+    await execute(`${rail}.scrollTop = 0`)
+    await wait(`${rail}.classList.contains('can-scroll-down') && !${rail}.classList.contains('can-scroll-up')`)
+    assert.match(await execute(`getComputedStyle(${rail}).maskImage`), /linear-gradient/)
+    assert.equal(await execute(`getComputedStyle(${rail}).getPropertyValue('--history-fade-top').trim()`), '0px')
+    assert.notEqual(await execute(`getComputedStyle(${rail}).getPropertyValue('--history-fade-bottom').trim()`), '0px')
+    await execute(`${rail}.scrollTop = 150`)
+    await wait(`${rail}.classList.contains('can-scroll-up') && ${rail}.classList.contains('can-scroll-down')`)
+    await execute(`${rail}.scrollTop = ${rail}.scrollHeight`)
+    await wait(`${rail}.classList.contains('can-scroll-up') && !${rail}.classList.contains('can-scroll-down')`)
+    await execute(`${rail}.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}))`)
+    await wait(`!${rail}.classList.contains('can-scroll-up') && ${rail}.classList.contains('can-scroll-down')`)
+    await execute(`document.activeElement.dispatchEvent(new FocusEvent('focus'))`)
+    await wait(`!!document.querySelector('.history-preview')`)
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.history-preview')).maskImage`), 'none', 'Teleported previews are not faded')
+    await execute(`${rail}.style.maxHeight = '2000px'`)
+    await wait(`!${rail}.classList.contains('can-scroll-up') && !${rail}.classList.contains('can-scroll-down')`)
+    await execute(`${rail}.style.maxHeight = '100px'`)
+    await wait(`${rail}.classList.contains('can-scroll-down')`)
+    await execute(`window.__navigationMessages.splice(4); window.__setPending(null); void 0`)
+    await wait(`document.querySelectorAll('.history-marker').length === 3 && !${rail}.classList.contains('can-scroll-up') && !${rail}.classList.contains('can-scroll-down')`)
+    await execute(`window.__navigationMessages.splice(0); void 0`)
+    await wait(`!${rail}`)
+    await execute(`window.__navigationMessages.push(...Array.from({length:50}, (_,index) => ({role:'user',content:'Restored message '+index})))`)
+    await wait(`!!${rail}`)
+    await frame()
+    await execute(`${rail}.scrollTop = 0`)
+    await wait(`${rail}.classList.contains('can-scroll-down') && !${rail}.classList.contains('can-scroll-up')`)
     await execute(`document.querySelector('#switch').click()`)
     await wait(`document.querySelectorAll('.node rect').length === 3 && !!document.querySelector('.composer-send')`)
     for (const width of [1100, 390]) {

@@ -30,14 +30,14 @@
       <HoverInfo v-if="error && isRail" :text="error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Folders unavailable. Retry folders" @click="loadFolders"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
       <section v-for="group in groups.folders" :key="group.folder.id" class="folder-group">
         <TreeRow class="folder-folder-row" :selected="!activeSessionId && selectedFolderId === group.folder.id"
-          :class="{ working: !!folderWorkingStage(group.sessions) }" :icon-only="isRail"
+          :class="{ working: !!folderWorkingStage(group.sessions) || folderSubagents(group.sessions).running > 0 }" :icon-only="isRail"
           :label="group.folder.name" :title="group.folder.kind === 'remote' ? `${group.folder.workdir.nodeId}: ${group.folder.path}` : group.folder.path" :expanded="expandedFolders.has(group.folder.id)" separate-toggle
           button-class="folder-folder" toggle-class="folder-toggle"
           :toggle-label="`${expandedFolders.has(group.folder.id) ? 'Collapse' : 'Expand'} folder ${group.folder.name}`"
           @toggle="toggleFolder(group.folder.id)" @select="selectFolder(group.folder.id)"
           @contextmenu.prevent="grouped && openFolderActions(group.folder, $event)">
           <template #icon><span v-if="loading" class="i-lucide-loader-circle folder-loading-icon" /><span v-else-if="isRail" class="folder-initial">{{ railInitial(group.folder.name) }}</span><span v-else :class="group.folder.kind === 'remote' ? 'i-lucide-monitor' : expandedFolders.has(group.folder.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
-          <template #meta><SessionActivity v-if="folderWorkingStage(group.sessions)" :stage="folderWorkingStage(group.sessions)" compact :icon-only="isRail" :title="undefined" /></template>
+          <template #meta><SessionActivity v-if="folderWorkingStage(group.sessions) || folderHasSubagents(group.sessions)" :stage="folderWorkingStage(group.sessions)" :subagents="folderSubagents(group.sessions)" compact :icon-only="isRail" :title="undefined" /></template>
           <template #actions>
             <HoverInfo :text="`New conversation in ${group.folder.name}`"><template #default="{ triggerProps }"><button class="folder-action-button folder-add" v-bind="triggerProps" :aria-label="`New conversation in ${group.folder.name}`" @click="startFolderDraft(group.folder)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
             <button v-if="grouped" class="folder-action-button folder-add folder-actions" :aria-label="`Folder actions for ${group.folder.name}`"
@@ -52,12 +52,12 @@
               <p>{{ group.sessions.length }} {{ group.sessions.length === 1 ? 'conversation' : 'conversations' }}</p>
               <button class="folder-info-new" @click="startFolderDraft(group.folder); close()">New conversation</button>
               <FolderSessionList v-if="group.sessions.length" class="folder-info-conversations" :sessions="group.sessions" :active-session-id="activeSessionId"
-                :collapsed="collapsed" :stages="stages" :show-info="false" @select="selectConversation($event); close()" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+                :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" :show-info="false" @select="selectConversation($event); close()" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
             </div>
           </template>
         </TreeRow>
         <div v-if="!isRail && expandedFolders.has(group.folder.id) && group.sessions.length" class="folder-conversations">
-          <FolderSessionList :sessions="group.sessions" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+          <FolderSessionList :sessions="group.sessions" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
       <section v-if="chatGroups.chats.length || sessionsLoading || sessionsError" class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
@@ -65,7 +65,7 @@
         <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading conversations…</span></p>
         <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">Retry conversations</button></div>
         <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Conversations unavailable. Retry conversations" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
-        <FolderSessionList :sessions="chatGroups.chats" :depth="1" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+        <FolderSessionList :sessions="chatGroups.chats" :depth="1" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
       </section>
       <section v-for="bot in chatGroups.bots" :key="bot.id" class="bot-conversations" :data-bot-id="bot.id">
         <TreeRow :label="bot.label" :title="`${bot.label}\n${bot.connection.label}\n${bot.platform}\n${bot.id}`"
@@ -75,7 +75,7 @@
           @select="toggleBot(bot.id)">
           <template #icon><span class="i-lucide-bot" /></template>
           <template #meta>
-            <SessionActivity v-if="folderWorkingStage(bot.sessions)" :stage="folderWorkingStage(bot.sessions)" compact :icon-only="isRail" :title="undefined" />
+            <SessionActivity v-if="folderWorkingStage(bot.sessions) || folderHasSubagents(bot.sessions)" :stage="folderWorkingStage(bot.sessions)" :subagents="folderSubagents(bot.sessions)" compact :icon-only="isRail" :title="undefined" />
             <span class="bot-connection" :data-state="bot.connection.state" :title="bot.connection.label" aria-hidden="true">
               <span :class="bot.connection.icon" />
             </span>
@@ -83,7 +83,7 @@
         </TreeRow>
         <div v-show="!collapsedBots.has(bot.id)" :id="domId(`bot-conversations-${encodeURIComponent(bot.id)}`)">
           <FolderSessionList v-if="!collapsedBots.has(bot.id)" :sessions="bot.sessions" :depth="1" :rail="isRail" :active-session-id="activeSessionId"
-            :collapsed="collapsed" :stages="stages" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
+            :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
       <AutomationSidebar :api-base="apiBase" :active="resizeActive && (!grouped || groupExpanded)" :rail="isRail"
@@ -116,6 +116,7 @@ import SessionActivity from './SessionActivity.vue'
 import AutomationSidebar from './AutomationSidebar.vue'
 import { railInitial } from '../folder-rail.ts'
 import { prominentWorkingStage } from '../session-activity.ts'
+import { activeSubagentsByOwner, summarizeSubagents } from '../subagent-executions.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
 import { automationSessionOwners, groupFolderSessions, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
@@ -157,6 +158,7 @@ const domId = (id: string) => props.grouped ? `${componentId}-${id}` : id
 const folderActions = computed(() => FOLDER_ACTIONS.filter(action => action.id !== 'remote' || props.remoteFolders))
 const folders = ref<FolderRecord[]>([])
 const groups = computed(() => groupFolderSessions(folders.value, props.sessions))
+const executionsByOwner = computed(() => activeSubagentsByOwner(props.sessions, props.stages))
 const chatGroups = computed(() => groupBotConversations(groups.value.chats, props.projectId, props.bots))
 const collapsedBots = ref(new Set<string>())
 watch(() => [props.apiBase, props.projectId], () => {
@@ -201,6 +203,11 @@ let resizeObserver: ResizeObserver | undefined
 let listRequest: AbortController | undefined
 let active = true
 const folderWorkingStage = (sessions: SidebarSession[]) => prominentWorkingStage(sessions.map(session => props.stages[session.sessionId]))
+const folderSubagents = (sessions: SidebarSession[]) => summarizeSubagents(sessions.flatMap(session => executionsByOwner.value.get(session.sessionId) ?? []), props.stages)
+const folderHasSubagents = (sessions: SidebarSession[]) => {
+  const { running, waiting, pending } = folderSubagents(sessions)
+  return running + waiting + pending > 0
+}
 
 function measureSidebar() {
   desktop.value = window.innerWidth > 700

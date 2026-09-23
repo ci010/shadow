@@ -29,7 +29,7 @@
         </div>
       </div>
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
-      <div class="file-modal-body">
+      <div class="file-modal-body" :class="{ 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
         <NodeOfflineState v-if="offline" :checking="loading" description="This preview will be available when the owning node reconnects." @retry="loadText" />
         <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || 'Loading…' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
@@ -351,6 +351,15 @@ onUnmounted(() => request?.abort())
   overscroll-behavior: contain;
 }
 .inline .file-modal-text { padding: 0; background: transparent; border-radius: 0; font-size: 13px; line-height: 1.65; }
+.inline .file-modal-body.html-preview {
+  padding: 0 0 var(--composer-height, 0px);
+  scroll-padding-bottom: 0;
+  overflow: hidden;
+}
+.inline .html-preview .file-modal-frame {
+  display: block;
+  min-height: 0;
+}
 /* Keep the final line inside the content box so scrollable bottom padding follows it. */
 .inline .file-modal-text-wrap { align-self: flex-start; }
 .inline .file-modal-btn { border-color: transparent; background: transparent; color: var(--c-text-secondary); }

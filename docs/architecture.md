@@ -1304,6 +1304,24 @@ a non-approval continuation. Custom human answers are also preserved as genuine
 input evidence and require renewed work interpretation/adoption, not automatic
 approval of the original framing.
 
+Conversation work controls share a wrapping chip row: **Decision reporting**,
+**Work alignment**, **Background tasks**, and **Subagents**. The latter two appear
+when active work exists (or task inventory is unavailable) and open the same
+keyboard-accessible popup rather than a separate full-width task bar.
+Background tasks retain their scoped inventory, retry, and live refresh;
+Subagents lists active delegated tasks and nested blocking calls, with links to
+the existing execution inspector. Completed execution traces remain in history.
+
+Sidebar conversations separately summarize active subagents from the Project's
+shared graph and activity snapshots, including while another conversation is
+selected. Three staggered vertical bars indicate subagent work; waiting for a
+human and pending execution have distinct static branch icons. The parent's
+own thinking, tool use, needs-reply, and failure indicators remain separate.
+Rollups follow explicit task/call ownership, stop at persistent conversations,
+deduplicate nested executions in group summaries, and honor durable terminal
+states over stale activity. They do not change the parent's runtime stage or
+enable its Stop action while only a child is working.
+
 The lazy conversation **Work alignment** panel uses
 `GET/POST /api/sessions/:key/work` for review, proposals, exact-revision edits,
 checkpoint requests, explicit context-transition confirmation and unknown-effect
@@ -1998,6 +2016,24 @@ session exists. The diagnosis view mounts lazily, retains its selected section
 between document switches, and hides the composer without discarding the draft
 or conversation scroll position.
 
+Composer text is saved to `localStorage` as it changes, scoped by API base,
+Project, and logical session (with a separate unsent draft per Project).
+Refresh and conversation switches restore that text. First-send preparation
+moves it to the assigned session key; only confirmed admission clears matching
+submitted text, so failures and newer edits remain recoverable. Deleting a
+session removes its saved text. Storage failures are visible in the composer.
+This is device-local text persistence, not a server draft or attachment backup:
+selected files, image edits, and file/folder context chips are not persisted.
+
+Diagnosis uses `panel=diagnosis&diagnosis=trace|prompt|tools` in the conversation
+URL. Refresh and URL navigation restore both the document and the selected
+Diagnosis section; `prompt` selects System prompt. Child panes independently use
+`childPanel` and `childDiagnosis`, without replacing the primary pane's state.
+Only the conversation owning the current route may update these keys. Existing
+Knowledge navigation, child selection, and unrelated query parameters remain
+intact. Trace filters, expanded events, and historical segment selection remain
+in-memory; they are not encoded by these view-selection parameters.
+
 The drawer supports rightward swipes from anywhere in the viewport's left half
 and leftward swipes inside the open drawer. Once horizontal intent is established,
 its position and backdrop track the held finger; a 64px threshold commits the
@@ -2014,6 +2050,10 @@ Phone messages use 8px safe-area-aware gutters rather than the desktop 112px
 column allowance. Assistant/action rows can fill the column; user bubbles retain
 a 92% cap. The history rail becomes a touch-sized list in contextual actions,
 reusing the same markers and scroll navigation instead of covering message text.
+The compact history minimap fades its top and bottom edges independently only
+when more markers can be scrolled into view in that direction. Its alpha mask
+updates after scrolling, marker changes, and viewport/composer resizing; it does
+not fade the mobile history list or teleported message previews.
 
 Message presentation distinguishes human input from session-to-session handoffs
 and background events using recorded source envelopes, independently of the
@@ -2138,6 +2178,12 @@ External URLs, application routes, downloads, fragment-only links, and modified
 clicks retain their existing behavior. Preview requests still use the owning
 session's scoped file API, including remote workdir routing; this does not grant
 access to arbitrary absolute paths or paths escaping the workdir.
+
+Rendered HTML document previews remove the outer top and side gutters and
+reserve only the measured composer height at the bottom, without an extra gap.
+Short viewports can shrink the iframe rather than enforcing a minimum height.
+Source views keep their normal text gutters; the embedded page's own styling,
+sandbox, and non-HTML previews remain unchanged.
 
 Chat image attachments, Markdown images, and pending image thumbnails open the
 shared `ImageViewer` native modal dialog instead of navigating away. Images fit

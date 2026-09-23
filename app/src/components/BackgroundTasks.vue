@@ -1,6 +1,6 @@
 <template>
-  <section v-if="tasks.length || error" v-show="active" class="background-tasks" aria-label="Background tasks" :aria-busy="loading">
-    <button v-if="tasks.length" type="button" class="background-toggle" :aria-expanded="expanded" :aria-controls="listId" @click="expanded = !expanded">
+  <section v-if="embedded || tasks.length || error" v-show="active" class="background-tasks" :class="{ embedded }" aria-label="Background tasks" :aria-busy="loading">
+    <button v-if="!embedded && tasks.length" type="button" class="background-toggle" :aria-expanded="expanded" :aria-controls="listId" @click="expanded = !expanded">
       <span class="i-lucide-terminal task-icon" aria-hidden="true" />
       <span>Background tasks</span>
       <span class="background-count" role="status">{{ loading ? 'Checking…' : `${total} running` }}</span>
@@ -9,7 +9,8 @@
     <div v-if="error" class="background-error" role="alert">
       <span>{{ error }}</span><button type="button" class="background-retry" :disabled="loading" @click="refresh">Retry</button>
     </div>
-    <div v-if="tasks.length" v-show="expanded" :id="listId" class="background-list">
+    <p v-if="embedded && !tasks.length && !error" class="background-empty">{{ loading ? 'Checking background tasks…' : 'No background tasks running.' }}</p>
+    <div v-if="tasks.length" v-show="embedded || expanded" :id="listId" class="background-list">
       <ul>
         <li v-for="task in tasks" :key="task.id">
           <span class="running-dot" aria-hidden="true" />
@@ -35,7 +36,8 @@ import { createLiveRefresh } from '../live-refresh.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
 import { isRecord } from '../folders-sidebar.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; active: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; embedded?: boolean }>()
+const emit = defineEmits<{ status: [value: { total: number; loading: boolean; error: string }] }>()
 const pool = useLiveClientPool()
 const listId = useId()
 const tasks = ref<ActiveBackgroundTask[]>([])
@@ -46,6 +48,7 @@ const expanded = ref(false)
 const labels = { process: 'Process', tool: 'Tool', subagent: 'Agent' }
 let identity = ''
 let refresh = () => {}
+watch([total, loading, error], () => emit('status', { total: total.value, loading: loading.value, error: error.value }), { immediate: true })
 
 function started(value: string) {
   return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -103,6 +106,9 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
 
 <style scoped>
 .background-tasks { margin-bottom: 8px; min-width: 0; color: var(--c-text-secondary); font-size: 13px; }
+.background-tasks.embedded { margin: 0; }
+.background-empty { margin: 0; padding: 8px 0; }
+.embedded .background-list { max-height: none; border: 0; background: transparent; }
 .background-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 6px 10px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .background-toggle:hover, .background-retry:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .background-toggle:focus-visible, .background-retry:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }

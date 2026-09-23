@@ -316,6 +316,7 @@ function knowledgeNavigation(resource: ConversationResource, active: boolean, en
   const query = { ...route.query }
   if (active) {
     query.panel = 'knowledge'
+    delete query.diagnosis
     if (entryId) query.entry = entryId
     else delete query.entry
   } else {

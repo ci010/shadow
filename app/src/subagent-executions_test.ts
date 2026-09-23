@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { groupFolderSessions, parseSessionGraph } from './folders-sidebar.ts'
 import { childConversationTarget } from './conversation-split.ts'
-import { executionDisplayStage, executionStages, executionStatus, isOneShot, ownedExecutions } from './subagent-executions.ts'
+import { activeSubagentsByOwner, executionDisplayStage, executionStages, executionStatus, isOneShot, ownedExecutions, subagentActivityLabel, summarizeSubagents } from './subagent-executions.ts'
 import { isWaitingStage, isWorkingStage, sessionActivity } from './session-activity.ts'
 import { readFile } from 'node:fs/promises'
 import { compileScript, compileStyle, compileTemplate, parse } from 'vue/compiler-sfc'
@@ -104,13 +104,63 @@ test('orphaned and cyclic executions retain a bounded diagnostic entry', () => {
   assert.deepEqual(new Set(groupFolderSessions([], sessions).chats.map(item => item.sessionId)), new Set(['orphan', 'a', 'b']))
 })
 
-test('async tasks never override the owning conversation activity', () => {
+test('async tasks never override the owning conversation runtime activity', () => {
   const sessions = parseSessionGraph(graph())
   for (const stage of ['idle', 'llm', 'tool', 'waiting'] as const) {
     const displayed = executionStages(sessions, { 'web:chat-root': stage })
     assert.equal(displayed['web:chat-root'], stage)
     assert.equal(displayed['web:chat-nested-call'], 'running', 'Only the child retains its actual execution state')
   }
+})
+
+test('sidebar activity rolls up nested delegated executions without changing parent stages or historical lineage', () => {
+  const sessions = parseSessionGraph(graph())
+  const stages = { 'web:chat-root': 'idle', 'web:chat-nested-call': 'tool' } as const
+  const owners = activeSubagentsByOwner(sessions, stages)
+  assert.deepEqual(owners.get('web:chat-root')?.map(session => session.sessionId), ['web:chat-task', 'web:chat-nested-call'])
+  assert.deepEqual(owners.get('web:chat-task')?.map(session => session.sessionId), ['web:chat-nested-call'])
+  assert.equal(owners.has('web:chat-persistent'), false)
+  assert.equal(owners.has('heartbeat:reflector-123'), false)
+  assert.deepEqual(summarizeSubagents(owners.get('web:chat-root')!, stages), { running: 1, waiting: 0, pending: 1 })
+  assert.equal(stages['web:chat-root'], 'idle')
+  assert.equal(executionStages(sessions, stages)['web:chat-root'], 'idle')
+  const completed = sessions.map(session => isOneShot(session) ? { ...session, executionStatus: 'completed' as const } : session)
+  assert.equal(activeSubagentsByOwner(completed, stages).size, 0, 'Terminal metadata wins even over stale running stages')
+})
+
+test('delegated status keeps waiting for a human, pending, and working distinct and deduplicates group summaries', () => {
+  const sessions = parseSessionGraph({ sessions: [
+    { sessionId: 'root', mode: 'session' },
+    { sessionId: 'task', parentSessionId: 'root', mode: 'task', executionStatus: 'waiting', waitingForCall: true },
+    { sessionId: 'call', parentSessionId: 'task', mode: 'call', executionStatus: 'waiting' },
+    { sessionId: 'pending', parentSessionId: 'root', mode: 'task', executionStatus: 'pending' },
+  ], nodes: [] })
+  const owners = activeSubagentsByOwner(sessions, {})
+  const activity = summarizeSubagents([...owners.get('root')!, ...owners.get('task')!], {})
+  assert.deepEqual(activity, { running: 1, waiting: 1, pending: 1 })
+  assert.equal(subagentActivityLabel(activity), '1 subagent working, 1 subagent waiting for a response, 1 subagent pending')
+  assert.equal(subagentActivityLabel({ running: 2, waiting: 0, pending: 0 }), '2 subagents working')
+  assert.equal(subagentActivityLabel(summarizeSubagents([], {})), '')
+})
+
+test('subagent rollups stop at persistent owners and ignore orphan, context-only, and cross-project ancestry', () => {
+  const sessions = parseSessionGraph({ sessions: [
+    { sessionId: 'historical', mode: 'session', projectId: 'a' },
+    { sessionId: 'owner', mode: 'session', projectId: 'a', parentSessionId: 'historical' },
+    { sessionId: 'child', mode: 'task', projectId: 'a', parentSessionId: 'owner', executionStatus: 'running' },
+    { sessionId: 'other-project', mode: 'task', projectId: 'b', parentSessionId: 'owner', executionStatus: 'running' },
+    { sessionId: 'context-only', mode: 'task', parentSessionId: null, executionStatus: 'running' },
+    { sessionId: 'orphan', mode: 'task', parentSessionId: 'missing', executionStatus: 'running' },
+  ], nodes: [] })
+  const owners = activeSubagentsByOwner(sessions, {})
+  assert.deepEqual([...owners.keys()], ['owner'])
+  assert.deepEqual(owners.get('owner')?.map(session => session.sessionId), ['child'])
+  const cycle = parseSessionGraph({ sessions: [
+    { sessionId: 'a', mode: 'task', parentSessionId: 'b', executionStatus: 'running' },
+    { sessionId: 'b', mode: 'call', parentSessionId: 'a', executionStatus: 'running' },
+  ], nodes: [] })
+  assert.deepEqual([...activeSubagentsByOwner(cycle, {})].map(([owner, children]) => [owner, children.map(child => child.sessionId)]),
+    [['b', ['a']], ['a', ['b']]])
 })
 
 test('blocking call waits belong to their task or reusable sub-session, never its root ancestor', () => {
@@ -137,7 +187,7 @@ test('blocking call waits belong to their task or reusable sub-session, never it
 })
 
 test('mode surfaces compile without replacing existing composer, hidden preview or child-pane controls', async () => {
-  for (const filename of ['ExecutionMessage.vue', 'ConversationEvent.vue', 'ChatTab.vue', 'AgentsTab.vue', 'SessionActivity.vue', 'YieldQuestion.vue', 'FolderSessionList.vue']) {
+  for (const filename of ['ExecutionMessage.vue', 'ConversationEvent.vue', 'ChatTab.vue', 'AgentsTab.vue', 'SessionActivity.vue', 'YieldQuestion.vue', 'FolderSessionList.vue', 'SessionWorkControls.vue', 'BackgroundTasks.vue', 'FoldersSidebar.vue']) {
     const source = await readFile(new URL(`./components/${filename}`, import.meta.url), 'utf8')
     const { descriptor, errors } = parse(source, { filename })
     assert.deepEqual(errors, [])
@@ -158,7 +208,7 @@ test('mode surfaces compile without replacing existing composer, hidden preview 
       assert.match(source, /if \(isExecution\.value\) \{\s*composerError\.value/)
       assert.match(source, /ctxRes && !ctxRes\.ok/)
       assert.match(source, /inspectExecution, restoreSession \} = useConversationNavigation\(/)
-      assert.match(source, /<ExecutionMessage v-if="inlineExecutions.entries.has\(idx\)"/, 'Executions occupy the original tool-call position')
+      assert.match(source, /<ExecutionMessage v-(?:else-)?if="inlineExecutions.entries.has\(idx\)"/, 'Executions occupy the original tool-call position')
       assert.doesNotMatch(source, /<ExecutionCards|expandedEvents/)
       assert.match(source, /<YieldQuestion v-if="!isCall"/, 'Leaf calls must not mount or poll yield controls')
       assert.doesNotMatch(source, /if \(awaitingCall\.value\) return/, 'Callers can submit guidance while a blocking call runs')

@@ -31,7 +31,7 @@
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
-      :diagnosis-enabled="!!activeSessionId"
+      :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
       @diagnosis-visible="diagnosisVisibilityChanged"
@@ -219,7 +219,9 @@
       </template>
     </div>
     <template #diagnosis>
+      <p v-if="diagnosisNavigation.error.value" class="composer-error" role="alert">{{ diagnosisNavigation.error.value }}</p>
       <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" aria-label="Session diagnosis" :id-prefix="embedded || managed ? paneId : undefined"
+        :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
         :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
         :active="visible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
         :working="sessionWorking" :system-prompt="systemPrompt" :compaction-summary="compactionSummary" :tools="tools" />
@@ -236,7 +238,8 @@
           <span v-if="!isWaitingStage(sessionStage)" class="working-wave" aria-hidden="true"><i /><i /><i /></span>
         </div>
         <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="activeSessionId"
-          :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'" />
+          :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
+          :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
         <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled"
@@ -270,7 +273,6 @@
           <div v-if="canResend" class="resend-bar">
             <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Resend last message</button>
           </div>
-          <BackgroundTasks :api-base="apiBase" :session-id="activeSessionId" :active="paneActive && !!activeSession" />
           <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget }"
             @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
           <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
@@ -386,6 +388,7 @@
           <p v-if="currentRequest?.state.error" class="composer-error" role="alert">{{ currentRequest.state.error }}</p>
           <p v-if="stageError && requestBusy" class="composer-error" role="status">{{ stageError }}</p>
           <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
+          <p v-if="composerDraft.error.value" class="composer-error" role="alert">{{ composerDraft.error.value }}</p>
           <p v-if="remoteConversation" class="remote-execution-note" role="status">Files and commands run on the selected device. Local file attachments are not transferred to that device.</p>
         </div>
       </div>
@@ -412,10 +415,11 @@ import ImageViewer from './ImageViewer.vue'
 import { imagePreviewFromEvent, imagePreviewMarkup, type ImagePreview } from '../image-viewer.ts'
 import { messageAttachments } from '../message-attachments.ts'
 import { conversationFileLink } from '../conversation-file-link.ts'
+import { composerDraftKey, useComposerDraft } from '../composables/useComposerDraft.ts'
+import { useDiagnosisNavigation } from '../composables/useDiagnosisNavigation.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
-import BackgroundTasks from './BackgroundTasks.vue'
 import type { ToolDef } from './ToolsCard.vue'
 import ModelSelector from './ModelSelector.vue'
 import ComposerPopover from './ComposerPopover.vue'
@@ -444,7 +448,7 @@ import { inlineMessageActions } from '../message-actions.ts'
 import ConversationEvent from './ConversationEvent.vue'
 import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
-import { executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
+import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl } from '../api-url.ts'
 import { automationChatLocation } from '../automations.ts'
@@ -651,7 +655,11 @@ const streamPhase = ref<WorkingStage>()
 const streamContent = ref('')
 const streamTimestamp = ref<string>()
 const streamingToolCallData = ref<{ name: string; arguments: Record<string, unknown> } | null>(null)
-const inputText = ref('')
+const composerKey = computed(() => composerDraftKey(props.apiBase, props.projectId ?? '', activeSessionId.value))
+const composerDraft = useComposerDraft(composerKey, () => window.localStorage)
+const inputText = composerDraft.text
+watch(inputText, () => { void nextTick(autoResize) })
+onMounted(autoResize)
 const slashMenu = ref<InstanceType<typeof SlashCommandMenu>>()
 const composerFocused = ref(false)
 const composerComposing = ref(false)
@@ -679,6 +687,7 @@ const stageError = ref('')
 const displayedSessionStages = computed(() => executionStages(allSessions.value, resolveDisplayedStages(
   sessionStages.value, activeSessionId.value, streaming.value, streamPhase.value,
 )))
+const activeSubagents = computed(() => activeSubagentsByOwner(allSessions.value, displayedSessionStages.value).get(activeSessionId.value) ?? [])
 const sessionStage = computed<SessionStage | null>(() =>
   activeSessionId.value ? (displayedSessionStages.value[activeSessionId.value] ?? null) : null,
 )
@@ -1020,6 +1029,10 @@ const compactionSummary = computed(() => {
 })
 
 type ConversationPanel = 'conversation' | 'diagnosis'
+const diagnosisNavigation = useDiagnosisNavigation({
+  route, router, projectId: () => props.projectId || liveProjectId(props.apiBase),
+  sessionId: () => activeSessionId.value, embedded: () => !!props.embedded,
+})
 const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
@@ -1038,6 +1051,9 @@ function switchPanel(panel: ConversationPanel): void {
 function diagnosisVisibilityChanged(visible: boolean) {
   const panel = visible ? 'diagnosis' : 'conversation'
   if (panel !== activePanel.value) switchPanel(panel)
+  void nextTick(() => {
+    if (activePanel.value === panel && !knowledgeDocumentVisible.value) diagnosisNavigation.selectPanel(visible)
+  })
 }
 interface ChatMsg {
   role: string
@@ -1624,6 +1640,7 @@ function deleteSession(sessionId: string): void {
 async function sessionsDeleted(ids: string[]): Promise<void> {
   deletion.value = undefined
   const activeDeleted = ids.includes(activeSessionId.value)
+  for (const id of ids) composerDraft.remove(composerDraftKey(props.apiBase, props.projectId ?? '', id))
   for (const id of ids) emit('deleted', id)
   if (activeDeleted) createNewWebChat()
   await loadSessionList()
@@ -1641,8 +1658,8 @@ function resetConversation(): void {
   settingsError.value = ''
   settingsOverride.value = undefined
   pendingDraftSettings.value = undefined
-  activePanel.value = 'conversation'
-  diagnosisOpened.value = false
+  activePanel.value = diagnosisNavigation.requested.value ? 'diagnosis' : 'conversation'
+  diagnosisOpened.value = activePanel.value === 'diagnosis'
   if (!(currentRequest.value?.state.phase === 'submitting' && currentRequest.value.state.stopping)) sendRequest?.abort()
   sendRequest = undefined
   draftRequest.value = undefined
@@ -1654,7 +1671,6 @@ function resetConversation(): void {
   pickingContext.value = false
   streaming.value = false
   streamPhase.value = undefined
-  inputText.value = ''
   clearPendingAttachments()
   contextItems.value = []
   composerError.value = ''
@@ -1992,6 +2008,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     return
   }
   const retry = opts?.retry === true
+  const submittedText = inputText.value
   const content = retry ? '' : composeChatMessage(overrideContent ?? inputText.value.trim(), contextItems.value)
   const isCommand = !retry && content.trimStart().startsWith('/')
   const attachments = retry ? [] : [...pendingAttachments.value]
@@ -2035,6 +2052,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     historyRequest = undefined
     loadingHistory.value = false
     if (startingDraft && draftRemote.value) currentWorkdir.value = { kind: 'remote', displayPath: draftRemote.value.displayPath ?? null }
+    if (startingDraft) composerDraft.migrate(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId))
     activeSessionId.value = sessionId
     if (props.managed) emit('prepared', sessionId)
     else if (!props.embedded) void router.replace({ name: 'chat', params: { projectId: props.projectId, sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })
@@ -2105,10 +2123,12 @@ async function sendMessage(overrideContent?: string, opts?: {
       throw new Error('Main returned an invalid command result. Refresh the conversation before retrying.')
     }
     accepted = true
+    if (!retry && overrideContent === undefined) {
+      composerDraft.clearSent(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId), submittedText)
+    }
     // Steered inputs are admitted before the tool boundary writes them to history.
     if (followUp && !isCommand && generation === sessionSelectionGeneration) deferActiveHistory = true
     if (!retry && generation === sessionSelectionGeneration) {
-      inputText.value = ''
       clearPendingAttachments()
       contextItems.value = []
       if (chatInput.value) chatInput.value.style.height = 'auto'

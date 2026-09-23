@@ -167,6 +167,7 @@ import HoverInfo from './HoverInfo.vue'
 import TraceEventDetails from './TraceEventDetails.vue'
 import SystemPromptCard from './SystemPromptCard.vue'
 import ToolsCard, { type ToolDef } from './ToolsCard.vue'
+import type { DiagnosisSection } from '../composables/useDiagnosisNavigation.ts'
 import {
   correlateModelSpans, correlateToolSpans, detailText, eventMatches, fetchDiagnosisJson, fitTraceWindow, formatTraceDuration, latestTraceWindow, mergeTraceSpans, parseDiagnosisHistory, recordedModelResponse,
   parseTracePage, spanDuration, spanMatches, stackTimelineItems, traceDuration, traceKey,
@@ -187,7 +188,7 @@ const props = defineProps<{
 }>()
 const domId = (id: string) => props.idPrefix ? `${props.idPrefix}-${id}` : id
 const views = [{ id: 'trace', label: 'Trace' }, { id: 'prompt', label: 'System prompt' }, { id: 'tools', label: 'Tools' }] as const
-const section = ref<typeof views[number]['id']>('trace')
+const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
 const query = ref('')
 const kinds = ['ALL', 'USER', 'SESSION', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
 const filter = ref('ALL')
