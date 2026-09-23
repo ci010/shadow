@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createContext, runInContext, type Context } from 'node:vm'
 import { createProgram, ModuleKind, ModuleResolutionKind, ScriptTarget } from 'typescript'
 import {
-  assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded, isolatedEnvironment,
+  assertMacIconEncoding, assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded, isolatedEnvironment,
   killPosixTree, nodeModeProbe, packagedEvalCommand, parsePosixProcesses, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, serviceEnvironment, startProcess, terminateProcess,
   verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
@@ -19,6 +19,48 @@ import {
 import { desktopTarget } from './desktop-target.ts'
 
 const windows = desktopTarget('win32', 'x64')
+
+test('macOS icon verification rejects the legacy PNG chunks that render as Finder noise', () => {
+  const argb = (size: number) => {
+    const channel = Buffer.alloc(Math.ceil(size * size / 128) * 2)
+    for (let i = 0; i < channel.length; i += 2) {
+      channel[i] = 253 // A run of 128 zero-valued pixels.
+    }
+    return Buffer.concat([Buffer.from('ARGB'), channel, channel, channel, channel])
+  }
+  const icns = (entries: Array<[string, Buffer]>) => {
+    const chunks = entries.map(([type, payload]) => {
+      const header = Buffer.alloc(8)
+      header.write(type, 0, 'ascii')
+      header.writeUInt32BE(8 + payload.length, 4)
+      return Buffer.concat([header, payload])
+    })
+    const header = Buffer.alloc(8)
+    header.write('icns')
+    header.writeUInt32BE(8 + chunks.reduce((length, chunk) => length + chunk.length, 0), 4)
+    return Buffer.concat([header, ...chunks])
+  }
+  const small: Array<[string, Buffer]> = [['ic04', argb(16)], ['ic05', argb(32)]]
+  const valid = icns(small)
+  assert.doesNotThrow(() => assertMacIconEncoding(valid))
+  for (const type of ['icp4', 'icp5', 'icp6']) {
+    assert.throws(() => assertMacIconEncoding(icns([...small, [type, Buffer.from('89504e470d0a1a0a', 'hex')]])),
+      /Unsupported macOS icon encoding/)
+  }
+  assert.throws(() => assertMacIconEncoding(icns([small[0]])), /ic05 must use ARGB/)
+  assert.throws(() => assertMacIconEncoding(icns([['ic04', Buffer.from('PNG data')], small[1]])), /ic04 must use ARGB/)
+  assert.throws(() => assertMacIconEncoding(icns([...small, small[0]])), /Duplicate ICNS entry/)
+  assert.throws(() => assertMacIconEncoding(Buffer.alloc(4)), /Invalid ICNS header/)
+  assert.throws(() => assertMacIconEncoding(valid.subarray(0, -1)), /Invalid ICNS file length/)
+  const truncatedHeader = Buffer.concat([valid, Buffer.alloc(4)])
+  truncatedHeader.writeUInt32BE(truncatedHeader.length, 4)
+  assert.throws(() => assertMacIconEncoding(truncatedHeader), /Truncated ICNS entry header/)
+  const invalidEntry = Buffer.from(valid)
+  invalidEntry.writeUInt32BE(0, 12)
+  assert.throws(() => assertMacIconEncoding(invalidEntry), /Invalid ICNS entry length/)
+  invalidEntry.writeUInt32BE(valid.length, 12)
+  assert.throws(() => assertMacIconEncoding(invalidEntry), /Invalid ICNS entry length/)
+})
 
 test('verification data paths canonicalize OS temporary-directory aliases', async t => {
   const root = resolve('.test-data', `verification-paths-${randomUUID()}`)

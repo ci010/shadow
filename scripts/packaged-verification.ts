@@ -57,6 +57,30 @@ export function relocatedPackageRoot(scratch: string, target: DesktopTarget = de
   return join(scratch, target.platform === 'darwin' ? 'Shadow.app' : 'application')
 }
 
+export function assertMacIconEncoding(icon: Buffer): void {
+  assert.ok(icon.length >= 8 && icon.toString('ascii', 0, 4) === 'icns', 'Invalid ICNS header')
+  assert.equal(icon.readUInt32BE(4), icon.length, 'Invalid ICNS file length')
+  const entries = new Map<string, Buffer>()
+  for (let offset = 8; offset < icon.length;) {
+    assert.ok(offset + 8 <= icon.length, 'Truncated ICNS entry header')
+    const type = icon.toString('ascii', offset, offset + 4)
+    const length = icon.readUInt32BE(offset + 4)
+    assert.ok(length > 8 && offset + length <= icon.length, `Invalid ICNS entry length: ${type}`)
+    assert.ok(!entries.has(type), `Duplicate ICNS entry: ${type}`)
+    entries.set(type, icon.subarray(offset + 8, offset + length))
+    offset += length
+  }
+  // PNG in icp4/icp5/icp6 renders as noise in Finder (electron-builder#9980).
+  for (const type of ['icp4', 'icp5', 'icp6']) {
+    assert.ok(!entries.has(type), `Unsupported macOS icon encoding: ${type}; rebuild with electron-builder >=26.16.0`)
+  }
+  for (const type of ['ic04', 'ic05']) {
+    const payload = entries.get(type)
+    assert.ok(payload && payload.length > 4 && payload.toString('ascii', 0, 4) === 'ARGB',
+      `macOS small icon ${type} must use ARGB encoding`)
+  }
+}
+
 export async function createVerificationDirectory(parent = tmpdir()): Promise<string> {
   // macOS /var is an OS alias; generated data paths must use /private/var.
   return mkdtemp(join(await realpath(parent), 'shadow-packaged-acceptance-'))

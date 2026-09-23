@@ -831,7 +831,12 @@ The header, setup, and recovery screens use `app/src/assets/shadow-logo.png`.
 The matching browser favicon is `app/public/favicon.png`; the multi-resolution
 Windows icon in `desktop/assets/icon.ico` is used by both the desktop window and
 the installer build. macOS/Linux use `desktop/assets/icon.png`, copied from the
-same shared logo. Renderer branding updates through Vite during development;
+same shared logo. macOS packaging uses the pinned electron-builder 26.16.1:
+older 26.15.x converters can encode small ICNS entries incorrectly, producing
+noise in Finder despite a valid source PNG. Packaged verification rejects those
+entries and requires ARGB-encoded 16px/32px icons. Rebuild the app to replace
+affected bundles; changing the source PNG alone does not fix them.
+Renderer branding updates through Vite during development;
 native window icon changes require restarting Electron.
 Content begins directly below navigation without a persistent runtime status row;
 device roles, connection status, and node IDs remain available in **Nodes**.

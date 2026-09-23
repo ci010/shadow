@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { verifyReleaseManifest } from './release-manifest.ts'
 import { desktopTarget } from './desktop-target.ts'
 import {
-  assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded,
+  assertMacIconEncoding, assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded,
   killProcessTree, nodeModeProbe, packagedEvalCommand, prepareRendererSmoke, relocatedPackageRoot, remainingBudget, rendererEnvironment, rendererSignatureCommands, reservePort, runCommand, sanitizeLog, snapshotProcesses,
   serviceEnvironment, startProcess, terminateProcess, verifyRendererArtifacts, waitForOutput, waitReady, waitSuccessful,
   type ManagedProcess, type ProcessIdentity,
@@ -40,6 +40,10 @@ async function inspectBackendTree(sample: string): Promise<void> {
 try {
   // Never execute an unverified package, including the Node-mode runtime probe.
   await verifyReleaseManifest(packaged, repository)
+  if (target.platform === 'darwin') {
+    stage = 'macOS small-icon encoding'
+    assertMacIconEncoding(await readFile(join(packaged, target.resourcesRelativePath, 'icon.icns')))
+  }
   stage = 'complete package relocation'
   // Deliberately outside the source tree: neither executable nor dependencies may fall back to the checkout.
   scratch = await createVerificationDirectory()
