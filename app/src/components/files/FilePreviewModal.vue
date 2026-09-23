@@ -19,10 +19,16 @@
             :aria-label="fullscreen ? 'Exit fullscreen' : 'Fullscreen'"
           ><span class="w-4 h-4" :class="fullscreen ? 'i-lucide-minimize' : 'i-lucide-maximize'" aria-hidden="true" /></button>
           </HoverInfo>
-          <a v-if="!offline" class="file-modal-btn" :href="raw" target="_blank" rel="noopener noreferrer">Open raw</a>
+          <a v-if="raw && !offline" class="file-modal-btn" :href="raw" :download="entry.name" :aria-label="`Download ${entry.name}`" referrerpolicy="no-referrer"
+            :aria-busy="downloads.pending.has(raw)" :aria-disabled="downloads.pending.has(raw)"
+            @click="downloads.download($event, raw, entry.name)">
+            <span class="w-4 h-4" :class="downloads.pending.has(raw) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" />
+            {{ downloads.pending.has(raw) ? 'Downloading...' : 'Download' }}
+          </a>
           <HoverInfo v-if="!inline" text="Close file preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Close file preview" @click="$emit('close')"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button></HoverInfo>
         </div>
       </div>
+      <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
       <div class="file-modal-body">
         <NodeOfflineState v-if="offline" :checking="loading" description="This preview will be available when the owning node reconnects." @retry="loadText" />
         <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
@@ -49,7 +55,7 @@
           <p v-if="loaded && encodingWarning" class="file-encoding-warning" role="status">{{ encodingWarning }}</p>
           <div v-if="loading" class="file-modal-note">Loading…</div>
           <div v-else-if="error" class="file-modal-note" role="alert">{{ error }} <button class="file-modal-btn" @click="loadText">Retry</button></div>
-          <div v-else-if="binary" class="file-modal-note">This file contains binary data. Use Open raw to download it.</div>
+          <div v-else-if="binary" class="file-modal-note">This file contains binary data. Use Download to save it.</div>
           <div v-else-if="isMemoryEvents && !sourceView" ref="selectionRoot" class="file-memory-events" role="list" aria-label="Memory events">
             <MemoryEventRecord v-for="record in memoryRecords" :key="record.start" :record="record" />
           </div>
@@ -59,11 +65,11 @@
           </article>
           <pre v-else ref="selectionRoot" class="file-modal-text"><FileHighlightText :key="selectionKey" ref="highlight" :source="textContent" :path="path" :active="active && loaded && !loading && !binary" @error="highlightError = $event" /></pre>
           <div v-if="highlightError && ((!isMarkdown && !isMemoryEvents) || sourceView)" class="file-modal-note file-highlight-notice" role="status">{{ highlightError }} <button class="file-modal-btn" @click="highlight?.retry()">Retry</button></div>
-          <div v-if="truncated" class="file-modal-note">Preview truncated — use “Open raw” for the full file.</div>
+          <div v-if="truncated" class="file-modal-note">Preview truncated — use “Download” for the full file.</div>
         </div>
         <div v-else class="file-modal-note">
           No inline preview available.
-          <a :href="raw" target="_blank" rel="noopener noreferrer">Download</a>.
+          Use Download to save the file.
         </div>
         <SelectionMenu v-if="selectionEnabled" :key="selectionKey" :container="selectionRoot" :active="selectionEnabled" :can-quote="canQuote" @quote="quoteSelection" />
       </div>
@@ -73,9 +79,11 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
+import { useFileDownload } from '../../composables/useFileDownload.ts'
 import DOMPurify from 'dompurify'
 import { useMobileResources, vMobileMedia } from '../../mobile-resources.ts'
 const resources = useMobileResources()
+const downloads = useFileDownload()
 import SelectionMenu from '../SelectionMenu.vue'
 import HoverInfo from '../HoverInfo.vue'
 import FileHighlightText from './FileHighlightText.vue'
@@ -234,6 +242,7 @@ async function loadText(): Promise<void> {
 }
 
 watch(() => [props.apiBase, props.sessionId, props.folderId, path.value, kind.value, props.remote], () => {
+  downloads.reset()
   encoding.value = 'auto'
   offline.value = false
   loaded.value = false
@@ -351,6 +360,7 @@ onUnmounted(() => request?.abort())
 
 .file-modal-btn {
   display: inline-flex;
+  gap: 6px;
   align-items: center;
   justify-content: center;
   min-height: 32px;
@@ -369,6 +379,7 @@ onUnmounted(() => request?.abort())
   border-color: var(--c-primary, #6366f1);
 }
 .file-modal-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.file-download-error { margin: 0; padding: 8px 16px; color: var(--c-error); font-size: 13px; overflow-wrap: anywhere; }
 
 .file-modal-body {
   flex: 1;

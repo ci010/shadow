@@ -1,6 +1,7 @@
 <template>
-  <div class="tree-node" :class="decoration ? `git-${decoration}` : undefined">
+  <div ref="node" class="tree-node" :class="decoration ? `git-${decoration}` : undefined">
     <TreeRow button-class="tree-row" :button-attrs="{ 'data-path': fullPath, 'aria-busy': loading, 'aria-disabled': !active }" :label="entry.name" :depth="depth"
+      :selected="selectedPath === fullPath" :current="selectedPath === fullPath ? 'page' : undefined"
       :title="decoration ? `${fullPath}\n${entry.type === 'dir' ? 'Contains changes: ' : ''}${gitChangeLabel(decoration)}` : fullPath"
       :expanded="entry.type === 'dir' ? expanded : undefined" @select="onRowClick">
       <template #icon><span :class="loading ? 'i-lucide-loader-circle animate-spin' : entry.type === 'dir' ? folderIcon(entry.name, expanded) : fileIcon(entry.name)" /></template>
@@ -27,6 +28,8 @@
         :home-state="homeState"
         :changes="changes"
         :changes-only="changesOnly"
+        :selected-path="selectedPath"
+        :reveal-version="revealVersion"
         @open="$emit('open', $event)"
         @node-offline="$emit('node-offline')"
       />
@@ -35,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, toRefs, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, toRefs, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import TreeRow from '../TreeRow.vue'
 import { fileIcon, folderIcon } from '../../file-icons.ts'
@@ -63,6 +66,8 @@ const props = withDefaults(defineProps<{
   refreshVersion?: number
   workspaceKey?: string
   homeState?: HomeTreeState
+  selectedPath?: string
+  revealVersion?: number
 }>(), { active: true, changes: () => [], changesOnly: false, refreshVersion: 0 })
 
 const emit = defineEmits<{ open: [payload: { path: string; entry: FileEntry }]; 'node-offline': [] }>()
@@ -77,6 +82,7 @@ const { expanded, children, loaded, stale } = toRefs(homeDirectoryState(props.ho
 const displayChildren = computed(() => props.changesOnly ? changedDirectory(props.changes, fullPath.value) : children.value)
 const loading = ref(false)
 const loadError = ref('')
+const node = ref<HTMLElement>()
 let request: AbortController | undefined
 
 async function loadChildren(): Promise<void> {
@@ -132,7 +138,20 @@ watch(() => [props.workspaceKey ?? sourceKey.value, fullPath.value, sourceKey.va
     } else if (refresh !== previousRefresh || (source !== previousSource && !props.homeState)) stale.value = true
     if (active && expanded.value && (!loaded.value || stale.value)) void loadChildren()
 })
-onMounted(() => { if (expanded.value) void loadChildren() })
+async function revealSelected(): Promise<void> {
+  if (!props.active || !props.selectedPath) return
+  if (props.entry.type === 'dir' && props.selectedPath.startsWith(`${fullPath.value}/`)) {
+    expanded.value = true
+    void loadChildren()
+  } else if (props.selectedPath === fullPath.value) {
+    await nextTick()
+    if (props.active && props.selectedPath === fullPath.value) {
+      node.value?.querySelector<HTMLElement>('.tree-row')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+  }
+}
+watch(() => [props.selectedPath, props.revealVersion, props.active, props.refreshVersion], revealSelected, { flush: 'post' })
+onMounted(() => { if (expanded.value) void loadChildren(); void revealSelected() })
 onUnmounted(() => request?.abort())
 </script>
 

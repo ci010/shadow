@@ -41,6 +41,7 @@
           <FileTreeNode v-for="entry in displayEntries" :key="`${workspaceKey}:${changesOnly}:${fileEntryKey(entry)}`" :api-base="displaySource.apiBase"
             :session-id="displaySource.sessionId" :folder-id="displaySource.folderId" dir="" :entry="entry" :depth="0" :active="active && !sourcePending"
             :workspace-key="workspaceKey"
+            :selected-path="selectedPath" :reveal-version="revealVersion"
             :refresh-version="homeState?.revision ?? revision" :home-state="changesOnly ? undefined : homeState"
             :changes-only="changesOnly" :changes="gitStatus?.available ? gitStatus.entries : []" @open="onOpen" @node-offline="fileOffline = true" />
         </template>
@@ -68,7 +69,7 @@ import type { OpenFile } from '../../file-workbench.ts'
 import { canRetainHomeTree, fileEntryKey, fileWorkspaceKey, reconcileFileEntries, type FileTreeSource } from '../../file-tree-state.ts'
 import { HomeTreeCacheKey, type HomeTreeState } from '../../home-tree-cache.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string; gitOffline?: boolean; remote?: boolean }>(), { active: true, remote: false })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string; gitOffline?: boolean; remote?: boolean; selectedPath?: string; revealVersion?: number }>(), { active: true, remote: false, revealVersion: 0 })
 const emit = defineEmits<{ open: [payload: OpenFile]; 'refresh-git': [] }>()
 const id = `file-tree-${useId()}`
 const changesOnly = ref(false)
@@ -208,6 +209,10 @@ watch([() => props.apiBase, () => props.sessionId, () => props.folderId, expecte
 watch(() => props.active, active => {
   if (active && (!loaded.value || sourcePending.value)) void reload(false)
   else if (!active) { request?.abort(); request = undefined; loading.value = false; previewEntry.value = null }
+})
+watch(() => props.revealVersion, () => {
+  changesOnly.value = false
+  if (props.active && loaded.value && !loading.value) void reload()
 })
 watch([homeState, () => props.active, changesOnly], restoreScroll, { flush: 'post', immediate: true })
 watch(workspaceKey, () => { previewEntry.value = null })

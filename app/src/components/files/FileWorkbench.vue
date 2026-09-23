@@ -32,7 +32,7 @@
     <button v-if="expanded && !wide" class="explorer-backdrop" aria-label="Dismiss files" @click="collapseExplorer" />
     <aside v-if="explorerAvailable" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" aria-label="File explorer" @keydown.esc.stop.prevent="collapseExplorer">
       <FileTree :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded"
-        :remote="remote"
+        :remote="remote" :selected-path="selectedFilePath" :reveal-version="revealVersion"
         :git-status="gitStatus" :git-loading="gitLoading" :git-error="gitError" :git-offline="gitOffline" @refresh-git="refreshGit" @open="openFile">
         <template #actions>
           <HoverInfo text="Collapse files" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="workbench-button" aria-label="Collapse files" @click="collapseExplorer"><span class="i-lucide-panel-left-close" aria-hidden="true" /></button></HoverInfo>
@@ -160,6 +160,8 @@ const remoteExpanded = ref(false)
 const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.folderId))
 const expanded = computed(() => explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? wide.value)))
 const tabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
+const selectedFilePath = computed(() => tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.path)
+const revealVersion = ref(0)
 const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? 'Diagnosis' : tabs.value.selected === KNOWLEDGE_TAB_KEY ? 'Knowledge'
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
     ?? props.conversationTitle ?? 'Conversation')
@@ -195,7 +197,15 @@ function selectTab(path: string) {
   if (tabs.value.selected === path) return
   tabs.value = { ...tabs.value, selected: path }
 }
-defineExpose({ showConversation: () => selectTab('') })
+defineExpose({ showConversation: () => selectTab(''), openLinkedFile })
+function openLinkedFile(file: OpenFile) {
+  openFile(file)
+  revealVersion.value++
+  if (wide.value && explorerAvailable.value) {
+    if (props.remote) remoteExpanded.value = true
+    else preference.value = true
+  }
+}
 function selectKnowledgeEntry(entryId: string) {
   if (tabs.value.knowledge) tabs.value = { ...tabs.value, knowledge: { entryId } }
 }

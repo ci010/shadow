@@ -41,7 +41,7 @@ export function parseMemoryEvents(source: string, truncated = false): MemoryEven
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error
       return [{ ...span, kind: partial ? 'partial' : 'invalid', raw, message: partial
-        ? 'This record is cut off by the preview limit. Open raw to read the full entry.'
+        ? 'This record is cut off by the preview limit. Use Download to read the full entry.'
         : 'Invalid JSON on this line. The original text is shown below.' }]
     }
     if (!isEvent(value)) {

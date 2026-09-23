@@ -74,6 +74,58 @@ const base = { apiBase: 'http://localhost', sessionId: '', folderId: 'folder-a',
 
 const offlineResponse = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }
 
+test('revealing a nested file expands only its ancestors and loads existing children', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTreeNode', {
+    ...base, dir: '', depth: 0, entry: { ...entry, name: 'reports', type: 'dir' },
+    selectedPath: 'reports/daily/REPORT.md', revealVersion: 1,
+  })
+  assert.equal(state().expanded, true)
+  assert.equal(pending[0]!.url.searchParams.get('path'), 'reports')
+  pending[0]!.finish({ path: 'reports', entries: [{ ...entry, name: 'daily', type: 'dir' }] })
+  await settle()
+  assert.equal(state().displayChildren[0].name, 'daily')
+  state().onRowClick()
+  assert.equal(state().expanded, false, 'Users may still collapse the revealed ancestor')
+  props.revealVersion = 2
+  await settle()
+  assert.equal(state().expanded, true, 'Reopening the same link reveals it again')
+  assert.equal(pending.length, 1, 'Loaded children are reused')
+})
+
+test('missing reveal paths and inactive trees do not trigger unrelated directory requests', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTreeNode', {
+    ...base, active: false, dir: '', depth: 0, entry: { ...entry, name: 'reports', type: 'dir' },
+    selectedPath: 'reports/daily/REPORT.md',
+  })
+  assert.equal(pending.length, 0)
+  props.active = true
+  await settle()
+  assert.equal(pending.length, 1)
+  pending[0]!.finish({ path: 'reports', entries: [] })
+  await settle()
+  assert.deepEqual(state().displayChildren, [])
+  props.selectedPath = 'reports-other/REPORT.md'
+  await settle()
+  assert.equal(pending.length, 1)
+})
+
+test('file link reveal switches from changes to files and refreshes a stale root', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FileTree', { ...base, selectedPath: 'REPORT.md', revealVersion: 0 })
+  pending[0]!.finish({ path: '', entries: [] })
+  await settle()
+  state().changesOnly = true
+  props.revealVersion = 1
+  await settle()
+  assert.equal(state().changesOnly, false)
+  assert.equal(pending.length, 2)
+  pending[1]!.finish({ path: '', entries: [{ ...entry, name: 'REPORT.md', ext: '.md' }] })
+  await settle()
+  assert.equal(state().displayEntries[0].name, 'REPORT.md')
+})
+
 test('file explorer combines offline Git/files into one calm state and recovers after checking again', async t => {
   const pending = requests(t)
   const { props, state } = mount(t, 'FileTree', { ...base, gitOffline: true, gitError: '' })
@@ -273,7 +325,7 @@ test('scratch workbenches hide the explorer and Git without losing the expansion
   }
   const source = readFileSync(new URL('./components/files/FileWorkbench.vue', import.meta.url), 'utf8')
   assert.match(source, /<aside v-if="explorerAvailable"/)
-  assert.match(source, /<HoverInfo v-if="explorerAvailable" text="Toggle files"/)
+  assert.match(source, /<HoverInfo v-if="explorerAvailable" text="Toggle files \(Ctrl\+Shift\+E\)"/)
 })
 
 test('memory event previews retain original source, scoped quotes and view state without refetching', async t => {

@@ -2081,6 +2081,20 @@ an inline error instead of navigating away or saving an error body. Download sta
 prevents duplicate requests; requests and object URLs are cleaned up on disposal.
 Files are buffered only when Download is clicked; audio/video previews retain
 their range-capable streaming URLs, and external links keep native link behavior.
+The File Preview toolbar uses the same authenticated Blob flow for its Download
+action (including an icon, pending state, and inline failure feedback), rather
+than navigating directly to the protected raw-file endpoint.
+
+Relative Markdown file links in conversation messages open a document tab in the
+existing File Preview, resolved against that conversation's workdir rather than
+the browser route. The explorer highlights the active file, expands its ancestors,
+and scrolls the matching row into view when available. Opening a link refreshes
+the tree and selects its Files view; a missing tree entry does not block preview.
+Wide layouts reveal the sidebar; narrow layouts keep the preview unobstructed.
+External URLs, application routes, downloads, fragment-only links, and modified
+clicks retain their existing behavior. Preview requests still use the owning
+session's scoped file API, including remote workdir routing; this does not grant
+access to arbitrary absolute paths or paths escaping the workdir.
 
 Chat image attachments, Markdown images, and pending image thumbnails open the
 shared `ImageViewer` native modal dialog instead of navigating away. Images fit

@@ -411,6 +411,7 @@ import MessageAttachments from './MessageAttachments.vue'
 import ImageViewer from './ImageViewer.vue'
 import { imagePreviewFromEvent, imagePreviewMarkup, type ImagePreview } from '../image-viewer.ts'
 import { messageAttachments } from '../message-attachments.ts'
+import { conversationFileLink } from '../conversation-file-link.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
@@ -492,12 +493,20 @@ async function renameMobileSession() { await nextTick(); await sessionHeading.va
 const router = useRouter()
 
 function openConversationLink(event: MouseEvent) {
+  if (event.defaultPrevented) return
   const image = imagePreviewFromEvent(event)
   if (image) { event.preventDefault(); openImagePreview(image); return }
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
   const anchor = event.target instanceof Element ? event.target.closest('a') : null
   const id = anchor && conversationLinkSession(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
-  if (!id) return
+  if (!id) {
+    const file = anchor && !anchor.hasAttribute('download') && conversationFileLink(anchor.getAttribute('href') ?? '')
+    if (file && activeSessionId.value && workbench.value) {
+      event.preventDefault()
+      workbench.value.openLinkedFile(file)
+    }
+    return
+  }
   event.preventDefault()
   if (props.embedded) void router.push({ name: 'chat', params: { projectId: props.projectId, sessionId: id } })
   else requestSession(id)
