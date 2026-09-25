@@ -2496,8 +2496,10 @@ async function main(): Promise<void> {
   assert.equal(await evaluate(`document.querySelector('.document-tablist [aria-selected="true"]').textContent`), documentBeforeCardShortcut, 'Ctrl+Tab remains blocked when focus is inside interactive hover-card navigation')
   await nativeKey('Escape', 'Escape', 27)
   await evaluate(`document.querySelector('.session-select[aria-label="Second conversation"]').focus()`)
-  await waitFor(`document.querySelector('.session-info-id')?.textContent === ${JSON.stringify(idB)}`)
+  await waitFor(`document.querySelector('.session-info-id .copy-value')?.textContent === ${JSON.stringify(idB)}`)
   assert.equal(await evaluate(`document.querySelectorAll('.hover-info-popup').length`), 1, 'Only the current root entry owns an open information card')
+  await nativeKey('Tab', 'Tab', 9)
+  await waitFor(`document.activeElement.getAttribute('aria-label') === 'Copy Session ID'`)
   await nativeKey('Tab', 'Tab', 9)
   await waitFor(`document.activeElement.classList.contains('session-info-open')`)
   await nativeKey('Escape', 'Escape', 27)
@@ -2837,7 +2839,7 @@ async function main(): Promise<void> {
   const assertLongSessionInfo = async () => {
     assert.equal(await evaluate(`(() => {
       const card = document.querySelector('.hover-info-popup'); const title = card.querySelector('.session-info-title');
-      const description = card.querySelector('.session-info-description'); const id = card.querySelector('.session-info-id');
+      const description = card.querySelector('.session-info-description'); const id = card.querySelector('.session-info-id .copy-value');
       const related = card.querySelector('.session-info-related'); const open = card.querySelector('.session-info-open');
       const lines = node => node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight);
       const rect = card.getBoundingClientRect(); const action = open.getBoundingClientRect();
@@ -2853,7 +2855,7 @@ async function main(): Promise<void> {
   await assertLongSessionInfo()
   await captureVisibleInfo('sidebar-long-info-desktop.png')
   await nativeKey('ArrowRight', 'ArrowRight', 39)
-  await waitFor(`document.activeElement.classList.contains('session-info-open')`)
+  await waitFor(`document.activeElement.getAttribute('aria-label') === 'Copy Session ID'`)
   await nativeKey('Escape', 'Escape', 27)
   assert.equal(await evaluate(`document.activeElement.getAttribute('aria-label')`), longSessionTitle)
   window.webContents.enableDeviceEmulation({ screenPosition: 'desktop', screenSize: { width: 390, height: 844 }, viewPosition: { x: 0, y: 0 }, viewSize: { width: 390, height: 844 }, deviceScaleFactor: 1, scale: 1 })
@@ -2864,7 +2866,7 @@ async function main(): Promise<void> {
   await assertLongSessionInfo()
   await captureVisibleInfo('sidebar-long-info-mobile.png', true)
   await nativeKey('ArrowRight', 'ArrowRight', 39)
-  await waitFor(`document.activeElement.classList.contains('session-info-open')`)
+  await waitFor(`document.activeElement.getAttribute('aria-label') === 'Copy Session ID'`)
   await nativeKey('Escape', 'Escape', 27)
   await click('.mobile-sessions-toggle')
   window.webContents.disableDeviceEmulation()

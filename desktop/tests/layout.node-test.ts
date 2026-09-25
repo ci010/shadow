@@ -203,7 +203,15 @@ async function runFixture(t: TestContext, fixture: string, args: string[] = []):
     const output = resolve(process.env.SHADOW_LAYOUT_SCREENSHOTS)
     await mkdir(output, { recursive: true })
     for (const width of [1440, 390]) {
-      for (const state of ['bot-sidebar', 'bot-delete', 'bot-delete-error']) {
+      for (const state of ['bot-sidebar', 'bot-delete', 'bot-delete-error', 'bot-info', 'chat-info']) {
+        if (state.endsWith('info')) {
+          for (const theme of ['light', 'dark']) {
+            const name = `${state}-${width}-${theme}.png`
+            try { await access(join(directory, name)) } catch { continue }
+            await copyFile(join(directory, name), join(output, name))
+          }
+          continue
+        }
         const name = `${state}-${width}.png`
         try { await access(join(directory, name)) } catch { continue }
         await copyFile(join(directory, name), join(output, name))

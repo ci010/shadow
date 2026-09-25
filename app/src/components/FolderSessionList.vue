@@ -31,8 +31,14 @@
           <p v-if="session.description" class="session-info-description">{{ session.description }}</p>
           <p v-if="session.topic?.goal" class="session-info-description"><strong>Goal:</strong> {{ session.topic.goal }}</p>
           <p v-if="session.topic?.scope" class="session-info-description"><strong>Scope:</strong> {{ session.topic.scope }}</p>
-          <p class="session-info-id">{{ session.sessionId }}</p>
-          <p>{{ sessionActivity(stages[session.sessionId]).label }}<span v-if="!session.isDirectChat"> · Read-only</span></p>
+          <div class="session-info-status">
+            <SessionActivity :stage="stages[session.sessionId]" status-icons />
+            <span v-if="!session.isDirectChat" class="session-info-readonly"><span class="i-lucide-lock-keyhole" aria-hidden="true" />Read-only</span>
+          </div>
+          <div class="session-info-identity">
+            <span class="session-info-key">Session ID</span>
+            <CopyableId class="session-info-id" :value="session.sessionId" label="Session ID" />
+          </div>
           <p v-if="delegatedLabel(session)">{{ delegatedLabel(session) }}</p>
           <button class="session-info-open" @click="$emit('select', session.sessionId); close()">Open conversation</button>
           <template v-if="descendants(session).length">
@@ -52,8 +58,9 @@ import { sessionNavigationParent, visibleSessions, type SidebarSession } from '.
 import SessionActivity from './SessionActivity.vue'
 import TreeRow from './TreeRow.vue'
 import HoverInfo from './HoverInfo.vue'
+import CopyableId from './CopyableId.vue'
 import { rootSessionFamilies } from '../folder-rail.ts'
-import { isWorkingStage, prominentWorkingStage, sessionActivity } from '../session-activity.ts'
+import { isWorkingStage, prominentWorkingStage } from '../session-activity.ts'
 import { subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 const props = withDefaults(defineProps<{
   sessions: SidebarSession[]
@@ -100,7 +107,11 @@ function isWorking(session: SidebarSession) { return isWorkingStage(activityStag
 .session-info-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; max-height: 3em; overflow: hidden; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; font-weight: 600; }
 .session-info p { margin: 6px 0; color: var(--c-text-secondary); white-space: pre-line; overflow-wrap: anywhere; }
 .session-info-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; max-height: 4.5em; overflow: hidden; line-height: 1.5; }
-.session-info .session-info-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--c-text-faint); }
+.session-info-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+.session-info-readonly { display: inline-flex; align-items: center; gap: 6px; color: var(--c-text-secondary); }
+.session-info-readonly > span { width: 14px; height: 14px; }
+.session-info-identity { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--c-border-soft); }
+.session-info-key { font-size: 12px; color: var(--c-text-muted); }
 .session-info-related { max-height: min(204px, 30dvh); overflow: auto; overscroll-behavior: contain; }
 .session-info h4 { margin: 16px 0 6px; font-size: 12px; font-weight: 500; color: var(--c-text-secondary); }
 .session-info-open { margin-top: 6px; padding: 6px 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: transparent; color: var(--c-text); font: inherit; cursor: pointer; }

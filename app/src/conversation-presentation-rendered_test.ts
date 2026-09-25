@@ -32,16 +32,16 @@ test('conversation presentation and compacted history render across themes and v
   assert(start >= 0 && end > start)
   const skeleton = template.match(/<ConversationSkeleton[\s\S]*?\/>/)?.[0]
   assert.ok(skeleton, 'Use the actual loading condition and activity binding')
-  const continuityStart = template.indexOf('<nav v-if="previousPhysicalId && !viewingPhysicalId"')
+  const continuityStart = template.indexOf('<details v-if="unlinkedExecutions.length"')
   assert(continuityStart >= 0 && continuityStart < start)
-  const previousNavigation = template.match(/<nav v-if="viewingPhysicalId"[\s\S]*?<\/nav>/)?.[0]
-  assert.ok(previousNavigation)
+  const segmentNavigation = template.match(/<SegmentNavigation[\s\S]*?\/>/)?.[0]
+  assert.ok(segmentNavigation)
   const compiled = compileTemplate({
     source: `<div>
-      <SessionHeading v-if="compactionFixture" :api-base="apiBase" :session-id="activeSessionId"
+      <div v-if="compactionFixture" class="conversation-heading-row"><SessionHeading :api-base="apiBase" :session-id="activeSessionId"
         name="Daily preliminary review" project-name="Default" :topic="headingTopic" :physical-id="viewingPhysicalId"
-        :revision="0" :active="true" :can-rename="true" />
-      <div class="chat-history"><div class="chat-message-list">${skeleton}${template.slice(continuityStart, end)}${previousNavigation}
+        :revision="0" :active="true" :can-rename="true" />${segmentNavigation}</div>
+      <div class="chat-history"><div class="chat-message-list">${skeleton}${template.slice(continuityStart, end)}
       <div class="fixture-stages"><SessionActivity v-for="stage in ['idle', 'llm', 'tool', 'waiting', 'completed', 'failed']" :key="stage" :stage="stage" /></div>
       </div></div></div>`,
     filename: 'ConversationRows.vue', id: 'data-v-fixture', scoped: true,
@@ -75,6 +75,7 @@ test('conversation presentation and compacted history render across themes and v
           import MessageTimestamp from '/src/components/MessageTimestamp.vue';
           import SessionActivity from '/src/components/SessionActivity.vue';
           import SessionHeading from '/src/components/SessionHeading.vue';
+          import SegmentNavigation from '/src/components/SegmentNavigation.vue';
           import ConversationSummary from '/src/components/ConversationSummary.vue';
           import { inlineMessageActions } from '/src/message-actions.ts';
           import { groupToolActivity } from '/src/tool-activity.ts';
@@ -124,7 +125,7 @@ test('conversation presentation and compacted history render across themes and v
           createApp({
             __scopeId:'data-v-fixture',
             components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, CollaborationMessage,
-              SessionHeading, ConversationSummary, CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty,
+              SessionHeading, SegmentNavigation, ConversationSummary, CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
             setup() {
@@ -143,6 +144,7 @@ test('conversation presentation and compacted history render across themes and v
                 inspectExecution:nav.inspectExecution, clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
                 viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },
                 goBackToCurrentSegment(){ state.viewingPhysicalId = null },
+                viewNextSegment(){ state.viewingPhysicalId = null },
                 renderMarkdown:text => DOMPurify.sanitize(marked.parse(text)), isErrorMessage:() => false };
             },
           }).mount('#app');`

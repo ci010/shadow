@@ -69,14 +69,17 @@
         <p v-else class="draft-scratch">From scratch &middot; No folder selected</p>
       </div>
       <template v-else>
-        <div v-show="!mobileLayout" class="conversation-heading-row">
+        <div v-show="!mobileLayout || previousPhysicalId || viewingPhysicalId" class="conversation-heading-row">
           <button v-if="embedded && executionParent" class="btn btn-sm" aria-label="Back to owning execution" @click="inspectExecution(executionParent.sessionId)">
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
-          <SessionHeading ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
+          <SessionHeading v-show="!mobileLayout" ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
             :name="activeSessionName" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :can-rename="installation.uiScopes.includes('chat:write')" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
+          <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId" :has-previous="!!previousPhysicalId"
+            :historical="!!viewingPhysicalId" :busy="loadingHistory" @previous="viewPreviousSegment"
+            @next="viewNextSegment" @current="goBackToCurrentSegment" />
         </div>
 
         <!-- Messages -->
@@ -89,10 +92,6 @@
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
-          <!-- Segment navigation: view previous (top) -->
-          <nav v-if="previousPhysicalId && !viewingPhysicalId" class="segment-nav" aria-label="Conversation segments">
-            <button type="button" class="segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left" aria-hidden="true" /> View previous session</button>
-          </nav>
           <details v-if="unlinkedExecutions.length" class="unlinked-executions history-disclosure">
             <summary><span class="history-chevron i-lucide-chevron-right" aria-hidden="true" /><span>Other execution traces</span><span class="history-count">{{ unlinkedExecutions.length }}</span></summary>
             <div class="history-executions">
@@ -206,12 +205,6 @@
             </div>
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
-          <!-- Segment navigation: back to current + view older (bottom) -->
-          <nav v-if="viewingPhysicalId" class="segment-nav" aria-label="Conversation segments">
-            <button type="button" class="segment-nav-btn" @click="goBackToCurrentSegment">Back to current <span class="i-lucide-arrow-right" aria-hidden="true" /></button>
-            <span class="segment-nav-label">Viewing previous session</span>
-            <button v-if="previousPhysicalId" type="button" class="segment-nav-btn" @click="viewPreviousSegment"><span class="i-lucide-arrow-left" aria-hidden="true" /> View older session</button>
-          </nav>
           </div>
         </div>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
@@ -235,7 +228,7 @@
         <div v-else-if="sessionWorking && !viewingPhysicalId" class="chat-working" :class="sessionStage" role="status" aria-live="polite">
           <SessionActivity :stage="sessionStage" />
           <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
-          <span v-if="!isWaitingStage(sessionStage)" class="working-wave" aria-hidden="true"><i /><i /><i /></span>
+          <WorkingWave v-if="!isWaitingStage(sessionStage)" />
         </div>
         <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="activeSessionId"
           :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
@@ -432,6 +425,8 @@ import SelectionMenu from './SelectionMenu.vue'
 import { insertQuote } from '../selection-actions.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import SessionActivity from './SessionActivity.vue'
+import SegmentNavigation from './SegmentNavigation.vue'
+import WorkingWave from './WorkingWave.vue'
 import YieldQuestion from './YieldQuestion.vue'
 import SessionWorkControls from './SessionWorkControls.vue'
 import CollaborationMessage from './CollaborationMessage.vue'
@@ -1712,7 +1707,7 @@ async function loadCurrentSession(): Promise<void> {
 }
 
 async function loadDirectChat(background = false): Promise<void> {
-  if (deferActiveHistory && requestBusy.value && messages.value.length) return
+  if (deferActiveHistory && requestBusy.value && messages.value.length && !viewingPhysicalId.value) return
   historyRequest?.abort()
   const controller = new AbortController()
   historyRequest = controller
@@ -1821,8 +1816,18 @@ async function loadReadonlySession(background = false): Promise<void> {
 // ── Segment navigation ───────────────────────────────────────────────────────
 
 async function viewPreviousSegment(): Promise<void> {
-  if (!previousPhysicalId.value) return
-  const physId = previousPhysicalId.value
+  if (!previousPhysicalId.value || loadingHistory.value) return
+  await loadHistoricalSegment(previousPhysicalId.value, 'previous')
+}
+
+async function viewNextSegment(): Promise<void> {
+  if (!viewingPhysicalId.value || loadingHistory.value) return
+  const next = physicalIdStack.value.at(-1)
+  if (!next) { await goBackToCurrentSegment(); return }
+  await loadHistoricalSegment(next, 'next')
+}
+
+async function loadHistoricalSegment(physId: string, direction: 'previous' | 'next'): Promise<void> {
   historyRequest?.abort()
   const controller = new AbortController()
   historyRequest = controller
@@ -1833,9 +1838,12 @@ async function viewPreviousSegment(): Promise<void> {
     const data = await res.json()
     if (controller.signal.aborted) return
     const rawMessages: RawMessage[] = data.messages ?? []
-    physicalIdStack.value.push(viewingPhysicalId.value ?? '')
-    messages.value = mergeCommandResults(collapseHistory(rawMessages), data.commandResults)
-    decisionRecords.value = parseDecisionRecords(data.decisionRecords ?? [])
+    const nextMessages = mergeCommandResults(collapseHistory(rawMessages), data.commandResults)
+    const nextDecisions = parseDecisionRecords(data.decisionRecords ?? [])
+    if (direction === 'previous') physicalIdStack.value.push(viewingPhysicalId.value ?? '')
+    else physicalIdStack.value.pop()
+    messages.value = nextMessages
+    decisionRecords.value = nextDecisions
     decisionRecordError.value = ''
     viewingPhysicalId.value = physId
     previousPhysicalId.value = data.previousPhysicalId ?? null
@@ -1852,9 +1860,7 @@ async function viewPreviousSegment(): Promise<void> {
 }
 
 async function goBackToCurrentSegment(): Promise<void> {
-  viewingPhysicalId.value = null
-  previousPhysicalId.value = null
-  physicalIdStack.value = []
+  if (loadingHistory.value) return
   await loadCurrentSession()
 }
 
@@ -2489,6 +2495,12 @@ function resendLastMessage() {
 .chat-panel { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .conversation-heading-row { display: flex; align-items: center; flex-shrink: 0; min-width: 0; }
 .conversation-heading-row > :deep(.session-heading) { flex: 1; }
+.conversation-heading-row > :deep(.segment-nav) { margin-left: auto; }
+@media (max-width: 700px) {
+  .conversation-heading-row:has(.segment-nav) :deep(.heading-folder),
+  .conversation-heading-row:has(.segment-nav) :deep(.heading-separator) { display: none; }
+  .conversation-heading-row:has(.segment-nav) :deep(.heading-name) { max-width: none; }
+}
 .conversation-dock { position: absolute; inset: auto 0 0; display: flex; flex-direction: column; pointer-events: none; z-index: 3; }
 .conversation-dock:not(.in-flow):has(> .chat-composer)::before {
   content: '';
@@ -2532,12 +2544,7 @@ function resendLastMessage() {
 .chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
 .execution-summary { flex-wrap: wrap; border-color: var(--c-border); background: var(--c-bg-soft); }
 .execution-summary .chat-working-detail { display: block; white-space: normal; }
-.working-wave { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; height: 16px; margin-left: auto; }
-.working-wave i { width: 3px; height: 13px; border-radius: var(--radius-sm); background: currentColor; animation: working-wave 1.2s ease-in-out infinite; }
-.working-wave i:nth-child(2) { animation-delay: .15s; }
-.working-wave i:nth-child(3) { animation-delay: .3s; }
-@keyframes working-wave { 0%, 100% { transform: scaleY(.35); opacity: .45; } 50% { transform: scaleY(1); opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .working-wave i { animation: none; } }
+.working-wave { margin-left: auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: 860px; margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
 .composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-blue); }
@@ -2731,7 +2738,7 @@ function resendLastMessage() {
 .mobile-message-settings :deep(.composer-control), .mobile-message-settings .context-action { width: 100%; min-height: 44px; justify-content: flex-start; font-size: 14px; }
 .conversation-empty { color: var(--c-text-secondary); font-size: 14px; user-select: none; }
 
-.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card, .message-action, .segment-nav, .history-disclosure)) {
+.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
   min-width: 0;
   max-width: var(--conversation-item-max-width);
   align-self: flex-start;
@@ -2791,43 +2798,9 @@ button.chat-session-source:focus-visible { outline: 2px solid var(--c-blue); out
 .history-execution-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .history-execution > .i-lucide-arrow-up-right { flex: 0 0 14px; width: 14px; height: 14px; color: var(--c-text-secondary); }
 .history-execution:hover { background: var(--c-bg-muted); }
-.history-execution:focus-visible, .segment-nav-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-
-.segment-nav {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  width: 100%;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--c-border);
-  font-size: 12px;
-}
-
-.segment-nav-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px;
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--c-text-secondary);
-  font: inherit;
-  line-height: 20px;
-  text-align: left;
-  cursor: pointer;
-}
-.segment-nav-btn > span { flex: 0 0 14px; width: 14px; height: 14px; }
-.segment-nav-btn:hover { background: var(--c-bg-soft); color: var(--c-text); }
-
-.segment-nav-label {
-  color: var(--c-text-muted);
-  padding-inline: 8px;
-}
+.history-execution:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 @media (pointer: coarse) {
-  .segment-nav-btn, .history-disclosure > summary, .history-execution { min-height: 44px; }
+  .history-disclosure > summary, .history-execution { min-height: 44px; }
 }
 
 .chat-sender {

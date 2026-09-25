@@ -77,8 +77,23 @@
           <template #meta>
             <SessionActivity v-if="folderWorkingStage(bot.sessions) || folderHasSubagents(bot.sessions)" :stage="folderWorkingStage(bot.sessions)" :subagents="folderSubagents(bot.sessions)" compact :icon-only="isRail" :title="undefined" />
             <span class="bot-connection" :data-state="bot.connection.state" :title="bot.connection.label" aria-hidden="true">
-              <span :class="bot.connection.icon" />
+              <WorkingWave v-if="bot.connection.state === 'connecting'" />
+              <span v-else :class="bot.connection.icon" />
             </span>
+          </template>
+          <template #info>
+            <div class="bot-info">
+              <strong class="bot-info-title">{{ bot.label }}</strong>
+              <div class="bot-info-status" :data-state="bot.connection.state">
+                <WorkingWave v-if="bot.connection.state === 'connecting'" />
+                <span v-else :class="bot.connection.icon" aria-hidden="true" />
+                <span>{{ bot.connection.label }}</span>
+              </div>
+              <dl class="bot-info-details">
+                <div><dt>Platform</dt><dd>{{ botPlatformLabel(bot.platform) }}</dd></div>
+                <div><dt>Bot ID</dt><dd><CopyableId :value="bot.id" label="Bot ID" /></dd></div>
+              </dl>
+            </div>
           </template>
         </TreeRow>
         <div v-show="!collapsedBots.has(bot.id)" :id="domId(`bot-conversations-${encodeURIComponent(bot.id)}`)">
@@ -113,6 +128,8 @@ import TreeRow from './TreeRow.vue'
 import SidebarResizer from './SidebarResizer.vue'
 import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'
+import WorkingWave from './WorkingWave.vue'
+import CopyableId from './CopyableId.vue'
 import AutomationSidebar from './AutomationSidebar.vue'
 import { railInitial } from '../folder-rail.ts'
 import { prominentWorkingStage } from '../session-activity.ts'
@@ -121,7 +138,7 @@ import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 import { createFoldersClient, type CloneView, type FolderRecord } from '../folders-client.ts'
 import { automationSessionOwners, groupFolderSessions, FOLDER_ACTIONS, type SidebarSession } from '../folders-sidebar.ts'
 import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
-import { groupBotConversations, restoreCollapsedBots, saveCollapsedBots, type SidebarBot } from '../bot-sidebar.ts'
+import { botPlatformLabel, groupBotConversations, restoreCollapsedBots, saveCollapsedBots, type SidebarBot } from '../bot-sidebar.ts'
 
 const props = defineProps<{
   apiBase: string
@@ -374,10 +391,19 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .legacy-chats { margin-top: var(--sidebar-section-gap); }
 .legacy-chats:first-child { margin-top: 0; }
 .bot-connection { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-inline-start: 6px; flex-shrink: 0; color: var(--c-text-secondary); }
-.bot-connection > span { width: 13px; height: 13px; }
+.bot-connection > span:not(.working-wave) { width: 13px; height: 13px; }
 .bot-connection[data-state="connected"] { color: var(--c-success); }
 .bot-connection[data-state="restart-required"] { color: var(--c-warn); }
 .bot-connection[data-state="error"] { color: var(--c-error); }
+.bot-info-title { display: block; font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.bot-info-status { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--c-text-secondary); }
+.bot-info-status > span:first-child { flex: 0 0 16px; width: 16px; height: 16px; }
+.bot-info-status[data-state="connected"] { color: var(--c-success); }
+.bot-info-status[data-state="error"] { color: var(--c-error); }
+.bot-info-status[data-state="restart-required"] { color: var(--c-warn); }
+.bot-info-details { display: grid; gap: 12px; margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--c-border-soft); }
+.bot-info-details dt { color: var(--c-text-muted); font-size: 12px; }
+.bot-info-details dd { margin: 2px 0 0; color: var(--c-text); font-size: 13px; }
 .legacy-chats h3 { margin: 0 0 var(--sidebar-heading-gap); padding-inline: calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)) var(--sidebar-row-inset); font-size: 12px; line-height: 20px; font-weight: 500; color: var(--c-text-secondary); }
 .sidebar-note { margin: 8px 12px 16px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; }
 .sidebar-error { margin: 12px; color: var(--c-error); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }

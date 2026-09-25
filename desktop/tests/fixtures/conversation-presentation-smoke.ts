@@ -225,8 +225,9 @@ async function main() {
           const summary = document.querySelector('.compaction-summary');
           const body = document.querySelector('.compaction-summary-body');
           return {
-            widths:[nav, traces, summary].map(el => el.getBoundingClientRect().width),
-            lefts:[nav, traces, summary].map(el => el.getBoundingClientRect().left),
+            widths:[traces, summary].map(el => el.getBoundingClientRect().width),
+            lefts:[traces, summary].map(el => el.getBoundingClientRect().left),
+            headingNavigation:nav.closest('.conversation-heading-row') !== null && !nav.closest('.chat-history'),
             backgrounds:[nav, ...document.querySelectorAll('.segment-nav-btn, .history-execution')].map(el => getComputedStyle(el).backgroundColor),
             fontSizes:[traces.querySelector('summary'), summary.querySelector('summary')].map(el => getComputedStyle(el).fontSize),
             overflow:document.documentElement.scrollWidth > innerWidth,
@@ -238,6 +239,7 @@ async function main() {
         })()`)
         assert(continuity.widths.every((value: number) => Math.abs(value - continuity.widths[0]) < 1), 'All history controls share the conversation rail')
         assert(continuity.lefts.every((value: number) => Math.abs(value - continuity.lefts[0]) < 1))
+        assert.equal(continuity.headingNavigation, true)
         assert(continuity.backgrounds.every((value: string) => value === 'rgba(0, 0, 0, 0)'), 'History navigation is not a primary blue action')
         assert.deepEqual(continuity.fontSizes, ['12px', '12px'])
         assert.equal(continuity.overflow, false)
@@ -270,10 +272,10 @@ async function main() {
     await wait(`window.__conversationFixture.navigation.length === 1`)
     window.webContents.debugger.detach()
     assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[0]))`), { event: 'navigate', id: 'web:peer' })
-    await execute(`document.querySelector('.segment-nav-btn').click()`)
-    await wait(`document.querySelector('.segment-nav-label')?.textContent === 'Viewing previous session'`)
-    await execute(`document.querySelector('.segment-nav-btn').click()`)
-    await wait(`document.querySelector('.segment-nav-btn')?.textContent.includes('View previous session')`)
+    await execute(`document.querySelector('[aria-label="View previous session"]').click()`)
+    await wait(`document.querySelector('.segment-position')?.textContent === 'Viewing previous session'`)
+    await execute(`document.querySelector('[aria-label="Back to current session"]').click()`)
+    await wait(`document.querySelector('.segment-position')?.textContent === 'Current session'`)
     await execute(`window.__conversationFixture.activeSessionId = 'web:orchestrator'; window.__conversationFixture.headingTopic = undefined`)
     await frame()
     await execute(`document.querySelector('.session-heading .composer-control').click()`)

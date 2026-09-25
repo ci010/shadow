@@ -19,6 +19,7 @@ export interface BotConversationGroup {
 }
 
 const platformNames: Record<string, string> = { qq: 'QQ', discord: 'Discord', feishu: 'Feishu' }
+export function botPlatformLabel(platform: string) { return platformNames[platform] ?? platform }
 const connectionIcons: Record<ChannelState, string> = {
   connected: 'i-lucide-circle-check', connecting: 'i-lucide-loader-circle',
   disconnected: 'i-lucide-circle-minus', disabled: 'i-lucide-circle-minus',
@@ -47,7 +48,7 @@ export function groupBotConversations(sessions: SidebarSession[], projectId: str
       const bot = bots.find(bot => bot.projectId === projectId && bot.id === address.botInstanceId && bot.platform === address.platform)
       group = {
         id: address.botInstanceId, platform: address.platform,
-        label: bot?.displayName || `${platformNames[address.platform] ?? address.platform} · ${address.botInstanceId}`,
+        label: bot?.displayName || `${botPlatformLabel(address.platform)} · ${address.botInstanceId}`,
         connection: botConnectionIndicator(bot?.connection),
         sessions: [],
       }

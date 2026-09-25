@@ -33,6 +33,8 @@ let supportStage = 'tool'
 const id = (projectId: string, botInstanceId: string, conversationId: string) =>
   channelSessionId({ projectId, botInstanceId, platform: 'qq', conversationId })
 const supportDm = id('a', 'qq-one', 'dm:person')
+const previousSegments = new Map([[supportDm, 'support-previous'], ['support-previous', 'support-oldest']])
+let rejectSegmentRead = false
 const supportGroup = id('a', 'qq-one', 'group:room')
 const personalDm = id('a', 'qq-two', 'dm:person')
 const personalGroup = id('a', 'qq-two', `group:${'shared-room-'.repeat(24)}`)
@@ -75,7 +77,7 @@ const server = createServer(async (request, response) => {
     if (path === '/api/agent-resources/publication-requests') return json({ request: null })
     if (path === '/api/agent-resources/probe-requests') return json({ requests: [] })
     if (path === '/api/sessions/graph') return json({ sessions: sessions.filter(row => row.projectId === projectId).map(row => ({ ...row, current: `physical-${row.sessionId}` })), nodes: [] })
-    if (path === '/api/sessions/stages') return json({ stages: projectId === 'a' ? { [supportGroup]: supportStage } : {} })
+    if (path === '/api/sessions/stages') return json({ stages: projectId === 'a' ? { [supportGroup]: supportStage, [supportDm]: 'inactive' } : {} })
     if (path === '/api/provider/setup') return json({ ready: true, provider: 'custom', model: 'synthetic', authMode: 'none', hasApiKey: false })
     if (path === '/api/provider/configured') return json({ providers: [] })
     if (path === '/debug/models') return json({ models: ['synthetic'] })
@@ -104,7 +106,10 @@ const server = createServer(async (request, response) => {
         sessionId, name: record?.title, workdir: { kind: 'local', displayPath: 'C:\\fixture' },
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageScope: 'session', context: { usedTokens: null, windowTokens: null },
       })
-      if (!route[2]) return json({ messages: [{ role: 'user', content: record?.title ?? 'Fixture' }], currentPhysicalId: `physical-${sessionId}`, previousPhysicalId: null })
+      if (!route[2]) {
+        if (sessionId === 'support-oldest' && rejectSegmentRead) { rejectSegmentRead = false; return json({ error: 'synthetic_history_failure' }, 503) }
+        return json({ messages: [{ role: 'user', content: record?.title ?? sessionId }], currentPhysicalId: `physical-${sessionId}`, previousPhysicalId: previousSegments.get(sessionId) ?? null })
+      }
     }
     if (/^\/(?:api|nodes|debug|local)\//.test(path)) {
       errors.push(`Unexpected ${request.method} ${projectId} ${path}`)
@@ -211,6 +216,28 @@ async function main(): Promise<void> {
     if (width < 700) await click('.projects-toggle')
     await assertChatSelection('Support DM')
     const connection = `${support} .bot-connection`
+    const segment = (label: string) => `.conversation-heading-row [aria-label="${label}"]`
+    await waitFor(`document.querySelector(${JSON.stringify(segment('View previous session'))})?.disabled === false`)
+    const headingHeight = await evaluate(`document.querySelector('.conversation-heading-row').getBoundingClientRect().height`)
+    assert.equal(await evaluate(`document.querySelectorAll('.chat-messages .segment-nav').length`), 0)
+    await click(segment('View previous session'))
+    await waitFor(`document.querySelector('.chat-message-list')?.textContent.includes('support-previous')`)
+    rejectSegmentRead = true
+    await click(segment('View previous session'))
+    await waitFor(`document.querySelector('.composer-error')?.textContent.includes('Could not load this historical segment')`)
+    assert.equal(await evaluate(`document.querySelector('.chat-message-list').textContent.includes('support-previous')`), true)
+    await click(segment('View previous session'))
+    await waitFor(`document.querySelector('.chat-message-list')?.textContent.includes('support-oldest')`)
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(segment('View previous session'))}).disabled`), true)
+    await click(segment('View next session'))
+    await waitFor(`document.querySelector('.chat-message-list')?.textContent.includes('support-previous')`)
+    await click(segment('View next session'))
+    await waitFor(`document.querySelector('.segment-position')?.textContent === 'Current session'`)
+    await click(segment('View previous session'))
+    await waitFor(`document.querySelector('.chat-message-list')?.textContent.includes('support-previous')`)
+    await click(segment('Back to current session'))
+    await waitFor(`document.querySelector('.segment-position')?.textContent === 'Current session'`)
+    assert.equal(await evaluate(`document.querySelector('.conversation-heading-row').getBoundingClientRect().height`), headingHeight)
     await waitFor(`document.querySelector(${JSON.stringify(connection)})?.dataset.state === 'connected'`)
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(connection)}).textContent.trim()`), '', 'Connection is icon-only')
     assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(`${support} .bot-toggle`)}).getAttribute('aria-label')`), /Connected/)
@@ -227,6 +254,27 @@ async function main(): Promise<void> {
       publisher.invalidateSessions(supportGroup)
       await waitFor(`document.querySelector(${JSON.stringify(connection)})?.dataset.state === ${JSON.stringify(state)}`)
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${other} .bot-connection`)}).dataset.state`), 'connected')
+      if (state === 'connecting') {
+        const bars = `${connection} .working-wave i`
+        await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+        assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(bars)})).map(bar => {
+          const style = getComputedStyle(bar);
+          return { width: style.width, radius: style.borderRadius, duration: style.animationDuration, delay: style.animationDelay };
+        })`), [
+          { width: '3px', radius: '0px', duration: '1.2s', delay: '0s' },
+          { width: '3px', radius: '0px', duration: '1.2s', delay: '0.15s' },
+          { width: '3px', radius: '0px', duration: '1.2s', delay: '0.3s' },
+        ])
+        const transform = () => evaluate<string>(`getComputedStyle(document.querySelector(${JSON.stringify(bars)})).transform`)
+        const before = await transform()
+        await new Promise(resolve => setTimeout(resolve, 200))
+        assert.notEqual(await transform(), before, 'Connecting bars must visibly animate, not just carry an animation class')
+        await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(bars)})).animationName`), 'none')
+        await window.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] })
+      } else {
+        assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(`${connection} .working-wave`)}).length`), 0)
+      }
     }
     unavailableBotStatus = true
     publisher.invalidateSessions(supportGroup)
@@ -235,6 +283,54 @@ async function main(): Promise<void> {
     unavailableBotStatus = false
     publisher.invalidateSessions(supportGroup)
     await waitFor(`document.querySelector(${JSON.stringify(connection)})?.dataset.state === 'connected'`)
+    await evaluate(`Object.defineProperty(navigator, 'clipboard', { configurable:true, value:{ writeText:async value => {
+      if (window.rejectCopy) throw new Error('Clipboard denied');
+      window.copiedValue = value;
+    } } })`)
+    const openInfo = async (selector: string) => {
+      await evaluate(`document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight',bubbles:true,cancelable:true}))`)
+      await waitFor(`document.querySelector('.hover-info-popup[role="dialog"]')?.contains(document.activeElement)`)
+    }
+    const closeInfo = async () => {
+      await window!.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+      await window!.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+      await waitFor(`!document.querySelector('.hover-info-popup')`)
+    }
+    const captureInfo = async (name: string) => {
+      for (const dark of [false, true]) {
+        await evaluate(`document.documentElement.classList.toggle('dark', ${dark})`)
+        await new Promise(resolve => setTimeout(resolve, 60))
+        assert.equal(await evaluate(`(() => {
+          const popup = document.querySelector('.hover-info-popup'); const r = popup.getBoundingClientRect();
+          return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight && popup.scrollWidth <= popup.clientWidth;
+        })()`), true)
+        await writeFile(join(directory, `${name}-${width}-${dark ? 'dark' : 'light'}.png`), (await window.webContents.capturePage()).toPNG())
+      }
+    }
+    await openInfo(`${support} .bot-toggle`)
+    assert.equal(await evaluate(`document.querySelector('.bot-info-title').textContent`), 'Support bot')
+    assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('.bot-info-details dt')).map(node => node.textContent)`), ['Platform', 'Bot ID'])
+    assert.equal(await evaluate(`document.querySelector('.bot-info-details dd').textContent`), 'QQ')
+    await captureInfo('bot-info')
+    await click('.bot-info button[aria-label="Copy Bot ID"]')
+    await waitFor(`document.querySelector('.bot-info [role="status"]')?.textContent === 'Copied'`)
+    assert.equal(await evaluate('window.copiedValue'), 'qq-one')
+    await closeInfo()
+    await openInfo(`${support} .session-select`)
+    await waitFor(`document.querySelector('.session-info .status-icon')`)
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.session-info .status-icon')).maskImage !== 'none'`), true)
+    assert.equal(await evaluate(`document.querySelector('.session-info .activity-label').textContent`), 'Inactive')
+    await captureInfo('chat-info')
+    await click('.session-info button[aria-label="Copy Session ID"]')
+    await waitFor(`document.querySelector('.session-info [role="status"]')?.textContent === 'Copied'`)
+    assert.equal(await evaluate('window.copiedValue'), supportDm)
+    await evaluate('window.rejectCopy = true')
+    await click('.session-info .copyable-id button')
+    await waitFor(`document.querySelector('.session-info [role="alert"]')?.textContent.includes('Could not copy')`)
+    assert.equal(await evaluate(`document.querySelector('.session-info-id .copy-value').textContent`), supportDm)
+    await evaluate('window.rejectCopy = false')
+    await closeInfo()
+    assert.equal(await evaluate(`document.activeElement.matches(${JSON.stringify(`${support} .session-select`)})`), true)
     assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(`${projectA} .bot-conversations`)}).length`), 2)
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(support)}).textContent.includes('Personal room')`), false)
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(projectA)}).textContent.includes('Other Project DM')`), false)

@@ -381,6 +381,20 @@ appropriate state; the toolbar does not grant backend access.
 
 ### Connection and recovery
 
+Sidebar hover details distinguish identity, state and technical metadata.
+Bot names lead at (14px) semibold, followed by a labeled connection icon, then
+Platform and Bot ID below a quiet divider. Conversation details show a
+state-specific icon beside their status, including inactive and unknown states.
+Session IDs have an adjacent copy icon with copied/error feedback; Bot IDs use
+the same control. Copy the complete value even when its display is truncated.
+Keep normal hover dismissal, keyboard entry and square controls.
+
+Bot connection-in-progress indicators reuse the thinking indicator's three
+square vertical bars (`WorkingWave`): (3px) wide, (13px) tall, with a (1.2s)
+staggered scale/opacity animation. Keep the sidebar's (16px) status slot fixed.
+Other connection states retain their icons; reduced-motion preferences show
+static bars instead of a continuous animation.
+
 Browser connection forms use one full-width primary submit action beneath the
 input and help text. Session checks and alternative pairing methods sit in a
 separate, centered column of quiet text buttons below a structural divider.
@@ -397,6 +411,14 @@ shadow, reserving warning color for the status mark rather than a full-width
 banner.
 
 ### Conversation and action cards
+
+Physical session history is navigated from the conversation heading, not from
+rows above or below the messages. Use three compact Git-style node controls:
+previous segment, return to current, and next segment. Next retraces visited
+segments one at a time; the middle control jumps directly to the live session.
+Keep all three slots stable, disable unavailable directions and navigation while
+loading, and provide explicit hover/accessibility labels. On narrow or touch
+layouts, targets grow to (44px); the controls remain above the conversation.
 
 `ChatTab.vue` uses the chat aliases with a one-pixel border and padding (0.5rem 0.75rem). Peer messages preserve their source label and dashed border; source-label strong text is secondary neutral ink. An actionable source label underlines and uses normal ink on hover and exposes blue focus; sender identity itself is not teal or a success state.
 

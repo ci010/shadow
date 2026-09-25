@@ -70,6 +70,7 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify(value))
     }
     const status = { provider: 'copilot', model: 'gpt-5-mini@copilot', authMode: 'copilot', ready: true, hasApiKey: false }
+    if (path === '/api/web-auth/session') return json({ version: 1, required: false, authenticated: true })
     if (path === '/api/projects') return json({ projects: [{ id: 'default', name: 'Default', createdAt: '2026-09-16T00:00:00Z' }] })
     if (path === '/api/automations') return json({ automations: [] })
     if (path === '/api/provider/setup') return json(status)
@@ -426,16 +427,33 @@ async function runViewport(origin: string, width: number, height: number) {
       const receipt: CommandReceipt = { id: `historical-receipt-${width}`, command: '/help historical',
         output: 'Display-only receipt from the previous physical segment.', timestamp: '2026-09-01T00:00:00.000Z', failed: false }
       receipts.set(physical, [receipt])
+      const older = `older-command-${width}`
+      const olderReceipt = { ...receipt, id: `older-receipt-${width}`, output: 'An older physical segment.' }
+      receipts.set(older, [olderReceipt])
+      previous.set(physical, older)
       previous.set(sessionId, physical)
       await window.loadURL(window.webContents.getURL())
-      await waitFor(window, `Array.from(document.querySelectorAll('.segment-nav-btn')).some(button => button.textContent.includes('View previous session'))`)
-      await evaluate(window, `Array.from(document.querySelectorAll('.segment-nav-btn')).find(button => button.textContent.includes('View previous session')).click()`)
+      await waitFor(window, `document.querySelector('[aria-label="View previous session"]')?.disabled === false`)
+      const heading = await evaluate(window, `document.querySelector('.conversation-heading-row').getBoundingClientRect().height`)
+      assert.equal(await evaluate(window, `document.querySelectorAll('.chat-messages .segment-nav').length`), 0)
+      await evaluate(window, `document.querySelector('[aria-label="View previous session"]').click()`)
       await visibleReceipt(window, receipt)
       assert.equal(await evaluate(window, `document.querySelectorAll('.command-result').length`), 1, 'Only receipts from the viewed segment are shown')
       assert.equal(await evaluate(window, `document.querySelectorAll('.chat-bubble').length`), 0)
       await screenshot(window, `command-historical-${width}`)
+      await evaluate(window, `document.querySelector('[aria-label="View previous session"]').click()`)
+      await visibleReceipt(window, olderReceipt)
+      assert.equal(await evaluate(window, `document.querySelector('[aria-label="View previous session"]').disabled`), true)
+      await evaluate(window, `document.querySelector('[aria-label="View next session"]').click()`)
+      await visibleReceipt(window, receipt)
+      assert.equal(await evaluate(window, `document.querySelector('.conversation-heading-row').getBoundingClientRect().height`), heading)
+      await evaluate(window, `document.querySelector('[aria-label="View next session"]').click()`)
+      await visibleReceipt(window, first!)
+      await waitFor(window, `document.querySelector('[aria-label="View previous session"]')?.disabled === false`)
+      await evaluate(window, `document.querySelector('[aria-label="View previous session"]').click()`)
+      await visibleReceipt(window, receipt)
       assert.equal(await evaluate(window, `(() => {
-        const back = Array.from(document.querySelectorAll('.segment-nav-btn')).find(button => button.textContent.includes('Back to current'));
+        const back = document.querySelector('[aria-label="Back to current session"]');
         if (!back) return false;
         back.click(); return true;
       })()`), true, 'Historical segment must remain selected until Back to current is clicked')
