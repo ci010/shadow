@@ -33,6 +33,7 @@ import { StartupTimings } from '../startup-timings.ts'
 import { BrowserAuth } from '../../gateway/web-auth.ts'
 import { MainDeviceNetwork } from './device-network.ts'
 import { MobileAccess, mobileGatewayConfig } from '../../gateway/mobile-access.ts'
+import { a2aRequestProject } from '../../a2a/config.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -197,7 +198,11 @@ export async function startProjectHost(
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
   registerGatewayRoutes(app, [browserAuth.plugin(), ...(mobileAccess ? [mobileAccess.managementPlugin()] : []), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appWebSearchPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
-    launchCredential, browserAuth, clientAddresses, authorizeClient: request => !!mobileAccess?.authorizeMain(request),
+    launchCredential, browserAuth, clientAddresses, authorizeClient: request => {
+      if (mobileAccess?.authorizeMain(request)) return true
+      const projectId = a2aRequestProject(request)
+      return projectId ? runtimes.get(projectId)?.authorizeA2a?.(request) ?? false : false
+    },
     launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
   })
   registerRealtimeRoute(app, realtimeHub, authorize)

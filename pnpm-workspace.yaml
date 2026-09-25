@@ -2,6 +2,7 @@ packages:
   - app
   - desktop
   - mobile
+  - integrations/a2a
 
 # Nearest stable versions available from the required Microsoft npm proxy.
 overrides:
@@ -14,3 +15,4 @@ allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
+  koffi: false

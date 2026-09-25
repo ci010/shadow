@@ -1800,6 +1800,30 @@ jobs, learning polls, and the WIP device-transport heartbeat.
 
 ## Channels, gateway, and UI
 
+### A2A text boundary
+
+[`src/a2a/`](../src/a2a/) adds an opt-in Project-owned A2A 1.0 JSON-RPC
+endpoint and outbound tools. It uses the existing Hono host and
+`SessionManager.deliver()`; no parallel model/tool loop is introduced.
+Protocol task records are separate from session history, with authenticated
+caller ownership, durable admission deduplication and conservative restart
+failure. Both JSONL and SQLite remain valid session backends.
+
+Machine credentials only authorize exact scoped A2A paths, not host APIs.
+The surface supports text, task-state SSE, query, requested-input continuation
+and cancellation. Outbound calls use configured URL pairs and session-owned
+handles; bounded polling queues completion/input updates to the owning session
+as external events. Uncertain submissions and notification deliveries are not
+blindly replayed.
+
+The independent [`integrations/a2a/`](../integrations/a2a/) workspace hosts
+official Claude, Codex and Copilot SDKs behind the same protocol service. These
+processes own explicit local workdirs and private SDK state, never replacing
+Shadow's session loop or importing those SDKs into Electron. A stdio MCP entry
+lets external coding clients call configured A2A endpoints. Text input does not
+grant permissions. This is not a general remote-workdir capability or complete
+A2A binding parity. See [A2A setup and limitations](a2a.md).
+
 ### Channels and media
 
 `ChannelManager` instantiates enabled project bot instances for Discord,

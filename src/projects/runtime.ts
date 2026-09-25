@@ -25,6 +25,7 @@ export interface ProjectRuntimeDependencies {
 }
 
 export interface ProjectRuntime {
+  authorizeA2a?(request: Request): boolean
   readonly app: Hono
   readonly folders: FolderRegistry
   readonly ready: Promise<void>

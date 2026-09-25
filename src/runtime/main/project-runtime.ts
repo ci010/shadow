@@ -143,6 +143,8 @@ import { registerIoRoutes } from '../../io/routes.ts'
 import { IoCapabilitiesTool, IoRunTool } from '../../tools/io.ts'
 import { IoSurfaceTool } from '../../tools/io-surface.ts'
 import { createPromptCaptureStore } from '../../sessions/prompt-capture.ts'
+import { createA2aRuntime } from '../../a2a/runtime.ts'
+import { isDeepStrictEqual } from 'node:util'
 
 function resolvePrimaryProviderName(modelSpec: string): string {
   const { model, provider } = parseModelSpec(modelSpec)
@@ -507,6 +509,9 @@ export async function createProjectRuntime(
     onSessionStopped: (id) => backgroundTasks.handleSessionStopped(id),
   })
   cleanup.push(() => sessions.stop())
+  const a2a = createA2aRuntime({ projectId: project.id, workspace, config: config.a2a, app, sessions, bus, agentTypes })
+  cleanup.push(() => a2a.close())
+  for (const tool of a2a.tools) importTool.registerBuiltin(tool.name, tool)
   deliverInput = (sessionId, input) => sessions.deliver(sessionId, input)
   const ioLocations = (sessionId: string) => {
     const state = sessions.getSessionState(sessionId)
@@ -949,6 +954,9 @@ export async function createProjectRuntime(
   app.get('/api/learning', c => c.json(learning.status()))
 
   const updateConfig = async (newConfig: Config) => {
+      if (!isDeepStrictEqual(newConfig.a2a, activeConfig.a2a)) {
+        throw new Error('A2A configuration changes require a Project backend restart; edit the Project configuration while stopped.')
+      }
       const newProvider = createAggregatedProvider(newConfig, copilotAuth)
       const newQuickModel = newConfig.agent.quickModel
       const newLlm = createLlmRuntimeConfig(newConfig)
@@ -1072,6 +1080,7 @@ export async function createProjectRuntime(
     // Quiesce producers before draining output; one failed cleanup must not
     // leave the remaining channels, persistence writes, or gateway running.
     for (const close of [
+      () => a2a.close(),
       () => credentialRequests.stop(),
       stopPublicationReviews,
       () => probeRequests.stop(),
@@ -1119,6 +1128,7 @@ export async function createProjectRuntime(
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
   })
   await ready
+  a2a.validate()
   void knowledgeSchedule.start().catch(error => console.error('[knowledge] Scheduled scan failed', error))
   resumeApprovedPublications()
   publicationRetryTimer = setInterval(resumeApprovedPublications, 2000)
@@ -1128,6 +1138,6 @@ export async function createProjectRuntime(
   await channels.startAll(app, { waitForConnections: false })
   startup.ready()
   console.info('[main] All services started')
-  return { app, folders: folderRegistry, ready, shutdown, updateConfig }
+  return { app, folders: folderRegistry, ready, shutdown, updateConfig, authorizeA2a: a2a.authorize }
   }
 }

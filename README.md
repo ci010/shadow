@@ -2013,6 +2013,13 @@ accepted; no migration for those definitions is provided.
 
 ## Gateway and trust boundary
 
+Optional [A2A text integration](docs/a2a.md) lets trusted callers submit Project
+tasks and lets local sessions call configured A2A agents. It is disabled by
+default and uses independent caller credentials. It includes durable tasks,
+input continuation, asynchronous conversation updates, official Claude Code,
+Codex and Copilot SDK bridges (`pnpm a2a:bridge`), and a stdio MCP entry
+(`pnpm a2a:mcp`) for coding clients to call Shadow.
+
 | Path | Purpose |
 | --- | --- |
 | `/api/*` | Configuration, sessions, providers, web chat, and runtime APIs |
@@ -2020,6 +2027,8 @@ accepted; no migration for those definitions is provided.
 | `/v1/query/*` | Stored telemetry queries |
 | `/api/live` | Shared, cursor-based SSE for project-qualified chat, sessions, logs and spans |
 | `/api/chat/send` | JSON message admission; live output uses `/api/live` |
+| `/projects/<id>/a2a` | Opt-in authenticated A2A 1.0 JSON-RPC text tasks |
+| `/projects/<id>/a2a/.well-known/agent-card.json` | Authenticated A2A discovery when enabled |
 | `/*` | Production SPA, when installed |
 
 The normal gateway binds to loopback by default (`GATEWAY_HOST`,

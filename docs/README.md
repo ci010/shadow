@@ -14,6 +14,7 @@
 | [Shared live transport](realtime-protocol.md) | Multiplexed SSE, topic ownership, replay/reset, reconnect recovery, and resource limits |
 | [Frontend I/O](io.md) | Browser capture panels, adhoc backend connection protocol, controls, and verification limits |
 | [Conversation agent authoring](agent-authoring.md) | Independent Changes, delegated resource edits, saved checks, owner-reviewed probes/publication and legacy drafts |
+| [A2A text integration](a2a.md) | Opt-in A2A server/client, SDK/MCP coding-agent bridges, task continuation, notifications and trust boundaries |
 
 **Status, September 2026:** the supported development direction is a direct
 Node.js 24.15+ backend with pnpm, a Vue web application, and an Electron host.

@@ -4,6 +4,7 @@ import { MAX_YIELD_TIMEOUT_MS } from '../sessions/yield-contract.ts'
 import { REASONING_EFFORTS } from '../agent/llm-config.ts'
 import { DEFAULT_AGENT_MODEL } from './defaults.ts'
 import { WebSearchSelectionSchema } from './web-search.ts'
+import { A2aConfigSchema } from '../a2a/config.ts'
 
 // ── Provider configs ────────────────────────────────────────────────────────
 
@@ -261,6 +262,7 @@ export const VoiceSchema = z.object({
 // ── Root config ─────────────────────────────────────────────────────────
 
 export const ConfigSchema = z.object({
+  a2a: A2aConfigSchema.optional(),
   agent: AgentSchema.default({}),
   providers: ProvidersSchema.default({}),
   channels: ChannelsSchema.default({}),
