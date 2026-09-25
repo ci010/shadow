@@ -109,19 +109,19 @@ future tool execution. Restart restores the source catalog with zero connections
 To discover indexed metadata, select the configured source:
 
 ```js
-search({ space: "tools:teams", query: "" })
+search({ space: "glob:v:tools/teams", query: "**" })
 ```
 
-Global and targeted installed MCP searches return exact names, descriptions,
+Read the returned individual tool paths for exact names, descriptions,
 parameters and `indexedAt` timestamps from the index with zero connections,
 `tools/list` RPCs or dynamic registration. Repeated searches work offline; even
-100 installed servers will not start from search. Inspect errors and pagination:
-missing, mismatched or corrupt records produce explicit source errors, never
+100 installed servers will not start from search. Inspect warnings and pagination:
+missing, mismatched or corrupt records produce explicit source warnings, never
 fallback auto-connections. Read/save MCP configuration to build missing metadata.
 
 Metadata can become stale. Call an exact known ID through `invoke_tool({ name, args })`
 only when its operation is intended; invocation can have side effects. Invocation
 lazily connects, lists live tools and refreshes the index, then validates the
 current schema before execution. The current live invocation contract wins.
-Explicit built-in browser/factory discovery may still initialize live resources;
-it is not installed MCP index search.
+Browser/factory sources are not initialized by search either. Use browser_setup
+or invocation/preload for explicit initialization.

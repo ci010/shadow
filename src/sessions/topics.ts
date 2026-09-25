@@ -126,6 +126,18 @@ export class TopicService {
   async search(request: unknown = {}) {
     const { query, limit, offset } = discoveryRequest.parse(request)
     const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
+    const entries = (await this.summaries())
+      .filter(topic => {
+        const text = [topic.sessionId, topic.title, topic.goal, topic.scope, topic.nonGoals,
+          topic.folderId, topic.initiativeId].join('\n').toLocaleLowerCase()
+        return terms.every(term => text.includes(term))
+      })
+    const topics = entries.slice(offset, offset + limit)
+    const hasMore = offset + topics.length < entries.length
+    return { topics, totalMatches: entries.length, hasMore, nextOffset: hasMore ? offset + topics.length : null }
+  }
+
+  async summaries(): Promise<TopicSummary[]> {
     const states = (await this.options.listStates())
       .filter(state => (state.mode ?? 'session') === 'session' &&
         state.sessionKind !== 'orchestrator' && state.sessionId !== ORCHESTRATOR_SESSION_ID &&
@@ -138,16 +150,8 @@ export class TopicService {
         ...state, topic: this.options.currentTopic?.(state.sessionId) ?? state.topic,
       }, firstMessage))
     }
-    const entries = summaries
-      .filter(topic => {
-        const text = [topic.sessionId, topic.title, topic.goal, topic.scope, topic.nonGoals,
-          topic.folderId, topic.initiativeId].join('\n').toLocaleLowerCase()
-        return terms.every(term => text.includes(term))
-      })
+    return summaries
       .sort((a, b) => (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? '') || a.sessionId.localeCompare(b.sessionId))
-    const topics = entries.slice(offset, offset + limit)
-    const hasMore = offset + topics.length < entries.length
-    return { topics, totalMatches: entries.length, hasMore, nextOffset: hasMore ? offset + topics.length : null }
   }
 
   async create(request: unknown, createdBySessionId?: string, signal?: AbortSignal) {

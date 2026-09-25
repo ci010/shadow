@@ -9,13 +9,14 @@ import { InitiativeTool } from './initiative.ts'
 import { SessionTools, Tools } from './registry.ts'
 import type { ExecutionContext } from './context.ts'
 import { McpConnection } from '../mcp/client.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
 
 test('coordinator keeps routing and approval rules while loading authoring details on demand', async () => {
   const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')
   assert(agent)
   const prompt = agent.prompt.replace(/\s+/g, ' ')
   for (const rule of [
-    /Search `sessions:` before creating a topic/,
+    /Search `grep:v:sessions` before creating a topic/,
     /Gather required baselines before kickoff/,
     /conversationUrl.*logical session ID/,
     /Never resolve remote display paths on Main or quietly widen access/,
@@ -50,6 +51,7 @@ test('coordinator keeps routing and approval rules while loading authoring detai
 test('coordinator cannot activate dynamic tools; topics retain lazy Initiative access', async t => {
   const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')
   assert(agent)
+  assert.match(agent.prompt, /Search `grep:v:sessions` before creating a topic/)
   const base = new Tools('.')
   const initiative = new InitiativeTool({ query: () => [{ id: 'fixture' }] }, 'p', 'synthetic schema')
   const importer = new ImportTool(new Map([
@@ -58,7 +60,9 @@ test('coordinator cannot activate dynamic tools; topics retain lazy Initiative a
   await importer.updateMcpServers([{ name: 'fixture', transport: 'stdio', command: 'never-execute' }])
   base.register(initiative)
   base.register(new InvokeTool(importer))
-  base.register(new SearchTool('.', undefined, undefined, importer))
+  const vfs = new VirtualFs()
+  vfs.mount('v:tools', 'Tools', (path, ctx) => importer.readVirtual(path, ctx), (ctx, opts) => importer.virtualEntries(ctx, opts))
+  base.register(new SearchTool('.', undefined, vfs))
   for (const name of ['exec', 'write', 'subagent', 'read', 'topic', 'message', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'yield']) {
     base.register({ name, description: name, parameters: { type: 'object', properties: {} }, execute: async () => name })
   }
@@ -70,7 +74,7 @@ test('coordinator cannot activate dynamic tools; topics retain lazy Initiative a
   }
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('unexpected connection') })
   assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['authoring_change', 'initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic', 'yield'])
-  assert.match(requireToolText(await tools.execute('search', { space: 'tools:fixture' }, context)), /not available/)
+  assert.match(requireToolText(await tools.execute('search', { space: 'grep:v:tools/fixture', query: '' }, context)), /not available/)
   assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'fixture__execute', args: {} }, context)), /not found|not available|not allowed/i)
   assert.equal(connect.mock.callCount(), 0)
   const borrowed = tools.snapshot()

@@ -6,7 +6,6 @@ import { McpConnection } from '../mcp/client.ts'
 import { McpToolIndex } from '../mcp/tool-index.ts'
 import { parseMcpConfigDocument, parseMcpServerConfig } from '../mcp/config.ts'
 import { mcpCleanupFailure, mcpFailure } from '../mcp/errors.ts'
-import { toolSearchScore } from './search-tools.ts'
 import type { McpServerConfig } from '../config/schema.ts'
 import type { Tool as TypedTool, ToolParameters, ToolResult } from './tool.ts'
 import { toolInvocationContract, type SessionTools } from './registry.ts'
@@ -22,6 +21,7 @@ import { readSkillDirectory } from '../skills/edit-store.ts'
 import { parseSkillFile } from '../skills/parse.ts'
 import { SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
+import type { VirtualEntry, VirtualListOptions } from '../vfs/virtual-fs.ts'
 
 type Tool = TypedTool<ToolResult>
 
@@ -78,6 +78,7 @@ function isScriptLoadable(entry: LoadableEntry): entry is ScriptLoadable {
  */
 export interface FactoryLoadable {
   factory: () => Promise<Tool | Tool[]>
+  contracts?: Array<Pick<Tool, 'name' | 'description' | 'parameters'>>
 }
 
 function isMcpLoadable(entry: LoadableEntry): entry is McpLoadable {
@@ -266,10 +267,10 @@ export class ImportTool implements Tool {
 
   private browserReceipt(instance: BrowserInstance) {
     return {
-      instance: instance.id, source: 'tools:chrome-devtools', mode: instance.target.mode,
+      instance: instance.id, source: 'v:tools/chrome-devtools', mode: instance.target.mode,
       owned: instance.target.mode === 'launch', ready: instance.ready,
       ...(instance.target.mode === 'launch' ? instance.target.options : { endpoint: instance.target.endpoint }),
-      usage: 'Pass instance to search({space:"tools:chrome-devtools",instance,...}) and invoke_tool({name:"chrome-devtools__...",instance,args:{...}}). Required when multiple instances are open.',
+      usage: 'Search glob:v:tools/chrome-devtools/<instance> or grep:v:tools/chrome-devtools/<instance>. Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).',
     }
   }
 
@@ -404,140 +405,91 @@ export class ImportTool implements Tool {
     return entries.find(entry => entry.name === name)?.content ?? `Error: unknown or unavailable source "${name}".`
   }
 
-  async searchTools(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
+  async readVirtual(path: string, context: ExecutionContext): Promise<string> {
+    const entries = await this.virtualEntries(context, { subpath: path })
+    if (!path) return entries.filter(entry => !entry.name.includes('/')).map(entry => entry.content).join('\n') || 'No dynamic tool sources are available for this agent.'
+    const entry = entries.find(entry => entry.name === path)
+    if (!entry) throw new Error('Unknown or unavailable tool metadata path. Search glob:v:tools for current paths.')
+    return entry.content
+  }
+
+  async virtualEntries(context: ExecutionContext, options?: VirtualListOptions): Promise<VirtualEntry[]> {
     const requester = context.tools
-    const requestSignal = AbortSignal.any([context.signal, requester.dynamicSignal, requester.ownerSignal])
-    if (!context.tools.has('search') || !context.tools.has('invoke_tool')) {
-      return 'Error: tool search and invocation are not available for this agent type.'
+    const signal = AbortSignal.any([context.signal, requester.dynamicSignal, requester.ownerSignal])
+    signal.throwIfAborted()
+    if ((!requester.has('read') && !requester.has('search')) || !requester.has('invoke_tool')) {
+      throw new Error('Tool metadata is not available for this agent type.')
     }
-    if (args.query !== undefined && typeof args.query !== 'string') return 'Error: query must be a string.'
-    const query = typeof args.query === 'string' ? args.query.trim() : ''
-    if (query.length > 500) return 'Error: query must contain at most 500 characters.'
-    const limit = args.limit === undefined ? 3 : args.limit
-    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 10) {
-      return 'Error: limit must be an integer from 1 through 10.'
-    }
-    const offset = args.offset === undefined ? 0 : args.offset
-    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
-      return 'Error: offset must be a nonnegative safe integer.'
-    }
-    if (args.source !== undefined && (typeof args.source !== 'string' || !args.source.trim())) {
-      return 'Error: source must be a nonempty catalog source.'
-    }
-    const selected = typeof args.source === 'string'
-      ? args.source.replace(/^v:tools\//, '') : undefined
-    if (selected !== undefined && !this.catalogFor(context.tools).has(selected)) return `Error: unknown catalog source "${selected}".`
-    if (args.instance !== undefined && (typeof args.instance !== 'string' || !args.instance.trim())) {
-      return 'Error: instance must be a nonempty browser instance ID.'
-    }
-    if (args.instance !== undefined && selected !== 'chrome-devtools') return 'Error: instance requires space tools:chrome-devtools.'
-    let browserInstance: BrowserInstance | undefined
-    if (selected === 'chrome-devtools' && this.sessionBrowsersEnabled()) {
-      const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
-      if (denied) return denied
-      const target = this.browsers.resolve(context.tools, args.instance as string | undefined)
-      if (typeof target === 'string') return target
-      browserInstance = target
-      context = { ...context, tools: target.tools }
-    } else if (args.instance !== undefined) return 'Error: session browser instances are not configured.'
-    const signal = AbortSignal.any([requestSignal, context.tools.dynamicSignal])
-    return this.withImports(context.tools, signal, async () => {
-      const candidates = new Map<string, {
-        tool: { name: string; description: string; parameters: Record<string, unknown> }
-        source?: string
-        indexedAt?: string
-        instance?: string
-      }>()
-      const errors: Array<{ source: string; message: string }> = []
-      const searchedSources: string[] = []
-      const deferredSources: string[] = []
-      const sources = [...this.catalogFor(context.tools)].filter(([name]) => selected === undefined || name === selected)
-      const scan = async ([name, entry]: [string, LoadableEntry]) => {
-        const source = `${VIRTUAL_TOOLS_PREFIX}${name}`
-        if (selected === undefined && (isFactoryLoadable(entry) ||
-          (isMcpLoadable(entry) && (!this.configured.has(name) || entry.config.name === 'chrome-devtools' ||
-            entry.chromeManager || entry.sharedConn?.chromeManager)))) {
-          deferredSources.push(source)
-          return
-        }
-        const denied = this.contextError(source, context)
-        if (denied) {
-          errors.push({ source, message: denied })
-          return
-        }
+    const selected = options?.subpath?.split('/')[0]
+    const entries: VirtualEntry[] = []
+    const metadata = this.catalogEntries(requester)
+    for (const [name, entry] of this.catalogFor(requester)) {
+      if (selected && name !== selected) continue
+      signal.throwIfAborted()
+      const source = `${VIRTUAL_TOOLS_PREFIX}${name}`
+      const children: VirtualEntry[] = []
+      let warning: string | undefined
+      const add = (tool: { name: string; description: string; parameters: unknown }, instance?: string, indexedAt?: string) => {
+        if (!requester.canUseDynamic(tool.name)) return
+        const path = `${name}/${instance ? `${instance}/` : ''}${encodeURIComponent(tool.name)}`
+        children.push({
+          name: path,
+          content: options?.content === false ? '' : JSON.stringify({
+            name: tool.name, source, instance, indexedAt, description: tool.description, parameters: tool.parameters,
+          }, null, 2),
+        })
+      }
+      const denied = this.contextError(source, context)
+      if (denied) {
+        warning = denied
+      } else {
         try {
-          if (isMcpLoadable(entry) && this.configured.get(name) === entry &&
-            entry.config.name !== 'chrome-devtools' && !entry.chromeManager && !entry.sharedConn?.chromeManager) {
-            const indexed = await this.mcpIndex.read(entry.config)
-            signal.throwIfAborted()
-            if (!indexed) {
-              errors.push({ source, message: 'MCP tools are not indexed for this configuration. Read and save v:config/mcp.json to index them; search does not connect configured servers.' })
-              return
+          if (isMcpLoadable(entry)) {
+            const browser = name === 'chrome-devtools' && this.sessionBrowsersEnabled()
+            const active = browser
+              ? this.browsers.list(requester).flatMap(instance => instance.tools.activeDynamicTools().map(tool => ({ tool, instance: instance.id })))
+              : requester.activeDynamicTools().filter(tool => tool.name.startsWith(`${entry.config.name}__`)).map(tool => ({ tool, instance: undefined }))
+            if (active.length) {
+              for (const { tool, instance } of active) add(tool, instance)
+            } else if (browser) {
+              warning = 'Browser tools are not initialized. Use browser_setup explicitly; search never launches a browser.'
+            } else {
+              const indexed = await this.mcpIndex.read(entry.config)
+              signal.throwIfAborted()
+              if (indexed) {
+                for (const info of indexed.tools) {
+                  if (!entry.toolFilter || entry.toolFilter.has(info.name)) add(mcpToolContract(entry.config.name, info), undefined, indexed.indexedAt)
+                }
+              } else {
+                warning = 'Tool metadata is not indexed. Read v:skills/mcp-config for indexing, or initialize built-in browser sources with browser_setup. Search never connects services.'
+              }
             }
-            searchedSources.push(source)
-            for (const info of indexed.tools) {
-              const tool = mcpToolContract(entry.config.name, info)
-              if (requester.canUseDynamic(tool.name)) candidates.set(tool.name, { tool, source, indexedAt: indexed.indexedAt })
-            }
-            return
-          }
-          const result = await this.loadByName(name, context.tools, [], {
-            signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
-          })
-          signal.throwIfAborted()
-          if (typeof result === 'string') {
-            errors.push({ source, message: result })
-            return
-          }
-          searchedSources.push(source)
-          for (const tool of result) {
-            if (requester.canUseDynamic(tool.name)) candidates.set(tool.name, { tool, source, instance: browserInstance?.id })
+          } else if (isFactoryLoadable(entry)) {
+            const contracts = entry.contracts ?? requester.activeDynamicTools().filter(tool => tool.name === name)
+            for (const tool of contracts) add(tool)
+            if (!contracts.length) warning = 'On-demand source has no static metadata; search does not initialize it.'
+          } else if (!isScriptLoadable(entry) || entry.resource.active && (!entry.script.admin || context.admin)) {
+            add(isScriptLoadable(entry) ? { name, ...entry.script } : entry)
           }
         } catch (error) {
           signal.throwIfAborted()
-          errors.push({ source, message: mcpFailure(error, {
-            phase: 'connect', source, config: isMcpLoadable(entry) ? entry.config : undefined,
-          }).message })
+          warning = mcpFailure(error, { phase: 'read_config', source, config: isMcpLoadable(entry) ? entry.config : undefined }).message
         }
       }
-      for (let start = 0; start < sources.length; start += 3) {
-        signal.throwIfAborted()
-        const outcomes = await Promise.allSettled(sources.slice(start, start + 3).map(scan))
-        signal.throwIfAborted()
-        const failed = outcomes.find(result => result.status === 'rejected')
-        if (failed?.status === 'rejected') throw failed.reason
-      }
-      if (selected === undefined) {
-        for (const tool of context.tools.activeDynamicTools()) {
-          if (!candidates.has(tool.name)) candidates.set(tool.name, { tool })
-        }
-        for (const instance of this.browsers.list(requester)) {
-          for (const tool of instance.tools.activeDynamicTools()) {
-            if (requester.canUseDynamic(tool.name)) candidates.set(`${instance.id}:${tool.name}`, {
-              tool, source: `${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, instance: instance.id,
-            })
-          }
-        }
-      }
-      const ranked = [...candidates.values()]
-        .map(candidate => ({ ...candidate, score: toolSearchScore(query, candidate.tool, candidate.source) }))
-        .filter(candidate => candidate.score > 0)
-        .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name, 'en'))
-      return JSON.stringify({
-        ...(browserInstance ? { instance: browserInstance.id } : {}),
-        tools: ranked.slice(offset, offset + limit).map(({ tool, source, indexedAt, instance }) => ({
-          name: tool.name, source, description: tool.description, parameters: tool.parameters,
-          ...(instance ? { instance } : {}),
-          ...(indexedAt ? { indexedAt } : {}),
-        })),
-        totalMatches: ranked.length,
-        hasMore: ranked.length > offset + limit,
-        nextOffset: ranked.length > offset + limit ? offset + limit : null,
-        searchedSources: searchedSources.sort(),
-        deferredSources: deferredSources.sort(),
-        errors,
+      const summary = metadata.find(item => item.name === name)
+      if (summary) entries.push({
+        name,
+        content: JSON.stringify({
+          ...JSON.parse(summary.content),
+          tools: children.map(child => `${VIRTUAL_TOOLS_PREFIX}${child.name}`),
+          ...(warning ? { warning } : {}),
+        }, null, 2),
+        warning,
       })
-    })
+      entries.push(...children)
+    }
+    signal.throwIfAborted()
+    return entries
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -697,7 +649,7 @@ export class ImportTool implements Tool {
 
       result = await load(catalogName)
       if (sessionTools.hasDynamic(toolName)) return result
-      result ??= `Error: tool "${toolName}" is not advertised by server "${serverName}". Use search with space "tools:" for current tool IDs.`
+      result ??= `Error: tool "${toolName}" is not advertised by server "${serverName}". Search grep:v:tools and read the matching paths for current tool IDs.`
     }
     return result
   }

@@ -22,7 +22,7 @@ recorder unless the user explicitly wants a separate web application.
 
 ## Route the task before searching
 
-One source, `tools:chrome-devtools`, covers interactions, diagnostics, and
+One source, `v:tools/chrome-devtools`, covers interactions, diagnostics, and
 emulation. Choose search keywords by task, not just by tool names:
 
 | Task or symptom | Useful query |
@@ -37,14 +37,15 @@ emulation. Choose search keywords by task, not just by tool names:
 | Page quality or accessibility audit | `lighthouse` |
 
 Use short English keywords from this table even when the task is in another
-language: tool search is lexical, not semantic. These are routing hints, not a
+language: tool search uses case-sensitive regular expressions, not semantic matching. These are routing hints, not a
 fixed inventory or a guarantee that every installed version has every feature.
 
 ## Set up a browser instance
 
-No setup is required for automatic lazy default launch in an owning session.
+Invocation can lazily launch a default browser in an owning session.
+Search never launches browsers; use browser_setup to discover live contracts first.
 Borrowing leaf calls require the owner to initialize first. To choose a browser,
-discover `browser_setup` with `search({ space: "tools:", query: "browser_setup" })`,
+discover `browser_setup` with `search({ space: "grep:v:tools", query: "browser_setup" })`,
 or invoke the known ID directly:
 
 ```js
@@ -69,7 +70,7 @@ Only loopback HTTP(S)/WS(S) endpoints are accepted; a browser WebSocket URL such
 as `ws://127.0.0.1:9222/devtools/browser/...` also works. Attach is explicit,
 not an import-argument workaround, and does not enable CDP on the target.
 
-Setup returns `{ instance, source: "tools:chrome-devtools", mode, owned, ready, ... }`.
+Setup returns `{ instance, source: "v:tools/chrome-devtools", mode, owned, ready, ... }`.
 Save the opaque `instance` ID. Setup connects and lists live contracts without
 business tool RPCs. List or close instances with:
 
@@ -83,18 +84,19 @@ invoke_tool({ name: "browser_setup", args: { action: "close", instance: "<id>" }
 For a slow page, for example:
 
 ```js
-search({ space: "tools:chrome-devtools", query: "performance", limit: 3 })
+search({ space: "grep:v:tools/chrome-devtools", query: "performance", limit: 3 })
 ```
 
 With multiple instances, select one explicitly:
 
 ```js
-search({ space: "tools:chrome-devtools", instance: "<id>", query: "snapshot" })
+search({ space: "grep:v:tools/chrome-devtools/<id>", query: "snapshot" })
 invoke_tool({ name: "chrome-devtools__take_snapshot", instance: "<id>", args: {} })
 ```
 
-Results contain exact names, descriptions, and complete JSON Schemas. Call the
-selected name with arguments matching its schema through `invoke_tool`.
+Results contain matching lines and paths. Read
+`v:tools/chrome-devtools/<instance>/<encoded-tool-name>` for the exact name,
+description, complete JSON Schema and instance ID, then use `invoke_tool`.
 Canonical tool names use the `chrome-devtools__` prefix for every instance;
 there are no per-instance prefix variants or alternate full source.
 `instance` belongs beside `name`/`args`, not inside business tool arguments.
@@ -104,16 +106,15 @@ is required. Arguments are validated before execution.
 
 If the desired contract is missing:
 
-1. Check `errors` and `deferredSources`. Global `tools:` search includes
-   already-loaded browser contracts with per-result `instance` IDs without
-   reconnecting. Uninitialized browser sources and live refresh remain deferred
-   unless explicitly selected. `browser_setup` discovery is metadata only, not
+1. Check warnings. Global VFS search includes already-loaded browser contracts
+   under their instance paths without reconnecting. Uninitialized browser sources
+   remain deferred even when explicitly selected. `browser_setup` discovery is metadata only, not
    browser initialization. Installed MCP search remains offline. An empty result
    does not mean the browser lacks the capability.
-2. Select `tools:chrome-devtools` and try a broader keyword from the table.
+2. Search `grep:v:tools/chrome-devtools` and try a broader regex from the table.
 3. If keywords still miss, list that source with
-   `search({ space: "tools:chrome-devtools", query: "", limit: 3 })`.
-   Follow `nextOffset` only until the needed contract is found or the list ends.
+   `search({ space: "glob:v:tools/chrome-devtools", query: "**", limit: 20 })`.
+   Follow the continuation footer's offset only until the needed contract is found or the list ends.
    Do not enumerate every schema before starting ordinary browser work.
 4. Report connection/configuration failures separately from unsupported
    capabilities. Only a successful, exhausted listing establishes that

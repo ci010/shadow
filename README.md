@@ -57,7 +57,7 @@ sessions. This is application data/context isolation, **not an OS sandbox**:
 
 **Start from scratch** leaves the registered folder unselected, but the agent
 still receives its current project's identity and a bounded summary of the
-project's registered folders. It can read/search `v:project/folders` for the
+project's registered folders. It can read `v:project/folders` for the
 complete current folder metadata and availability, scoped to that project.
 This is discovery, not a working-directory change or additional permission.
 Remote paths are display metadata only; remote operations still need their
@@ -201,7 +201,7 @@ adds no privileged recovery API or UI: the normal owner/assignee must explicitly
 handoff or release while the session still exists. Deletion does not release work.
 
 Agents discover the built-in Initiative schema with
-`search({space: "tools:initiative", query: ""})` and issue bounded SQL through
+`read({path: "v:tools/initiative/initiative"})` and issue bounded SQL through
 `invoke_tool`; no installation or explicit import is needed.
 The restricted Project coordinator instead uses its direct `initiative` tool;
 its runtime cap excludes `invoke_tool`.
@@ -1273,14 +1273,14 @@ durable topics are root peers. The built-in `orchestrator` has a hard runtime
 cap of `read`, `search`, `topic`, `message`, `initiative`, `project_config`, and `authoring_change`; it cannot use
 `invoke_tool`, `exec`, `write`, or `subagent`.
 
-`search({space: "sessions:", query, limit: 5, offset: 0})` discovers Project topics
-by their briefs, returning title, goal, scope, nonGoals, folderId, initiativeId,
-createdBySessionId, and status. The maximum page size is 20. Prefer reuse over
-creating competing topics. Topic create/search/update receipts include
+`search({space: "grep:v:sessions", query})` searches session histories and topic
+briefs. Read `v:sessions/<session-id>/brief` for title, goal, scope, nonGoals,
+folderId, initiativeId, createdBySessionId and status. Prefer reuse over creating
+competing topics. Topic briefs and create/update receipts include
 `conversationUrl` (`/projects/<encodedProjectId>/chat/<encodedLogicalSessionId>`).
 Use the returned URL in a Markdown link with the topic title so the user can
 continue directly there; do not reconstruct it from a display name.
-Project topic search (`sessions:`) and typed Project
+Project topic search (`v:sessions`) and typed Project
 messaging also work from remote-workdir sessions as control-plane operations.
 Other search spaces remain explicitly unsupported for remote workdirs.
 
@@ -1720,22 +1720,44 @@ Use `pnpm test:update` only when snapshot changes are intentional.
 
 ## MCP and optional skills
 
+`search` has three protocols: `grep:` for content, `glob:` for names and `web:`
+for external information. Both file-search protocols support virtual folders:
+
+```js
+search({ space: "grep:v:memory", query: "login" })
+search({ space: "grep:v:skills", query: "CSV" })
+search({ space: "glob:v:sessions", query: "*/brief" })
+search({ space: "glob:v:tools/mail", query: "*__*" })
+read({ path: "v:tools/mail/mail__SearchMessages" })
+```
+
+Virtual searches are case-sensitive regex/glob matching, not keyword ranking or
+embeddings. `grep` searches skill bodies/resources, Project Home memory files,
+accessible session histories/topic briefs and tool metadata including parameter
+schemas. `glob` lists matching read paths; `**` lists all entries. Subpaths scope
+the search, and `**/*.md` includes nested files. Virtual regexes use JavaScript
+syntax; physical content searches retain ripgrep syntax. Virtual searches do not
+need ripgrep. Unknown or non-searchable mounts fail instead of searching Main's
+filesystem. The old skills/tools/sessions-specific spaces are no longer accepted.
+
+Virtual `limit` is 1-100 (default 100); `offset` defaults to zero. A continuation
+footer gives the next offset when more matches remain. Warnings expose incomplete
+coverage even when no lines match. Search never activates skills, imports modules,
+connects MCP or initializes browsers.
+
 Configured MCP servers stay in a lazy catalog, including after configuration
 reloads; their tools are not added to the model's base function list.
-`search({space: "tools:", query, limit?, offset?})` searches names/descriptions and returns
-only matching tools' exact names, descriptions, parameters and `indexedAt`
-timestamps (default 3, maximum 10).
-Use `space: "tools:mail"` to select a source. Empty, whitespace or omitted query
-lists tools in stable name order; pass `nextOffset` as `offset` to get the next
-page (`null` means the end). The same `search` tool retains grep:/glob:/web:;
-there is no separate tool-discovery function in the base tool list.
-It uses keyword ranking, not embeddings. Global and targeted configured MCP
-searches read the persistent index: no connections, `tools/list` RPCs, tool
+`grep:v:tools` returns matching lines and paths; read a
+`v:tools/<source>/<encoded-tool-name>` path for its complete name, description,
+parameters and optional `indexedAt` or browser `instance`. Source paths list
+their individual tool paths. Global and targeted configured MCP searches read
+active contracts or the persistent index: no connections, `tools/list` RPCs, tool
 execution or dynamic registration, including repeated searches offline.
 Even 100 installed servers will not start from search. Missing, mismatched or
-corrupt index records produce explicit source errors, never automatic connections;
+corrupt index records produce explicit source warnings, never automatic connections;
 read/save `v:config/mcp.json` to build missing metadata. Deferred built-in
-browser/factory sources are explicit; selecting one may initialize live resources.
+browser/factory sources stay deferred during search; use `browser_setup` or
+invocation/preload for initialization.
 `read("v:tools")` remains a connection-free source listing.
 
 Use `invoke_tool({name, args})` directly for a known tool ID. It connects lazily
@@ -1814,7 +1836,7 @@ explicitly. See the `mcp-config` skill for both write forms.
 
 Ordinary learning edits the shared Project Skill space directly; it does not
 need an authoring Change, approval or publication. Discover `skill_read` and
-`skill_save` with `search({space: "tools:", query: "skill"})`, then invoke them.
+`skill_save` with `search({space: "grep:v:tools", query: "skill"})`, read their contract paths, then invoke them.
 The Project coordinator has these scoped tools directly, without general
 filesystem write or script-execution access.
 
@@ -1891,18 +1913,18 @@ accepted. Keep source files in place; imports use the supported native/module
 catalog, not arbitrary packages or source-file loaders.
 
 ```js
-search({ space: "skills:", query: "CSV", limit: 5, offset: 0 })
+search({ space: "grep:v:skills", query: "CSV", limit: 5, offset: 0 })
 read({ path: "v:skills/csv-utils" })
 invoke_tool({ name: "csv_summary", args: { text: "name,count\napple,2" } })
 ```
 
-Skill search returns names, descriptions, and read paths; `skills:<category>`
+Skill search returns matching lines and read paths; `v:skills/<name>`
 optionally narrows it. Search, index/category reads, and bundled resource reads
 do **not** activate tools. Only the exact skill read registers its declarations
 in the **current session**, without importing or executing source in Main.
 After that read, direct invocation needs no additional preparation and validates
 the declared parameter schema. After activation,
-`search({space: "tools:csv_summary", query: ""})` reads metadata without executing
+`read({path: "v:tools/csv_summary/csv_summary"})` reads metadata without executing
 source. Invocation uses the shared child/VM engine with controlled imports;
 host `exec` uses the same engine with host policy, not the tool import policy.
 Neither policy nor the process boundary is an OS sandbox.
@@ -1913,7 +1935,7 @@ fingerprint; changes require a fresh read instead of silently switching code.
 This is change detection, not an execution snapshot: concurrent external edits
 during execution may already have side effects before the post-execution check.
 Registrations are not shared across sessions. Invalid tool declarations remain
-discoverable with `toolsError`, but the exact skill read fails explicitly.
+discoverable with warnings, but the exact skill read fails explicitly.
 
 Declarations persist only in `SKILL.md`, not a Project tool-installation registry.
 New sessions and sleep/reset require reading the owning skill again. MCP
@@ -1940,7 +1962,7 @@ for session lifetime and execution boundaries.
 ## Scheduled conversations
 
 Scheduling uses three dynamic tools: `cron_add`, `cron_list`, and `cron_remove`.
-Discover them with `search({space: "tools:cron", query: ""})`, then call the
+Discover them with `search({space: "glob:v:tools/cron", query: "**"})`, read the contract, then call the
 selected tool through `invoke_tool`; there is no `action` parameter.
 `cron_add` requires `schedule` and `task` and supports two context modes:
 

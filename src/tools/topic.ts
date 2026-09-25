@@ -5,7 +5,7 @@ import type { TopicService } from '../sessions/topics.ts'
 export class TopicTool implements Tool {
   readonly name = 'topic'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Create an independent, user-visible topic chat in this Project, revise its brief, or register an existing local folder. First search space="sessions:" to reuse an existing topic and read v:project/folders to select a folder ID. Topics are peers, not children; creation never transfers Initiative assignments. Use message for subsequent communication.'
+  readonly description = 'Create or update user-visible Project topic chats and register local folders. Topics are peers; creation does not transfer assignments.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

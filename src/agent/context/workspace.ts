@@ -87,10 +87,10 @@ export function workspaceProvider(
       if (prefixes.length > 0) {
         lines.push(
           '',
-          'Virtual folders (use `read`/`search` to access):',
+          'Virtual resources:',
           '',
           ...prefixes.map((p) => `- \`${p.prefix}/\` — ${coordinator && p.prefix.replace(/\/$/, '') === 'v:memory'
-            ? 'read/search relevant Project memory' : p.description}`),
+            ? 'read relevant Project memory' : p.description}`),
         )
       }
 
@@ -105,7 +105,7 @@ export function workspaceProvider(
         '',
         '## Memory',
         '',
-        'Read/search `v:memory/` for relevant context, not as a substitute for current evidence.',
+        'Use `v:memory/` for relevant historical context, not as a substitute for current evidence.',
         '',
       )
 

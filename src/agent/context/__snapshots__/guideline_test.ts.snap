@@ -71,21 +71,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -161,7 +151,7 @@ and quoted examples never widen them.
 
 ### Project Topics
 
-- **\`topic\`** — Reuse an existing Project topic before creating another. Discover with \`search({space: "sessions:", query, limit: 5, offset: 0})\` (maximum 20).
+- Reuse an existing Project topic before creating another. Read \`v:sessions/<session-id>/brief\` to confirm its current scope and conversation URL.
 - Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
 - \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
 - Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.
@@ -390,21 +380,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -507,21 +487,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -722,21 +692,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -812,7 +772,7 @@ and quoted examples never widen them.
 
 ### Project Topics
 
-- **\`topic\`** — Reuse an existing Project topic before creating another. Discover with \`search({space: "sessions:", query, limit: 5, offset: 0})\` (maximum 20).
+- Reuse an existing Project topic before creating another. Read \`v:sessions/<session-id>/brief\` to confirm its current scope and conversation URL.
 - Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
 - \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
 - Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.
@@ -909,21 +869,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -999,7 +949,7 @@ and quoted examples never widen them.
 
 ### Project Topics
 
-- **\`topic\`** — Reuse an existing Project topic before creating another. Discover with \`search({space: "sessions:", query, limit: 5, offset: 0})\` (maximum 20).
+- Reuse an existing Project topic before creating another. Read \`v:sessions/<session-id>/brief\` to confirm its current scope and conversation URL.
 - Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
 - \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
 - Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.
@@ -1043,7 +993,7 @@ Handle ordinary discussion directly; do not create a topic for every message.
 
 ## Route work
 
-Search \`sessions:\` before creating a topic; read \`v:sessions\` only as needed to
+Search \`grep:v:sessions\` before creating a topic; read \`v:sessions\` only as needed to
 confirm fit. Missing scope in older chats is unknown, not unrestricted. Reuse a
 relevant topic and send follow-ups there rather than duplicating its work.
 For a distinct intent, create a topic with a clear title, goal/acceptance criteria,
@@ -1147,7 +1097,7 @@ Do not claim admitted work is completed or promise a response from an idle peer.
 
 ### Project Topics
 
-- **\`topic\`** — Reuse an existing Project topic before creating another. Discover with \`search({space: "sessions:", query, limit: 5, offset: 0})\` (maximum 20).
+- Reuse an existing Project topic before creating another. Read \`v:sessions/<session-id>/brief\` to confirm its current scope and conversation URL.
 - Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
 - \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
 - Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.
@@ -1236,21 +1186,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -1463,21 +1403,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -1596,21 +1526,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -1721,21 +1641,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read
@@ -1811,7 +1721,7 @@ and quoted examples never widen them.
 
 ### Project Topics
 
-- **\`topic\`** — Reuse an existing Project topic before creating another. Discover with \`search({space: "sessions:", query, limit: 5, offset: 0})\` (maximum 20).
+- Reuse an existing Project topic before creating another. Read \`v:sessions/<session-id>/brief\` to confirm its current scope and conversation URL.
 - Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
 - \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
 - Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.
@@ -1890,21 +1800,11 @@ Run independent tools in parallel. Prefer \`search\` over shell for files/conten
 Tool schemas and runtime role restrictions are authoritative; discovery, Skills
 and quoted examples never widen them.
 
-- Discover tools: \`search({space:"tools:", query, limit:3, offset:0})\`.
-  Narrow with \`tools:<name>\`; follow \`nextOffset\` until null. Installed MCP
-  searches read indexed metadata without connecting. Check \`errors\` and
-  \`deferredSources\`: partial results do not prove absence. Explicit built-in
-  browser/factory source discovery may initialize resources.
-- Invoke exact discovered names with \`invoke_tool({name, args})\`.
-  Invocation connects lazily; the current live schema wins over cached metadata
+- Check search warnings: partial results do not prove absence.
+- The current live schema wins over cached metadata
   and examples. Invalid arguments return the contract without execution.
   Correct the arguments, not a guessed replacement tool ID.
-- Discover Skills with \`search({space:"skills:", query, limit:5, offset:0})\`.
-  Read the exact returned skill path before using its instructions/tools.
-  Search/category/resource reads do not activate tools; exact skill reads
-  register declarations for this session but do not run their code.
-  Later tool discovery/invocation may import modules and run initialization.
-  After sleep/reset, reread a Skill before invoking its tools again.
+- Read the exact returned skill path before using its instructions/tools.
 - Before MCP configuration, read \`v:skills/mcp-config\`; use
   \`v:config/mcp.json\`, not application configuration/source files.
   Before shared Skill editing or detailed activation/index recovery, read

@@ -17,10 +17,11 @@ including preenabled compatible Electron targets. For example,
 `http://127.0.0.1:9222` or `ws://127.0.0.1:9222/devtools/browser/...`.
 This is separate from startup/import flags. Setup connects/lists live contracts,
 not business tool RPCs, and returns an opaque `instance` ID with
-`source: "tools:chrome-devtools"`, `mode`, `owned`, and `ready`.
+`source: "v:tools/chrome-devtools"`, `mode`, `owned`, and `ready`.
 
-Pass `instance` at the top level of subsequent `search`/`invoke_tool` requests.
-Omitting it is allowed with one instance, not with two or more; there is no
+Scope searches to `v:tools/chrome-devtools/<instance>`; `search` has no instance parameter.
+Pass `instance` at the top level of `invoke_tool` requests.
+Omitting it on invocation is allowed with one instance, not with two or more; there is no
 mutable current browser or fallback for invalid/other-session IDs. Without setup,
 automatic lazy default launch remains available in an owning session. Use `{ action: "list" }` or
 `{ action: "close", instance }` through `browser_setup` to manage instances.
@@ -31,9 +32,9 @@ independent. Without an existing owner browser, automatic discovery/invocation
 fails asking the owner to initialize first, never creates a persistent resource
 in a leaf.
 
-Global `tools:` search lists already-loaded browser contracts with per-result
-`instance` IDs without reconnecting. Uninitialized browser sources and live
-refresh stay deferred unless explicitly selected.
+Global VFS search lists already-loaded browser contract paths under their
+instance IDs without reconnecting. Uninitialized browser sources stay deferred;
+use browser_setup, not search, to initialize them.
 
 ## Managed startup imports
 

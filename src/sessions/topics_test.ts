@@ -20,6 +20,8 @@ import { BaseSession } from './base-session.ts'
 import { Bus } from '../bus/bus.ts'
 import { MessageTool } from '../tools/message.ts'
 import type { LLMProvider } from '../providers/provider.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import { createSessionsHandler } from '../vfs/mounts.ts'
 
 class CoordinatorContractSession extends BaseSession {
   run(context: ExecutionContext) {
@@ -151,7 +153,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       agent: { name: 'general', defaultMode: 'session', prompt: '', source: 'builtin', description: '' },
     })
     assert.match(String(prompt), /MCP topic/)
-    assert.match(String(prompt), /assignments.*authority/)
+    assert.match(String(prompt), /not an authorization/)
 
     const tools = new SessionTools(new Tools(home), home)
     const context: ExecutionContext = {
@@ -159,9 +161,21 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       channel: 'web', chatId: 'orchestrator', senderId: 'user', messageId: 'm',
       tools, signal: new AbortController().signal,
     }
-    const search = new SearchTool(home, undefined, undefined, undefined, undefined, () => service)
-    assert.equal(JSON.parse(await search.execute({ space: 'sessions:', query: 'MCP' }, context)).totalMatches, 1)
-    await assert.rejects(search.execute({ space: 'sessions:' }, { ...context, projectId: 'other' }), /Project/)
+    const vfs = new VirtualFs()
+    const handlers = createSessionsHandler({
+      getSessionState: sessions.getSessionState,
+      listSessions: () => [],
+      getHistory: async () => ({ messages: [], total: 0 }),
+    }, () => service)
+    vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
+    const search = new SearchTool(home, undefined, vfs)
+    assert.match(await search.execute({ space: 'grep:v:sessions', query: 'MCP' }, context), new RegExp(`${created.sessionId}/brief`))
+    assert.equal(JSON.parse((await vfs.resolve(`v:sessions/${created.sessionId}/brief`, context))!).conversationUrl, created.conversationUrl)
+    await assert.rejects(search.execute({ space: 'glob:v:sessions', query: '**' }, { ...context, projectId: 'other' }), /Project/)
+    const remoteContext = { ...context, sessionId: worker.sessionId, remoteWorkdir: {
+      nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
+    } }
+    assert.match(await search.execute({ space: 'grep:v:sessions', query: 'MCP' }, remoteContext), /\/brief/)
     const tool = new TopicTool(service)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath }, { ...context, sessionId: worker.sessionId }), /Temporary/)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath, extra: 1 }, context), /only path/)
@@ -191,7 +205,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     const bus = new Bus()
     t.after(() => bus.stopAll())
     const base = new Tools(home)
-    base.register(new SearchTool(home, undefined, undefined, undefined, undefined, () => service))
+    base.register(new SearchTool(home, undefined, vfs))
     base.register(new TopicTool(service))
     base.register(new MessageTool(bus, () => true, () => undefined, () => [], sessions.deliver,
       (from, to) => states.has(from) && states.has(to)))
@@ -206,11 +220,11 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         const lastResult = messages.filter(message => message.role === 'tool').at(-1)
         if (turn === 1) return {
           content: '', finishReason: 'tool_calls',
-          toolCalls: [{ id: 'find-topic', name: 'search', arguments: { space: 'sessions:', query: 'LLM routing' } }],
+          toolCalls: [{ id: 'find-topic', name: 'search', arguments: { space: 'grep:v:sessions', query: 'LLM routing' } }],
         }
         assert(lastResult)
         if (turn === 2) {
-          assert.equal(JSON.parse(String(lastResult.content)).totalMatches, 0)
+          assert.equal(String(lastResult.content), 'No matches found')
           return {
             content: '', finishReason: 'tool_calls',
             toolCalls: [{ id: 'create-topic', name: 'topic', arguments: {

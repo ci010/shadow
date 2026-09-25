@@ -1,74 +1,69 @@
-import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
-import { resolve } from 'node:path'
-import { setImmediate } from 'node:timers/promises'
 import test, { type TestContext } from 'node:test'
-import type { ExecutionContext } from './context.ts'
-import { ConfigSchema } from '../config/schema.ts'
-import { McpConnection, type McpToolInfo } from '../mcp/client.ts'
-import { McpManager } from '../mcp/manager.ts'
+import { rm } from 'node:fs/promises'
+import { setImmediate } from 'node:timers/promises'
+import { createTempWorkspace } from '../testing/workspace.ts'
+import { McpConnection } from '../mcp/client.ts'
 import { McpToolIndex } from '../mcp/tool-index.ts'
-import { ProjectConfigStore } from '../projects/config-store.ts'
-import { ImportTool, type LoadableEntry, type McpLoadable } from './load-tool.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import type { ExecutionContext } from './context.ts'
+import { ImportTool, type LoadableEntry } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
-import { SessionTools, Tools } from './registry.ts'
+import { ReadTool } from './read.ts'
 import { SearchTool } from './search.ts'
-import type { Tool } from './tool.ts'
+import { Tools, SessionTools } from './registry.ts'
+import { requireToolText, type Tool } from './tool.ts'
 
 const schema = {
-  type: 'object',
-  properties: {
-    query: { type: 'string', minLength: 1 },
-    count: { type: 'integer', minimum: 1, maximum: 10 },
-  },
+  type: 'object', properties: { query: { type: 'string', minLength: 1 }, count: { type: 'integer', maximum: 10 } },
   required: ['query'], additionalProperties: false,
 }
-const messageTool: McpToolInfo = { name: 'SearchMessages', description: 'Search messages by subject and sender.', inputSchema: schema }
-const mailConfig = { name: 'mail', transport: 'stdio' as const, command: 'synthetic-never-run' }
+const config = { name: 'mail', transport: 'stdio' as const, command: 'synthetic-never-run' }
+const advertised = [{ name: 'SearchMessages', description: 'Search messages by subject and sender.', inputSchema: schema }]
 
 async function setup(t: TestContext, builtins = new Map<string, LoadableEntry>()) {
-  await mkdir(resolve('.tmp'), { recursive: true })
-  const home = await mkdtemp(resolve('.tmp', 'tool-search-'))
+  const home = await createTempWorkspace()
   const index = new McpToolIndex(home)
   const importer = new ImportTool(builtins, home, undefined, undefined, index)
+  const vfs = new VirtualFs()
+  vfs.mount('v:tools', 'Tools', (path, ctx) => importer.readVirtual(path, ctx), (ctx, opts) => importer.virtualEntries(ctx, opts))
   const base = new Tools(home)
-  base.register(importer)
+  base.register(new SearchTool(home, undefined, vfs))
+  base.register(new ReadTool(home, vfs))
   base.register(new InvokeTool(importer))
-  base.register(new SearchTool(home, undefined, undefined, importer))
   const tools = new SessionTools(base, home)
   const context = { tools, signal: new AbortController().signal } as ExecutionContext
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => {})
   t.mock.method(McpConnection.prototype, 'disconnect', async () => {})
   t.mock.method(McpConnection.prototype, 'setToolsChangedHandler', () => {})
-  const advertised = [
-    messageTool,
-    ...Array.from({ length: 12 }, (_, i) => ({ name: `Unrelated${i}`, description: 'Other operation.', inputSchema: { type: 'object' } })),
-  ]
   const list = t.mock.method(McpConnection.prototype, 'listTools', async () => advertised)
   const call = t.mock.method(McpConnection.prototype, 'callTool', async () => 'success')
-  await importer.updateMcpServers([mailConfig])
-  await index.store(mailConfig, advertised)
+  await importer.updateMcpServers([config])
+  await index.store(config, advertised)
   t.after(async () => {
-    tools.resetDynamic()
+    await tools.resetDynamicAndWait()
     await rm(home, { recursive: true, force: true })
   })
-  const search = (args: Record<string, unknown>) => tools.execute('search', { space: 'tools:', ...args }, context)
-  const invoke = (args: Record<string, unknown>, name = 'mail__SearchMessages') =>
-    tools.execute('invoke_tool', { name, args }, context)
-  return { home, importer, base, tools, context, connect, list, call, search, invoke, index }
+  const search = async (args: Record<string, unknown>, ctx = context) =>
+    requireToolText(await ctx.tools.execute('search', { space: 'grep:v:tools', query: 'subject', ...args }, ctx))
+  const read = async (path = 'v:tools/mail/mail__SearchMessages', ctx = context) =>
+    requireToolText(await ctx.tools.execute('read', { path }, ctx))
+  const invoke = (args: Record<string, unknown>) => tools.execute('invoke_tool', { name: 'mail__SearchMessages', args }, context)
+  return { home, index, importer, base, tools, context, connect, list, call, search, read, invoke }
 }
 
-test('search returns only matching exact contracts and performs no tool RPC; invoke needs no import step', async t => {
+test('VFS searches names, descriptions and full schemas; read returns exact contracts without connecting', async t => {
   const f = await setup(t)
-  const result = JSON.parse(requireToolText(await f.search({ query: 'search subject', limit: 1 })))
-  assert.deepEqual(result.tools.map((tool: { name: string }) => tool.name), ['mail__SearchMessages'])
-  assert.deepEqual(result.tools[0].parameters, schema)
-  assert.match(result.tools[0].description, /Search messages by subject/)
-  assert.equal(result.tools[0].source, 'v:tools/mail')
-  assert.equal(f.call.mock.callCount(), 0)
+  assert.equal(await f.search({ space: 'glob:v:tools/mail', query: '*__*' }), 'v:tools/mail/mail__SearchMessages')
+  for (const query of ['subject', '"query"', '"maximum": 10']) {
+    assert.match(await f.search({ query }), /v:tools\/mail\/mail__SearchMessages/)
+  }
+  assert.deepEqual(JSON.parse(await f.read()).parameters, schema)
+  assert.equal(JSON.parse(await f.read()).name, 'mail__SearchMessages')
+  assert.equal(typeof JSON.parse(await f.read()).indexedAt, 'string')
   assert.equal(f.connect.mock.callCount(), 0)
   assert.equal(f.list.mock.callCount(), 0)
+  assert.equal(f.call.mock.callCount(), 0)
   assert.equal(f.tools.activeDynamicTools().length, 0)
   assert.equal(await f.invoke({ query: 'hello' }), 'success')
   assert.equal(f.connect.mock.callCount(), 1)
@@ -76,271 +71,94 @@ test('search returns only matching exact contracts and performs no tool RPC; inv
   assert(!f.tools.getDefinitions().some(tool => tool.function.name === 'mail__SearchMessages'))
 })
 
-test('known IDs execute lazily on first use, but invalid arguments never reach MCP', async t => {
+test('invalid arguments never execute and live schemas replace stale indexed metadata', async t => {
   const f = await setup(t)
-  for (const args of [{}, { query: 5 }, { query: '' }, { query: 'test', count: 11 }, { query: 'test', unknown: 1 }]) {
-    const invalid = await f.invoke(args)
-    assert.match(requireToolText(invalid), /invalid arguments/)
-    assert.match(requireToolText(invalid), /no tool was executed/)
-    assert.match(requireToolText(invalid), /"parameters"/)
+  for (const args of [{}, { query: 5 }, { query: '' }, { query: 'test', count: 11 }, { query: 'test', extra: 1 }]) {
+    assert.match(requireToolText(await f.invoke(args)), /invalid arguments/)
   }
   assert.equal(f.call.mock.callCount(), 0)
-  assert.equal(await f.invoke({ query: 'test', count: 2 }), 'success')
-  assert.equal(f.call.mock.callCount(), 1)
-  assert.equal(f.connect.mock.callCount(), 1)
-})
-
-test('indexed schemas are advisory and invocation refreshes changed or removed live tools', async t => {
-  const f = await setup(t)
-  const before = JSON.parse(requireToolText(await f.search({ query: 'SearchMessages' })))
-  assert.deepEqual(before.tools[0].parameters, schema)
-  const current = {
-    type: 'object', properties: { folder: { type: 'string' } },
-    required: ['folder'], additionalProperties: false,
-  }
-  f.list.mock.mockImplementation(async () => [{ ...messageTool, inputSchema: current }])
-  assert.match(requireToolText(await f.invoke({ query: 'old indexed contract' })), /invalid arguments/)
-  assert.equal(f.call.mock.callCount(), 0)
-  const after = JSON.parse(requireToolText(await f.search({ query: 'SearchMessages' })))
-  assert.deepEqual(after.tools[0].parameters, current)
-  assert.equal(f.connect.mock.callCount(), 1)
+  f.tools.resetDynamic()
+  const current = { type: 'object', properties: { folder: { type: 'string' } }, required: ['folder'], additionalProperties: false }
+  f.list.mock.mockImplementation(async () => [{ ...advertised[0], inputSchema: current }])
+  assert.match(requireToolText(await f.invoke({ query: 'old' })), /invalid arguments/)
+  assert.deepEqual(JSON.parse(await f.read()).parameters, current)
   assert.equal(await f.invoke({ folder: 'inbox' }), 'success')
   f.tools.resetDynamic()
   f.list.mock.mockImplementation(async () => [])
   assert.match(requireToolText(await f.invoke({ folder: 'inbox' })), /not advertised/)
-  assert.equal(JSON.parse(requireToolText(await f.search({ query: '' }))).totalMatches, 0)
-  assert.equal(f.call.mock.callCount(), 1)
+  assert.equal(await f.search({ space: 'glob:v:tools/mail', query: '*__*' }), 'No files found')
 })
 
-test('limits bound returned tools, never truncate an individual contract, and exact IDs rank first', async t => {
-  const f = await setup(t)
-  const description = 'Search messages with the exact subject. '.repeat(500)
-  await f.index.store(mailConfig, [
-    { ...messageTool, description },
-    { ...messageTool, name: 'FindMessages' },
-  ])
-  const text = await f.search({ query: 'mail__SearchMessages', limit: 1 })
-  const result = JSON.parse(requireToolText(text))
-  assert.equal(result.tools.length, 1)
-  assert.equal(result.tools[0].description, `[MCP:mail] ${description}`)
-  assert(!requireToolText(text).includes('[truncated:'))
-  const broad = JSON.parse(requireToolText(await f.search({ query: 'messages', limit: 1 })))
-  assert.equal(broad.totalMatches, 2)
-  assert.equal(broad.hasMore, true)
-})
-
-test('search reports missing indexes without connecting and defers browser/factory initialization', async t => {
+test('uninitialized factories stay deferred, static contracts work, and warnings survive no-match queries', async t => {
   let factories = 0
-  const tool: Tool = { name: 'fixture', description: 'Fixture browser tool', parameters: { type: 'object', properties: {} }, execute: async () => 'not called' }
-  const f = await setup(t, new Map([['browser', { factory: async () => { factories++; return tool } }]]))
-  await f.importer.updateMcpServers([
-    mailConfig,
-    { name: 'unavailable', transport: 'stdio', command: 'synthetic' },
-  ])
-  f.connect.mock.mockImplementation(async function (this: McpConnection) {
-    if (this.config.name === 'unavailable') throw Object.assign(new Error('authentication required'), { code: 401 })
-  })
-  const partial = JSON.parse(requireToolText(await f.search({ query: 'messages' })))
-  assert.equal(partial.tools.length, 1)
-  assert.equal(partial.errors.length, 1)
-  assert.match(partial.errors[0].message, /not indexed/)
-  assert.equal(partial.errors[0].source, 'v:tools/unavailable')
-  assert.equal(f.connect.mock.callCount(), 0)
-  assert.deepEqual(partial.deferredSources, ['v:tools/browser'])
+  const tool: Tool = { name: 'fixture', description: 'Static capability', parameters: { type: 'object', properties: {} }, execute: async () => 'unused' }
+  const f = await setup(t, new Map<string, LoadableEntry>([
+    ['group', { contracts: [tool], factory: async () => { factories++; return tool } }],
+    ['deferred', { factory: async () => { factories++; return tool } }],
+  ]))
+  assert.match(await f.search({ query: 'Static capability' }), /v:tools\/group\/fixture/)
+  const missing = await f.search({ query: 'never matches' })
+  assert.match(missing, /No matches found/)
+  assert.match(missing, /Warning: v:tools\/deferred:.*does not initialize/)
+  assert.match(await f.search({ space: 'grep:v:tools/deferred/unknown', query: 'never' }), /Warning:/)
   assert.equal(factories, 0)
-  const explicit = JSON.parse(requireToolText(await f.search({ query: 'browser', space: 'tools:browser' })))
-  assert.equal(explicit.tools[0].name, 'fixture')
-  assert.equal(factories, 1)
-  assert.equal(f.call.mock.callCount(), 0)
+  assert.equal(f.connect.mock.callCount(), 0)
 })
 
-test('sleep and config changes do not require disclosure flags; current schema still governs invocation', async t => {
+test('missing or malformed MCP indexes report incomplete coverage without fallback connections', async t => {
   const f = await setup(t)
-  await f.search({ query: 'messages' })
-  f.tools.resetDynamic()
-  assert.equal(await f.invoke({ query: 'after sleep' }), 'success')
-  assert.equal(f.connect.mock.callCount(), 1)
-  await f.importer.updateMcpServers([{ name: 'mail', transport: 'stdio', command: 'synthetic-changed' }])
-  f.list.mock.mockImplementation(async () => [{
-    ...messageTool,
-    inputSchema: { type: 'object', properties: { folder: { type: 'string' } }, required: ['folder'], additionalProperties: false },
-  }])
-  assert.match(requireToolText(await f.invoke({ query: 'obsolete arguments' })), /invalid arguments/)
-  assert.equal(f.call.mock.callCount(), 1)
-  assert.equal(await f.invoke({ folder: 'inbox' }), 'success')
-  assert.equal(f.call.mock.callCount(), 2)
-})
-
-test('one browser source discovers interactions and diagnostics without a legacy alias', async t => {
-  const browser: McpLoadable = {
-    config: {
-      name: 'chrome-devtools', transport: 'stdio', command: 'synthetic-never-run',
-      description: 'Managed browser: page interaction, network, console, performance, memory and emulation.',
-    },
-  }
-  const f = await setup(t, new Map([['chrome-devtools', browser]]))
-  await f.importer.updateMcpServers([])
-  const parameters = {
-    type: 'object', properties: { reload: { type: 'boolean' } },
-    required: ['reload'], additionalProperties: false,
-  }
-  f.list.mock.mockImplementation(async () => [
-    { name: 'take_snapshot', description: 'Read page controls.', inputSchema: { type: 'object' } },
-    { name: 'performance_start_trace', description: 'Record a performance trace.', inputSchema: parameters },
-  ])
-
-  const catalog = f.importer.catalogEntries(f.tools).map(entry => JSON.parse(entry.content))
-  assert.deepEqual(catalog.map(entry => entry.source), ['v:tools/chrome-devtools'])
-  assert.deepEqual(catalog.map(entry => entry.description), [browser.config.description])
-  assert.equal(f.importer.isBuiltinName('chrome-devtools-full'), false)
-  assert.match(f.importer.readCatalog('chrome-devtools-full', f.tools), /^Error: unknown or unavailable source/)
-  assert.match(requireToolText(await f.search({ space: 'tools:chrome-devtools-full', query: 'performance' })), /^Error: unknown catalog source/)
-  assert.match(await f.importer.importSource({ source: 'v:tools/chrome-devtools-full' }, f.tools), /^Unknown tool/)
-  const global = JSON.parse(requireToolText(await f.search({ query: 'performance' })))
-  assert.deepEqual(global.tools, [])
-  assert.deepEqual(global.deferredSources, ['v:tools/chrome-devtools'])
+  await f.importer.updateMcpServers([config, { name: 'missing', transport: 'stdio', command: 'never' }])
+  assert.match(await f.search({ query: 'no matches' }), /Warning: v:tools\/missing:.*not indexed/)
+  t.mock.method(f.index, 'read', async () => { throw new Error('Malformed tool index') })
+  assert.match(await f.search({ space: 'grep:v:tools/mail', query: 'nothing' }), /Warning:.*Malformed tool index/)
   assert.equal(f.connect.mock.callCount(), 0)
   assert.equal(f.list.mock.callCount(), 0)
-
-  const targeted = JSON.parse(requireToolText(await f.search({ space: 'tools:chrome-devtools', query: 'performance', limit: 1 })))
-  assert.equal(targeted.tools[0].name, 'chrome-devtools__performance_start_trace')
-  assert.deepEqual(targeted.tools[0].parameters, parameters)
-  assert.deepEqual(targeted.searchedSources, ['v:tools/chrome-devtools'])
-  assert.equal(f.connect.mock.callCount(), 1)
-
-  const missed = JSON.parse(requireToolText(await f.search({ space: 'tools:chrome-devtools', query: 'sluggish' })))
-  assert.equal(missed.totalMatches, 0)
-  const listing = JSON.parse(requireToolText(await f.search({ space: 'tools:chrome-devtools', query: '', limit: 1 })))
-  assert.equal(listing.totalMatches, 2, 'A lexical miss must not imply missing capabilities')
-  const next = JSON.parse(requireToolText(await f.search({ space: 'tools:chrome-devtools', query: '', limit: 1, offset: listing.nextOffset })))
-  assert.deepEqual([...listing.tools, ...next.tools].map((tool: { name: string }) => tool.name), [
-    'chrome-devtools__performance_start_trace', 'chrome-devtools__take_snapshot',
-  ])
-  assert.equal(next.nextOffset, null)
-  assert.equal(f.call.mock.callCount(), 0, 'Discovery must not execute browser actions')
-  assert(!f.tools.getDefinitions().some(tool => tool.function.name.startsWith('chrome-devtools__')))
-
-  f.tools.resetDynamic()
-  assert.equal(await f.invoke({ reload: false }, 'chrome-devtools__performance_start_trace'), 'success')
-  assert.equal(f.connect.mock.callCount(), 2, 'Known diagnostic IDs must reconnect without search/import')
-  assert.equal(f.call.mock.callCount(), 1)
-  assert.match(requireToolText(await f.invoke({ reload: 'false' }, 'chrome-devtools__performance_start_trace')), /invalid arguments/)
-  assert.equal(f.call.mock.callCount(), 1)
 })
 
-test('persisted MCP configuration restores three searchable tools after runtime restart without eager connections', async t => {
+test('VFS tool listing is deterministic and paginated; encoded tool names round-trip through read', async t => {
   const f = await setup(t)
-  const configPath = resolve(f.home, 'project.json')
-  const store = new ProjectConfigStore({
-    home: f.home, configPath, getSharedConfig: () => ConfigSchema.parse({}),
-    onChanged: config => f.importer.updateMcpServers(config.mcp.servers),
-  })
-  await store.init()
-  f.list.mock.mockImplementation(async () => [
-    messageTool,
-    { name: 'SendMessage', description: 'Send a message.', inputSchema: schema },
-    { name: 'ListFolders', description: 'List mailbox folders.', inputSchema: { type: 'object' } },
-  ])
-  await store.update(raw => ({ ...raw, mcp: { mail: { command: 'synthetic-installed' } } }))
-  assert.equal(f.connect.mock.callCount(), 1, 'Saving indexes the new configuration before committing')
-  assert.equal(JSON.parse(requireToolText(await f.search({ query: '' }))).totalMatches, 3)
-  f.tools.resetDynamic()
-
-  const restored = new ProjectConfigStore({
-    home: f.home, configPath, getSharedConfig: () => ConfigSchema.parse({}),
-  })
-  const config = await restored.init()
-  const importer = new ImportTool(new Map(), f.home)
-  const manager = new McpManager(servers => importer.updateMcpServers(servers), config.mcp.servers)
-  const base = new Tools(f.home)
-  base.register(new SearchTool(f.home, undefined, undefined, importer))
-  base.register(new InvokeTool(importer))
-  const tools = new SessionTools(base, f.home)
-  t.after(async () => {
-    tools.resetDynamic()
-    await manager.stop()
-  })
-  await manager.ensureLoaded()
-  assert.equal(f.connect.mock.callCount(), 1, 'Restart restores only the source catalog')
-  assert.equal(f.list.mock.callCount(), 1)
-  assert.equal(tools.activeDynamicTools().length, 0)
-  assert.equal(importer.catalogEntries(tools).length, 1)
-  assert.doesNotMatch(importer.readCatalog('', tools), /SearchMessages|SendMessage|ListFolders/)
-
-  const result = JSON.parse(requireToolText(await tools.execute('search', { space: 'tools:', query: '' }, { ...f.context, tools })))
-  assert.deepEqual(result.tools.map((tool: { name: string }) => tool.name), [
-    'mail__ListFolders', 'mail__SearchMessages', 'mail__SendMessage',
-  ])
-  assert.deepEqual(result.searchedSources, ['v:tools/mail'])
-  assert.deepEqual(result.errors, [])
-  assert.deepEqual(result.deferredSources, [])
-  assert.equal(f.connect.mock.callCount(), 1, 'Cold search must not connect any configured source')
-  assert.equal(f.list.mock.callCount(), 1, 'Search reads the persisted index')
-  assert.equal(f.call.mock.callCount(), 0)
-  const match = JSON.parse(requireToolText(await tools.execute('search', { space: 'tools:', query: 'sender' }, { ...f.context, tools })))
-  assert.deepEqual(match.tools.map((tool: { name: string }) => tool.name), ['mail__SearchMessages'])
-  assert.equal(f.connect.mock.callCount(), 1)
-  assert.equal(f.list.mock.callCount(), 1, 'Repeated searches also perform no MCP RPC')
-  assert(!tools.getDefinitions().some(tool => tool.function.name.startsWith('mail__')))
-})
-
-test('invalid schemas fail closed and schema IDs cannot alias across tool versions', async t => {
-  const f = await setup(t)
-  f.list.mock.mockImplementation(async () => [{
-    ...messageTool, inputSchema: { ...schema, $ref: '#/missing' },
-  }])
-  assert.match(requireToolText(await f.invoke({ query: 'test' })), /invalid or unsupported input schema/)
-  assert.equal(f.call.mock.callCount(), 0)
-  f.tools.resetDynamic()
-  f.list.mock.mockImplementation(async () => [{ ...messageTool, inputSchema: { ...schema, $id: 'fixture-contract' } }])
-  assert.equal(await f.invoke({ query: 'old version' }), 'success')
-  await f.importer.updateMcpServers([{ name: 'mail', transport: 'stdio', command: 'new-version' }])
-  f.list.mock.mockImplementation(async () => [{
-    ...messageTool, inputSchema: {
-      $id: 'fixture-contract', type: 'object',
-      properties: { folder: { type: 'string' } }, required: ['folder'], additionalProperties: false,
-    },
-  }])
-  assert.match(requireToolText(await f.invoke({ query: 'old version' })), /invalid arguments/)
-  assert.equal(f.call.mock.callCount(), 1)
-  assert.equal(await f.invoke({ folder: 'new version' }), 'success')
-})
-
-test('role restrictions and search input validation do not reveal or execute prohibited tools', async t => {
-  const f = await setup(t)
-  for (const args of [
-    { query: null }, { query: 1 }, { query: 'x'.repeat(501) }, { query: 'mail', limit: 0 },
-    { query: 'mail', space: 'tools:absent' }, { limit: null }, { offset: null },
-    { offset: -1 }, { offset: 1.5 }, { offset: Number.MAX_SAFE_INTEGER + 1 },
-  ]) {
-    assert.match(requireToolText(await f.search(args)), /^Error:/)
-  }
+  await f.index.store(config, ['a', 'b', 'slash/name%', 'z'].map(name => ({ ...advertised[0], name })))
+  const first = await f.search({ space: 'glob:v:tools/mail', query: '*__*', limit: 2 })
+  assert.equal(first, 'v:tools/mail/mail__a\nv:tools/mail/mail__b\n(Showing 2 of 4 results; continue with offset: 2.)')
+  const last = await f.search({ space: 'glob:v:tools/mail', query: '*__*', limit: 2, offset: 2 })
+  assert.equal(last, 'v:tools/mail/mail__slash%2Fname%25\nv:tools/mail/mail__z')
+  assert.equal(JSON.parse(await f.read('v:tools/mail/mail__slash%2Fname%25')).name, 'mail__slash/name%')
   assert.equal(f.connect.mock.callCount(), 0)
-  const restricted = new SessionTools(f.base, f.home, ['search'])
-  t.after(() => restricted.resetDynamic())
-  assert.match(requireToolText(await restricted.execute('search', { space: 'tools:', query: 'mail' }, { ...f.context, tools: restricted })), /not available/)
-  assert.equal(f.connect.mock.callCount(), 0)
+})
+
+test('complete schema reads are not truncated and virtual grep retains coverage warnings', async t => {
+  const f = await setup(t)
+  const description = 'Detailed metadata. '.repeat(1000)
+  await f.index.store(config, [{ ...advertised[0], description }])
+  assert.equal(JSON.parse(await f.read()).description, `[MCP:mail] ${description}`)
+  assert.doesNotMatch(await f.read(), /\[truncated:/)
+})
+
+test('role and remote-workdir restrictions apply equally to virtual grep, glob and contract reads', async t => {
+  const f = await setup(t)
+  const restricted = new SessionTools(f.base, f.home, ['search', 'read'])
+  const ctx = { ...f.context, tools: restricted }
+  assert.match(await f.search({}, ctx), /not available/)
+  assert.match(await f.read(undefined, ctx), /not available/)
   const hidden = new SessionTools(f.base, f.home, undefined, ['mail__SearchMessages'])
-  t.after(() => hidden.resetDynamic())
-  const result = JSON.parse(requireToolText(await hidden.execute('search', { space: 'tools:', query: 'subject' }, { ...f.context, tools: hidden })))
-  assert.equal(result.tools.length, 0)
-  assert.equal(f.call.mock.callCount(), 0)
+  assert.equal(await f.search({}, { ...f.context, tools: hidden }), 'No matches found')
+  assert.match(await f.read(undefined, { ...f.context, tools: hidden }), /Unknown or unavailable/)
+  const remote = { ...f.context, remoteWorkdir: {
+    nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not use remote executor') },
+  } }
+  assert.match(await f.search({}, remote), /only v:sessions searches/)
+  assert.equal(f.connect.mock.callCount(), 0)
 })
 
-test('cancelled index search waits for pending reads and never connects or registers tools', async t => {
+test('cancelled virtual index searches wait for pending reads and never connect or register', async t => {
   const f = await setup(t)
-  const indexed = await f.index.read(mailConfig)
+  const indexed = await f.index.read(config)
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  t.mock.method(f.index, 'read', async () => {
-    entered.resolve()
-    await release.promise
-    return indexed
-  })
+  t.mock.method(f.index, 'read', async () => { entered.resolve(); await release.promise; return indexed })
   const controller = new AbortController()
   let settled = false
-  const pending = f.tools.execute('search', { space: 'tools:', query: 'messages' }, { ...f.context, signal: controller.signal })
-    .finally(() => { settled = true })
+  const pending = f.search({}, { ...f.context, signal: controller.signal }).finally(() => { settled = true })
   const rejected = assert.rejects(pending, { name: 'AbortError' })
   await entered.promise
   controller.abort()
@@ -348,63 +166,19 @@ test('cancelled index search waits for pending reads and never connects or regis
   assert.equal(settled, false)
   release.resolve()
   await rejected
-  assert.equal(f.tools.activeDynamicTools().length, 0)
   assert.equal(f.connect.mock.callCount(), 0)
 })
 
-test('a malformed index is reported without falling back to live discovery', async t => {
+test('configuration changes and invalid schema references still fail before execution', async t => {
   const f = await setup(t)
-  t.mock.method(f.index, 'read', async () => { throw new Error('Invalid MCP tool index: malformed JSON') })
-  const result = JSON.parse(requireToolText(await f.search({ space: 'tools:mail' })))
-  assert.deepEqual(result.tools, [])
-  assert.equal(result.errors.length, 1)
-  assert.match(result.errors[0].message, /Invalid MCP tool index/)
-  assert.equal(f.connect.mock.callCount(), 0)
-  assert.equal(f.list.mock.callCount(), 0)
-})
-
-test('empty, whitespace and omitted tool queries list complete contracts with deterministic pagination', async t => {
-  const f = await setup(t)
-  const first = JSON.parse(requireToolText(await f.search({ query: '', space: 'tools:mail', limit: 5 })))
-  assert.equal(first.tools.length, 5)
-  assert.equal(first.totalMatches, 13)
-  assert.equal(first.nextOffset, 5)
-  assert.equal(first.hasMore, true)
-  assert.deepEqual(first, JSON.parse(requireToolText(await f.search({ query: ' \n\t ', space: 'tools:mail', limit: 5 }))))
-  assert.deepEqual(first, JSON.parse(requireToolText(await f.search({ space: 'tools:mail', limit: 5 }))))
-  const second = JSON.parse(requireToolText(await f.search({ space: 'tools:mail', limit: 5, offset: first.nextOffset })))
-  const last = JSON.parse(requireToolText(await f.search({ space: 'tools:mail', limit: 5, offset: second.nextOffset })))
-  const names = [...first.tools, ...second.tools, ...last.tools].map((tool: { name: string }) => tool.name)
-  assert.equal(new Set(names).size, 13)
-  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'en')))
-  assert.equal(last.tools.length, 3)
-  assert.equal(last.nextOffset, null)
-  assert.equal(last.hasMore, false)
-  const beyond = JSON.parse(requireToolText(await f.search({ offset: 100 })))
-  assert.deepEqual(beyond.tools, [])
-  assert.equal(beyond.hasMore, false)
-  assert.equal(beyond.nextOffset, null)
-  assert.equal(f.connect.mock.callCount(), 0)
+  f.list.mock.mockImplementation(async () => [{ ...advertised[0], inputSchema: { ...schema, $ref: '#/missing' } }])
+  assert.match(requireToolText(await f.invoke({ query: 'x' })), /invalid or unsupported input schema/)
   assert.equal(f.call.mock.callCount(), 0)
-  assert(!f.tools.getDefinitions().some(tool => tool.function.name === 'search_tools'))
-})
-
-test('empty discovery preserves role and remote workdir restrictions', async t => {
-  const f = await setup(t)
-  const restricted = new SessionTools(f.base, f.home, undefined, ['invoke_tool'])
-  t.after(() => restricted.resetDynamic())
-  assert.match(requireToolText(await restricted.execute('search', { space: 'tools:' }, { ...f.context, tools: restricted })), /not available/)
-  assert.equal(f.connect.mock.callCount(), 0)
-  const remote = {
-    nodeId: 'remote', capabilityId: 'workdir',
-    executor: {
-      execute: () => { throw new Error('Remote execution must not start') },
-      getStatus: async () => { throw new Error('Remote execution must not start') },
-      cancel: async () => { throw new Error('Remote execution must not start') },
-    },
-  }
-  assert.match(requireToolText(await f.tools.execute('search', { space: 'tools:' }, {
-    ...f.context, remoteWorkdir: remote,
-  })), /only sessions: discovery is supported.*remote workdir/)
-  assert.equal(f.connect.mock.callCount(), 0)
+  f.tools.resetDynamic()
+  f.list.mock.mockImplementation(async () => advertised)
+  assert.equal(await f.invoke({ query: 'old' }), 'success')
+  await f.importer.updateMcpServers([{ ...config, command: 'changed' }])
+  assert.match(await f.search({}), /not indexed/)
+  assert.equal(await f.invoke({ query: 'new' }), 'success')
+  assert.equal(f.call.mock.callCount(), 2)
 })

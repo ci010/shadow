@@ -14,10 +14,12 @@ restrictions. Reading this guide grants no capabilities.
 ### Project Coordination
 
 Reuse durable Project topics; they are root peers, not coordinator children.
-`search({ space: "sessions:", query, limit: 5, offset: 0 })` lists topic
-title/goal/scope/nonGoals, folderId, initiativeId, createdBySessionId, and status
-(maximum 20). Creator provenance is not structural ownership.
-For remote workdirs, `sessions:` search and typed Project messaging are control-plane
+`search({ space: "grep:v:sessions", query })` searches histories and topic briefs.
+Read a matching `v:sessions/<session-id>/brief` for title/goal/scope/nonGoals,
+folderId, initiativeId, createdBySessionId, status and conversationUrl.
+Use `glob:v:sessions` with `query: "*/brief"` to list topic briefs.
+Creator provenance is not structural ownership.
+For remote workdirs, `v:sessions` search and typed Project messaging are control-plane
 operations; other search spaces remain explicitly unsupported remotely.
 Task/call executions cannot create/manage durable topics or register folders.
 Message admission is not acceptance, completion, or transfer of Initiative work.
@@ -40,14 +42,15 @@ Full writes include revision in JSON `content`. Exact edits use
 `match`/`content`, optional `flag: "g"`; they revision-check a prior read's redacted
 snapshot in the same logical/physical session. Missing snapshot: reread.
 
-**Find skills:** `search({ space: "skills:", query: "CSV", limit: 5, offset: 0 })`
-returns names, descriptions, and read paths. Use `skills:<category>` to narrow.
+**Find skills:** `search({ space: "grep:v:skills", query: "CSV", limit: 5, offset: 0 })`
+returns matching lines and read paths. Use `grep:v:skills/<name>` to narrow.
+Skill resources, including frontmatter in `<name>/SKILL.md`, are searchable too.
 Search, index/category reads, and bundled resource reads do not activate tools.
 Prompt hints contain only bounded core/recent metadata, including learned Skills.
 Search still covers the full catalog; omission is not deletion or loss of access.
 
 **Edit shared Skills:** Ordinary Project learning does not need a Change or
-publication. Discover `skill_read` / `skill_save` under `tools:` and call through
+publication. Discover `skill_read` / `skill_save` under `v:tools` and call through
 `invoke_tool` (the coordinator has these two scoped tools directly).
 `skill_read({name, path?})` reads raw text without activating scripts and remembers
 the edit baseline. Use `offset`/`limit` for long resources.
@@ -71,27 +74,28 @@ After reading, call `invoke_tool({ name: "csv_summary", args: { /* skill-documen
 directly; invocation lazy-loads the module and validates its schema. The skill
 body explains arguments. New sessions and sleep/reset require reading the skill
 again before invoking its tools.
-Lazy tool discovery or invocation may import the module and run `init`:
-`search({ space: "tools:csv_summary", query: "" })` loads the current schema
-without calling `execute`. Skill search never activates tools. Reread the exact
+Only invocation may import the module and run `init`:
+`read("v:tools/csv_summary/csv_summary")` reads the registered schema
+without importing or executing source. Skill search never activates tools. Reread the exact
 skill to refresh changed instructions, declarations, entrypoints or resources;
 stale registrations fail instead of silently switching code. Registrations are not shared
 across sessions. Invalid declarations remain discoverable with `toolsError`,
 but exact skill reads fail explicitly.
 
-**Discover:** `search({ space: "tools:", query, limit?, offset? })` matches names/
-descriptions by keywords, not embeddings.
-Limit: 3 by default, 10 maximum. Narrow with `space: "tools:<name>"`.
-Empty/omitted query lists stable name order. Page with `offset: nextOffset`;
-`nextOffset: null` ends pagination. Files/web use `grep:`/`glob:`/`web:`.
+**Discover:** `search({ space: "grep:v:tools", query, limit?, offset? })` searches
+names, descriptions and parameter schemas with case-sensitive regular expressions.
+Read returned `v:tools/<source>/<encoded-tool-name>` paths for full contracts.
+Use `glob:v:tools` with `query: "**"` to list paths, or scope either protocol to
+`v:tools/<source>`. Virtual pages default to 100 results (maximum 100); follow
+the continuation footer's offset. Files/web use `grep:`/`glob:`/`web:`.
 
-Installed MCP search, global or targeted, reads the persistent index: exact names,
+Installed MCP search, global or targeted, reads active metadata or the persistent index: exact names,
 descriptions, parameters and `indexedAt`; zero connections, `tools/list` RPCs or
 dynamic registration. Repeated searches work offline; 100 installed servers will
 not start from search. Missing/mismatched/corrupt indexes give explicit source
-errors, never fallback auto-connect; read/save MCP config to build missing metadata.
-Check `errors` and `deferredSources`: partial results do not prove absence. Built-in
-browser/factory sources initialize only with explicit source selection.
+warnings, never fallback auto-connect; read/save MCP config to build missing metadata.
+Check warnings: partial results do not prove absence. Built-in browser/factory
+sources are never initialized by search. Use browser_setup or invocation/preload.
 Chrome has one public source, `chrome-devtools`, no `chrome-devtools-full` alias.
 `read("v:tools")` lists sources without connecting.
 

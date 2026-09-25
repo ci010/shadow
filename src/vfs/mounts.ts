@@ -1,5 +1,6 @@
 import type { ChatMessage } from '../providers/provider.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
+import type { TopicService } from '../sessions/topics.ts'
 import type {
   BackgroundTaskManager,
   BackgroundTaskSummary,
@@ -13,6 +14,7 @@ import type { VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isNotFoundError } from '../utils/runtime.ts'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -62,11 +64,21 @@ function formatSessionMessage(
 
 // ── Sessions ─────────────────────────────────────────────────────────────
 
-export function createSessionsHandler(sessions: SessionManager): {
+export function createSessionsHandler(
+  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getHistory'>,
+  topics?: () => TopicService,
+): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
 } {
-  const read: VirtualFsHandler = async (subpath) => {
+  const read: VirtualFsHandler = async (subpath, context) => {
+    topics?.().assertActor(context.projectId, context.sessionId)
+    context.signal.throwIfAborted()
+    if (subpath.endsWith('/brief') && topics) {
+      const summary = (await topics().summaries()).find(topic => topic.sessionId === subpath.slice(0, -6))
+      if (!summary) throw new Error('Unknown Project topic brief.')
+      return JSON.stringify(summary, null, 2)
+    }
     if (!subpath) {
       const allList = await sessions.listSessions()
       // Hide internal pipeline sessions (heartbeat:*) from the default listing.
@@ -177,10 +189,25 @@ export function createSessionsHandler(sessions: SessionManager): {
     return lines.join('\n')
   }
 
-  const list: VirtualFsListHandler = async () => {
+  const list: VirtualFsListHandler = async (context, options) => {
+    topics?.().assertActor(context.projectId, context.sessionId)
+    context.signal.throwIfAborted()
     const all = await sessions.listSessions()
     const entries = []
+    const subpath = options?.subpath
+    const selected = (name: string) => !subpath || name === subpath || name.startsWith(`${subpath}/`)
+    for (const summary of await topics?.().summaries() ?? []) {
+      if (selected(`${summary.sessionId}/brief`)) {
+        entries.push({ name: `${summary.sessionId}/brief`, content: options?.content === false ? '' : JSON.stringify(summary, null, 2) })
+      }
+    }
     for (const s of all) {
+      context.signal.throwIfAborted()
+      if (!selected(s.sessionId)) continue
+      if (options?.content === false) {
+        entries.push({ name: s.sessionId, content: '' })
+        continue
+      }
       const state = await sessions.getSessionState(s.sessionId)
       const parts = [s.sessionId]
       if (state?.originUser) parts.push(`by=${state.originUser}`)
@@ -189,7 +216,7 @@ export function createSessionsHandler(sessions: SessionManager): {
       parts.push(`segments=${s.segmentIndex + 1}`)
 
       const { messages: history } = await sessions.getHistory(s.sessionId, {
-        maxMessages: 50,
+        maxMessages: Number.MAX_SAFE_INTEGER,
       })
       const historyText = history
         .map((m, i) => formatSessionMessage(m, i + 1).join('\n'))
@@ -250,6 +277,7 @@ export function createSkillsHandler(
   registerTools?: (skill: Skill, context: ExecutionContext) => Promise<string[]>,
 ): {
   read: VirtualFsHandler
+  list: VirtualFsListHandler
 } {
   const read: VirtualFsHandler = async (subpath, context) => {
     if (!subpath) {
@@ -305,7 +333,28 @@ export function createSkillsHandler(
     return `Unknown skill or category: ${name}`
   }
 
-  return { read }
+  const list: VirtualFsListHandler = async (context, options) => {
+    const entries = []
+    const subpath = options?.subpath
+    for (const skill of skills.availableSkills(context.admin)) {
+      context.signal.throwIfAborted()
+      const name = skill.meta.name
+      if (subpath && name !== subpath && !subpath.startsWith(`${name}/`)) continue
+      entries.push({ name, content: options?.content === false ? '' : skill.body, warning: skill.meta.toolsError })
+      for (const resource of await walkResourceFiles(skill.dirPath, context.signal)) {
+        const path = `${name}/${resource}`
+        if (subpath && path !== subpath && !path.startsWith(`${subpath}/`)) continue
+        context.signal.throwIfAborted()
+        entries.push({
+          name: path,
+          content: options?.content === false ? '' : await readFile(join(skill.dirPath, resource), 'utf8'),
+        })
+      }
+    }
+    return entries
+  }
+
+  return { read, list }
 }
 
 // ── Memory ───────────────────────────────────────────────────────────────
@@ -314,20 +363,22 @@ export function createSkillsHandler(
  * Recursively collect file paths under `root`, relative to `root` and using
  * POSIX-style separators. Missing directories yield an empty list.
  */
-async function walkMemoryFiles(root: string, rel = ''): Promise<string[]> {
+async function walkResourceFiles(root: string, signal: AbortSignal, rel = ''): Promise<string[]> {
+  signal.throwIfAborted()
   const out: string[] = []
   try {
     const dirents = await readdir(join(root, rel), { withFileTypes: true })
     for (const entry of dirents) {
+      signal.throwIfAborted()
       const childRel = rel ? `${rel}/${entry.name}` : entry.name
       if (entry.isDirectory()) {
-        out.push(...await walkMemoryFiles(root, childRel))
+        out.push(...await walkResourceFiles(root, signal, childRel))
       } else if (entry.isFile()) {
         out.push(childRel)
       }
     }
-  } catch {
-    // memory dir (or subdir) may not exist yet
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error
   }
   return out
 }
@@ -347,7 +398,7 @@ export function createMemoryHandler(workspace: string): {
 } {
   const memoryRoot = join(workspace, 'memory')
 
-  const read: VirtualFsHandler = async (subpath) => {
+  const read: VirtualFsHandler = async (subpath, context) => {
     if (subpath.includes('..')) return 'Invalid path.'
     const target = subpath ? join(memoryRoot, subpath) : memoryRoot
     let info
@@ -357,7 +408,7 @@ export function createMemoryHandler(workspace: string): {
       return `Not found: memory/${subpath}`
     }
     if (info.isDirectory()) {
-      const files = await walkMemoryFiles(memoryRoot, subpath)
+      const files = await walkResourceFiles(memoryRoot, context.signal, subpath)
       if (files.length === 0) {
         return subpath ? `Empty: memory/${subpath}` : 'No memories yet.'
       }
@@ -371,13 +422,13 @@ export function createMemoryHandler(workspace: string): {
     return await readFile(target, 'utf8')
   }
 
-  const list: VirtualFsListHandler = async () => {
-    const files = await walkMemoryFiles(memoryRoot)
+  const list: VirtualFsListHandler = async (context, options) => {
+    const files = await walkResourceFiles(memoryRoot, context.signal)
     const entries: Array<{ name: string; content: string }> = []
     for (const f of files) {
-      const content = await readFile(join(memoryRoot, f), 'utf8').catch(() =>
-        ''
-      )
+      context.signal.throwIfAborted()
+      if (options?.subpath && f !== options.subpath && !f.startsWith(`${options.subpath}/`)) continue
+      const content = options?.content === false ? '' : await readFile(join(memoryRoot, f), 'utf8')
       entries.push({ name: f, content })
     }
     return entries

@@ -10,6 +10,7 @@ import { CronAddTool, CronListTool, registerCronTools } from '../tools/cron.ts'
 import { ImportTool } from '../tools/load-tool.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
 import { SearchTool } from '../tools/search.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { LearningService } from '../agent/learning/service.ts'
 import { createProjectScope } from '../projects/scope.ts'
 import { createLearnCommand } from '../slash-commands/handlers/learn.ts'
@@ -174,7 +175,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const importer = new ImportTool(new Map(), workspace)
       registerCronTools(importer, f.cron, f.manager, name => name === 'general')
       base.register(new InvokeTool(importer))
-      base.register(new SearchTool(workspace, undefined, undefined, importer))
+      const vfs = new VirtualFs()
+      vfs.mount('v:tools', 'Tools', (path, ctx) => importer.readVirtual(path, ctx), (ctx, options) => importer.virtualEntries(ctx, options))
+      base.register(new SearchTool(workspace, undefined, vfs))
       const tools = new SessionTools(base, workspace)
       const ctx = { tools, sessionId: 'web:source', projectId: 'org-a', signal: new AbortController().signal } as ExecutionContext
       const invoke = (name: string, args: Record<string, unknown>) => tools.execute('invoke_tool', { name, args }, ctx)
@@ -186,11 +189,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const names = ['cron_add', 'cron_list', 'cron_remove']
         assert.deepEqual(tools.activeDynamicTools(), [])
         assert.equal(await invoke('cron_list', {}), 'No scheduled jobs.')
-        for (const space of ['tools:', 'tools:cron']) {
-          const result = JSON.parse(requireToolText(await tools.execute('search', { space, query: 'cron', limit: 10 }, ctx)))
-          assert.deepEqual(result.tools.map((tool: { name: string }) => tool.name).sort(), names)
-          assert(result.tools.every((tool: { parameters: { properties: object } }) => !Object.hasOwn(tool.parameters.properties, 'action')))
-          assert.deepEqual(result.errors, [])
+        for (const space of ['glob:v:tools', 'glob:v:tools/cron']) {
+          const result = requireToolText(await tools.execute('search', { space, query: '**/cron_*' }, ctx))
+          assert.doesNotMatch(result, /Warning:/)
+          const paths = result.split('\n')
+          const contracts = (await Promise.all(paths.map(async path => JSON.parse((await vfs.resolve(path, ctx))!))))
+            .filter(tool => tool.parameters)
+          assert.deepEqual([...new Set(contracts.map(tool => tool.name))].sort(), names)
+          assert(contracts.every(tool => !Object.hasOwn(tool.parameters.properties, 'action')))
         }
         assert(!tools.getDefinitions().some(tool => tool.function.name.startsWith('cron')))
         assert.equal(f.cron.listJobs().length, 0)

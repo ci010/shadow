@@ -155,35 +155,32 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "search",
-      "description": "Search files, the web, skills, Project topic sessions, or available tools via the \`space\` scheme. sessions: discovers peer topic goals, scope, folders and Initiative references. skills: returns skill summaries and read paths without activating tools; read a skill to register its declared tools in this session. tools: searches installed MCP indexes without connecting, returning exact names and parameter schemas for invoke_tool. Explicit built-in browser/factory discovery may initialize resources but never executes their tools.",
+      "description": "Search names with glob, content with grep, or the web. Virtual searches return read paths without activating skills, connecting services or launching browsers.",
       "parameters": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
-            "description": "Glob pattern, regex, or keywords depending on space. For tools: and skills:, empty or omitted query lists entries. Skill search matches name, description, category and instructions."
+            "description": "Glob pattern, regex or web keywords. Use ** to list virtual entries."
           },
           "space": {
             "type": "string",
-            "description": "grep:[glob] — file contents. glob:[path] — file names. web:[domain] — web search. sessions: — Project peer topic discovery (no activation). skills:[category] — skill discovery without activation. tools:[source] — tool contracts (e.g. tools:mail); tools: searches persisted MCP metadata and active tools without starting configured servers. Browser/factory sources require explicit selection."
+            "description": "grep:[file-glob] or grep:v:<folder>[/path] — contents. glob:[path] — names. Virtual folders: skills, memory, sessions, tools. web:[domain] — web search."
           },
           "limit": {
             "type": "integer",
-            "description": "Maximum entries per page: tools: 1-10 (default 3), skills: and sessions: 1-20 (default 5)."
+            "description": "Virtual searches only: 1-100 results per page (default 100)."
           },
           "offset": {
             "type": "integer",
-            "default": 0,
-            "description": "tools:, skills: and sessions: only. Nonnegative result offset; use nextOffset to continue listing or searching."
-          },
-          "instance": {
-            "type": "string",
-            "description": "tools:chrome-devtools only. Session browser instance ID; required when multiple instances are open. Returns that instance's live contracts."
+            "description": "Virtual searches only: nonnegative result offset (default 0)."
           }
         },
         "required": [
-          "space"
-        ]
+          "space",
+          "query"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -191,7 +188,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "invoke_tool",
-      "description": "Execute a tool by its exact name. Known catalog tools are connected lazily; arguments are validated against the current schema before execution. Use search with space \\"tools:\\" to find names, descriptions and schemas. No separate import is required for catalog tools. Skills are optional guidance.",
+      "description": "Execute an exact tool name, loading it lazily. Validates arguments against the current schema; invalid arguments return the contract without execution.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -306,7 +303,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "topic",
-      "description": "Create an independent, user-visible topic chat in this Project, revise its brief, or register an existing local folder. First search space=\\"sessions:\\" to reuse an existing topic and read v:project/folders to select a folder ID. Topics are peers, not children; creation never transfers Initiative assignments. Use message for subsequent communication.",
+      "description": "Create or update user-visible Project topic chats and register local folders. Topics are peers; creation does not transfer assignments.",
       "parameters": {
         "type": "object",
         "properties": {

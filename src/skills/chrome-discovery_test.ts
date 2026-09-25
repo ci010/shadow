@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { SkillsManager } from './loader.ts'
-import { searchSkills } from './search.ts'
+import { SearchTool } from '../tools/search.ts'
+import { Tools, SessionTools } from '../tools/registry.ts'
+import type { ExecutionContext } from '../tools/context.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import { createSkillsHandler } from '../vfs/mounts.ts'
 
 test('browser capabilities are visible in the compact summary before tool discovery', async () => {
   await withTempWorkspace(async home => {
@@ -17,22 +21,26 @@ test('browser capabilities are visible in the compact summary before tool discov
         }
         assert.ok(entry.length < 350, 'The capability entry must remain a compact routing hint')
       }
-      for (const query of ['slow page', 'failed API request', 'broken button', 'memory', 'mobile layout', 'accessibility audit', 'Edge', 'Brave', 'Electron', 'browser_setup']) {
-        const result = JSON.parse(searchSkills(skills, { query }))
-        assert.ok(result.skills.some((skill: { name: string }) => skill.name === 'chrome-devtools'), `Browser skill must be discoverable for ${query}`)
-        assert.equal(result.activation, 'none')
+      const handlers = createSkillsHandler(skills, async () => { assert.fail('search must not register skill tools') })
+      const vfs = new VirtualFs()
+      vfs.mount('v:skills', 'Skills', handlers.read, handlers.list)
+      const search = new SearchTool(home, undefined, vfs)
+      const context = { tools: new SessionTools(new Tools(home), home), signal: new AbortController().signal } as ExecutionContext
+      for (const query of ['[Ss]low page', '[Ff]ailed API request', '[Bb]roken button', 'memory', '[Mm]obile layout', 'accessibility audit', 'Edge', 'Brave', 'Electron', 'browser_setup']) {
+        const result = await search.execute({ space: 'grep:v:skills/chrome-devtools', query }, context)
+        assert.match(result, /v:skills\/chrome-devtools/, `Browser skill must be discoverable for ${query}`)
       }
       const body = skills.getSkillBody('chrome-devtools')
       assert.ok(body)
-      assert.match(body, /tool search is lexical, not semantic/)
-      assert.match(body, /errors` and `deferredSources/)
-      assert.match(body, /tools:chrome-devtools", query: "", limit: 3/)
-      assert.match(body, /nextOffset/)
+      assert.match(body, /tool search uses case-sensitive regular expressions/)
+      assert.match(body, /Check warnings/)
+      assert.match(body, /glob:v:tools\/chrome-devtools", query: "\*\*", limit: 20/)
+      assert.match(body, /continuation footer's offset/)
       assert.match(body, /not merely to hide tool schemas/)
       assert.match(body, /does not inherit the parent's open page or login/)
       const normalized = body.replace(/\s+/g, ' ')
       for (const contract of [
-        /search\(\{ space: "tools:", query: "browser_setup" \}\)/,
+        /search\(\{ space: "grep:v:tools", query: "browser_setup" \}\)/,
         /name: "browser_setup", args: \{ action: "launch", browser: "edge" \}/,
         /`browser` accepts `edge`, `brave`, `chrome`, or `default`/,
         /`executablePath` instead of `browser`.*explicit choice never falls back/,
@@ -42,11 +50,11 @@ test('browser capabilities are visible in the compact summary before tool discov
         /loopback HTTP\(S\)\/WS\(S\)/,
         /ws:\/\/127\.0\.0\.1:9222\/devtools\/browser\/\.\.\./,
         /preenabled CDP target, including compatible Electron/,
-        /source: "tools:chrome-devtools", mode, owned, ready/,
+        /source: "v:tools\/chrome-devtools", mode, owned, ready/,
         /connects and lists live contracts without business tool RPCs/,
         /args: \{ action: "list" \}/,
         /args: \{ action: "close", instance: "<id>" \}/,
-        /space: "tools:chrome-devtools", instance: "<id>", query: "snapshot"/,
+        /space: "grep:v:tools\/chrome-devtools\/<id>", query: "snapshot"/,
         /name: "chrome-devtools__take_snapshot", instance: "<id>", args: \{\}/,
         /no per-instance prefix variants or alternate full source/,
         /One session instance allows omitted `instance`; two or more require an explicit ID/,
@@ -61,9 +69,9 @@ test('browser capabilities are visible in the compact summary before tool discov
         /IDs are scoped to the session lifecycle/,
         /Each instance has an isolated tool registry/,
         /raw endpoint\/profile\/executable flags/,
-        /No setup is required for automatic lazy default launch in an owning session/,
-        /Global `tools:` search includes already-loaded browser contracts with per-result `instance` IDs without reconnecting/,
-        /Uninitialized browser sources and live refresh remain deferred unless explicitly selected/,
+        /Invocation can lazily launch a default browser in an owning session/,
+        /Global VFS search includes already-loaded browser contracts under their instance paths without reconnecting/,
+        /Uninitialized browser sources remain deferred even when explicitly selected/,
         /Installed MCP search remains offline/,
         /Browser\/host tests are synthetic, not actual browser end-to-end verification/,
       ]) assert.match(normalized, contract)

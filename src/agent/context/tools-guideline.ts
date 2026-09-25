@@ -91,7 +91,7 @@ ${modes.some(candidate => candidate !== 'call')
   if (mode === 'session' && isToolAllowed(ctx.agent, 'topic')) {
     sections.push(`### Project Topics
 
-- **\`topic\`** — Reuse an existing Project topic before creating another. Discover with \`search({space: "sessions:", query, limit: 5, offset: 0})\` (maximum 20).
+- Reuse an existing Project topic before creating another. Read \`v:sessions/<session-id>/brief\` to confirm its current scope and conversation URL.
 - Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
 - \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
 - Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.

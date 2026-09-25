@@ -15,13 +15,10 @@ const GUIDANCE = [
   '## Skills',
   '',
   'Skills describe reusable workflows. Below is a bounded selection, not the full catalog; omitted skills remain available.',
-  'Discover all skills with search({space:"skills:", query:"...", limit:5, offset:0}); use query:"" to browse and nextOffset to continue.',
-  'Search and category listings never activate tools.',
   '- read("v:skills/<name>") loads instructions and registers that skill\'s frontmatter tools for this session only.',
   '- read("v:skills/<category>") lists skills in a category.',
   '- read("v:skills/<name>/<path>") reads bundled resources.',
-  'invoke_tool loads the module lazily and validates arguments; no install/import step is required. Sleep clears registrations: read the skill again. TypeScript entrypoints stay inside their owning skill directory.',
-  'To configure MCP, read("v:skills/mcp-config") and edit the Project virtual config with read/write.',
+  'Category/resource reads do not register tools. Reading a skill does not run its code; invocation may run initialization. Sleep clears registrations: read the skill again. TypeScript entrypoints stay inside their owning skill directory.',
 ].join('\n')
 
 function tokens(text: string): number {

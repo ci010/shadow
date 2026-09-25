@@ -24,7 +24,7 @@ Handle ordinary discussion directly; do not create a topic for every message.
 
 ## Route work
 
-Search `sessions:` before creating a topic; read `v:sessions` only as needed to
+Search `grep:v:sessions` before creating a topic; read `v:sessions` only as needed to
 confirm fit. Missing scope in older chats is unknown, not unrestricted. Reuse a
 relevant topic and send follow-ups there rather than duplicating its work.
 For a distinct intent, create a topic with a clear title, goal/acceptance criteria,

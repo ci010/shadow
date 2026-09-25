@@ -90,7 +90,7 @@ function buildBaseTools(): Tools {
   )
   const importer = new ImportTool(new Map<string, LoadableEntry>(), WORKSPACE)
   tools.register(new InitiativeTool({ query: () => [] }, 'fixture', INITIATIVE_SCHEMA_PROMPT))
-  tools.register(new SearchTool(WORKSPACE, undefined, undefined, importer, new SkillsManager(WORKSPACE)))
+  tools.register(new SearchTool(WORKSPACE))
   tools.register(new InvokeTool(importer))
   tools.register(new BackgroundTaskTool(backgroundTasks))
   tools.register(new ContinuationTool(backgroundTasks))

@@ -35,12 +35,12 @@ function names(summary: string): string[] {
 function checkBound(summary: string): void {
   assert.ok(estimateTokens([{ role: 'system', content: summary }]) <= SKILL_DISCLOSURE_TOKEN_LIMIT)
   assert.ok(names(summary).length <= SKILL_DISCLOSURE_ENTRY_LIMIT)
-  assert.match(summary, /search\(\{space:"skills:"/)
-  assert.match(summary, /query:"" to browse and nextOffset/)
+  assert.doesNotMatch(summary, /search\(\{|nextOffset/)
   assert.match(summary, /read\("v:skills\/<name>"\)/)
   assert.match(summary, /read\("v:skills\/<category>"\)/)
   assert.match(summary, /read\("v:skills\/<name>\/<path>"\)/)
-  assert.match(summary, /Search and category listings never activate tools/)
+  assert.match(summary, /Category\/resource reads do not register tools/)
+  assert.match(summary, /invocation may run initialization/)
 }
 
 test('empty and learned-only catalogs keep complete bounded discovery guidance', () => {

@@ -599,14 +599,14 @@ It routes to reusable topics and lets users continue there, rather than owning
 their session hierarchy. Ensuring its existence never automatically runs an LLM.
 
 Durable topics are `web:chat-UUID` root peers. Project-scoped
-`search({space: "sessions:", query, limit: 5, offset: 0})` returns their
-title/goal/scope/nonGoals, folderId, initiativeId, createdBySessionId, and status;
-page size is bounded at 20. Prefer reuse before creating a new topic.
-Topic create/search/update receipts return `conversationUrl` in
+`search({space: "grep:v:sessions", query})` searches histories and topic briefs.
+Read `v:sessions/<session-id>/brief` for title/goal/scope/nonGoals, folderId,
+initiativeId, createdBySessionId, status and conversationUrl.
+Prefer reuse before creating a new topic. Topic briefs and create/update receipts return `conversationUrl` in
 `/projects/<encodedProjectId>/chat/<encodedLogicalSessionId>` form. Coordinator
 handoffs link the topic title to that returned URL, making the peer conversation
 directly accessible rather than merely reporting an ID.
-Remote-workdir sessions may use `sessions:` search and typed Project messaging
+Remote-workdir sessions may use `v:sessions` search and typed Project messaging
 as control-plane operations. This does not enable other remote search spaces,
 which remain explicitly rejected.
 `topic` creation requires title, goal, and scope; optional nonGoals, folderId,
@@ -1003,7 +1003,8 @@ than an exact provider image-token calculation.
 
 `SessionTools` filters base tools by agent type and owns a session-only dynamic
 layer. **Dynamic tool schemas are not added to the base definitions sent to
-the model.** `search` with `space: "tools:"` returns only matching invocation contracts;
+the model.** `search` with `space: "grep:v:tools"` returns matching lines and paths;
+read an individual tool path for its complete invocation contract.
 `invoke_tool({name, args})` resolves known catalog IDs lazily and validates
 arguments before execution. There is no "contract already disclosed" flag or
 extra first-call round trip. Invalid arguments return only the affected tool's
@@ -1021,7 +1022,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | --- | --- |
 | `read` | Local text/directories, supported media/URLs, VFS; bounded remote UTF-8 read path |
 | `write` | Create/overwrite, append, or match-and-replace edit; local checks and remote workdir path |
-| `search` | Unified glob/grep/web/tools search; targeted contracts and paginated empty-query tool listing |
+| `search` | Glob/grep over physical files or VFS resources, plus web search; virtual results have read paths and pagination |
 | `v:config/mcp.json` via `read`/`write` | Revision-checked, atomic Project MCP configuration without connecting |
 | `invoke_tool` | Lazy connections and current-schema argument validation |
 | `exec` | Managed local shell processes and inline script/tool-bridge execution |
@@ -1356,7 +1357,7 @@ mode rather than rewriting the previously read contents.
 
 ### Virtual filesystem
 
-`VirtualFs` exposes logical read/search surfaces mounted in `src/runtime/main/`:
+`VirtualFs` exposes logical resources mounted in `src/runtime/main/`:
 
 - `v:sessions`: conversation history;
 - `v:bg`: background status/output;
@@ -1367,9 +1368,22 @@ mode rather than rewriting the previously read contents.
 - `v:memory`: shared file-backed knowledge;
 - `v:events`: event subscriptions.
 
+The public `search` tool accepts only grep/glob/web protocols. Use
+`grep:v:memory`, `glob:v:skills` or another searchable virtual path; a bare
+`v:` path is not a protocol. Virtual grep uses case-sensitive JavaScript regexes;
+virtual glob uses POSIX glob matching with recursive patterns. Subpaths restrict
+the scope and output retains canonical read paths. Limit/offset page virtual
+results (default/max 100); continuation footers and source warnings stay visible.
+Unknown/non-searchable mounts fail explicitly, never fall through to Main's
+filesystem or trigger ripgrep installation. Virtual memory resolves against the
+owning Project Home, independent of the session workdir. Skill listing includes
+visible bodies and bundled resources without registering tools. Session grep
+uses the complete history available through SessionManager, not a last-50 window;
+topic metadata is separately readable at `<session-id>/brief`.
+
 `v:tools/<name>` identifies a virtual catalog source for the internal lazy
 loader, not an ordinary filesystem directory. Models
-select it through `search({ space: "tools:<name>", query })` or invoke a known
+select it through `search({ space: "grep:v:tools/<name>", query })` or invoke a known
 tool ID. `v:memory` writes are mapped to Home's memory directory
 by path helpers.
 
@@ -1485,8 +1499,9 @@ are not authoring principals. Reads never return stored credential values.
 See [Conversation agent authoring](agent-authoring.md) for formats, test inputs,
 source hashes, approval and credential boundaries.
 
-`search({ space: "skills:", query: "CSV", limit: 5, offset: 0 })` returns names,
-descriptions, and read paths, optionally filtered with `skills:<category>`.
+`search({ space: "grep:v:skills", query: "CSV", limit: 5, offset: 0 })` returns
+matching lines and read paths. Scope to `v:skills/<name>` or grep frontmatter in
+its `SKILL.md` resource to inspect metadata such as category.
 Search, index/category reads, and bundled resource reads never activate tools.
 Only an exact `read("v:skills/csv-utils")` registers that skill's declarations
 in the current session. This never imports source into Main for metadata.
@@ -1497,7 +1512,7 @@ validates the declared schema and executes the source in the shared child.
 Declarations persist only in `SKILL.md`; there is no Project persistence of
 skill-tool registrations. New sessions and sleep/reset require another exact
 skill read. Source files remain in their original locations.
-After activation, `search({space: "tools:<alias>", query: ""})`
+After activation, `read({path: "v:tools/<alias>/<alias>"})`
 reads schema metadata without executing source. Skill search never activates
 tools. Registration captures a whole-package content fingerprint and executable
 text. Imports and pre/post execution checks reject changed instructions,
@@ -1506,7 +1521,7 @@ exact read updates only that session; no historical package is preserved.
 These checks are not execution isolation and cannot undo side effects of edits
 racing a running script. Rereading the exact skill refreshes
 changed bundles; registrations are not shared across
-sessions. Invalid frontmatter tools remain discoverable with `toolsError`,
+sessions. Invalid frontmatter tools remain discoverable with warnings,
 while an exact skill read fails explicitly.
 Metadata belongs exclusively to `SKILL.md`; `init`, `execute`, `callTool`,
 executable metadata exports and source-path tool loading are unsupported.
@@ -1515,23 +1530,21 @@ through module-call bindings, without granting access to every tool.
 
 ### Project MCP configuration and lazy loading
 
-[`search-tools.ts`](../src/tools/search-tools.ts) ranks names and descriptions
-lexically, returning complete schemas only for the top matches (default 3,
-maximum 10). Global and targeted installed/configured MCP searches read a
-configuration-bound persistent index, returning exact names, descriptions,
-parameters and `indexedAt` timestamps. They perform zero connections or
-`tools/list` RPCs, execute no tools and register no dynamic tools.
-Search reports searched, failed and deferred sources rather than implying
-exhaustive success. Built-in browser/factory initialization still requires explicit
-source selection and may create live resources. Active session tools are also
-searchable. The metadata index is not an embedding provider or a second tool registry.
+[`ImportTool.virtualEntries`](../src/tools/load-tool.ts) exposes source records
+and individual tool contracts beneath `v:tools`. Each contract has an encoded
+tool-name path and includes its name, description, parameters and optional
+indexedAt/instance. Search uses static declarations, active contracts or the
+configuration-bound persistent MCP index; it never connects, calls `tools/list`,
+initializes factories or registers dynamic tools. Source warnings expose missing,
+invalid or deferred metadata even when a regex matches nothing.
+The metadata index is not an embedding provider or a second tool registry.
 
 After restart, persisted Project MCP configuration restores the source catalog,
 not live connections or tool registrations. Cold and repeated searches work
 offline from indexed metadata: 100 installed servers will not start from search.
-Missing, mismatched or corrupt records produce explicit source `errors`, never
+Missing, mismatched or corrupt records produce explicit source warnings, never
 fallback auto-connections. Read/save MCP configuration to build missing metadata,
-including a no-op resave of legacy configuration. Keyword misses are not proof of
+including a no-op resave of legacy configuration. Regex misses are not proof of
 absent capabilities. A session-only JSON import is not a persistent install.
 
 MCP configuration is persistent **current Project** state. Agents use existing
@@ -1627,14 +1640,13 @@ Configured servers are always lazy catalog sources, including after config
 reload. `McpManager`/watcher updates that catalog and invalidates affected
 session connections; it never registers raw MCP tools in the base registry.
 Discovery through `read("v:tools")` exposes source names and descriptions without
-connections; `search({space: "tools:<source>", query})` returns individual tool contracts.
-An empty, whitespace or omitted tools query lists contracts in stable name order.
-`limit` (default 3, maximum 10) and `offset` bound results; `nextOffset` continues
-the list or search. Partial failures and deferred sources remain explicit.
-Complete tool contracts bypass generic result truncation; other search spaces
-retain their existing result limits. File/web searches retain parallel-read
-scheduling, while tool discovery is conservatively serialized because explicit
-built-in browser/factory selection can initialize live resources.
+connections; `search({space: "grep:v:tools/<source>", query})` returns matching lines
+and read paths. `glob:v:tools/<source>` with `query: "**"` lists paths in stable
+order. `limit` (default/max 100) and `offset` bound virtual results; a continuation
+footer identifies the next offset. Partial failures and deferred sources remain
+explicit. Complete contract reads and self-limited virtual grep/glob results bypass
+generic result truncation. All search modes are parallel reads: explicit source
+selection no longer initializes resources.
 Known MCP IDs can be invoked directly with current-schema validation. Skill
 aliases can be invoked directly after the exact owning skill read. There is no
 explicit model-visible import step. Saving configuration reports installed/indexed,
@@ -1643,20 +1655,20 @@ tool execution is a separate operation with its own possible side effects.
 
 Chrome DevTools has one public lazy source, `chrome-devtools`, with no
 `chrome-devtools-full` alias, exposing all advertised tools without a common/full
-filter. Search returns only the relevant
-contracts; loading the source does not inject all schemas into the base tool list.
+filter. Search returns matching paths/lines; read the selected path for its
+contract. Loading the source does not inject all schemas into the base tool list.
 The dynamic catalog also exposes `browser_setup`: global
-`search({space: "tools:", query: "browser_setup"})` discovers its metadata without
-initializing browsers. Global `tools:` search also includes already-loaded browser
-contracts with per-result `instance` IDs without reconnecting. Uninitialized
-browser sources and live refresh remain deferred unless explicitly selected.
+`search({space: "grep:v:tools", query: "browser_setup"})` discovers its metadata without
+initializing browsers. Global VFS search includes already-loaded browser contracts
+under instance-specific paths without reconnecting. Uninitialized browser sources
+remain deferred even when explicitly selected; browser_setup initializes them.
 Installed MCP global search remains offline.
 Invoke the known setup ID with `args: {action: "launch", browser: "edge"}` to
 select `edge`, `brave`, `chrome`, or `default`, or supply `executablePath` instead
 of `browser`. Explicit selections fail without fallback. Each owned launch gets
 a fresh private profile; host profiles are never copied and Project configuration
 is unchanged. Without setup, automatic lazy default launch remains available
-in an owning session.
+on invocation in an owning session.
 
 Explicit `{action: "attach", endpoint}` accepts only loopback HTTP(S)/WS(S)
 preenabled CDP targets, including compatible Electron. Examples are
@@ -1667,9 +1679,9 @@ changing arguments cannot silently create a second browser. Empty
 `preload_tools: { "chrome-devtools": [] }` still works.
 
 Setup connects/lists live contracts without business tool RPCs and returns
-`{instance, source: "tools:chrome-devtools", mode, owned, ready, ...}`.
-`search({space: "tools:chrome-devtools", instance: id, query: "snapshot"})`
-reads that instance's live schemas.
+`{instance, source: "v:tools/chrome-devtools", mode, owned, ready, ...}`.
+`search({space: "grep:v:tools/chrome-devtools/<instance>", query: "snapshot"})`
+finds that instance's contracts. Read the returned paths for full schemas.
 `invoke_tool({name: "chrome-devtools__take_snapshot", instance: id, args: {...}})`
 routes canonical tool names to isolated instance registries, never prefix variants.
 One instance allows an omitted ID; two or more require explicit selection, with

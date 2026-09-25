@@ -365,7 +365,7 @@ export async function createProjectRuntime(
   cleanup.push(() => knowledgeMaintenance.stop())
   registerKnowledgeRoutes(app, { workspace, skills, authorize: dependencies.authorize, maintenance: knowledgeMaintenance })
   const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name))
-  tools.register(new SearchTool(workspace, webSearchTool, vfs, importTool, skills, () => topics))
+  tools.register(new SearchTool(workspace, webSearchTool, vfs))
   tools.register(new InvokeTool(importTool))
 
   tools.register(new BackgroundTaskTool(backgroundTasks))
@@ -697,15 +697,15 @@ export async function createProjectRuntime(
 
   vfs.mount(
     'v:tools',
-    'discover dynamic tool and MCP sources without connecting; use search with space tools:<name> for current tool contracts',
-    (name, context) => importTool.readCatalog(name, context.tools),
-    context => importTool.catalogEntries(context.tools),
+    'tool sources and individual indexed/active contracts; no service connections',
+    (name, context) => importTool.readVirtual(name, context),
+    (context, options) => importTool.virtualEntries(context, options),
   )
 
-  const sessionsVfs = createSessionsHandler(sessions)
+  const sessionsVfs = createSessionsHandler(sessions, () => topics)
   vfs.mount(
     'v:sessions',
-    'conversation history for all sessions',
+    'conversation histories; <session-id>/brief holds Project topic metadata',
     sessionsVfs.read,
     sessionsVfs.list,
   )
@@ -718,6 +718,7 @@ export async function createProjectRuntime(
     'v:skills',
     'read skill bodies and category listings',
     skillsVfs.read,
+    skillsVfs.list,
   )
 
   const mcpConfigVfs = createMcpConfigHandler({
@@ -730,7 +731,7 @@ export async function createProjectRuntime(
   const memoryVfs = createMemoryHandler(workspace)
   vfs.mount(
     'v:memory',
-    'read, search, and write your long-term memory store',
+    'read and write your long-term memory store',
     memoryVfs.read,
     memoryVfs.list,
   )

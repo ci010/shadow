@@ -180,5 +180,5 @@ export function registerCronTools(
 ): void {
   const tools = [new CronAddTool(cron, sessions, resolveAgentType), new CronListTool(cron), new CronRemoveTool(cron)]
   for (const tool of tools) importer.registerBuiltin(tool.name, tool)
-  importer.registerBuiltin('cron', { factory: async () => tools })
+  importer.registerBuiltin('cron', { contracts: tools, factory: async () => tools })
 }

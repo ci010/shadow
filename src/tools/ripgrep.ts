@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, posix, relative, resolve } from 'node:path'
 import { spawn as childSpawn } from 'node:child_process'
 import { stat as nodeStat } from 'node:fs/promises'
 import { Buffer } from 'node:buffer'
@@ -6,7 +6,7 @@ import type { ExecutionContext } from './context.ts'
 import { isNotFoundError } from '../utils/runtime.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import type { Tool, ToolParameters } from './tool.ts'
-import type { VirtualFs } from '../vfs/virtual-fs.ts'
+import { isVirtualPath, type VirtualFs, type VirtualEntry } from '../vfs/virtual-fs.ts'
 
 export { detectRipgrep, installRipgrep } from '../utils/ripgrep.ts'
 
@@ -115,25 +115,16 @@ export class GlobTool implements Tool {
     const pattern = String(args.pattern)
     const rawPath = args.path ? String(args.path) : ''
 
-    // ── Virtual filesystem ──
-    if (this.virtualFs) {
-      // Case 1: path="v:sessions" pattern="*" → list entries under v:sessions
-      // Case 2: path not set, pattern="v:sessions/*" → extract mount from pattern
-      const rel = rawPath
-        ? (isAbsolute(rawPath) ? relative(this.workspace, rawPath) : rawPath)
-        : ''
-      const mount = rel || pattern.split('/')[0]
-      if (!mount.startsWith('..')) {
-        const entries = this.virtualFs.list(mount, context)
-        if (entries) {
-          const list = await entries
-          const globPattern = rel ? pattern : pattern.slice(mount.length + 1) || '*'
-          const globRe = globToRegex(globPattern)
-          const matched = list.filter((e) => globRe.test(e.name))
-          if (matched.length === 0) return 'No files found'
-          return matched.map((e) => `${mount}/${e.name}`).join('\n')
-        }
-      }
+    const virtualPath = isVirtualPath(rawPath) ? rawPath
+      : !rawPath && isVirtualPath(pattern) ? pattern.replace(/\\/g, '/').replace(/^\/+/, '').split('/')[0] : undefined
+    if (virtualPath) {
+      const page = virtualPage(args)
+      if (!this.virtualFs) throw new Error('Virtual filesystem search is not configured.')
+      const entries = await this.virtualFs.list(virtualPath, context, { content: false })
+      if (!entries) throw new Error('Unknown virtual folder.')
+      const globPattern = rawPath ? pattern : pattern.replace(/\\/g, '/').replace(/^\/+/, '').slice(virtualPath.length + 1) || '**'
+      const matches = entries.filter(entry => matchesGlob(entry.name, globPattern)).map(entry => entry.path)
+      return virtualResults(matches, entries, page, 'No files found')
     }
 
     const searchDir = rawPath
@@ -220,34 +211,25 @@ export class GrepTool implements Tool {
   ): Promise<string> {
     const pattern = String(args.pattern)
 
-    // ── Virtual filesystem ──
-    if (this.virtualFs && args.path) {
-      const rawPath = String(args.path)
-      const rel = isAbsolute(rawPath)
-        ? relative(this.workspace, rawPath)
-        : rawPath
-      if (!rel.startsWith('..')) {
-        const entries = this.virtualFs.list(rel, context)
-        if (entries) {
-          const list = await entries
-          const re = new RegExp(pattern, 'i')
-          const matches: string[] = []
-          for (const entry of list) {
-            const lines = entry.content.split('\n')
-            for (let i = 0; i < lines.length; i++) {
-              if (re.test(lines[i])) {
-                const text = lines[i].length > MAX_LINE_LENGTH
-                  ? lines[i].slice(0, MAX_LINE_LENGTH) + '...'
-                  : lines[i]
-                matches.push(`${rel}/${entry.name}:  Line ${i + 1}: ${text}`)
-              }
-            }
+    if (args.path && isVirtualPath(String(args.path))) {
+      const page = virtualPage(args)
+      const re = new RegExp(pattern)
+      if (!this.virtualFs) throw new Error('Virtual filesystem search is not configured.')
+      const entries = await this.virtualFs.list(String(args.path), context)
+      if (!entries) throw new Error('Unknown virtual folder.')
+      const matches: string[] = []
+      for (const entry of entries) {
+        context.signal.throwIfAborted()
+        if (args.include && !matchesGlob(entry.name, String(args.include))) continue
+        const lines = entry.content.split(/\r?\n/)
+        for (let i = 0; i < lines.length; i++) {
+          if (re.test(lines[i])) {
+            const text = lines[i].length > MAX_LINE_LENGTH ? lines[i].slice(0, MAX_LINE_LENGTH) + '...' : lines[i]
+            matches.push(`${entry.path}:  Line ${i + 1}: ${text}`)
           }
-          if (matches.length === 0) return 'No matches found'
-          return `Found ${matches.length} match${matches.length !== 1 ? 'es' : ''}\n` +
-            matches.slice(0, GREP_LIMIT).join('\n')
         }
       }
+      return virtualResults(matches, entries, page, 'No matches found')
     }
 
     const searchPath = args.path
@@ -344,12 +326,25 @@ export class GrepTool implements Tool {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Convert a simple glob pattern to a RegExp. Supports `*` and `?`. */
-function globToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-  const re = escaped
-    .replace(/\*\*/g, '.*')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '.')
-  return new RegExp(`^${re}$`)
+function matchesGlob(name: string, pattern: string): boolean {
+  const normalized = pattern.replace(/\\/g, '/')
+  return posix.matchesGlob(normalized.includes('/') ? name : posix.basename(name), normalized)
+}
+
+function virtualPage(args: Record<string, unknown>): { limit: number; offset: number } {
+  const limit = args.limit === undefined ? 100 : args.limit
+  const offset = args.offset === undefined ? 0 : args.offset
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be an integer from 1 through 100.')
+  if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('offset must be a nonnegative safe integer.')
+  return { limit, offset }
+}
+
+function virtualResults(matches: string[], entries: Array<VirtualEntry & { path: string }>, page: { limit: number; offset: number }, empty: string): string {
+  const selected = matches.slice(page.offset, page.offset + page.limit)
+  const lines = selected.length ? selected : [matches.length ? 'No results at this offset.' : empty]
+  if (matches.length > page.offset + selected.length) lines.push(`(Showing ${selected.length} of ${matches.length} results; continue with offset: ${page.offset + selected.length}.)`)
+  for (const entry of entries) {
+    if (entry.warning) lines.push(`Warning: ${entry.path}: ${entry.warning}`)
+  }
+  return lines.join('\n')
 }

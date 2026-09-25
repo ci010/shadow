@@ -129,7 +129,8 @@ test('compact memory guidance preserves write-role gating and persistence conven
     const prompt = (await provider.getPromptSection(context({
       agent: { ...agent, allowedTools },
     })))!
-    assert.match(prompt, /Read\/search `v:memory\/` for relevant context, not as a substitute for current evidence/)
+    assert.match(prompt, /Use `v:memory\/` for relevant historical context, not as a substitute for current evidence/)
+    assert.doesNotMatch(prompt, /Read\/search `v:/)
     if (allowedTools.includes('write')) {
       assert.match(prompt, /Files survive restarts; mental notes do not/)
       assert.match(prompt, /including explicit "remember this" requests/)
@@ -152,6 +153,8 @@ test('coordinator workspace retains read context without worker resources or wri
     agent: { ...agent, name: 'orchestrator' },
   })))!
   assert.match(prompt, /Working directory|Session uploads|absolute attachment paths/)
+  assert.match(prompt, /Virtual resources:/)
+  assert.doesNotMatch(prompt, /read\/search relevant Project memory|use `read`\/`search`/)
   for (const path of ['v:project', 'v:sessions', 'v:memory']) assert(prompt.includes(path))
   assert.doesNotMatch(prompt, /v:tools|v:bg|v:skills|v:config|v:events|write\(|read, search, and write|Write what you need|scratch\/ephemeral/)
   const ordinary = (await provider.getPromptSection(context()))!

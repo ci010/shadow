@@ -19,7 +19,7 @@ export class InvokeTool implements Tool<ToolResult> {
   readonly name = 'invoke_tool'
   readonly supportsRemoteWorkdir = true
   readonly description =
-    'Execute a tool by its exact name. Known catalog tools are connected lazily; arguments are validated against the current schema before execution. Use search with space "tools:" to find names, descriptions and schemas. No separate import is required for catalog tools. Skills are optional guidance.'
+    'Execute an exact tool name, loading it lazily. Validates arguments against the current schema; invalid arguments return the contract without execution.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -73,7 +73,7 @@ export class InvokeTool implements Tool<ToolResult> {
       const result = await this.importer.importForInvocation(name, context.tools, context.signal)
       if (!context.tools.hasDynamic(name)) {
         if (result) return result.startsWith('Error') ? result : `Error: ${result}`
-        return `Error: dynamic tool "${name}" is not active and could not be imported automatically. Use search with space "tools:" for current tool IDs.`
+        return `Error: dynamic tool "${name}" is not active and could not be imported automatically. Search grep:v:tools and read the matching paths for current tool IDs.`
       }
     }
 

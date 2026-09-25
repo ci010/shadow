@@ -10,6 +10,8 @@ import { ImportTool, type LoadableEntry } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
 import { SearchTool } from './search.ts'
 import { SessionTools, Tools } from './registry.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import { ReadTool } from './read.ts'
 
 function fixture(t: TestContext, home: string) {
   const config = { executablePath: 'project-default', basePort: 9322 }
@@ -40,8 +42,11 @@ function fixture(t: TestContext, home: string) {
   }]])
   const importer = new ImportTool(loadable, home, manager)
   const base = new Tools(home)
+  const vfs = new VirtualFs()
+  vfs.mount('v:tools', 'Tools', (path, ctx) => importer.readVirtual(path, ctx), (ctx, options) => importer.virtualEntries(ctx, options))
   base.register(new InvokeTool(importer))
-  base.register(new SearchTool(home, undefined, undefined, importer))
+  base.register(new SearchTool(home, undefined, vfs))
+  base.register(new ReadTool(home, vfs))
   const sessions: SessionTools[] = []
   const session = (blocked?: string[]) => {
     const tools = new SessionTools(base, home, undefined, blocked)
@@ -75,8 +80,15 @@ function fixture(t: TestContext, home: string) {
     context.tools.execute('invoke_tool', { name: 'chrome-devtools__inspect', args, instance }, context)
   const setup = (context: ExecutionContext, args: Record<string, unknown>) =>
     context.tools.execute('invoke_tool', { name: 'browser_setup', args }, context)
-  const search = (context: ExecutionContext, args: Record<string, unknown> = {}) =>
-    context.tools.execute('search', { space: 'tools:chrome-devtools', query: 'inspect', ...args }, context)
+  const search = async (context: ExecutionContext, args: Record<string, unknown> = {}) => {
+    const path = `v:tools/chrome-devtools${args.instance ? `/${args.instance}` : ''}`
+    const result = requireToolText(await context.tools.execute('search', { space: `glob:${path}`, query: '*__inspect' }, context))
+    if (result.startsWith('Error') || result.includes('Warning:')) return result
+    const paths = result.split('\n').filter(line => line.startsWith('v:'))
+    const tools = await Promise.all(paths.map(async path =>
+      JSON.parse(requireToolText(await context.tools.execute('read', { path }, context)))))
+    return JSON.stringify({ tools })
+  }
   t.after(async () => {
     for (const tools of sessions) await tools.resetDynamicAndWait()
     await manager.releaseAll()
@@ -88,14 +100,14 @@ test('setup is discoverable without starting a browser; default use stays lazy a
   await withTempWorkspace(async home => {
     const f = fixture(t, home)
     const context = f.session()
-    const found = JSON.parse(requireToolText(await context.tools.execute('search', { space: 'tools:', query: 'browser_setup' }, context)))
-    assert.equal(found.tools[0].name, 'browser_setup')
+    const found = requireToolText(await context.tools.execute('search', { space: 'glob:v:tools', query: '**/browser_setup' }, context))
+    assert.match(found, /v:tools\/browser_setup\/browser_setup/)
     assert.equal(f.connect.mock.callCount(), 0)
     assert.equal(f.live.size, 0)
     assert.deepEqual(JSON.parse(requireToolText(await f.setup(context, { action: 'list' }))).instances, [])
     assert.equal(JSON.parse(requireToolText(await f.invoke(context, { value: 'default' }))).browser, 'project-default')
     const discovery = JSON.parse(requireToolText(await f.search(context)))
-    assert.equal(discovery.tools[0].instance, discovery.instance)
+    assert.equal(typeof discovery.tools[0].instance, 'string')
     assert.equal(discovery.tools[0].name, 'chrome-devtools__inspect')
     assert.equal(f.connect.mock.callCount(), 1)
     assert.equal(f.live.size, 1)
@@ -138,11 +150,11 @@ test('same-named tools route and validate by explicit instance; ambiguous or for
     assert.equal(foundBrave.tools[0].parameters.properties.value.type, 'number')
     assert.match(requireToolText(await f.invoke(context, { value: 'wrong' }, brave.instance)), /invalid arguments/)
     assert.match(requireToolText(await f.invoke(context, { value: 'ambiguous' })), /multiple browser instances/)
-    assert.match(requireToolText(await f.search(context)), /multiple browser instances/)
+    assert.equal(JSON.parse(requireToolText(await f.search(context))).tools.length, 2)
     assert.match(requireToolText(await f.invoke(f.session(), { value: 'foreign' }, edge.instance)), /unknown browser instance/)
-    assert.match(requireToolText(await f.search(context, { instance: 'unknown' })), /unknown browser instance/)
+    assert.deepEqual(JSON.parse(requireToolText(await f.search(context, { instance: 'unknown' }))).tools, [])
     assert.equal(f.call.mock.callCount(), 0)
-    const global = JSON.parse(requireToolText(await context.tools.execute('search', { space: 'tools:', query: 'inspect' }, context)))
+    const global = JSON.parse(requireToolText(await f.search(context)))
     assert.deepEqual(new Set(global.tools.map((tool: { instance: string }) => tool.instance)), new Set([edge.instance, brave.instance]))
     const results = await Promise.all([
       f.invoke(context, { value: 'edge' }, edge.instance).then(requireToolText).then(JSON.parse),
@@ -194,8 +206,8 @@ test('invalid setup and instance arguments fail before any allocation or connect
       { action: 'launch', endpoint: 'http://localhost:9222' },
       { action: 'close' },
     ]) assert.match(requireToolText(await f.setup(context, args)), /^Error/)
-    assert.match(requireToolText(await f.search(context, { instance: 123 })), /instance must be/)
-    assert.match(requireToolText(await context.tools.execute('search', { space: 'tools:', instance: 'x' }, context)), /instance requires/)
+    assert.match(requireToolText(await context.tools.execute('search', { space: 'glob:v:tools', query: '**', instance: 123 }, context)), /supported search parameters/)
+    assert.match(requireToolText(await context.tools.execute('search', { space: 'tools:', query: '', instance: 'x' }, context)), /unknown search space/)
     assert.match(requireToolText(await context.tools.execute('invoke_tool', { name: 'browser_setup', instance: 'x', args: { action: 'list' } }, context)), /instance is supported only/)
     assert.equal(f.connect.mock.callCount(), 0)
     assert.equal(f.live.size, 0)
@@ -279,7 +291,7 @@ test('leaf calls borrow browser IDs and cannot close the owner resources or wide
     tools.setExecutionScope('call', [])
     const child = { ...context, tools }
     assert.equal(JSON.parse(requireToolText(await f.invoke(child, { value: 'borrowed' }, edge.instance))).browser, 'edge')
-    assert.equal(JSON.parse(requireToolText(await f.search(child, { instance: edge.instance }))).instance, edge.instance)
+    assert.equal(JSON.parse(requireToolText(await f.search(child, { instance: edge.instance }))).tools[0].instance, edge.instance)
     assert.match(requireToolText(await f.setup(child, { action: 'close', instance: edge.instance })), /Blocked:.*owner may/)
     assert.match(requireToolText(await f.setup(child, { action: 'launch', browser: 'brave' })), /Blocked:.*owner may/)
     await tools.resetDynamicAndWait()
@@ -343,7 +355,7 @@ test('cached browser invocation still enforces Project and role boundaries', asy
         source: 'v:tools/chrome-devtools', args: ['--remote-debugging-port=9444'],
       }, context.tools), /startup arguments are fixed/)
       assert.equal(JSON.parse(requireToolText(await f.invoke(context, { value: 'preloaded' }, current.instance))).browser, 'project-default')
-      assert.equal(JSON.parse(requireToolText(await f.search(context))).instance, current.instance)
+      assert.equal(JSON.parse(requireToolText(await f.search(context))).tools[0].instance, current.instance)
       assert.equal(f.connect.mock.callCount(), 1)
       assert.equal(f.live.size, 1)
     })

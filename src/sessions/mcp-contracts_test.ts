@@ -148,7 +148,7 @@ export async function run() {return 'skill-case-complete'}
     vfs.mount('v:skills', 'Skills', createSkillsHandler(skills, (skill, ctx) => loader.registerSkillTools(skill, ctx)).read)
     base.register(new ReadTool(home, vfs))
     base.register(new InvokeTool(loader))
-    base.register(new SearchTool(home, undefined, vfs, loader, skills))
+    base.register(new SearchTool(home, undefined, vfs))
     const tools = new SessionTools(base, home)
     const bus = new Bus()
     t.after(async () => {
@@ -213,7 +213,10 @@ export async function run() {return 'skill-case-complete'}
     const importer = new ImportTool(new Map(), home)
     base.register(importer)
     base.register(new InvokeTool(importer))
-    base.register(new SearchTool(home, undefined, undefined, importer))
+    const vfs = new VirtualFs()
+    vfs.mount('v:tools', 'Tools', (path, ctx) => importer.readVirtual(path, ctx), (ctx, opts) => importer.virtualEntries(ctx, opts))
+    base.register(new SearchTool(home, undefined, vfs))
+    base.register(new ReadTool(home, vfs))
     const tools = new SessionTools(base, home)
     const bus = new Bus()
     t.after(async () => {
@@ -246,16 +249,25 @@ export async function run() {return 'skill-case-complete'}
         if (turns === 1) return {
           content: '', finishReason: 'tool_calls',
           toolCalls: [
-            { id: 'search', name: 'search', arguments: { query: 'synthetic', space: 'tools:fixture' } },
-            { id: 'invalid', name: 'invoke_tool', arguments: { name: 'fixture__write', args: { value: 3 } } },
+            { id: 'search', name: 'search', arguments: { query: 'Synthetic', space: 'grep:v:tools/fixture' } },
           ],
         }
         if (turns === 2) {
+          assert.match(String(messages.at(-1)?.content), /v:tools\/fixture\/fixture__write/)
+          return {
+            content: '', finishReason: 'tool_calls',
+            toolCalls: [
+              { id: 'read-contract', name: 'read', arguments: { path: 'v:tools/fixture/fixture__write' } },
+              { id: 'invalid', name: 'invoke_tool', arguments: { name: 'fixture__write', args: { value: 3 } } },
+            ],
+          }
+        }
+        if (turns === 3) {
           assert.deepEqual(executed, [])
           const results = messages.filter(message => message.role === 'tool')
-          assert.equal(results.length, 2)
-          assert.match(String(results[0].content), /"parameters"/)
-          for (const result of results.slice(1)) assert.match(String(result.content), /no tool was executed/)
+          assert.equal(results.length, 3)
+          assert.match(String(results[1].content), /"parameters"/)
+          for (const result of results.slice(2)) assert.match(String(result.content), /no tool was executed/)
           return {
             content: '', finishReason: 'tool_calls',
             toolCalls: [{ id: 'informed', name: 'invoke_tool', arguments: { name: 'fixture__write', args: { value: 'informed' } } }],
@@ -276,6 +288,6 @@ export async function run() {return 'skill-case-complete'}
       physicalSessionId: session.physicalSessionId,
       senderId: 'synthetic', messageId: 'synthetic',
     }), 'done')
-    assert.equal(turns, 3)
+    assert.equal(turns, 4)
   })
 }

@@ -66,18 +66,18 @@ test('system prompt — guideline section for general agent in group chat', asyn
 test('tool operations stay discoverable on demand while critical recovery boundaries remain inline', async () => {
   const provider = guidelineProvider()
   const required = [
-    /search\(\{ space: "tools:", query, limit\?, offset\? \}\)/,
-    /Limit: 3 by default, 10 maximum/,
-    /nextOffset: null.*ends pagination/,
+    /search\(\{ space: "grep:v:tools", query, limit\?, offset\? \}\)/,
+    /Virtual pages default to 100 results/,
+    /continuation footer's offset/,
     /Before config commits.*temporary connections and paginated `tools\/list`.*no tools execute or runtime connection remains/,
     /Index failure aborts save with previous config\/catalog unchanged/,
     /A no-op resave can index legacy configs/,
     /Report installed\/indexed, not guaranteed availability or execution/,
-    /Installed MCP search, global or targeted, reads the persistent index.*indexedAt.*zero connections, `tools\/list` RPCs or dynamic registration/,
+    /Installed MCP search, global or targeted, reads active metadata or the persistent index.*indexedAt.*zero connections, `tools\/list` RPCs or dynamic registration/,
     /Repeated searches work offline; 100 installed servers will not start from search/,
-    /Missing\/mismatched\/corrupt indexes give explicit source errors, never fallback auto-connect; read\/save MCP config to build missing metadata/,
-    /errors.*deferredSources.*partial results do not prove absence/,
-    /browser\/factory sources initialize only with explicit source selection/,
+    /Missing\/mismatched\/corrupt indexes give explicit source warnings, never fallback auto-connect; read\/save MCP config to build missing metadata/,
+    /Check warnings: partial results do not prove absence/,
+    /browser\/factory sources are never initialized by search/,
     /one public source, `chrome-devtools`, no `chrome-devtools-full` alias/,
     /read\("v:tools"\).*without connecting/,
     /invoke_tool\(\{ name, args \}\)/,
@@ -121,6 +121,7 @@ test('tool operations stay discoverable on demand while critical recovery bounda
         }
         assert.doesNotMatch(prompt, /## Safety|## Chats with Humans|Ask before destructive commands|anything that leaves the machine|Stay silent during casual banter/)
         assert.doesNotMatch(prompt, /paginated `tools\/list`|100 installed servers|optional `args` for `init/)
+        assert.doesNotMatch(prompt, /space:\s*"(?:tools|skills|sessions):|nextOffset/)
       }
     }
   }

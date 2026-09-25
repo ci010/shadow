@@ -11,6 +11,7 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
 import { redactMcpText } from '../mcp/errors.ts'
 import type { WorkToolGuard } from '../sessions/work-alignment.ts'
+import { isVirtualPath } from '../vfs/virtual-fs.ts'
 type Tool = TypedTool<ToolResult>
 
 const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'work', 'event_subscribe', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
@@ -137,7 +138,10 @@ export class Tools {
       if (
         text.length > this.truncationThreshold &&
         !EXEMPT_TOOLS.has(name) &&
-        !(name === 'search' && typeof args.space === 'string' && args.space.split(':', 1)[0] === 'tools') &&
+        !(name === 'search' && typeof args.space === 'string' && (
+          /^(?:glob|grep):[\\/]*v:/.test(args.space) ||
+          /^(?:glob|glob:)$/.test(args.space) && typeof args.query === 'string' && isVirtualPath(args.query)
+        )) &&
         !(context.remoteWorkdir && name === 'exec')
       ) {
         text = await this.truncateAndSave(name, text)
