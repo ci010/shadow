@@ -14,7 +14,7 @@ import type { WorkToolGuard } from '../sessions/work-alignment.ts'
 import { isVirtualPath } from '../vfs/virtual-fs.ts'
 type Tool = TypedTool<ToolResult>
 
-const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'work', 'event_subscribe', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
+const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'work', 'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000

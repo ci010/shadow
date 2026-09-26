@@ -465,98 +465,6 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
   {
     "type": "function",
     "function": {
-      "name": "event_subscribe",
-      "description": "Manage event subscriptions, event sources, and emit custom events. Events are signals that wake a session; declare urgency to control how they arrive (steering=interrupt now, queue=after current turn, debounce=coalesce a burst, silent=record only). Read v:events for subscriptions and v:events/sources for registered sources. Discover tools:cron and use cron_add to schedule periodic events.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "action": {
-            "type": "string",
-            "description": "subscribe | unsubscribe | emit | register_source | unregister_source | list_sources",
-            "enum": [
-              "subscribe",
-              "unsubscribe",
-              "emit",
-              "register_source",
-              "unregister_source",
-              "list_sources"
-            ]
-          },
-          "id": {
-            "type": "string",
-            "description": "Subscription ID (required for unsubscribe)."
-          },
-          "event": {
-            "type": "string",
-            "description": "Event type to match or emit. Use * to subscribe to all."
-          },
-          "source": {
-            "type": "string",
-            "description": "Event source tag. For subscribe/emit: filter/label (e.g. channel:web, cron). For register_source/unregister_source: the source tag to define/remove."
-          },
-          "channel": {
-            "type": "string",
-            "description": "Optional channel filter for channel.message events."
-          },
-          "chat_id": {
-            "type": "string",
-            "description": "Optional chat filter for channel.message events."
-          },
-          "content": {
-            "type": "string",
-            "description": "Event payload text when action=emit."
-          },
-          "meta_json": {
-            "type": "string",
-            "description": "Optional JSON object string for event metadata."
-          },
-          "target_session": {
-            "type": "string",
-            "description": "Optional target session ID; defaults to current session."
-          },
-          "urgency": {
-            "type": "string",
-            "description": "Delivery urgency for subscribe/emit/register_source: steering (interrupt), queue (default, after current turn), debounce (coalesce burst), silent (record only).",
-            "enum": [
-              "steering",
-              "queue",
-              "debounce",
-              "silent"
-            ]
-          },
-          "coalesce_key": {
-            "type": "string",
-            "description": "Grouping key for debounce coalescing (defaults to \\"<type>:<source>\\")."
-          },
-          "debounce_ms": {
-            "type": "number",
-            "description": "Trailing debounce window in ms (default 30000). Only for urgency=debounce."
-          },
-          "kind": {
-            "type": "string",
-            "description": "Source category for register_source (default \\"custom\\").",
-            "enum": [
-              "channel",
-              "cron",
-              "agent",
-              "system",
-              "custom"
-            ]
-          },
-          "description": {
-            "type": "string",
-            "description": "Human description for register_source."
-          }
-        },
-        "required": [
-          "action"
-        ]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
       "name": "subagent",
       "description": "Create a temporary asynchronous task, or invoke a blocking bounded leaf call. Use topic creation for independent long-lived conversations. Blocking calls must use this tool directly, not an exec/invoke bridge.",
       "parameters": {
@@ -656,7 +564,6 @@ search
 continuation
 topic
 yield
-event_subscribe
 update_convention
 `;
 
@@ -678,7 +585,6 @@ continuation
 topic
 message
 yield
-event_subscribe
 subagent
 update_convention
 `;
@@ -694,7 +600,6 @@ continuation
 topic
 message
 yield
-event_subscribe
 subagent
 update_convention
 `;
@@ -731,7 +636,6 @@ search
 continuation
 topic
 yield
-event_subscribe
 update_convention
 `;
 
@@ -746,7 +650,6 @@ continuation
 topic
 message
 yield
-event_subscribe
 subagent
 `;
 

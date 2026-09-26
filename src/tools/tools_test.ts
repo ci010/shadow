@@ -19,7 +19,6 @@ import { TopicTool } from './topic.ts'
 import { InitiativeTool } from './initiative.ts'
 import { INITIATIVE_SCHEMA_PROMPT } from '../initiatives/schema.ts'
 import type { TopicService } from '../sessions/topics.ts'
-import { EventSubscribeTool } from './event-subscribe.ts'
 import { SubagentTool } from './subagent.ts'
 import { YieldTool } from './yield.ts'
 import type { YieldManager } from '../sessions/yield.ts'
@@ -100,7 +99,6 @@ function buildBaseTools(): Tools {
     new MessageTool(bus, () => true, () => undefined, () => undefined, deliver),
   )
   tools.register(new YieldTool(stub<YieldManager>()))
-  tools.register(new EventSubscribeTool(events))
   tools.register(
     new SubagentTool(
       bus,

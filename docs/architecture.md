@@ -1032,8 +1032,8 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `yield` | Three-option decision requests, actual-parent routing, correlated answers and configurable waiting |
 | `work` | Versioned agreements, executor adoption, factual checkpoints and controlled context transitions |
 | `plan_write`, `update_convention`, `log` | Planning documents, scoped constraints, structured knowledge logging |
-| `event_subscribe` | Subscribe to normalized system events |
-| Lazy tools | Cron, Initiative SQL, search/MCP/tool factories |
+| `event_subscribe`, `event_source` (lazy) | Subscribe to normalized events or manage restricted Project polling producers; discover via `v:tools/events` and invoke through `invoke_tool` |
+| Lazy tools | Events, cron, Initiative SQL, search/MCP/tool factories |
 
 ### Initiative coordination
 
@@ -1735,7 +1735,23 @@ Three mechanisms must not be conflated:
    directly. `emit` awaits directed admission (or schedules the debounce window);
    independent fanout targets can partially succeed, with failures returned to the
    producer. Timer-triggered failures report correlation IDs. There is no automatic
-   retry or crash replay of this pending work.
+   retry or crash replay of this pending work. `event_subscribe` and `event_source`
+   are registered in the on-demand `events` tool catalog, not the base prompt;
+   `v:skills/event-sources` guides discovery and `invoke_tool` usage.
+   **PollingSources** persists immutable script definitions, HTTP grants, checkpoints
+   and bounded occurrence IDs in `.events/polling-sources.json`. A local durable
+   authoring session may create one on a direct user turn with `event_source`.
+   Each timer tick runs the script in a disposable restricted child. Its
+   `@shadow/fetch` module sends path-scoped HTTP requests through the existing
+   Project capability broker, which injects host-held credentials; the script
+   cannot directly emit events or select recipients. Results are validated and
+   routed through EventService. A checkpoint is saved after accepted events, so
+   failures do not advance it; a crash between admission and saving may redeliver.
+   Source code cannot be updated in place, and explicit user permission is required
+   before changing its grant. The stored checksum covers code and grants, but is
+   not a signature or an OS-level defense against a host user modifying both
+   the definition and its checksum. There is no general webhook or streaming
+   source runner.
 3. **Memory event log:** model-curated daily knowledge in `memory/events`, not
    the transport log of every Bus event.
 
@@ -2576,7 +2592,7 @@ from the host or other sessions**.
 | Agent types and skills | Workspace `agents` and `skills`; shipped definitions are application assets |
 | Initiative context | Project-local SQLite work records and bounded prompt summaries; folder ownership lives in the host catalog |
 | Project catalog/config | Sibling host `projects.v2.json`; per-project `config/project.json` and `config/bots.v1.json` |
-| Event subscriptions/sources | `.events/subscriptions.json`, `.events/sources.json` |
+| Event subscriptions/sources | `.events/subscriptions.json`, `.events/sources.json`, `.events/polling-sources.json` |
 | Cron definitions | `.cron/jobs.json` |
 | Telemetry | Each project Home's `.otel.db`; separate host `.host.otel.db`; project composition does not use a shared `OTEL_DB_PATH` override |
 | WIP device registry | Shared legacy Home `.cluster/registry.v1.json`, unless an explicit host snapshot path is supplied |

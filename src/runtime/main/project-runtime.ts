@@ -66,7 +66,7 @@ import { registerCronTools } from '../../tools/cron.ts'
 import { SkillEditing, SkillReadTool, SkillSaveTool } from '../../tools/skill-edit.ts'
 import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
-import { EventSubscribeTool } from '../../tools/event-subscribe.ts'
+import { registerEventTools } from '../../tools/event-source.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
 import type { LoadableEntry } from '../../tools/load-tool.ts'
 import { InvokeTool } from '../../tools/invoke-tool.ts'
@@ -107,6 +107,7 @@ import { botSetupPlugin } from '../../channels/bot-setup.ts'
 import { BotInstanceStore } from '../../channels/bot-store.ts'
 import { projectConfigPlugin } from '../../projects/config-routes.ts'
 import { EventService } from '../../events/service.ts'
+import { PollingSources } from '../../events/polling-sources.ts'
 import { CronService } from '../../cron/service.ts'
 import { CronDispatcher } from '../../cron/dispatch.ts'
 import { registerAutomationRoutes } from '../../cron/routes.ts'
@@ -809,6 +810,12 @@ export async function createProjectRuntime(
     const locations = resolveSessionLocations(workspace, state, undefined, sessions.workdirCapabilityLookup)
     return locations.workdir.available && locations.workdir.locality === 'local'
   }
+  const pollingSources = new PollingSources(
+    workspace, events, capabilityBroker,
+    id => canAuthor(id) && sessions.canReceiveSessionMessage(id),
+    ref => agentCredentials.names().includes(ref),
+  )
+  cleanup.push(() => pollingSources.stop())
   const publicationRequests = new PublicationRequests({
     ...authoringOptions,
     validateRequest: request => {
@@ -926,7 +933,7 @@ export async function createProjectRuntime(
   cronService.setOnChanged(() => realtime.invalidateSessions())
   registerAutomationRoutes(app, cronService, sessions, project.id)
   registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
-  tools.register(new EventSubscribeTool(events))
+  registerEventTools(importTool, events, pollingSources, canAuthor)
   // Clean up event subscriptions linked to one-shot cron jobs when they are
   // auto-removed after firing (prevents orphaned subscriptions in `list`).
   cronService.setOnJobRemoved((jobId) => {
@@ -1087,6 +1094,7 @@ export async function createProjectRuntime(
       () => io.shutdown(),
       () => knowledgeSchedule.stop(),
       () => knowledgeMaintenance.stop(),
+      () => pollingSources.stop(),
       () => cronService.stop(),
       () => stopLearning,
       () => folders.dispose(),
@@ -1128,6 +1136,7 @@ export async function createProjectRuntime(
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
   })
   await ready
+  pollingSources.start()
   a2a.validate()
   void knowledgeSchedule.start().catch(error => console.error('[knowledge] Scheduled scan failed', error))
   resumeApprovedPublications()
