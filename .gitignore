@@ -13,6 +13,12 @@ dist/
 desktop/release/
 desktop/backend/
 desktop/service/ShadowService.exe
+desktop/aria2/aria2c
+desktop/aria2/aria2c.exe
+desktop/aria2/COPYING
+desktop/aria2/LICENSE.OpenSSL
+desktop/aria2/aria2-1.37.0-source.tar.gz
+/.aria2-source/
 desktop/release-manifest.v1.json
 /release-prepared.json
 

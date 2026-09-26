@@ -27,6 +27,11 @@ test('one release entry selects desktop/mobile/all, shares preparation and retai
     assert(steps.some((step: { run?: string }) => step.run?.includes('pnpm desktop:package')))
     assert(steps.some((step: { uses?: string }) => step.uses === './.github/actions/restore-prepared'))
     assert(!steps.some((step: { run?: string }) => step.run?.includes('pnpm typecheck')))
+    const source = steps.find((step: { with?: { repository?: string } }) => step.with?.repository === 'aria2/aria2')
+    assert.equal(source.with.ref, '02f2d0d8472b3c38c29b4dba8c75ebd5fdd2899a')
+    const nativeBuild = steps.find((step: { run?: string }) => step.run?.includes('scripts/build-aria2-native.sh'))
+    const packageIndex = steps.findIndex((step: { run?: string }) => step.run?.includes('pnpm desktop:package'))
+    assert(steps.indexOf(nativeBuild) >= 0 && steps.indexOf(nativeBuild) < packageIndex)
   }
   for (const id of ['android-validation', 'ios-validation', 'android-signed', 'ios-signed']) {
     const job = mobile.jobs[id]

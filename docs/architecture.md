@@ -2642,6 +2642,21 @@ with muxed audio for H3; existing media routing serves completed files,
 not progressive inference streams. Remote workdirs cannot use Main-local
 weights or `sd-cli`.
 
+The desktop release pipeline is configured to bundle a separate, pinned
+aria2 CLI for approved, resumable HTTPS transfers. Native Windows x64, macOS
+arm64/x64 and Linux x64 builds use the same pinned upstream source revision;
+the package checks for its GPL license, corresponding source and build
+instructions, and verifies executable architecture/version and packaged
+hashes before delivery. Native builds and installed-package downloads must
+still be exercised on each target platform. The local-only `download` tool requires an explicit
+SHA-256 and consent, stages and resumes a partial file and exposes it only
+after verification; large downloads run through the existing background-task
+system so they can be observed or cancelled without holding a tool call.
+It never silently uses a `PATH` binary. Its Skill
+describes cache reuse and leaves repository resolution and authentication
+to HF/ModelScope tooling. Bundling this small downloader does not bundle
+the audio.cpp or sd.cpp binaries or any model weights.
+
 `bot.config.example.json` selects `gpt-6-astra@copilot` with medium reasoning
 effort, SQLite session storage, web settings,
 and `restrictToWorkspace: true`. These are example choices, not all schema

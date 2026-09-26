@@ -44,6 +44,11 @@
         "filter": ["**/*"]
       },
       {
+        "from": "aria2",
+        "to": "aria2",
+        "filter": ["aria2c", "aria2c.exe", "COPYING", "LICENSE.OpenSSL", "aria2-1.37.0-source.tar.gz", "BUILD.md", "build-aria2-native.sh"]
+      },
+      {
         "from": "../app/dist",
         "to": "app-dist"
       }

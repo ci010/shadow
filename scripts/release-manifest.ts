@@ -5,8 +5,9 @@ import { extractFile, listPackage } from '@electron/asar'
 import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 
 const sourceInputs = [
-  'src', 'scripts', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service',
+  'src', 'scripts', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service', 'desktop/aria2',
   'build.ts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',
+  '.gitattributes', '.github/workflows/release-check.yml',
   'tsconfig.json', 'tsconfig.build.json', 'app/package.json', 'app/tsconfig.json',
   'app/index.html', 'app/vite.config.ts', 'app/unocss.config.ts',
   'desktop/package.json', 'desktop/tsconfig.json', 'desktop/tsconfig.build.json',
@@ -14,7 +15,7 @@ const sourceInputs = [
 ]
 
 export interface ReleaseManifest {
-  version: 2
+  version: 1 | 2
   platform: DesktopTarget['platform']
   arch: DesktopTarget['arch']
   buildId: string
@@ -72,6 +73,8 @@ export async function sourceFingerprint(root: string): Promise<string> {
       for (const [name, bytes] of await tree(path)) {
         // The pinned downloaded wrapper is an output, not source.
         if (input === 'desktop/service' && name === 'ShadowService.exe') continue
+        if (input === 'desktop/aria2' && ['aria2c', 'aria2c.exe', 'COPYING', 'LICENSE.OpenSSL',
+          'aria2-1.37.0-source.tar.gz', 'build-aria2-native.sh'].includes(name)) continue
         entries.push([`${input}/${name}`, hash(bytes)])
       }
     } else {
@@ -91,11 +94,14 @@ export async function createReleaseManifest(
   for (const [input, prefix] of [
     ['desktop/backend', 'resources/backend'],
     ['app/dist', 'resources/app-dist'],
+    ['desktop/aria2', 'resources/aria2'],
     ...(target.platform === 'win32' ? [['desktop/service', 'resources/service']] : []),
     ['desktop/dist', 'asar/dist'],
     ['desktop/assets', 'asar/assets'],
   ]) {
     for (const [name, bytes] of await tree(resolve(root, input))) {
+      if (prefix === 'resources/aria2' && ['aria2c', 'aria2c.exe'].includes(name)
+        && name !== (target.platform === 'win32' ? 'aria2c.exe' : 'aria2c')) continue
       if (prefix === 'resources/backend' && !name.startsWith('dist/') && !name.startsWith('node_modules/') && name !== 'package.json') continue
       if (prefix === 'resources/backend' && name.startsWith('dist/') && name.endsWith('.map')) continue
       if (prefix === 'asar/dist' && !/\.(?:js|cjs)$/.test(name)) continue
@@ -117,7 +123,10 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
   const data = value as Record<string, unknown>
   const hex = (item: unknown): item is string => typeof item === 'string' && /^[a-f0-9]{64}$/.test(item)
   const legacy = data.version === 1
-  if (Object.keys(data).length !== (legacy ? 6 : 8) || (!legacy && data.version !== 2) || typeof data.buildId !== 'string' ||
+  const normalizedLegacy = legacy && Object.keys(data).length === 8
+    && data.platform === 'win32' && data.arch === 'x64'
+  if ((legacy ? Object.keys(data).length !== 6 && !normalizedLegacy : Object.keys(data).length !== 8)
+    || (!legacy && data.version !== 2) || typeof data.buildId !== 'string' ||
     !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(data.buildId) ||
     !hex(data.sourceHash) || typeof data.packageVersion !== 'string' ||
     typeof data.electronVersion !== 'string' || !data.files || typeof data.files !== 'object' || Array.isArray(data.files)) {
@@ -127,7 +136,7 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
   const target = legacy ? desktopTarget('win32', 'x64') : desktopTarget(data.platform as string, data.arch as string)
   const files: Record<string, string> = {}
   for (const [name, checksum] of Object.entries(data.files)) {
-    if (!/^(resources\/(?:backend|app-dist|service)|asar\/(?:dist|assets))\//.test(name) ||
+    if (!/^(resources\/(?:backend|app-dist|service|aria2)|asar\/(?:dist|assets))\//.test(name) ||
       name.includes('\\') || name.split('/').some(part => part === '.' || part === '..' || !part) || !hex(checksum)) {
       throw new Error(`Invalid release manifest entry: ${name}`)
     }
@@ -137,12 +146,15 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
     throw new Error('Non-Windows release manifest must not contain service resources')
   }
   for (const required of ['resources/backend/dist/src/index.js', 'resources/app-dist/index.html',
+    ...(legacy ? [] : [`resources/aria2/${target.platform === 'win32' ? 'aria2c.exe' : 'aria2c'}`,
+      'resources/aria2/COPYING', 'resources/aria2/LICENSE.OpenSSL',
+      'resources/aria2/aria2-1.37.0-source.tar.gz', 'resources/aria2/BUILD.md', 'resources/aria2/build-aria2-native.sh']),
     ...(target.platform === 'win32' ? ['resources/service/ShadowService.exe'] : []),
     'asar/dist/main.js', 'asar/dist/preload.cjs']) {
     if (!(required in files)) throw new Error(`Release manifest is missing ${required}`)
   }
   return {
-    version: 2, platform: target.platform, arch: target.arch, buildId: data.buildId, sourceHash: data.sourceHash,
+    version: legacy ? 1 : 2, platform: target.platform, arch: target.arch, buildId: data.buildId, sourceHash: data.sourceHash,
     packageVersion: data.packageVersion, electronVersion: data.electronVersion, files,
   }
 }
@@ -151,7 +163,9 @@ export async function verifyReleaseManifest(
   packagedRoot: string, repositoryRoot: string, target: DesktopTarget = desktopTarget(),
 ): Promise<void> {
   const resources = join(packagedRoot, target.resourcesRelativePath)
-  const manifest = parseReleaseManifest(JSON.parse(await readFile(join(resources, 'release-manifest.v1.json'), 'utf8')))
+  const saved: unknown = JSON.parse(await readFile(join(resources, 'release-manifest.v1.json'), 'utf8'))
+  const manifest = parseReleaseManifest(saved)
+  const legacy = typeof saved === 'object' && saved !== null && 'version' in saved && saved.version === 1
   if (manifest.platform !== target.platform || manifest.arch !== target.arch) {
     throw new Error(`Packaged application target ${manifest.platform}/${manifest.arch} does not match ${target.platform}/${target.arch}`)
   }
@@ -171,7 +185,8 @@ export async function verifyReleaseManifest(
   if (target.platform !== 'win32' && (await readdir(resources)).includes('service')) {
     throw new Error('Non-Windows package must not contain service resources')
   }
-  for (const directory of ['backend', 'app-dist', ...(target.platform === 'win32' ? ['service'] : [])]) {
+  for (const directory of ['backend', 'app-dist', ...(!legacy ? ['aria2'] : []),
+    ...(target.platform === 'win32' ? ['service'] : [])]) {
     for (const [name, bytes] of await tree(join(resources, directory))) {
       actual.set(`resources/${directory}/${name}`, bytes)
     }

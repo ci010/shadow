@@ -65,8 +65,11 @@ shared directory they choose (including an external disk). If neither is
 available, a dedicated Shadow data-directory models folder is a fallback.
 Use a pinned revision, per-file download, checksum verification and a
 complete file before calling `configure`; do not fetch entire Diffusers
-repositories just to obtain a few components. Provider CLIs remain responsible for authenticated repository access and
-revision selection. GitHub release archives require a pinned version and SHA-256 release-asset digest; Windows
+repositories just to obtain a few components. GitHub release archives
+with a published SHA-256 can be transferred via `v:skills/download`
+and the bundled `download` tool; provider CLIs remain responsible for
+authenticated repository access and revision selection. GitHub release archives
+also require a pinned version and SHA-256 release-asset digest; Windows
 CUDA releases need the **matching additional CUDA runtime** alongside
 `sd-cli`. If GitHub is blocked, use a verified offline archive, not an
 unverified installer/mirror. No automatic startup installs.

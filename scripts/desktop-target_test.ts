@@ -63,6 +63,8 @@ test('packaging configuration keeps WinSW Windows-only and uses shared portable 
   assert.equal(desktop.build.linux.target, 'tar.gz')
   assert.equal(desktop.build.linux.executableName, 'shadow')
   assert(!desktop.build.extraResources.some((item: { from: string }) => item.from === 'service'))
+  assert(desktop.build.extraResources.some((item: { from: string; to: string }) =>
+    item.from === 'aria2' && item.to === 'aria2'))
   assert(desktop.build.win.extraResources.some((item: { from: string }) => item.from === 'service'))
   assert.equal(desktop.build.mac.icon, 'assets/icon.png')
   assert.equal(desktop.build.linux.icon, 'assets/icon.png')

@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { cp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { verifyReleaseManifest } from './release-manifest.ts'
+import { ARIA2_VERSION, aria2Executable } from './aria2-package.ts'
 import { desktopTarget } from './desktop-target.ts'
 import {
   assertMacIconEncoding, assertOutsideRepository, backendCommand, backendResourceReport, bounded, createVerificationDirectory, descendants, fetchBounded,
@@ -53,6 +54,11 @@ try {
   await cp(packaged, relocated, { recursive: true, dereference: target.platform === 'win32', verbatimSymlinks: target.platform !== 'win32' })
   stage = 'relocated release manifest'
   await verifyReleaseManifest(relocated, repository)
+  stage = 'relocated bundled aria2 executable'
+  const aria2Path = join(relocated, target.resourcesRelativePath, 'aria2', aria2Executable(target))
+  const aria2Version = await runCommand(aria2Path, ['--version'],
+    { cwd: scratch, env: process.env }, 10_000, stage)
+  assert.match(aria2Version, new RegExp(`^aria2 version ${ARIA2_VERSION.replaceAll('.', '\\.')}\\r?\\n`))
   stage = 'renderer artifact references'
   await verifyRendererArtifacts(relocated)
   console.log(`Artifact checks (${target.platform}/${target.arch}): release manifest verified ASAR main/preload and backend/renderer hashes; ${target.platform === 'win32' ? 'Windows service resources verified' : 'Windows service resources absent'}; referenced renderer assets present (not UI execution).`)

@@ -147,6 +147,8 @@ import { AudioCppService } from '../../audio-cpp/service.ts'
 import { AudioCppTool } from '../../tools/audio-cpp.ts'
 import { DiffusionCppService } from '../../diffusion-cpp/service.ts'
 import { DiffusionCppTool } from '../../tools/diffusion-cpp.ts'
+import { Aria2Downloader } from '../../downloader/aria2.ts'
+import { DownloadTool } from '../../tools/download.ts'
 import { createPromptCaptureStore } from '../../sessions/prompt-capture.ts'
 import { createA2aRuntime } from '../../a2a/runtime.ts'
 import { isDeepStrictEqual } from 'node:util'
@@ -569,6 +571,7 @@ export async function createProjectRuntime(
       return resolveSessionLocations(workspace, state).sessionDataDir
     },
   ))
+  importTool.registerBuiltin('download', new DownloadTool(new Aria2Downloader(), project.id, backgroundTasks))
 
   const initiatives = new InitiativeStore(workspace, {
     trackWork: true,

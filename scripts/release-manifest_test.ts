@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { createPackage } from '@electron/asar'
@@ -28,6 +28,13 @@ async function fixture(root: string, target: DesktopTarget = windows): Promise<s
     ['desktop/dist/service/connection.js', 'service connection'],
     ['desktop/assets/icon.ico', 'icon'],
     ['desktop/service/ShadowService.exe', 'synthetic-wrapper'],
+    ['desktop/aria2/aria2c.exe', 'MZ-synthetic-executable'],
+    ['desktop/aria2/aria2c', 'ELF-synthetic-executable'],
+    ['desktop/aria2/COPYING', 'synthetic license'],
+    ['desktop/aria2/LICENSE.OpenSSL', 'synthetic exception'],
+    ['desktop/aria2/aria2-1.37.0-source.tar.gz', 'synthetic source'],
+    ['desktop/aria2/BUILD.md', 'synthetic build guide'],
+    ['desktop/aria2/build-aria2-native.sh', 'synthetic build script'],
   ]) await file(root, path, text)
   const sourceHash = await sourceFingerprint(root)
   await createReleaseManifest(root, sourceHash, target)
@@ -38,6 +45,9 @@ async function fixture(root: string, target: DesktopTarget = windows): Promise<s
     ['desktop/backend/dist/src/index.js', 'resources/backend/dist/src/index.js'],
     ['app/dist/index.html', 'resources/app-dist/index.html'],
     ['desktop/service/ShadowService.exe', 'resources/service/ShadowService.exe'],
+    ...['COPYING', 'LICENSE.OpenSSL', 'aria2-1.37.0-source.tar.gz', 'BUILD.md', 'build-aria2-native.sh',
+      target.platform === 'win32' ? 'aria2c.exe' : 'aria2c'].map(name =>
+      [`desktop/aria2/${name}`, `resources/aria2/${name}`]),
     ['desktop/package.json', 'archive/package.json'],
     ['desktop/dist/main.js', 'archive/dist/main.js'],
     ['desktop/dist/preload.cjs', 'archive/dist/preload.cjs'],
@@ -66,6 +76,12 @@ test('release verification rejects tampered or extra packaged resources', async 
     await file(packaged, 'resources/app-dist/index.html', 'stale renderer')
     await assert.rejects(verifyReleaseManifest(packaged, root, windows), /differs from validated build/)
     await file(packaged, 'resources/app-dist/index.html', 'renderer')
+    await file(packaged, 'resources/aria2/aria2c.exe', 'wrong downloader')
+    await assert.rejects(verifyReleaseManifest(packaged, root, windows), /resources\/aria2\/aria2c.exe/)
+    await file(packaged, 'resources/aria2/aria2c.exe', 'MZ-synthetic-executable')
+    await file(packaged, 'resources/aria2/COPYING', 'wrong license')
+    await assert.rejects(verifyReleaseManifest(packaged, root, windows), /resources\/aria2\/COPYING/)
+    await file(packaged, 'resources/aria2/COPYING', 'synthetic license')
     await file(packaged, 'resources/backend/extra.js', 'unvalidated')
     await assert.rejects(verifyReleaseManifest(packaged, root, windows), /inventory/)
   })
@@ -111,7 +127,11 @@ test('legacy v1 manifests are Windows x64 only', async () => {
     manifest.version = 1
     delete manifest.platform
     delete manifest.arch
+    for (const name of Object.keys(manifest.files)) {
+      if (name.startsWith('resources/aria2/')) delete manifest.files[name]
+    }
     await writeFile(path, JSON.stringify(manifest))
+    await rm(join(packaged, 'resources', 'aria2'), { recursive: true })
     assert.equal(parseReleaseManifest(manifest).platform, 'win32')
     assert.equal(parseReleaseManifest(manifest).arch, 'x64')
     assert.deepEqual(parseReleaseManifest(parseReleaseManifest(manifest)), parseReleaseManifest(manifest))

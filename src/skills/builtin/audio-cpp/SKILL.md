@@ -39,7 +39,9 @@ large disk use or a model with special license terms.
    from the archive. Do not execute a downloaded binary before verification.
    Do not run an OS shell installer for a third-party mirror without explicit
    review; offline import is preferable when GitHub is blocked.
-   Do not invent a digest if the release has none.
+   For a public HTTPS asset with a published SHA-256, use
+   `v:skills/download` and the bundled `download` tool for resumable
+   transfer; do not invent a digest if the release has none.
 3. Call `audio_cpp configure` with `binary` set to its absolute path. Shadow
    probes `--list-loaders --json` before saving. If the binary is already on
    `PATH`, the tool can discover it without configuration. Use `AUDIOCPP_CLI_PATH`
