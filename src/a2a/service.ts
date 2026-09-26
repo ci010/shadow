@@ -21,7 +21,7 @@ export interface A2aRunner {
   run(record: InboundTask, message: Message, signal: AbortSignal, interaction: A2aInteraction): Promise<Pick<SessionTurnFact, 'status' | 'content'>>
 }
 export interface A2aInteraction {
-  ask(question: string): Promise<string>
+  ask(question: string, signal?: AbortSignal): Promise<string>
 }
 type Running = { controller: AbortController; promise: Promise<void> }
 
@@ -165,7 +165,7 @@ export class A2aService implements A2ARequestHandler {
       this.store.saveTask(record)
       this.notify()
       const result = await this.runner.run(record, message, controller.signal, {
-        ask: question => this.ask(record, question, controller.signal),
+        ask: (question, signal) => this.ask(record, question, controller.signal, signal),
       })
       if (Buffer.byteLength(result.content) > 256 * 1024) {
         this.finish(record, TaskState.TASK_STATE_FAILED, 'Result exceeds the 256 KiB text limit.')
@@ -189,12 +189,16 @@ export class A2aService implements A2ARequestHandler {
     } finally { clearTimeout(timer) }
   }
 
-  private async ask(record: InboundTask, question: string, signal: AbortSignal): Promise<string> {
+  private async ask(record: InboundTask, question: string, taskSignal: AbortSignal, questionSignal?: AbortSignal): Promise<string> {
+    const signal = questionSignal ? AbortSignal.any([taskSignal, questionSignal]) : taskSignal
     signal.throwIfAborted()
     if (!question.trim() || Buffer.byteLength(question) > 64 * 1024) throw new Error('Invalid A2A question.')
     if (this.questions.has(record.task.id)) throw new Error('Only one input request per task may be pending.')
     const response = Promise.withResolvers<string>()
-    const abort = () => response.reject(signal.reason)
+    const abort = () => {
+      this.questions.delete(record.task.id)
+      response.reject(signal.reason)
+    }
     signal.addEventListener('abort', abort, { once: true })
     this.questions.set(record.task.id, message => {
       const current = this.store.inbound.get(record.task.id)!
@@ -213,6 +217,12 @@ export class A2aService implements A2ARequestHandler {
     } finally {
       signal.removeEventListener('abort', abort)
       this.questions.delete(record.task.id)
+      if (questionSignal?.aborted && !taskSignal.aborted
+        && record.task.status?.state === TaskState.TASK_STATE_INPUT_REQUIRED) {
+        record.task.status = { state: TaskState.TASK_STATE_WORKING, timestamp: new Date().toISOString(), message: undefined }
+        this.store.saveTask(record)
+        this.notify()
+      }
     }
   }
 

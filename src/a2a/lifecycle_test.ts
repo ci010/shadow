@@ -70,6 +70,7 @@ test('pending input is canceled without another message; unfinished input is not
         return { status: 'completed', content: await interaction.ask('Waiting') }
       },
     })
+
     try {
       const task = await service.sendMessage(send('start'), owner())
       const recoveredStore = new A2aStore(root); recoveredStore.init()
@@ -79,6 +80,38 @@ test('pending input is canceled without another message; unfinished input is not
       const canceled = await service.cancelTask({ id: task.id, tenant: '', metadata: undefined }, owner())
       assert.equal(canceled.status?.state, TaskState.TASK_STATE_CANCELED)
     } finally { await service.close() }
+  })
+})
+
+test('withdrawing one input clears protocol waiting state and permits a later question', async () => {
+  await withTempWorkspace(async root => {
+    const store = new A2aStore(root); store.init()
+    const controller = new AbortController()
+    const withdrawn = Promise.withResolvers<void>()
+    const proceed = Promise.withResolvers<void>()
+    const asked = Promise.withResolvers<void>()
+    const service = new A2aService('p', config.server!, store, {
+      async run(_record, _message, _signal, interaction) {
+        await assert.rejects(interaction.ask('Old question', controller.signal), /input expired/)
+        withdrawn.resolve()
+        await proceed.promise
+        const answer = interaction.ask('New question')
+        asked.resolve()
+        return { status: 'completed', content: await answer }
+      },
+    })
+    try {
+      const task = await service.sendMessage(send('start'), owner())
+      controller.abort(new Error('input expired'))
+      await withdrawn.promise
+      assert.equal((await service.getTask({ id: task.id, tenant: '' }, owner())).status?.state, TaskState.TASK_STATE_WORKING)
+      await assert.rejects(service.sendMessage(send('late', { taskId: task.id }), owner()), /not waiting/)
+      proceed.resolve()
+      await asked.promise
+      const result = await service.sendMessage(send('new answer', { taskId: task.id }), owner())
+      assert.equal(result.status?.state, TaskState.TASK_STATE_COMPLETED)
+      assert.equal(result.artifacts[0].parts[0].content?.value, 'new answer')
+    } finally { proceed.resolve(); await service.close() }
   })
 })
 
@@ -112,16 +145,17 @@ test('outbound tracking resumes after restart, reports requested input and compl
       await Promise.all([client.poll(), client.poll()])
       await client.poll()
       assert.deepEqual(notifications, ['input-required'])
-      const args = { handle: initial.handle, message: 'answer' }
-      const reply = JSON.parse(await client.call('a2a_reply', args, { ...context, toolCallId: 'reply' }))
+      const waiting = JSON.parse(await client.call('a2a_get', { handle: initial.handle }, context))
+      const args = { request_id: waiting.request.request_id, text: 'answer' }
+      const reply = JSON.parse(await client.call('reply', args, { ...context, toolCallId: 'reply' }))
       assert.equal(reply.status, 'completed')
       assert.notEqual(reply.handle, initial.handle)
-      assert.equal(JSON.parse(await client.call('a2a_reply', args, { ...context, toolCallId: 'reply' })).handle, reply.handle)
+      assert.equal(JSON.parse(await client.call('reply', args, { ...context, toolCallId: 'reply' })).handle, reply.handle)
       await client.poll()
       await client.poll()
       assert.deepEqual(notifications, ['input-required', 'completed'])
       assert.equal(sends, 2)
-      await assert.rejects(client.call('a2a_reply', args, { ...context, toolCallId: 'second-reply' }), /already has a reply/)
+      await assert.rejects(client.call('reply', args, { ...context, toolCallId: 'second-reply' }), /already has a reply/)
       assert.deepEqual(messages, [
         { messageId: store.outbound.get(initial.handle)!.messageId, role: 'ROLE_USER', parts: [{ text: 'work', mediaType: 'text/plain' }] },
         { messageId: recovered.outbound.get(reply.handle)!.messageId, role: 'ROLE_USER', contextId: remote.contextId,

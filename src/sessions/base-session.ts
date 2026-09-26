@@ -1,6 +1,8 @@
 import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { withCurrentWork } from '../agent/context/builder.ts'
+import { withResponseAudience } from '../agent/context/response-audience.ts'
+import { createResponseContext, type ResponseContext } from './response-context.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
@@ -46,6 +48,7 @@ import { IMAGE_SNAPSHOT_LABEL, saveToolImages } from './tool-images.ts'
  */
 export abstract class BaseSession {
   protected usage: LLMResponseUsage | undefined
+  protected responseContext: ResponseContext | undefined
 
   constructor(
     protected readonly workspace: string,
@@ -119,6 +122,7 @@ export abstract class BaseSession {
           : undefined,
         reasoning_text: e.role === 'assistant' ? e.reasoning_text : undefined,
         provider_state: e.role === 'assistant' ? e.provider_state : undefined,
+        responseContext: e.role === 'assistant' ? e.responseContext : undefined,
         tool_calls: e.tool_calls,
         tool_call_id: e.tool_call_id,
         name: e.name,
@@ -214,14 +218,17 @@ export abstract class BaseSession {
 
       // Hook: drain pending messages (e.g. steer queue in Session).
       await this.drainPendingMessages(llm)
+      const responseContext = this.responseContext
+        ? { ...this.responseContext, responseId: `${turnId}:${i}` } : undefined
       const workGuard = this.tools.getWorkGuard()
       executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
       const workPrompt = workGuard?.prompt(this.id)
-      const inferenceMessages: ChatMessage[] = workPrompt
+      const workMessages: ChatMessage[] = workPrompt
         ? this.messages[0]?.role === 'system' ? this.messages.map((message, index) => index === 0
           ? { ...message, content: withCurrentWork(String(message.content ?? ''), workPrompt) } : message)
           : [{ role: 'system', content: workPrompt }, ...this.messages]
         : this.messages
+      const inferenceMessages = withResponseAudience(workMessages, responseContext)
 
       const traceAttributes = {
         sessionId: this.id,
@@ -306,6 +313,7 @@ export abstract class BaseSession {
         reasoning_content: response.reasoningContent,
         reasoning_text: response.reasoningText,
         provider_state: response.providerState,
+        responseContext,
         tool_calls: response.toolCalls.map((tc) => ({
           id: tc.id,
           type: 'function' as const,
@@ -335,6 +343,7 @@ export abstract class BaseSession {
           media,
           done,
           usage: done ? responseUsage : undefined,
+          responseContext,
         })
       }
 
@@ -480,6 +489,7 @@ export abstract class BaseSession {
     const senderName = msg.senderName ?? msg.senderId
     const isGroup = !!msg.isGroup
     const queryId = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    this.responseContext = createResponseContext(queryId, input.source, this.state.mode, msg.channel)
 
     const attributes = {
       channel: msg.channel,
@@ -629,6 +639,7 @@ export abstract class BaseSession {
         event: 'response',
       })
     } finally {
+      this.responseContext = undefined
       if (attempted) {
         await this.finishTurn(fact)
       }

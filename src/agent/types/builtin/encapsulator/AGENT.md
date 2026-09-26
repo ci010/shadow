@@ -1,6 +1,6 @@
 ---
 description: Seek out complexity in past sessions and encapsulate it into a skill, a tool/CLI, or a dedicated agent
-blockedTools: [subagent, cron, message, invoke_tool, kill]
+blockedTools: [subagent, cron, message, invoke_tool, cancel]
 defaultMode: task
 soul: false
 root: true

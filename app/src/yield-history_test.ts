@@ -6,7 +6,7 @@ import type { YieldRequest } from '../../src/sessions/yield-contract.ts'
 
 const args = { question: 'May we increase the experiment budget?', options: ['Allow six runs', 'Keep four runs'], default_option: 'Keep four runs' }
 const call = (id = 'ask'): ToolActivityMessage => ({
-  event: 'tool_call', content: '', toolCallId: id, toolCall: { name: 'yield', arguments: args },
+  event: 'tool_call', content: '', toolCallId: id, toolCall: { name: 'ask', arguments: args },
 })
 const receipt = (fields = {}) => ({
   requestId: 'request-1', option: 'Keep four runs', answeredBy: 'user', answeredAt: '2026-09-21T10:00:00Z', ...fields,
@@ -110,10 +110,10 @@ test('invalid and failed receipts remain explicit, inspectable, and never become
 })
 
 test('legacy calls and receipts retain their pairing; parent responses require matching confirmation', () => {
-  const legacy = { event: 'tool_call', content: `yield(${JSON.stringify(args)})` }
+  const legacy = { event: 'tool_call', content: `ask(${JSON.stringify(args)})` }
   assert.equal(inlineYieldDecisions([legacy, { event: 'tool_result', content: JSON.stringify(receipt()) }]).entries.get(0)?.status, 'user')
   const answer: ToolActivityMessage = { event: 'tool_call', content: '', toolCallId: 'answer',
-    toolCall: { name: 'yield', arguments: { action: 'answer', request_id: 'request-1', option: 'Keep four runs' } } }
+    toolCall: { name: 'reply', arguments: { request_id: 'request-1', text: 'Keep four runs' } } }
   for (const fields of [{}, { answeredBy: 'parent', requestId: 'different' }, { answeredBy: 'parent', option: 'Allow six runs' }]) {
     assert.equal(inlineYieldDecisions([answer, result(receipt(fields), 'answer')]).entries.get(0)?.status, 'unknown')
   }
@@ -123,11 +123,11 @@ test('legacy calls and receipts retain their pairing; parent responses require m
     .entries.get(0)?.sources, [reference], 'Parent answer cards retain a link to the actual child question')
   assert.equal(inlineYieldDecisions([call(), result(receipt(), 'another-call')]).entries.get(0)?.status, 'unknown')
   const threeOptions = { ...args, options: [...args.options, 'Pause'] }
-  const wrapped: ToolActivityMessage = { ...call(), toolCall: { name: 'invoke_tool', arguments: { name: 'yield', args: threeOptions } } }
+  const wrapped: ToolActivityMessage = { ...call(), toolCall: { name: 'invoke_tool', arguments: { name: 'ask', args: threeOptions } } }
   const legacyDecision = inlineYieldDecisions([wrapped, result(receipt({ option: 'Pause' }))]).entries.get(0)!
   assert.deepEqual(legacyDecision.options, threeOptions.options)
   assert.equal(legacyDecision.status, 'user')
-  const invalidAction: ToolActivityMessage = { ...call(), toolCall: { name: 'yield', arguments: { ...args, action: null } } }
+  const invalidAction: ToolActivityMessage = { ...call(), toolCall: { name: 'ask', arguments: { ...args, action: null } } }
   assert.equal(inlineYieldDecisions([invalidAction]).entries.size, 0)
 })
 

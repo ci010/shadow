@@ -69,7 +69,7 @@ All fields are optional. Minimal AGENT.md can be just a prompt body with no fron
 `defaultMode` is a preference, not permission to bypass the caller's delegation
 scope. Root sessions can create session/task; reusable sub-sessions can create
 task/call; tasks can create only call. Session/task start asynchronously; calls
-block their caller and cannot yield, message, delegate, or schedule deferred
+block their caller and cannot ask, reply, message, delegate, or schedule deferred
 coordination. Calls return missing decisions as blockers for the caller to handle.
 Sub-sessions and tasks must select mode explicitly. Only a root session may omit
 mode to use an allowed role default; unsupported defaults or modes fail.

@@ -85,7 +85,9 @@ test('production project composition creates remote folders and sessions with op
     assert(reopened.every(result => result.status === 200), JSON.stringify(await Promise.all(reopened.map(result => result.clone().json()))))
     const reopenedIds = await Promise.all(reopened.map(result => result.json()))
     assert.equal(reopenedIds[0].sessionId, reopenedIds[1].sessionId)
-    assert.equal((await (await request(`/api/folders/${session.folderId}/sessions`, reopenedBody)).json()).sessionId, reopenedIds[0].sessionId)
+    const reopenedRetry = await request(`/api/folders/${session.folderId}/sessions`, reopenedBody)
+    assert.equal(reopenedRetry.status, 200, await reopenedRetry.clone().text())
+    assert.equal((await reopenedRetry.json()).sessionId, reopenedIds[0].sessionId)
     assert.equal((await request(`/api/folders/${session.folderId}/sessions`, { requestId: 'bad' })).status, 400)
     const localFolder = join(root, 'local-folder')
     await mkdir(localFolder)
@@ -112,35 +114,36 @@ test('production project composition creates remote folders and sessions with op
     const coordinatorIds = await Promise.all(coordinators.map(response => response.json()))
     assert(coordinatorIds.every(value => value.sessionId === 'web:orchestrator'))
     const topicRequest = {
-      requestId: randomUUID(), title: 'Remote topic', goal: 'Inspect child content', scope: 'Registered remote folder only',
+      requestId: randomUUID(), title: 'Remote session', description: 'Registered remote folder only',
       folderId: returned.id,
     }
-    const topicResponse = await request('/api/topics', topicRequest)
+    const topicResponse = await request('/api/sessions', topicRequest)
     assert.equal(topicResponse.status, 200, await topicResponse.clone().text())
     const topic = await topicResponse.json()
     assert.equal(topic.folderId, returned.id)
     const topicFiles = await request(`/api/sessions/${encodeURIComponent(topic.sessionId)}/preview?path=child.txt`)
     assert.equal(topicFiles.status, 200, await topicFiles.clone().text())
     assert.equal((await topicFiles.json()).content, 'Child runtime fixture')
-    assert.equal((await (await request('/api/topics', topicRequest)).json()).sessionId, topic.sessionId)
-    const topics = await (await request('/api/topics?query=Remote%20topic')).json()
+    assert.equal((await (await request('/api/sessions', topicRequest)).json()).sessionId, topic.sessionId)
+    const topics = await (await request('/api/sessions/discover?query=Remote%20session')).json()
     assert.equal(topics.totalMatches, 1)
-    assert.equal(topics.topics[0].sessionId, topic.sessionId)
+    assert.equal(topics.sessions[0].sessionId, topic.sessionId)
     const topicGraph = await (await request('/api/sessions/graph')).json()
     const coordinatorState = topicGraph.sessions.find((state: { sessionId: string }) => state.sessionId === 'web:orchestrator')
     assert.equal(coordinatorState.sessionKind, 'orchestrator')
     assert.equal(coordinatorState.folderId, undefined)
     assert.equal(coordinatorState.parentSessionId, null)
     const topicState = topicGraph.sessions.find((state: { sessionId: string }) => state.sessionId === topic.sessionId)
-    assert.equal(topicState.title, 'Remote topic')
+    assert.equal(topicState.title, 'Remote session')
     assert.equal(topicState.parentSessionId, null)
-    assert.equal(topicState.topic.scope, topicRequest.scope)
-    const localTopic = await request('/api/topics', {
-      title: 'Local topic', goal: 'Separate work', scope: 'Local folder', folderId: local.folder.id,
+    assert.equal(topicState.description, topicRequest.description)
+    assert.equal(topicState.topic, undefined)
+    const localTopic = await request('/api/sessions', {
+      title: 'Local session', description: 'Local folder', folderId: local.folder.id,
     })
     assert.equal(localTopic.status, 200, await localTopic.clone().text())
     assert.equal((await localTopic.json()).folderId, local.folder.id)
-    assert.equal((await request('/api/topics', { ...topicRequest, agentType: 'orchestrator' })).status, 400)
+    assert.equal((await request('/api/sessions', { ...topicRequest, agentType: 'orchestrator' })).status, 400)
     const folderCount = catalog.folders().length
     const scratchBody = { nodeId: 'child', requestId: randomUUID() }
     const scratchResponse = await request('/api/sessions/remote', scratchBody)

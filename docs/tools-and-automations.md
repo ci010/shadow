@@ -16,6 +16,23 @@ fail rather than silently searching Main's filesystem. See
 [tool layers](architecture.md#tools-skills-and-mcp) for their scope and
 remote-workdir limitations.
 
+## Inspect and cancel executions
+
+`read({path: "v:bg"})` lists the current session's background work, local task/call,
+and remote A2A executions. `grep:v:bg` and `glob:v:bg` search that same inventory.
+Use a returned reference with `read({path: "v:bg/<executionId>"})` or
+`cancel({executionId: "<executionId>"})`; background references start with `bg:`.
+The old `kill` tool is removed. References do not grant access to another owner's
+execution, even if its completion was routed to you.
+
+This is a shared view, not a second task store: `v:sessions` retains history,
+tasks still notify `report_to`, and blocking calls still return in their original
+tool invocation. Avoid polling. Local cancellation waits for cleanup and reports
+failures explicitly; remote cancellation returns the remote state. Cancellation
+does not delete conversations or roll back side effects. Background completion
+callbacks are suppressed on explicit cancellation; `continuation` accepts the
+same `bg:` reference but does not change task/call or A2A delivery.
+
 ## Configure Project MCP servers
 
 Use the current Project's `v:config/mcp.json` through the existing `read` and

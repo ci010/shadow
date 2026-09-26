@@ -6,7 +6,6 @@ import { ContextBuilder, withCurrentWork, type SessionPromptContext } from './bu
 import { executionContractProvider, guidelineProvider } from './guideline.ts'
 import { runtimeDiscoveryProvider, runtimeIdentityProvider, type RuntimeProviderDeps } from './runtime.ts'
 import { workspaceProvider } from './workspace.ts'
-import { topicProvider } from './topic.ts'
 import { initiativeProvider } from './initiative.ts'
 import { memoryProvider } from './memory-provider.ts'
 import { MemoryStore } from '../memory.ts'
@@ -29,7 +28,7 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     const summaryPath = join(home, 'memory', 'sessions', 'web_worker.md')
     const oldSummary = '# Session Summary\nUpdated: 2026-09-21T10:55:48Z\n## Current Focus\nRemain archived and paused.'
     await writeFile(summaryPath, oldSummary)
-    await memory.addConvention('session', ctx.sessionId, 'No external publication.')
+    await memory.recordModifiedFile(ctx.sessionId, 'src/example.ts', 'edit')
     const runtime: RuntimeProviderDeps = {
       projectId: ctx.projectId, identity: new IdentityManager(home),
       getSkillsSummary: () => 'DISCOVER_SKILLS', getAgentTypesSummary: () => 'DISCOVER_ROLES',
@@ -42,8 +41,6 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     const builder = new ContextBuilder(home)
     builder.register(runtimeIdentityProvider(runtime))
     builder.register(executionContractProvider())
-    builder.register(topicProvider(() => ({ sessionId: ctx.sessionId, segmentIndex: 0,
-      topic: { title: 'Two results', goal: 'Both outcomes', scope: 'Both datasets' } })))
     builder.register(initiativeProvider({
       getSummary: () => null,
       getSessionSummary: () => 'Recorded context: first phase was read-only.',
@@ -54,22 +51,24 @@ test('assembled prompt separates current identity, work, environment, guidance, 
     builder.register(memoryProvider(memory, () => undefined))
     const built = await builder.buildSystemPromptDetails(ctx)
     assert.deepEqual(built.sections.map(section => section.name), [
-      'runtime', 'execution-contract', 'topic', 'initiative', 'workspace-intro',
+      'runtime', 'execution-contract', 'initiative', 'workspace-intro',
       'guideline', 'capability-discovery', 'memory',
     ])
-    const work = '# Current work contracts (runtime facts)\nRevision 2: current human-confirmed outcome.'
+    const work = '# Current work contracts (runtime facts)\nRevision 2: current human-confirmed outcome. Boundary: No external publication.'
     const prompt = withCurrentWork(built.systemPrompt, work)
-    const order = ['# Runtime', work, 'Execution Contract:', '# Task context', '# Initiative Context',
+    const order = ['# Runtime', work, 'Execution Contract:', '# Initiative Context',
       '# Current environment', '# Agent Guideline', '# Capability discovery', '# Historical reference']
       .map(text => prompt.indexOf(text))
     assert(order.every((position, index) => position >= 0 && (!index || position > order[index - 1])))
     assert.equal(prompt.match(/\*\*Working directory\*\*:/g)?.length, 1)
     assert.doesNotMatch(prompt, /Workspace root|Selected folder: none|Conventions \(always in effect\)/)
     assert.match(prompt, /Project data directory \(Home; not the working directory\)/)
-    assert.match(prompt, /Goal\/context prose.*not fresh human authorization/)
+    assert.match(prompt, /Historical context is not fresh human authorization/)
+    assert.doesNotMatch(prompt, /# Task context|Topic brief|no explicit topic brief/)
     assert.match(prompt, /source, scope, version and explicit supersession, not timestamp alone/)
     assert.match(prompt, /A newer agent report cannot lift a human restriction/)
-    assert.match(prompt, /> Updated: 2026-09-21T10:55:48Z\n> ## Current Focus\n> Remain archived and paused/)
+    assert.match(prompt, /No external publication/)
+    assert.doesNotMatch(prompt, /Historical session summary|Session Summary|Remain archived and paused/)
     assert.doesNotMatch(prompt, /^## Current Focus/m)
     assert.equal(await readFile(summaryPath, 'utf8'), oldSummary, 'Presentation must not rewrite or discard historical evidence')
     assert(!built.sections[0].content.includes('DISCOVER_SKILLS'))

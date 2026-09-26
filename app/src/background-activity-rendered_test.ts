@@ -96,8 +96,8 @@ test('background chips and sidebar delegated activity update without making an i
           } else if (path.endsWith('/background-tasks')) {
             const sessionId = decodeURIComponent(path.split('/').at(-2)!)
             if (background === 'error') { json({}, 503); return }
-            const tasks = background === 'running' && sessionId === 'web:chat-owner' ? [{
-              id: 'process-1', sessionId, kind: 'process', title: 'Build preview server', status: 'running', createdAt: '2026-09-23T00:00:00Z',
+            const tasks = ['running', 'cancelling'].includes(background) && sessionId === 'web:chat-owner' ? [{
+              id: '1234567890abcdef', sessionId, kind: 'process', title: 'Build preview server', status: background, createdAt: '2026-09-23T00:00:00Z',
             }] : []
             json({ sessionId, total: tasks.length, tasks })
           } else if (path.endsWith('/api/folders')) json({ folders: [] })

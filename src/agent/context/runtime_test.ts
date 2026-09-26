@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { IdentityManager } from '../identity.ts'
 import type { SessionPromptContext } from './builder.ts'
-import { runtimeIdentityProvider as identityProvider, runtimeDiscoveryProvider, type RuntimeProviderDeps } from './runtime.ts'
+import { runtimeIdentityProvider as identityProvider, runtimeDiscoveryProvider, channelCapabilityPrompt, type RuntimeProviderDeps } from './runtime.ts'
 import type { ExecutionMode } from '../../sessions/execution-mode.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from '../../channels/capabilities.ts'
 import type { NodeInventoryResponse } from '../../cluster/node-inventory.ts'
@@ -15,6 +15,12 @@ function runtimeIdentityProvider(deps: RuntimeProviderDeps) {
     return [await identityProvider(deps).getPromptSection(ctx), await runtimeDiscoveryProvider(deps).getPromptSection(ctx)].filter(Boolean).join('\n\n')
   } }
 }
+
+test('A2A input guidance does not advertise human decision or native choice authority', () => {
+  const prompt = channelCapabilityPrompt('a2a', unavailableCapabilities(), false, true, false)
+  assert.match(prompt, /ask\(kind=input\).*authenticated A2A caller/)
+  assert.doesNotMatch(prompt, /ask\(kind=decision\)|numbered text choices|native choices/)
+})
 
 test('Skill disclosure receives the logical session and current admin visibility', async () => {
   const requests: Array<[boolean, string | undefined]> = []
@@ -328,7 +334,7 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
     }
     const root = await provider.getPromptSection(ctx)
     assert.match(root!, /No new native thread\/topic is created by subagent/)
-    assert.match(root!, /Durable Project topics are web-visible root peers/)
+    assert.match(root!, /Durable Project sessions are web-visible root peers/)
     assert.match(root!, /native choices with text fallback/)
     assert.match(root!, /Output updates: replace/)
     assert.match(root!, /message tool communicates with other agent sessions/)
@@ -359,6 +365,7 @@ test('runtime advertises only mode-and-role permitted delegation', async t => {
     const prompt = await provider.getPromptSection({ ...context, ...scope })
     assert(prompt?.includes(`**Allowed Delegation Modes**: ${expected}`))
     assert.equal(prompt?.includes('Fixture roles'), expected !== 'none')
+    assert.equal(prompt?.includes('Remote delegation uses subagent task mode'), expected === 'task, call')
   }
   const restricted = await provider.getPromptSection({
     ...context, mode: 'task', agent: { ...context.agent, allowedTools: ['read'] },
@@ -407,10 +414,11 @@ test('topic-only sessions see role templates without child execution listings', 
     behavior: {}, sessionId: 'web:topic', channel: 'web', chatId: 'topic',
     agent: {
       name: 'router', description: '', prompt: '', defaultMode: 'session', source: 'builtin',
-      allowedTools: ['read', 'search', 'topic'],
+      allowedTools: ['read', 'search', 'session'],
     },
   }
   assert.match((await provider.getPromptSection(ctx))!, /Selectable topic roles/)
+  assert.doesNotMatch((await provider.getPromptSection(ctx))!, /Remote delegation uses subagent/)
   for (const mode of ['task', 'call'] as const) {
     assert.doesNotMatch((await provider.getPromptSection({ ...ctx, mode }))!,
       /Selectable topic roles|Managed Subagents/)

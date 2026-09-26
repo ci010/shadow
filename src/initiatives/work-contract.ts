@@ -5,6 +5,8 @@ const text = z.string().trim().min(1).max(2000)
 const longText = z.string().trim().min(1).max(4000)
 const list = z.array(text).max(12)
 export const workSubjectSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('work'), id: z.string().uuid() }).strict(),
+  z.object({ kind: z.literal('initiative'), initiativeId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/) }).strict(),
   z.object({ kind: z.literal('topic'), sessionId: z.string().min(1).max(512) }).strict(),
   z.object({ kind: z.literal('item'), initiativeId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/),
     itemId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/) }).strict(),
@@ -31,6 +33,38 @@ export const workChangeSchema = z.object({
 }).strict()
 export type WorkChange = z.infer<typeof workChangeSchema>
 
+export const workProgressSchema = z.enum(['pending', 'in_progress', 'blocked', 'done', 'cancelled'])
+export const workWorkflowSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  parentKey: z.string().min(1).max(600).optional(),
+  manager: z.string().min(1).max(512).nullable(),
+  assignee: z.string().min(1).max(512).nullable(),
+  assignmentRevision: z.number().int().positive(),
+  assignmentStarted: z.boolean().optional(),
+  status: workProgressSchema,
+  blockedReason: text.optional(),
+  dependencies: z.array(z.string().min(1).max(600)).max(100),
+  result: z.object({ summary: text, evidence: workDefinitionSchema.shape.evidence }).strict().optional(),
+}).strict().refine(value => (value.status === 'blocked') === !!value.blockedReason,
+  'Blocked work needs a reason; clear it when leaving blocked.')
+export const workProposalSchema = z.object({
+  id: z.string().uuid(),
+  baseRevision: z.number().int().positive(),
+  assignmentRevision: z.number().int().positive().optional(),
+  change: workChangeSchema.shape.change,
+  reason: text, definition: workDefinitionSchema, paused: z.boolean(),
+  status: z.enum(['pending', 'applied', 'rejected']),
+  appliedRevision: z.number().int().positive().optional(),
+  request: z.object({ sessionId: z.string(), physicalId: z.string(), requestId: z.string() }).strict().optional(),
+}).strict()
+export type WorkProposal = z.infer<typeof workProposalSchema>
+export const workDecisionSchema = workProposalSchema.pick({
+  id: true, baseRevision: true, assignmentRevision: true, change: true, reason: true, definition: true, paused: true,
+}).extend({ key: z.string().min(1).max(600) }).strict()
+export type WorkDecision = z.infer<typeof workDecisionSchema>
+export const WORK_APPROVE = 'Apply this work proposal'
+export const WORK_REJECT = 'Keep the current work unchanged'
+
 export const workRecordSchema = z.object({
   key: z.string().min(1).max(600), subject: workSubjectSchema,
   revision: z.number().int().positive(), sequence: z.number().int().positive(),
@@ -52,11 +86,15 @@ export const workRecordSchema = z.object({
   answerReview: z.object({ requestId: z.string().min(1), text: longText }).strict().optional(),
   handoffFrom: z.object({ key: z.string().min(1), sessionId: z.string().min(1) }).strict().optional(),
   successors: z.array(z.object({ sessionId: z.string().min(1), fromSessionId: z.string().min(1) }).strict()).max(100).optional(),
+  workflow: workWorkflowSchema.optional(),
+  proposals: z.array(workProposalSchema).max(100).optional(),
 }).strict()
 export type WorkRecord = z.infer<typeof workRecordSchema>
-export interface WorkStamp { key: string; revision: number; adoptionId?: string }
+export interface WorkStamp { key: string; revision: number; adoptionId?: string; assignmentRevision?: number }
 export interface WorkAuthority { manager: string | null; executor: string | null; active: boolean }
 export function workKey(subject: WorkSubject): string {
+  if (subject.kind === 'work') return `work:${subject.id}`
+  if (subject.kind === 'initiative') return `initiative:${subject.initiativeId}`
   return subject.kind === 'topic' ? `topic:${subject.sessionId}` : `item:${subject.itemId}`
 }
 

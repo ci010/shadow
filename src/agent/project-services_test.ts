@@ -35,7 +35,6 @@ test('same-name projects retain independent memory retrieval, working sets, iden
       await Promise.all(homes.map(async (home, i) => {
         const marker = i ? 'B_PRIVATE' : 'A_PRIVATE'
         await memories[i].recordModifiedFile('same-session', `${marker}.ts`, 'edit')
-        await memories[i].addConvention('project', 'same-folder', marker)
         await identities[i].assignProfile('web', 'same-user', marker, 'same-chat')
         await put(home, ['memory', 'sessions', 'same-session.md'], marker)
         await put(home, ['memory', 'topics', `${marker}.md`], marker)
@@ -67,7 +66,6 @@ test('same-name projects retain independent memory retrieval, working sets, iden
       await assert.rejects(identities[1].confirmLink('web', 'target', challenge.code), /Invalid confirmation code/)
       await identities[0].confirmLink('web', 'target', challenge.code)
       assert.doesNotMatch((await identities[1].lookupByAccount('web', 'target')).personContext, /A_PRIVATE/)
-      await assert.rejects(memories[0].addConvention('project', '..\\..\\..\\b', 'escape'), /single directory/)
       await assert.rejects(skills[0].saveLearnedSkill('..\\..\\b\\skills\\escape', 'escape'), /single directory/)
       await assert.rejects(skills[0].getOriginalSkillBody('..\\..\\b\\skills\\shared'), /single directory/)
       await assert.rejects(skills[0].getSkillResource('shared', '..\\..\\..\\b\\skills\\shared\\SKILL.md'), /inside its skill directory/)

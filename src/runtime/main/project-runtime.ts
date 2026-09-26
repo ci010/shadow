@@ -21,10 +21,9 @@ import { ContextBuilder } from '../../agent/context/builder.ts'
 import { executionContractProvider, guidelineProvider } from '../../agent/context/guideline.ts'
 import { initiativeProvider } from '../../agent/context/initiative.ts'
 import { memoryProvider } from '../../agent/context/memory-provider.ts'
-import { topicProvider } from '../../agent/context/topic.ts'
 import { TopicService } from '../../sessions/topics.ts'
 import { topicsPlugin } from '../../sessions/topic-routes.ts'
-import { TopicTool } from '../../tools/topic.ts'
+import { SessionTool } from '../../tools/session.ts'
 import { runtimeDiscoveryProvider, runtimeIdentityProvider, type RuntimeProviderDeps } from '../../agent/context/runtime.ts'
 import { workspaceProvider } from '../../agent/context/workspace.ts'
 import { IdentityManager } from '../../agent/identity.ts'
@@ -32,7 +31,7 @@ import type { LlmRuntimeConfig } from '../../agent/llm-config.ts'
 import { MemoryStore } from '../../agent/memory.ts'
 import { agentTypesPlugin } from '../../agent/types/routes.ts'
 import { createConfigCommand } from '../../slash-commands/handlers/config.ts'
-import { createYieldCommand } from '../../slash-commands/handlers/yield.ts'
+import { createReplyCommand } from '../../slash-commands/handlers/reply.ts'
 import { createDumpPromptCommand } from '../../slash-commands/handlers/dump-prompt.ts'
 import { createHelpCommand } from '../../slash-commands/handlers/help.ts'
 import { createLearnCommand } from '../../slash-commands/handlers/learn.ts'
@@ -59,7 +58,7 @@ import { SkillsManager } from '../../skills/loader.ts'
 import { registerKnowledgeRoutes } from '../../knowledge/routes.ts'
 import { KnowledgeMaintenanceService } from '../../knowledge/maintenance.ts'
 import { scheduleKnowledgeMaintenance } from './knowledge-maintenance.ts'
-import { BackgroundTaskTool, ContinuationTool } from '../../tools/background.ts'
+import { ContinuationTool } from '../../tools/background.ts'
 import { CommandHandlerManager } from '../../tools/shell-commands/command-handler.ts'
 import { createUserLinkCommandHandler } from '../../tools/shell-commands/userlink.ts'
 import { registerCronTools } from '../../tools/cron.ts'
@@ -74,21 +73,21 @@ import { ImportTool } from '../../tools/load-tool.ts'
 import { createMcpConfigHandler } from '../../mcp/virtual-config.ts'
 import { MemoryLinkCheckHook } from '../../tools/hooks/memory-link-checker.ts'
 import { WorkingSetHook } from '../../tools/hooks/working-set.ts'
-import { ConventionTool } from '../../tools/convention.ts'
+import { SqlTool } from '../../tools/sql.ts'
+import { ProjectConventions } from '../../projects/conventions.ts'
 import { MessageTool } from '../../tools/message.ts'
+import { CancelTool } from '../../tools/cancel.ts'
 import { PlanWriteTool } from '../../tools/plan-write.ts'
 import { ProcessManager } from '../../execution/processes/manager.ts'
-import { InitiativeTool } from '../../tools/initiative.ts'
 import { InitiativeStore } from '../../initiatives/store.ts'
 import { WorkAlignment } from '../../sessions/work-alignment.ts'
 import { WorkTool } from '../../tools/work.ts'
-import { workKey } from '../../initiatives/work-contract.ts'
-import { INITIATIVE_SCHEMA_PROMPT } from '../../initiatives/schema.ts'
 import { ReadTool } from '../../tools/read.ts'
 import { Tools } from '../../tools/registry.ts'
 import { ExecTool } from '../../tools/shell.ts'
 import { SubagentTool } from '../../tools/subagent.ts'
-import { YieldTool } from '../../tools/yield.ts'
+import { AskTool } from '../../tools/ask.ts'
+import { ReplyTool } from '../../tools/reply.ts'
 import { remoteSessionPlugin } from '../../sessions/remote-session-routes.ts'
 import { isManagedWorkdir, ownsManagedWorkdir, MANAGED_SESSION_CAPABILITY, MANAGED_SESSION_OPERATION } from '../../execution/managed-workdir.ts'
 import { RemoteFolderOwnership } from '../../folders/remote-ownership.ts'
@@ -100,6 +99,7 @@ import {
   createSkillsHandler,
 } from '../../vfs/mounts.ts'
 import { VirtualFs } from '../../vfs/virtual-fs.ts'
+import { createAgentsHandler } from '../../vfs/agents.ts'
 
 import { Bus } from '../../bus/bus.ts'
 import { ChannelManager } from '../../channels/manager.ts'
@@ -363,11 +363,6 @@ export async function createProjectRuntime(
     chromeManager,
   })
 
-  const initiativeTool = new InitiativeTool({
-    query: (sql, actor, signal) => initiatives.query(sql, actor, signal),
-  }, project.id, INITIATIVE_SCHEMA_PROMPT)
-  loadable.set('initiative', initiativeTool)
-  tools.register(initiativeTool)
   const skills = new SkillsManager(workspace)
   const knowledgeMaintenance = new KnowledgeMaintenanceService(workspace, skills)
   await knowledgeMaintenance.init()
@@ -377,8 +372,6 @@ export async function createProjectRuntime(
   tools.register(new SearchTool(workspace, webSearchTool, vfs))
   tools.register(new InvokeTool(importTool))
 
-  tools.register(new BackgroundTaskTool(backgroundTasks))
-  tools.register(new ContinuationTool(backgroundTasks))
   tools.register(new LogTool(workspace))
 
   // Purge stale tool-result temp files from previous runs
@@ -403,9 +396,6 @@ export async function createProjectRuntime(
 
   const memory = new MemoryStore(workspace)
   tools.addHook(new WorkingSetHook(memory))
-  tools.register(new ConventionTool(memory,
-    id => sessions.getSessionState(id)?.initiativeId,
-    id => sessions.assertInitiativeAccess(id)))
   const agentTypes = new AgentTypesManager(workspace)
   cleanup.push(() => skills.stopWatching())
   cleanup.push(() => agentTypes.stopWatching())
@@ -494,6 +484,7 @@ export async function createProjectRuntime(
     getLlmRuntimeConfig: () => llm,
     getYieldPolicy: () => activeConfig.tools.yield ?? { timeoutMs: null },
     deliverYield: message => channels.deliverDecision(message),
+    deliverInput: message => channels.deliver(message),
     getKnownContextWindow: (modelSpec) => {
       const { model } = parseModelSpec(modelSpec)
       const provider = resolvePrimaryProviderName(modelSpec)
@@ -543,7 +534,10 @@ export async function createProjectRuntime(
           tags: { ioRunId: run.id },
           callback: { sessionId: run.sessionId, eventType: 'io-run-complete' },
           observe: () => JSON.stringify({ id: run.id, status: io.get(run.id).status }),
-          onCancel: () => { void io.stop(run.id, 'cancelled', 'Background task cancelled').catch(error => console.error('[io] Cancellation failed', error)) },
+          onCancel: async reason => {
+            if (reason === 'shutdown') await io.shutdown()
+            else await io.stop(run.id, 'cancelled', 'Background task cancelled')
+          },
         }))
       }
       if (IO_TERMINAL.has(run.status)) {
@@ -585,6 +579,7 @@ export async function createProjectRuntime(
   })
   cleanup.push(async () => { await sessions.stop(); initiatives.close() })
   initiatives.migrateLegacyMarkdown()
+  initiatives.migrateWorkItems()
   const topics = new TopicService({
     projectId: project.id,
     sessions,
@@ -594,35 +589,15 @@ export async function createProjectRuntime(
     firstMessage: id => sessions.getFirstUserMessage(id),
     resolveAgent: name => agentTypes.resolve(name),
     changed: id => realtime.invalidateSessions(id),
-    currentTopic: id => sessions.currentTopic(id),
-    created: (state, creator) => {
-      const subject = { kind: 'topic' as const, sessionId: state.sessionId }
-      initiatives.saveWork({
-        key: workKey(subject), subject, revision: 1, sequence: 1,
-        definition: { objective: state.topic!.goal,
-          acceptance: [state.topic!.scope || state.topic!.goal],
-          boundaries: state.topic!.nonGoals ? [state.topic!.nonGoals] : [], evidence: [] },
-        origin: creator ? 'agent_interpretation' : 'human', changedBy: creator ?? 'human',
-        changedAt: new Date().toISOString(), change: 'understanding',
-        reason: 'Initial topic brief; execution requires an explicit stop/retain/next acknowledgment.', paused: false,
-      }, 0, creator ?? 'human', 'created')
-    },
-    assertBriefChange: (id, brief) => {
-      const record = initiatives.workRecords().find(item => item.key === workKey({ kind: 'topic', sessionId: id }))
-      const old = sessions.getSessionState(id)?.topic
-      if (record && (old?.goal !== brief.goal || old?.scope !== brief.scope || old?.nonGoals !== brief.nonGoals)) {
-        throw new Error('This topic has a versioned work agreement. Revise it through work/the alignment panel, not an unversioned brief update.')
-      }
-    },
   })
-  tools.register(new TopicTool(topics))
+  tools.register(new SessionTool(topics))
   initiatives.recoverWorkEffects()
   const alignment = new WorkAlignment(initiatives, {
     state: id => sessions.getSessionState(id),
     evidence: source => sessions.validateWorkEvidence(source),
-    changed: async record => {
+    changed: async (record, previous) => {
       realtime.invalidateSessions()
-      await sessions.notifyWorkChange(record)
+      await sessions.notifyWorkChange(record, previous)
     },
     fresh: (id, record) => sessions.requestWorkContext(id, record),
     successor: async (id, record) => {
@@ -633,21 +608,10 @@ export async function createProjectRuntime(
         if (current.transition?.id !== record.transition!.id) throw new Error('Successor transition was superseded.')
         if (initiatives.workEffects().some(effect => effect.sessionId === id)) throw new Error('Unresolved effects prevent successor creation.')
         const topic = await topics.create({
-          requestId: record.transition!.id, title: `Realigned: ${source.topic?.title ?? source.name ?? 'work'}`.slice(0, 160),
-          goal: record.definition.objective, scope: `Full acceptance is retained in the work agreement inherited from ${record.key}.`,
-          nonGoals: 'Existing boundaries are retained in the work agreement; no permissions or assignments transfer.',
+          requestId: record.transition!.id, title: `Realigned: ${source.name ?? source.topic?.title ?? 'work'}`.slice(0, 120),
+          description: `Prepared to receive ${record.key}; no assignment or permission has transferred.`,
           folderId: source.folderId, agentType: source.agentType ?? 'general', initiativeId: source.initiativeId,
         }, id)
-        const subject = { kind: 'topic' as const, sessionId: topic.sessionId }
-        const initial = initiatives.workRecords().find(item => item.key === workKey(subject))
-        if (!initial?.handoffFrom) {
-          initiatives.saveWork({
-            key: workKey(subject), subject, revision: 1, sequence: (initial?.sequence ?? 0) + 1, definition: record.definition,
-            origin: record.origin, changedBy: record.changedBy, changedAt: new Date().toISOString(),
-            change: 'understanding', reason: 'Prepared successor; acceptance and assignment are separate.',
-            paused: false, checkpoint: record.checkpoint, handoffFrom: { key: record.key, sessionId: id },
-          }, initial?.sequence ?? 0, id, 'successor_prepared')
-        }
         realtime.invalidateSessions()
         return topic.sessionId
       }
@@ -667,6 +631,10 @@ export async function createProjectRuntime(
   sessions.alignment = alignment
   tools.setWorkGuard(alignment)
   tools.register(new WorkTool(alignment))
+  const conventions = new ProjectConventions(workspace, () => initiatives.workRecords())
+  cleanup.push(() => conventions.close())
+  tools.register(new SqlTool(conventions, project.id, (source, context) => sessions.validateConventionSource(source, context),
+    () => sessions.invalidateSystemPrompts()))
 
   const runtimePrompt: RuntimeProviderDeps = {
     projectId: project.id,
@@ -688,11 +656,8 @@ export async function createProjectRuntime(
     registry: folderRegistry,
     workdirCapabilityLookup,
   })
-  context.register(topicProvider(id => {
-    const state = sessions.getSessionState(id)
-    return state ? { ...state, topic: sessions.currentTopic(id) } : null
-  }))
   context.register(initiativeProvider(initiatives))
+  context.register({ name: 'project-conventions', getPromptSection: () => conventions.prompt() })
   context.register(workspaceProvider(workspace, vfs, workdirCapabilityLookup, projectFolderDiscovery))
   context.register(guidelineProvider())
   context.register(runtimeDiscoveryProvider(runtimePrompt))
@@ -723,16 +688,19 @@ export async function createProjectRuntime(
     (context, options) => importTool.virtualEntries(context, options),
   )
 
-  const sessionsVfs = createSessionsHandler(sessions, () => topics)
+  const agentsVfs = createAgentsHandler(agentTypes, a2a.sessions)
+  vfs.mount('v:agents', 'available local roles and configured remote agent targets; discovery grants no capabilities', agentsVfs.read, agentsVfs.list)
+
+  const sessionsVfs = createSessionsHandler(sessions, () => topics, a2a.sessions)
   vfs.mount(
     'v:sessions',
-    'conversation histories; <session-id>/brief holds Project topic metadata',
+    'conversation histories and owned remote execution views; <session-id>/brief holds Project topic metadata',
     sessionsVfs.read,
     sessionsVfs.list,
   )
 
-  const bgVfs = createBgTasksHandler(backgroundTasks)
-  vfs.mount('v:bg', 'background task status and output', bgVfs.read, bgVfs.list)
+  const bgVfs = createBgTasksHandler(backgroundTasks, sessions, a2a.sessions)
+  vfs.mount('v:bg', 'owned executions: background work, local task/call, and remote A2A status and output', bgVfs.read, bgVfs.list)
 
   const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context))
   vfs.mount(
@@ -781,7 +749,7 @@ export async function createProjectRuntime(
 
   commandDispatcher.register(createHelpCommand(commandDispatcher))
   commandDispatcher.register(createConfigCommand(sessions))
-  commandDispatcher.register(createYieldCommand(sessions))
+  commandDispatcher.register(createReplyCommand(sessions))
   commandDispatcher.register(createCompactCommand(sessions))
   commandDispatcher.register(createClearCommand(sessions))
   commandDispatcher.register(createDumpPromptCommand(agent))
@@ -911,9 +879,13 @@ export async function createProjectRuntime(
       (source, target) => sessions.canSendSessionMessage(source, target),
       (initiativeId, itemId) => initiatives.assertWorkReference(initiativeId, itemId),
       stamps => alignment.current(stamps),
+      a2a.sessions,
     ),
   )
-  tools.register(new YieldTool(sessions.yields))
+  tools.register(new AskTool(sessions.yields, sessions.inputs, () => alignment))
+  tools.register(new ReplyTool(sessions.yields, sessions.inputs, a2a.sessions))
+  tools.register(new CancelTool(sessions, a2a.sessions, backgroundTasks))
+  tools.register(new ContinuationTool(backgroundTasks, sessions))
 
   // ── Cron service ──────────────────────────────────────────────────
   const cronService = new CronService(workspace, config.cron.timezone)
@@ -1060,8 +1032,8 @@ export async function createProjectRuntime(
       authorize: dependencies.authorize,
       assertAccess: id => sessions.assertFolderAccess(id),
     }),
-    sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize }),
     topicsPlugin(topics, dependencies.authorize),
+    sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize }),
     backgroundTasksPlugin(backgroundTasks, id => !!sessions.getSessionState(id)),
     remoteSessionPlugin({
       sessions,
@@ -1082,7 +1054,7 @@ export async function createProjectRuntime(
 
   // Register subagent tool (requires ChannelManager for thread creation)
   tools.register(
-    new SubagentTool(bus, sessions, agentTypes, channels),
+    new SubagentTool(bus, sessions, agentTypes, channels, a2a.sessions),
   )
 
   // ── Graceful shutdown ─────────────────────────────────────────────
@@ -1124,7 +1096,7 @@ export async function createProjectRuntime(
       () => bus.stopAll(),
       () => chromeManager.releaseAll(),
       () => evalBridge.shutdown(),
-      () => initiatives.close(),
+      () => { conventions.close(); initiatives.close() },
       () => sessionStore.close?.(),
       () => closeTelemetry(),
       releaseFolderLifecycle,
@@ -1148,6 +1120,8 @@ export async function createProjectRuntime(
 
   // Recover sessions interrupted by the previous process exit.
   const ready = Promise.all([startAgent, startCron]).then(async () => {
+    await alignment.recoverDecisions(async reference => (await sessions.getYieldRecords(reference.sessionId, reference.physicalId))
+      .find(record => record.request.id === reference.requestId))
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
   })
   await ready

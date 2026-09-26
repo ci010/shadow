@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { WORK_APPROVE } from '../initiatives/work-contract.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import type { SessionState } from './session-store.ts'
 import {
@@ -101,6 +102,7 @@ export class YieldManager {
     }
     if (parsed.sources && !this.deps.journal) throw new YieldError('unavailable', 'Decision references require a persistent journal.')
     const recipient = this.recipient(sessionId)
+    if (parsed.workProposal && recipient.kind !== 'user') throw new YieldError('forbidden', 'Work proposal approval requires the human, not a parent agent.')
     const reportingSessionId = this.deps.getState(sessionId)?.decisionOwnerSessionId
     if (reportingSessionId && (!this.deps.getState(reportingSessionId) || this.deps.getState(reportingSessionId)?.mode === 'call'
       || this.deps.getState(reportingSessionId)?.mode === 'task')) throw new YieldError('unavailable', 'The decision reporting owner is unavailable; explicitly reassign responsibility.')
@@ -231,6 +233,7 @@ export class YieldManager {
   reviseUser(sessionId: string, requestId: string, question: YieldQuestion, reason: string, reviewerId: string): Promise<YieldRequest> {
     const pending = this.userRequest(sessionId, requestId)
     const previous = pending.request
+    if (previous.workProposal || question.workProposal) throw new YieldError('conflict', 'Return for investigation and create a new work proposal; its exact decision cannot be rewritten.')
     if (!previous.origin || !this.deps.journal?.replace) throw new YieldError('unavailable', 'Decision revisions require a journal.')
     const next = snapshot({
       ...parseYieldQuestion(question), sources: previous.sources,
@@ -264,6 +267,15 @@ export class YieldManager {
 
   answerUser(sessionId: string, requestId: string, option: string): Promise<YieldAnswer> {
     return this.answer(this.userRequest(sessionId, requestId), option, 'user')
+  }
+
+  async completeWorkProposal(key: string, proposalId: string): Promise<void> {
+    for (const pending of this.pending.values()) {
+      if (pending.phase !== 'waiting' || pending.request.recipient.kind !== 'user'
+        || pending.request.workProposal?.key !== key || pending.request.workProposal.id !== proposalId) continue
+      // Called only after the authenticated Work-panel approval has committed.
+      await this.answer(pending, WORK_APPROVE, 'user')
+    }
   }
 
   answerUserText(sessionId: string, requestId: string, text: string): Promise<YieldAnswer> {

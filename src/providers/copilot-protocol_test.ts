@@ -145,6 +145,8 @@ test('dual-endpoint and legacy models retain chat-completions and strip Response
   const history = [{
     role: 'assistant' as const, content: 'Earlier answer',
     reasoning_text: 'Display-only narration',
+    responseContext: { version: 1 as const, turnId: 'private-turn', responseId: 'private-response',
+      source: { kind: 'event' as const, eventId: 'event', type: 'fixture', source: 'worker' }, userInvolved: false },
     provider_state: {
       provider: 'copilot' as const, model: astra.id,
       reasoning: [{ type: 'reasoning' as const, encrypted_content: 'synthetic-opaque-state', summary: [] }],
@@ -155,7 +157,7 @@ test('dual-endpoint and legacy models retain chat-completions and strip Response
     const request = f.posts.at(-1)!
     assert.equal(request.path, '/chat/completions')
     assert.equal(request.body.model, model)
-    assert.doesNotMatch(JSON.stringify(request.body), /provider_state|synthetic-opaque-state|Display-only narration/)
+    assert.doesNotMatch(JSON.stringify(request.body), /provider_state|synthetic-opaque-state|Display-only narration|responseContext|private-turn/)
   }
 })
 

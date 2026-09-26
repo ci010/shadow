@@ -6,7 +6,7 @@ export interface ActiveBackgroundTask {
   sessionId: string
   kind: 'process' | 'tool' | 'subagent'
   title: string
-  status: 'running'
+  status: 'running' | 'cancelling'
   createdAt: string
 }
 export interface ActiveBackgroundTasks {
@@ -35,12 +35,12 @@ export async function fetchBackgroundTasks(
   const tasks = value.tasks.map((task: unknown): ActiveBackgroundTask => {
     if (!isRecord(task) || typeof task.id !== 'string' || !task.id || ids.has(task.id)
       || task.sessionId !== sessionId || (task.kind !== 'process' && task.kind !== 'tool' && task.kind !== 'subagent')
-      || typeof task.title !== 'string' || task.title.length > 512 || task.status !== 'running'
+      || typeof task.title !== 'string' || task.title.length > 512 || (task.status !== 'running' && task.status !== 'cancelling')
       || typeof task.createdAt !== 'string' || !Number.isFinite(Date.parse(task.createdAt))) throw invalid()
     ids.add(task.id)
     return {
       id: task.id, sessionId, kind: task.kind,
-      title: task.title, status: 'running', createdAt: task.createdAt,
+      title: task.title, status: task.status, createdAt: task.createdAt,
     }
   })
   return { sessionId, total: value.total, tasks }

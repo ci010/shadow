@@ -181,56 +181,6 @@ test('relevance gate — disabled when session has no signals', async () => {
   })
 })
 
-test('conventions — empty when none set', async () => {
-  await withTempWorkspace(async (workspace) => {
-    const memory = new MemoryStore(workspace)
-    assertEquals(await memory.readConventions('discord:1', 'shadow'), '')
-  })
-})
-
-test('conventions — merges scopes with tags in order agent→project→session', async () => {
-  await withTempWorkspace(async (workspace) => {
-    const memory = new MemoryStore(workspace)
-    await memory.addConvention('agent', undefined, 'answer concisely')
-    await memory.addConvention('project', 'shadow', 'deps use chore: prefix')
-    await memory.addConvention('session', 'discord:1', "don't touch build")
-
-    const out = await memory.readConventions('discord:1', 'shadow')
-    const lines = out.split('\n')
-    assertEquals(lines[0], '### Conventions (remembered; subject to current scope)')
-    assertEquals(lines[1], '- [agent] answer concisely')
-    assertEquals(lines[2], '- [initiative:shadow] deps use chore: prefix')
-    assertEquals(lines[3], "- [session] don't touch build")
-  })
-})
-
-test('conventions — add is idempotent, remove matches substring', async () => {
-  await withTempWorkspace(async (workspace) => {
-    const memory = new MemoryStore(workspace)
-    await memory.addConvention('session', 'discord:1', 'rule one')
-    await memory.addConvention('session', 'discord:1', 'rule one') // dup
-    await memory.addConvention('session', 'discord:1', 'rule two')
-
-    let out = await memory.readConventions('discord:1')
-    assertEquals(out.split('\n').filter((l) => l.startsWith('- ')).length, 2)
-
-    await memory.removeConvention('session', 'discord:1', 'one')
-    out = await memory.readConventions('discord:1')
-    assert(!out.includes('rule one'))
-    assert(out.includes('rule two'))
-  })
-})
-
-test('conventions — session scope does not leak across sessions', async () => {
-  await withTempWorkspace(async (workspace) => {
-    const memory = new MemoryStore(workspace)
-    await memory.addConvention('session', 'discord:1', 'only mine')
-
-    assert((await memory.readConventions('discord:1')).includes('only mine'))
-    assertEquals(await memory.readConventions('discord:2'), '')
-  })
-})
-
 test('keywords — empty when no wiki items', async () => {
   await withTempWorkspace(async (workspace) => {
     const memory = new MemoryStore(workspace)

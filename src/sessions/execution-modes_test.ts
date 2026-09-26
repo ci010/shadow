@@ -1,3 +1,4 @@
+import { ReplyTool } from '../tools/reply.ts'
 import { requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -12,7 +13,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import { SubagentTool } from '../tools/subagent.ts'
 import { MessageTool } from '../tools/message.ts'
-import { YieldTool } from '../tools/yield.ts'
+import { AskTool } from '../tools/ask.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
 import { EventService } from '../events/service.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -33,7 +34,7 @@ import { parseTopicMetadata } from './topic-contract.ts'
 import { physicalSessionId } from './session-identity.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
-const question = { question: 'Choose a path', options: ['A', 'B', 'C'], default_option: 'A', brief: decisionBrief }
+const question = { kind: 'decision', question: 'Choose a path', options: ['A', 'B', 'C'], default_option: 'A', brief: decisionBrief }
 const done = (content = 'Final'): LLMResponse => ({ content, toolCalls: [] })
 const invoke = (name: string, args: Record<string, unknown>, id: string = crypto.randomUUID()): LLMResponse =>
   ({ content: '', toolCalls: [{ name, arguments: args, id }] })
@@ -60,7 +61,8 @@ function fixture(workspace: string, store: SessionStore, settings: {
       const pending = Promise.withResolvers<LLMResponse>()
       const signal = options!.signal!
       const request = {
-        sessionId: JSON.parse(String(messages[0]!.content)).sessionId as string,
+        // Fixture identity precedes any per-inference runtime guidance.
+        sessionId: JSON.parse(String(messages[0]!.content).split('\n', 1)[0]).sessionId as string,
         messages: structuredClone(messages), names: definitions.map(def => def.function.name),
         signal, model: options?.model, settled: false,
         resolve: (response: LLMResponse) => { request.settled = true; pending.resolve(response) },
@@ -83,7 +85,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
       name, description: '', prompt: '', source: 'builtin',
       root: name === 'sub',
       defaultMode: name === 'verify' ? 'task' : 'session',
-      ...(name === 'limited' ? { allowedTools: ['subagent', 'yield', 'message', 'read'] } : {}),
+      ...(name === 'limited' ? { allowedTools: ['subagent', 'ask', 'reply', 'message', 'read'] } : {}),
     }),
     allNames: () => ['general', 'sub', 'limited', 'verify'],
   } as unknown as AgentTypesManager
@@ -99,12 +101,13 @@ function fixture(workspace: string, store: SessionStore, settings: {
   } as unknown as SessionManagerDeps)
   const subagent = new SubagentTool(bus, sessions, agentTypes, { createThread: async () => null } as unknown as ChannelManager)
   tools.register(subagent)
-  tools.register(new YieldTool(sessions.yields))
+  tools.register(new AskTool(sessions.yields, sessions.inputs))
+  tools.register(new ReplyTool(sessions.yields, sessions.inputs))
   tools.register(new InvokeTool())
   tools.register(new MessageTool(bus, id => sessions.canReceiveSessionMessage(id),
     id => sessions.getSessionState(id)?.parent, id => sessions.getSessionState(id)?.children,
     (id, value) => sessions.deliver(id, value), (source, target) => sessions.canSendSessionMessage(source, target)))
-  for (const name of ['read', 'dangerous', 'exec', 'cron', 'event_subscribe', 'continuation', 'kill']) tools.register({
+  for (const name of ['read', 'dangerous', 'exec', 'cron', 'event_subscribe', 'continuation', 'cancel']) tools.register({
     name, description: name, parameters: { type: 'object', properties: {} }, execute: async () => name,
   })
   async function next(id: string) {
@@ -207,11 +210,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const role = resolve(name)
         return name === 'orchestrator' && role ? { ...role, allowedTools: ['exec', 'invoke_tool', 'subagent'] } : role
       }
-      for (const name of ['search', 'topic', 'work', 'initiative', 'project_config', 'skill_read', 'skill_save']) {
+      for (const name of ['search', 'session', 'work', 'initiative', 'project_config', 'skill_read', 'skill_save']) {
         f.tools.register({ name, description: name, optIn: name === 'initiative',
           parameters: { type: 'object', properties: {} }, execute: async () => name })
       }
-      const allowed = ['initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic', 'work', 'yield']
+      const allowed = ['ask', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'work']
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })
@@ -253,23 +256,25 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           { ...topic, title: 'x'.repeat(201) }, { ...topic, scope: 'x'.repeat(8001) },
           { ...topic, nonGoals: 1 }, { ...topic, unexpected: true }]) {
           assert.throws(() => parseTopicMetadata(invalid))
-          await assert.rejects(f.sessions.updateTopicMetadata('web:topic', invalid as any))
         }
-        await assert.rejects(f.sessions.updateTopicMetadata('web:orchestrator', topic), /editable/)
+        await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { title: '' }))
+        await assert.rejects(f.sessions.updateConversationMetadata('web:topic', { title: 'Valid', description: 'x'.repeat(4001) }))
+        await assert.rejects(f.sessions.updateConversationMetadata('web:orchestrator', { title: 'Forbidden' }), /ordinary/)
         await assert.rejects(f.sessions.buildSession('web:foreign', undefined, { topic, createdBySessionId: 'web:missing' }), /project/)
         await assert.rejects(store.saveState('web:invalid', { sessionId: 'web:invalid', segmentIndex: 0, topic: { ...topic, goal: '' } }))
-        const replacement = { title: 'Replacement', goal: 'New goal', scope: 'Bounded' }
+        const replacement = { title: 'Replacement', description: 'Discovery metadata, not a new goal' }
         await Promise.all([
-          f.sessions.updateTopicMetadata('web:topic', { ...replacement, title: 'Previous replacement' }),
-          f.sessions.updateTopicMetadata('web:topic', replacement),
+          f.sessions.updateConversationMetadata('web:topic', { ...replacement, title: 'Previous replacement' }),
+          f.sessions.updateConversationMetadata('web:topic', replacement),
         ])
-        assert.deepEqual(f.sessions.listSessions().find(s => s.sessionId === 'web:topic')?.topic, replacement)
-        assert.deepEqual((await f.sessions.getSessionDetails('web:topic'))?.topic, replacement)
+        assert.equal(f.sessions.listSessions().find(s => s.sessionId === 'web:topic')?.description, replacement.description)
+        assert.equal((await f.sessions.getSessionDetails('web:topic'))?.description, replacement.description)
         assert.equal((await f.sessions.getSessionDetails('web:topic'))?.name, replacement.title)
-        assert.deepEqual((await store.listSessions()).find(s => s.sessionId === 'web:topic')?.topic, replacement)
+        assert.deepEqual((await store.listSessions()).find(s => s.sessionId === 'web:topic')?.topic, topic, 'Historical metadata is preserved, not another editable goal')
         await f.sessions.stop()
         await f.sessions.start()
-        assert.deepEqual(f.sessions.getSessionState('web:topic')?.topic, replacement)
+        assert.deepEqual(f.sessions.getSessionState('web:topic')?.topic, topic)
+        assert.equal(f.sessions.getSessionState('web:topic')?.name, replacement.title)
         assert.equal(f.sessions.getSessionState('web:topic')?.createdBySessionId, 'web:orchestrator')
         assert.equal(f.sessions.getSessionState('web:topic')?.topicRequestHash, 'a'.repeat(64))
         assert.equal(f.sessions.getDelegationOwner('web:topic'), undefined)
@@ -279,10 +284,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const release = Promise.withResolvers<void>()
         const originalSave = store.saveState.bind(store)
         store.saveState = async (id, state) => {
-          if (state.topic?.title === 'Slow replacement') { entered.resolve(); await release.promise }
+          if (state.name === 'Slow replacement') { entered.resolve(); await release.promise }
           await originalSave(id, state)
         }
-        const update = f.sessions.updateTopicMetadata('web:topic', { ...replacement, title: 'Slow replacement' })
+        const update = f.sessions.updateConversationMetadata('web:topic', { ...replacement, title: 'Slow replacement' })
         await entered.promise
         const deletion = f.sessions.deleteSession('web:topic')
         release.resolve()
@@ -406,7 +411,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(schema.properties.mode.enum, ['task', 'call'])
         assert.match(await f.subagent.execute({ description: 'missing', mode: 'task' }, context), /task is required/)
         assert.match(await f.subagent.execute({ description: 'invalid', mode: 'unsupported', task: 'x' }, context), /mode must be task or call/)
-        assert.match(await f.subagent.execute({ description: 'Reusable verifier', agent_type: 'verify', mode: 'session' }, context), /topic creation/)
+        assert.match(await f.subagent.execute({ description: 'Reusable verifier', agent_type: 'verify', mode: 'session' }, context), /session creation/)
         await f.sessions.buildSession('web:topic', undefined, { mode: 'session', agentType: 'verify', parentSessionId: null, createdBySessionId: 'web:root' })
         const reusable = { sessionId: 'web:topic' }
         assert.equal(f.requests.length, 0)
@@ -513,11 +518,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const { child, parent } = await f.spawn()
         parent.resolve(done())
         await waitFor(() => f.sessions.getActiveSession('web:root')?.phase === 'idle')
-        ;(await f.next(child)).resolve(invoke('yield', question))
+        ;(await f.next(child)).resolve(invoke('ask', question))
         const decision = await f.next('web:root')
         const request = f.sessions.yields.get(child)!
         assert.deepEqual(request.recipient, { kind: 'parent', sessionId: 'web:root' })
-        decision.resolve(invoke('yield', { action: 'answer', request_id: request.id, option: 'B' }))
+        decision.resolve(invoke('reply', { request_id: request.id, text: 'B' }))
         const resumed = await f.next(child)
         assert.equal(JSON.parse(String(resumed.messages.at(-1)?.content)).option, 'B')
         assert.equal(f.sessions.yields.get(child), null)
@@ -780,9 +785,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             const context = { ...sourceContext(workspace, f), sessionId: owner }
             if (!(allowed as readonly string[]).includes(mode)) {
               await assert.rejects(f.sessions.buildSession(id, { id: owner }, { mode, parentSessionId: owner }), /not allowed|Leaf calls/)
-              if (mode === 'session') assert.match(await f.subagent.execute({ mode, task: 'Work', description: id }, context), /topic creation/)
+              if (mode === 'session') assert.match(await f.subagent.execute({ mode, task: 'Work', description: id }, context), /session creation/)
               else await assert.rejects(f.subagent.execute({ mode, task: 'Work', description: id }, context), /not allowed|Leaf calls/)
-              assert.match(requireToolText(await f.tools.execute('bridge', { mode, task: 'Work', description: id }, context)), /not allowed|Leaf calls|topic creation/)
+              assert.match(requireToolText(await f.tools.execute('bridge', { mode, task: 'Work', description: id }, context)), /not allowed|Leaf calls|session creation/)
             } else {
               await f.sessions.buildSession(id, { id: owner }, { mode, parentSessionId: owner })
               assert.equal(f.sessions.getSessionState(id)?.mode, mode)
@@ -849,7 +854,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.match(JSON.stringify(leaf.messages), /Worker context sentinel/)
           assert.match(JSON.stringify(leaf.messages), /data:image\/png;base64,c25hcHNob3Q=/)
           assert.ok(!JSON.stringify(leaf.messages).includes('leaf-tool'))
-          for (const denied of ['subagent', 'yield', 'message', 'cron', 'event_subscribe', 'continuation']) assert.ok(!leaf.names.includes(denied))
+          for (const denied of ['subagent', 'ask', 'reply', 'message', 'cron', 'event_subscribe', 'continuation']) assert.ok(!leaf.names.includes(denied))
           assert.ok(leaf.names.includes('exec'))
           assert.equal(f.sessions.isWaitingForCall('web:worker'), true)
           assert.equal(callWaits.at(-1), true, 'Entering a blocking call publishes its wait state')
@@ -907,11 +912,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call'))
         const child = f.sessions.listSessions().find(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call')!.sessionId
         ;(await f.next(child)).resolve(invoke('write-fixture', {}))
-        ;(await f.next(child)).resolve({ ...invoke('yield', question), content: 'Changed one fixture; need permission to continue.' })
+        ;(await f.next(child)).resolve({ ...invoke('ask', question), content: 'Changed one fixture; need permission to continue.' })
         const caller = await f.next('web:sub')
         const receipt = JSON.parse(String(caller.messages.find(message => message.tool_call_id === 'leaf')!.content))
         assert.equal(receipt.status, 'blocked')
-        assert.match(receipt.blockedReason, /yield/)
+        assert.match(receipt.blockedReason, /ask/)
         assert.match(receipt.partialWork, /Changed one fixture/)
         assert.equal(receipt.sideEffectsMayHaveOccurred, true)
         assert.equal(writes, 1)
@@ -919,10 +924,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.reports.length, 0)
         await assert.rejects(f.sessions.yields.ask(child, { question: 'Choose', options: ['A', 'B', 'C'], defaultOption: 'A' }, new AbortController().signal), /Leaf calls/)
         await assert.rejects(f.sessions.deliver('web:sub', { ...input('Leak'), source: { kind: 'session', sessionId: child } }), /Leaf calls/)
-        caller.resolve(invoke('yield', question, 'owner-question'))
+        caller.resolve(invoke('ask', question, 'owner-question'))
         const decision = await f.next('web:root')
         const request = f.sessions.yields.get('web:sub')!
-        decision.resolve(invoke('yield', { action: 'answer', request_id: request.id, option: 'B' }))
+        decision.resolve(invoke('reply', { request_id: request.id, text: 'B' }))
         const afterDecision = await f.next('web:sub')
         ;(await f.next('web:root')).resolve(done())
         afterDecision.resolve(invoke('subagent', { mode: 'call', task: 'Continue with permission', description: 'New leaf' }, 'new-leaf'))
@@ -1165,7 +1170,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
 
 test('leaf coordination tools remain denied through direct registry, dynamic invocation and invoke gateway', async () => {
   const base = new Tools('.')
-  const denied = ['subagent', 'yield', 'message', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'event_subscribe', 'continuation', 'kill']
+  const denied = ['subagent', 'ask', 'reply', 'message', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'event_subscribe', 'continuation', 'cancel']
   let executions = 0
   for (const name of denied) base.register({ name, description: '', parameters: { type: 'object', properties: {} },
     execute: async () => { executions++; return 'Unexpected execution' } })

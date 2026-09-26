@@ -8,7 +8,7 @@
       <textarea :id="inputId" v-model="question" rows="3" maxlength="4000" :disabled="sending" />
       <div v-if="canRequest" class="discussion-actions">
         <button type="button" :disabled="sending || running || !question.trim()" @click="submit('clarify')">Ask for explanation</button>
-        <button type="button" :disabled="sending || running || !question.trim()" @click="submit('revise')">Request revised question</button>
+        <button v-if="!exactProposal" type="button" :disabled="sending || running || !question.trim()" @click="submit('revise')">Request revised question</button>
         <button type="button" :disabled="sending || running || !question.trim()" @click="submit('investigation')">Return for investigation · no approval</button>
         <button type="button" :disabled="sending || running || !question.trim()" @click="submit('deferred')">Defer · continue independent work</button>
       </div>
@@ -40,7 +40,7 @@ import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
 import { decisionKey } from '../decision-graph.ts'
 import { parseYieldReview, type YieldReference, type YieldReview } from '../../../src/sessions/yield-contract.ts'
-const props = defineProps<{ reference: YieldReference; apiBase: string; canRequest?: boolean; canInvalidate?: boolean }>()
+const props = defineProps<{ reference: YieldReference; apiBase: string; canRequest?: boolean; canInvalidate?: boolean; exactProposal?: boolean }>()
 const emit = defineEmits<{ updated: [] }>()
 const inputId = `decision-discussion-${useId()}`
 const question = ref('')
@@ -95,7 +95,7 @@ async function submit(kind: 'clarify' | 'revise' | 'investigation' | 'deferred' 
   if (attempt?.key !== key) attempt = { key, id: crypto.randomUUID() }
   try {
     const discussion = kind === 'clarify' || kind === 'revise'
-    const route = discussion ? 'yield/reviews' : kind === 'invalidate' ? 'decisions/invalidate' : 'yield/follow-up'
+    const route = discussion ? 'ask/reviews' : kind === 'invalidate' ? 'decisions/invalidate' : 'ask/follow-up'
     const body = discussion ? { id: attempt.id, requestId: props.reference.requestId, kind, question: question.value.trim() }
       : kind === 'invalidate' ? { reference: props.reference, reason: question.value.trim() }
       : { requestId: props.reference.requestId, kind, reason: question.value.trim() }

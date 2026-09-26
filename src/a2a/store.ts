@@ -34,6 +34,8 @@ export const OutboundCallSchema = z.object({
   notificationError: z.string().optional(),
   trackingError: z.string().optional(),
   replyTo: id.optional(),
+  conversationId: id.optional(),
+  previous: id.optional(),
   result: z.unknown().optional(),
 }).strict()
 export type OutboundCall = z.infer<typeof OutboundCallSchema>

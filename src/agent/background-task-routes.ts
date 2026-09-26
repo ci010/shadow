@@ -10,7 +10,7 @@ export function backgroundTasksPlugin(
       c.header('Cache-Control', 'no-store')
       const sessionId = c.req.param('key')
       if (!sessionId.trim() || !sessionExists(sessionId)) return c.json({ error: 'session_not_found' }, 404)
-      const active = tasks.listTasks(sessionId, 'running')
+      const active = tasks.listTasks(sessionId).filter(task => task.status === 'running' || task.status === 'cancelling')
       return c.json({
         sessionId, total: active.length,
         tasks: active.slice(0, 100).map(task => ({

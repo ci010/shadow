@@ -13,21 +13,41 @@ restrictions. Reading this guide grants no capabilities.
 
 ### Project Coordination
 
-Reuse durable Project topics; they are root peers, not coordinator children.
-`search({ space: "grep:v:sessions", query })` searches histories and topic briefs.
-Read a matching `v:sessions/<session-id>/brief` for title/goal/scope/nonGoals,
+Reuse durable Project sessions; they are root peers, not coordinator children.
+`search({ space: "grep:v:sessions", query })` searches histories and session metadata.
+Read a matching `v:sessions/<session-id>/brief` for title and description,
 folderId, initiativeId, createdBySessionId, status and conversationUrl.
-Use `glob:v:sessions` with `query: "*/brief"` to list topic briefs.
+Use `glob:v:sessions` with `query: "*/brief"` to list sessions. `session` creates
+or renames conversations; it does not create work or define acceptance.
+Use `work` for work definitions, assignments, dependencies and progress.
 Creator provenance is not structural ownership.
 For remote workdirs, `v:sessions` search and typed Project messaging are control-plane
 operations; other search spaces remain explicitly unsupported remotely.
-Task/call executions cannot create/manage durable topics or register folders.
+Task/call executions cannot create/manage durable sessions or register folders.
 Message admission is not acceptance, completion, or transfer of Initiative work.
 Responsibility survives sleep/recovery; inactive work needs explicit guarded
 release/handoff/claim, never automatic stealing. Work references in the first
 trusted sender envelope are context only, not authority.
 
 ### Skill Tools and External MCP Tools
+
+**External agent conversations:** Read `v:skills/a2a`. Discover local roles and
+configured remote targets in `v:agents`; delegate to `a2a:<agent>` with `subagent`
+task mode, continue with `message`, and inspect owned remote references under
+`v:bg`; `v:sessions` retains conversations/history. `cancel({executionId})`
+targets one owned execution, not the conversation. Remote
+input requests use `reply({request_id, text})` with the returned pending request.
+Use `ask(kind=input)` for missing text and `ask(kind=decision)` for decisions.
+Discovery and familiar tool names do not grant outbound access.
+
+**Execution inventory:** `read("v:bg")` and `grep:v:bg`/`glob:v:bg` cover owned
+background work, local task/call and remote A2A executions without duplicating
+their state. Read `v:bg/<executionId>` for status/output. Background IDs use `bg:`;
+use the returned reference with `cancel`, never `kill` or a PID.
+Local cancellation waits for cleanup; failure is not confirmation of a stop.
+Task `report_to` notifications and blocking call results are unchanged; do not poll.
+`continuation({executionId, continuation})` only applies to `bg:` completion callbacks,
+not task/call or A2A delivery. Explicitly cancelled background work has no callback.
 
 **Configure MCP:** Read `v:skills/mcp-config`. Use `read`/`write` on
 `v:config/mcp.json`, never application config/source files. Preserve its opaque
@@ -59,7 +79,7 @@ saves related files together; null deletes a resource. Read existing Skills firs
 new Skills can be created directly. Conflicts require rereading and merging.
 Built-ins are read-only; adapt them with a new name. No backup history is kept,
 and saving grants no execution permission or managed Bot deployment.
-These tools require a durable local topic/coordinator, not managed or temporary
+These tools require a durable local session/coordinator, not managed or temporary
 execution. Existing Bot resource publication remains under `authoring_change`.
 
 **Activate skill tools:** Only an exact `read("v:skills/csv-utils")` registers
@@ -131,7 +151,7 @@ Use `authoring_change` with `action: schema` for current edit/check/review
 contracts. This workflow deploys managed Bot resources, not ordinary shared
 Skills. Create a Change from the published baseline on the owner's request.
 Small prompt edits belong in that Change; substantial implementation belongs in
-a durable developer topic with explicit resource paths. Pass changeId, goals
+a durable developer session with explicit resource paths. Pass changeId, goals
 and acceptance cases, not copied bundles, hashes or reports.
 
 Authoring uses a Project-managed virtual workspace; no business source folder
@@ -140,7 +160,7 @@ Owner-approved fixed scripts are implementations, not arbitrary Bot input.
 Arguments stay data; approvals never grant unrelated tools, secrets or paths.
 The Node child/VM is not an OS sandbox. Preserve module ceilings and grants.
 
-Delegated authors may edit, check and request review in their own topic,
+Delegated authors may edit, check and request review in their own session,
 including peer-triggered turns. The host saves versions, diffs and evidence.
 Read results by runId; do not create duplicate REPORT/manifest/provenance files
 or reconstruct receipts from chat history. Worker reports are not approval.
@@ -148,7 +168,7 @@ Validate references, preview prompts, use mocks for changed tools and scenario
 checks for model behavior. A preview is not a behavior test.
 
 `request_probe` opens an expiring one-use GET approval card in the coordinator
-and requesting topic. Do not repeat the request in another chat or publish
+and requesting session. Do not repeat the request in another chat or publish
 first. It authorizes no writes, inbox delivery or deployment; inspect the saved
 run. Use `request_secret` with secretRef and purpose for private owner entry.
 Never put secrets in prompts, chat, source, arguments or tests. Respect
@@ -156,7 +176,7 @@ cancellation; saved secrets neither publish nor widen grants.
 
 The Change's `propose` presents the owner's Publish/Cancel card for that exact
 snapshot, not the legacy shared draft. Never approve for the owner or infer
-approval from messages, yield, results or silence. Changed revisions need new
+approval from messages, input replies, results or silence. Changed revisions need new
 review. Rebase explicitly when the published baseline changes; do not mix
 independent changes or import `project_config` legacy drafts silently.
 Rollback also requires owner review of historical and current revisions.

@@ -24,17 +24,10 @@
       </template>
       <template #default>
         <div class="session-details">
-          <section v-if="coordinator || topic" class="details-topic" aria-label="Initiative context">
-            <h3>{{ coordinator ? 'Project coordination' : 'Initiative' }}</h3>
-            <p v-if="coordinator" class="details-note">Coordinate this Project here. Topics are independent conversations in the sidebar, not tasks or child chats.</p>
-            <template v-else-if="topic">
-              <p class="details-topic-title">{{ topic.title }}</p>
-              <dl>
-                <dt>Goal</dt><dd>{{ topic.goal }}</dd>
-                <dt>Scope</dt><dd>{{ topic.scope }}</dd>
-                <template v-if="topic.nonGoals"><dt>Out of scope</dt><dd>{{ topic.nonGoals }}</dd></template>
-              </dl>
-            </template>
+          <section v-if="coordinator || details?.description" class="details-topic" aria-label="Session description">
+            <h3>{{ coordinator ? 'Project coordination' : 'Description' }}</h3>
+            <p v-if="coordinator" class="details-note">Coordinate Project work here. Peer sessions are independent conversations, not tasks or child chats.</p>
+            <p v-else class="details-topic-title">{{ details?.description }}</p>
           </section>
           <p v-if="loading" class="details-note" role="status">Loading session details...</p>
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>

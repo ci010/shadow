@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import { Bus } from '../bus/bus.ts'
 import { EventService } from '../events/service.ts'
 import type { SessionTurnFact, SessionInput } from '../sessions/input.ts'
-import { BackgroundTaskManager } from './background-task.ts'
+import { BackgroundTaskManager, backgroundExecutionId, backgroundTaskId } from './background-task.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import { createProjectScope, getProjectScope } from '../projects/scope.ts'
 
@@ -132,4 +132,123 @@ test('callback rejection is tracked without pretending a completed process itsel
   assert.match(tasks.listTasks()[0].callbackError ?? '', /target unavailable|Event delivery failed/)
   assert.match(await tasks.getTaskOutput(task.taskId), /Callback delivery failed/)
   assert.equal(displays, 0)
+})
+
+function cancellationFixture(t: TestContext) {
+  const scope = createProjectScope('p')
+  const bus = new Bus()
+  const deliveries: SessionInput[] = []
+  const events = new EventService('.', bus, async (sessionId, input) => {
+    deliveries.push(input)
+    return { status: 'accepted', sessionId, inputId: input.id }
+  }, scope)
+  const tasks = new BackgroundTaskManager(bus, events, scope)
+  t.after(async () => {
+    try { await tasks.stop(); await events.stop() }
+    finally { bus.stopAll(); scope.close() }
+  })
+  return { tasks, deliveries, owner: { projectId: 'p', sessionId: 'web:owner' } }
+}
+
+test('cancellation waits for both cleanup and real execution, is idempotent, and does not send a completion callback', async t => {
+  const { tasks, owner, deliveries } = cancellationFixture(t)
+  const cleanup = Promise.withResolvers<void>()
+  const execution = Promise.withResolvers<string>()
+  let cancellations = 0
+  const taskId = tasks.runPromiseTask({
+    kind: 'tool', title: 'Slow cleanup', sessionId: owner.sessionId,
+    callback: { sessionId: owner.sessionId },
+    onCancel: () => { cancellations++; return cleanup.promise },
+  }, execution.promise)
+  assert.equal(backgroundTaskId(backgroundExecutionId(taskId)), taskId)
+  assert.throws(() => backgroundTaskId(taskId), /bg:/)
+  let returned = false
+  const first = tasks.cancelTask(taskId, owner).then(status => { returned = true; return status })
+  const second = tasks.cancelTask(taskId, owner)
+  try {
+    await tick()
+    assert.equal(cancellations, 1)
+    assert.equal(tasks.listTasks()[0].status, 'cancelling')
+    assert.equal(tasks.hasRunningTasks, true)
+    assert.match(await tasks.getTaskOutput(taskId), /Status: cancelling/)
+    assert.throws(() => tasks.setContinuation(taskId, 'Do not wake'), /do not deliver/)
+    cleanup.resolve()
+    await tick()
+    assert.equal(returned, false, 'Abort acknowledgement is not execution completion')
+    execution.resolve('Final captured output')
+    assert.deepEqual(await Promise.all([first, second]), ['cancelled', 'cancelled'])
+    assert.match(await tasks.getTaskOutput(taskId), /Status: cancelled[\s\S]*Final captured output/)
+    assert.equal(await tasks.cancelTask(taskId, owner), 'cancelled')
+    assert.equal(tasks.complete(taskId, 'late result'), false)
+    assert.equal(tasks.hasRunningTasks, false)
+    assert.equal(deliveries.length, 0)
+  } finally { cleanup.resolve(); execution.resolve('cleanup'); await first; await second }
+})
+
+test('background ownership is not callback routing, and unsupported cancellation leaves work running', async t => {
+  const { tasks, owner } = cancellationFixture(t)
+  const deferred = tasks.createDeferredTask({
+    kind: 'process', title: 'Uncancellable', sessionId: owner.sessionId,
+    callback: { sessionId: 'web:recipient' },
+  })
+  await assert.rejects(tasks.cancelTask(deferred.taskId, { ...owner, projectId: 'other' }), /owner/)
+  await assert.rejects(tasks.cancelTask(deferred.taskId, { ...owner, sessionId: 'web:recipient' }), /owner/)
+  await assert.rejects(tasks.cancelTask(deferred.taskId, owner), /no cancellation capability/)
+  assert.equal(tasks.listTasks()[0].status, 'running')
+  deferred.complete('Natural completion')
+  assert.equal(await tasks.cancelTask(deferred.taskId, owner), 'completed')
+})
+
+test('failed cancellation is visible and retains a natural result that raced with cleanup', async t => {
+  const { tasks, owner } = cancellationFixture(t)
+  const fail = Promise.withResolvers<void>()
+  const deferred = tasks.createDeferredTask({
+    kind: 'process', title: 'Failed cleanup', sessionId: owner.sessionId,
+    onCancel: () => fail.promise,
+  })
+  const rejected = assert.rejects(tasks.cancelTask(deferred.taskId, owner), /cleanup failed/)
+  deferred.complete('Real completion')
+  assert.equal(tasks.listTasks()[0].status, 'cancelling')
+  fail.reject(new Error('cleanup failed'))
+  await rejected
+  assert.equal(tasks.listTasks()[0].status, 'completed')
+  assert.match(await tasks.getTaskOutput(deferred.taskId), /Cancellation failed: cleanup failed[\s\S]*Real completion/)
+  assert.equal(await tasks.cancelTask(deferred.taskId, owner), 'completed')
+})
+
+test('shutdown drains asynchronous cancellation instead of just rejecting the task receipt', async t => {
+  const { tasks, owner } = cancellationFixture(t)
+  const execution = Promise.withResolvers<string>()
+  let aborted = false
+  const taskId = tasks.runPromiseTask({
+    kind: 'tool', title: 'Shutdown', sessionId: owner.sessionId,
+    onCancel: () => { aborted = true },
+  }, execution.promise)
+  let stopped = false
+  const stop = tasks.stop().then(() => { stopped = true })
+  try {
+    await tick()
+    assert.equal(aborted, true)
+    assert.equal(stopped, false)
+    execution.reject(new Error('Aborted during shutdown'))
+    await stop
+    assert.equal(tasks.listTasks()[0].status, 'cancelled')
+    assert.match(await tasks.getTaskOutput(taskId), /Status: cancelled/)
+  } finally { execution.resolve('cleanup'); await stop }
+})
+
+test('a failed stop remains retryable and does not release active-work accounting', async t => {
+  const { tasks, owner } = cancellationFixture(t)
+  let attempts = 0
+  const task = tasks.createDeferredTask({
+    kind: 'tool', title: 'Retry cleanup', sessionId: owner.sessionId,
+    onCancel: () => { if (++attempts === 1) throw new Error('Stop unavailable') },
+  })
+  await assert.rejects(tasks.cancelTask(task.taskId, owner), /Stop unavailable/)
+  assert.equal(tasks.listTasks()[0].status, 'running')
+  assert.equal(tasks.hasRunningTasks, true)
+  assert.match(await tasks.getTaskOutput(task.taskId), /Cancellation failed: Stop unavailable/)
+  assert.equal(await tasks.cancelTask(task.taskId, owner), 'cancelled')
+  assert.equal(attempts, 2)
+  assert.doesNotMatch(await tasks.getTaskOutput(task.taskId), /Cancellation failed/)
 })

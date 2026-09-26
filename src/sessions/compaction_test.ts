@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { BackgroundTaskManager } from '../agent/background-task.ts'
+import { ContextBuilder } from '../agent/context/builder.ts'
+import { memoryProvider } from '../agent/context/memory-provider.ts'
+import { IdentityManager } from '../agent/identity.ts'
+import { MemoryStore } from '../agent/memory.ts'
+import { AgentTypesManager } from '../agent/types/manager.ts'
 import { Bus } from '../bus/bus.ts'
 import type { OutboundMessage } from '../bus/events.ts'
+import { EventService } from '../events/service.ts'
 import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { HandoffManager, type CompactResult } from './handoff/manager.ts'
+import type { SessionTurnFact } from './input.ts'
 import { Session } from './session.ts'
+import { SessionManager } from './session-manager.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
@@ -59,6 +69,118 @@ const stores = [
 ] as const
 
 for (const [name, createStore] of stores) {
+  test(`${name}: compacted summaries reach the provider once, including after restart`, { timeout: 15000 }, async () => {
+    await withTempWorkspace(async workspace => {
+      const id = 'web:compaction-summary'
+      const calls: ChatMessage[][] = []
+      const continuation = {
+        summary: 'UNIQUE_COMPACT_PROGRESS',
+        currentObjective: 'UNIQUE_COMPACT_OBJECTIVE',
+        recentTranscript: ['UNIQUE_COMPACT_EXCERPT'],
+      }
+      const provider: LLMProvider = {
+        name: 'fixture', listModels: () => ['fixture'],
+        async chat(messages, tools) {
+          if (tools?.some(tool => tool.function.name === 'handoff_summary')) {
+            return messages.at(-1)?.role === 'tool'
+              ? { content: 'Summary saved.', toolCalls: [] }
+              : { content: null, toolCalls: [{ id: 'summary-call', name: 'handoff_summary', arguments: continuation }] }
+          }
+          calls.push(structuredClone(messages))
+          return { content: 'Finished.', toolCalls: [] }
+        },
+      }
+      const memory = new MemoryStore(workspace)
+      await memory.recordModifiedFile(id, 'KEEP_WORKING_SET.txt', 'edit')
+
+      async function openRuntime() {
+        const store = createStore(join(workspace, 'sessions'))
+        await store.init()
+        const bus = new Bus()
+        const agentTypes = new AgentTypesManager(workspace)
+        await agentTypes.load()
+        const context = new ContextBuilder(workspace)
+        context.register(memoryProvider(memory, () => undefined))
+        const handoff = new HandoffManager(provider, llm.contextWindow, { autoHandoff: false }, workspace, store)
+        const events = new EventService(workspace, bus, (sessionId, input) => sessions.deliver(sessionId, input))
+        const backgroundTasks = new BackgroundTaskManager(bus, events)
+        const sessions: SessionManager = new SessionManager({
+          workspace, store, bus, provider, context, agentTypes, events, backgroundTasks,
+          tools: new Tools(workspace), identity: new IdentityManager(workspace),
+          handoffManager: handoff, getLlmRuntimeConfig: () => llm,
+        })
+        await sessions.start()
+        return {
+          sessions, bus, store,
+          async send(content: string) {
+            const inputId = crypto.randomUUID()
+            const finished = Promise.withResolvers<SessionTurnFact>()
+            const subscription = bus.on('session.turn.finished', fact => {
+              if (fact.inputId === inputId) finished.resolve(fact)
+            })
+            try {
+              await sessions.deliver(id, {
+                id: inputId, timestamp: new Date().toISOString(), kind: 'message', content, policy: 'queue',
+                source: { kind: 'event', eventId: inputId, type: 'fixture', source: 'system' },
+              })
+              const fact = await finished.promise
+              assert.equal(fact.status, 'completed', fact.error)
+            } finally { bus.off(subscription) }
+          },
+          async close() {
+            await sessions.stop()
+            await handoff.stop()
+            await backgroundTasks.stop()
+            await events.stop()
+            store.close?.()
+          },
+        }
+      }
+
+      function assertSingleSummary() {
+        const messages = calls.at(-1)!
+        assert.equal(messages[0].role, 'system')
+        assert.match(String(messages[0].content), /KEEP_WORKING_SET/)
+        assert.doesNotMatch(String(messages[0].content), /Historical session summary|UNIQUE_COMPACT_/)
+        for (const marker of [continuation.summary, continuation.currentObjective, ...continuation.recentTranscript]) {
+          assert.deepEqual(messages.filter(message => String(message.content).includes(marker)).map(message => message.role), ['user'])
+          assert.equal(messages.reduce((count, message) => count + String(message.content).split(marker).length - 1, 0), 1)
+        }
+        assert.match(String(messages[1].content), /Previous Conversation Summary/)
+        assert.match(String(messages[1].content), /v:sessions\//)
+      }
+
+      let runtime = await openRuntime()
+      try {
+        await runtime.send('Original task')
+        const compacted = Promise.withResolvers<void>()
+        const subscription = runtime.bus.on('session.handoff', event => {
+          if (event.sessionId === id) compacted.resolve()
+        })
+        try {
+          assert.equal(runtime.sessions.requestCompact(id, llm), true)
+          await compacted.promise
+        } finally { runtime.bus.off(subscription) }
+        const active = runtime.sessions.getActiveSession(id)!
+        const start = await runtime.store.readFirstRecord(active.physicalSessionId)
+        assert.equal(start?.summary_context, active.history[1].content)
+        const summaryPath = join(workspace, 'memory', 'sessions', 'web_compaction-summary.md')
+        const saved = await readFile(summaryPath, 'utf8')
+        assert.match(saved, /UNIQUE_COMPACT_PROGRESS/)
+        assert.match(saved, /UNIQUE_COMPACT_OBJECTIVE/)
+        await runtime.send('Continue after compact')
+        assertSingleSummary()
+
+        await runtime.close()
+        runtime = await openRuntime()
+        await runtime.send('Continue after restart')
+        assertSingleSummary()
+        assert.equal(calls.at(-1)![1].name, '__compaction_summary__')
+        assert.equal(await readFile(summaryPath, 'utf8'), saved)
+      } finally { await runtime.close() }
+    })
+  })
+
   async function fixture(run: (f: {
     session: TestSession
     handoff: TestHandoffManager

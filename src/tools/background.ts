@@ -1,38 +1,8 @@
-import type { BackgroundTaskManager } from '../agent/background-task.ts'
+import { backgroundTaskId, type BackgroundTaskManager } from '../agent/background-task.ts'
+import { assertExecutionActor } from '../sessions/execution-scope.ts'
+import type { SessionManager } from '../sessions/session-manager.ts'
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
-
-export class BackgroundTaskTool implements Tool {
-  readonly name = 'kill'
-  readonly readonly = false
-  readonly description =
-    'Kill a background task by ID.'
-  readonly parameters: ToolParameters = {
-    type: 'object',
-    properties: {
-      task_id: {
-        type: 'string',
-        description: 'Task ID to kill.',
-      },
-    },
-    required: ['task_id'],
-  }
-
-  constructor(private tasks: BackgroundTaskManager) {}
-
-  getChatTextDisplay(args: Record<string, unknown>): string {
-    return `💥 ${String(args.task_id ?? '')}`
-  }
-
-  async execute(
-    args: Record<string, unknown>,
-    _context: ExecutionContext,
-  ): Promise<string> {
-    const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : ''
-    if (!taskId) return 'Error: `task_id` is required'
-    return this.tasks.killTask(taskId)
-  }
-}
 
 export class ContinuationTool implements Tool {
   readonly name = 'continuation'
@@ -44,32 +14,42 @@ export class ContinuationTool implements Tool {
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
-      task_id: {
+      executionId: {
         type: 'string',
-        description: 'Background task ID.',
+        description: 'Owned bg:... executionId from v:bg or exec. Not a local task/call or remote execution.',
       },
       continuation: {
         type: 'string',
         description: 'Continuation text to carry with the task completion event.',
       },
     },
-    required: ['task_id', 'continuation'],
+    required: ['executionId', 'continuation'],
+    additionalProperties: false,
   }
 
-  constructor(private tasks: BackgroundTaskManager) {}
+  constructor(
+    private tasks: BackgroundTaskManager,
+    private sessions: Pick<SessionManager, 'getSessionState' | 'assertFolderAccess'>,
+  ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
     const preview = String(args.continuation ?? '')
     const short = preview.length > 40 ? preview.slice(0, 40) + '…' : preview
-    return `🔗 ${String(args.task_id ?? '')} → ${short}`
+    return `🔗 ${String(args.executionId ?? '')} → ${short}`
   }
 
   async execute(
     args: Record<string, unknown>,
-    _context: ExecutionContext,
+    context: ExecutionContext,
   ): Promise<string> {
-    const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : ''
-    if (!taskId) return 'Error: `task_id` is required'
+    assertExecutionActor(this.sessions, context)
+    const denied = context.tools.executionDenial(this.name, args)
+    if (denied) return denied
+    if (typeof args.executionId !== 'string' || Object.keys(args).some(key => !['executionId', 'continuation'].includes(key))) {
+      throw new Error('Continuation requires executionId and continuation.')
+    }
+    const taskId = backgroundTaskId(args.executionId)
+    this.tasks.assertOwner(context, taskId)
     const continuation = typeof args.continuation === 'string' ? args.continuation : ''
     if (!continuation) return 'Error: `continuation` is required'
     return this.tasks.setContinuation(taskId, continuation)

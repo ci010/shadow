@@ -297,6 +297,7 @@ async function runFixture(t: TestContext, fixture: string, args: string[] = []):
       'yield-custom-2-390.png', 'yield-custom-3-390.png',
       'yield-reflector-1440.png', 'yield-reflector-390.png',
       'yield-parent-1440.png', 'yield-parent-390.png',
+      'ask-input-1440.png', 'ask-input-390.png',
       ...(code !== 0 ? ['yield-failure-1440.png', 'yield-failure-390.png'] : []),
     ]
     for (const name of screenshots) {

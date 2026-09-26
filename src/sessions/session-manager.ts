@@ -1,5 +1,6 @@
 import { trace } from '@opentelemetry/api'
 import { parseSessionName } from './session-name.ts'
+import { parseResponseContext } from './response-context.ts'
 import { mkdir } from 'node:fs/promises'
 import { isCommandReceipt, type CommandReceipt } from '../slash-commands/receipt.ts'
 import { parseAutomationSessionRef, resolveAutomationSession, type AutomationSessionRef } from '../cron/contracts.ts'
@@ -36,7 +37,7 @@ import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
 import { evaluateAuthoringScenario } from './authoring-evaluation.ts'
 import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
-import { parseTopicMetadata, parseTopicSessionFields, type TopicMetadata } from './topic-contract.ts'
+import { parseTopicSessionFields, type TopicMetadata } from './topic-contract.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
 import { isConfigObject, type SessionConfigPatch } from './config-patch.ts'
 import type { Executor } from '../execution/executor.ts'
@@ -50,6 +51,8 @@ import type {
 } from './session-store.ts'
 import { Session } from './session.ts'
 import { YieldError, YieldManager } from './yield.ts'
+import { InputRequests } from './input-requests.ts'
+import type { InputRequest } from './input-request.ts'
 import { YieldRecords } from './yield-records.ts'
 import { YieldDiscussions, DECISION_REVIEW_PROMPT } from './yield-discussions.ts'
 import { parseYieldPolicy, type YieldPolicy, type YieldRequest, type YieldReview } from './yield-contract.ts'
@@ -146,6 +149,7 @@ export interface SessionManagerDeps {
   getLlmRuntimeConfig?: () => LlmRuntimeConfig
   getYieldPolicy?: () => YieldPolicy
   deliverYield?: (message: import('../bus/events.ts').OutboundMessage) => Promise<void>
+  deliverInput?: (message: import('../bus/events.ts').OutboundMessage) => Promise<void>
   getKnownContextWindow?: (model: string) => number | null
   /** Called when a session stops (idle timeout, crash, or explicit stop). */
   onSessionStopped?: (sessionId: string) => void
@@ -209,6 +213,7 @@ interface BlockingCallFrame {
 export class SessionManager {
   alignment?: WorkAlignment
   readonly yields: YieldManager
+  readonly inputs: InputRequests
   readonly yieldDiscussions: YieldDiscussions
   private readonly decisionRecords: YieldRecords
   /** Registry of active per-session event loops. */
@@ -226,7 +231,6 @@ export class SessionManager {
   private readonly completionEvents = new Map<string, { sourceId: string; targetId: string }>()
   private readonly deleting = new Set<string>()
   private readonly calls = new Map<string, BlockingCallFrame>()
-  private readonly topicUpdates = new Map<string, Promise<void>>()
   private readonly stateCreations = new Map<string, Promise<unknown>>()
   private readonly ownedCreations = new Map<string, Set<Promise<void>>>()
 
@@ -250,7 +254,7 @@ export class SessionManager {
   }
 
   get hasFolderWork(): boolean {
-    return this.yieldDiscussions.active || this.preparations.size > 0 || this.executionAdmissions.size > 0 || this.topicUpdates.size > 0 || this.stateCreations.size > 0 ||
+    return this.yieldDiscussions.active || this.preparations.size > 0 || this.executionAdmissions.size > 0 || this.stateCreations.size > 0 ||
       this.reporting.size > 0 || this.calls.size > 0 ||
       Object.values(this.sessions).some(session => !(session instanceof Session) || !session.quiescent)
   }
@@ -562,26 +566,52 @@ export class SessionManager {
     this.sleepInactivityMs = deps.sleep?.inactivityMs ?? 15 * 60 * 1_000
     const decisionRecords = new YieldRecords(this.store, id => this.getSessionState(id), request => {
       if (!this.alignment || !request.workStamps?.length) return
-      if (!this.alignment.current(request.workStamps)) {
+      if (!this.alignment.currentDecision(request)) {
         return 'The task agreement changed. This historical question/answer is not approval for the current revision.'
       }
     }, record => {
-      if (record.answer) this.alignment?.reviewAnswer(record.request.sessionId, record.answer.option, record.request.id)
+      if (record.answer) this.alignment?.reviewAnswer(record.request.sessionId, record.answer.option, record.request.id, record.request.workStamps ?? [])
     })
     this.decisionRecords = decisionRecords
     this.yields = new YieldManager({
       changed: sessionId => this.deps.bus.emit('session.activity.changed', { sessionId }),
       assertCanYield: id => {
-        if (this.sessionStates[id]?.mode === 'call') this.blockCall(id, 'Leaf calls cannot yield; the caller must decide and issue a new call.')
+        if (this.sessionStates[id]?.mode === 'call') this.blockCall(id, 'Leaf calls cannot ask; the caller must decide and issue a new call.')
       },
       getState: id => this.getSessionState(id),
       getPolicy: id => this.getYieldPolicy(id),
       notifyUser: (request, replyTo) => this.notifyYieldUser(request, replyTo),
       notifyParent: request => this.notifyYieldParent(request),
-      journal: decisionRecords,
+      journal: {
+        open: async (request, toolCallId) => {
+          const saved = await decisionRecords.open(request, toolCallId)
+          if (saved.workProposal) this.alignment?.bindDecision(saved.workProposal, {
+            sessionId: saved.sessionId, physicalId: saved.origin!.physicalId, requestId: saved.id,
+          })
+          return saved
+        },
+        write: async record => {
+          await decisionRecords.write(record)
+          await this.alignment?.settleDecision(record)
+        },
+        replace: (previous, next) => decisionRecords.replace(previous, next),
+      },
       context: id => this.decisionContext(id),
       invalidate: (reference, reason) => this.invalidateDecision(reference, reason),
       notifyReporter: request => this.notifyDecisionReporter(request),
+    })
+    this.inputs = new InputRequests({
+      getState: id => this.getSessionState(id),
+      assertAccess: id => {
+        if (this.stopped || this.deleting.has(id)) throw new YieldError('unavailable', 'Input session is unavailable.')
+        this.assertFolderAccess(id)
+        if (this.sessionStates[id]?.mode === 'call') this.blockCall(id, 'Leaf calls cannot ask or reply.')
+      },
+      hasDecision: id => !!this.yields.get(id),
+      timeout: id => this.getYieldPolicy(id).timeoutMs,
+      changed: sessionId => this.deps.bus.emit('session.activity.changed', { sessionId }),
+      write: record => this.store.appendRawEvents(record.request.origin.physicalId, [{ input_request: record }]),
+      notify: (request, context) => this.notifyInput(request, context),
     })
     this.yieldDiscussions = new YieldDiscussions(decisionRecords, this.yields,
       (request, review, signal) => this.runDecisionReview(request, review, signal), sessionId => {
@@ -776,8 +806,8 @@ ${JSON.stringify(request)}`,
       content: [
         request.question,
         ...request.options.map((option, index) => `${index + 1}. ${option}${option === request.defaultOption ? ' (default)' : ''}`),
-        `Reply with /yield ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
-        `Or write your own response: /yield ${request.id} text <your response>.`,
+        `Reply with /reply ${request.id} <${request.options.map((_, index) => index + 1).join('|')}|cancel>.`,
+        `Or write your own response: /reply ${request.id} text <your response>.`,
         request.deadline ? `At ${request.deadline}, the default will be used if unanswered.` : 'Waiting for your answer; no automatic default.',
       ].join('\n'),
       done: true,
@@ -793,8 +823,8 @@ ${JSON.stringify(request)}`,
     if (!parent) throw new YieldError('unavailable', 'The parent session no longer exists.')
     const definitions = this.getToolDefinitions(parentId,
       this.getActiveSession(parentId) ? undefined : this.resolveAgentTypeTools(parent.agentType, parent.sessionKind))
-    if (!definitions.some(tool => tool.name === 'yield')) {
-      throw new YieldError('unavailable', 'The parent must have the yield tool enabled to answer.')
+    if (!definitions.some(tool => tool.name === 'reply')) {
+      throw new YieldError('unavailable', 'The parent must have the reply tool enabled to answer.')
     }
     await this.deliver(parentId, {
       kind: 'message', id: request.id, timestamp: new Date().toISOString(),
@@ -803,11 +833,39 @@ ${JSON.stringify(request)}`,
       content: [
         'Your subagent is paused awaiting your decision.',
         JSON.stringify(request),
-        'Answer using the yield tool with action="answer", request_id set to the id above, and option set to one exact option.',
+        'Answer using reply, request_id set to the id above, and text set to one exact option.',
         'Do not merely send a message to the child; that does not resolve this request.',
         'After answering, continue your original task.',
       ].join('\n'),
     })
+  }
+
+  private async notifyInput(request: InputRequest, context: import('../tools/context.ts').ExecutionContext): Promise<void> {
+    if (request.recipient.kind === 'parent') {
+      const parent = this.getSessionState(request.recipient.sessionId)
+      if (!parent || !this.getToolDefinitions(parent.sessionId, this.getActiveSession(parent.sessionId)
+        ? undefined : this.resolveAgentTypeTools(parent.agentType, parent.sessionKind)).some(tool => tool.name === 'reply')) {
+        throw new YieldError('unavailable', 'The parent must have reply enabled to answer.')
+      }
+      await this.deliver(parent.sessionId, {
+        kind: 'message', id: request.id, timestamp: request.createdAt, policy: 'steering',
+        source: { kind: 'session', sessionId: request.sessionId, senderName: 'Subagent' },
+        content: `Your subagent needs input, not new authorization.\n${JSON.stringify(request)}\nUse reply({ request_id: "${request.id}", text: "..." }); a normal message does not resume it.`,
+      })
+      return
+    }
+    const separator = request.sessionId.indexOf(':')
+    if (separator < 1 || request.sessionId.startsWith('web:')) return
+    const channelAddress = channelAddressFromSessionId(request.sessionId)
+    if (channelAddress && channelAddress.projectId !== this.projectId) throw new YieldError('forbidden', 'Input belongs to another Project.')
+    const message: import('../bus/events.ts').OutboundMessage = {
+      event: 'response', channel: channelAddress?.platform ?? request.sessionId.slice(0, separator),
+      chatId: channelAddress?.conversationId ?? request.sessionId.slice(separator + 1),
+      ...(channelAddress ? { channelAddress } : {}), replyTo: context.platformMessageId, done: true,
+      content: `${request.question}\nReply with /reply ${request.id} text <your answer>, or /reply ${request.id} cancel.\nNo answer is chosen automatically.`,
+    }
+    if (this.deps.deliverInput) await this.deps.deliverInput(message)
+    else this.deps.bus.emit('message.outbound', message)
   }
 
   get workspace(): string {
@@ -863,6 +921,7 @@ ${JSON.stringify(request)}`,
     this.stopPromise = undefined
     this.stopped = false
     this.yields.start()
+    this.inputs.start()
     this.yieldDiscussions.startRuntime()
     // Load all session states into memory cache
     this.sessionStates = await this.store.listAllStates()
@@ -899,7 +958,7 @@ ${JSON.stringify(request)}`,
         state.parentSessionId = null
         delete state.reportTo
         state.sessionKind ??= state.sessionId === 'web:orchestrator' && state.agentType === 'orchestrator'
-          ? 'orchestrator' : state.automation ? undefined : 'topic'
+          ? 'orchestrator' : undefined
       }
       if (state.mode !== 'session' && ['running', 'waiting', 'pending'].includes(state.executionStatus ?? '')) {
         state.executionStatus = 'cancelled'
@@ -1014,7 +1073,6 @@ ${JSON.stringify(request)}`,
       // Admission errors belong to their deliver callers. Wait for them rather
       // than allowing an in-flight preparation to outlive shutdown.
       await Promise.allSettled(this.preparations.values())
-      await Promise.allSettled(this.topicUpdates.values())
       await Promise.allSettled(this.stateCreations.values())
       await discussionStop
       for (const session of Object.values(this.sessions)) {
@@ -1024,6 +1082,7 @@ ${JSON.stringify(request)}`,
       }
       const completed = await Promise.allSettled([...sessions].map((session) => session.completion))
       await this.yields.settled()
+      await this.inputs.settled()
       for (const result of completed) {
         if (result.status === 'rejected') errors.push(result.reason)
       }
@@ -1033,6 +1092,7 @@ ${JSON.stringify(request)}`,
     })
     for (const session of sessions) stopSession(session)
     this.yields.stop()
+    this.inputs.stop()
     return this.stopPromise
   }
 
@@ -1194,7 +1254,10 @@ ${JSON.stringify(request)}`,
     if (this.stopped) throw new Error('Session manager stopped')
     const onStopped = (id: string) => {
       delete this.sessions[id]
-      if (ctx.state.mode !== 'session') this.yields.cancelSession(id, 'The one-shot parent finished before answering.')
+      if (ctx.state.mode !== 'session') {
+        this.yields.cancelSession(id, 'The one-shot parent finished before answering.')
+        this.inputs.cancelSession(id)
+      }
       this.deps.bus.emit('session.ended', { sessionId: id, agentType: ctx.state.agentType })
       this.deps.onSessionStopped?.(id)
     }
@@ -1292,6 +1355,7 @@ ${JSON.stringify(request)}`,
       folderId?: string
       reportTo?: string
       originUser?: string
+      name?: string
       description?: string
       preloadTools?: Record<string, string[]>
       workspaceRoot?: string
@@ -1385,7 +1449,7 @@ ${JSON.stringify(request)}`,
       physicalIdVersion: 2,
       projectId: this.deps.projectId,
       ...topicFields,
-      sessionKind: topicFields.sessionKind ?? (mode === 'session' && !automation ? 'topic' : undefined),
+      sessionKind: topicFields.sessionKind,
       previous_physical_id: null,
       timestamp: ts,
     }
@@ -1412,7 +1476,7 @@ ${JSON.stringify(request)}`,
       physicalIdVersion: 2,
       projectId: this.deps.projectId,
       ...topicFields,
-      sessionKind: topicFields.sessionKind ?? (mode === 'session' && !automation ? 'topic' : undefined),
+      sessionKind: topicFields.sessionKind,
       mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
       automation,
       automationVersion: 1,
@@ -1431,6 +1495,7 @@ ${JSON.stringify(request)}`,
       folderId: stateFields?.folderId ?? parentState?.folderId,
       reportTo: mode === 'session' ? undefined : stateFields?.reportTo,
       originUser: stateFields?.originUser,
+      name: stateFields?.name === undefined ? undefined : parseSessionName(stateFields.name),
       description: stateFields?.description,
       preloadTools: stateFields?.preloadTools,
     }
@@ -1597,35 +1662,24 @@ ${JSON.stringify(request)}`,
 
   // ── Session config ─────────────────────────────────────────────────
 
-  async updateTopicMetadata(sessionId: string, topic: TopicMetadata): Promise<void> {
-    const next = parseTopicMetadata(topic)
-    const previous = this.topicUpdates.get(sessionId) ?? Promise.resolve()
-    const update = previous.catch(() => {}).then(() =>
-      this.withStateCreation(sessionId, () => this.replaceTopicMetadata(sessionId, next)))
-    this.topicUpdates.set(sessionId, update)
-    try { await update }
-    finally { if (this.topicUpdates.get(sessionId) === update) this.topicUpdates.delete(sessionId) }
-  }
-
-  private async replaceTopicMetadata(sessionId: string, next: TopicMetadata): Promise<void> {
-    if (this.stopped) throw new Error('Session manager stopped')
-    const release = this.acquireFolderAccess()
-    try {
+  async updateConversationMetadata(sessionId: string, metadata: { title: string; description?: string }): Promise<void> {
+    const name = parseSessionName(metadata.title)
+    if (metadata.description !== undefined && (typeof metadata.description !== 'string' || metadata.description.length > 4000)) {
+      throw new TypeError('Session description must be text of at most 4000 characters.')
+    }
+    await this.withStateCreation(sessionId, async () => {
+      if (this.stopped || this.deleting.has(sessionId)) throw new Error('Session is unavailable')
       const state = this.sessionStates[sessionId]
-      if (!state) throw new Error('session_not_found')
-      if (state.mode !== 'session' || state.sessionKind === 'orchestrator' || state.agentType === 'orchestrator'
-        || state.sessionId === 'web:orchestrator' || state.automation) {
-        throw new Error('Only independent topic sessions have editable topic metadata')
-      }
-      if (this.deleting.has(sessionId)) throw new Error('Session is being deleted')
-      if (this.deps.projectId && state.projectId !== this.deps.projectId) throw new Error('Session project mismatch')
-      this.assertFolderAccess(sessionId)
-      await this.store.saveState(sessionId, { ...state, topic: next, sessionKind: 'topic' })
-      state.topic = next
-      state.sessionKind = 'topic'
-      this.invalidateSystemPrompts()
-      this.deps.bus.emit('session.changed', { sessionId })
-    } finally { release() }
+      if (!state || state.mode !== 'session' || state.sessionKind === 'orchestrator' || this.isManagedConversation(sessionId)) throw new Error('Only ordinary durable session metadata can be edited')
+      const release = this.acquireFolderAccess()
+      try {
+        this.assertFolderAccess(sessionId)
+        const next = { ...state, name, description: metadata.description }
+        await this.store.saveState(sessionId, next)
+        state.name = name; state.description = metadata.description
+        this.deps.bus.emit('session.changed', { sessionId })
+      } finally { release() }
+    })
   }
 
   async renameSession(sessionId: string, value: string): Promise<string> {
@@ -1728,10 +1782,11 @@ ${JSON.stringify(request)}`,
   }
 
   private async deleteSessionState(sessionId: string, state: SessionState, deleted: string[]): Promise<void> {
-    await this.topicUpdates.get(sessionId)?.catch(() => {})
     await this.yieldDiscussions.cancelSession(sessionId)
     this.yields.cancelSession(sessionId, 'Session deleted.')
+    this.inputs.cancelSession(sessionId)
     await this.yields.settled()
+    await this.inputs.settled()
     const call = this.calls.get(sessionId)
     if (call) {
       call.cancelled = true
@@ -1787,20 +1842,6 @@ ${JSON.stringify(request)}`,
     return this.sessionStates[sessionId] ?? null
   }
 
-  currentTopic(sessionId: string): TopicMetadata | undefined {
-    const state = this.getSessionState(sessionId)
-    const work = this.alignment?.store.workRecords().find(record => record.subject.kind === 'topic' && record.subject.sessionId === sessionId)
-    if (!work) return state?.topic
-    const display = (values: string[]) => {
-      const full = values.join('\n')
-      return full.length <= 3800 ? full : `${full.slice(0, 3800)}\n[Display excerpt; open Work alignment for all criteria.]`
-    }
-    return { title: state?.topic?.title ?? state?.name ?? work.definition.objective.slice(0, 160),
-      goal: work.definition.objective,
-      scope: `Work agreement v${work.revision} (${work.origin === 'human' ? 'human-confirmed' : 'agent interpretation'}):\n${display(work.definition.acceptance)}`,
-      nonGoals: display(work.definition.boundaries) }
-  }
-
   async getYieldRecords(sessionId: string, physicalId?: string) {
     return this.decisionRecords.read(sessionId, physicalId)
   }
@@ -1850,7 +1891,7 @@ ${JSON.stringify(request)}`,
     return {
       ...(state.projectId ? { projectId: state.projectId } : {}),
       ...parseTopicSessionFields(state),
-      ...(this.currentTopic(sessionId) ? { topic: this.currentTopic(sessionId) } : {}),
+      description: state.description ?? (state.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       sessionId,
       name: state.name ?? state.topic?.title ?? (state.sessionKind === 'orchestrator' ? 'Project coordination' : await this.getFirstUserMessage(sessionId)),
       workdir: {
@@ -1882,20 +1923,43 @@ ${JSON.stringify(request)}`,
     return this.decisionRecords.evidence(source)
   }
 
-  async notifyWorkChange(record: WorkRecord): Promise<void> {
-    if (!this.alignment) throw new Error('Work alignment is not configured.')
-    const authority = this.alignment.store.workAuthority(record.subject)
-    if (!authority.executor) return
-    this.assertFolderAccess(authority.executor)
-    const pending = this.yields.get(authority.executor)
-    if (pending?.origin) await this.yields.invalidatePending({
-      sessionId: pending.sessionId, physicalId: pending.origin.physicalId, requestId: pending.id,
-    }, `Work contract ${record.key} changed to revision ${record.revision}.`)
-    await this.deliver(authority.executor, {
-      kind: 'message', id: `work:${record.key}:${record.revision}`, timestamp: new Date().toISOString(), policy: 'steering',
-      source: { kind: 'event', eventId: record.key, type: 'work-realignment', source: 'work-contract' },
-      content: `Work agreement changed. Stop obsolete actions and read work context; acknowledge stop/retain/next before execution. No new permission was granted.\n${JSON.stringify(record)}`,
+  validateConventionSource(source: import('../projects/conventions.ts').ConventionSource, context: import('../tools/context.ts').ExecutionContext) {
+    const state = this.getSessionState(context.sessionId)
+    if (!state || (state.mode ?? 'session') !== 'session') throw new Error('Only durable human conversations may change Project conventions.')
+    return this.decisionRecords.conventionAuthority(source, {
+      sessionId: context.sessionId, physicalId: context.physicalSessionId, id: context.messageId,
     })
+  }
+
+  async notifyWorkChange(record: WorkRecord, previous?: WorkRecord): Promise<void> {
+    if (!this.alignment) throw new Error('Work alignment is not configured.')
+    for (const proposal of record.proposals ?? []) {
+      if (proposal.status === 'applied' && proposal.appliedRevision === record.revision) {
+        await this.yields.completeWorkProposal(record.key, proposal.id)
+      }
+    }
+    for (const sessionId of Object.keys(this.sessionStates)) {
+      const pending = this.yields.get(sessionId)
+      if (pending?.origin && pending.workStamps?.length && !this.alignment.current(pending.workStamps)) {
+        await this.yields.invalidatePending({
+          sessionId, physicalId: pending.origin.physicalId, requestId: pending.id,
+        }, `Work ${record.key} changed; revalidate its definition and assignment.`)
+      }
+    }
+    if (previous && previous.revision === record.revision
+      && previous.workflow?.assignmentRevision === record.workflow?.assignmentRevision
+      && JSON.stringify(previous.workflow?.dependencies) === JSON.stringify(record.workflow?.dependencies)) return
+    const authority = this.alignment.store.workAuthority(record.subject)
+    for (const executor of new Set([authority.executor, previous?.workflow?.assignee])) {
+      if (!executor || !this.getSessionState(executor)) continue
+      this.assertFolderAccess(executor)
+      await this.deliver(executor, {
+        kind: 'message', id: `work:${record.key}:${record.sequence}`, timestamp: new Date().toISOString(), policy: 'steering',
+        source: { kind: 'event', eventId: record.key, type: 'work-realignment', source: 'work-contract' },
+        content: `Work ${record.key} changed. Read its current context and assignment; stop obsolete actions. Only its current executor may adopt and resume. No permission or acceptance is implied.\n` +
+          JSON.stringify({ key: record.key, revision: record.revision, assignee: authority.executor }),
+      })
+    }
   }
 
   async requestWorkContext(sessionId: string, record: WorkRecord): Promise<void> {
@@ -1986,13 +2050,14 @@ ${JSON.stringify(request)}`,
   }
 
   listSessions(): Array<
-    Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'topic' | 'createdBySessionId'
+    Pick<SessionState, 'projectId' | 'sessionId' | 'name' | 'description' | 'segmentIndex' | 'lastActivityAt' | 'folderId' | 'sessionKind' | 'createdBySessionId'
       | 'initiativeId' | 'automation' | 'agentType' | 'mode' | 'executionStatus'>
   > {
     return Object.values(this.sessionStates).map((s) => ({
       ...(s.projectId ? { projectId: s.projectId } : {}),
       sessionId: s.sessionId,
-      ...(s.name !== undefined ? { name: s.name } : {}),
+      name: s.name ?? s.topic?.title,
+      description: s.description ?? (s.topic ? [s.topic.goal, s.topic.scope, s.topic.nonGoals].filter(Boolean).join('\n') : undefined),
       segmentIndex: s.segmentIndex,
       lastActivityAt: s.lastActivityAt,
       folderId: s.folderId,
@@ -2001,7 +2066,8 @@ ${JSON.stringify(request)}`,
       agentType: s.agentType,
       mode: s.mode,
       executionStatus: s.executionStatus,
-      ...parseTopicSessionFields(s),
+      sessionKind: s.sessionKind === 'orchestrator' ? 'orchestrator' : undefined,
+      createdBySessionId: s.createdBySessionId,
     }))
   }
 
@@ -2237,7 +2303,7 @@ ${JSON.stringify(request)}`,
       this.deps.agentTypes.resolve('general')!
 
     if (name === 'orchestrator' || sessionKind === 'orchestrator') {
-      const allowedTools = ['read', 'search', 'topic', 'message', 'work', 'initiative', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'yield']
+      const allowedTools = ['read', 'search', 'session', 'message', 'work', 'sql', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'ask', 'reply']
       return {
         agentType: { ...resolved, allowedTools, blockedTools: undefined },
         allowedTools,
@@ -2357,7 +2423,6 @@ ${JSON.stringify(request)}`,
       sessionId,
       segmentIndex: 0,
       mode: 'session',
-      sessionKind: 'topic',
       parentSessionId: null,
       executionStatus: 'pending',
       automationVersion: 1,
@@ -2501,7 +2566,7 @@ ${JSON.stringify(request)}`,
 
     for await (const parsed of this.store.readSessionLog(physicalSessionId)) {
       // Display-only receipts must not shift existing model-history fork offsets.
-      if (parsed.event === 'command_result' || Object.hasOwn(parsed, 'yield_decision') || Object.hasOwn(parsed, 'yield_review')
+      if (parsed.event === 'command_result' || Object.hasOwn(parsed, 'input_request') || Object.hasOwn(parsed, 'yield_decision') || Object.hasOwn(parsed, 'yield_review')
         || Object.hasOwn(parsed, 'yield_invalidation') || Object.hasOwn(parsed, 'decision_input')) continue
       if (maxRecords != null && recordIndex >= maxRecords) break
       recordIndex++
@@ -2531,6 +2596,7 @@ ${JSON.stringify(request)}`,
             provider_state: event.role === 'assistant'
               ? event.provider_state
               : undefined,
+            responseContext: event.role === 'assistant' ? parseResponseContext(parsed.responseContext) : undefined,
             tool_calls: event.tool_calls as ChatMessage['tool_calls'],
             tool_call_id: event.tool_call_id,
             name: event.name,

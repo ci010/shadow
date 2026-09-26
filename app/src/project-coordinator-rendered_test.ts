@@ -234,18 +234,15 @@ test('another Project coordinator click cancels an earlier ensure before either 
   assert.equal(view.button().props['aria-disabled'], false)
 })
 
-test('rendered heading recognizes Project coordination without a folder and exposes topic goal/scope', async t => {
+test('rendered heading separates Session identity from legacy work definitions', async t => {
   const view = mount(t, 'SessionHeading.vue', { apiBase: 'http://fixture/projects/a/', sessionId: 'web:orchestrator',
     name: 'Old name', projectName: 'Alpha', physicalId: null, revision: 0, active: false })
   assert.match(view.text(), /Alpha \/ Project coordination/)
-  assert.match(view.text(), /Project-wide · No folder/)
   assert.match(view.text(), /independent conversations/)
   view.state.sessionId = 'web:chat-topic'
+  view.state.name = 'Release discussion'
   view.state.topic = { title: 'Desktop release', goal: 'Ship installer', scope: 'Windows only', nonGoals: 'Linux' }
   await nextTick()
-  assert.match(view.text(), /Alpha \/ Desktop release/)
-  assert.match(view.text(), /Ship installer/)
-  assert.match(view.text(), /Windows only/)
-  assert.match(view.text(), /Out of scope.*Linux/s)
-  assert.ok(view.nodes().some(node => node.tag === 'details'))
+  assert.match(view.text(), /Alpha \/ Release discussion/)
+  assert.doesNotMatch(view.text(), /Ship installer|Windows only|Out of scope/)
 })

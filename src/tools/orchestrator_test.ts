@@ -5,7 +5,6 @@ import { getBuiltinAgentTypes } from '../agent/types/builtins.ts'
 import { ImportTool } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
 import { SearchTool } from './search.ts'
-import { InitiativeTool } from './initiative.ts'
 import { SessionTools, Tools } from './registry.ts'
 import type { ExecutionContext } from './context.ts'
 import { McpConnection } from '../mcp/client.ts'
@@ -16,54 +15,46 @@ test('coordinator keeps routing and approval rules while loading authoring detai
   assert(agent)
   const prompt = agent.prompt.replace(/\s+/g, ' ')
   for (const rule of [
-    /Search `grep:v:sessions` before creating a topic/,
+    /Search `grep:v:sessions` before creating a session/,
     /Gather required baselines before kickoff/,
     /conversationUrl.*logical session ID/,
     /Never resolve remote display paths on Main or quietly widen access/,
-    /Sleeping topics keep their assignments/,
-    /Ordinary learning belongs in the shared Project Skill space, not a Change/,
-    /Use `skill_read`.*then `skill_save`/,
-    /No revision arguments, backup history or publication/,
-    /Only changing a managed Bot's deployed resources uses the publication workflow/,
+    /Sleeping sessions keep their assignments/,
+    /Ordinary learning uses `skill_read`\/`skill_save`, not a Change or publication/,
+    /Read `v:skills\/tool-operations` before maintenance/,
+    /preserve concurrent edits on conflict.*Built-ins are read-only/,
+    /Saving does not execute tools or grant permissions/,
+    /Skill files cannot bypass your execution cap/,
+    /Only managed Bot deployment uses Changes; ordinary shared Skills do not/,
     /Use `authoring_change` with `action: schema`/,
-    /Small prompt edits belong directly in that Change/,
-    /delegated explicit resource paths/,
-    /Pass changeId, goals and acceptance cases, not copied bundles, hashes or reports/,
-    /Owner-approved fixed scripts are tool implementations, not arbitrary bot input/,
-    /Arguments remain data.*never grants unrelated tools, secrets or paths/,
-    /shared Node child\/VM engine is not an OS sandbox/,
-    /do not silently migrate legacy resources/,
-    /Delegated authors can edit, check and request review.*including peer-triggered turns/,
-    /host saves versions, diffs and check evidence/,
-    /Worker reports are evidence, not approval/,
-    /Preview is not a behavior test; mocks prove only their assertions/,
-    /No need to repeat the request in another chat or publish first/,
-    /never authorizes writes, inbox delivery or deployment/,
-    /Never put secrets in chat, prompts, source, arguments or tests/,
-    /request_secret.*private owner entry; respect cancellation/,
-    /Publish\/Cancel card.*not the legacy shared draft/,
-    /Never approve for the owner or infer approval/,
-    /Changed revisions need new review/,
-    /Rollback requires explicit owner review/,
+    /delegate substantial implementation with explicit resource paths, changeId and acceptance cases/,
+    /Edit exact revisions and use host-saved check evidence/,
+    /previews are not behavior tests/,
+    /Fixed-script approval never grants unrelated tools, secrets or paths/,
+    /The Node child\/VM is not an OS sandbox/,
+    /Never put secrets in chat or source/,
+    /private `request_secret` entry and respect cancellation/,
+    /saving grants no deployment permission/,
+    /Only the owner's Publish\/Cancel review of the Change's `propose` publishes that snapshot/,
+    /Never infer approval from messages, ask, reply, worker reports or silence/,
+    /Changed revisions and rollback need new owner review/,
+    /rebase explicitly when the published baseline changes/,
+    /Do not silently import legacy shared drafts/,
   ]) assert.match(prompt, rule)
 })
 
-test('coordinator cannot activate dynamic tools; topics retain lazy Initiative access', async t => {
+test('coordinator cannot activate dynamic tools; sessions share the direct Work surface without Initiative SQL', async t => {
   const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')
   assert(agent)
-  assert.match(agent.prompt, /Search `grep:v:sessions` before creating a topic/)
+  assert.match(agent.prompt, /Search `grep:v:sessions` before creating a session/)
   const base = new Tools('.')
-  const initiative = new InitiativeTool({ query: () => [{ id: 'fixture' }] }, 'p', 'synthetic schema')
-  const importer = new ImportTool(new Map([
-    ['initiative', initiative],
-  ]), '.')
+  const importer = new ImportTool(new Map(), '.')
   await importer.updateMcpServers([{ name: 'fixture', transport: 'stdio', command: 'never-execute' }])
-  base.register(initiative)
   base.register(new InvokeTool(importer))
   const vfs = new VirtualFs()
   vfs.mount('v:tools', 'Tools', (path, ctx) => importer.readVirtual(path, ctx), (ctx, opts) => importer.virtualEntries(ctx, opts))
   base.register(new SearchTool('.', undefined, vfs))
-  for (const name of ['exec', 'write', 'subagent', 'read', 'topic', 'message', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'yield']) {
+  for (const name of ['exec', 'write', 'subagent', 'read', 'session', 'work', 'sql', 'message', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'ask', 'reply']) {
     base.register({ name, description: name, parameters: { type: 'object', properties: {} }, execute: async () => name })
   }
   const tools = new SessionTools(base, '.', agent.allowedTools, agent.blockedTools)
@@ -73,19 +64,21 @@ test('coordinator cannot activate dynamic tools; topics retain lazy Initiative a
     signal: new AbortController().signal, tools,
   }
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('unexpected connection') })
-  assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['authoring_change', 'initiative', 'message', 'project_config', 'read', 'search', 'skill_read', 'skill_save', 'topic', 'yield'])
+  assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['ask', 'authoring_change', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'sql', 'work'])
   assert.match(requireToolText(await tools.execute('search', { space: 'grep:v:tools/fixture', query: '' }, context)), /not available/)
   assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'fixture__execute', args: {} }, context)), /not found|not available|not allowed/i)
   assert.equal(connect.mock.callCount(), 0)
   const borrowed = tools.snapshot()
   assert.equal(borrowed.has('invoke_tool'), false)
   assert.equal(borrowed.canUseDynamic('fixture__execute'), false)
-  assert.equal(borrowed.has('initiative'), true)
-  assert.equal(JSON.parse(requireToolText(await tools.execute('initiative', { query: 'SELECT id FROM initiatives' }, context)))[0].id, 'fixture')
+  assert.equal(borrowed.has('initiative'), false)
+  assert.equal(borrowed.has('work'), true)
+  assert.equal(borrowed.has('sql'), true)
+  assert.equal(borrowed.has('update_convention'), false)
+  assert.equal(requireToolText(await tools.execute('work', { action: 'context' }, context)), 'work')
   const ordinary = new SessionTools(base, '.')
   assert.equal(ordinary.getDefinitions().some(definition => definition.function.name === 'initiative'), false)
-  const ordinaryContext = { ...context, sessionId: 'web:topic', tools: ordinary }
-  assert.equal(JSON.parse(requireToolText(await ordinary.execute('invoke_tool', { name: 'initiative', args: { query: 'SELECT id FROM initiatives' } }, ordinaryContext)))[0].id, 'fixture')
+  assert.equal(ordinary.getDefinitions().some(definition => definition.function.name === 'work'), true)
   ordinary.resetDynamic()
   tools.resetDynamic()
 })

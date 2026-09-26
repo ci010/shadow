@@ -106,7 +106,7 @@
               </ul>
             </div>
           </details>
-          <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${idx}`">
+          <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
             <CommandResult v-if="msg.commandReceipt" :receipt="msg.commandReceipt">
               <div class="prose" v-html="renderMarkdown(msg.content)" />
             </CommandResult>
@@ -135,10 +135,12 @@
             <ConversationSummary v-else-if="msg.isSummary" :content="msg.content"
               :render-content="renderMarkdown" @interact="clearSelection" />
             <!-- Normal messages -->
+            <ResponseDisclosure v-else :context="msg.responseContext" :message-index="idx" :timestamp="msg.timestamp"
+              :open="expandedResponses.has(msg.responseContext?.responseId ?? '')"
+              @update:open="setResponseExpanded(msg.responseContext, $event)" @interact="clearSelection">
             <div
-              v-else
               class="chat-bubble"
-              :data-msg-idx="idx"
+              :data-msg-idx="isBackgroundResponse(msg.responseContext) ? undefined : idx"
               :class="[
                 msg.sessionSource ? 'chat-user chat-session' : msg.role === 'user' ? 'chat-user' : 'chat-assistant',
               ]"
@@ -184,6 +186,7 @@
               <MessageTimestamp :timestamp="msg.timestamp" />
               </div>
             </div>
+            </ResponseDisclosure>
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </template>
           <YieldDecision v-for="[index, decision] in [...yieldDecisions.entries].filter(([index]) => index >= displayMessages.length)"
@@ -199,12 +202,17 @@
           </details>
           <p v-if="ioError" class="composer-error" role="alert">Capture requests: {{ ioError }}</p>
           <!-- Streaming response -->
-          <div v-if="streaming && streamContent" class="chat-bubble chat-assistant" role="article" aria-label="Assistant message">
+          <ResponseDisclosure v-if="streaming && (streamContent || streamMedia.length)" :context="streamResponseContext" :timestamp="streamTimestamp"
+            :open="expandedResponses.has(streamResponseContext?.responseId ?? '')"
+            @update:open="setResponseExpanded(streamResponseContext, $event)" @interact="clearSelection">
+          <div class="chat-bubble chat-assistant" role="article" aria-label="Assistant message">
             <div class="chat-content">
               <span>{{ streamContent }}</span>
             </div>
+            <MessageAttachments :paths="streamMedia" :api-base="apiBase" :session-id="activeSessionId" @preview="openImagePreview" />
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
+          </ResponseDisclosure>
           </div>
         </div>
         <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" @navigate="browseHistory" />
@@ -230,7 +238,7 @@
           <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
           <WorkingWave v-if="!isWaitingStage(sessionStage)" />
         </div>
-        <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="activeSessionId"
+        <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="activeSessionId" :revision="workRevision"
           :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
           :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
         <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
@@ -433,6 +441,7 @@ import CollaborationMessage from './CollaborationMessage.vue'
 import YieldDecision from './YieldDecision.vue'
 import { inlineYieldDecisions, parseDecisionRecords } from '../yield-history.ts'
 import type { YieldRequest, YieldDecisionRecord } from '../../../src/sessions/yield-contract.ts'
+import { isInputRequest, type AskRequest } from '../yield-requests.ts'
 import CredentialRequest from './CredentialRequest.vue'
 import PublicationRequest from './PublicationRequest.vue'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
@@ -441,6 +450,8 @@ import ConversationSkeleton from './ConversationSkeleton.vue'
 import MessageAction from './MessageAction.vue'
 import { inlineMessageActions } from '../message-actions.ts'
 import ConversationEvent from './ConversationEvent.vue'
+import ResponseDisclosure from './ResponseDisclosure.vue'
+import { isBackgroundResponse, parseResponseContext, type ResponseContext } from '../../../src/sessions/response-context.ts'
 import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
 import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
@@ -649,6 +660,8 @@ const streaming = ref(false)
 const streamPhase = ref<WorkingStage>()
 const streamContent = ref('')
 const streamTimestamp = ref<string>()
+const streamResponseContext = shallowRef<ResponseContext>()
+const streamMedia = ref<string[]>([])
 const streamingToolCallData = ref<{ name: string; arguments: Record<string, unknown> } | null>(null)
 const composerKey = computed(() => composerDraftKey(props.apiBase, props.projectId ?? '', activeSessionId.value))
 const composerDraft = useComposerDraft(composerKey, () => window.localStorage)
@@ -899,7 +912,7 @@ function connectEventStream(chatId: string): void {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}`) return
       bgStreamState = { accumulated: '' }
       streamRequestId = undefined
-      streamContent.value = ''
+      resetStreamPresentation()
       refreshDirectHistory()
       void refreshSessionActivity()
     },
@@ -926,8 +939,7 @@ function connectEventStream(chatId: string): void {
       if (envelope.requestId && payload.event !== 'turn_finished' && payload.event !== 'session_message') {
         if (streamRequestId && streamRequestId !== envelope.requestId) {
           bgStreamState = { accumulated: '' }
-          streamContent.value = ''
-          streamTimestamp.value = undefined
+          resetStreamPresentation()
         }
         streamRequestId = envelope.requestId
         const current = currentRequest.value
@@ -951,9 +963,8 @@ function connectEventStream(chatId: string): void {
           streaming.value = false
           bgStreamState = { accumulated: '' }
           streamRequestId = undefined
-          streamContent.value = ''
+          resetStreamPresentation()
           streamPhase.value = undefined
-          streamTimestamp.value = undefined
           streamingToolCallData.value = null
         }
         refreshDirectHistory()
@@ -994,9 +1005,8 @@ function disconnectEventStream(): void {
   clearTimeout(directRefreshTimer)
   directRefreshTimer = undefined
   directRefreshPending = false
-  bgStreamState.accumulated = ''
-  bgStreamState.timestamp = undefined
-  streamTimestamp.value = undefined
+  bgStreamState = { accumulated: '' }
+  resetStreamPresentation()
 }
 
 function autoResize() {
@@ -1053,6 +1063,7 @@ function diagnosisVisibilityChanged(visible: boolean) {
 interface ChatMsg {
   role: string
   content: string
+  responseContext?: ResponseContext
   commandReceipt?: CommandReceipt
   senderName?: string
   sessionSource?: SessionMessageSource
@@ -1098,7 +1109,8 @@ const yieldDecisions = computed(() => inlineYieldDecisions(
     && pendingYield.value?.sessionId === activeSessionId.value ? pendingYield.value : null, decisionRecords.value,
 ))
 
-function handleYieldRequest(request: YieldRequest | null) {
+function handleYieldRequest(value: AskRequest | null) {
+  const request = value && !isInputRequest(value) ? value : null
   if (disposed) return
   const previous = pendingYield.value
   pendingYield.value = request
@@ -1143,6 +1155,13 @@ const sessionsLoading = ref(false)
 const sessionsError = ref('')
 const collapsedSessions = reactive(new Set<string>())
 const expandedThinking = reactive(new Set<number>())
+const expandedResponses = reactive(new Set<string>())
+function setResponseExpanded(context: ResponseContext | undefined, open: boolean) {
+  if (!context) return
+  if (open) expandedResponses.add(context.responseId)
+  else expandedResponses.delete(context.responseId)
+}
+watch([() => props.apiBase, () => props.projectId, () => props.sessionId, activeSessionId], () => expandedResponses.clear())
 
 // ── Segment navigation state ─────────────────────────────────────────────────
 const previousPhysicalId = ref<string | null>(null)
@@ -1204,6 +1223,7 @@ const META_TAG_RE = /^<(?:sender|event)\s[^>]*\/>\s*/
 
 interface RawMessage {
   role: string
+  responseContext?: unknown
   timestamp?: string
   content: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> | null
   reasoning_content?: string | null
@@ -1279,14 +1299,16 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
           const rawMedia = rawMediaContent(cur)
           if (rawText) {
             const { text, paths: media } = messageAttachments(rawText)
-            const entry: ChatMsg = { role: 'assistant', content: text, timestamp: cur.timestamp }
+            const entry: ChatMsg = { role: 'assistant', content: text, timestamp: cur.timestamp,
+              responseContext: parseResponseContext(cur.responseContext) }
             if (cur.usage) entry.usage = cur.usage
             if (media.length > 0 || rawMedia.length > 0) entry.media = [...media, ...rawMedia]
             if (cur.reasoning_content) entry.reasoningContent = cur.reasoning_content
             if (cur.reasoning_text) entry.reasoningText = cur.reasoning_text
             out.push(entry)
           } else if (rawMedia.length > 0) {
-            const entry: ChatMsg = { role: 'assistant', content: '', timestamp: cur.timestamp, media: rawMedia }
+            const entry: ChatMsg = { role: 'assistant', content: '', timestamp: cur.timestamp, media: rawMedia,
+              responseContext: parseResponseContext(cur.responseContext) }
             if (cur.usage) entry.usage = cur.usage
             if (cur.reasoning_content) entry.reasoningContent = cur.reasoning_content
             if (cur.reasoning_text) entry.reasoningText = cur.reasoning_text
@@ -1382,6 +1404,7 @@ function collapseHistory(raw: RawMessage[]): ChatMsg[] {
 
 // ── Session list ──────────────────────────────────────────────────────────────
 
+const workRevision = ref(0)
 async function loadSessionList(): Promise<void> {
   await projectLease?.refresh()
 }
@@ -1398,6 +1421,7 @@ watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base,
     observedSessionId = activeSessionId.value
   }, { flush: 'sync' })
   const stopGraph = watch(() => lease.graph.state.revision, () => {
+    workRevision.value++
     const sessions = lease.graph.state.value
     if (!sessions) return
     if (!props.managed) homeCache.setSessions(base, sessions)
@@ -1678,8 +1702,7 @@ function resetConversation(): void {
   decisionRecordError.value = ''
   historyBrowsing = false
   historyLeftBottom = false
-  streamContent.value = ''
-  streamTimestamp.value = undefined
+  resetStreamPresentation()
   streamingToolCallData.value = null
   systemPrompt.value = ''
   tools.value = []
@@ -1728,9 +1751,8 @@ async function loadDirectChat(background = false): Promise<void> {
     decisionRecordError.value = ''
     if (!sendRequest && !streaming.value) {
       streaming.value = false
-      streamContent.value = ''
+      resetStreamPresentation()
       streamPhase.value = undefined
-      streamTimestamp.value = undefined
       streamingToolCallData.value = null
     }
     systemPrompt.value = data.systemPrompt ?? ''
@@ -1876,7 +1898,7 @@ function handleKeyDown(e: KeyboardEvent): void {
 }
 
 /** Transient output; persisted history is authoritative after resets and completion. */
-interface StreamState { accumulated: string; timestamp?: string }
+interface StreamState { accumulated: string; timestamp?: string; responseContext?: ResponseContext; media?: string[] }
 
 /** A decoded SSE payload emitted by the web channel. */
 interface StreamPayload {
@@ -1890,6 +1912,7 @@ interface StreamPayload {
   toolCallId?: string
   toolName?: string
   message?: unknown
+  responseContext?: unknown
 }
 
 function isStreamPayload(value: unknown): value is StreamPayload {
@@ -1921,13 +1944,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
     if (!parsed) throw new Error('Invalid live event message')
     const eventId = 'eventMeta' in parsed ? parsed.eventMeta.attrs['event-id'] : undefined
     if (eventId && messages.value.some(message => message.eventMeta?.attrs['event-id'] === eventId)) return false
-    if (state.accumulated) {
-      messages.value.push({ role: 'assistant', content: state.accumulated, timestamp: state.timestamp })
-      state.accumulated = ''
-      state.timestamp = undefined
-      streamContent.value = ''
-      streamTimestamp.value = undefined
-    }
+    flushStreamResponse(state)
     messages.value.push({ ...parsed, media: payload.media })
     void loadSessionList()
     scrollToBottom()
@@ -1937,13 +1954,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
 
   if (event === 'tool_call') {
     // Flush any pending response text
-    if (state.accumulated) {
-      messages.value.push({ role: 'assistant', content: state.accumulated, timestamp: state.timestamp })
-      state.accumulated = ''
-      state.timestamp = undefined
-      streamContent.value = ''
-      streamTimestamp.value = undefined
-    }
+    flushStreamResponse(state)
     streamingToolCallData.value = payload.toolCall ?? null
     messages.value.push({
       role: 'assistant', event: 'tool_call', content: payload.content ?? '',
@@ -1964,6 +1975,16 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
   } else {
     // response event
     flushStreamingTool()
+    const context = parseResponseContext(payload.responseContext)
+    if (state.responseContext?.responseId !== context?.responseId) flushStreamResponse(state)
+    state.responseContext = context
+    streamResponseContext.value = context
+    if (payload.media?.length) {
+      state.media = [...new Set([...(state.media ?? []), ...payload.media])]
+      streamMedia.value = state.media
+      state.timestamp ??= new Date().toISOString()
+      streamTimestamp.value = state.timestamp
+    }
     if (payload.content) {
       state.timestamp ??= new Date().toISOString()
       state.accumulated += payload.content
@@ -1977,22 +1998,31 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
     detailsRevision.value++
     streamPhase.value = undefined
     flushStreamingTool()
-    if (state.accumulated) {
-      const { text, paths: media } = messageAttachments(state.accumulated)
-      const msg: ChatMsg = { role: 'assistant', content: text, timestamp: state.timestamp }
-      if (payload.usage) msg.usage = payload.usage
-      if (payload.media?.length) msg.media = [...(media.length ? media : []), ...payload.media]
-      else if (media.length) msg.media = media
-      messages.value.push(msg)
-    }
-    state.accumulated = ''
-    state.timestamp = undefined
-    streamContent.value = ''
-    streamTimestamp.value = undefined
+    flushStreamResponse(state, payload.usage)
     scrollToBottom()
     return true
   }
   return false
+}
+
+function flushStreamResponse(state: StreamState, usage?: ChatMsg['usage']) {
+  if (state.accumulated || state.media?.length) {
+    const { text, paths } = messageAttachments(state.accumulated, state.media)
+    messages.value.push({ role: 'assistant', content: text, timestamp: state.timestamp,
+      responseContext: state.responseContext, ...(usage ? { usage } : {}), ...(paths.length ? { media: paths } : {}) })
+  }
+  state.accumulated = ''
+  state.timestamp = undefined
+  state.responseContext = undefined
+  state.media = undefined
+  resetStreamPresentation()
+}
+
+function resetStreamPresentation() {
+  streamContent.value = ''
+  streamTimestamp.value = undefined
+  streamResponseContext.value = undefined
+  streamMedia.value = []
 }
 
 async function sendMessage(overrideContent?: string, opts?: {
@@ -2069,8 +2099,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (!followUp && !isCommand) {
       streaming.value = true
       streamPhase.value = 'llm'
-      streamContent.value = ''
-      streamTimestamp.value = undefined
+      resetStreamPresentation()
       streamingToolCallData.value = null
     }
     scrollToBottom()
@@ -2183,8 +2212,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       if (!followUp && (!accepted || control.state.phase === 'finished')) {
         streaming.value = false
         streamPhase.value = undefined
-        streamContent.value = ''
-        streamTimestamp.value = undefined
+        resetStreamPresentation()
         streamingToolCallData.value = null
       }
       scrollToBottom()

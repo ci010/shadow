@@ -1,16 +1,24 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { parseYieldRequest, parseYieldCustomText, MAX_YIELD_CUSTOM_TEXT_LENGTH, type YieldRequest } from '../../src/sessions/yield-contract.ts'
+import { parseInputRequest, type InputRequest } from '../../src/sessions/input-request.ts'
 export { MAX_YIELD_CUSTOM_TEXT_LENGTH }
+export type AskRequest = YieldRequest | InputRequest
+export function isInputRequest(request: AskRequest): request is InputRequest { return 'kind' in request && request.kind === 'input' }
 
-export function parseYieldResponse(value: unknown, sessionId: string): YieldRequest | null {
+export function parseYieldResponse(value: unknown, sessionId: string): AskRequest | null {
   if (!value || typeof value !== 'object' || !('request' in value)) {
     throw new Error('The server returned an invalid question. Retry to load it again.')
   }
-  return value.request === null ? null : parseYieldRequest(value.request, sessionId)
+  if (value.request === null) return null
+  return value.request && typeof value.request === 'object' && 'kind' in value.request && value.request.kind === 'input'
+    ? parseInputRequest(value.request, sessionId) : parseYieldRequest(value.request, sessionId)
 }
 
-export function yieldDeadlineText(request: YieldRequest, now: number): string {
+export function yieldDeadlineText(request: AskRequest, now: number): string {
+  if (isInputRequest(request)) return request.deadline
+    ? `Input expires at ${new Date(request.deadline).toLocaleTimeString()}; no answer is chosen automatically.`
+    : 'Waiting for input. No answer is chosen automatically.'
   if (request.timeoutPaused) return 'Automatic default paused because you requested an explanation or revision. An explicit answer is required.'
   if (!request.deadline) return 'No time limit. Waiting for a response.'
   const deadline = Date.parse(request.deadline)
@@ -42,7 +50,7 @@ export interface YieldSource {
 }
 
 export function useYieldRequest(source: () => YieldSource) {
-  const request = ref<YieldRequest | null>(null)
+  const request = ref<AskRequest | null>(null)
   const selected = ref('')
   const customMode = ref(false)
   const customText = ref('')
@@ -63,7 +71,7 @@ export function useYieldRequest(source: () => YieldSource) {
 
   function endpoint(): string {
     const { apiBase, sessionId } = source()
-    return apiUrl(apiBase, `/api/sessions/${encodeURIComponent(sessionId)}/yield`).toString()
+    return apiUrl(apiBase, `/api/sessions/${encodeURIComponent(sessionId)}/ask`).toString()
   }
   function stopRequests() {
     generation++
@@ -88,8 +96,8 @@ export function useYieldRequest(source: () => YieldSource) {
       if (next && next.id === answeredId) return
       const changed = next?.id !== request.value?.id
       if (changed) {
-        selected.value = next?.defaultOption ?? ''
-        customMode.value = false
+        selected.value = next && !isInputRequest(next) ? next.defaultOption : ''
+        customMode.value = !!next && isInputRequest(next)
         customText.value = ''
         answerError = false
       }
@@ -106,7 +114,8 @@ export function useYieldRequest(source: () => YieldSource) {
   async function mutate(isCancellation: boolean): Promise<boolean> {
     const question = request.value
     if (!answerable.value || !question || write) return false
-    const custom = !isCancellation && customMode.value
+    const input = isInputRequest(question)
+    const custom = !isCancellation && (input || customMode.value)
     let option = selected.value
     if (!isCancellation) {
       if (custom) {
@@ -116,7 +125,7 @@ export function useYieldRequest(source: () => YieldSource) {
           error.value = cause.message
           return false
         }
-      } else if (!question.options.includes(option)) {
+      } else if (input || !question.options.includes(option)) {
         error.value = 'Choose an offered option or write your own response.'
         return false
       }
@@ -133,7 +142,7 @@ export function useYieldRequest(source: () => YieldSource) {
       const response = await fetch(endpoint(), {
         method: isCancellation ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isCancellation ? { requestId: question.id }
-          : { requestId: question.id, ...(custom ? { customText: option } : { option }) }),
+          : { requestId: question.id, ...(input ? { text: option } : custom ? { customText: option } : { option }) }),
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
       })
       const value = await readResponse(response)
@@ -144,8 +153,8 @@ export function useYieldRequest(source: () => YieldSource) {
         }
       } else if (!value || typeof value !== 'object' || !('answer' in value) || !value.answer || typeof value.answer !== 'object'
         || !('requestId' in value.answer) || value.answer.requestId !== question.id
-        || !('option' in value.answer) || value.answer.option !== option
-        || (custom && (!('custom' in value.answer) || value.answer.custom !== true))
+        || (input ? !('text' in value.answer) || value.answer.text !== option : !('option' in value.answer) || value.answer.option !== option)
+        || (!input && custom && (!('custom' in value.answer) || value.answer.custom !== true))
         || !('answeredBy' in value.answer) || value.answer.answeredBy !== 'user'
         || !('answeredAt' in value.answer) || typeof value.answer.answeredAt !== 'string'
         || !Number.isFinite(Date.parse(value.answer.answeredAt))) {
@@ -200,7 +209,7 @@ export function useYieldRequest(source: () => YieldSource) {
   return { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh,
     submit: () => mutate(false), cancelQuestion: () => mutate(true),
     choose: (option: string) => {
-      if (!answerable.value || busy.value || !request.value?.options.includes(option)) return Promise.resolve(false)
+      if (!answerable.value || busy.value || !request.value || isInputRequest(request.value) || !request.value.options.includes(option)) return Promise.resolve(false)
       customMode.value = false
       selected.value = option
       return mutate(false)

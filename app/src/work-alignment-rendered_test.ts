@@ -31,6 +31,9 @@ test('rendered work agreements preserve drafts on conflicts and separate goal, p
     authority: { manager: 'web:fixture', executor: 'web:fixture', active: true },
     adoption: { sessionId: 'web:fixture', revision: 1, understanding: 'Both evaluations', stop: ['Only smoke'], retain: ['Inputs'], next: ['Start with smoke'] },
     checkpoint: { revision: 1, completed: ['Inputs checked'], artifacts: ['report.json'], inFlight: [], unknown: [], retired: ['Only smoke'] },
+    proposals: [{ id: '11111111-1111-4111-8111-111111111111', baseRevision: 1, status: 'pending',
+      change: 'pause', reason: 'Review before executing', paused: true,
+      definition: { objective: 'Run both evaluations', acceptance: ['Both have complete results'], boundaries: ['No publication'], evidence: [] } }],
     history: [{ kind: 'proposal', actor: 'web:peer', at: new Date().toISOString(),
       data: { definition: { objective: 'Two independent outcomes', acceptance: ['Both verified'], boundaries: ['No publication'] } } }],
   }
@@ -44,7 +47,7 @@ test('rendered work agreements preserve drafts on conflicts and separate goal, p
         import '/src/styles.css';
         import { createApp, h, reactive } from 'vue';
         import SessionWorkControls from '/src/components/SessionWorkControls.vue';
-        const state = reactive({ sessionId: 'web:fixture', canWrite: true, active: true });
+        const state = reactive({ sessionId: 'web:fixture', canWrite: true, active: true, revision: 0 });
         window.fixture = state;
         createApp({ render: () => h('div', { style: 'position:fixed;inset:auto 0 16px;' }, [
           h(SessionWorkControls, { ...state, apiBase: location.origin }),
@@ -58,6 +61,8 @@ test('rendered work agreements preserve drafts on conflicts and separate goal, p
           if (path === '/__work') {
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module" src="/work-fixture.ts"></script></body></html>')
+          } else if (path.startsWith('/api/sessions/') && path.endsWith('/background-tasks')) {
+            json({ sessionId: decodeURIComponent(path.split('/')[3]), total: 0, tasks: [] })
           } else if (path.startsWith('/api/sessions/') && path.endsWith('/decisions/owner')) {
             if (request.method === 'POST') {
               let body = ''

@@ -211,7 +211,7 @@ test('ExecTool foreground LocalExecutor parity: timeout preserves process and pa
 
   assertMatch(result, /^Process PID=9876 still running after /)
   assert(result.includes('partial-out\n[stderr]\npartial-err'))
-  assert(result.includes('Background task ID: background-123'))
+  assert(result.includes('Execution ID: bg:background-123'))
   assertEquals(backgroundTasks.calls, 1)
   assertEquals(process.killCount(), 0)
   exit.resolve({ success: true, code: 0, signal: null })
@@ -247,7 +247,7 @@ test('ExecTool timeout_ms=0 keeps the existing ProcessManager background path', 
   )
 
   assert(result.includes('Process started. PID=2468'))
-  assert(result.includes('Background task ID: background-123'))
+  assert(result.includes('Execution ID: bg:background-123'))
   assertEquals(spawnCount, 1)
   assertEquals(executor.calls, [])
 })
@@ -383,7 +383,7 @@ for (const timeout_ms of [0, 50]) {
           'setInterval(async () => console.log(await heartbeat({})), 5);',
         ].join('\n'),
       }, { ...context(workspace, controller.signal), tools })
-      assert.match(response, /Background task ID/)
+      assert.match(response, /Execution ID: bg:/)
       assert.equal(background.calls, 1)
       controller.abort(new Error('turn ended'))
       const deadline = Date.now() + 10_000
@@ -391,7 +391,7 @@ for (const timeout_ms of [0, 50]) {
         assert(Date.now() < deadline, 'background script did not stay alive and call its tools')
         await delay(20)
       }
-      background.options?.onCancel?.()
+      await background.options?.onCancel?.('cancel')
       await background.completion
       for (const file of [ownerFile, childFile]) {
         const pid = Number(await readFile(file, 'utf8'))
@@ -399,7 +399,7 @@ for (const timeout_ms of [0, 50]) {
       }
       assert.equal(existsSync(join(workspace, '.eval')), false)
     } finally {
-      background.options?.onCancel?.()
+      await background.options?.onCancel?.('cancel')
       await background.completion
       await rm(workspace, { recursive: true, force: true })
     }
@@ -562,7 +562,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
           assert('value' in completed)
           assertMatch(completed.value, /timed out/)
           assertMatch(completed.value, /foreground-partial/)
-          assert(!completed.value.includes('Background task ID'))
+          assert(!completed.value.includes('Execution ID: bg:'))
         }
         for (const file of [ownerFile, descendantFile]) {
           const pid = Number(await readFile(file, 'utf8'))

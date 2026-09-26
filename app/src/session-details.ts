@@ -7,6 +7,7 @@ export interface SessionDetails {
   topic?: TopicMetadata
   createdBySessionId?: string
   name: string | null
+  description?: string
   workdir: { kind: 'local' | 'remote'; displayPath: string | null; nodeId?: string; nodeName?: string; displayName?: string; available?: boolean }
   usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null
   usageScope: 'session' | 'segment' | 'latest-call'
@@ -45,12 +46,14 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
   if (windowTokens === 0) throw invalid()
   if (value.sessionKind !== undefined && value.sessionKind !== 'topic' && value.sessionKind !== 'orchestrator') throw invalid()
   if (value.createdBySessionId !== undefined && typeof value.createdBySessionId !== 'string') throw invalid()
+  if (value.description !== undefined && typeof value.description !== 'string') throw invalid()
   return {
     sessionId,
     ...(value.sessionKind !== undefined ? { sessionKind: value.sessionKind as SessionDetails['sessionKind'] } : {}),
     ...(value.topic !== undefined ? { topic: parseTopicMetadata(value.topic) } : {}),
     ...(typeof value.createdBySessionId === 'string' ? { createdBySessionId: value.createdBySessionId } : {}),
     name: value.name,
+    ...(typeof value.description === 'string' ? { description: value.description } : {}),
     workdir: { kind: value.workdir.kind === 'remote' ? 'remote' : 'local', displayPath: value.workdir.displayPath,
       ...(typeof value.workdir.nodeId === 'string' ? { nodeId: value.workdir.nodeId } : {}),
       ...(typeof value.workdir.nodeName === 'string' ? { nodeName: value.workdir.nodeName } : {}),

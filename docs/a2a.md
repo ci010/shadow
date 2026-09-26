@@ -12,7 +12,7 @@ dependency registry when this integration was implemented. SDK version and
 protocol version are different. The routes use Hono, not Express or gRPC.
 
 ```text
-Shadow session -- a2a_send --> A2A JSON-RPC --> coding SDK bridge --> coding agent
+Shadow session -- subagent/message --> A2A JSON-RPC --> coding SDK bridge --> coding agent
 Coding client -- stdio MCP --> A2A JSON-RPC --> Shadow Project --> SessionManager
 ```
 
@@ -56,9 +56,22 @@ from an untrusted request Host header.
 Provide the referenced environment variables to the backend process, using
 distinct random secrets of at least 32 non-whitespace characters. Configure each
 peer with the corresponding secret. Secrets are environment references, not
-values stored in Project JSON. Missing/invalid credentials fail Project startup.
-Credential and A2A configuration changes require a backend restart; live
-configuration writes reject them explicitly.
+values stored in Project JSON. They authenticate external A2A callers, not model
+providers or the owner's GitHub account; task/context ownership follows the
+authenticated caller.
+
+Missing/invalid or duplicate inbound credentials disable **only A2A inbound**,
+not Project startup, local conversations or outbound A2A. An unavailable configured
+role or mismatched Project URL has the same behavior. Project diagnostics record
+the configuration problem without secret values. The Agent Card and RPC routes
+return `503 a2a_unavailable` to authenticated gateway clients; external clients
+without gateway credentials remain rejected by the host authentication boundary.
+No anonymous access or fallback credential is enabled.
+
+Fix the environment/configuration and restart the backend to re-enable inbound
+A2A. Credential and A2A configuration changes require a backend restart; live
+configuration writes reject them explicitly. An outbound peer's missing credential
+fails that peer's operation rather than disabling local or inbound operation.
 
 Omit `server` for client-only operation. Omit `agents` for server-only operation.
 Remove `a2a` to disable the module. No network listener is created separately
@@ -120,8 +133,11 @@ the question in `status.message`. Reply with a new `messageId` and the same
 `taskId` (and optionally its matching `contextId`) to resume that task. Duplicate
 replies are deduplicated, including after restart. A stream or blocking request
 ends when input is required; submit the reply or subscribe again for updates.
-An ordinary question in final prose does not automatically become a suspended
-task. Shadow's native runner still completes normal conversation turns.
+An ordinary question in final prose does not become a suspended task. A Shadow
+role explicitly allowed to use `ask` can call `ask({kind:"input", question:"..."})`;
+the native runner publishes `INPUT_REQUIRED` and resumes that same tool call when
+its authenticated A2A caller replies. This does not grant human decision authority.
+The default `a2a-text` role remains tool-free.
 
 The outbound client preserves `AUTH_REQUIRED` from remote agents but does not
 send credentials through message parts or interpret text as permission approval.
@@ -132,20 +148,93 @@ tool arguments/results, or token-level deltas. Disconnecting a stream does not
 cancel the task. Clients can query or subscribe again. Proxies should allow
 long-lived SSE connections.
 
-## Outbound tools
+## Shadow session tools
 
-These tools enter the existing lazy tool catalog when A2A is configured. Use
-them from a session role that permits `invoke_tool` and the corresponding dynamic
-tools. They are not additional LLM providers or local `subagent` executions.
+Read `v:skills/a2a` for the built-in workflow guide. Agent-facing discovery and
+session operations share the existing Shadow tools:
+
+```javascript
+read({ path: "v:agents" }) // Local roles and configured a2a:<agent> targets.
+subagent({ agent_type: "a2a:peer", mode: "task", description: "Review supplied text", task: "Review this text: ..." })
+read({ path: "v:sessions/<returned-sessionId>" })
+message({ sessionId: "<returned-sessionId>", content: "Explain your previous answer." })
+read({ path: "v:sessions/<returned-sessionId>/executions" })
+read({ path: "v:bg/<returned-executionId>" })
+cancel({ executionId: "<returned-executionId>" })
+```
+
+A remote `sessionId` is a stable, owner-scoped conversation reference
+(`remote:<local-id>`); each send/reply produces a distinct `executionId` under
+that conversation. These are A2A journal views, not local executable sessions:
+no local parent relationship, workdir, transcript or Initiative is adopted.
+Only explicitly supplied task/message text leaves Shadow. Remote subagent
+delegation supports `task`, not blocking `call`, and rejects `report_to`,
+`preload_tools` and Initiative selectors. Remote `message` accepts only
+`sessionId` and `content`; silent/archive, attention and attachment semantics
+are not silently approximated.
+
+Conversation/execution reads refresh known nonterminal tasks; VFS lists and
+searches use cached local records and do not make network requests. Listings
+include only the acting session's remote calls, not the provider's session
+inventory or private history. Read/search alone do not grant A2A access: the
+native entrypoints retain the corresponding dynamic A2A tool permission checks
+(the existing `invoke_tool` grant for allowlisted roles, or named restrictions
+for blocklisted roles). Remote-workdir support is unchanged.
+
+`v:bg` is the unified owner-scoped execution view: background tools/processes,
+local task/call, and remote A2A executions. It reads the existing background
+manager, SessionStore, and A2A journal without copying their state. `v:sessions`
+remains the history/conversation entrypoint, including its remote execution views.
+Lists/searches never start or poll remote work.
+
+`cancel({executionId})` accepts references from this view, `exec`, or `subagent`;
+background references use `bg:<id>`. It replaces the public `kill` tool. Local
+cancellation waits for actual execution/cleanup before returning `cancelled`;
+pending cleanup remains `cancelling`, and cleanup failures remain visible rather
+than claiming a stop. Already terminal results are preserved. It does not delete
+a durable conversation or roll back effects. `task` keeps its `report_to`
+notification and `call` keeps its blocking return without an extra callback.
+Explicit background cancellation suppresses its old completion callback.
+
+**Requested input uses `ask` / `reply`.** A waiting execution exposes
+`request: {kind:"input", request_id, question}`. Use
+`reply({request_id:"<returned-id>", text:"TypeScript"})`, then follow its returned
+execution reference. The remote task and conversation remain the same. Request
+references bind the execution and question; stale or duplicate answers cannot
+silently become new tasks. `message` rejects active/waiting conversations.
+
+If the owning Shadow session needs missing information, it can first use
+`ask({kind:"input", question:"..."})`; consequential decisions use `kind:"decision"`
+with the existing brief, options and authority rules. A local answer is not
+automatically forwarded remotely. Plain input never grants new permissions.
+Cancellation and deadlines stop waiting without fabricating input. Restart
+interrupts active inbound tasks rather than replaying them.
+
+New journal records preserve conversation and predecessor references across
+restart. Old outbound records without these fields remain readable via their
+existing handles, initially exposed as individual conversation views; subsequent
+messages retain the known remote context. No JSONL/SQLite session format changes
+are required.
+
+### Low-level and MCP tools
+
+The `a2a_*` tools enter the lazy catalog when A2A is configured; their use requires
+`invoke_tool` and the corresponding dynamic-tool permissions. `reply` is the
+native pending-request tool. The MCP server exposes its own owner-scoped `reply`.
+These operations are not additional LLM providers or local `subagent` executions.
 
 ```json
 {"name":"a2a_agents","args":{}}
 {"name":"a2a_send","args":{"agent":"peer","message":"Summarize the following explicitly supplied text: ..."}}
 {"name":"a2a_get","args":{"handle":"<local-handle-returned-by-send>"}}
-{"name":"a2a_reply","args":{"handle":"<input-required-local-handle>","message":"TypeScript"}}
+{"name":"reply","args":{"request_id":"<returned-pending-request-id>","text":"TypeScript"}}
 {"name":"a2a_cancel","args":{"handle":"<local-handle-returned-by-send>"}}
 {"name":"a2a_calls","args":{}}
 ```
+
+`yield` and `a2a_reply` are not registered aliases. Shadow's base `reply` tool
+handles local and remote requests; the stdio MCP `reply` handles that MCP client's
+owned remote requests. Other low-level A2A operations retain their existing names.
 
 For conversational continuity, add `"context": "<previous-local-handle>"` to
 `a2a_send`. It must reference a call owned by the current session to the same
@@ -237,7 +326,8 @@ To call this bridge, add an agent in the Shadow Project:
 }
 ```
 
-Restart Shadow, load `a2a_send`, and select `agent: "claude"`. Repeat the same
+Restart Shadow, discover `a2a:claude` in `v:agents`, and delegate with `subagent`.
+The compatibility equivalent is `a2a_send` with `agent: "claude"`. Repeat the same
 pattern for Codex and Copilot. Tool permissions are real operator grants, not
 sandbox guarantees. Do not turn on unrestricted coding tools for untrusted
 callers. SDK questions only solicit task input; they do not authorize new tools.

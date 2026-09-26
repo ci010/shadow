@@ -1,10 +1,12 @@
 import type { ChatMessage } from '../providers/provider.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { TopicService } from '../sessions/topics.ts'
-import type {
-  BackgroundTaskManager,
-  BackgroundTaskSummary,
+import {
+  backgroundExecutionId,
+  backgroundTaskId,
+  type BackgroundTaskManager,
 } from '../agent/background-task.ts'
+import { assertExecutionActor, assertOwnedExecution } from '../sessions/execution-scope.ts'
 import type { Skill, SkillsManager } from '../skills/loader.ts'
 import { loadSingleSkill } from '../skills/parse.ts'
 import type { ExecutionContext } from '../tools/context.ts'
@@ -15,6 +17,7 @@ import { physicalSessionId } from '../sessions/session-identity.ts'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isNotFoundError } from '../utils/runtime.ts'
+import type { A2aSessions } from '../a2a/sessions.ts'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -67,6 +70,7 @@ function formatSessionMessage(
 export function createSessionsHandler(
   sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getHistory'>,
   topics?: () => TopicService,
+  remote?: Pick<A2aSessions, 'read' | 'entries' | 'canDiscover'>,
 ): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
@@ -74,9 +78,13 @@ export function createSessionsHandler(
   const read: VirtualFsHandler = async (subpath, context) => {
     topics?.().assertActor(context.projectId, context.sessionId)
     context.signal.throwIfAborted()
+    if (subpath.startsWith('remote:')) {
+      if (!remote) throw new Error('A2A is not configured in this Project.')
+      return remote.read(subpath, context)
+    }
     if (subpath.endsWith('/brief') && topics) {
       const summary = (await topics().summaries()).find(topic => topic.sessionId === subpath.slice(0, -6))
-      if (!summary) throw new Error('Unknown Project topic brief.')
+      if (!summary) throw new Error('Unknown Project session metadata.')
       return JSON.stringify(summary, null, 2)
     }
     if (!subpath) {
@@ -84,17 +92,21 @@ export function createSessionsHandler(
       // Hide internal pipeline sessions (heartbeat:*) from the default listing.
       // They can still be read directly by ID (e.g. v:sessions/heartbeat:reflector-...).
       const list = allList.filter((s) => !s.sessionId.startsWith('heartbeat:'))
-      if (list.length === 0) return 'No sessions.'
-      const lines: string[] = [`Sessions (${list.length}):`]
+      const external = remote?.canDiscover(context)
+        ? remote.entries(context).filter(entry => !entry.name.includes('/')) : []
+      if (list.length === 0 && external.length === 0) return 'No sessions.'
+      const lines: string[] = [`Sessions (${list.length + external.length}):`]
       for (const s of list) {
         const state = await sessions.getSessionState(s.sessionId)
         const parts = [`- ${s.sessionId}`]
         if (state?.originUser) parts.push(`(by ${state.originUser})`)
         if (state?.parent?.id) parts.push(`←parent: ${state.parent.id}`)
+        if (state?.mode && state.mode !== 'session') parts.push(`mode=${state.mode} status=${state.executionStatus ?? 'unknown'}`)
         if (s.lastActivityAt) parts.push(`[${s.lastActivityAt}]`)
         parts.push(`segments=${s.segmentIndex + 1}`)
         lines.push(parts.join(' '))
       }
+      if (external.length) lines.push('', 'Owned remote conversations (cached):', ...external.map(entry => entry.content))
       return lines.join('\n')
     }
 
@@ -125,6 +137,9 @@ export function createSessionsHandler(
       : state
       ? physicalSessionId(state)
       : undefined
+    if (state?.mode && state.mode !== 'session') {
+      sessionLabel += `\nExecution: ${state.executionId ?? state.sessionId}; mode=${state.mode}; status=${state.executionStatus ?? 'unknown'}`
+    }
 
     if (!physicalId && !isPhysicalId) {
       return `Session "${sessionKey}" not found. It may have been lost during a restart.`
@@ -196,6 +211,11 @@ export function createSessionsHandler(
     const entries = []
     const subpath = options?.subpath
     const selected = (name: string) => !subpath || name === subpath || name.startsWith(`${subpath}/`)
+    if (subpath?.startsWith('remote:')) {
+      if (!remote) throw new Error('A2A is not configured in this Project.')
+      return remote.entries(context, options)
+    }
+    if (remote?.canDiscover(context)) entries.push(...remote.entries(context, options))
     for (const summary of await topics?.().summaries() ?? []) {
       if (selected(`${summary.sessionId}/brief`)) {
         entries.push({ name: `${summary.sessionId}/brief`, content: options?.content === false ? '' : JSON.stringify(summary, null, 2) })
@@ -212,6 +232,7 @@ export function createSessionsHandler(
       const parts = [s.sessionId]
       if (state?.originUser) parts.push(`by=${state.originUser}`)
       if (state?.parent?.id) parts.push(`parent=${state.parent.id}`)
+      if (state?.mode && state.mode !== 'session') parts.push(`mode=${state.mode} status=${state.executionStatus ?? 'unknown'}`)
       if (s.lastActivityAt) parts.push(`last=${s.lastActivityAt}`)
       parts.push(`segments=${s.segmentIndex + 1}`)
 
@@ -235,36 +256,70 @@ export function createSessionsHandler(
 
 // ── Background tasks ─────────────────────────────────────────────────────
 
-export function createBgTasksHandler(backgroundTasks: BackgroundTaskManager): {
+export function createBgTasksHandler(
+  backgroundTasks: BackgroundTaskManager,
+  sessions: Pick<SessionManager, 'listSessions' | 'getSessionState' | 'getDelegationOwner' | 'assertFolderAccess' | 'getHistory'>,
+  remote?: Pick<A2aSessions, 'read' | 'entries' | 'canDiscover'>,
+): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
 } {
-  const read: VirtualFsHandler = async (subpath, ctx) => {
-    if (subpath) {
-      return await backgroundTasks.getTaskOutput(subpath)
+  const history = createSessionsHandler(sessions)
+  const isRemoteExecution = (path: string) => /^remote:[^/]+\/executions\/[^/]+$/.test(path)
+  const localSummary = (executionId: string, ctx: ExecutionContext) => {
+    const state = assertOwnedExecution(sessions, executionId, ctx)
+    return {
+      executionId, sessionId: state.sessionId, ownerSessionId: ctx.sessionId,
+      kind: 'local', mode: state.mode, agentType: state.agentType,
+      status: state.executionStatus ?? 'unknown', lastActivityAt: state.lastActivityAt,
+      history: `v:sessions/${state.sessionId}`,
     }
-    const tasks = backgroundTasks.listTasks(ctx.sessionId)
-    if (tasks.length === 0) return 'No background tasks.'
-    return tasks
-      .map((t: BackgroundTaskSummary) => {
-        const parts = [t.id, t.kind, t.status, t.title]
-        parts.push(`created=${t.createdAt}`)
-        if (t.completedAt) parts.push(`completed=${t.completedAt}`)
-        if (t.error) parts.push(`error=${t.error}`)
-        return parts.join('  ')
-      })
-      .join('\n')
   }
-
-  const list: VirtualFsListHandler = (ctx) => {
-    const tasks = backgroundTasks.listTasks(ctx.sessionId)
-    return tasks.map((t: BackgroundTaskSummary) => {
-      const parts = [t.id, t.kind, t.status, t.title]
-      parts.push(`created=${t.createdAt}`)
-      if (t.completedAt) parts.push(`completed=${t.completedAt}`)
-      if (t.error) parts.push(`error=${t.error}`)
-      return { name: t.id, content: parts.join('  ') }
-    })
+  const list: VirtualFsListHandler = (ctx, options) => {
+    assertExecutionActor(sessions, ctx)
+    backgroundTasks.assertOwner(ctx)
+    const selected = (name: string) => !options?.subpath || name === options.subpath || name.startsWith(`${options.subpath}/`)
+    const content = (value: unknown) => options?.content === false ? '' : JSON.stringify(value, null, 2)
+    const entries = backgroundTasks.listTasks(ctx.sessionId).filter(task => selected(backgroundExecutionId(task.id))).map(task => ({
+      name: backgroundExecutionId(task.id),
+      content: content({ ...task, executionId: backgroundExecutionId(task.id), ownerSessionId: task.sessionId }),
+    }))
+    for (const state of sessions.listSessions()) {
+      if ((state.mode !== 'task' && state.mode !== 'call') || state.projectId !== ctx.projectId ||
+        sessions.getDelegationOwner(state.sessionId) !== ctx.sessionId || !selected(state.sessionId)) continue
+      ctx.signal.throwIfAborted()
+      entries.push({ name: state.sessionId, content: content(localSummary(state.sessionId, ctx)) })
+    }
+    if (options?.subpath?.startsWith('remote:') || remote?.canDiscover(ctx)) {
+      if (!remote) throw new Error('A2A is not configured in this Project.')
+      entries.push(...remote.entries(ctx, options).filter(entry => isRemoteExecution(entry.name)))
+    }
+    return entries
+  }
+  const read: VirtualFsHandler = async (subpath, ctx) => {
+    assertExecutionActor(sessions, ctx)
+    if (!subpath) {
+      const entries = await list(ctx)
+      return entries.length ? entries.map(entry => entry.content).join('\n\n') : 'No owned executions.'
+    }
+    if (subpath.startsWith('remote:')) {
+      if (!remote) throw new Error('A2A is not configured in this Project.')
+      if (!isRemoteExecution(subpath)) throw new Error('Read an execution from v:bg; conversations belong in v:sessions.')
+      return remote.read(subpath, ctx)
+    }
+    if (subpath.startsWith('bg:')) {
+      const taskId = backgroundTaskId(subpath)
+      backgroundTasks.assertOwner(ctx, taskId)
+      const output = await backgroundTasks.getTaskOutput(taskId)
+      assertExecutionActor(sessions, ctx)
+      backgroundTasks.assertOwner(ctx, taskId)
+      return output
+    }
+    const executionId = subpath.split('?')[0]
+    assertOwnedExecution(sessions, executionId, ctx)
+    const output = await history.read(subpath, ctx)
+    const summary = localSummary(executionId, ctx)
+    return `${JSON.stringify(summary, null, 2)}\n\n${output}`
   }
 
   return { read, list }

@@ -1,4 +1,5 @@
 const INITIATIVE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+const WORK_KEY = /^(?:work|initiative|item|topic):[^/\\\s]+$/
 
 export class InitiativeMetadataError extends TypeError {}
 
@@ -7,8 +8,8 @@ export function parseInitiativeId(record: Record<string, unknown>): string | und
   for (const key of ['initiativeId', 'initiativeName', 'projectName']) {
     const value = record[key]
     if (value === undefined) continue
-    if (typeof value !== 'string' || !INITIATIVE_ID.test(value)) {
-      throw new InitiativeMetadataError(`${key} must be an initiative ID: 1-64 lowercase letters, digits, or hyphens.`)
+    if (typeof value !== 'string' || !(INITIATIVE_ID.test(value) || value.length <= 600 && WORK_KEY.test(value))) {
+      throw new InitiativeMetadataError(`${key} must be an initiative ID: a legacy slug or canonical Work key.`)
     }
     if (result !== undefined && result !== value) {
       throw new InitiativeMetadataError('Conflicting current and legacy initiative identities.')

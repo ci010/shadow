@@ -1,6 +1,11 @@
+import { workWorkflowSchema, workProposalSchema, type WorkRecord, type WorkSubject } from '../../src/initiatives/work-contract.ts'
+
 export interface WorkAgreement {
   key: string
-  subject: { kind: 'topic'; sessionId: string } | { kind: 'item'; initiativeId: string; itemId: string }
+  subject: WorkSubject
+  sequence?: number
+  workflow?: WorkRecord['workflow']
+  proposals?: WorkRecord['proposals']
   revision: number
   definition: { objective: string; acceptance: string[]; boundaries: string[]; evidence: unknown[] }
   origin: 'human' | 'agent_interpretation'
@@ -14,6 +19,7 @@ export interface WorkAgreement {
   history: { kind: string; actor: string; at: string; data: unknown }[]
 }
 export interface WorkView {
+  selected?: string
   records: WorkAgreement[]
   effects: { id: string; sessionId: string; tool: string; status: string }[]
 }
@@ -23,7 +29,9 @@ function assertWorkView(value: unknown): asserts value is WorkView {
   if (!object(value) || !Array.isArray(value.records) || !Array.isArray(value.effects)) throw new Error('Invalid work alignment response.')
   for (const entry of value.records) {
     if (!object(entry) || typeof entry.key !== 'string' || !Number.isSafeInteger(entry.revision) || Number(entry.revision) < 1
-      || !object(entry.subject) || !(entry.subject.kind === 'topic' && typeof entry.subject.sessionId === 'string'
+      || !object(entry.subject) || !(entry.subject.kind === 'work' && typeof entry.subject.id === 'string'
+        || entry.subject.kind === 'initiative' && typeof entry.subject.initiativeId === 'string'
+        || entry.subject.kind === 'topic' && typeof entry.subject.sessionId === 'string'
         || entry.subject.kind === 'item' && typeof entry.subject.initiativeId === 'string' && typeof entry.subject.itemId === 'string')
       || !object(entry.definition) || typeof entry.definition.objective !== 'string' || !strings(entry.definition.acceptance)
       || !strings(entry.definition.boundaries) || !Array.isArray(entry.definition.evidence)
@@ -32,6 +40,9 @@ function assertWorkView(value: unknown): asserts value is WorkView {
       || ![entry.authority.manager, entry.authority.executor].every(id => id === null || typeof id === 'string')
       || !Array.isArray(entry.history) || entry.history.some(item => !object(item) || typeof item.kind !== 'string'
         || typeof item.actor !== 'string' || typeof item.at !== 'string')) throw new Error('Invalid work agreement.')
+    if (entry.sequence !== undefined && (!Number.isSafeInteger(entry.sequence) || Number(entry.sequence) < 1)) throw new Error('Invalid work sequence.')
+    if (entry.workflow !== undefined && !workWorkflowSchema.safeParse(entry.workflow).success) throw new Error('Invalid work progress or assignment.')
+    if (entry.proposals !== undefined && (!Array.isArray(entry.proposals) || entry.proposals.some(proposal => !workProposalSchema.safeParse(proposal).success))) throw new Error('Invalid work proposal.')
     if (entry.adoption !== undefined && (!object(entry.adoption) || typeof entry.adoption.sessionId !== 'string'
       || !Number.isSafeInteger(entry.adoption.revision) || typeof entry.adoption.understanding !== 'string'
       || !strings(entry.adoption.stop) || !strings(entry.adoption.retain) || !strings(entry.adoption.next))) throw new Error('Invalid adoption.')

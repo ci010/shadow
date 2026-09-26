@@ -79,7 +79,7 @@ base. The card summarizes affected bindings, prompt/tool/permission changes and
 current-version checks, with full resource and binding details available.
 Publishing this snapshot leaves any unrelated shared draft untouched.
 Owner approval is separate from preparing a proposal; ordinary messages,
-tool results, `yield` answers and silence never publish.
+tool results, `reply` answers and silence never publish.
 
 The owner-only `/api/agent-resources/probe-requests` endpoint lists saved probe
 reviews. `POST /:id` approves one run and `DELETE /:id` cancels a pending review;
@@ -136,7 +136,7 @@ template, including skill tool declarations and grant examples.
    **Cancel** in that card. `/agent-publish <exact-draft-revision>` in Project
    coordination remains a fallback when the card is unavailable.
 
-The model cannot publish through `project_config` or `yield`. Ordinary yes/no
+The model cannot publish through `project_config`, `ask` or `reply`. Ordinary yes/no
 questions, chat answers, commands copied into group messages and other-session
 messages are not authoritative publication approval. `propose` is nonblocking:
 it returns request identity, revisions, changed paths and binding counts without

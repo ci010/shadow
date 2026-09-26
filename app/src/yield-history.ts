@@ -76,8 +76,8 @@ export function inlineYieldDecisions(
     const message = messages[index]
     if (message.event !== 'tool_call') continue
     const call = resolveToolCall(message)
-    if (call.name !== 'yield') continue
-    const action = call.args.action === undefined ? 'ask' : call.args.action
+    if (call.name !== 'ask' && call.name !== 'reply') continue
+    const action = call.name === 'reply' ? 'answer' : call.args.action === undefined ? 'ask' : call.args.action
     let decision: YieldDecision
     if (action === 'ask') {
       try {
@@ -90,9 +90,9 @@ export function inlineYieldDecisions(
         // Invalid/legacy payloads stay visible in the ordinary tool inspector.
         continue
       }
-    } else if (action === 'answer' && typeof call.args.request_id === 'string'
-      && typeof call.args.option === 'string') {
-      decision = { action, question: 'Response to child decision', options: [],
+    } else if (call.name === 'reply' && typeof call.args.request_id === 'string'
+      && typeof call.args.text === 'string' && readAnswer(messages[pairs.get(index) ?? -1]?.content)) {
+      decision = { action: 'answer', question: 'Response to child decision', options: [],
         requestId: call.args.request_id, status: 'unknown' }
     } else continue
     const resultIndex = pairs.get(index)
@@ -103,7 +103,7 @@ export function inlineYieldDecisions(
       decision = { ...decision, ...answer.revisedQuestion }
     }
     if (answer && (action === 'answer'
-      ? answer.requestId !== call.args.request_id || answer.option !== call.args.option || answer.answeredBy !== 'parent'
+      ? answer.requestId !== call.args.request_id || answer.option !== call.args.text || answer.answeredBy !== 'parent'
       : (!answer.custom && !decision.options.includes(answer.option))
         || (answer.answeredBy === 'timeout' && answer.option !== decision.defaultOption))) answer = undefined
     entries.set(index, {

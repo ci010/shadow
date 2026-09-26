@@ -32,8 +32,8 @@ export function executionModeGuideline(ctx: SessionPromptContext): string {
   const hasDelegationParent = !!ctx.parentSessionId
   const modes = ctx.agent.name !== 'orchestrator' && isToolAllowed(ctx.agent, 'subagent')
     ? allowedSubagentModes(mode, hasDelegationParent) : []
-  const decision = isToolAllowed(ctx.agent, 'yield')
-    ? 'Use yield for blockers or decisions requiring input.'
+  const decision = isToolAllowed(ctx.agent, 'ask')
+    ? 'Use ask for missing input or consequential decisions; reply answers a specific pending request.'
     : 'Report blockers or missing input explicitly; do not invent an answer.'
   if (mode === 'call') {
     return `## Execution Contract: Call
@@ -42,11 +42,11 @@ Complete the caller's bounded task using inherited context, not a new user conve
 Do not repeat alignment interviews or create alignment documents/delegate merely out of
 orchestration habit. Keep role tool constraints and the current environment context.
 The caller is waiting for your final response as the original tool result.
-This is a leaf call: you cannot yield, message other sessions, create subagents, or schedule
+This is a leaf call: you cannot ask, reply, message other sessions, create subagents, or schedule
 deferred coordination. These limits override role coordination instructions.
-Do not create/manage durable topics or register folders.
+Do not create/manage durable sessions or register folders.
 For missing facts, authorization or consequential decisions, return a blocked result immediately;
-the caller decides or yields before issuing a new call. Do not invent answers or blindly retry
+the caller decides or asks before issuing a new call. Do not invent answers or blindly retry
 side effects. Report ordinary execution failures as failures.
 Return the matching blocker/failure shape as raw JSON without fences or a preamble:
 {"status":"blocked","reason":"What input or permission is missing and why","partialWork":"Actions already taken and their side effects"}
@@ -64,7 +64,7 @@ effects are not rolled back.`
     return `## Execution Contract: Task
 
 Complete this one-time task in your own context; make routine decisions yourself.
-Do not create/manage durable topics or register folders.
+Do not create/manage durable sessions or register folders.
 ${decision} Your final response ends the task and is reported
 automatically; do not send a duplicate completion message. No follow-up assignments or promises.
 ${modes.length

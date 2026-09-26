@@ -60,6 +60,28 @@ test('direct choice helper submits exactly the requested option and blocks dupli
   assert.equal(state.request.value, null)
 })
 
+test('plain input has no default, retains rejected text, and requires a matching input receipt', async t => {
+  const { state, requests } = harness(t)
+  const input = { kind: 'input', id: 'input-1', sessionId: 'web:root', question: 'Which path?',
+    recipient: { kind: 'user', sessionId: 'web:root' }, origin: { physicalId: 'root-0', toolCallId: 'ask-input' },
+    createdAt: new Date().toISOString(), deadline: null }
+  requests[0]!.finish(Response.json({ request: input }))
+  await settle()
+  assert.equal(state.customMode.value, true)
+  assert.equal(state.selected.value, '')
+  assert.equal(await state.submit(), false)
+  state.customText.value = 'C:\\fixture'
+  const failed = state.submit()
+  assert.deepEqual(JSON.parse(String(requests[1].init.body)), { requestId: 'input-1', text: 'C:\\fixture' })
+  requests[1].finish(Response.json({ error: 'conflict', message: 'Try again.' }, { status: 409 }))
+  assert.equal(await failed, false)
+  assert.equal(state.customText.value, 'C:\\fixture')
+  const replied = state.submit()
+  requests[2].finish(Response.json({ answer: { requestId: 'input-1', text: 'C:\\fixture', answeredBy: 'user', answeredAt: new Date().toISOString() } }))
+  assert.equal(await replied, true)
+  assert.equal(state.request.value, null)
+})
+
 test('custom responses survive polling and rejection, require explicit confirmation and block duplicate answers', async t => {
   const { state, requests } = harness(t)
   requests[0]!.finish(Response.json({ request: question() }))
@@ -148,7 +170,7 @@ test('only visible waiting sessions fetch and stale session responses cannot app
   assert.equal(requests.length, 0)
   source.stage = 'waiting'
   assert.equal(requests.length, 1)
-  assert.equal(requests[0]!.url, 'http://main/api/sessions/web%3Aroot/yield')
+  assert.equal(requests[0]!.url, 'http://main/api/sessions/web%3Aroot/ask')
   source.sessionId = 'web:second'
   assert.equal(requests[0]!.init.signal!.aborted, true)
   requests[1]!.finish(Response.json({ request: question('web:second') }))

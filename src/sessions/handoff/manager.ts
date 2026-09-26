@@ -353,7 +353,7 @@ export class HandoffManager {
       '',
       '## Continuation Instruction',
       '- Persistent context (themes, files, decisions, progress) is in your Session Memory — refer to it.',
-      '- Preserve conventions and objective unless newer user instruction overrides them.',
+      '- Preserve still-applicable conversation instructions and their source; distinguish them from stable personal preferences, Project conventions and current Work. Do not carry a previous task restriction onto unrelated work or treat remembered approval as new permission.',
       '- Continue execution from the most recent unfinished work item.',
     ]
 

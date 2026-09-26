@@ -59,6 +59,24 @@ async function main() {
     assert.match(await execute(`document.querySelector('.yield-decision').textContent`), /Default selected by timeout/)
     assert.equal(await execute(`document.querySelector('.yield-decision').getAttribute('data-msg-idx')`), '7')
     assert.equal(await execute(`document.querySelectorAll('.yield-decision button, .yield-decision input').length`), 0, 'Historical decisions cannot submit answers')
+    assert.equal(await execute(`document.querySelector('.response-disclosure').open`), false)
+    assert.match(await execute(`document.querySelector('.response-disclosure > summary').textContent`), /Background response.*subagent-failed.*Reviewer.*Trigger failed/)
+    assert.equal(await execute(`document.querySelector('.yield-decision').closest('.response-disclosure')`), null)
+    assert.equal(await execute(`document.querySelector('.tool-activity').closest('.response-disclosure')`), null)
+    await execute(`document.querySelector('.response-disclosure > summary').focus()`)
+    window.webContents.debugger.attach('1.3')
+    await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+    for (const type of ['keyDown', 'keyUp']) {
+      await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}),
+      })
+    }
+    await wait(`document.querySelector('.response-disclosure').open`)
+    window.webContents.debugger.detach()
+    assert.match(await execute(`document.querySelector('.response-disclosure .prose').textContent`), /original changes are untouched/)
+    await execute(`void (window.__conversationFixture.messages = [...window.__conversationFixture.messages])`)
+    await frame()
+    assert.equal(await execute(`document.querySelector('.response-disclosure').open`), true, 'Message refresh preserves disclosure intent')
     await execute(`window.__conversationFixture.messages[1].content = 'Routine progress. '.repeat(60)`)
     await wait(`!!document.querySelector('.collaboration-message')`)
     assert.equal(await execute(`!!document.querySelector('.collaboration-message .prose')`), false, 'Long routine progress does not mount hidden Markdown')
@@ -97,6 +115,7 @@ async function main() {
         assert.notEqual(layout.userProseMaxWidth, 'none', 'Other message prose retains its reading measure')
         assert.equal(layout.overflow, false)
         assert.equal(layout.actionOverflow, false)
+        assert.equal(await execute(`document.querySelector('.response-disclosure').scrollWidth > document.querySelector('.response-disclosure').clientWidth`), false)
         const colors = await execute(`(() => {
           const root = getComputedStyle(document.documentElement);
           const token = name => { const el = document.createElement('span'); el.style.color = root.getPropertyValue(name); document.body.append(el); const value = getComputedStyle(el).color; el.remove(); return value };

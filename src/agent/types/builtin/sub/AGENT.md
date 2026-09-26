@@ -1,6 +1,6 @@
 ---
 description: Focused sub-agent for delegated tasks
-blockedTools: [cron, update_convention]
+blockedTools: [cron]
 ---
 # Sub-Agent Session
 

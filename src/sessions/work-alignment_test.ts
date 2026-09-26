@@ -85,7 +85,7 @@ test('registry fences old inference, same-batch adoption, nested tools, and rest
   try {
     assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /Untracked execution/)
     await f.apply()
-    const clarification = { name: 'yield', description: '', parameters: { type: 'object' as const, properties: {} }, async execute() { return 'clarification' } }
+    const clarification = { name: 'ask', description: '', parameters: { type: 'object' as const, properties: {} }, async execute() { return 'clarification' } }
     assert.equal(f.alignment.before(clarification, { action: 'ask' }, f.context()), undefined, 'Asking for clarification does not require adopting an unclear goal')
     const unadopted = f.context()
     await f.adopt()
@@ -132,6 +132,15 @@ test('late results stay attributable and unresolved effects survive restart with
       assert.equal(reopened.workRecords()[0].adoption?.revision, 2)
     } finally { reopened.close() }
   } finally { result.resolve('cleanup'); f.store.close() }
+}))
+
+test('execution cancellation remains available while work is paused and unadopted', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  try {
+    await f.apply({ ...change(), paused: true })
+    const cancel = { name: 'cancel', description: '', parameters: { type: 'object' as const, properties: {} }, async execute() { return 'cancelled' } }
+    assert.equal(f.alignment.before(cancel, { executionId: 'virtual:child' }, f.context()), undefined)
+  } finally { f.store.close() }
 }))
 
 test('bounded tasks cannot manage contracts but retain their durable owner execution fence', async () => withTempWorkspace(async workspace => {

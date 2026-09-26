@@ -11,11 +11,10 @@ import type { SessionState, SessionStore } from './session-store.ts'
 import type { SessionInput } from './input.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
-import { TopicTool } from '../tools/topic.ts'
+import { SessionTool } from '../tools/session.ts'
 import { SearchTool } from '../tools/search.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
-import { topicProvider } from '../agent/context/topic.ts'
 import { BaseSession } from './base-session.ts'
 import { Bus } from '../bus/bus.ts'
 import { MessageTool } from '../tools/message.ts'
@@ -59,10 +58,11 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       },
       assertFolderAccess(id) { assert(states.has(id)) },
       assertInitiativeAccess(id) { if (id !== 'work') throw new Error('Unknown Project initiative') },
-      async updateTopicMetadata(id, topic) {
+      async updateConversationMetadata(id, topic) {
         const state = states.get(id)
         assert(state)
-        state.topic = topic
+        state.name = topic.title
+        state.description = topic.description
         await store.saveState(id, state)
       },
       async deliver(sessionId, input) {
@@ -73,7 +73,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     }
     const options: TopicServiceOptions = {
       projectId: 'p', sessions, folders, listStates: async () => [...states.values()],
-      firstMessage: async () => 'Legacy release readiness',
+      firstMessage: async id => id === 'web:legacy' ? 'Legacy release readiness' : null,
       resolveAgent: name => ['general', 'orchestrator', 'explore', 'encapsulator'].includes(name) ? { defaultMode: 'session' } : undefined,
       changed: id => { changes.push(id) },
     }
@@ -88,8 +88,8 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.equal(states.get('web:orchestrator')?.folderId, undefined)
     const { folder } = await service.registerFolder(folderPath)
     const request = {
-      requestId: randomUUID(), title: 'MCP configuration', goal: 'Explain lazy tool setup',
-      scope: 'MCP configuration and skill declarations', nonGoals: 'Provider changes',
+      requestId: randomUUID(), title: 'MCP configuration',
+      description: 'MCP configuration and skill declarations',
       folderId: folder.id, initiativeId: 'work', initialMessage: 'Read the selected skill and explain how to configure MCP.',
     }
     const [created, retry] = await Promise.all([
@@ -112,14 +112,17 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     assert.match(saved.topicRequestHash ?? '', /^[a-f0-9]{64}$/)
     assert.equal((await store.getState(created.sessionId))?.topicRequestHash, saved.topicRequestHash)
     assert.equal(changes.filter(id => id === created.sessionId).length, 1)
-    await assert.rejects(service.create({ ...request, goal: 'Different goal' }, 'web:orchestrator'), /requestId/)
+    await assert.rejects(service.create({ ...request, description: 'Different description' }, 'web:orchestrator'), /requestId/)
     const restartedService = new TopicService(options)
     assert.equal((await restartedService.create(request, 'web:orchestrator')).initialMessageStatus, 'not_replayed')
     assert.equal(deliveries.length, 1)
     assert.equal((await restartedService.ensureOrchestrator()).sessionId, 'web:orchestrator')
     assert.equal(builds, 2)
 
-    const plain = await service.create({ title: 'Discussion', goal: 'Clarify requirements', scope: '' })
+    const plain = await service.create({ title: 'Discussion' })
+    assert.equal(states.get(plain.sessionId)?.topic, undefined)
+    assert.equal(states.get(plain.sessionId)?.sessionKind, undefined)
+    await assert.rejects(service.create({ title: 'No duplicate goal', goal: 'Not a metadata field' }))
     assert.equal(states.get(plain.sessionId)?.folderId, undefined)
     const worker: SessionState = { sessionId: 'task:worker', projectId: 'p', segmentIndex: 0, mode: 'task' }
     states.set(worker.sessionId, worker)
@@ -131,29 +134,23 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
     await assert.rejects(service.create({ ...request, requestId: randomUUID(), folderId: randomUUID() }), /folder/i)
     const matches = await service.search({ query: 'MCP skill' })
     assert.equal(matches.totalMatches, 1)
-    assert.equal(matches.topics[0].sessionId, created.sessionId)
+    assert.equal(matches.sessions[0].sessionId, created.sessionId)
     const page = await service.search({ limit: 1 })
     assert.equal(page.hasMore, true)
     assert.equal(page.nextOffset, 1)
-    assert.equal((await service.search({ offset: 1 })).topics.length, 1)
+    assert.equal((await service.search({ offset: 1 })).sessions.length, 1)
     const legacy: SessionState = { sessionId: 'web:legacy', projectId: 'p', segmentIndex: 0, mode: 'session' }
     states.set(legacy.sessionId, legacy)
     const legacyMatches = await service.search({ query: 'release readiness' })
-    assert.equal(legacyMatches.topics[0].sessionId, legacy.sessionId)
-    assert.equal(legacyMatches.topics[0].briefSource, 'first_message')
-    assert(!(await service.search()).topics.some(topic => topic.sessionId === worker.sessionId))
+    assert.equal(legacyMatches.sessions[0].sessionId, legacy.sessionId)
+    assert.equal(legacyMatches.sessions[0].metadataSource, 'first_message')
+    assert(!(await service.search()).sessions.some(topic => topic.sessionId === worker.sessionId))
     await assert.rejects(service.search({ limit: 21 }))
     await assert.rejects(service.search({ offset: -1 }))
 
-    await assert.rejects(service.update({ sessionId: created.sessionId, title: 'Hijack', goal: 'x', scope: 'y' }, plain.sessionId), /Only this topic/)
-    await service.update({ sessionId: created.sessionId, title: 'MCP topic', goal: request.goal, scope: request.scope }, 'web:orchestrator')
-    assert.equal(states.get(created.sessionId)?.topic?.title, 'MCP topic')
-    const prompt = topicProvider(sessions.getSessionState).getPromptSection({
-      sessionId: created.sessionId, projectId: 'p', mode: 'session', behavior: {}, channel: 'web', chatId: created.chatId!,
-      agent: { name: 'general', defaultMode: 'session', prompt: '', source: 'builtin', description: '' },
-    })
-    assert.match(String(prompt), /MCP topic/)
-    assert.match(String(prompt), /not an authorization/)
+    await assert.rejects(service.update({ sessionId: created.sessionId, title: 'Hijack' }, plain.sessionId), /Only this session/)
+    await service.update({ sessionId: created.sessionId, title: 'MCP session', description: request.description }, 'web:orchestrator')
+    assert.equal(states.get(created.sessionId)?.name, 'MCP session')
 
     const tools = new SessionTools(new Tools(home), home)
     const context: ExecutionContext = {
@@ -176,40 +173,40 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
       nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not access remote executor') },
     } }
     assert.match(await search.execute({ space: 'grep:v:sessions', query: 'MCP' }, remoteContext), /\/brief/)
-    const tool = new TopicTool(service)
+    const tool = new SessionTool(service)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath }, { ...context, sessionId: worker.sessionId }), /Temporary/)
     await assert.rejects(tool.execute({ action: 'register_folder', path: folderPath, extra: 1 }, context), /only path/)
     await assert.rejects(tool.execute({ action: 'create', title: 'x', goal: 'y', scope: 'z', projectId: 'other' }, context))
 
     const app = new Hono()
     topicsPlugin(service, req => req.headers.get('authorization') === 'fixture')(app)
-    assert.equal((await app.request('/api/topics')).status, 401)
+    assert.equal((await app.request('/api/sessions/discover')).status, 401)
     assert.equal((await app.request('/api/orchestrator', { method: 'POST' })).status, 401)
     const headers = { authorization: 'fixture', 'content-type': 'application/json' }
     const response = await app.request('/api/orchestrator', { method: 'POST', headers })
     assert.equal(response.status, 200)
     assert.equal((await response.json()).sessionId, 'web:orchestrator')
-    assert.equal((await app.request('/api/topics?limit=NaN', { headers })).status, 400)
-    assert.equal((await app.request('/api/topics', { method: 'POST', headers, body: '{"projectId":"other"}' })).status, 400)
-    assert.equal((await app.request('/api/topics', { method: 'POST', headers, body: '{' })).status, 400)
-    const trustedRequest = new Request('http://127.0.0.1/api/topics', {
+    assert.equal((await app.request('/api/sessions/discover?limit=NaN', { headers })).status, 400)
+    assert.equal((await app.request('/api/sessions', { method: 'POST', headers, body: '{"projectId":"other"}' })).status, 400)
+    assert.equal((await app.request('/api/sessions', { method: 'POST', headers, body: '{' })).status, 400)
+    const trustedRequest = new Request('http://127.0.0.1/api/sessions', {
       method: 'POST', headers, body: '{"projectId":"other"}',
     })
     const trustedApp = new Hono()
     topicsPlugin(service, req => req === trustedRequest)(trustedApp)
     assert.equal((await trustedApp.request(trustedRequest)).status, 400,
       'Authorize the trusted request before the body limiter can clone it')
-    const list = await app.request('/api/topics?query=MCP', { headers })
+    const list = await app.request('/api/sessions/discover?query=MCP', { headers })
     assert.equal((await list.json()).totalMatches, 1)
 
     const bus = new Bus()
     t.after(() => bus.stopAll())
     const base = new Tools(home)
     base.register(new SearchTool(home, undefined, vfs))
-    base.register(new TopicTool(service))
+    base.register(new SessionTool(service))
     base.register(new MessageTool(bus, () => true, () => undefined, () => [], sessions.deliver,
       (from, to) => states.has(from) && states.has(to)))
-    const coordinatorTools = new SessionTools(base, home, ['search', 'topic', 'message'])
+    const coordinatorTools = new SessionTools(base, home, ['search', 'session', 'message'])
     let turn = 0
     let routedSessionId = ''
     const provider: LLMProvider = {
@@ -227,8 +224,8 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
           assert.equal(String(lastResult.content), 'No matches found')
           return {
             content: '', finishReason: 'tool_calls',
-            toolCalls: [{ id: 'create-topic', name: 'topic', arguments: {
-              action: 'create', title: 'LLM routing', goal: 'Explain a routing change', scope: 'Routing only',
+            toolCalls: [{ id: 'create-topic', name: 'session', arguments: {
+              action: 'create', title: 'LLM routing', description: 'Routing investigation',
               folderId: folder.id, initialMessage: 'Investigate the routing contract and report here.',
             } }],
           }

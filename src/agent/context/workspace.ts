@@ -112,6 +112,7 @@ export function workspaceProvider(
       if (!coordinator && isToolAllowed(ctx.agent, 'write')) {
         lines.push(
           '- Files survive restarts; mental notes do not. Write what you need to remember under `v:memory/`, including explicit "remember this" requests.',
+          '- Stable personal preferences belong in the identified user profile with source/context and corrections, not Project rules. Temporary reply instructions stay in conversation; preserve applicable ones through compaction, not as session conventions.',
           '- Record mistakes to avoid repeating them; save lessons in memory or update/create relevant skills.',
           '- Memory is a knowledge graph: reference files with markdown links, not bare code spans. Fix write-validation issues reported in tool results.',
           '',

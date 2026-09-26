@@ -2,43 +2,52 @@
   <section v-if="enabled && (request || error)" class="yield-question" :class="{ 'yield-question-custom': customMode }" aria-label="Pending question">
     <form v-if="request" @submit.prevent="submit" @keydown="handleKeydown">
       <header class="yield-heading">
-        <span>{{ request.recipient.kind === 'user' ? 'Decision · Needs your reply' : 'Decision · Waiting for parent' }}</span>
+        <span>{{ inputQuestion ? 'Input' : 'Decision' }} · {{ request.recipient.kind === 'user' ? 'Needs your reply' : request.recipient.kind === 'parent' ? 'Waiting for parent' : 'Waiting for caller' }}</span>
         <span class="i-lucide-signpost" aria-hidden="true" />
       </header>
       <div class="yield-body">
-        <DecisionBrief v-if="request.brief" :brief="request.brief" @inspect="emit('inspect', $event)" />
-        <p v-if="request.reportingSessionId" class="yield-status">Reporting responsibility: {{ request.reportingSessionId }}. Answer authority is unchanged.</p>
+        <DecisionBrief v-if="decisionRequest?.brief" :brief="decisionRequest.brief" @inspect="emit('inspect', $event)" />
+        <section v-if="decisionRequest?.workProposal" class="work-proposal" aria-label="Exact proposed work change">
+          <h3>Proposed work · v{{ decisionRequest.workProposal.baseRevision }}</h3>
+          <p>Change type: {{ decisionRequest.workProposal.change }} · New execution: {{ decisionRequest.workProposal.paused ? 'paused' : 'not paused' }}</p>
+          <p>{{ decisionRequest.workProposal.definition.objective }}</p>
+          <p><strong>Acceptance:</strong> {{ decisionRequest.workProposal.definition.acceptance.join('; ') }}</p>
+          <p><strong>Boundaries:</strong> {{ decisionRequest.workProposal.definition.boundaries.join('; ') || 'Not recorded; no new permission' }}</p>
+          <p>{{ decisionRequest.workProposal.reason }}</p>
+          <p class="yield-status">One approval applies this exact change. The executor must adopt the new version. A custom answer or timeout does not approve it.</p>
+        </section>
+        <p v-if="decisionRequest?.reportingSessionId" class="yield-status">Reporting responsibility: {{ decisionRequest.reportingSessionId }}. Answer authority is unchanged.</p>
         <fieldset :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">
           <legend>{{ request.question }}</legend>
-          <div class="yield-options">
-            <label v-for="(option, index) in request.options" :key="option" class="yield-option" :class="{ selected: !customMode && selected === option }">
+          <div v-if="decisionRequest" class="yield-options">
+            <label v-for="(option, index) in decisionRequest.options" :key="option" class="yield-option" :class="{ selected: !customMode && selected === option }">
               <input class="yield-sr-only" type="radio" :name="id" :value="option" :aria-keyshortcuts="optionLetter(index)"
                 :checked="!customMode && selected === option" @change="selected = option; customMode = false">
               <span class="yield-index" aria-hidden="true">{{ optionLetter(index) }}</span>
               <span class="yield-option-text">{{ option }}</span>
-              <span v-if="option === request.defaultOption" class="yield-default">Default</span>
+              <span v-if="option === decisionRequest.defaultOption" class="yield-default">Default</span>
               <span class="yield-selected i-lucide-check" :class="{ visible: !customMode && selected === option }" aria-hidden="true" />
             </label>
             <button type="button" class="yield-option yield-custom-toggle" :class="{ selected: customMode }"
-              :aria-expanded="customMode" :aria-controls="`${id}-custom`" :aria-keyshortcuts="optionLetter(request.options.length)" @click="openCustomResponse">
-              <span class="yield-index" aria-hidden="true">{{ optionLetter(request.options.length) }}</span>
+              :aria-expanded="customMode" :aria-controls="`${id}-custom`" :aria-keyshortcuts="optionLetter(decisionRequest.options.length)" @click="openCustomResponse">
+              <span class="yield-index" aria-hidden="true">{{ optionLetter(decisionRequest.options.length) }}</span>
               <span class="yield-option-text">{{ customMode ? 'Your answer' : 'Or type your own answer...' }}</span>
               <span class="yield-selected i-lucide-check" :class="{ visible: customMode }" aria-hidden="true" />
             </button>
           </div>
-          <div v-if="customMode" :id="`${id}-custom`" class="yield-custom">
+          <div v-if="customMode || inputQuestion" :id="`${id}-custom`" class="yield-custom" :class="{ 'input-response': inputQuestion }">
             <label :for="`${id}-response`" class="yield-sr-only">Your response</label>
             <textarea :id="`${id}-response`" ref="customInput" v-model="customText" rows="3" required
               placeholder="Type your answer..." :maxlength="MAX_YIELD_CUSTOM_TEXT_LENGTH" />
           </div>
         </fieldset>
         <p :id="`${id}-status`" class="yield-status" :class="{ 'yield-sr-only': answerable }">{{ request.recipient.kind === 'parent'
-          ? 'Waiting for the parent session. Only that session can answer.'
-          : canAnswer ? 'Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.' : 'Waiting for an authorized user. You have read-only access.' }}</p>
-        <p v-if="request.deadline || request.timeoutPaused" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
-        <p v-if="request.supersedes" class="yield-status">Revised in response to your feedback: {{ request.revisionReason }}. This is a new unanswered version.</p>
-        <DecisionDiscussion v-if="request.origin && answerable"
-          :key="request.id" :reference="{ sessionId: request.sessionId, physicalId: request.origin.physicalId, requestId: request.id }"
+          ? 'Waiting for the parent session. Only that session can answer.' : request.recipient.kind === 'caller' ? 'Waiting for the authenticated A2A caller.'
+          : canAnswer ? inputQuestion ? 'Provide the requested information. This reply does not grant new permissions.' : 'Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.' : 'Waiting for an authorized user. You have read-only access.' }}</p>
+        <p v-if="request.deadline || decisionRequest?.timeoutPaused || inputQuestion" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
+        <p v-if="decisionRequest?.supersedes" class="yield-status">Revised in response to your feedback: {{ decisionRequest.revisionReason }}. This is a new unanswered version.</p>
+        <DecisionDiscussion v-if="decisionRequest?.origin && answerable" :exact-proposal="!!decisionRequest.workProposal"
+          :key="request.id" :reference="{ sessionId: request.sessionId, physicalId: decisionRequest.origin.physicalId, requestId: request.id }"
           :api-base="apiBase" :can-request="answerable && !busy" @updated="refresh" />
       </div>
       <div class="yield-actions">
@@ -57,13 +66,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
-import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText } from '../yield-requests.ts'
-import type { YieldRequest } from '../../../src/sessions/yield-contract.ts'
+import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText, isInputRequest, type AskRequest } from '../yield-requests.ts'
 import DecisionDiscussion from './DecisionDiscussion.vue'
 import DecisionBrief from './DecisionBrief.vue'
 
 const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean }>()
-const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: YieldRequest | null]; inspect: [sessionId: string] }>()
+const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; inspect: [sessionId: string] }>()
 const id = `yield-${useId()}`
 const documentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const enabled = computed(() => props.active && documentVisible.value)
@@ -71,6 +79,8 @@ const customInput = ref<HTMLTextAreaElement>()
 const { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh, submit, cancelQuestion: cancelPendingQuestion } = useYieldRequest(
   () => ({ ...props, active: enabled.value }),
 )
+const inputQuestion = computed(() => !!request.value && isInputRequest(request.value))
+const decisionRequest = computed(() => request.value && !isInputRequest(request.value) ? request.value : null)
 watch(request, (value, previous) => {
   if (value?.id !== previous?.id) emit('request', value)
 }, { immediate: true })
@@ -85,15 +95,15 @@ function handleKeydown(event: KeyboardEvent) {
     void submit()
     return
   }
-  if (!/^[a-z]$/i.test(event.key) || !request.value) return
+  if (!/^[a-z]$/i.test(event.key) || !decisionRequest.value) return
   const index = event.key.toUpperCase().charCodeAt(0) - 65
-  if (index > request.value.options.length) return
+  if (index > decisionRequest.value.options.length) return
   event.preventDefault()
   event.stopPropagation()
-  if (index === request.value.options.length) {
+  if (index === decisionRequest.value.options.length) {
     void openCustomResponse()
   } else {
-    selected.value = request.value.options[index]!
+    selected.value = decisionRequest.value.options[index]!
     customMode.value = false
     if (event.currentTarget instanceof HTMLFormElement) {
       event.currentTarget.querySelectorAll<HTMLInputElement>('input[type="radio"]')[index]?.focus({ preventScroll: true })
@@ -147,6 +157,7 @@ fieldset:disabled .yield-index { color: var(--c-text-muted); }
 .yield-custom-toggle { color: var(--c-text-muted); }
 .yield-custom-toggle.selected { color: var(--c-text); }
 .yield-custom { margin: 8px 4px 4px 48px; }
+.yield-custom.input-response { margin-inline: 0; }
 .yield-custom textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 80px; padding: 8px 12px; border: 1px solid var(--c-control-border); border-radius: 0; background: var(--c-bg-input); color: var(--c-text); font: inherit; line-height: 1.5; resize: vertical; }
 .yield-custom textarea::placeholder { color: var(--c-text-muted); }
 .yield-error { flex-shrink: 0; max-height: 6em; overflow-y: auto; margin: 12px 4px 0; color: var(--c-error); font-size: 12px; }

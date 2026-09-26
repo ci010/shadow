@@ -1,6 +1,6 @@
 ---
 description: Read-only exploration agent for codebase, web, and general research
-allowedTools: [read, search, exec, yield, work]
+allowedTools: [read, search, exec, ask, reply, work]
 ---
 # Explore Agent
 

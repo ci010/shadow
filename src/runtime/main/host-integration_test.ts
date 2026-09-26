@@ -4,7 +4,7 @@ import { once } from 'node:events'
 import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { ConfigSchema } from '../../config/schema.ts'
 import { startMainRuntime } from './start.ts'
 import type { MainRuntimeHandle } from './contracts.ts'
@@ -19,7 +19,8 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
   await withTempWorkspace(async root => {
     const previousCwd = process.cwd()
     const environmentKeys = ['GITHUB_COPILOT_TOKEN_DIR', 'GITHUB_COPILOT_ACCESS_TOKEN_FILE',
-      'GITHUB_COPILOT_API_KEY_FILE', 'GITHUB_COPILOT_MODELS_CACHE_FILE', 'OTEL_DB_PATH', 'VITE_DEV_URL', 'UI_DIST_DIR']
+      'GITHUB_COPILOT_API_KEY_FILE', 'GITHUB_COPILOT_MODELS_CACHE_FILE', 'OTEL_DB_PATH', 'VITE_DEV_URL', 'UI_DIST_DIR',
+      'SHADOW_A2A_MISSING_STARTUP_TEST_TOKEN']
     const previousEnvironment = new Map(environmentKeys.map(key => [key, process.env[key]]))
     let runtime: MainRuntimeHandle | undefined
     try {
@@ -59,6 +60,12 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const credential = randomUUID()
       const options = { configPath, localNodeId: 'fixture-main', gateway: { host: '127.0.0.1', port, launchCredential: credential } }
       const base = `http://127.0.0.1:${port}`
+      const projectConfigPath = projectPaths(`${home}.projects`, 'default').configPath
+      await mkdir(dirname(projectConfigPath), { recursive: true })
+      await writeFile(projectConfigPath, JSON.stringify({ voice: { enabled: false, timeoutMs: 30000 }, a2a: { server: {
+        url: `${base}/projects/default/a2a`, agentType: 'a2a-text',
+        callers: { fixture: 'SHADOW_A2A_MISSING_STARTUP_TEST_TOKEN' },
+      } } }))
       async function request(path: string, method = 'GET', body?: unknown) {
         return fetch(base + path, {
           method, headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
@@ -73,6 +80,17 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       }
       runtime = await startMainRuntime(config, options)
       await runtime.ready
+      assert.deepEqual(await json('/api/projects/default/status'), { state: 'ready' })
+      for (const [path, method] of [
+        ['/projects/default/a2a/.well-known/agent-card.json', 'GET'],
+        ['/projects/default/a2a', 'POST'],
+      ]) {
+        const unavailable = await request(path, method)
+        assert.equal(unavailable.status, 503)
+        assert.equal(unavailable.headers.get('cache-control'), 'no-store')
+        assert.equal((await unavailable.json()).error, 'a2a_unavailable')
+        assert.equal((await fetch(base + path, { method })).status, 401, 'No anonymous fallback for missing A2A credentials')
+      }
       assert.equal((await fetch(base + '/api/projects')).status, 401)
       assert.equal((await fetch(base + '/api/live?topics=[]')).status, 401)
       assert.equal((await fetch(base + '/nodes/v1/network')).status, 401)
@@ -184,7 +202,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert(!contextB.systemPrompt.includes('ORG_A_PRIVATE_IDENTITY_7f01'))
       assert(!contextA.systemPrompt.includes('B-private-folder'))
       assert(!contextB.systemPrompt.includes('A-private-folder'))
-      for (const suffix of ['/context', '/files', '/preview?path=sentinel.txt', '/yield', '/background-tasks']) {
+      for (const suffix of ['/context', '/files', '/preview?path=sentinel.txt', '/ask', '/background-tasks']) {
         assert.equal((await request(b + `/api/sessions/${encodeURIComponent(sessionA.sessionId)}${suffix}`)).status, 404)
       }
       assert((await (await request(aSession + '/preview?path=sentinel.txt')).text()).includes('A file only'))

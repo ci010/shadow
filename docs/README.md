@@ -9,6 +9,7 @@
 | [Messaging channels](channels.md) | Project bots, trust settings, and QQ passive-reply limits |
 | [Browser access](browser-access.md) | Local PIN and one-use pairing, trusted LAN, and PWA installation limits |
 | [Tools and automations](tools-and-automations.md) | Virtual discovery, Project MCP configuration, skills, and schedules |
+| [Project conventions](project-conventions.md) | Project SQL, attributable rule changes, Work queries, decisions and personal memory boundaries |
 | [Session diagnosis](diagnostics.md) | Read-only export/API/CLI and development-only prompt capture |
 | [Desktop release verification](release.md) | Native Windows/macOS/Linux build gates, Actions artifacts, package identity and installation acceptance boundaries |
 | [Mobile client](mobile.md) | Capacitor client architecture, HTTPS gateway, pairing/revocation, native release and operational boundaries |

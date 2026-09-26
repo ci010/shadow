@@ -20,6 +20,7 @@ import { SessionTools, Tools } from '../tools/registry.ts'
 import { saveToolImages } from '../sessions/tool-images.ts'
 import { imageFromBytes } from '../utils/image-input.ts'
 import { pngFixture } from '../testing/image.ts'
+import { createResponseContext } from '../sessions/response-context.ts'
 
 test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
   const bus = new Bus()
@@ -51,11 +52,44 @@ test('live event envelopes and parallel tool IDs are forwarded only to the ownin
       assert.equal(payload.toolCallId, toolCallId)
       assert.equal(payload.toolName, 'subagent')
     }
+    const responseContext = createResponseContext('turn', { kind: 'session', sessionId: 'web:peer' }, 'session', 'web')
+    bus.emit('message.outbound', { event: 'response', channel: 'web', chatId: 'owner',
+      content: 'Exact final result', media: ['report.txt'], responseContext, done: true })
+    const payload = JSON.parse((await decode()).match(/^data: (.+)$/m)![1]).payload
+    assert.deepEqual(payload.responseContext, responseContext)
+    assert.equal(payload.content, 'Exact final result')
+    assert.deepEqual(payload.media, ['report.txt'])
+    assert.equal(payload.done, true)
   } finally {
     await reader.cancel()
     await channel.stop()
     hub.close()
   }
+})
+
+test('display provenance does not filter or relabel synchronous REST content and media', async () => {
+  const bus = new Bus()
+  const channel = new WebChannel(bus, {})
+  const app = new Hono()
+  channel.setReceiver(async message => {
+    bus.emit('message.outbound', {
+      event: 'response', channel: 'web', chatId: message.chatId, replyTo: message.messageId,
+      done: true, content: 'Complete unabridged result', media: ['report.txt'],
+      responseContext: createResponseContext('turn', { kind: 'event', eventId: 'event', type: 'fixture', source: 'worker' }, 'session', 'web'),
+    })
+    return { status: 'accepted', sessionId: `web:${message.chatId}`, inputId: message.messageId }
+  })
+  await channel.start(app)
+  try {
+    const response = await app.request('/api/chat/message', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'owner', content: 'Read result' }) })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.content, 'Complete unabridged result')
+    assert.deepEqual(body.media, ['report.txt'])
+    assert.equal(body.responseContext, undefined)
+    assert.equal(body.chatId, 'owner')
+  } finally { await channel.stop() }
 })
 
 test('peer progress is projected once with its persisted author envelope, not as assistant stream text', async () => {

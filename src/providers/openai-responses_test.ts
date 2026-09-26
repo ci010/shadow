@@ -75,6 +75,8 @@ test('maps stateless messages, images, encrypted tool history and flat function 
       tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'inspect', arguments: call.arguments } }],
       reasoning_text: 'display-only', reasoning_content: 'other-protocol-only', timestamp: 'local-date',
       usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+      responseContext: { version: 1, turnId: 'private-turn', responseId: 'private-response',
+        source: { kind: 'session', sessionId: 'web:peer' }, userInvolved: false },
     },
     { role: 'tool', tool_call_id: 'call_1', name: 'inspect', content: '{"ok":true}' },
     { role: 'assistant', content: null, tool_calls: [

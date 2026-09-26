@@ -8,17 +8,18 @@ import { physicalSessionId } from '../sessions/session-identity.ts'
 import { isExecutionMode } from '../sessions/execution-mode.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import { parseInitiativeId } from '../sessions/initiative-metadata.ts'
+import type { A2aSessions } from '../a2a/sessions.ts'
 
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
   readonly name = 'subagent'
-  readonly description = 'Create a temporary asynchronous task, or invoke a blocking bounded leaf call. Use topic creation for independent long-lived conversations. Blocking calls must use this tool directly, not an exec/invoke bridge.'
+  readonly description = 'Create a temporary asynchronous task, or invoke a blocking bounded leaf call. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       mode: {
         type: 'string', enum: ['task', 'call'],
-        description: 'Task returns an accepted ID immediately. Call waits for its final result and cannot coordinate, yield, or delegate. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
+        description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
       },
       task: { type: 'string', description: 'Initial work. Required for task/call.' },
       description: {
@@ -33,7 +34,7 @@ export class SubagentTool implements Tool {
         type: 'string',
         description:
           'Agent role. Defaults to "general"; explicit call mode inherits the caller role when omitted. ' +
-          'Available types are listed in the Runtime section of the system prompt.',
+          'Discover local roles and configured a2a:<agent> targets with read("v:agents"). Remote targets support task mode only and inherit no local resources.',
       },
       report_to: {
         type: 'string',
@@ -57,13 +58,14 @@ export class SubagentTool implements Tool {
     private sessions: SessionManager,
     private agentTypes: AgentTypesManager,
     private channels: ChannelManager,
+    private remote?: Pick<A2aSessions, 'start'>,
   ) { }
 
   async execute(
     args: Record<string, unknown>,
     ctx: ExecutionContext,
   ): Promise<string> {
-    if (args.mode === 'session') return 'Error: mode=session is no longer supported by subagent. Use topic creation for an independent long-lived session.'
+    if (args.mode === 'session') return 'Error: mode=session is no longer supported by subagent. Use session creation for an independent long-lived conversation.'
     const denied = ctx.tools?.executionDenial?.('subagent', args)
     if (denied) return denied
     const description = args.description != null ? String(args.description) : ''
@@ -73,6 +75,16 @@ export class SubagentTool implements Tool {
     const allowedModes = this.sessions.getAllowedSubagentModes(ctx.sessionId)
     if (args.mode === undefined && !allowedModes.includes('task')) {
       return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
+    }
+    if (typeof args.agent_type === 'string' && args.agent_type.startsWith('a2a:')) {
+      if (!this.remote) throw new Error('A2A is not configured in this Project.')
+      if (args.mode !== undefined && args.mode !== 'task') throw new Error('Remote agents support asynchronous task mode only.')
+      if (Object.keys(args).some(key => !['agent_type', 'task', 'description', 'mode'].includes(key))) {
+        throw new Error('Remote delegation accepts only agent_type, task, description and task mode; local work context, report_to and preload_tools are not forwarded.')
+      }
+      if (typeof args.task !== 'string' || !args.task.trim()) throw new Error('Remote delegation requires task text.')
+      this.sessions.assertCanCreateChild(ctx.sessionId, 'task')
+      return this.remote.start(args.agent_type, args.task, ctx)
     }
     const parentState = this.sessions.getSessionState(ctx.sessionId)
     const initiativeId = parseInitiativeId({

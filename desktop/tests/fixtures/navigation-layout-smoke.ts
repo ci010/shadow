@@ -94,9 +94,9 @@ async function main() {
       {role:'user',content:'First investigation',sessionSource:{id:'web:reviewer',intent:'progress'}},
       {role:'assistant',content:'Checking the evidence'},
       {role:'user',content:'Second investigation',sessionSource:{id:'web:other',intent:'progress'}},
-      {role:'assistant',event:'tool_call',toolCallId:'budget',content:'',toolCall:{name:'yield',arguments:{question:'Allow six runs?',options:['Yes','No'],default_option:'No'}}},
+      {role:'assistant',event:'tool_call',toolCallId:'budget',content:'',toolCall:{name:'ask',arguments:{question:'Allow six runs?',options:['Yes','No'],default_option:'No'}}},
       {role:'tool',event:'tool_result',toolCallId:'budget',content:JSON.stringify({requestId:'budget',option:'No',answeredBy:'timeout',answeredAt:'2026-09-21T10:00:00Z'})},
-      {role:'assistant',event:'tool_call',toolCallId:'next',content:'',toolCall:{name:'yield',arguments:{question:'Continue local investigation?',options:['Yes','No'],default_option:'No'}}}
+      {role:'assistant',event:'tool_call',toolCallId:'next',content:'',toolCall:{name:'ask',arguments:{question:'Continue local investigation?',options:['Yes','No'],default_option:'No'}}}
     ); window.__setPending({id:'next',sessionId:'web:owner',question:'Continue local investigation?',options:['Yes','No'],defaultOption:'No',recipient:{kind:'user',sessionId:'web:owner'},createdAt:'2026-09-21T10:01:00Z',deadline:null})`)
     await wait(`document.querySelectorAll('.history-marker').length === 6`)
     assert.equal(await execute(`document.querySelectorAll('.history-marker.collaboration').length`), 1)

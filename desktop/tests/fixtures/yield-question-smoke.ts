@@ -6,7 +6,9 @@ import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { app, BrowserWindow, session } from 'electron'
 import { LiveFixture } from './live-fixture.ts'
 import type { YieldDecisionRecord, YieldRequest, YieldReview } from '../../../src/sessions/yield-contract.ts'
+import type { InputRequest } from '../../../src/sessions/input-request.ts'
 import { decisionBrief } from '../../../src/testing/decision.ts'
+import { WORK_APPROVE, WORK_REJECT } from '../../../src/initiatives/work-contract.ts'
 
 function argument(name: string): string {
   const value = process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -41,6 +43,8 @@ const question = (sessionId: string, id: string, parent = false): YieldRequest =
   createdAt: '2026-09-13T12:00:00.000Z', deadline: null as string | null,
 })
 const pending = new Map<string, ReturnType<typeof question>>()
+let pendingInput: InputRequest | undefined
+const inputAnswers: string[] = []
 const decisionRecords = new Map<string, YieldDecisionRecord>()
 const reviews: YieldReview[] = []
 const owners = new Map<string, string>()
@@ -75,10 +79,11 @@ const server = createServer(async (request, response) => {
     if (path === '/debug/models') return json({ models: ['gpt-5-mini@copilot'] })
     if (path === '/api/config') return json({ agent: { ...status, workspace: directory, temperature: 0.7 } })
     if (path === '/api/folders') return json({ folders: [] })
+    if (path === '/api/projects/default/status') return json({ state: 'ready' })
     if (path === '/api/sessions/graph') return json({
       sessions, nodes: sessions.map(item => ({ physicalId: item.current, logicalId: item.sessionId, parentPhysicalId: null, isCurrent: true })),
     })
-    if (path === '/api/sessions/stages') return json({ stages: Object.fromEntries(sessions.map(item => [item.sessionId, pending.has(item.sessionId) ? 'waiting' : 'idle'])) })
+    if (path === '/api/sessions/stages') return json({ stages: Object.fromEntries(sessions.map(item => [item.sessionId, pending.has(item.sessionId) || pendingInput?.sessionId === item.sessionId ? 'waiting' : 'idle'])) })
     if (path === '/api/chat/session') return json({ history: [{ role: 'user', content: 'Synthetic question test' }, ...live.history(`web:${url.searchParams.get('chatId')}`)],
       decisionRecords: recordsFor(`web:${url.searchParams.get('chatId')}`), tools: [], systemPrompt: '' })
     if (path === '/api/chat/send') { sends++; return json({ error: 'forbidden' }, 403) }
@@ -94,7 +99,7 @@ const server = createServer(async (request, response) => {
         return json({ reportingSessionId: owners.get(id) ?? id,
           candidates: sessions.filter(item => item.sessionId !== child).map(item => ({ sessionId: item.sessionId, label: item.title })) })
       }
-      if (match[2] === 'yield/follow-up' || match[2] === 'decisions/invalidate') {
+      if (match[2] === 'ask/follow-up' || match[2] === 'decisions/invalidate') {
         let body = ''
         for await (const chunk of request) body += chunk
         const input = JSON.parse(body)
@@ -116,7 +121,7 @@ const server = createServer(async (request, response) => {
         return
       }
       if (match[2] === 'decisions/reviews') return json({ reviews: reviews.filter(review => review.reference.requestId === url.searchParams.get('requestId')) })
-      if (match[2] === 'yield/reviews') {
+      if (match[2] === 'ask/reviews') {
         let body = ''
         for await (const chunk of request) body += chunk
         const input = JSON.parse(body)
@@ -142,11 +147,21 @@ const server = createServer(async (request, response) => {
       }
       if (match[2] === 'decisions') return json({ records: recordsFor(id) })
       if (match[2] === 'background-tasks') return json({ sessionId: id, total: 0, tasks: [] })
-      if (match[2] === 'yield') {
-        if (request.method === 'GET') { reads++; return json({ request: pending.get(id) ?? null }) }
+      if (match[2] === 'ask') {
+        if (request.method === 'GET') { reads++; return json({ request: pendingInput?.sessionId === id ? pendingInput : pending.get(id) ?? null }) }
         let body = ''
         for await (const chunk of request) body += chunk
         const input = JSON.parse(body)
+        if (pendingInput?.sessionId === id && pendingInput.id === input.requestId) {
+          assert.equal(request.method, 'POST')
+          assert.deepEqual(Object.keys(input).sort(), ['requestId', 'text'])
+          assert.equal(typeof input.text, 'string')
+          inputAnswers.push(input.text)
+          pendingInput = undefined
+          json({ answer: { requestId: input.requestId, text: input.text, answeredBy: 'user', answeredAt: new Date().toISOString() } })
+          live.finish(id)
+          return
+        }
         if (request.method === 'DELETE') {
           assert.deepEqual(Object.keys(input), ['requestId'])
           assert.equal(pending.get(id)?.id, input.requestId)
@@ -210,7 +225,7 @@ async function waitFor(window: BrowserWindow, expression: string) {
     await new Promise(resolve => setTimeout(resolve, 50))
   }
 }
-async function inspect(window: BrowserWindow, label: string) {
+async function inspect(window: BrowserWindow, label: string, input = false) {
   await evaluate(window, 'document.fonts.ready')
   const result = await evaluate<{ bounded: boolean; radios: number; checked: number; defaults: number; covered: boolean; overflow: boolean; square: boolean; aligned: boolean; touchTargets: boolean }>(window, `(() => {
     const card = document.querySelector('.yield-question'), rect = card.getBoundingClientRect();
@@ -225,13 +240,13 @@ async function inspect(window: BrowserWindow, label: string) {
       overflow: document.documentElement.scrollWidth > innerWidth || card.scrollWidth > card.clientWidth };
   })()`)
   assert.equal(result.bounded, true, `${label} card stays in viewport`)
-  assert.equal(result.radios, 3)
-  assert.equal(result.checked, 1)
-  assert.equal(result.defaults, 1)
+  assert.equal(result.radios, input ? 0 : 3)
+  assert.equal(result.checked, input ? 0 : 1)
+  assert.equal(result.defaults, input ? 0 : 1)
   assert.equal(result.covered, false, `${label} Continue is independently reachable`)
   assert.equal(result.overflow, false)
   assert.equal(result.square, true, `${label} uses square corners throughout`)
-  assert.equal(result.aligned, true, `${label} presets and custom answer share one text column`)
+  if (!input) assert.equal(result.aligned, true, `${label} presets and custom answer share one text column`)
   assert.equal(result.touchTargets, true, `${label} preserves mobile touch targets`)
   await writeFile(join(directory, `${label}.png`), (await window.webContents.capturePage()).toPNG())
   console.log(`LAYOUT_YIELD ${JSON.stringify({ label, ...result })}`)
@@ -278,7 +293,7 @@ async function runViewport(origin: string, width: number, height: number) {
     assert.equal(await evaluate(window, `document.querySelectorAll('.yield-decision').length`), 1, 'The pending endpoint supplies an anchor before the tool call loads')
     assert.match(await evaluate<string>(window, `document.querySelector('.yield-decision .decision-status').textContent`), /Needs your reply/)
     assert.match(await evaluate<string>(window, `document.querySelector('.yield-question .decision-brief').textContent`), /Original goal.*Unverified assumption.*Blocked until decided/s)
-    live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'yield', arguments: {} } })
+    live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'ask', arguments: {} } })
     await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
     assert.match(await evaluate<string>(window, `document.querySelector('.chat-working').textContent`), /Waiting for a response/)
     await inspect(window, width > 600 ? 'yield-question-desktop' : 'yield-question-mobile')
@@ -451,6 +466,26 @@ async function runViewport(origin: string, width: number, height: number) {
     assert.deepEqual(answers.at(-1), { requestId: `binary-${width}`, option: binaryOptions[0] })
     assert.equal(await evaluate(window, `document.querySelector('.composer-input textarea').value`), 'Keep my unsent draft')
 
+    pending.set(root, { ...question(root, `work-${width}`), question: 'Apply this saved work proposal?',
+      options: [WORK_APPROVE, WORK_REJECT], defaultOption: WORK_REJECT, brief: decisionBrief,
+      origin: { physicalId: 'physical-0' },
+      workProposal: { key: 'work:11111111-1111-4111-8111-111111111111', id: '22222222-2222-4222-8222-222222222222',
+        baseRevision: 1, assignmentRevision: 2, change: 'pause', reason: 'Review acceptance first', paused: true,
+        definition: { objective: 'Verify both directions', acceptance: ['Inbound and outbound verified'], boundaries: ['No publication'], evidence: [] } },
+    })
+    live.publisher.invalidateSessions(root)
+    await waitFor(window, `document.querySelector('.work-proposal')`)
+    const proposalText = await evaluate<string>(window, `document.querySelector('.work-proposal').textContent`)
+    assert.match(proposalText, /Verify both directions/)
+    assert.match(proposalText, /Inbound and outbound verified/)
+    assert.match(proposalText, /No publication/)
+    assert.match(proposalText, /New execution: paused/)
+    assert.equal(await evaluate(window, `[...document.querySelectorAll('.yield-question button')].some(button => button.textContent.includes('Request revised question'))`), false)
+    await evaluate(window, `document.querySelector('.yield-question input[type="radio"]').click()`)
+    await evaluate(window, `document.querySelector('.yield-continue').click()`)
+    await waitFor(window, `!document.querySelector('.yield-question')`)
+    assert.deepEqual(answers.at(-1), { requestId: `work-${width}`, option: WORK_APPROVE })
+
     const expiring = question(root, `expired-${width}`)
     expiring.deadline = new Date(Date.now() - 1000).toISOString()
     pending.set(root, expiring)
@@ -459,7 +494,7 @@ async function runViewport(origin: string, width: number, height: number) {
     const expiredAnswers = answers.length
     await new Promise(resolve => setTimeout(resolve, 1600))
     assert.equal(answers.length, expiredAnswers, 'Client expiry must never resolve the question')
-    live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'yield', arguments: {} } })
+    live.chat(root, { event: 'tool_call', content: 'Waiting', toolCall: { name: 'ask', arguments: {} } })
     await waitFor(window, `!!document.querySelector('[aria-label="Stop current request"]') && document.querySelector('.composer-input textarea')?.disabled === false`)
     assert.equal(await evaluate(window, `!!document.querySelector('[aria-label="Stop waiting"]')`), false, 'Do not add an unrelated composer Stop control')
     await evaluate(window, `document.querySelector('.yield-cancel').click()`)
@@ -474,6 +509,23 @@ async function runViewport(origin: string, width: number, height: number) {
     await waitFor(window, `!document.querySelector('.yield-question')`)
     assert.equal(cancellations.at(-1)?.requestId, `cancel-card-${width}`)
 
+    pendingInput = {
+      kind: 'input', id: `input-${width}`, sessionId: root, question: 'Which workspace path should be used?',
+      recipient: { kind: 'user', sessionId: root }, origin: { physicalId: 'physical-0', toolCallId: `ask-input-${width}` },
+      createdAt: new Date().toISOString(), deadline: null,
+    }
+    live.publisher.invalidateSessions(root)
+    await waitFor(window, `document.querySelector('.yield-heading')?.textContent.includes('Input')`)
+    assert.equal(await evaluate(window, `document.querySelectorAll('.yield-question input[type="radio"]').length`), 0)
+    assert.equal(await evaluate(window, `document.querySelector('.yield-continue').disabled`), true)
+    await evaluate(window, `(() => {
+      const input = document.querySelector('.yield-custom textarea'); input.focus();
+      input.value = 'fixture-path'; input.dispatchEvent(new Event('input', {bubbles:true}));
+    })()`)
+    await inspect(window, `ask-input-${width}`, true)
+    await evaluate(window, `document.querySelector('.yield-continue').click()`)
+    await waitFor(window, `!document.querySelector('.yield-question')`)
+    assert.equal(inputAnswers.at(-1), 'fixture-path')
     pending.set(reflector, question(reflector, `reflector-${width}`))
     await window.loadURL(`${origin}/chat/${encodeURIComponent(reflector)}`)
     await waitFor(window, `!!document.querySelector('.yield-continue')`)

@@ -14,13 +14,13 @@ import type { WorkToolGuard } from '../sessions/work-alignment.ts'
 import { isVirtualPath } from '../vfs/virtual-fs.ts'
 type Tool = TypedTool<ToolResult>
 
-const CALL_DENIED_TOOLS = new Set(['subagent', 'yield', 'message', 'work', 'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'kill', 'initiative', 'skill_read', 'skill_save'])
+const CALL_DENIED_TOOLS = new Set(['subagent', 'ask', 'reply', 'message', 'cancel', 'work', 'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'initiative', 'skill_read', 'skill_save'])
 
 const CHAT_DISPLAY_MAX_LENGTH = 200
 const DEFAULT_TRUNCATION_THRESHOLD = 12_000
 
 /** Self-limited outputs and structured execution receipts must remain intact. */
-const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'authoring_change', 'skill_read'])
+const EXEMPT_TOOLS = new Set(['read', 'glob', 'grep', 'subagent', 'import_tool', 'invoke_tool', 'initiative', 'sql', 'authoring_change', 'skill_read'])
 
 export function toolInvocationContract(tools: Tool[]): string {
   return 'Call active tools with invoke_tool({ name, args }). Tool contracts:\n' +
@@ -311,7 +311,7 @@ export class SessionTools extends Tools {
 
   /** Check if a tool name passes the allow/block policy. */
   private isToolAllowed(name: string): boolean {
-    if ((name === 'topic' || name === 'work') && this.scope && this.scope.mode !== 'session') return false
+    if ((name === 'session' || name === 'work') && this.scope && this.scope.mode !== 'session') return false
     if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
     if (this.allowed) return this.allowed.has(name)
@@ -588,7 +588,7 @@ export class SessionTools extends Tools {
       ? { ...def, function: { ...def.function,
         description: scope.modes.includes('call')
           ? `${scope.modes.includes('task') ? 'Start an asynchronous task, or invoke' : 'Invoke'} a blocking bounded leaf call directly. Available modes: ${scope.modes.join(', ')}.`
-          : 'Create an asynchronous bounded task. Durable conversations use the topic tool.',
+          : 'Create an asynchronous bounded task. Durable conversations use the session tool.',
         parameters: {
         ...def.function.parameters,
         required: [...new Set([...(def.function.parameters.required ?? []), 'task',
@@ -599,13 +599,13 @@ export class SessionTools extends Tools {
           mode: { ...def.function.parameters.properties.mode, enum: [...scope.modes],
             description: scope.modes.includes('task')
               ? 'Omission defaults to task, which returns an admitted ID immediately. Call waits for its final result.'
-              : 'Required. Call waits for the final result and cannot yield, message, or delegate.',
+              : 'Required. Call waits for the final result and cannot ask, reply, message, or delegate.',
           },
           task: { ...def.function.parameters.properties.task,
             description: 'Required initial work: a bounded assignment with an expected result.',
           },
           agent_type: { ...def.function.parameters.properties.agent_type,
-            description: `Agent role from Runtime's available types. ${scope.modes.includes('call')
+            description: `Agent role from Runtime or read("v:agents"); a2a:<agent> targets support task mode only. ${scope.modes.includes('call')
               ? 'For call, omission inherits your role and an explicit role cannot widen your capabilities.'
               : 'Defaults to "sub".'}${scope.modes.includes('call') && scope.modes.includes('task') ? ' For task, defaults to "sub".' : ''}`,
           },

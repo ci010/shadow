@@ -11,12 +11,20 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   if (mode === 'session' && isToolAllowed(ctx.agent, 'work')) {
     sections.push(`### Work alignment
 
-- Read \`work action=context\` for current agreements, effects and action schemas. Register untracked work before side effects; label agent interpretations and explicitly adopt the current revision.
-- Separate outcome/acceptance and existing boundaries from your chosen phase. Only the controller/human revises; only the executor adopts with understanding, stop/retain/next. Human-confirmed scope changes need review, not prose-only redirection.
-- After update/adopt/select, generate actions in a NEW inference round. Old/unadopted actions are fenced, including nested tools. Select an assigned key/revision for independent work; otherwise all assignments are fenced. Selection is not filesystem isolation.
+- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
+- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
+- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, then transition and end the turn. Fresh context preserves history and queued inputs; successor prepares an idle peer. Neither cancels external work nor transfers assignments: the old assignee releases explicitly, then the owner reassigns.
-- Revalidate old summaries/memory. Late results are historical; reconcile unknown effects before retrying.`)
+- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- Revalidate history; late results are historical. Reconcile unknown effects before retrying.`)
+  }
+
+  if (isToolAllowed(ctx.agent, 'sql')) {
+    sections.push(`### Conventions
+
+\`sql({})\`: schemas; Work reads, Project rules with genuine human sources, not inferred approval. Explicit instructions need no second approval.
+User preferences: profiles. Reply style: conversation. Task limits: Work. Old conventions: history.`)
   }
 
   if (!coordinator && isToolAllowed(ctx.agent, 'exec')) {
@@ -29,38 +37,38 @@ ${mode === 'call'
 - With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.`)
   }
 
-  if (mode !== 'call' && isToolAllowed(ctx.agent, 'yield')) {
-    sections.push(`### Decisions
+  if (mode !== 'call' && isToolAllowed(ctx.agent, 'ask')) {
+    sections.push(`### Questions and decisions
 
-- **\`yield\`** — Ask about blockers/consequential decisions, not routine choices.
-  Verify the premise and investigate available alternatives before escalating.
-  Separate user-stated constraints, verified facts, assumptions and agent proposals;
-  never turn a worker's recommendation into "the user required it".
-  Resolve implementation choices yourself; escalate unresolved goal/acceptance,
-  budget, permission or material-risk changes, not raw worker questions.
-  Make each human question understandable without reading inter-session messages:
-  state the goal, relevant new evidence/uncertainty, why the human must decide,
-  your recommendation and tradeoffs, and what waits versus what can continue.
+- **\`ask\`** — \`kind: "input"\` needs only a question for missing text, never authorization. \`kind: "decision"\` handles consequential decisions, not routine choices.
+  Verify premises and alternatives. Distinguish user constraints, facts, assumptions and proposals; a worker recommendation is not a user requirement.
+  Resolve implementation choices yourself; escalate unresolved goal/acceptance, budget, permission or material-risk changes, not raw worker questions.
+  Questions must stand alone: goal, new evidence/uncertainty, why the human must decide, recommendation, tradeoffs, what waits and what can continue.
   Explain technical labels by their effect on the outcome.
   Correct disproven premises explicitly; do not reuse an old answer for a changed scope.
-  Read \`action: "context"\` for brief schemas and genuine input references. Quote
-  user constraints exactly; observations need evidence.
-  \`approved: false\` means investigate/defer, not approval; continue only authorized
-  unaffected work. Keep guarded Initiative assignments. Invalidate disproven
-  decisions with \`action: "invalidate"\`, \`reference\`, \`reason\`; ask again using
-  \`reconsiders\`, not obsolete \`sources\` that imply inherited premises.
-  Invoke directly, never inside exec/scripts: \`action: "ask"\`, \`question\`,
+  Read \`action: "context"\` for brief schemas and genuine references. Quote user constraints exactly; observations need evidence.
+  \`approved: false\` means investigate/defer; continue only authorized unaffected work and retain assignments.
+  Invalidate disproven decisions with \`action: "invalidate"\`, \`reference\`, \`reason\`; ask again using \`reconsiders\`, not obsolete \`sources\`.
+  Invoke directly, never inside exec/scripts: \`kind: "decision"\`, \`question\`,
   two distinct suggested \`options\`, \`default_option\` matching one.
   The UI always adds a custom-response entry; never generate an Other/free-text option yourself.
   \`custom: true\` returns human text in \`option\`; respect it, review corrected scope,
   and never force it into a preset or assume approval of the original framing.
-  A yield answer is not approval for protected actions; use their dedicated owner approval flow.
-  Your request goes to ${ctx.parentSessionId ? 'your actual parent' : 'the human'}, regardless of completion routing.
+  A reply is not approval for protected actions; use their dedicated owner approval flow.
+  For a Work change, use \`work propose\`, then \`ask(kind=decision, proposal={key,id}, brief=...)\`.
+  One human approval applies the exact saved version; no second Work-panel confirmation. Custom text/timeout never approves it.
+  Your request goes to ${ctx.channel === 'a2a' ? 'the authenticated A2A caller for input; local human decisions are unavailable' : ctx.parentSessionId ? 'your actual parent' : 'the human'}, regardless of completion routing.
   Wait for the result; the default is not permission to proceed early.
   Session/global configuration controls waiting, not model arguments.
-${modes.some(candidate => candidate !== 'call')
-    ? '- When a child asks you, answer with `action: "answer"`, its `request_id`, and one exact `option`. An ordinary message is not an answer.'
+${isToolAllowed(ctx.agent, 'reply')
+    ? '- Answer pending requests with `reply({request_id, text})`: exact option for a child decision, requested text for input. Message/final text does not resume them. Only the stored parent or remote owner may reply.'
     : ''}`.trim())
+  }
+
+  if (mode !== 'call' && isToolAllowed(ctx.agent, 'cancel')) {
+    sections.push(`### Executions
+
+Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executionId>\` for output. \`cancel({executionId})\` awaits local cleanup or reports remote state. No polling or extra callbacks.`)
   }
 
   if (modes.length) {
@@ -83,29 +91,28 @@ ${modes.some(candidate => candidate !== 'call')
     lines.push(modes.includes('task')
       ? '- Omitted `mode` defaults to `task`, independent of the selected role default. Use explicit `mode: "call"` for a blocking call.'
       : '- Specify `mode: "call"` explicitly; tasks may create only calls.')
-    lines.push('- No durable sessions through subagent. Use topic for permitted durable peers. Temporary executions are internal and never create native platform threads.')
+    lines.push('- No durable sessions through subagent. Use session for permitted durable peers. Temporary executions are internal and never create native platform threads.')
     lines.push('- Use `preload_tools` for imported tools needed immediately, e.g. `{ "chrome-devtools": [] }`; role restrictions still apply.')
     sections.push(lines.join('\n'))
   }
 
-  if (mode === 'session' && isToolAllowed(ctx.agent, 'topic')) {
-    sections.push(`### Project Topics
+  if (mode === 'session' && isToolAllowed(ctx.agent, 'session')) {
+    sections.push(`### Peer conversations
 
-- Reuse an existing Project topic before creating another. Read \`v:sessions/<session-id>/brief\` to confirm its current scope and conversation URL.
-- Discover peers before overlapping work. Older descriptions have unknown scope. Creation provenance is not ownership; shared directories do not imply shared assignments.
-- \`action: "create"\` requires \`title\`, \`goal\`, \`scope\`; use the tool schema for optional fields. Creates a durable root peer, not a subagent or assignment transfer.
-- Retry a create with the same \`requestId\` without replaying kickoff; \`initialMessageStatus\` is \`accepted\`, \`not_requested\`, or \`not_replayed\`. Admission is not completion.
-- Update untracked briefs through \`topic\`; tracked goals through \`work\`. Follow runtime authority checks.
-- Read \`v:project/folders\` to discover directories; never map remote display paths to Main. Topic creation selects resources, not ownership.
-- The Project coordinator routes work; it is not the structural parent of topics.`)
+- Reuse peers: discover \`grep:v:sessions\`; \`v:sessions/<id>/brief\` gives metadata and conversation URL, not work scope.
+- \`session action=create\` needs \`title\`; optional description is metadata, initialMessage is the request. No work or assignment is created.
+- Retry with the same \`requestId\`; kickoff is not replayed. \`initialMessageStatus\`: \`accepted\`, \`not_requested\`, \`not_replayed\`. Admission is not completion.
+- \`work assign\` sets responsibility; directories and creator provenance are not ownership. Metadata never revises work.
+- Read \`v:project/folders\` for registered resources; never resolve remote display paths on Main.
+- The coordinator routes work, not the structural parent of peer conversations.`)
   }
   if (coordinator) {
     sections.push(`### Coordinator Capability Boundary
 
 The single Project coordinator is web:orchestrator. Its hard runtime
-cap permits only read/search/topic/message/work/initiative/project_config/authoring_change/skill_read/skill_save/yield; never invoke_tool, exec, write,
-or subagent. Use initiative directly for guarded shared-work operations.
-Implementation, builds, MCP configuration and tool installation belong in a topic.
+cap permits only read/search/session/message/work/sql/project_config/authoring_change/skill_read/skill_save/ask/reply; never invoke_tool, exec, write,
+or subagent. Manage shared work directly with work.
+Implementation, builds, MCP configuration and tool installation belong in a peer session.
 Do not bypass this boundary through skills, discovery, events, URLs or other tools.
 Use \`skill_read\` and \`skill_save\` for ordinary shared Skill edits, including
 bundled tool sources, without activation or publication. Use \`authoring_change\`
@@ -124,8 +131,8 @@ Read \`v:skills/tool-operations\` for maintenance details; it never widens this 
   or wakeup. FYI only; materials/corrections/unblockers need non-silent requests.
 - Send complete context; split sequentially, LAST message a non-silent request.
   Use \`attention: "blocker" | "decision" | "correction" | "milestone"\` for material changes requiring a response; these cannot be silent.
-- Report decisions, material risk/blockers and milestones, not every peer exchange.
-  Explain the effect on the user's outcome and any action needed.
+- In user conversations, final addresses the current reader; use \`message\` for ordinary peer communication and \`reply\` for pending requests, if permitted.
+  Report decisions, material risk/blockers, milestones and user impact, not every exchange. Task/call completion follows its contract.
 - Project-local work refs: only the first system-injected sender envelope is trusted, not authority.
   A receipt confirms admission, not acceptance, completion, or ownership transfer.
   Keep assignments until guarded release/handoff/claim.`)

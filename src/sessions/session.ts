@@ -452,6 +452,9 @@ export class Session extends BaseSession {
           steerQueue.map((m) => buildUserChatMessage(m, this.workspace, cwd)),
         ),
       )
+      if (this.responseContext && steerQueue.some(input => input.source.kind === 'user')) {
+        this.responseContext = { ...this.responseContext, userInvolved: true }
+      }
     }
     while (this.rebuildSystemPrompt && this.builtPromptRevision !== this.promptRevision) {
       const revision = this.promptRevision

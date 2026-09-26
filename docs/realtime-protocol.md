@@ -55,6 +55,79 @@ cancel/resume continue using their existing routes. Admission
 uses the existing channel receiver and SessionManager. Steering may reuse the
 running turn's requestId rather than the steering command's admission ID.
 
+## Conversational response provenance
+
+Conversational assistant records and matching `response` payloads may contain
+`responseContext`, defined in
+[`src/sessions/response-context.ts`](../src/sessions/response-context.ts):
+
+```json
+{
+  "version": 1,
+  "turnId": "runtime-turn-id",
+  "responseId": "runtime-turn-id:0",
+  "source": { "kind": "session", "sessionId": "web:reviewer" },
+  "userInvolved": false
+}
+```
+
+The source is the runtime input that began the turn: `user`, `session`, or
+`event`. Events include `eventId`, `type`, and `source`, and may carry a known
+`failed`/`cancelled` trigger status. This is a small display projection, not the
+full input, a reply address, or an authorization grant.
+
+`userInvolved` records whether user input was actually admitted to the inference
+that produced this response. Merely queued or silent input does not count;
+user steering affects subsequent output without rewriting earlier responses.
+An event's historical user origin does not count as present user participation.
+User Retry/Continue actions count even though they reuse existing model history.
+
+Web defaults explicitly marked, non-user conversational responses to a
+**Background response** disclosure, both live and after history reload. Full
+text and attachments remain accessible; the header shows source and any recorded
+trigger failure. User-involved output and legacy records without metadata retain
+their normal presentation. Invalid/unsupported metadata produces a diagnostic and
+does not hide the response. Task cards, event cards, yield decisions and recovery
+controls retain their existing behavior. Opening a response survives updates in
+the current conversation; no persistent visibility preference is stored.
+
+The metadata is stored on the same assistant record in both JSONL and SQLite,
+not in extra log rows, and is stripped from provider wire messages. It does not
+change `replyTo`, `done`, task/call results, A2A results, sync REST responses, or
+external channel delivery. QQ, Discord and other channels still receive the
+original final text, not Web disclosure labels.
+
+Per-inference guidance asks reusable user conversations to address their reader,
+not the triggering Agent/event, and to keep pure background summaries brief
+without omitting material results or blockers. It is guidance, not runtime
+truncation. A peer reply still requires the existing `message` tool. Task/call
+and inbound A2A result contracts do not receive this audience instruction.
+This display policy does not change request routing or turn delivery. Explicit
+pending requests are handled separately through `ask` / `reply`.
+
+## Pending input and decisions
+
+`GET /api/sessions/:key/ask` returns `{request: null}` or the active request.
+Existing decision requests retain their brief, choices and answer-authority
+rules. Ordinary input requests have `kind: "input"`, `id`, `sessionId`, `question`,
+`recipient`, `origin`, `createdAt` and `deadline`, without choices or defaults.
+Only live requests imply an active waiter; historical facts do not recreate it.
+
+Reply to ordinary input with `POST /api/sessions/:key/ask` and
+`{requestId, text}`. Decision replies retain `{requestId, option}` or
+`{requestId, customText}`. `DELETE` with `{requestId}` cancels the request and
+current execution. The existing authenticated gateway and stored recipient
+checks apply; a human cannot answer a parent- or A2A-caller-directed question.
+Decision follow-up/review routes are under `/ask/follow-up` and `/ask/reviews`.
+
+Plain input returns `{requestId, text, answeredBy, answeredAt}`. Both storage
+backends append versioned `input_request` facts to the owning physical segment
+before publication/answer acknowledgement; these are not model messages or
+approval records. The original ask and its tool result remain paired. Input
+expiration fails the wait, never choosing the decision policy's default.
+The Web input field is separate from the chat draft and is not a background
+response disclosure.
+
 ## Reconnection and snapshots
 
 The cursor query overrides `Last-Event-ID`. Replay sends matching events strictly

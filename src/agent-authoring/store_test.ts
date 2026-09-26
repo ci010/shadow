@@ -145,7 +145,7 @@ test('publishSnapshot rejects modified source, stale bases, invalid resources an
 
 test('authored tools cannot shadow management or scheduling tools', t => {
   const { store } = fixture(t)
-  for (const name of ['authoring_change', 'cron_add', 'cron_list', 'cron_remove', 'skill_read', 'skill_save']) {
+  for (const name of ['authoring_change', 'cron_add', 'cron_list', 'cron_remove', 'skill_read', 'skill_save', 'cancel', 'continuation']) {
     const resource = bundle()
     resource.files['agents/helper/AGENT.md'] = agent({ allowedTools: [name] })
     resource.files['skills/catalog/SKILL.md'] = skill().replace('"lookup":', `"${name}":`)
@@ -352,7 +352,7 @@ test('invalid drafts preview errors but never replace live publication', async t
     ['unsafe tool source', b => { b.files['skills/catalog/SKILL.md'] = skill({ tools: { lookup: { source: '../lookup.js', description: 'Lookup', parameters: {}, imports: [] } } }) }],
     ['duplicate aliases', b => { b.files['skills/other/SKILL.md'] = skill({ name: 'other' }); b.files['skills/other/lookup.js'] = 'export default 2' }],
   ]
-  for (const name of ['exec', 'write', 'invoke_tool', 'message', 'topic', 'subagent', 'project_config', 'arbitrary']) {
+  for (const name of ['exec', 'write', 'invoke_tool', 'message', 'session', 'subagent', 'project_config', 'arbitrary']) {
     mutations.push([`forbidden tool ${name}`, b => { b.files['agents/helper/AGENT.md'] = agent({ allowedTools: [name] }) }])
   }
   for (const [label, mutate] of mutations) {

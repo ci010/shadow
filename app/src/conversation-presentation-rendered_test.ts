@@ -77,6 +77,8 @@ test('conversation presentation and compacted history render across themes and v
           import SessionHeading from '/src/components/SessionHeading.vue';
           import SegmentNavigation from '/src/components/SegmentNavigation.vue';
           import ConversationSummary from '/src/components/ConversationSummary.vue';
+          import ResponseDisclosure from '/src/components/ResponseDisclosure.vue';
+          import { isBackgroundResponse } from '/@fs/${resolve(root, 'src', 'sessions', 'response-context.ts').replaceAll('\\', '/')}';
           import { inlineMessageActions } from '/src/message-actions.ts';
           import { groupToolActivity } from '/src/tool-activity.ts';
           import { messageAttachments } from '/src/message-attachments.ts';
@@ -103,9 +105,12 @@ test('conversation presentation and compacted history render across themes and v
             { role:'tool', event:'tool_result', toolCallId:'read', content:'File contents' },
             { role:'assistant', content:'Review complete. The changes preserve existing behavior.', reasoningText:'Checking the affected paths.' },
             { role:'assistant', event:'tool_call', content:'', toolCallId:'decision',
-              toolCall:{ name:'yield', arguments:{question:'Increase the experiment budget?',options:['Six runs','Four runs'],default_option:'Four runs'} } },
+              toolCall:{ name:'ask', arguments:{question:'Increase the experiment budget?',options:['Six runs','Four runs'],default_option:'Four runs'} } },
             { role:'tool', event:'tool_result', toolCallId:'decision',
               content:JSON.stringify({requestId:'budget',option:'Four runs',answeredBy:'timeout',answeredAt:'2026-09-21T10:00:00Z'}) },
+            { role:'assistant', content:'The background review failed. The original changes are untouched.',
+              responseContext:{version:1,turnId:'background-turn',responseId:'background-response',userInvolved:false,
+                source:{kind:'event',eventId:'review-failed',type:'subagent-failed',source:'Reviewer',status:'failed'}} },
           ];
           Object.assign(window, { __conversationFixture:state, __showConversation:() => { state.messages = samples; state.loadingHistory = false } });
           window.__showCompaction = () => {
@@ -125,10 +130,11 @@ test('conversation presentation and compacted history render across themes and v
           createApp({
             __scopeId:'data-v-fixture',
             components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, CollaborationMessage,
-              SessionHeading, SegmentNavigation, ConversationSummary, CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty,
+              SessionHeading, SegmentNavigation, ConversationSummary, ResponseDisclosure, CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
             setup() {
+              const expandedResponses = reactive(new Set());
               const sessions = [{ sessionId:'web:peer', label:'Reviewer with a deliberately long name', mode:'session' }];
               const messageActions = computed(() => inlineMessageActions(state.messages, sessions));
               const yieldDecisions = computed(() => inlineYieldDecisions(state.messages, null, state.decisionRecords));
@@ -138,6 +144,8 @@ test('conversation presentation and compacted history render across themes and v
                 sessions:() => sessions, reset(){}, refresh(){}, mounted:() => true, newDraft(){},
               });
               return { ...toRefs(state), messageActions, yieldDecisions,
+                expandedResponses, isBackgroundResponse,
+                setResponseExpanded(context, open) { if (!context) return; if (open) expandedResponses.add(context.responseId); else expandedResponses.delete(context.responseId) },
                 displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
                 inlineExecutions:{entries:new Map()}, ioAfter:new Map(), expandedThinking:new Set(),
                 toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded]))),

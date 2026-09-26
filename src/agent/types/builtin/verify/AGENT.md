@@ -1,6 +1,6 @@
 ---
 description: Verification agent — confirms task results satisfy requirements
-allowedTools: [read, search, exec, yield, work]
+allowedTools: [read, search, exec, ask, reply, work]
 defaultMode: task
 soul: false
 ---

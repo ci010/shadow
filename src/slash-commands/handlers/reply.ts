@@ -2,14 +2,31 @@ import type { SlashCommandHandler } from '../index.ts'
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import { YieldError } from '../../sessions/yield.ts'
 
-export function createYieldCommand(sessions: SessionManager): SlashCommandHandler {
+export function createReplyCommand(sessions: SessionManager): SlashCommandHandler {
   return {
-    name: 'yield',
-    description: 'Answer or cancel a pending question: /yield <request-id> <1|2|3|cancel>, or /yield <request-id> text <your response>.',
+    name: 'reply',
+    description: 'Answer or cancel a pending question: /reply <request-id> <1|2|3|cancel>, or /reply <request-id> text <your response>.',
     adminOnly: false,
     async execute(ctx, args) {
       const match = /^(\S+)\s+(?:([123]|cancel)|(text)(?:\s+([\s\S]*))?)$/.exec(args.trim())
-      if (!match) return 'Error: use /yield <request-id> <1|2|3|cancel>, or /yield <request-id> text <your response>.'
+      if (!match) return 'Error: use /reply <request-id> <1|2|3|cancel>, or /reply <request-id> text <your response>.'
+      const input = sessions.inputs.get(ctx.sessionId)
+      if (input?.id === match[1]) {
+        try {
+          const channel = ctx.msg.channel === 'web' ? undefined : ctx.msg.channel
+          if (match[2] === 'cancel') {
+            await sessions.inputs.cancelUser(ctx.sessionId, input.id, channel, ctx.msg.senderId)
+            sessions.getActiveSession(ctx.sessionId)?.cancel()
+            return 'Question cancelled.'
+          }
+          if (match[3] !== 'text') return 'Error: this input request needs a text reply, not an option number.'
+          const answer = await sessions.inputs.replyUser(ctx.sessionId, input.id, match[4] ?? '', channel, ctx.msg.senderId)
+          return `Answered: ${answer.text}`
+        } catch (error) {
+          if (!(error instanceof YieldError)) throw error
+          return `Error: ${error.message}`
+        }
+      }
       const request = sessions.yields.get(ctx.sessionId)
       if (!request || request.id !== match[1]) return 'Error: this question is no longer pending. Use the current request ID.'
       try {

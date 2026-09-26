@@ -4,7 +4,7 @@ import type { ExecutionContext } from './context.ts'
 import type { WorkAlignment } from '../sessions/work-alignment.ts'
 
 const request = z.object({
-  action: z.enum(['context', 'update', 'propose', 'adopt', 'checkpoint', 'transition', 'settle', 'release', 'select']),
+  action: z.enum(['context', 'list', 'tree', 'create', 'update', 'propose', 'assign', 'manage', 'progress', 'dependencies', 'adopt', 'checkpoint', 'transition', 'settle', 'select']),
   key: z.string().min(1).max(600).optional(), revision: z.number().int().positive().optional(),
   data: z.unknown().optional(),
 }).strict()
@@ -12,12 +12,12 @@ const request = z.object({
 export class WorkTool implements Tool {
   readonly name = 'work'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Versioned work alignment. Start with context for current contracts and schemas. Separate outcomes, existing boundaries and agent-chosen phases. Propose material changes; only the work controller/human applies them. Only the executor adopts a revision with stop/retain/next. Checkpoint before fresh-context/successor transitions. Neither reporting ownership nor a message receipt grants control, permissions or assignments.'
+  readonly description = 'Manage work items: definitions, assignments, dependencies, progress and versioned adoption in one place. Read context for schemas; list finds Project work and tree derives an Initiative view. Create work only when executing or tracking it, not for ordinary conversation. Propose material changes for one human review via ask or the Work panel. Session creation is independent. Only the assigned executor adopts and reports progress; execution completion is not acceptance.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: {
       action: { type: 'string', enum: request.shape.action.options },
       key: { type: 'string', description: 'Work key returned by context.' },
-      revision: { type: 'integer', description: 'Exact current semantic revision for adopt/checkpoint/transition/settle/release.' },
+      revision: { type: 'integer', description: 'Exact current semantic revision for mutations and selection.' },
       data: { type: 'object', description: 'Action-specific bounded payload; obtain its schema with context.' },
     }, required: ['action'], additionalProperties: false,
   }

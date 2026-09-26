@@ -27,6 +27,7 @@ function outboundPayload(msg: OutboundMessage) {
     event: msg.event ?? 'response', content: msg.content, done: msg.done ?? false,
     media: msg.media, usage: msg.usage, toolCall: msg.toolCall,
     toolCallId: msg.toolCallId, toolName: msg.toolName,
+    responseContext: msg.responseContext,
   }
 }
 

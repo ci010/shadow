@@ -252,14 +252,14 @@ export function sessionsApiPlugin(
           mode: state?.mode ?? 'session',
           agentType: state?.agentType ?? 'general',
           sessionKind: state?.sessionKind,
-          topic: state?.topic,
+          description: state?.description ?? (state?.topic ? [state.topic.goal, state.topic.scope, state.topic.nonGoals].filter(Boolean).join('\n') : undefined),
           createdBySessionId: state?.createdBySessionId,
           initiativeId: state?.initiativeId,
           parentSessionId: delegationOwner(state) ?? null,
           waitingForCall: !!sessions.isWaitingForCall?.(session.sessionId),
           executionId: state?.executionId,
           parentToolCallId: state?.parentToolCallId,
-          executionStatus: sessions.isWaitingForCall?.(session.sessionId) || sessions.yields.get(session.sessionId)
+          executionStatus: sessions.isWaitingForCall?.(session.sessionId) || sessions.yields.get(session.sessionId) || sessions.inputs.get(session.sessionId)
             ? 'waiting' : state?.executionStatus ?? (state?.lastActivityAt ? 'completed' : 'pending'),
         }
         const firstMsg = await sessions.getFirstUserMessage(session.sessionId)
@@ -344,11 +344,11 @@ export function sessionsApiPlugin(
       }
     })
 
-    app.get('/api/sessions/:key/yield', (c) => {
+    app.get('/api/sessions/:key/ask', (c) => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       const key = c.req.param('key')
       if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
-      return c.json({ request: sessions.yields.get(key) })
+      return c.json({ request: sessions.inputs.get(key) ?? sessions.yields.get(key) })
     })
 
     app.get('/api/sessions/:key/work', c => {
@@ -366,11 +366,15 @@ export function sessionsApiPlugin(
       sessions.assertFolderAccess(id)
       try {
         const body = z.object({
-          action: z.enum(['update', 'transition', 'settle', 'request_checkpoint']),
+          action: z.enum(['create', 'update', 'apply_proposal', 'assign', 'manage', 'progress', 'dependencies', 'transition', 'settle', 'request_checkpoint']),
           key: z.string().optional(), revision: z.number().int().positive().optional(), data: z.unknown().optional(),
         }).strict().parse(await c.req.json())
         const visible = sessions.alignment.records(id)
-        if (body.action === 'update') {
+        if (body.action === 'create') {
+          const data = z.object({ title: z.string(), parentKey: z.string().optional(), definition: z.unknown(), reason: z.string() }).strict().parse(body.data)
+          if (data.parentKey && !visible.some(record => record.key === data.parentKey)) return c.json({ error: 'forbidden' }, 403)
+          body.data = { ...data, assignee: id }
+        } else if (body.action === 'update' && !body.key && !sessions.alignment.store.unifiedWork) {
           const change = workChangeSchema.parse(body.data)
           const key = workKey(change.subject)
           const authority = sessions.alignment.store.workAuthority(change.subject)
@@ -442,7 +446,7 @@ export function sessionsApiPlugin(
       }
     })
 
-    app.post('/api/sessions/:key/yield/follow-up', async c => {
+    app.post('/api/sessions/:key/ask/follow-up', async c => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       const body: unknown = await c.req.json().catch(() => null)
       if (!isConfigObject(body) || Object.keys(body).some(key => !['requestId', 'kind', 'reason'].includes(key))
@@ -485,7 +489,7 @@ export function sessionsApiPlugin(
       }
     })
 
-    app.post('/api/sessions/:key/yield/reviews', async c => {
+    app.post('/api/sessions/:key/ask/reviews', async c => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
@@ -502,13 +506,31 @@ export function sessionsApiPlugin(
       }
     })
 
-    app.on(['POST', 'DELETE'], '/api/sessions/:key/yield', async (c) => {
+    app.on(['POST', 'DELETE'], '/api/sessions/:key/ask', async (c) => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       const key = c.req.param('key')
       if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
       const cancel = c.req.method === 'DELETE'
+      if (isConfigObject(body) && typeof body.requestId === 'string' && sessions.inputs.has(body.requestId)) {
+        if (Object.keys(body).some(key => key !== 'requestId' && (cancel || key !== 'text')) || !cancel && typeof body.text !== 'string') {
+          return c.json({ error: 'invalid_request', message: 'Supply requestId and text for an input reply.' }, 400)
+        }
+        try {
+          if (cancel) {
+            await sessions.inputs.cancelUser(key, body.requestId)
+            sessions.getActiveSession(key)?.cancel()
+            return c.json({ cancelled: true })
+          }
+          if (typeof body.text !== 'string') return c.json({ error: 'invalid_request' }, 400)
+          return c.json({ answer: await sessions.inputs.replyUser(key, body.requestId, body.text) })
+        } catch (error) {
+          if (!(error instanceof YieldError)) throw error
+          return c.json({ error: error.code, message: error.message }, error.code === 'not_found' ? 404
+            : error.code === 'forbidden' ? 403 : error.code === 'conflict' ? 409 : error.code === 'invalid_request' ? 400 : 503)
+        }
+      }
       if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'requestId' && (cancel || (key !== 'option' && key !== 'customText')))
         || typeof body.requestId !== 'string' || !body.requestId
         || (!cancel && (Object.hasOwn(body, 'option') === Object.hasOwn(body, 'customText')
@@ -808,7 +830,7 @@ export function sessionsApiPlugin(
       for (const s of list) {
         const active = sessions.getActiveSession(s.sessionId)
         waitingForCalls[s.sessionId] = !!sessions.isWaitingForCall?.(s.sessionId)
-        stages[s.sessionId] = waitingForCalls[s.sessionId] || sessions.yields.get(s.sessionId) ? 'waiting' : active ? active.phase : 'inactive'
+        stages[s.sessionId] = waitingForCalls[s.sessionId] || sessions.yields.get(s.sessionId) || sessions.inputs.get(s.sessionId) ? 'waiting' : active ? active.phase : 'inactive'
         if (active && active.phase !== 'idle' && 'activeRequestId' in active && typeof active.activeRequestId === 'string') {
           activeRequestIds[s.sessionId] = active.activeRequestId
         }
@@ -824,7 +846,7 @@ export function sessionsApiPlugin(
       }
       const key = c.req.param('key')
       if (sessions.isWaitingForCall?.(key)) return c.json({ stage: 'waiting', waitingForCall: true })
-      if (sessions.yields.get(key)) return c.json({ stage: 'waiting' })
+      if (sessions.yields.get(key) || sessions.inputs.get(key)) return c.json({ stage: 'waiting' })
       const active = sessions.getActiveSession(key)
       if (active) {
         return c.json({ stage: active.phase })

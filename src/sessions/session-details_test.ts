@@ -60,7 +60,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await sessions.setSessionConfig('web:new', { model: 'fixture' })
         await sessions.resetSessionConfig('web:new')
         assert.equal(changed.length, 5)
-        await sessions.updateTopicMetadata('web:new', { title: 'Updated', goal: 'Refresh metadata', scope: 'local' })
+        await sessions.updateConversationMetadata('web:new', { title: 'Updated', description: 'Refresh metadata' })
         assert.equal(changed.length, 6)
         await sessions.deleteSession('web:new')
         assert.deepEqual(changed.at(-1), { id: 'web:new', exists: false })
@@ -82,7 +82,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const save = t.mock.method(store, 'saveState', async () => { throw new Error('synthetic disk failure') })
         try {
           await assert.rejects(sessions.setSessionConfig('web:one', { model: 'fixture' }), /synthetic disk failure/)
-          await assert.rejects(sessions.updateTopicMetadata('web:one', { title: 'Updated', goal: 'Goal', scope: 'local' }), /synthetic disk failure/)
+          await assert.rejects(sessions.updateConversationMetadata('web:one', { title: 'Updated', description: 'Discussion' }), /synthetic disk failure/)
           await assert.rejects(sessions.buildSession('web:two'), /synthetic disk failure/)
           assert.equal(notifications, 0)
         } finally { save.mock.restore() }
@@ -260,7 +260,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         equal(sessions.getSessionState('web:missing'), null)
         deepEqual(await readdir(join(workspace, 'sessions'), { recursive: true }), before)
         deepEqual(await (await app.request('/api/sessions/web:one/details')).json(), {
-          sessionId: 'web:one', sessionKind: 'topic', name: 'Actual question',
+          sessionId: 'web:one', name: 'Actual question',
           workdir: { kind: 'local', displayPath: sessionWorkspacePath(workspace, 'web:owner'), nodeId: 'local', available: true, availability: 'available' },
           usage, usageScope: 'latest-call',
           context: { usedTokens: 120, windowTokens: 8000 },

@@ -41,7 +41,7 @@ export interface BusTopics {
   'session.turn.finished': SessionTurnFact
   'session.activity.changed': { sessionId: string }
   'session.changed': { sessionId: string }
-  'background.task.changed': { sessionId: string; taskId: string; status: 'running' | 'completed' | 'failed' }
+  'background.task.changed': { sessionId: string; taskId: string; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' }
 }
 
 // Allow string keys for extensibility (workspace-defined topics)

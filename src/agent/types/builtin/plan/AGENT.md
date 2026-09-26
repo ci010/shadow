@@ -1,6 +1,6 @@
 ---
 description: Planning agent for design and architecture work
-allowedTools: [read, search, plan_write, yield, work]
+allowedTools: [read, search, plan_write, ask, reply, work]
 ---
 # Plan Agent
 

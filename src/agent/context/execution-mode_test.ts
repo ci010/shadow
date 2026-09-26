@@ -31,7 +31,7 @@ test('the same role retains tool guidance without generic safety in every execut
     assert(prompt?.includes('## Tool discovery and recovery'))
     assert(prompt?.includes(`## Execution Contract: ${mode[0].toUpperCase()}${mode.slice(1)}`))
     assert.equal(verify.defaultMode, 'task')
-    assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'yield', 'work'])
+    assert.deepEqual(verify.allowedTools, ['read', 'search', 'exec', 'ask', 'reply', 'work'])
   }
 })
 
@@ -43,7 +43,7 @@ test('call contract overrides orchestration habits without changing tool restric
   })
   assert(prompt?.includes('Do not repeat alignment interviews'))
   assert(prompt?.includes('waiting for your final response as the original tool result'))
-  assert(prompt?.includes('you cannot yield, message other sessions, create subagents'))
+  assert(prompt?.includes('you cannot ask, reply, message other sessions, create subagents'))
   assert(prompt?.includes('blocked result immediately'))
   assert(prompt?.includes('{"status":"blocked","reason":'))
   assert(prompt?.includes('{"status":"failed","error":'))
@@ -80,7 +80,7 @@ test('compact call guidance preserves machine-readable outcomes and bounded exec
       /raw JSON without fences or a preamble/,
       /Reasons\/errors must be nonempty; success returns a normal final answer/,
       /These limits override role coordination instructions/,
-      /caller decides or yields before issuing a new call/,
+      /caller decides or asks before issuing a new call/,
       /local and foreground-only: timeout_ms must be 1 through 120000, never zero/,
       /timeout\/cancellation terminates it, never backgrounds it/,
       /120-second execution deadline plus up to 10 seconds for cleanup/,
@@ -108,8 +108,8 @@ test('durable peers delegate task/call independently of context ancestry', async
   const child = await guidelineProvider().getPromptSection({ ...context, parentSessionId: 'fixture:root' })
   assert(root?.includes('Allowed delegation modes:\ntask, call'))
   assert(child?.includes('Allowed delegation modes:\ntask, call'))
-  assert(root?.includes('Creates a durable root peer'))
-  assert(child?.includes('Creation provenance is not ownership'))
+  assert(root?.includes('`session action=create` needs `title`'))
+  assert(child?.includes('creator provenance are not ownership'))
   assert.equal(general.root, true)
 })
 
@@ -138,10 +138,10 @@ test('prompt guides expose only current delegation modes and permitted coordinat
   assert.doesNotMatch(task, /mode: "session"|mode: "task"|Asynchronous creation|`report_to` redirects/)
   assert.match(task, /mode: "call"/)
   assert.match(task, /Specify `mode: "call"` explicitly/)
-  assert.match(task, /Do not create\/manage durable topics or register folders/)
+  assert.match(task, /Do not create\/manage durable sessions or register folders/)
 
   const call = (await provider.getPromptSection({ ...ctx, mode: 'call' }))!
-  assert.doesNotMatch(call, /### Delegation|### Decisions|### Messaging|fire-and-forget|process keeps running|timeout_ms: 0/)
+  assert.doesNotMatch(call, /### Delegation|### Questions and decisions|### Messaging|fire-and-forget|process keeps running|timeout_ms: 0/)
   assert.match(call, /foreground-only/)
 
   for (const role of roles.filter(role => ['explore', 'verify', 'plan'].includes(role.name))) {
@@ -155,7 +155,7 @@ test('prompt guides expose only current delegation modes and permitted coordinat
   const restricted = (await provider.getPromptSection({
     ...ctx, mode: 'task', agent: { ...general, allowedTools: ['read', 'search'] },
   }))!
-  assert.doesNotMatch(restricted, /### Decisions|Use yield|### Shell|### Delegation|You may create/)
+  assert.doesNotMatch(restricted, /### Questions and decisions|### Shell|### Delegation|You may create/)
 })
 
 test('coordinator guidance cannot advertise worker tools even with broad role metadata', async () => {
@@ -166,16 +166,16 @@ test('coordinator guidance cannot advertise worker tools even with broad role me
     },
   }
   const prompt = (await guidelineProvider().getPromptSection(context))!
-  assert.match(prompt, /### Project Topics/)
+  assert.match(prompt, /### Peer conversations/)
   assert.match(prompt, /### Coordinator Capability Boundary/)
   const normalized = prompt.replace(/\s+/g, ' ')
-  assert.match(normalized, /hard runtime cap permits only read\/search\/topic\/message\/work\/initiative\/project_config\/authoring_change\/skill_read\/skill_save\/yield; never invoke_tool, exec, write, or subagent/)
+  assert.match(normalized, /hard runtime cap permits only read\/search\/session\/message\/work\/project_config\/authoring_change\/skill_read\/skill_save\/ask\/reply; never invoke_tool, exec, write, or subagent/)
   assert.match(normalized, /Use `skill_read` and `skill_save` for ordinary shared Skill edits/)
   assert.match(normalized, /Use `authoring_change` only for managed Bot prompt\/resources, saved check runs and owner review/)
   assert.match(normalized, /Do not bypass this boundary through skills, discovery, events, URLs or other tools/)
   assert.match(prompt, /Allowed delegation modes:\nnone/)
-  assert.match(prompt, /### Decisions/)
-  assert.match(prompt, /never turn a worker's recommendation into "the user required it"/)
+  assert.match(prompt, /### Questions and decisions/)
+  assert.match(prompt, /a worker recommendation is not a user requirement/)
   assert.doesNotMatch(prompt, /### Shell|### Delegation|### Environment|Configure MCP|Activate skill tools|Skill Tools and External MCP Tools/)
   assert.doesNotMatch(prompt, /invoke_tool\(\{|shell: "node"|vm\.SourceTextModule/)
   assert.match(prompt, /initialMessageStatus.*accepted.*not_requested.*not_replayed/)
@@ -183,8 +183,8 @@ test('coordinator guidance cannot advertise worker tools even with broad role me
   assert.doesNotMatch(normalized, /coordinator does not start an LLM turn automatically/)
   for (const mode of ['task', 'call'] as const) {
     const oneShot = (await guidelineProvider().getPromptSection({ ...context, mode }))!
-    assert.doesNotMatch(oneShot, /### Project Topics/)
-    assert.match(oneShot, /Do not create\/manage durable topics or register folders/)
+    assert.doesNotMatch(oneShot, /### Peer conversations/)
+    assert.match(oneShot, /Do not create\/manage durable sessions or register folders/)
   }
 })
 
@@ -197,16 +197,17 @@ test('compact coordination guidance retains decision and completion routing prot
         agent: general, mode, parentSessionId,
       }))!.replace(/\s+/g, ' ')
       assert.match(prompt, /Invoke directly, never inside exec\/scripts/)
-      assert.match(prompt, /action: "ask".*question.*two distinct suggested `options`, `default_option` matching one/)
+      assert.match(prompt, /kind: "input".*only a question.*never authorization/)
+      assert.match(prompt, /kind: "decision".*question.*two distinct suggested `options`, `default_option` matching one/)
       assert.match(prompt, /UI always adds a custom-response entry/)
       assert.match(prompt, /Wait for the result; the default is not permission to proceed early/)
       assert.match(prompt, /Session\/global configuration controls waiting, not model arguments/)
-      assert.match(prompt, /Verify the premise and investigate available alternatives before escalating/)
-      assert.match(prompt, /Separate user-stated constraints, verified facts, assumptions and agent proposals/)
-      assert.match(prompt, /never turn a worker's recommendation into "the user required it"/)
-      assert.match(prompt, /without reading inter-session messages/)
+      assert.match(prompt, /Verify premises and alternatives/)
+      assert.match(prompt, /Distinguish user constraints, facts, assumptions and proposals/)
+      assert.match(prompt, /a worker recommendation is not a user requirement/)
+      assert.match(prompt, /Questions must stand alone/)
       assert.match(prompt, /why the human must decide/)
-      assert.match(prompt, /what waits versus what can continue/)
+      assert.match(prompt, /what waits and what can continue/)
       assert.match(prompt, /do not reuse an old answer for a changed scope/)
       assert.match(prompt, /silent: true.*without triggering a response/)
       assert.match(prompt, /silent: false.*WITHOUT interrupting it/)
@@ -217,8 +218,8 @@ test('compact coordination guidance retains decision and completion routing prot
       assert.match(prompt, /attention: "blocker".*these cannot be silent/)
       assert.match(prompt, /completion routing does not grant messaging permission/)
       if (mode === 'session') {
-        assert.match(prompt, /action: "answer".*request_id.*one exact `option`/)
-        assert.match(prompt, /An ordinary message is not an answer/)
+        assert.match(prompt, /reply\(\{request_id, text\}\).*exact option for a child decision/)
+        assert.match(prompt, /Message\/final text does not resume them/)
         assert.match(prompt, /Asynchronous creation admits an ID, not a result/)
         assert.match(prompt, /report_to.*not ownership or decisions, and grants no messaging permission/)
         assert.match(prompt, /do not sleep or poll/)

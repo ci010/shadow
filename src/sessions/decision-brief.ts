@@ -22,7 +22,7 @@ export interface DecisionBrief {
 
 export const DECISION_BRIEF_HELP = {
   goal: 'Original outcome in plain language.',
-  whyHuman: 'Which goal, acceptance criterion, budget, permission or material risk requires human judgment?',
+  whyHuman: 'Why does the recipient need to decide the goal, acceptance, budget, permission or material risk? A parent may resolve within existing authority; it cannot replace human approval.',
   recommendation: 'Recommended option and why.',
   tradeoff: 'How alternatives affect the goal, cost and uncertainty.',
   blocked: ['Work that must not proceed without this decision (1-6 entries).'],

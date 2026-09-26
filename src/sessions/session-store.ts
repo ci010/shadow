@@ -166,6 +166,7 @@ export interface StoredMessage {
   reasoning_text?: string | null
   /** Provider-scoped continuity for assistant messages. */
   provider_state?: ChatMessage['provider_state']
+  responseContext?: ChatMessage['responseContext']
   tool_calls?: ChatMessage['tool_calls']
   tool_call_id?: string
   name?: string

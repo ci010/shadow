@@ -29,8 +29,6 @@
         <div class="session-info">
           <strong class="session-info-title">{{ session.label }}</strong>
           <p v-if="session.description" class="session-info-description">{{ session.description }}</p>
-          <p v-if="session.topic?.goal" class="session-info-description"><strong>Goal:</strong> {{ session.topic.goal }}</p>
-          <p v-if="session.topic?.scope" class="session-info-description"><strong>Scope:</strong> {{ session.topic.scope }}</p>
           <div class="session-info-status">
             <SessionActivity :stage="stages[session.sessionId]" status-icons />
             <span v-if="!session.isDirectChat" class="session-info-readonly"><span class="i-lucide-lock-keyhole" aria-hidden="true" />Read-only</span>

@@ -25,6 +25,9 @@ test('background task client preserves scope, validates ownership/counts and dro
   }
   const value = await fetchBackgroundTasks('http://fixture/projects/a', sessionId, signal, request)
   assert.equal(JSON.stringify(value).includes('private'), false)
+  const cancelling = await fetchBackgroundTasks('http://fixture/projects/a', sessionId, signal,
+    async () => Response.json(snapshot([{ ...task(), status: 'cancelling' }])))
+  assert.equal(cancelling.tasks[0].status, 'cancelling')
   for (const value of [
     { ...snapshot(), sessionId: 'other' }, { ...snapshot(), total: 5 },
     snapshot([task(), task()]), snapshot([{ ...task(), sessionId: 'other' }]),

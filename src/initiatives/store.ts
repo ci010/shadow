@@ -40,6 +40,7 @@ export class InitiativeStore {
   #closed = false
   #busy = false
   #writeAccess = false
+  #unifiedWork = false
   #options: InitiativeStoreOptions
 
   constructor(home: string, options: InitiativeStoreOptions = {}) {
@@ -56,7 +57,8 @@ export class InitiativeStore {
     try {
       this.#db.exec('PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL;')
       const version = this.#db.prepare('PRAGMA user_version').get() as { user_version: number }
-      if (![0, 1, 2, 3, 4, 5].includes(version.user_version)) throw new Error('Unsupported initiative database version')
+      if (![0, 1, 2, 3, 4, 5, 6].includes(version.user_version)) throw new Error('Unsupported initiative database version')
+      this.#unifiedWork = version.user_version === 6
       if (version.user_version === 0) {
         const tables = this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()
         if (tables.length) throw new Error('Unrecognized initiative database schema')
@@ -91,6 +93,17 @@ export class InitiativeStore {
 
   workAuthority(subject: WorkSubject): WorkAuthority {
     subject = workSubjectSchema.parse(subject)
+    const record = this.#transaction('', () => {
+      const row = this.#one('work_contracts', workKey(subject))
+      return row ? workRecordSchema.parse(JSON.parse(String(row.data))) : undefined
+    }, undefined, true)
+    if (record?.workflow) {
+      const { manager, assignee, status } = record.workflow
+      return { manager, executor: assignee, active: !['done', 'cancelled'].includes(status) }
+    }
+    if (subject.kind === 'work' || subject.kind === 'initiative') {
+      return { manager: null, executor: null, active: false }
+    }
     if (subject.kind === 'topic') {
       if (!this.#options.isSessionKnown?.(subject.sessionId)) return { manager: subject.sessionId, executor: null, active: false }
       return { manager: subject.sessionId, executor: subject.sessionId, active: true }
@@ -110,17 +123,127 @@ export class InitiativeStore {
       .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))), undefined, true)
   }
 
-  saveWork(record: WorkRecord, expectedSequence: number, actor: string, kind: string): void {
+  saveWork(record: WorkRecord, expectedSequence: number, actor: string, kind: string, eventDetails?: unknown): void {
     const parsed = workRecordSchema.parse(record)
     if (parsed.key !== workKey(parsed.subject) || parsed.sequence !== expectedSequence + 1) throw new WorkConflict('Invalid work contract identity or sequence.')
     this.#transaction(actor, () => {
       const prior = this.#one('work_contracts', parsed.key)
       if ((Number(prior?.sequence) || 0) !== expectedSequence) throw new WorkConflict('Work contract changed; reload before applying.')
       if (!prior && this.#all('SELECT id FROM work_contracts').length >= MAX_TABLE_ROWS) throw new WorkConflict('Work contract limit exceeded.')
+      const records = this.#all('SELECT data FROM work_contracts')
+        .map(row => workRecordSchema.parse(JSON.parse(String(row.data)))).filter(item => item.key !== parsed.key)
+      records.push(parsed)
+      this.#validateWorkGraph(records)
       if (prior) this.#write('UPDATE work_contracts SET sequence=?, data=? WHERE id=?', [parsed.sequence, JSON.stringify(parsed), parsed.key])
       else this.#insert('work_contracts', { id: parsed.key, sequence: parsed.sequence, data: JSON.stringify(parsed) })
-      this.#workEvent(parsed.key, actor, kind, parsed)
+      this.#workEvent(parsed.key, actor, kind, eventDetails === undefined ? parsed : { ...parsed, eventDetails })
     })
+  }
+
+  get unifiedWork(): boolean { return this.#unifiedWork }
+
+  /** Keep old keys, journals and SQL tables as archives; all live work facts move together. */
+  migrateWorkItems(): void {
+    this.#transaction('work-migration', () => {
+      const saved = this.#all('SELECT data FROM work_contracts').map(row => workRecordSchema.parse(JSON.parse(String(row.data))))
+      const records = new Map(saved.map(record => [record.key, structuredClone(record)]))
+      const now = new Date().toISOString()
+      const missing = (subject: WorkSubject, objective: string): WorkRecord => ({
+        key: workKey(subject), subject, revision: 1, sequence: 0,
+        definition: { objective: objective.slice(0, 4000) || 'Review imported work',
+          acceptance: ['Acceptance was not recorded. Establish observable criteria before executing this imported work.'],
+          boundaries: [], evidence: [] },
+        origin: 'agent_interpretation', changedBy: 'work-migration', changedAt: now,
+        change: 'understanding', reason: 'Imported historical work; missing acceptance is unknown, not permission.', paused: true,
+      })
+      const parents = this.#all('SELECT * FROM initiatives')
+      for (const row of parents) {
+        const subject = { kind: 'initiative' as const, initiativeId: String(row.id) }
+        const record = records.get(workKey(subject)) ?? missing(subject, String(row.goal || row.title))
+        if (record.workflow) continue
+        record.workflow = {
+          title: String(row.title).slice(0, 160), manager: row.owner_session_id as string | null,
+          assignee: row.owner_session_id as string | null, assignmentRevision: 1,
+          status: row.status === 'completed' ? 'done' : row.status === 'cancelled' ? 'cancelled' : 'pending', dependencies: [],
+        }
+        records.set(record.key, record)
+        this.#workEvent(record.key, 'work-migration', 'legacy_initiative', row)
+      }
+      for (const row of this.#all('SELECT * FROM initiative_items')) {
+        const parent = parents.find(parent => parent.id === row.initiative_id)!
+        const subject = { kind: 'item' as const, initiativeId: String(row.initiative_id), itemId: String(row.id) }
+        const record = records.get(workKey(subject)) ?? missing(subject, String(row.title))
+        if (record.workflow) continue
+        record.workflow = {
+          title: String(row.title).slice(0, 160), parentKey: `initiative:${row.initiative_id}`,
+          manager: parent.owner_session_id as string | null, assignee: row.assignee_session_id as string | null,
+          assignmentRevision: 1, status: row.status as NonNullable<WorkRecord['workflow']>['status'],
+          ...(row.blocked_reason ? { blockedReason: String(row.blocked_reason).slice(0, 2000) } : {}),
+          dependencies: this.#all('SELECT depends_on_item_id FROM initiative_item_deps WHERE item_id=?', [row.id!])
+            .map(edge => `item:${edge.depends_on_item_id}`),
+        }
+        records.set(record.key, record)
+        this.#workEvent(record.key, 'work-migration', 'legacy_item', row)
+      }
+      for (const record of records.values()) {
+        if (!record.workflow && record.subject.kind === 'topic') record.workflow = {
+          title: record.definition.objective.slice(0, 160), manager: record.subject.sessionId,
+          assignee: record.subject.sessionId, assignmentRevision: 1, status: 'pending', dependencies: [],
+        }
+      }
+      this.#validateWorkGraph([...records.values()])
+      for (const record of records.values()) {
+        if (saved.find(old => old.key === record.key)?.workflow) continue
+        if (record.workflow) record.workflow.assignmentStarted = !!record.adoption
+        const next = workRecordSchema.parse({ ...record, sequence: record.sequence + 1 })
+        const existing = this.#one('work_contracts', record.key)
+        if (existing) this.#write('UPDATE work_contracts SET sequence=?,data=? WHERE id=?', [next.sequence, JSON.stringify(next), next.key])
+        else this.#insert('work_contracts', { id: next.key, sequence: next.sequence, data: JSON.stringify(next) })
+        this.#workEvent(next.key, 'work-migration', 'work_unified', next)
+      }
+      this.#db.exec('PRAGMA user_version=6')
+    })
+    this.#unifiedWork = true
+  }
+
+  #validateWorkGraph(records: WorkRecord[]): void {
+    const byKey = new Map(records.map(record => [record.key, record]))
+    const children = new Map<string, string[]>()
+    for (const record of records) {
+      const parent = record.workflow?.parentKey
+      if (parent) children.set(parent, [...(children.get(parent) ?? []), record.key])
+    }
+    for (const kind of ['parent', 'completion'] as const) {
+      const complete = new Set<string>(), visiting = new Set<string>()
+      const visit = (key: string) => {
+        if (complete.has(key)) return
+        if (visiting.has(key)) throw new WorkConflict(`Work ${kind} cycle is not allowed.`)
+        const record = byKey.get(key)
+        if (!record) throw new WorkConflict('Referenced work does not exist in this Project.')
+        visiting.add(key)
+        const links = kind === 'parent' ? record.workflow?.parentKey ? [record.workflow.parentKey] : []
+          : [...(record.workflow?.dependencies ?? []), ...(children.get(key) ?? [])]
+        for (const link of links) visit(link)
+        visiting.delete(key); complete.add(key)
+      }
+      for (const record of records) visit(record.key)
+    }
+  }
+
+  initiativeView(id: string) {
+    const records = this.workRecords()
+    const root = records.find(record => record.key === id || record.key === `initiative:${id}`)
+    if (!root) throw new WorkConflict('Initiative work root not found in this Project.')
+    const keys = new Set([root.key])
+    for (let size = -1; size !== keys.size;) {
+      size = keys.size
+      for (const record of records) if (record.workflow?.parentKey && keys.has(record.workflow.parentKey)) keys.add(record.key)
+    }
+    const items = records.filter(record => keys.has(record.key))
+    return { root: root.key, items, progress: {
+      total: items.length, done: items.filter(record => record.workflow?.status === 'done').length,
+      cancelled: items.filter(record => record.workflow?.status === 'cancelled').length,
+    } }
   }
 
   workEvent(key: string, actor: string, kind: string, data: unknown): void {
@@ -181,6 +304,9 @@ export class InitiativeStore {
   query(sql: string, actorSessionId: string, signal?: AbortSignal): InitiativeQueryResult {
     this.#sessionId(actorSessionId)
     const statements = parseSql(sql)
+    if (this.#unifiedWork && statements.some(statement => statement.operation !== 'SELECT')) {
+      throw new WorkConflict('Initiative SQL is a historical archive. Use work for current definitions, assignments and progress.')
+    }
     return this.#transaction(actorSessionId, () => {
       const result: InitiativeQueryResult = { results: [], changes: 0 }
       let rowCount = 0
@@ -207,6 +333,13 @@ export class InitiativeStore {
 
   /** Validates coordination metadata without granting ownership or changing work facts. */
   assertWorkReference(initiativeId: string, itemId?: string): void {
+    if (this.#unifiedWork) {
+      const view = this.initiativeView(initiativeId)
+      if (itemId && !view.items.some(item => item.key === itemId || item.key === `item:${itemId}`)) {
+        throw new WorkConflict('Work item does not belong to this Initiative view.')
+      }
+      return
+    }
     this.#slug(initiativeId)
     if (itemId !== undefined) this.#slug(itemId)
     this.#transaction('', () => {
@@ -219,12 +352,21 @@ export class InitiativeStore {
   }
 
   getSummary(initiativeId: string, sessionId?: string): string | null {
+    if (this.#unifiedWork) {
+      if (!this.workRecords().some(record => record.key === initiativeId || record.key === `initiative:${initiativeId}`)) return null
+      const view = this.initiativeView(initiativeId)
+      return JSON.stringify({ root: view.root, progress: view.progress, items: view.items.slice(0, 20).map(record => ({
+        key: record.key, title: record.workflow?.title, parentKey: record.workflow?.parentKey,
+        status: record.workflow?.status, manager: record.workflow?.manager, assignee: record.workflow?.assignee, revision: record.revision,
+      })), ...(view.items.length > 20 ? { notice: 'Partial Initiative index. Page work tree for remaining items; read context with a key for exact definitions.' } : {}) })
+    }
     this.#slug(initiativeId)
     if (sessionId !== undefined) this.#sessionId(sessionId)
     return this.#transaction(sessionId ?? '', () => this.#summary(initiativeId, sessionId))
   }
 
   getSessionSummary(actorSessionId: string): string | null {
+    if (this.#unifiedWork) return null // Current work is injected per inference, without a second goal snapshot.
     this.#sessionId(actorSessionId)
     return this.#transaction(actorSessionId, () => {
       const initiatives = this.#all(`
@@ -364,6 +506,7 @@ export class InitiativeStore {
     db.setAuthorizer((action, arg1, arg2, database) => {
       if (database && database !== 'main') return codes.SQLITE_DENY!
       if (action === codes.SQLITE_SELECT || action === codes.SQLITE_TRANSACTION) return codes.SQLITE_OK!
+      if (action === codes.SQLITE_PRAGMA && arg1 === 'user_version' && arg2 === '6' && this.#actor === 'work-migration') return codes.SQLITE_OK!
       if (action === codes.SQLITE_READ && arg1 && readable.has(arg1)) return codes.SQLITE_OK!
       if (action === codes.SQLITE_FUNCTION && ['actor_session_id', 'session_is_inactive', 'session_activity', 'count', 'sum', 'length', 'coalesce', 'trim'].includes(arg2 ?? '')) return codes.SQLITE_OK!
       if (this.#writeAccess && [codes.SQLITE_INSERT, codes.SQLITE_UPDATE, codes.SQLITE_DELETE].includes(action) && arg1 && [...BASE_TABLES, 'initiative_legacy_imports', ...workTables].includes(arg1)) return codes.SQLITE_OK!

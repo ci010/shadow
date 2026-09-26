@@ -1,7 +1,9 @@
 import { parseDecisionBrief, type DecisionBrief } from './decision-brief.ts'
 import { z } from 'zod'
+import { workDecisionSchema, type WorkDecision } from '../initiatives/work-contract.ts'
 export const workStampsSchema = z.array(z.object({
   key: z.string().min(1).max(600), revision: z.number().int().positive(), adoptionId: z.string().uuid().optional(),
+  assignmentRevision: z.number().int().positive().optional(),
 }).strict()).max(100)
 
 export const MAX_YIELD_TIMEOUT_MS = 2_147_483_647
@@ -12,6 +14,7 @@ export interface YieldPolicy {
 }
 
 export interface YieldQuestion {
+  workProposal?: WorkDecision
   question: string
   options: [string, string] | [string, string, string]
   defaultOption: string
@@ -179,6 +182,7 @@ export function parseYieldQuestion(value: unknown): YieldQuestion {
   return { question: value.question, options: value.options.length === 2
     ? [value.options[0], value.options[1]] : [value.options[0], value.options[1], value.options[2]], defaultOption: value.defaultOption,
     ...(sources ? { sources } : {}),
+    ...(value.workProposal === undefined ? {} : { workProposal: workDecisionSchema.parse(value.workProposal) }),
     ...(value.brief !== undefined ? { brief: parseDecisionBrief(value.brief) } : {}),
     ...(value.reconsiders !== undefined ? { reconsiders: parseYieldReference(value.reconsiders) } : {}) }
 }

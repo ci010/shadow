@@ -13,10 +13,24 @@ const sendSchema = z.object({
   context: z.string().uuid().optional(),
 }).strict()
 const handleSchema = z.object({ handle: z.string().uuid() }).strict()
-const replySchema = handleSchema.extend({ message: z.string().min(1).max(64 * 1024) })
+const replySchema = z.object({
+  request_id: z.string().regex(/^remote:[^/]+\/executions\/[^/]+\/input\/[a-f0-9]{64}$/),
+  text: z.string().min(1).max(64 * 1024),
+}).strict()
 const finishedCall = (call: OutboundCall): boolean => ['completed', 'failed', 'cancelled', 'rejected'].includes(call.status)
 const needsAttention = (call: OutboundCall): boolean => finishedCall(call) || ['input-required', 'auth-required'].includes(call.status)
 export type A2aCallContext = Pick<ExecutionContext, 'projectId' | 'sessionId' | 'physicalSessionId' | 'messageId' | 'toolCallId' | 'signal'>
+export const remoteSessionId = (call: OutboundCall): string => `remote:${call.conversationId ?? call.id}`
+export const remoteExecutionId = (call: OutboundCall): string => `${remoteSessionId(call)}/executions/${call.id}`
+export function remoteInputRequest(call: OutboundCall) {
+  if (call.status !== 'input-required') return undefined
+  const message = Task.fromJSON(call.result).status?.message
+  return {
+    kind: 'input' as const,
+    request_id: `${remoteExecutionId(call)}/input/${fingerprint(message ? Message.toJSON(message) : null)}`,
+    question: message?.parts.filter(part => part.content?.$case === 'text').map(part => part.content!.value).join('\n') ?? '',
+  }
+}
 export interface A2aClientLifecycle {
   notify(call: OutboundCall, content: string): Promise<void>
 }
@@ -105,9 +119,11 @@ export class A2aClientTools {
 
   private result(call: OutboundCall): string {
     return JSON.stringify({
+      sessionId: remoteSessionId(call), executionId: remoteExecutionId(call),
       handle: call.id, agent: call.agent, status: call.status,
       taskId: call.taskId, contextId: call.contextId, result: call.result,
       trackingError: call.trackingError, notification: call.notification, notificationError: call.notificationError,
+      request: remoteInputRequest(call),
       ...(call.status === 'uncertain' ? { error: 'Delivery outcome is unknown. Do not automatically retry; remote effects may have occurred.' } : {}),
     })
   }
@@ -185,27 +201,42 @@ export class A2aClientTools {
       return this.saveResult(call, result)
     }
     const reply = operation === 'reply' ? replySchema.parse(args) : undefined
-    const replying = reply ? this.owned(reply.handle, context) : undefined
-    const input = reply ? { agent: replying!.agent, message: reply.message, context: reply.handle } : sendSchema.parse(args)
+    const replying = reply ? this.owned(reply.request_id.split('/')[2], context) : undefined
+    const input = reply ? { agent: replying!.agent, message: reply.text, context: replying!.id } : sendSchema.parse(args)
     if (!Object.hasOwn(this.config.agents, input.agent)) throw new Error('Unknown configured A2A agent.')
     if (!input.message.trim() || Buffer.byteLength(input.message) > 64 * 1024) throw new Error('A2A text must contain 1-65536 bytes.')
     const agent = this.config.agents[input.agent]
     const previous = input.context ? this.owned(input.context, context) : undefined
     if (previous && (previous.agent !== input.agent || !previous.contextId)) throw new Error('Context must reference a call to the same remote agent with a known contextId.')
     const key = JSON.stringify([context.sessionId, context.physicalSessionId, context.messageId, context.toolCallId ?? randomUUID()])
-    const hash = fingerprint(reply ? ['reply', input] : input)
+    const hash = fingerprint(reply ? ['reply', reply] : input)
     const duplicate = [...this.store.outbound.values()].find(call => call.key === key)
     if (duplicate) {
       if (duplicate.fingerprint !== hash) throw new Error('A2A invocation was already used with different arguments.')
       return this.result(duplicate)
     }
-    if (replying && (replying.status !== 'input-required' || !replying.taskId)) {
-      throw new Error('Only a task waiting for input accepts a2a_reply. Authentication and permissions must be resolved by the operator.')
+    const assertPendingInput = () => {
+      if (!replying || !reply) return
+      const current = this.owned(replying.id, context)
+      if (!current.taskId || remoteInputRequest(current)?.request_id !== reply.request_id) {
+        throw new Error('Input request changed or is no longer pending. Inspect the current request; authentication is not an input reply.')
+      }
     }
-    if (!replying && previous && !finishedCall(previous)) throw new Error('Context is still active. Use a2a_reply for requested input, or wait for completion.')
+    assertPendingInput()
+    if (!replying && previous && !finishedCall(previous)) throw new Error('Context is still active. Use reply for requested input, or wait for completion.')
     if (replying && [...this.store.outbound.values()].some(call => call.replyTo === replying.id)) {
       throw new Error('This input already has a reply; follow its returned handle instead of resending.')
     }
+    const assertContextIdle = () => {
+      if (!previous || replying) return
+      const superseded = new Set([...this.store.outbound.values()].map(call => call.replyTo))
+      if ([...this.store.outbound.values()].some(call => call.owner === context.sessionId &&
+        call.agent === input.agent && call.contextId === previous.contextId &&
+        !finishedCall(call) && !superseded.has(call.id))) {
+        throw new Error('Context is still active. Wait for completion or answer the pending input with reply.')
+      }
+    }
+    assertContextIdle()
     // Discovery can fail safely before reserving a delivery.
     const client = await this.client(input.agent, signal)
     // Concurrent duplicate invocations may have completed discovery together.
@@ -217,11 +248,15 @@ export class A2aClientTools {
     if (replying && [...this.store.outbound.values()].some(call => call.replyTo === replying.id)) {
       throw new Error('This input already has a reply; follow its returned handle instead of resending.')
     }
+    assertContextIdle()
+    assertPendingInput()
     const call: OutboundCall = {
       version: 1, id: randomUUID(), owner: context.sessionId, agent: input.agent, key, fingerprint: hash,
       messageId: randomUUID(), endpointUrl: agent.endpointUrl, status: 'sending', contextId: previous?.contextId,
       taskId: replying?.taskId, replyTo: replying?.id,
     }
+    call.conversationId = previous?.conversationId ?? previous?.id ?? call.id
+    call.previous = previous?.id
     this.store.saveCall(call)
     try {
       const request: SendMessageRequest = {
@@ -245,10 +280,10 @@ export class A2aClientTools {
     return ['agents', 'calls', 'send', 'reply', 'get', 'cancel'].map((operation): Tool => {
       const properties: ToolParameters['properties'] = operation === 'send' ? {
         agent: { type: 'string' }, message: { type: 'string' }, context: { type: 'string' },
-      } : operation === 'reply' ? { handle: { type: 'string' }, message: { type: 'string' } }
+      } : operation === 'reply' ? { request_id: { type: 'string' }, text: { type: 'string' } }
         : operation === 'agents' || operation === 'calls' ? {} : { handle: { type: 'string' } }
       return {
-        name: `a2a_${operation}`,
+        name: operation === 'reply' ? 'reply' : `a2a_${operation}`,
         description: operation === 'agents' ? 'List configured remote A2A agents.'
           : operation === 'calls' ? 'Recover this session\'s durable A2A call handles and statuses after interruption.'
           : operation === 'reply' ? 'Answer a remote task waiting for input. Returns a new durable handle to follow. This is not authorization to grant permissions or forward credentials.'
@@ -258,20 +293,20 @@ export class A2aClientTools {
         parameters: {
           type: 'object',
           properties,
-          required: operation === 'send' ? ['agent', 'message'] : operation === 'reply' ? ['handle', 'message']
+          required: operation === 'send' ? ['agent', 'message'] : operation === 'reply' ? ['request_id', 'text']
             : operation === 'agents' || operation === 'calls' ? [] : ['handle'],
           additionalProperties: false,
         },
         execute: (args, context) => {
-          return this.call(`a2a_${operation}`, args, context)
+          return this.call(operation === 'reply' ? 'reply' : `a2a_${operation}`, args, context)
         },
       }
     })
   }
 
   call(name: string, args: Record<string, unknown>, context: A2aCallContext): Promise<string> {
-    if (!['a2a_agents', 'a2a_calls', 'a2a_send', 'a2a_reply', 'a2a_get', 'a2a_cancel'].includes(name)) return Promise.reject(new Error('Unknown A2A tool.'))
-    const pending = this.execute(name.slice(4), args, context)
+    if (!['a2a_agents', 'a2a_calls', 'a2a_send', 'reply', 'a2a_get', 'a2a_cancel'].includes(name)) return Promise.reject(new Error('Unknown A2A tool.'))
+    const pending = this.execute(name === 'reply' ? 'reply' : name.slice(4), args, context)
     this.requests.add(pending)
     void pending.then(() => this.requests.delete(pending), () => this.requests.delete(pending))
     return pending

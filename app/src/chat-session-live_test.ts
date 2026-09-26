@@ -10,6 +10,7 @@ import type { LiveObserver } from './live-client.ts'
 import { sessionActivity } from './session-activity.ts'
 import { createProjectLiveState } from './project-live-state.ts'
 import type { LiveClient } from './live-client.ts'
+import { createResponseContext, isBackgroundResponse, type ResponseContext } from '../../src/sessions/response-context.ts'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const root = 'web:chat-parent'
@@ -86,6 +87,60 @@ function fixture(t: TestContext) {
   }
   return { mount, invalidate, requests, subscriptions }
 }
+
+test('background response origin survives live boundaries and restoration; legacy replies remain expanded', async t => {
+  const f = fixture(t)
+  const view = f.mount('a')
+  const state = view.state()
+  state.messages = []
+  const context = createResponseContext('turn', { kind: 'session', sessionId: 'web:peer' }, 'session', 'web')!
+  const stream = { accumulated: '' }
+  state.applyStreamPayload({ event: 'response', content: 'Partial', responseContext: context }, stream)
+  assert.deepEqual(state.streamResponseContext, context)
+  assert(isBackgroundResponse(state.streamResponseContext))
+  assert.equal(state.expandedResponses.size, 0)
+  state.setResponseExpanded(context, true)
+  state.applyStreamPayload({ event: 'response', content: ' reply', media: ['result.txt'], responseContext: context }, stream)
+  state.applyStreamPayload({ event: 'tool_call', toolCall: { name: 'read', arguments: {} }, toolCallId: 'read' }, stream)
+  assert.equal(state.messages[0].content, 'Partial reply')
+  assert.deepEqual(state.messages[0].responseContext, context)
+  assert.deepEqual(state.messages[0].media, ['result.txt'])
+  const next: ResponseContext = { ...context, responseId: 'turn:1', userInvolved: true }
+  state.applyStreamPayload({ event: 'response', content: 'User answer', done: true, responseContext: next }, stream)
+  assert(!isBackgroundResponse(state.messages.at(-1).responseContext))
+  assert.equal(state.streamResponseContext, undefined)
+  assert.deepEqual(state.streamMedia, [])
+  const history = [
+    { role: 'assistant', content: 'Partial reply\nMEDIA:result.txt', responseContext: context },
+    { role: 'assistant', content: 'User answer', responseContext: next },
+    { role: 'assistant', content: 'Older event reply with no provenance' },
+  ]
+  state.messages = state.collapseHistory(history)
+  assert.deepEqual(state.messages.map((message: { responseContext?: ResponseContext }) => isBackgroundResponse(message.responseContext)), [true, false, false])
+  assert(state.expandedResponses.has(context.responseId), 'Refresh must preserve an explicitly opened response')
+  assert.equal(state.inputText, 'Keep this exact unsent draft')
+  view.props.sessionId = 'web:another'
+  await Vue.nextTick()
+  assert.equal(state.expandedResponses.size, 0)
+})
+
+test('media-only background responses and invalid display metadata never lose the body or attachments', async t => {
+  const f = fixture(t)
+  const state = f.mount('a').state()
+  state.messages = []
+  const context = createResponseContext('turn', { kind: 'event', eventId: 'event', type: 'tick', source: 'system' }, 'session', 'web')!
+  state.applyStreamPayload({ event: 'response', media: ['image.png'], done: true, responseContext: context }, { accumulated: '' })
+  assert.deepEqual(state.messages[0].media, ['image.png'])
+  assert(isBackgroundResponse(state.messages[0].responseContext))
+  const warnings = t.mock.method(console, 'warn', () => {})
+  state.applyStreamPayload({ event: 'response', content: 'Keep this response', done: true,
+    responseContext: { ...context, userInvolved: 'false' } }, { accumulated: '' })
+  assert.equal(state.messages[1].content, 'Keep this response')
+  assert(!isBackgroundResponse(state.messages[1].responseContext))
+  assert.equal(warnings.mock.calls.length, 1)
+  state.applyStreamPayload({ event: 'response', content: '', done: true, responseContext: context }, { accumulated: '' })
+  assert.equal(state.messages.length, 2, 'An empty final does not create an empty disclosure')
+})
 
 test('chat keeps outgoing message actions outside generic tools and routes recipient navigation through the current pane', async t => {
   const f = fixture(t)

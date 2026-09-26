@@ -102,6 +102,7 @@ export interface OutboundMessage {
   toolName?: string
   /** Recorded author envelope for a peer message, not assistant response text. */
   sessionMessage?: import('../providers/provider.ts').ChatMessage
+  responseContext?: import('../sessions/response-context.ts').ResponseContext
   /** Structured decision, separate from ordinary progressive response output. */
   yieldRequest?: import('../sessions/yield-contract.ts').YieldRequest
   /**

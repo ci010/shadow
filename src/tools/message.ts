@@ -8,10 +8,11 @@ import { sessionReplyAddress, type DeliverInput, type SessionInputSource, type S
 import { buildSenderTag } from '../agent/message-builder.ts'
 import { z } from 'zod'
 import type { WorkStamp } from '../initiatives/work-contract.ts'
+import type { A2aSessions } from '../a2a/sessions.ts'
 
 const coordinationSchema = z.object({
   intent: z.enum(['request', 'question', 'progress', 'handoff', 'acknowledgement']).default('request'),
-  initiativeId: z.string().trim().min(1).max(128).optional(),
+  initiativeId: z.string().trim().min(1).max(600).optional(),
   itemId: z.string().trim().min(1).max(128).optional(),
 }).refine(value => !value.itemId || !!value.initiativeId, 'itemId requires initiativeId.')
 
@@ -32,7 +33,7 @@ export class MessageTool implements Tool {
       sessionId: {
         type: 'string',
         description:
-          'Target session ID (e.g. "discord:123456"). Must not be the current session.',
+          'Target session ID from discovery or a prior receipt, including remote:<id> for an owned A2A conversation. Must not be the current session.',
       },
       silent: {
         type: 'boolean',
@@ -56,6 +57,7 @@ export class MessageTool implements Tool {
     private canSendSessionMessage?: (sourceId: string, targetId: string) => boolean,
     private assertWorkReference?: (initiativeId: string, itemId?: string) => void,
     private workIsCurrent?: (stamps: WorkStamp[]) => boolean,
+    private remote?: Pick<A2aSessions, 'message'>,
   ) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
@@ -76,6 +78,19 @@ export class MessageTool implements Tool {
     if (!rawContent) return 'Error: content is required'
 
     const targetSessionId = typeof args.sessionId === 'string' ? args.sessionId : ''
+    if (targetSessionId.startsWith('remote:')) {
+      if (!this.remote) throw new Error('A2A is not configured in this Project.')
+      if (Object.keys(args).some(key => !['sessionId', 'content'].includes(key))) {
+        throw new Error('Remote messages accept only sessionId and content; silent, coordination and Initiative metadata are not supported.')
+      }
+      if (context.workStamps?.length && this.workIsCurrent?.(context.workStamps) === false) {
+        throw new Error('Work basis changed; an obsolete message cannot be sent to a remote agent.')
+      }
+      if (typeof args.content !== 'string') throw new Error('Remote message content must be text.')
+      const { media } = parseMediaFromContent(args.content)
+      if (media?.length) throw new Error('A2A messages support text only; media is not forwarded.')
+      return this.remote.message(targetSessionId, args.content, context)
+    }
     const reply = sessionReplyAddress(targetSessionId)
     if (!reply) {
       return 'Error: sessionId is required and must be in "channel:chatId" format.'

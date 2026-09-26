@@ -23,11 +23,11 @@ import { chatCompletionImages } from './tool-images.ts'
  *   and they only inflate the prompt.
  * - `reasoning_content` (DeepSeek) is intentionally preserved \u2014 DeepSeek
  *   requires it on the next turn to maintain thinking-mode continuity.
- * - `usage` and `timestamp` are local bookkeeping; not part of the API.
+ * - `usage`, `timestamp`, and `responseContext` are local bookkeeping.
  */
 function sanitizeOutboundMessages(messages: ChatMessage[]): unknown[] {
   return chatCompletionImages(messages).map((msg) => {
-    const { reasoning_text: _rt, provider_state: _ps, usage: _u, timestamp: _ts, ...rest } = msg as any
+    const { reasoning_text: _rt, provider_state: _ps, usage: _u, timestamp: _ts, responseContext: _rc, ...rest } = msg
     return rest
   })
 }

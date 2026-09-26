@@ -8,8 +8,19 @@ import type { EventService } from '../events/service.ts'
 import { sessionReplyAddress, type InputOrigin, type ReplyAddress } from '../sessions/input.ts'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 
-export type BackgroundTaskStatus = 'running' | 'completed' | 'failed'
+export type BackgroundTaskStatus = 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled'
 export type BackgroundTaskKind = 'tool' | 'subagent' | 'process'
+
+export const backgroundExecutionId = (taskId: string): string => `bg:${taskId}`
+
+export function backgroundTaskId(executionId: string): string {
+  if (!/^bg:[a-f0-9]{16}$/.test(executionId)) throw new Error('Expected a bg: executionId from v:bg or exec.')
+  return executionId.slice(3)
+}
+
+const active = (task: BackgroundTaskSummary) => task.status === 'running' || task.status === 'cancelling'
+type TaskOutcome = { status: 'completed'; result: string } | { status: 'failed'; reason: unknown }
+type CancellationReason = 'cancel' | 'shutdown'
 
 export interface BackgroundTaskCallback {
   sessionId: string
@@ -31,6 +42,7 @@ export interface BackgroundTaskSummary {
   completedAt?: string
   error?: string
   callbackError?: string
+  cancellationError?: string
 }
 
 interface BackgroundTaskRecord extends BackgroundTaskSummary {
@@ -39,9 +51,11 @@ interface BackgroundTaskRecord extends BackgroundTaskSummary {
   callback?: BackgroundTaskCallback
   /** Returns live output for a running task (e.g. partial stdout, session history). */
   observe?: () => Promise<string> | string
-  /** Invoked when the task is forcibly cancelled (kill tool). Used to terminate
-   * an underlying long-lived process or abort its signal. */
-  onCancel?: () => void
+  /** Deferred tasks must confirm cleanup here; promise tasks also await their execution. */
+  onCancel?: (reason: CancellationReason) => void | Promise<void>
+  execution?: Promise<void>
+  cancellation?: Promise<BackgroundTaskStatus>
+  outcome?: TaskOutcome
   /** Arbitrary key→value metadata for lookup (e.g. subagentSessionId). */
   tags?: Record<string, string>
   promise: Promise<string>
@@ -51,7 +65,7 @@ interface BackgroundTaskRecord extends BackgroundTaskSummary {
 
 export class BackgroundTaskManager {
   get hasRunningTasks(): boolean {
-    return [...this.tasks.values()].some(task => task.status === 'running') || this.callbacks.size > 0
+    return [...this.tasks.values()].some(active) || this.callbacks.size > 0
   }
   private tasks = new Map<string, BackgroundTaskRecord>()
   private subscriptionId: string
@@ -86,10 +100,13 @@ export class BackgroundTaskManager {
   async stop(): Promise<void> {
     this.stopped = true
     this.bus.off(this.subscriptionId)
-    for (const task of this.tasks.values()) {
-      this.failTask(task.id, 'Project runtime stopped', true, true)
-    }
+    const results = await Promise.allSettled([...this.tasks.values()].filter(active).map(task => {
+      if (task.onCancel) return this.requestCancellation(task, 'shutdown')
+      this.failTask(task.id, 'Project runtime stopped', true)
+    }))
     await Promise.allSettled(this.callbacks)
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (errors.length) throw new AggregateError(errors, 'Background task shutdown failed')
   }
 
   private runOwned<T>(callback: () => T): T {
@@ -147,12 +164,12 @@ export class BackgroundTaskManager {
       inputId?: string
       callback?: BackgroundTaskCallback
       observe?: () => Promise<string> | string
-      onCancel?: () => void
+      onCancel?: (reason: CancellationReason) => void | Promise<void>
     },
     promise: Promise<string>,
   ): string {
     const deferred = this.createDeferredTask(options)
-    promise.then(deferred.complete).catch(deferred.fail)
+    this.tasks.get(deferred.taskId)!.execution = promise.then(deferred.complete, deferred.fail)
     return deferred.taskId
   }
 
@@ -163,7 +180,7 @@ export class BackgroundTaskManager {
     inputId?: string
     callback?: BackgroundTaskCallback
     observe?: () => Promise<string> | string
-    onCancel?: () => void
+    onCancel?: (reason: CancellationReason) => void | Promise<void>
     tags?: Record<string, string>
   }): {
     taskId: string
@@ -201,8 +218,12 @@ export class BackgroundTaskManager {
 
     return {
       taskId,
-      complete: (value: string) => { if (!this.stopped) this.runOwned(() => this.completeTask(taskId, value)) },
-      fail: (reason?: unknown) => { if (!this.stopped) this.runOwned(() => this.failTask(taskId, reason)) },
+      complete: (value: string) => {
+        if (!this.stopped || record.status === 'cancelling') this.runOwned(() => this.completeTask(taskId, value))
+      },
+      fail: (reason?: unknown) => {
+        if (!this.stopped || record.status === 'cancelling') this.runOwned(() => this.failTask(taskId, reason))
+      },
     }
   }
 
@@ -220,14 +241,22 @@ export class BackgroundTaskManager {
         completedAt: task.completedAt,
         error: task.error,
         callbackError: task.callbackError,
+        cancellationError: task.cancellationError,
       }))
+  }
+
+  assertOwner(context: Pick<ExecutionContext, 'projectId' | 'sessionId'>, taskId?: string): void {
+    if (!this.scope || context.projectId !== this.scope.projectId || !context.sessionId ||
+      taskId !== undefined && this.tasks.get(taskId)?.sessionId !== context.sessionId) {
+      throw new Error('Only the background execution owner in this Project can access it.')
+    }
   }
 
   async awaitTask(taskId: string, timeoutMs?: number): Promise<string> {
     const task = this.tasks.get(taskId)
     if (!task) return `Error: no background task with id=${taskId}`
 
-    if (task.status !== 'running') {
+    if (!active(task)) {
       return this.formatTaskResult(task)
     }
 
@@ -254,13 +283,48 @@ export class BackgroundTaskManager {
     return this.formatTaskResult(this.tasks.get(taskId) ?? task)
   }
 
-  /** Kill a running task. Marks it as failed and resolves its promise. */
-  killTask(taskId: string): string {
+  async cancelTask(taskId: string, context: Pick<ExecutionContext, 'projectId' | 'sessionId'>): Promise<BackgroundTaskStatus> {
+    this.assertOwner(context, taskId)
+    return this.requestCancellation(this.tasks.get(taskId)!)
+  }
+
+  private requestCancellation(task: BackgroundTaskRecord, reason: CancellationReason = 'cancel'): Promise<BackgroundTaskStatus> {
+    if (!active(task)) return Promise.resolve(task.status)
+    if (task.cancellation) return task.cancellation
+    const cancel = task.onCancel
+    if (!cancel) return Promise.reject(new Error('This background execution has no cancellation capability.'))
+    task.status = 'cancelling'
+    task.cancellationError = undefined
+    this.changed(task)
+    task.cancellation = Promise.resolve().then(async () => {
+      await this.runOwned(() => cancel(reason))
+      // The manager receipt is not evidence that the underlying work has stopped.
+      await task.execution
+      task.result = task.outcome?.status === 'completed' ? task.outcome.result : task.result
+      task.status = 'cancelled'
+      task.completedAt = new Date().toISOString()
+      task.resolve('Cancelled by owner.')
+      this.changed(task)
+      return task.status
+    }).catch((error: unknown) => {
+      task.status = 'running'
+      task.cancellationError = errMsg(error)
+      const outcome = task.outcome
+      if (outcome?.status === 'completed') this.completeTask(task.id, outcome.result)
+      else if (outcome?.status === 'failed') this.failTask(task.id, outcome.reason)
+      else this.changed(task)
+      throw error
+    }).finally(() => {
+      task.cancellation = undefined
+      task.outcome = undefined
+    })
+    return task.cancellation
+  }
+
+  private getTask(taskId: string): BackgroundTaskRecord {
     const task = this.tasks.get(taskId)
-    if (!task) return `Error: no background task with id=${taskId}`
-    if (task.status !== 'running') return `Task ${taskId} is already ${task.status}.`
-    this.failTask(taskId, 'Killed by user.', true, true)
-    return `Task ${taskId} killed.`
+    if (!task) throw new Error(`No background task with id=${taskId}`)
+    return task
   }
 
   /**
@@ -273,37 +337,30 @@ export class BackgroundTaskManager {
     const task = this.tasks.get(taskId)
     if (!task) return `Error: no background task with id=${taskId}`
 
+    if (task.status === 'cancelling' || task.status === 'cancelled') {
+      throw new Error('Cancelled executions do not deliver completion callbacks.')
+    }
     if (!task.callback) {
       if (!task.sessionId) return `Error: task ${taskId} has no callback session`
       task.callback = { sessionId: task.sessionId }
     }
     task.callback.contentPrefix = continuation
 
-    if (task.status !== 'running') {
+    if (!active(task)) {
       // Task already finished — re-fire the callback with the continuation
       this.notifyCallback(task)
-      return `Continuation set and callback scheduled for task ${taskId} (${task.status}).`
+      return `Continuation set and callback scheduled for ${backgroundExecutionId(taskId)} (${task.status}).`
     }
 
-    return `Continuation set for task ${taskId}. It will be included when the task completes.`
+    return `Continuation set for ${backgroundExecutionId(taskId)}. It will be included when the task completes.`
   }
 
   /** Get current output/status of a task without waiting. */
   async getTaskOutput(taskId: string): Promise<string> {
-    const task = this.tasks.get(taskId)
-    if (!task) return `Error: no background task with id=${taskId}`
-    if (task.status === 'running' && task.observe) {
+    const task = this.getTask(taskId)
+    if (active(task) && task.observe) {
       const live = await task.observe()
-      const lines = [
-        `Task ID: ${task.id}`,
-        `Kind: ${task.kind}`,
-        `Title: ${task.title}`,
-        `Status: running`,
-        `Started: ${task.createdAt}`,
-        '',
-        live,
-      ]
-      return lines.join('\n')
+      return this.formatTaskResult({ ...task, result: live })
     }
     return this.formatTaskResult(task)
   }
@@ -311,7 +368,7 @@ export class BackgroundTaskManager {
   /** Find a running task by a tag key/value pair. */
   findByTag(key: string, value: string): BackgroundTaskSummary | undefined {
     for (const task of this.tasks.values()) {
-      if (task.status === 'running' && task.tags?.[key] === value) {
+      if (active(task) && task.tags?.[key] === value) {
         return {
           id: task.id,
           kind: task.kind,
@@ -328,7 +385,7 @@ export class BackgroundTaskManager {
   /** Complete a running task by ID. Returns false if not found or not running. */
   complete(taskId: string, result: string): boolean {
     const task = this.tasks.get(taskId)
-    if (!task || task.status !== 'running') return false
+    if (!task || !active(task)) return false
     this.completeTask(taskId, result)
     return true
   }
@@ -336,14 +393,18 @@ export class BackgroundTaskManager {
   /** Fail a running task by ID. Returns false if not found or not running. */
   fail(taskId: string, reason?: unknown): boolean {
     const task = this.tasks.get(taskId)
-    if (!task || task.status !== 'running') return false
+    if (!task || !active(task)) return false
     this.failTask(taskId, reason)
     return true
   }
 
   private completeTask(taskId: string, result: string): void {
     const task = this.tasks.get(taskId)
-    if (!task || task.status !== 'running') return
+    if (!task || !active(task)) return
+    if (task.status === 'cancelling') {
+      task.outcome ??= { status: 'completed', result }
+      return
+    }
 
     task.status = 'completed'
     task.completedAt = new Date().toISOString()
@@ -353,16 +414,12 @@ export class BackgroundTaskManager {
     this.notifyCallback(task)
   }
 
-  private failTask(taskId: string, reason?: unknown, skipCallback = false, cancel = false): void {
+  private failTask(taskId: string, reason?: unknown, skipCallback = false): void {
     const task = this.tasks.get(taskId)
-    if (!task || task.status !== 'running') return
-
-    if (cancel && task.onCancel) {
-      try {
-        task.onCancel()
-      } catch (error) {
-        console.error(`[background-task] Cancellation failed (${task.id}):`, error)
-      }
+    if (!task || !active(task)) return
+    if (task.status === 'cancelling') {
+      task.outcome ??= { status: 'failed', reason }
+      return
     }
 
     const message = errMsg(reason)
@@ -440,7 +497,7 @@ export class BackgroundTaskManager {
 
   private formatTaskResult(task: BackgroundTaskRecord): string {
     const lines = [
-      `Task ID: ${task.id}`,
+      `Execution ID: ${backgroundExecutionId(task.id)}`,
       `Kind: ${task.kind}`,
       `Title: ${task.title}`,
       `Status: ${task.status}`,
@@ -449,6 +506,7 @@ export class BackgroundTaskManager {
     if (task.completedAt) lines.push(`Completed: ${task.completedAt}`)
     if (task.sessionId) lines.push(`Session: ${task.sessionId}`)
     if (task.callbackError) lines.push(`Callback delivery failed: ${task.callbackError}`)
+    if (task.cancellationError) lines.push(`Cancellation failed: ${task.cancellationError}`)
     if (task.error) {
       lines.push('', task.error)
       return lines.join('\n')

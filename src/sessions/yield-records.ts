@@ -3,6 +3,7 @@ import type { SessionState, SessionStore } from './session-store.ts'
 import { parseYieldDecisionRecord, parseYieldReview, parseDecisionInvalidation, type DecisionInvalidation, type YieldDecisionRecord, type YieldRequest, type YieldReview, type YieldReference } from './yield-contract.ts'
 import { DECISION_BRIEF_HELP, type DecisionEvidence } from './decision-brief.ts'
 import { YieldError } from './yield.ts'
+import type { ConventionAuthority, ConventionSource } from '../projects/conventions.ts'
 
 /** Project-local append-only facts; not a queue and never a source of answer authority. */
 export class YieldRecords {
@@ -130,6 +131,25 @@ export class YieldRecords {
     throw new YieldError('invalid_request', 'Evidence quote does not match a recorded input/receipt from that author. Mark unverified claims as assumptions.')
   }
 
+  async conventionAuthority(source: ConventionSource, input: { sessionId: string; physicalId: string; id: string }): Promise<ConventionAuthority> {
+    if (source.sessionId !== input.sessionId) throw new YieldError('forbidden', 'Convention authority must belong to the current human conversation.')
+    if (source.kind === 'user') {
+      if (source.id !== input.id) {
+        throw new YieldError('forbidden', 'A direct convention instruction must be the current human input, not an old quote.')
+      }
+      await this.evidence(source)
+      return { source, quote: source.quote }
+    }
+    if (source.kind !== 'decision') throw new YieldError('forbidden', 'Tool observations cannot authorize Project conventions.')
+    const record = (await this.read(source.sessionId, source.physicalId)).find(item => item.request.id === source.requestId)
+    if (!record || record.closed || record.invalidated || record.request.recipient.kind !== 'user'
+      || record.answer?.answeredBy !== 'user' || record.answer.custom
+      || record.answer.requestId !== record.request.id || !record.request.options.includes(record.answer.option)) {
+      throw new YieldError('forbidden', 'A convention decision needs a current, explicit human-selected option; parent, timeout, custom and invalidated answers are not approval.')
+    }
+    return { source, quote: record.answer.option }
+  }
+
   async invalidate(reference: YieldReference, reason: string) {
     return this.serialize(async () => {
       const source = (await this.readSegment(reference.sessionId, reference.physicalId)).find(item => item.request.id === reference.requestId)
@@ -205,6 +225,9 @@ export class YieldRecords {
   }
 
   async replace(previous: YieldRequest, next: YieldRequest): Promise<void> {
+    if (previous.workProposal || next.workProposal) {
+      throw new YieldError('conflict', 'A work proposal cannot be rewritten as a different question. Return for investigation and create a new work proposal instead.')
+    }
     if (!previous.origin || next.origin?.physicalId !== previous.origin.physicalId
       || next.supersedes?.requestId !== previous.id || next.sessionId !== previous.sessionId) {
       throw new TypeError('A replacement must retain the original decision owner and segment.')

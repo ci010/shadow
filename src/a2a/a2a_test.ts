@@ -12,7 +12,7 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { registerGatewayRoutes } from '../gateway/server.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
-import { A2aConfigSchema, a2aRequestProject, resolveA2aSecret } from './config.ts'
+import { A2aConfigurationError, A2aConfigSchema, a2aRequestProject, resolveA2aSecret } from './config.ts'
 import { A2aStore } from './store.ts'
 import { A2aService, type A2aRunner } from './service.ts'
 import { a2aAuthenticator, registerA2aRoutes } from './routes.ts'
@@ -42,8 +42,9 @@ test('A2A configuration is explicit, scoped, and does not accept unsafe URLs or 
   for (const url of ['http://example.com/a2a', 'http://localhost/a2a', 'https://user:pass@example.com/a2a', 'https://example.com/a2a?q=token']) {
     assert.throws(() => serverConfig(url))
   }
-  assert.throws(() => resolveA2aSecret('MISSING', {}), /credential/)
-  assert.throws(() => a2aAuthenticator({ alice: 'TOKEN', bob: 'TOKEN' }, { TOKEN: token }), /distinct/)
+  assert.throws(() => resolveA2aSecret('MISSING', {}), error => error instanceof A2aConfigurationError && /credential/.test(error.message))
+  assert.throws(() => a2aAuthenticator({ alice: 'TOKEN', bob: 'TOKEN' }, { TOKEN: token }),
+    error => error instanceof A2aConfigurationError && /distinct/.test(error.message))
   for (const [path, method, expected] of [
     ['/projects/p/a2a', 'POST', 'p'], ['/projects/p/a2a/.well-known/agent-card.json', 'GET', 'p'],
     ['/projects/p/api/config', 'POST', undefined], ['/projects/p/a2a/extra', 'POST', undefined],

@@ -99,7 +99,7 @@ export function startSessionSoundMonitor(options: {
         let needsAnswer = false
         for (const sessionId of changes.waiting) {
           const value = await projectJson(projectBase(options.base, projectId),
-            `/api/sessions/${encodeURIComponent(sessionId)}/yield`, { signal }, request)
+            `/api/sessions/${encodeURIComponent(sessionId)}/ask`, { signal }, request)
           if (signal.aborted || ownGeneration !== generation) return
           const question = parseYieldResponse(value, sessionId)
           if (question?.recipient.kind === 'user' && tracker.question(sessionId, question.id, changes.baseline)) needsAnswer = true

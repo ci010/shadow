@@ -27,7 +27,7 @@ test('MCP exposes the same A2A tools and cannot accept caller identity or arbitr
       await server.connect(first)
       await client.connect(second)
       assert.deepEqual((await client.listTools()).tools.map(tool => tool.name),
-        ['a2a_agents', 'a2a_calls', 'a2a_send', 'a2a_reply', 'a2a_get', 'a2a_cancel'])
+        ['a2a_agents', 'a2a_calls', 'a2a_send', 'reply', 'a2a_get', 'a2a_cancel'])
       const result = await client.callTool({ name: 'a2a_agents', arguments: {} })
       assert.deepEqual(result.content, [{ type: 'text', text: '[{"agent":"shadow"}]' }])
       const invalid = await client.callTool({ name: 'a2a_send', arguments: {

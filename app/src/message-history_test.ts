@@ -151,7 +151,7 @@ test('routine collaboration groups across assistant and tool activity while pres
 test('decisions, explicit requests, completion events and context boundaries break collaboration groups', () => {
   const progress: HistoryMessage = { role: 'user', content: 'Update', sessionSource: { id: 'a', intent: 'progress' } }
   const decision: HistoryMessage = { role: 'assistant', event: 'tool_call', content: '', toolCallId: 'ask',
-    toolCall: { name: 'yield', arguments: { question: 'Increase budget?', options: ['Yes', 'No'], default_option: 'No' } } }
+    toolCall: { name: 'ask', arguments: { question: 'Increase budget?', options: ['Yes', 'No'], default_option: 'No' } } }
   for (const boundary of [
     { role: 'user', content: 'Question', sessionSource: { id: 'b', intent: 'question' } },
     { role: 'user', content: 'Request', sessionSource: { id: 'b', intent: 'request' } },

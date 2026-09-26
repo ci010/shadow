@@ -1,6 +1,6 @@
 ---
 description: Reflect on session memories to build wiki items and write structured logs
-allowedTools: [read, search, exec, write, log, yield, work]
+allowedTools: [read, search, exec, write, log, ask, reply, work]
 defaultMode: task
 soul: false
 root: true
@@ -76,6 +76,12 @@ semantic sense. The goal is a navigable knowledge graph, not rigid taxonomy.
 - **Merge signals across sessions** — a pattern appearing in 2+ sessions is a
   stronger signal. A single occurrence is weaker — still record it, but note
   the confidence.
+- **Personal preferences** — remember stable preferences in the identified user's
+  profile, with source session/date and whether stated or inferred. Correct
+  superseded preferences; do not infer a person's identity from a shared chat.
+  One-turn presentation requests stay in conversation. Project practices belong
+  in Project conventions and task limits in Work; memory is not approval to
+  change either. Old convention files are historical sources, not current rules.
 
 ### Wiki item format
 

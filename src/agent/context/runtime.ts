@@ -40,7 +40,7 @@ export function channelCapabilityPrompt(
   channel: string,
   capabilities: ChannelCapabilities,
   _canCreateSession: boolean,
-  canYield: boolean,
+  canAsk: boolean,
   canMessage: boolean,
 ): string {
   const lines = [
@@ -52,11 +52,13 @@ export function channelCapabilityPrompt(
     `- Output updates: ${capabilities.updates}. The adapter handles formatting, uploads, splitting and delivery limits; do not write raw API/card JSON.`,
     '- Normal replies are sent automatically.',
     ...(canMessage ? ['- The message tool communicates with other agent sessions, not arbitrary platform recipients.'] : []),
-    '- No new native thread/topic is created by subagent. Durable Project topics are web-visible root peers; temporary task/call executions remain internal.',
+    '- No new native thread/topic is created by subagent. Durable Project sessions are web-visible root peers; temporary task/call executions remain internal.',
     '- Tasks report completion to their configured recipient; calls return through their originating tool call. Neither creates a native thread.',
     '- Platform conversations do not grant delegation permissions. A public thread/topic is not a private workspace.',
-    ...(canYield ? [
-      `- Ask decisions with yield. Presentation: ${capabilities.decisions === 'buttons' ? 'native choices with text fallback' : capabilities.decisions === 'native' ? 'native application controls' : 'numbered text choices'}. Do not invent clickable controls.`,
+    ...(canAsk ? [
+      channel === 'a2a'
+        ? '- Use ask(kind=input) for required text from the authenticated A2A caller. This caller cannot approve local human decisions.'
+        : `- Use ask(kind=decision) for decisions; presentation: ${capabilities.decisions === 'buttons' ? 'native choices with text fallback' : capabilities.decisions === 'native' ? 'native application controls' : 'numbered text choices'}. ask(kind=input) requests plain text without choices. Do not invent clickable controls.`,
     ] : []),
   ]
   if (channel === 'discord') lines.push('- Avoid unsolicited mentions. Wrap links in <> when embeds are not wanted. Archived threads are not deleted agent sessions.')
@@ -213,7 +215,7 @@ export function runtimeIdentityProvider(
 
       lines.push('', channelCapabilityPrompt(
         ctx.channel, capabilities, false,
-        !coordinator && (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'yield'),
+        !coordinator && (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'ask'),
         (ctx.mode ?? ctx.agent.defaultMode) !== 'call' && isToolAllowed(ctx.agent, 'message'),
       ))
 
@@ -247,13 +249,16 @@ export function runtimeDiscoveryProvider(deps: RuntimeProviderDeps): SystemPromp
         if (skillsSummary) lines.push(skillsSummary, '')
       }
 
-      // Topics can select expertise without granting delegation.
+      // Peer conversations can select expertise without granting delegation.
       const canSpawn = delegationModes.length > 0
       const canCreateTopic = (ctx.mode ?? ctx.agent.defaultMode) === 'session' &&
-        isToolAllowed(ctx.agent, 'topic')
+        isToolAllowed(ctx.agent, 'session')
       if (canSpawn || canCreateTopic) {
         const agentTypesSummary = deps.getAgentTypesSummary()
         if (agentTypesSummary) lines.push(agentTypesSummary, '')
+        lines.push(delegationModes.includes('task')
+          ? 'Read v:agents for local roles and configured remote a2a:<agent> targets. Remote delegation uses subagent task mode; receipts provide sessionId for message, executionId for cancel, and v:sessions paths for status. Discovery does not grant outbound permissions.'
+          : 'Read v:agents for available role templates. Discovery does not grant delegation or outbound permissions.', '')
       }
 
       // Active temporary executions belong only to their delegation owner.

@@ -9,7 +9,8 @@ import { ConfigSchema } from '../config/schema.ts'
 import { SessionManager } from '../sessions/session-manager.ts'
 import { YieldManager } from '../sessions/yield.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
-import { YieldTool } from '../tools/yield.ts'
+import { AskTool } from '../tools/ask.ts'
+import { decisionBrief } from '../testing/decision.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
@@ -376,12 +377,12 @@ test('QQ real yield notification retains the initiating turn source, not the ans
     notifyUser: (request, replyTo) => notify.call(receiver, request, replyTo),
     notifyParent: async () => {},
   })
-  const tool = new YieldTool(yields)
+  const tool = new AskTool(yields, { get: () => null, ask: async () => { throw new Error('Unexpected plain input') } })
   const ctx = {
     sessionId: 'qq:group:one', channel: 'qq', chatId: 'group:one', senderId: 'alice',
     inputSource: 'user', platformMessageId: 'source', signal: new AbortController().signal,
   } as ExecutionContext
-  const pending = tool.execute({ question: 'Proceed?', options: ['Yes', 'No'], default_option: 'No' }, ctx)
+  const pending = tool.execute({ kind: 'decision', brief: decisionBrief, question: 'Proceed?', options: ['Yes', 'No'], default_option: 'No' }, ctx)
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(outbound[0].replyTo, 'source')
   assert.equal(wire.messages()[0].body.msg_id, 'source')

@@ -17,7 +17,7 @@ import { bindScriptTools } from '../script-runtime/bridge.ts'
 import { startScript, type ScriptRun } from '../script-runtime/runtime.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { errMsg } from '../utils/truncate.ts'
-import type { BackgroundTaskManager } from '../agent/background-task.ts'
+import { backgroundExecutionId, type BackgroundTaskManager } from '../agent/background-task.ts'
 import { loadDotEnv } from '../utils/env.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import { decodeChunks } from '../utils/decode-chunks.ts'
@@ -173,14 +173,7 @@ export class ExecTool implements Tool {
 
   private registerBackgroundProcessTask(
     context: ExecutionContext,
-    managed: {
-      pid: number
-      command: string
-      shell?: ManagedShell
-      stdoutChunks: Uint8Array[]
-      stderrChunks: Uint8Array[]
-      exitPromise: Promise<ManagedProcessStatus>
-    },
+    managed: ManagedProcess,
   ): string | null {
     return this.backgroundTasks.runPromiseTask(
       {
@@ -188,6 +181,7 @@ export class ExecTool implements Tool {
         title: `exec: ${managed.command.slice(0, 80)}`,
         sessionId: context.sessionId,
         inputId: context.messageId,
+        onCancel: async () => { await this.processManager.terminate(managed) },
         callback: {
           sessionId: context.sessionId,
           replyTo: { channel: context.channel, chatId: context.chatId },
@@ -336,6 +330,7 @@ export class ExecTool implements Tool {
           dotEnv,
           shell,
           scriptArgs,
+          { isolated: true },
         )
         : await this.localExecutor.startProcess({
           script,
@@ -343,7 +338,7 @@ export class ExecTool implements Tool {
           env: dotEnv,
           shell,
           args: scriptArgs,
-        }, foreground ? { isolated: true, signal: context.signal } : undefined)
+        }, { isolated: true, ...(foreground ? { signal: context.signal } : {}) })
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`
     }
@@ -358,9 +353,9 @@ export class ExecTool implements Tool {
         managed,
       )
       const lines = [`Process started. PID=${pid}`]
-      if (taskId) lines.push(`Background task ID: ${taskId}`)
+      if (taskId) lines.push(`Execution ID: ${backgroundExecutionId(taskId)}`)
       lines.push(
-        'Use `kill` tool to cancel if needed.',
+        'Read `v:bg/<executionId>` for output; use `cancel({ executionId })` to stop it.',
       )
       return lines.join('\n')
     }
@@ -390,7 +385,7 @@ export class ExecTool implements Tool {
       const body = partial
         ? `${header}\n${partial}`
         : `${header}\n(no output yet)`
-      return taskId ? `${body}\n\nBackground task ID: ${taskId}\n` : body
+      return taskId ? `${body}\n\nExecution ID: ${backgroundExecutionId(taskId)}\nRead v:bg/<executionId> for output; cancel({ executionId }) stops it.\n` : body
     }
 
     // Process finished within the timeout window
@@ -537,7 +532,7 @@ export class ExecTool implements Tool {
       const header = timeoutMs === 0
         ? 'Node.js script running in background (detached from this turn).'
         : `Node.js script still running after ${formatElapsed(timeoutMs)}. Output so far:\n${observe()}`
-      return `${header}\nBackground task ID: ${taskId}\nIt keeps running with full tool access until it exits or you \`kill\` it.`
+      return `${header}\nExecution ID: ${backgroundExecutionId(taskId)}\nRead v:bg/<executionId> for output. It keeps running with full tool access until it exits or you cancel({ executionId }).`
     } catch (error) {
       context.signal.throwIfAborted()
       return `Error: ${errMsg(error)}`

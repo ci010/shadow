@@ -131,7 +131,7 @@ const server = createServer(async (request, response) => {
       if (operation === 'context') return id === rejectContext
         ? json({ error: 'Synthetic closed execution context' }, 409)
         : json({ systemPrompt: 'Synthetic context snapshot', tools: [] })
-      if (operation === 'yield') {
+      if (operation === 'ask') {
         yieldReads.push(id)
         return json({ request: id === reusable && reusableYield ? {
           id: 'reusable-question', sessionId: reusable, question: 'Which verification should continue?',

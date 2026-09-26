@@ -18,6 +18,51 @@ const request = (sessionId = 'web:worker', id = 'decision-1'): YieldRequest => (
 })
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: convention sources require the current human input or an explicit live human decision`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const state: SessionState = { sessionId: 'web:worker', segmentIndex: 0, physicalIdVersion: 2 }
+      await store.saveState(state.sessionId, state)
+      const records = new YieldRecords(store, id => id === state.sessionId ? state : undefined)
+      const physicalId = physicalSessionId(state)
+      const input = { sessionId: state.sessionId, physicalId, id: 'current-input' }
+      const source = { ...input, kind: 'user' as const, quote: 'Use pnpm' }
+      try {
+        await store.appendRawEvents(physicalId, [{ decision_input: { id: input.id, text: 'For this Project: Use pnpm' } }])
+        assert.equal((await records.conventionAuthority(source, input)).quote, 'Use pnpm')
+        await assert.rejects(records.conventionAuthority({ ...source, quote: 'Invented' }, input), /does not match/)
+        await assert.rejects(records.conventionAuthority({ ...source, id: 'old-input' }, input), /current human input/)
+        await assert.rejects(records.conventionAuthority({ ...source, sessionId: 'web:other' }, input), /current human conversation/)
+        await assert.rejects(records.conventionAuthority({ ...source, kind: 'tool' }, input), /Tool observations/)
+        state.segmentIndex = 1
+        assert.equal((await records.conventionAuthority(source, { ...input, physicalId: physicalSessionId(state) })).quote, 'Use pnpm',
+          'Compaction does not move the original human input to a different source segment')
+        state.segmentIndex = 0
+        for (const [index, answeredBy] of ['user', 'parent', 'timeout'].entries()) {
+          const saved = await records.open({ ...request(state.sessionId, `choice-${index}`),
+            ...(answeredBy === 'parent' ? { recipient: { kind: 'parent' as const, sessionId: 'web:parent' } } : {}) })
+          await records.write({ request: saved, answer: {
+            requestId: saved.id, answeredBy: answeredBy as 'user' | 'parent' | 'timeout',
+            option: saved.options[0], answeredAt: saved.createdAt,
+          } })
+          const ref = { kind: 'decision' as const, sessionId: state.sessionId, physicalId, requestId: saved.id }
+          if (answeredBy === 'user') {
+            assert.equal((await records.conventionAuthority(ref, input)).quote, saved.options[0])
+            await records.invalidate({ sessionId: state.sessionId, physicalId, requestId: saved.id }, 'Premise changed')
+          }
+          await assert.rejects(records.conventionAuthority(ref, input), /human-selected option/)
+        }
+        const custom = await records.open(request(state.sessionId, 'custom'))
+        await records.write({ request: custom, answer: { requestId: custom.id, answeredBy: 'user', option: 'Use pnpm', custom: true, answeredAt: custom.createdAt } })
+        await assert.rejects(records.conventionAuthority({ kind: 'decision', sessionId: state.sessionId, physicalId, requestId: custom.id }, input), /human-selected option/)
+        const pending = await records.open(request(state.sessionId, 'pending'))
+        await assert.rejects(records.conventionAuthority({ kind: 'decision', sessionId: state.sessionId, physicalId, requestId: pending.id }, input), /human-selected option/)
+        await assert.rejects(records.conventionAuthority({ kind: 'decision', sessionId: state.sessionId, physicalId: '../foreign', requestId: 'x' }, input), /segment/)
+      } finally { store.close?.() }
+    })
+  })
+
   test(`${Store.name}: decision facts and scoped references survive reopening and segment changes`, async () => {
     await withTempWorkspace(async workspace => {
       let store: SessionStore = new Store(join(workspace, 'sessions'))

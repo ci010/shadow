@@ -1,5 +1,20 @@
 # Initiative storage contract
 
+> **Current runtime: unified work (database version 6).** `work` is the public
+> mutation interface for definitions, assignment, progress and dependencies.
+> `work_contracts` stores complete work items; `work tree` derives Initiative
+> views from a root and descendants. `migrateWorkItems()` atomically incorporates
+> legacy rows, retains old keys and journals, and makes legacy SQL tables
+> read-only archives. No new Topic contracts are created. The SQL API described
+> below is retained for migration, archive reads and historical fixtures, not
+> as a second live authority.
+
+The public `sql` tool separately exposes read-only current `work_items` and
+`work_dependencies` projections plus guarded Project conventions. It does not
+reactivate this legacy SQL mutation API. See
+[Project conventions](../../docs/project-conventions.md) for its schema and
+authority boundaries.
+
 An `InitiativeStore` owns **one Project Home's** `initiatives.sqlite`. It is not a
 shared runtime database. Construct one per Project runtime, pass its actual
 session-liveness callback, and call `close()` during runtime disposal. Never pass

@@ -36,7 +36,7 @@
         :aria-labelledby="`${id}-${expanded || 'work'}`" :style="position" @keydown="popupKeydown">
         <DecisionOwner v-if="canWrite" :api-base="apiBase" :session-id="sessionId" embedded :expanded="expanded === 'reporting'" />
         <WorkAlignment :api-base="apiBase" :session-id="sessionId" :can-write="canWrite"
-          embedded :expanded="expanded === 'work'" @attention="needsAttention = $event" />
+          embedded :expanded="expanded === 'work'" :revision="revision" @attention="needsAttention = $event" />
         <div v-show="expanded === 'background'">
           <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
         </div>
@@ -63,7 +63,7 @@ import SessionActivity from './SessionActivity.vue'
 import type { SidebarSession } from '../folders-sidebar.ts'
 import { executionDisplayStage, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean; subagents?: SidebarSession[]; stages?: Record<string, string> }>()
+const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean; subagents?: SidebarSession[]; stages?: Record<string, string>; revision?: number }>()
 const emit = defineEmits<{ inspect: [sessionId: string] }>()
 const id = useId()
 type Panel = 'reporting' | 'work' | 'background' | 'subagents'

@@ -150,6 +150,8 @@ export interface ChatMessage {
   provider_state?: ResponsesProviderState
   /** Timestamp from session log. Only present on messages loaded from history. */
   timestamp?: string
+  /** Local conversational display provenance; never sent as a provider message field. */
+  responseContext?: import('../sessions/response-context.ts').ResponseContext
 }
 
 export interface LLMProviderOptions {

@@ -26,9 +26,9 @@ const reservedAgents = new Set([
 ])
 const reservedTools = new Set([
   'read', 'search', 'glob', 'grep', 'exec', 'write', 'invoke_tool', 'import_tool',
-  'install_tool', 'message', 'topic', 'subagent', 'project', 'project_config', 'authoring_change', 'skill_read', 'skill_save',
-  'initiative', 'yield', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'kill', 'continuation', 'event_subscribe',
-  'update_convention', 'io_surface', 'io_capabilities', 'io_run', 'log',
+  'install_tool', 'message', 'session', 'subagent', 'project', 'project_config', 'authoring_change', 'skill_read', 'skill_save',
+  'initiative', 'ask', 'reply', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'cancel', 'continuation', 'event_subscribe',
+  'sql', 'update_convention', 'io_surface', 'io_capabilities', 'io_run', 'log',
   'plan_write', 'web_search', 'search_tools',
 ])
 const agentFrontmatter = z.object({

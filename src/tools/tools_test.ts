@@ -12,18 +12,21 @@ import { SearchTool } from './search.ts'
 import { ImportTool, type LoadableEntry } from './load-tool.ts'
 import { InvokeTool } from './invoke-tool.ts'
 import { SkillsManager } from '../skills/loader.ts'
-import { BackgroundTaskTool, ContinuationTool } from './background.ts'
+import { ContinuationTool } from './background.ts'
 import { LogTool } from './log.ts'
 import { MessageTool } from './message.ts'
-import { TopicTool } from './topic.ts'
-import { InitiativeTool } from './initiative.ts'
-import { INITIATIVE_SCHEMA_PROMPT } from '../initiatives/schema.ts'
+import { SessionTool } from './session.ts'
+import { WorkTool } from './work.ts'
+import type { WorkAlignment } from '../sessions/work-alignment.ts'
 import type { TopicService } from '../sessions/topics.ts'
 import { SubagentTool } from './subagent.ts'
-import { YieldTool } from './yield.ts'
+import { AskTool } from './ask.ts'
+import { ReplyTool } from './reply.ts'
+import type { InputRequests } from '../sessions/input-requests.ts'
+import { CancelTool } from './cancel.ts'
 import type { YieldManager } from '../sessions/yield.ts'
-import { ConventionTool } from './convention.ts'
-import { MemoryStore } from '../agent/memory.ts'
+import { SqlTool } from './sql.ts'
+import type { ProjectConventions } from '../projects/conventions.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
 import { EventService } from '../events/service.ts'
 import { getBuiltinAgentTypes } from '../agent/types/builtins.ts'
@@ -88,17 +91,18 @@ function buildBaseTools(): Tools {
     ),
   )
   const importer = new ImportTool(new Map<string, LoadableEntry>(), WORKSPACE)
-  tools.register(new InitiativeTool({ query: () => [] }, 'fixture', INITIATIVE_SCHEMA_PROMPT))
+  tools.register(new WorkTool(stub<WorkAlignment>()))
   tools.register(new SearchTool(WORKSPACE))
   tools.register(new InvokeTool(importer))
-  tools.register(new BackgroundTaskTool(backgroundTasks))
-  tools.register(new ContinuationTool(backgroundTasks))
+  tools.register(new ContinuationTool(backgroundTasks, stub<SessionManager>()))
   tools.register(new LogTool(WORKSPACE))
-  tools.register(new TopicTool(stub<TopicService>()))
+  tools.register(new SessionTool(stub<TopicService>()))
   tools.register(
     new MessageTool(bus, () => true, () => undefined, () => undefined, deliver),
   )
-  tools.register(new YieldTool(stub<YieldManager>()))
+  tools.register(new AskTool(stub<YieldManager>(), stub<InputRequests>()))
+  tools.register(new ReplyTool(stub<YieldManager>(), stub<InputRequests>()))
+  tools.register(new CancelTool(stub<SessionManager>()))
   tools.register(
     new SubagentTool(
       bus,
@@ -107,7 +111,7 @@ function buildBaseTools(): Tools {
       stub<ChannelManager>(),
     ),
   )
-  tools.register(new ConventionTool(new MemoryStore(WORKSPACE)))
+  tools.register(new SqlTool(stub<ProjectConventions>(), 'test', async () => { throw new Error('Not invoked in tool snapshots') }))
   return tools
 }
 
@@ -159,11 +163,11 @@ test('scoped tool descriptions match the modes advertised to the model', () => {
     const modes = allowedSubagentModes(mode, parent)
     tools.setExecutionScope(mode, modes)
     const definitions = tools.getDefinitions()
-    assert.equal(definitions.some(def => def.function.name === 'topic'), mode === 'session')
+    assert.equal(definitions.some(def => def.function.name === 'session'), mode === 'session')
     const subagent = definitions.find(def => def.function.name === 'subagent')?.function
     if (!modes.length) {
       assert.equal(subagent, undefined)
-      for (const name of ['yield', 'message']) {
+      for (const name of ['ask', 'reply', 'message']) {
         assert(!definitions.some(def => def.function.name === name))
       }
       const exec = definitions.find(def => def.function.name === 'exec')!

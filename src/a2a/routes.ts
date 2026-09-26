@@ -7,7 +7,7 @@ import { AgentCard, formatSSEEvent, formatSSEErrorEvent, SSE_HEADERS } from '@a2
 import { JsonRpcTransportHandler, ServerCallContext, validateVersion } from '@a2a-js/sdk/server'
 import { A2AError, RequestMalformedError, toJsonRpcError } from '@a2a-js/sdk/errors'
 import { A2aService } from './service.ts'
-import { resolveA2aSecret } from './config.ts'
+import { A2aConfigurationError, resolveA2aSecret } from './config.ts'
 
 const identifier = z.string().max(512)
 const historyLength = z.number().int().min(0).max(1000).optional()
@@ -48,7 +48,7 @@ export function a2aAuthenticator(callers: Record<string, string>, environment: N
     owner, digest: createHash('sha256').update(resolveA2aSecret(name, environment)).digest(),
   }))
   if (new Set(credentials.map(value => value.digest.toString('hex'))).size !== credentials.length) {
-    throw new Error('A2A callers must use distinct credentials.')
+    throw new A2aConfigurationError('A2A callers must use distinct credentials.')
   }
   return (request: Request): string | undefined => {
     const authorization = request.headers.get('authorization') ?? ''
@@ -58,12 +58,18 @@ export function a2aAuthenticator(callers: Record<string, string>, environment: N
   }
 }
 
-export function registerA2aRoutes(app: Hono, service: A2aService | undefined, authenticate: (request: Request) => string | undefined): void {
+export function registerA2aRoutes(
+  app: Hono, service: A2aService | undefined, authenticate: (request: Request) => string | undefined,
+  isUnavailable: () => boolean = () => false,
+): void {
   const path = '/a2a'
   const cardPath = `${path}/.well-known/agent-card.json`
   for (const route of [path, cardPath]) {
     app.use(route, async (c, next) => {
       c.header('Cache-Control', 'no-store')
+      if (isUnavailable()) return c.json({
+        error: 'a2a_unavailable', message: 'A2A inbound service is unavailable. Check Project diagnostics.',
+      }, 503)
       if (!service) return c.notFound()
       if (!authenticate(c.req.raw)) return c.json({ error: 'unauthorized' }, 401, { 'WWW-Authenticate': 'Bearer' })
       return next()

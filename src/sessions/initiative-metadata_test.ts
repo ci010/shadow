@@ -10,6 +10,8 @@ test('legacy planning names normalize without colliding with Project or Folder i
   assert.equal(old.projectName, 'cleanup')
   assert.deepEqual(normalizeInitiativeMetadata({ initiativeName: 'cleanup' }), { initiativeId: 'cleanup' })
   assert.deepEqual(normalizeInitiativeMetadata({ initiativeId: 'cleanup' }), { initiativeId: 'cleanup' })
+  const root = 'work:11111111-1111-4111-8111-111111111111'
+  assert.deepEqual(normalizeInitiativeMetadata({ initiativeId: root }), { initiativeId: root })
   assert.equal(parseInitiativeId({}), undefined)
   assert.deepEqual(normalizeInitiativeMetadata({ preloadTools: { project: [], cron: [] } }), {
     preloadTools: { initiative: [], cron: [] },
@@ -17,7 +19,7 @@ test('legacy planning names normalize without colliding with Project or Folder i
 })
 
 test('initiative metadata rejects corrupt, unsafe and conflicting identities', () => {
-  for (const projectName of ['', '../other', 'a/b', 'a\\b', '.', 'a'.repeat(65), 42, null]) {
+  for (const projectName of ['', '../other', 'a/b', 'a\\b', '.', 'a'.repeat(65), 'work:../escape', 'topic:a\\b', 'work:', 42, null]) {
     assert.throws(() => parseInitiativeId({ projectName }), TypeError)
   }
   assert.throws(() => parseInitiativeId({ initiativeId: 'one', projectName: 'two' }), /Conflicting/)

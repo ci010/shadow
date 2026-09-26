@@ -18,7 +18,8 @@
             <code class="background-title">{{ task.title || 'Untitled task' }}</code>
             <div class="background-meta">
               <span>{{ labels[task.kind] }}</span>
-              <code>{{ task.id }}</code>
+              <code>bg:{{ task.id }}</code>
+              <span v-if="task.status === 'cancelling'" role="status">Cancelling…</span>
               <span>Started <time :datetime="task.createdAt">{{ started(task.createdAt) }}</time></span>
             </div>
           </div>

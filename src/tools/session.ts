@@ -2,23 +2,21 @@ import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import type { TopicService } from '../sessions/topics.ts'
 
-export class TopicTool implements Tool {
-  readonly name = 'topic'
+export class SessionTool implements Tool {
+  readonly name = 'session'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Create or update user-visible Project topic chats and register local folders. Topics are peers; creation does not transfer assignments.'
+  readonly description = 'Create or name durable peer conversations and register local folders. Metadata is for discovery, not a work definition. Creation never creates work or transfers assignments; put requests in initialMessage and manage work with work.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
       action: { type: 'string', enum: ['create', 'update', 'register_folder'] },
-      title: { type: 'string', description: 'Required for create/update: concise topic name (max 160 characters).' },
-      goal: { type: 'string', description: 'Required for create/update: intended outcome and acceptance criteria.' },
-      scope: { type: 'string', description: 'Required for create/update: owned domain/resources; a brief is not an exclusive Initiative claim.' },
-      nonGoals: { type: 'string', description: 'Explicitly excluded work.' },
-      sessionId: { type: 'string', description: 'Update only: this topic or a topic managed by the coordinator.' },
+      title: { type: 'string', description: 'Required for create/update: session name, max 120 characters.' },
+      description: { type: 'string', description: 'Optional short discovery description, not a goal, acceptance condition or permission.' },
+      sessionId: { type: 'string', description: 'Update only: this session or an ordinary conversation managed by the coordinator.' },
       requestId: { type: 'string', description: 'Create only: optional UUID; reuse exactly the same request on retry. Initial messages are never replayed.' },
-      folderId: { type: 'string', description: 'Create only: registered Project folder ID. Omit for a discussion-only topic; never a path.' },
+      folderId: { type: 'string', description: 'Create only: registered Project folder ID. Omit for a discussion-only session; never a path.' },
       agentType: { type: 'string', description: 'Create only: agent template name, default general. Never orchestrator.' },
-      initiativeId: { type: 'string', description: 'Create only: existing shared Initiative ID, optional; not an assignment.' },
+      initiativeId: { type: 'string', description: 'Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment.' },
       initialMessage: { type: 'string', description: 'Create only: optional kickoff request, with the necessary context and source references.' },
       path: { type: 'string', description: 'register_folder only: absolute existing directory on Main. This does not move data or change this chat workdir.' },
     },
@@ -34,10 +32,10 @@ export class TopicTool implements Tool {
     if (action === 'create') return JSON.stringify(await this.topics.create(request, context.sessionId, context.signal))
     if (action === 'update') return JSON.stringify(await this.topics.update(request, context.sessionId))
     if (action === 'register_folder') {
-      if (context.remoteWorkdir) throw new Error('A remote topic cannot register its display path on Main. Ask the Project coordinator to register a Main-local folder or select an existing remote capability.')
+      if (context.remoteWorkdir) throw new Error('A remote session cannot register its display path on Main. Ask the Project coordinator to register a Main-local folder or select an existing remote capability.')
       if (Object.keys(request).some(key => key !== 'path')) throw new TypeError('register_folder accepts only path.')
       return JSON.stringify(await this.topics.registerFolder(request.path, context.signal))
     }
-    throw new TypeError('Unknown topic action.')
+    throw new TypeError('Unknown session action.')
   }
 }

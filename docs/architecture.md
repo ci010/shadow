@@ -38,7 +38,7 @@ current references from historical proposals.
 | --- | --- |
 | Personal agent | Persistent conversations, configurable models, tool-use loops, steering, subagents, and slash commands in the local backend |
 | Projects | Concurrent project runtimes with separate Homes, sessions, context, bots, learning, and diagnostics; shared provider credentials/devices, not separate OS sandboxes |
-| Context and memory | Agent prompts, identity, project context, scoped conventions, file-backed memory, daily event summaries, compaction, and learning-agent pipelines |
+| Context and memory | Agent prompts, identity, project context, Project conventions, file-backed memory, daily event summaries, compaction, and learning-agent pipelines |
 | Tools | Files, text editing, search, shell processes, background continuations, messaging, plans, conventions, dynamic script tools, and MCP adapters |
 | Skills and agent types | Built-in definitions plus watched workspace overrides; progressive skill disclosure and per-type tool filtering |
 | Channels | Web plus project-owned Discord, Feishu, and QQ bot instances; legacy WeChat/iLink implementation is not started by project runtimes |
@@ -433,7 +433,7 @@ cross-node filesystem identity guarantees, or distributed release readiness.
    task/call executions; exhausting the limit fails the turn. This is not a
    tool-call count. Blocking calls retain their separate 120-second default
    cancellation deadline.
-   `yield` holds that tool call while `SessionManager.yields` waits for a
+   `ask(kind="decision")` holds that tool call while `SessionManager.yields` waits for a
    correlated human/parent answer or a configured default timeout. No separate
    provider loop is created; parent requests enter the normal session mailbox.
 6. **Finish or continue.** No tool calls ends the turn. A context-limit response
@@ -589,43 +589,48 @@ delegate. Structural delegation ownership applies to temporary executions, not
 topic provenance; neither the agent type's visibility flag nor context-only fork
 ancestry establishes coordination authority.
 
-### Project coordination and topic peers
+### Project coordination and peer sessions
 
 Each Project has exactly one `web:orchestrator`, pinned as the default UI routing
 entry. Its built-in role and canonical runtime guard permit only
-read/search/topic/message/initiative, Project configuration and skill-authoring
-controls, and `yield`, excluding invoke_tool/exec/write/subagent.
-It routes to reusable topics and lets users continue there, rather than owning
+read/search/session/message/work/sql, Project configuration and skill-authoring
+controls, and ask/reply, excluding invoke_tool/exec/write/subagent.
+It routes to reusable sessions and lets users continue there, rather than owning
 their session hierarchy. Ensuring its existence never automatically runs an LLM.
 
-Durable topics are `web:chat-UUID` root peers. Project-scoped
-`search({space: "grep:v:sessions", query})` searches histories and topic briefs.
-Read `v:sessions/<session-id>/brief` for title/goal/scope/nonGoals, folderId,
+Durable conversations are `web:chat-UUID` root peers. Topic is no longer a
+separate business object. Project-scoped `search({space: "grep:v:sessions", query})`
+searches histories and session metadata.
+Read `v:sessions/<session-id>/brief` for title/description, folderId,
 initiativeId, createdBySessionId, status and conversationUrl.
-Prefer reuse before creating a new topic. Topic briefs and create/update receipts return `conversationUrl` in
+Prefer reuse before creating a session. Metadata and create/update receipts return `conversationUrl` in
 `/projects/<encodedProjectId>/chat/<encodedLogicalSessionId>` form. Coordinator
-handoffs link the topic title to that returned URL, making the peer conversation
+handoffs link the session title to that returned URL, making the peer conversation
 directly accessible rather than merely reporting an ID.
 Remote-workdir sessions may use `v:sessions` search and typed Project messaging
 as control-plane operations. This does not enable other remote search spaces,
 which remain explicitly rejected.
-`topic` creation requires title, goal, and scope; optional nonGoals, folderId,
+`session` creation requires only title; optional description, folderId,
 agentType, initiativeId, initialMessage, and requestId refine it. Kickoff admission
-is optional and never transfers an Initiative assignment. Idempotent requestId
+is optional and never creates a work item or transfers an assignment. Idempotent requestId
 retries do not replay kickoff; initialMessageStatus distinguishes accepted,
 not_requested, and not_replayed.
 
-Topic update takes sessionId and the full title/goal/scope/nonGoals brief; only
-self/coordinator or authorized UI may update it. `register_folder` with path
+Session update takes sessionId, title and optional description; only
+self/coordinator or authorized UI may update it. Metadata does not revise work
+goals or acceptance. `register_folder` with path
 uses the existing Project registry for an existing Main-local folder. List with
-`read("v:project/folders")`; never translate a remote topic's display path into
-a Main filesystem path. Task/call executions cannot create/manage durable topics
+`read("v:project/folders")`; never translate a remote session's display path into
+a Main filesystem path. Task/call executions cannot create/manage durable sessions
 or register folders.
 
-Authorized routes expose GET/POST `/projects/:projectId/api/topics`, PATCH
-`/projects/:projectId/api/topics/:key`, and POST
-`/projects/:projectId/api/orchestrator`. Topic brief metadata is projected into
-session detail/graph results separately from delegation ownership.
+Authorized routes expose GET `/projects/:projectId/api/sessions/discover`, POST
+`/projects/:projectId/api/sessions`, PATCH
+`/projects/:projectId/api/sessions/:key/metadata`, and POST
+`/projects/:projectId/api/orchestrator`. Historical Topic metadata remains in
+stored records; current details and graph use session names/descriptions.
+Discovery returns a paginated `sessions` array and `metadataSource`; neither
+session creation nor renaming creates or revises a Work definition.
 
 JSONL and SQLite migration flatten old reusable structural children without
 losing context parents or changing effective workdirs. `createdBySessionId`
@@ -710,7 +715,7 @@ existing remote-capability draft picker rather than registering a Main-local
 path. Git worktree/branch management is not implemented.
 
 `subagent` requires the initial `task` for task/call execution. Legacy
-`mode: "session"` fails explicitly with guidance to use topic creation.
+`mode: "session"` fails explicitly with guidance to use the `session` tool.
 Tasks/calls start their assignment as part of
 creation and do not accept later message-tool assignments. Child sessions inherit
 the spawner's workdir ownership, not an isolated git worktree.
@@ -788,8 +793,12 @@ listed as ordinary conversations.
 `HandoffManager` checks configured context thresholds (default 0.95 in-loop and
 0.75 during sleep). It runs a bounded, specialized handoff session to synthesize
 the objective/summary/recent context, with a fallback when synthesis fails.
-The next physical segment starts with that continuation and a rebuilt system
-prompt. Tool-pair boundaries are respected before automatic compaction.
+The next physical segment starts with that continuation as a user-role message
+and a rebuilt system prompt. The continuation is persisted in the segment's
+`summary_context` and restored as a `__compaction_summary__` message on reload,
+for both JSONL and SQLite stores. The system prompt does not also inject the
+session-summary file; that file remains available for explicit reads.
+Tool-pair boundaries are respected before automatic compaction.
 After a successful handoff, context usage is cleared and persisted with the new
 segment so subsequent messages cannot trigger another handoff from stale usage.
 The triggering response retains its own usage in history and outbound events.
@@ -799,7 +808,7 @@ override, then the built-in model registry. Unknown models default to 400,000
 tokens, giving default thresholds of 380,000 in-loop and 300,000 during sleep.
 Registered model limits and explicit overrides are unchanged.
 
-Session memory, scoped conventions, file tracking, and learning events are
+Session memory, Project conventions, file tracking, and learning events are
 separate mechanisms. A handoff is not a distributed transfer to another node.
 
 ## Context and memory
@@ -811,9 +820,9 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
 1. **Runtime identity and execution contract:** platform, shell, channel/audience,
    role, permissions, and the session/task/call lifecycle. Role and mode limits
    remain enforced by the runtime, not by prompt ordering.
-2. **Task context and Initiative snapshot:** topic scope separately from actual
-   assignments. Recorded goal/context prose is planning background, not fresh
-   human authorization.
+2. **Initiative view:** a derived root Work/descendant view when explicitly linked.
+   There is no independently editable Topic brief or duplicate session goal.
+   Recorded definitions are work context, not new human authorization.
 3. **Current environment:** Project identity and directory-resource selection,
    one **Working directory** (local path, remote capability, or unavailable),
    directory source, private uploads, and **Project data directory (Home)**.
@@ -825,16 +834,18 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
    compact tool protocols cover work revisions, decisions and coordination.
    Session/task/call and role gating still suppress unavailable tool instructions.
 5. **Capability discovery:** bounded Skill metadata, selectable role templates,
-   and active temporary executions only for their delegation owner. Topic-only
+   and active temporary executions only for their delegation owner. Session-only
    coordinators see templates without acquiring subagent capabilities.
-6. **Historical reference:** quoted conventions, keyword index, dated events,
-   previously touched files and stored summaries. A summary's "Current Focus"
-   remains a historical claim, not the current task state. Stored files are not
-   rewritten or deleted. Conflicts require checking source, scope, version and
+6. **Historical reference:** keyword index, dated events,
+   and previously touched files. Compaction summaries appear only in the
+   continuation message, not again in this system-prompt section. A summary's
+   "Current Focus" remains a historical claim, not the current task state.
+   Stored files are not rewritten or deleted by prompt assembly.
+   Conflicts require checking source, scope, version and
    explicit supersession; a newer agent report cannot lift a human restriction.
 
 Before each inference, `withCurrentWork` inserts the current work agreement after
-runtime identity, ahead of cached topic/Initiative context and history. It also
+runtime identity, ahead of cached Initiative context and history. It also
 places agreement facts early in compaction input, without caching them in the
 next segment's base prompt even when prompt rebuilding fails. Stamps and the execution fence
 remain the enforcement mechanism; ordering and labels do not prove understanding.
@@ -884,18 +895,22 @@ that should be checked into the repository.
 
 | Layer | Storage and use |
 | --- | --- |
-| Session summary | `memory/sessions/<safe-id>.md`; bounded text injected for continuity |
+| Session summary | `memory/sessions/<safe-id>.md`; compact-written snapshot for explicit reads, not system-prompt injection; automatic continuity comes from the segment's summary message |
 | Working set | `memory/sessions/<safe-id>.files.jsonl`; runtime hook records successful `write` tool calls, including its edit mode |
-| Session conventions | `memory/sessions/<safe-id>.conventions.md` |
-| Initiative conventions | `memory/projects/<initiative>/conventions.md`; legacy path retained for compatibility |
-| Agent conventions | `memory/agent.conventions.md` |
+| Project conventions | `conventions.sqlite`; guarded `sql` writes and append-only audit; shared current prompt context |
+| Legacy conventions | `memory/sessions/<safe-id>.conventions.md`, `memory/projects/<initiative>/conventions.md`, `memory/agent.conventions.md`; preserved historical files, not injected as current rules |
+| Personal preferences | Identified user profiles under `memory/identities/`; model-driven memory/learning retains sources and corrections |
 | Daily knowledge events | `memory/events/YYYY-MM-DD.jsonl`; structured `when/who/what/why/challenge/refs/origin` material |
 | Keyword/wiki index | Markdown names in `memory/topics`, `identities`, `concepts`, and `tools`; bodies read on demand |
 | Learning watermark | `memory/.reflect-watermark.json`; identifies transcript increments already scheduled for reflection |
 | Personality/identity | Project-shared `SOUL.md` and identity-manager files; distinct from user authentication |
 
-Conventions are merged agent → initiative → session, with labels. Today's own
-events are included eagerly; other sessions' events are relevance-gated by
+Project conventions have no Session or Initiative scope. Work owns task
+boundaries and acceptance; temporary presentation instructions remain in the
+conversation. Decisions record the choice and its source, not a second rule
+store. See [Project conventions](project-conventions.md) for SQL access,
+human-source validation, limits and legacy handling. Today's own events are
+included eagerly; other sessions' events are relevance-gated by
 initiative/shared modified paths when such signals exist, and capped. With no
 initiative/file signals, related events can still be included up to the cap.
 This is **relevance selection within a project, not a privacy boundary
@@ -1026,49 +1041,53 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `v:config/mcp.json` via `read`/`write` | Revision-checked, atomic Project MCP configuration without connecting |
 | `invoke_tool` | Lazy connections and current-schema argument validation |
 | `exec` | Managed local shell processes and inline script/tool-bridge execution |
-| `kill`, `continuation`, `v:bg` | Cancel background work, attach continuation text, and inspect task status/output |
-| `topic` | Project peer-topic creation/full-brief updates and Main-local folder registration |
+| `cancel`, `continuation`, `v:bg` | Inspect/cancel owned background, task/call and A2A executions; continuation applies only to `bg:` callbacks |
+| `session` | Durable peer creation/naming and Main-local folder registration; no work definition |
 | `message`, `subagent` | Authorized session messaging and temporary task/call execution |
-| `yield` | Three-option decision requests, actual-parent routing, correlated answers and configurable waiting |
-| `work` | Versioned agreements, executor adoption, factual checkpoints and controlled context transitions |
-| `plan_write`, `update_convention`, `log` | Planning documents, scoped constraints, structured knowledge logging |
+| `ask`, `reply` | Ordinary text input or structured decisions, authenticated recipient routing, correlated answers and configurable waiting |
+| `work` | Work definitions, assignments, dependencies, progress, proposals, adoption and context transitions |
+| `plan_write`, `sql`, `log` | Planning documents, guarded Project conventions/read-only current Work queries, structured knowledge logging |
 | `event_subscribe`, `event_source` (lazy) | Subscribe to normalized events or manage restricted Project polling producers; discover via `v:tools/events` and invoke through `invoke_tool` |
-| Lazy tools | Events, cron, Initiative SQL, search/MCP/tool factories |
+| Lazy tools | Events, cron, search/MCP/tool factories |
 
 ### Initiative coordination
 
 [`InitiativeStore`](../src/initiatives/store.ts) opens one `initiatives.sqlite`
 per Project Home, independently of the selected JSONL/SQLite session backend.
-Its `initiatives`, `initiative_items`, `initiative_item_deps`, and
-`initiative_entries` tables store goals, assignments, dependencies, and an
-append-only audit trail. Runtime-stamped creators/authors cannot be supplied by
-the model. Coordinating owners and item assignees are logical session IDs, not
-physical history segments.
+Version 6 atomically migrates its old initiative tables into unified records in
+`work_contracts`, preserving keys, definitions, assignments, status, dependencies,
+audit history and effect references. Legacy SQL tables become read-only archives;
+the `initiative` SQL tool is no longer registered. Work without historical
+acceptance is marked for review, never silently human-approved.
 
-The [`initiative`](../src/tools/initiative.ts) tool accepts only `query`;
-the coordinator receives it directly rather than through forbidden dynamic invocation.
-Project scope and the acting session come from dispatch context. A closed SQL
-parser permits bounded, parameterized single-table queries and transactional
-mutation batches, not arbitrary SQLite. There are no joins, CTEs, subqueries,
-DDL, or access to session databases. Runtime views provide ready work and the
-actor's todos without requiring those constructs. Ownership, dependency,
-claim, and audit rules are enforced by the store, not just prompt instructions.
-See the [SQL contract](../src/initiatives/README.md) for its precise grammar and
-limits.
+An Initiative is a root work item and its descendants. `work list` discovers
+Project work; `work tree` derives membership and aggregate progress. Both return
+compact paginated indexes (default 5, maximum 20); read `context` with an exact
+key for the definition. Parent/completion dependency cycles are rejected. A completed
+child does not automatically satisfy the root's acceptance. `work create`,
+`assign`, `manage`, `dependencies` and `progress` provide one bounded, validated
+mutation interface. Assignment and management use an exact current record
+sequence. Definitions have a separate semantic revision; ordinary progress does
+not change the goal. No second editable todo/goal store is maintained.
 
 An explicit `initiativeId` survives delegation, compaction, and storage reload.
+It accepts a canonical root Work key as well as a historical Initiative slug;
+this link selects a derived view, not an assignment.
 Absent that link, prompt summaries show only work the session created, owns, or
 is assigned. Runtime activity is separate from recorded task status; an
 inactive owner or assignee retains responsibility across sleep/recovery and needs
 explicit guarded release/handoff/claim, not automatic completion, stealing, or
-reassignment. Topic creation and message admission do not transfer work.
+reassignment. Session creation and message admission do not transfer work.
 Inactive or unknown ownership is never claimable merely because its session
 is unavailable. Schema version 3 adds `needs_attention`; deprecated
 `needs_handoff` is an attention-only compatibility signal, not a claim/recovery
 authorization. Ownership belonging to an already-deleted session remains recorded
-as needing attention. No privileged recovery API/UI is added by this work;
-normal owners/assignees must explicitly handoff or release while they still exist.
+as needing attention; it never becomes automatically claimable.
 Deleting a session does not release its work.
+An authenticated human may explicitly release a deleted executor's orphaned
+assignment with an audited reason, but only after all effects are settled.
+Otherwise, once adoption has started, release requires the executor's current
+checkpoint even if a later definition revision cleared the old adoption.
 Session todos are a query view of shared items. `plan_write`
 remains a planning-document tool, not another authoritative task list.
 Here active means a live, accepting session without pending recovery, not proof
@@ -1080,10 +1099,8 @@ changed legacy inputs fail explicitly. JSONL and SQLite session metadata
 normalize legacy `projectName`/`initiativeName` to `initiativeId`, separately
 from canonical Project/Folder ownership validation.
 
-Remote-workdir sessions may import and invoke only this verified built-in
-through the dynamic wrappers: it edits the owning Project's Home, never a
-remote path. This exception does not enable arbitrary remote scripts, MCP
-imports, or tool factories.
+Work operations edit the owning Project's Home, never a remote display path.
+They do not enable arbitrary remote scripts, MCP imports or tool factories.
 
 ### Tool execution details
 
@@ -1094,7 +1111,7 @@ Its `shell: "node"` mode executes inline TypeScript in a Node child with a
 session tool bridge. OS-shell names such as `pwsh`, `bash`, or `cmd` select the
 ordinary managed-process path.
 
-`yield` is called directly, not through the Node script bridge. Its question
+`ask(kind="decision")` is called directly, not through the Node script bridge. Its question
 advertises two distinct suggested options and one default; legacy three-option
 requests remain readable. Both binary and legacy three-option questions use the
 same square-edged, lettered selection list and an explicit **Continue** action;
@@ -1102,22 +1119,31 @@ choosing a row never submits immediately. Letter keys select options while the
 question is focused, and Enter confirms a focused preset. The application adds its own
 custom-response entry for humans, separate from the chat composer. Root sessions expose the
 question to the human; a child addresses its stored parent, not `reportTo`.
-Only that parent can answer through `yield(action="answer")`; human answers
-use the session yield HTTP endpoint or the `/yield` channel command. The
+Only that parent can answer through `reply({request_id, text})`; human answers
+use the session `/ask` HTTP endpoint or the `/reply` channel command. The
 coordinator checks recipient, request ID and exact option before resolving
 the suspended call. Session stages report `waiting` while a request is active.
 Human free-text replies use the separate HTTP body `{requestId, customText}` or
-`/yield <request-id> text <your response>`, with the same recipient and initiating
+`/reply <request-id> text <your response>`, with the same recipient and initiating
 channel-user checks. Mixing `option` and `customText` is rejected. Text is bounded
 to 4000 characters and trimmed, never accepted as an arbitrary preset or parent
 answer. The tool receipt contains the text in `option` with `custom: true` and is
 persisted through the ordinary paired tool result in both stores.
 
-Global `tools.yield.timeoutMs` defaults to indefinite waiting (`null`).
+Ordinary `ask(kind="input")` uses `InputRequests` instead of the decision journal:
+no brief, options, default or authorization is manufactured. Local roots ask the
+human, tasks ask the stored parent, and an active A2A runner binds only its
+authenticated caller. `reply` selects the pending request, not a conversation.
+Replies return text and resume the original tool call. Both stores retain
+`input_request` facts without restoring in-memory waiters on restart. A2A task
+state and question-bound remote references are described in [A2A](a2a.md).
+
+The waiting-policy field remains `tools.yield.timeoutMs` and defaults to indefinite waiting (`null`).
 `SessionConfig.yield` can override it, including explicit indefinite waiting;
 removing the override restores the global default. Positive timeouts choose
 the declared default on the backend, with timeout provenance in the tool
-result. Policy is captured when each question opens. Cancellation never
+result for decisions; ordinary input instead fails without choosing an answer.
+Policy is captured when each question opens. Cancellation never
 chooses a default. This workflow is not an authorization or capability
 approval mechanism.
 
@@ -1143,10 +1169,10 @@ New answer receipts include a complete `reference` for later citations;
 pending parent notifications expose the same identity through the request's
 `id`, `sessionId` and `origin.physicalId`.
 
-New `yield(action="ask")` calls require a structured `brief`: original goal,
+New `ask(kind="decision")` calls require a structured `brief`: original goal,
 reason for human judgment, recommendation, tradeoff, blocked/unaffected work,
 and separately typed user constraints, observations, assumptions and proposals.
-`yield(action="context")` provides the on-demand schema and recent attributable
+`ask(action="context")` provides the on-demand schema and recent attributable
 human inputs from the session and its reporting owner, including older segments.
 Runtime `decision_input` facts record actual human-input envelopes; provider
 role `user`, sender markup and a worker's claim about the user are not proof of
@@ -1165,7 +1191,7 @@ Changing it while a question is pending is rejected. A separate normal
 SessionManager input asks that reporter to check premises and synthesize a
 self-contained explanation rather than forward worker jargon.
 
-`POST /api/sessions/:key/yield/follow-up` accepts an investigation or deferral
+`POST /api/sessions/:key/ask/follow-up` accepts an investigation or deferral
 instruction from the original user-addressed session. Unlike clarification,
 it closes the old wait durably and returns `approved:false`, a disposition,
 reason and blocked/unaffected scope to the original tool call. It never selects
@@ -1174,7 +1200,7 @@ deferral permits only already-authorized independent work. The old request
 cannot subsequently be answered. A later question may use `reconsiders` to
 link the earlier version without inheriting it as a still-valid premise.
 
-`yield(action="invalidate")` can invalidate the agent's own recorded premise;
+`ask(action="invalidate")` can invalidate the agent's own recorded premise;
 the authenticated UI can mark a decision obsolete through
 `POST /api/sessions/:key/decisions/invalidate`. An append-only
 `yield_invalidation` fact preserves past answers while read-time traversal
@@ -1189,7 +1215,7 @@ These events do not roll back completed side effects or automatically mutate
 Initiative items. Assignees must maintain their existing guarded work records;
 scope text is not a new per-item scheduler or sandbox.
 
-For a live user-addressed request, `POST /api/sessions/:key/yield/reviews`
+For a live user-addressed request, `POST /api/sessions/:key/ask/reviews`
 accepts an idempotent clarification or revision request. `YieldDiscussions`
 persists `yield_review` facts in the original segment and keeps one job per
 owner session. Accepted discussion pauses the automatic default for the
@@ -1232,12 +1258,11 @@ automatically replayed against that new request.
 `src/initiatives/work-contract.ts`, `InitiativeStore`, and
 `src/sessions/work-alignment.ts` separate the outcome/acceptance, existing boundary
 descriptions, source evidence and the executor's chosen next phase. Contracts
-attach to an existing topic or Initiative item; they are not another assignment
-queue. They live in the Project's existing `initiatives.sqlite` (schema version 5),
+are the versioned definition inside each work item, not another business object
+or assignment queue. They live in `initiatives.sqlite` (schema version 6),
 independently of whether session history uses JSONL or SQLite. Migration retains
 old assignments and does not invent historical goals, contracts or human approval.
-New TopicService-created topics and Initiative items start with explicit,
-unadopted agreements. Ordinary work-enabled sessions must explicitly register
+Creating or renaming a session never creates a work definition. Ordinary work-enabled sessions must explicitly register
 untracked work before side-effecting tools; historical scope is not reconstructed
 or assumed unrestricted. Read-only investigation, questions, coordination and
 existing permission-checked cancellation remain available during realignment.
@@ -1250,14 +1275,23 @@ owner's fence. Standalone bounded tasks retain their existing capability limits.
 
 `work action=context` returns the current records, proposal/revision history,
 in-flight/unknown tool invocations and action schemas. `update` uses an exact
-semantic `expectedRevision`; ordinary item progress does not increment this
-revision. An item controller is its current Initiative owner; a topic controls
-its own agreement. Reporting responsibility and creation provenance grant no
+semantic revision with the work key; ordinary progress does not increment this
+revision. Each item has its own manager and assigned durable Session.
+Reporting responsibility and session creation provenance grant no
 control rights. Peers can `propose`; material goal/authorization changes and
 agent changes to human-confirmed agreements require human review. An executor
 may always pause its unchanged agreement. Only the actual executor can `adopt`,
 recording understanding, stopped actions, retained evidence and chosen next steps.
-SQL/topic-brief edits cannot silently replace a tracked agreement's goals.
+Session metadata and archived SQL cannot silently replace current work goals.
+Proposals are persisted on the work item and notify the UI. `ask` can bind to an
+exact proposal, displaying its definition and base revision. Only a human preset
+approval applies it; timeout, parent replies and custom text do not. The Work
+panel approves the same proposal through the same idempotent application path.
+Panel approval also settles its pending Ask; it does not ask the user again.
+Bound work questions cannot be rewritten independently of their saved proposal.
+Both surfaces show the exact pause/resume state as well as the proposed definition.
+Persisted answers interrupted before application are recovered without issuing a
+second approval. Changed versions/assignments reject stale proposals.
 
 The normal LLM loop injects current agreement facts before each inference and
 captures runtime work stamps. The registry rechecks them immediately before
@@ -1291,10 +1325,10 @@ The new context contains the current agreement and factual inventory, not an
 old continuity narrative, and requires executor adoption again. Transition
 failures remain visible/pending rather than pretending the context was replaced.
 
-A successor transition prepares a distinct **idle** topic and retires old
-execution. It does not transfer an Initiative item. The old assignee must
-explicitly `release`, and the Initiative owner must explicitly assign the prepared
-successor with the existing guarded SQL update. The successor's execution stays
+A successor transition prepares a distinct **idle** session without copying the
+work item, and retires old execution. It does not transfer assignment. The old
+assignee releases with `work assign` (assignee null), then the manager assigns
+the same work key to the prepared successor. The successor's execution stays
 blocked until that assignment is real. Files, external jobs and long-term memory
 are not erased. Both intentional realignment and ordinary compaction explicitly
 treat old summaries/memory conclusions as evidence to revalidate, not authority.
@@ -1302,8 +1336,8 @@ treat old summaries/memory conclusions as evidence to revalidate, not authority.
 Yield records pin their work revisions. Changed agreements invalidate historical
 decision applicability without deleting answers; live wait invalidation returns
 a non-approval continuation. Custom human answers are also preserved as genuine
-input evidence and require renewed work interpretation/adoption, not automatic
-approval of the original framing.
+input evidence and require renewed interpretation/adoption only for their bound
+work stamps, not every item owned by a session. They never approve the old framing.
 
 Conversation work controls share a wrapping chip row: **Decision reporting**,
 **Work alignment**, **Background tasks**, and **Subagents**. The latter two appear
@@ -1360,7 +1394,7 @@ mode rather than rewriting the previously read contents.
 `VirtualFs` exposes logical resources mounted in `src/runtime/main/`:
 
 - `v:sessions`: conversation history;
-- `v:bg`: background status/output;
+- `v:bg`: owned execution status/output across background work, local task/call and A2A; projected from their existing managers/stores, not a second lifecycle;
 - `v:skills`: skill bodies/categories/resources;
 - `v:config/mcp.json`: revisioned Project MCP configuration with redacted secrets;
 - `v:tools`: dynamic tool and MCP source discovery without starting servers or
@@ -1910,7 +1944,7 @@ successful handle. Card replacement is not CardKit streaming. QQ exposes its
 implemented group/C2C/guild differences without advertising unimplemented stream
 or button APIs; iLink declares text/image output and no editing or threads.
 
-`yield` keeps one semantic tool. Discord/Feishu native controls call the same
+`ask` creates a request and `reply` answers it. Discord/Feishu native controls call the same
 coordinator as text choices, using validated request IDs and choice indexes rather
 than model-generated commands. The requesting human's channel identity is frozen
 in the in-memory waiter; other group members cannot answer or cancel it.
@@ -2135,7 +2169,7 @@ acknowledgement messages (over 600 characters) show a deterministic excerpt
 with lazy full-content expansion; requests/questions and unclassified messages
 are not automatically folded.
 
-`yield` calls render as decision records rather than generic tool activity, with
+Decision `ask` calls render as decision records rather than generic tool activity, with
 the question, choices, paired answer and raw receipt available. User answers,
 parent answers and timeout defaults remain distinct. Failed or unconfirmed
 receipts never imply approval or an active wait. Only the validated live yield

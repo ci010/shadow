@@ -1,3 +1,4 @@
+import { ReplyTool } from '../tools/reply.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
@@ -9,10 +10,10 @@ import { Bus } from '../bus/bus.ts'
 import { ContextBuilder } from '../agent/context/builder.ts'
 import { HandoffManager } from './handoff/manager.ts'
 import { Tools } from '../tools/registry.ts'
-import { YieldTool } from '../tools/yield.ts'
+import { AskTool } from '../tools/ask.ts'
 import { ToolsSchema } from '../config/schema.ts'
 import { createConfigCommand } from '../slash-commands/handlers/config.ts'
-import { createYieldCommand } from '../slash-commands/handlers/yield.ts'
+import { createReplyCommand } from '../slash-commands/handlers/reply.ts'
 import type { SlashCommandContext } from '../slash-commands/index.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { ChatMessage, LLMProvider, LLMResponse } from '../providers/provider.ts'
@@ -29,7 +30,7 @@ import type { OutboundMessage } from '../bus/events.ts'
 const question = { question: 'Which approach?', options: ['Continue', 'Change approach', 'Stop'], default_option: 'Continue' }
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
-const ask = (input = question, brief = decisionBrief): LLMResponse => ({ content: '', toolCalls: [{ id: 'ask-call', name: 'yield', arguments: { ...input, brief } }] })
+const ask = (input = question, brief = decisionBrief): LLMResponse => ({ content: '', toolCalls: [{ id: 'ask-call', name: 'ask', arguments: { kind: 'decision', ...input, brief } }] })
 const message = (id: string): SessionMessageInput => ({
   kind: 'message', id, content: 'Start', timestamp: new Date().toISOString(), policy: 'queue',
   source: { kind: 'event', eventId: id, type: 'test', source: 'fixture' },
@@ -52,7 +53,7 @@ function fixture(workspace: string, store: SessionStore, deliverYield?: (message
       assert.ok(signal)
       const abort = () => pending.reject(signal.reason)
       signal.addEventListener('abort', abort, { once: true })
-      calls.push({ sessionId: String(messages[0]?.content), messages: structuredClone(messages), toolCount: _tools?.length ?? 0, resolve: pending.resolve })
+      calls.push({ sessionId: String(messages[0]?.content).split('\n')[0], messages: structuredClone(messages), toolCount: _tools?.length ?? 0, resolve: pending.resolve })
       try { signal.throwIfAborted(); return await pending.promise }
       finally { signal.removeEventListener('abort', abort) }
     },
@@ -82,19 +83,60 @@ function fixture(workspace: string, store: SessionStore, deliverYield?: (message
     },
     events: { emit: async () => {} },
   } as unknown as SessionManagerDeps)
-  tools.register(new YieldTool(sessions.yields))
+  tools.register(new AskTool(sessions.yields, sessions.inputs))
+  tools.register(new ReplyTool(sessions.yields, sessions.inputs))
   const app = new Hono()
   sessionsApiPlugin(sessions)(app)
   return { sessions, app, calls, facts, outbound, accepted, tools, setGlobal: (policy: YieldPolicy) => { globalPolicy = policy } }
 }
 
 async function answer(app: Hono, sessionId: string, requestId: string, option: string) {
-  return app.request(`/api/sessions/${encodeURIComponent(sessionId)}/yield`, {
+  return app.request(`/api/sessions/${encodeURIComponent(sessionId)}/ask`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, option }),
   })
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: ordinary input uses the request route and preserves paired tool history without decision records`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:input', undefined, { agentType: 'general' })
+        await f.sessions.buildSession('web:other', undefined, { agentType: 'general' })
+        await f.sessions.deliver('web:input', message('input-turn'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: '', toolCalls: [
+          { id: 'input-call', name: 'ask', arguments: { kind: 'input', question: 'Which path?' } },
+        ] })
+        await waitFor(() => !!f.sessions.inputs.get('web:input'))
+        const { request } = await (await f.app.request('/api/sessions/web:input/ask')).json()
+        assert.equal(request.kind, 'input')
+        assert.equal(f.sessions.yields.get('web:input'), null)
+        const send = (id: string, text: unknown) => f.app.request(`/api/sessions/${id}/ask`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId: request.id, text }),
+        })
+        await f.sessions.inputs.settled()
+        assert.equal((await send('web:other', 'not yours')).status, 403)
+        assert.equal((await send('web:input', '')).status, 400)
+        const answered = await send('web:input', 'fixture-path')
+        assert.equal(answered.status, 200)
+        assert.equal((await answered.json()).answer.text, 'fixture-path')
+        await waitFor(() => f.calls.length === 2)
+        assert.equal(JSON.parse(String(f.calls[1].messages.find(message => message.tool_call_id === 'input-call')?.content)).text, 'fixture-path')
+        f.calls[1].resolve(done())
+        await waitFor(() => f.facts.length === 1)
+        const history = await f.sessions.getHistory('web:input', { shallow: true })
+        assert.ok(history.messages.some(message => message.role === 'tool' && String(message.content).includes('fixture-path')))
+        assert.deepEqual(await f.sessions.getYieldRecords('web:input'), [])
+        assert.equal((await f.app.request('/api/sessions/web:input/yield')).status, 404)
+      } finally { await f.sessions.stop(); await store.close?.() }
+    })
+  })
+
   test(`${Store.name}: reporting ownership and non-answer follow-up use normal session execution without granting peer answer rights`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -127,7 +169,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal((await f.sessions.decisionContext('web:coordinator')).userInputs.length, 0, 'Session reports never become human-input evidence')
         assert.throws(() => f.sessions.yields.answerParent('web:coordinator', request.id, 'Continue'), /stored parent/)
         f.calls[1]!.resolve(done())
-        const response = await f.app.request('/api/sessions/web%3Aworker/yield/follow-up', { method: 'POST',
+        const response = await f.app.request('/api/sessions/web%3Aworker/ask/follow-up', { method: 'POST',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: request.id, kind: 'investigation', reason: 'Check the existing pipeline instead of expanding scope.' }) })
         assert.equal(response.status, 200)
         assert.equal((await response.json()).continuation.approved, false)
@@ -190,7 +232,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         f.calls[0]!.resolve(ask())
         await waitFor(() => !!f.sessions.yields.get('web:review'))
         const original = f.sessions.yields.get('web:review')!
-        const post = (kind: string, requestId = original.id) => f.app.request('/api/sessions/web%3Areview/yield/reviews', {
+        const post = (kind: string, requestId = original.id) => f.app.request('/api/sessions/web%3Areview/ask/reviews', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: randomUUID(), requestId, kind, question: 'Explain the original constraint and remove the expansion assumption.' }),
         })
@@ -200,8 +242,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await waitFor(() => f.calls.length === 2)
         assert.equal(f.calls[1]!.toolCount, 0)
         assert.match(String(f.calls[1]!.messages[0]!.content), /Neither clarification nor revision is approval/)
-        f.calls[1]!.resolve({ content: '', toolCalls: [{ id: 'not-available', name: 'yield',
-          arguments: { action: 'answer', request_id: original.id, option: 'Continue' } }] })
+        f.calls[1]!.resolve({ content: '', toolCalls: [{ id: 'not-available', name: 'reply', arguments: { request_id: original.id, text: 'Continue' } }] })
         await waitFor(() => f.calls.length === 3)
         assert.equal(f.sessions.yields.get('web:review')?.id, original.id)
         assert.equal(f.calls[2]!.toolCount, 0)
@@ -245,7 +286,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         f.calls[0]!.resolve(ask({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' }))
         await waitFor(() => !!f.sessions.yields.get('web:custom'))
         const requestId = f.sessions.yields.get('web:custom')!.id
-        const post = (body: unknown) => f.app.request('/api/sessions/web:custom/yield', {
+        const post = (body: unknown) => f.app.request('/api/sessions/web:custom/ask', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         })
         for (const body of [
@@ -275,7 +316,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         f.calls[2]!.resolve(ask({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' }))
         await waitFor(() => !!f.sessions.yields.get('qq:room'))
         const channelId = f.sessions.yields.get('qq:room')!.id
-        const command = createYieldCommand(f.sessions)
+        const command = createReplyCommand(f.sessions)
         const ctx: SlashCommandContext = { sessionId: 'qq:room', msg, admin: false, llm }
         assert.match(f.outbound.at(-1)!, /text <your response>/)
         assert.match(await command.execute({ ...ctx, msg: { ...msg, senderId: 'bob' } }, `${channelId} text ${customText}`), /Only the user/)
@@ -324,7 +365,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(deliveries[0]?.yieldRequest?.id, request.id)
         assert.equal(deliveries[0]?.done, true)
         assert.match(deliveries[0]!.content, /<1\|2\|cancel>/)
-        const command = createYieldCommand(f.sessions)
+        const command = createReplyCommand(f.sessions)
         const ctx: SlashCommandContext = { sessionId: 'discord:room', msg, admin: false, llm }
         assert.match(await command.execute({ ...ctx, msg: { ...msg, senderId: 'bob' } }, `${request.id} 1`), /Only the user/)
         assert.match(await command.execute(ctx, `${request.id} 3`), /choose one of the options/)
@@ -361,7 +402,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await delay(35)
         assert.equal(f.calls.length, 1, 'Explicit infinite session policy overrides a finite global default')
         assert.equal(request.deadline, null)
-        assert.deepEqual(await (await f.app.request('/api/sessions/web:root/yield')).json(), { request })
+        assert.deepEqual(await (await f.app.request('/api/sessions/web:root/ask')).json(), { request })
         assert.deepEqual(await (await f.app.request('/api/sessions/web:root/stage')).json(), { stage: 'waiting' })
         assert.equal((await answer(f.app, 'web:root', request.id, 'invalid')).status, 400)
         assert.equal(f.sessions.yields.get('web:root')?.id, request.id)
@@ -408,13 +449,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(request.recipient, { kind: 'parent', sessionId: 'web:parent' })
         assert.equal(f.calls[1]?.sessionId, 'web:parent')
         assert.equal((await answer(f.app, 'virtual:child', request.id, 'Continue')).status, 403)
-        assert.equal((await f.app.request('/api/sessions/virtual:child/yield', {
+        assert.equal((await f.app.request('/api/sessions/virtual:child/ask', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ requestId: request.id, customText: 'Not the parent' }),
         })).status, 403)
         f.calls[1]!.resolve({
-          content: '', toolCalls: [{ id: 'answer-call', name: 'yield', arguments: {
-            action: 'answer', request_id: request.id, option: 'Change approach',
+          content: '', toolCalls: [{ id: 'answer-call', name: 'reply', arguments: { request_id: request.id, text: 'Change approach',
           } }],
         })
         await waitFor(() => f.calls.length === 4)
@@ -443,7 +483,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         f.calls[0]!.resolve(ask())
         await waitFor(() => !!f.sessions.yields.get('web:root'))
         const request = f.sessions.yields.get('web:root')!
-        const response = await f.app.request('/api/sessions/web:root/yield', {
+        const response = await f.app.request('/api/sessions/web:root/ask', {
           method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: request.id }),
         })
         assert.equal(response.status, 200)
@@ -559,8 +599,8 @@ test('yield configuration, channel commands and parent-routing edge cases', asyn
       }, new AbortController().signal, { channel: 'discord', senderId: 'alice' })
       await waitFor(() => !!f.sessions.yields.get(ctx.sessionId))
       const request = f.sessions.yields.get(ctx.sessionId)!
-      assert.ok(f.outbound.some(content => content.includes(`/yield ${request.id}`)))
-      assert.match(await createYieldCommand(f.sessions).execute(ctx, `${request.id} 2`), /Selected: Change approach/)
+      assert.ok(f.outbound.some(content => content.includes(`/reply ${request.id}`)))
+      assert.match(await createReplyCommand(f.sessions).execute(ctx, `${request.id} 2`), /Selected: Change approach/)
       assert.equal((await waiting).answeredBy, 'user')
     } finally { await f.sessions.stop() }
   })
@@ -596,8 +636,7 @@ test('yield configuration, channel commands and parent-routing edge cases', asyn
         assert.ok(f.calls[2]!.messages.some(item => item.role === 'user' && (typeof item.content === 'string'
           ? item.content : item.content?.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n'))?.includes(request.id)))
         assert.equal(f.facts.length, 0)
-        f.calls[2]!.resolve({ content: '', toolCalls: [{ id: 'answer-call', name: 'yield', arguments: {
-          action: 'answer', request_id: request.id, option: 'Continue',
+        f.calls[2]!.resolve({ content: '', toolCalls: [{ id: 'answer-call', name: 'reply', arguments: { request_id: request.id, text: 'Continue',
         } }] })
         await waitFor(() => f.calls.length === 5)
         for (const call of f.calls.slice(3)) call.resolve(done())
@@ -622,7 +661,7 @@ test('yield configuration, channel commands and parent-routing edge cases', asyn
         await waitFor(() => f.calls.length === 2)
         assert.equal(f.calls[1]?.sessionId, 'virtual:child')
         assert.equal(f.sessions.yields.get('virtual:child'), null)
-        assert.match(String(f.calls[1]?.messages.find(item => item.tool_call_id === 'ask-call')?.content), /parent.*yield.*enabled/i)
+        assert.match(String(f.calls[1]?.messages.find(item => item.tool_call_id === 'ask-call')?.content), /parent.*reply.*enabled/i)
         f.calls[1]!.resolve(done())
         await waitFor(() => f.facts.length === 1)
       } finally { await f.sessions.stop() }

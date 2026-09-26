@@ -26,10 +26,12 @@ export const A2aConfigSchema = z.object({
 }).strict()
 export type A2aConfig = z.infer<typeof A2aConfigSchema>
 
+export class A2aConfigurationError extends Error {}
+
 export function resolveA2aSecret(name: string, environment: NodeJS.ProcessEnv = process.env): string {
   const value = environment[name]
   if (!value || value.length < 32 || value.length > 4096 || /[\s\x00-\x1f\x7f]/.test(value)) {
-    throw new Error(`A2A credential ${name} must contain 32-4096 non-whitespace characters.`)
+    throw new A2aConfigurationError(`A2A credential ${name} must contain 32-4096 non-whitespace characters.`)
   }
   return value
 }

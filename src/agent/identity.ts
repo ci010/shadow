@@ -119,7 +119,7 @@ export class IdentityManager {
         personContext: [
           `System found user profile for ${safeName}.`,
           `Profile path: ${profilePath}`,
-          'Use this profile for memory continuity and update it when you learn stable personal traits.',
+          'Use this profile for memory continuity. Remember stable personal preferences here with source/context; distinguish explicit statements from observations and correct superseded preferences. Temporary reply instructions stay in conversation; Project practices and Work constraints do not belong in a personal profile.',
         ].join('\n'),
       }
     })

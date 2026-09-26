@@ -197,7 +197,7 @@ export class MemoryStore {
 
   /**
    * Read the session memory file for a logical session key.
-   * Truncates to `maxLines` to prevent oversized system prompts.
+   * Truncates to `maxLines` for bounded, explicit reads.
    * Returns empty string if no file exists.
    */
   async readSessionMemory(sessionKey: string, maxLines = 200, since?: string): Promise<string> {
@@ -269,113 +269,6 @@ export class MemoryStore {
       lines.push(`- ${path}${action === 'edit' ? ' (edit)' : ''}`)
     }
     return lines.join('\n')
-  }
-
-  // ── Conventions (scoped, always-on constraints) ─────────────────
-
-  private conventionsPath(
-    scope: 'session' | 'initiative' | 'project' | 'agent',
-    key?: string,
-  ): string {
-    if (scope === 'agent') return join(this.memoryDir, 'agent.conventions.md')
-    if (scope === 'initiative' || scope === 'project') {
-      if (key && (key === '.' || key === '..' || /[/\\:\0]/.test(key))) {
-        throw new TypeError('Project memory key must be a single directory name')
-      }
-      return join(this.memoryDir, 'projects', key ?? '_', 'conventions.md')
-    }
-    return join(
-      this.sessionMemoryDir(),
-      `${this.sanitizeSessionKey(key ?? '')}.conventions.md`,
-    )
-  }
-
-  private static parseBullets(content: string): string[] {
-    return content
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('- '))
-      .map((l) => l.slice(2).trim())
-      .filter(Boolean)
-  }
-
-  private async writeConventions(
-    filePath: string,
-    items: string[],
-  ): Promise<void> {
-    await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(
-      filePath,
-      items.length ? items.map((i) => `- ${i}`).join('\n') + '\n' : '',
-    )
-  }
-
-  /** Add a convention to a scope (no-op if it already exists). */
-  async addConvention(
-    scope: 'session' | 'initiative' | 'project' | 'agent',
-    key: string | undefined,
-    text: string,
-  ): Promise<void> {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    const filePath = this.conventionsPath(scope, key)
-    const items = MemoryStore.parseBullets(
-      (await readFileIfExists(filePath)) ?? '',
-    )
-    if (items.includes(trimmed)) return
-    items.push(trimmed)
-    await this.writeConventions(filePath, items)
-  }
-
-  /** Remove conventions from a scope whose text contains `text` (case-insensitive). */
-  async removeConvention(
-    scope: 'session' | 'initiative' | 'project' | 'agent',
-    key: string | undefined,
-    text: string,
-  ): Promise<void> {
-    const filePath = this.conventionsPath(scope, key)
-    const existing = await readFileIfExists(filePath)
-    if (!existing) return
-    const needle = text.trim().toLowerCase()
-    const items = MemoryStore.parseBullets(existing).filter(
-      (i) => !i.toLowerCase().includes(needle),
-    )
-    await this.writeConventions(filePath, items)
-  }
-
-  /**
-   * Merge active conventions across scopes (agent → initiative → session)
-   * into one `### Conventions` section, each tagged with its `[scope]`.
-   * Injected for main + sub agents (read-only). Returns '' if none.
-   */
-  async readConventions(
-    sessionId: string,
-    initiativeId?: string,
-  ): Promise<string> {
-    const groups: { tag: string; path: string }[] = [
-      { tag: 'agent', path: this.conventionsPath('agent') },
-    ]
-    if (initiativeId) {
-      groups.push({
-        tag: `initiative:${initiativeId}`,
-        path: this.conventionsPath('initiative', initiativeId),
-      })
-    }
-    groups.push({
-      tag: 'session',
-      path: this.conventionsPath('session', sessionId),
-    })
-
-    const lines: string[] = []
-    for (const { tag, path } of groups) {
-      const content = await readFileIfExists(path)
-      if (!content) continue
-      for (const item of MemoryStore.parseBullets(content)) {
-        lines.push(`- [${tag}] ${item}`)
-      }
-    }
-    if (!lines.length) return ''
-    return ['### Conventions (remembered; subject to current scope)', ...lines].join('\n')
   }
 
   // ── Long-term keyword index (lazy reference knowledge) ────────────

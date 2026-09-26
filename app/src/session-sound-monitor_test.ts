@@ -59,7 +59,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
     const id = path.split('/')[2]!
     if (path.endsWith('/graph')) return Response.json({ sessions: [{ sessionId: 'web:root', mode: 'session' }], nodes: [] })
     if (path.endsWith('/stages')) return Response.json(invalid ? { stages: { 'web:root': 123 } } : { stages: { 'web:root': stages[id] } })
-    if (path.endsWith('/yield')) return Response.json({ request: {
+    if (path.endsWith('/ask')) return Response.json({ request: {
       id: questionIds[id], sessionId: 'web:root', question: 'Continue?', options: ['Yes', 'No'], defaultOption: 'No',
       recipient: { kind: parent ? 'parent' : 'user', sessionId: parent ? 'web:owner' : 'web:root' },
       createdAt: new Date().toISOString(), deadline: null,
