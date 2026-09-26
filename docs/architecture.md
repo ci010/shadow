@@ -2617,6 +2617,31 @@ than using it as a test fixture.
 with Zod schemas. It can fall back to defaults when no implicit config exists.
 Use the committed example for setup; local credentials/configuration are private.
 
+Persisted App and Project configurations may still contain the retired `voice`
+field. Both file-loading paths discard it in memory with a warning before
+validation, so old settings do not prevent startup. Loading does not rewrite the
+file; the next successful configuration save removes that field. New writes still
+reject `voice`, and all remaining settings are validated normally. This does not
+restore automatic STT; transcription is available through the `audio_cpp` tool.
+
+Optional image/video inference uses the local-only `diffusion_cpp` tool and
+`diffusion-cpp` Skill. No `sd-cli` binary or weights ship with Shadow, and no
+downloads happen on startup. Qwen Image 2.1 is the default image preset;
+legacy Qwen-Image-Edit is a separate optional editing preset that checks
+Diffusers shard indexes in an existing cache, and Anima is an optional
+text-to-image preset with its own encoder, VAE and non-commercial license.
+Z-Image-Turbo is an explicit lower-resource text-to-image alternative;
+MiniMax-H3 is the video/audio preset. Project-local `.diffusion-cpp.json`
+stores references to existing model files, including other applications'
+caches, rather than copying weights into the Project. Bounded discovery
+reports filename/size candidates (or indexed-shard/header presence for the
+legacy Qwen cache), not proven compatibility. The Skill covers
+hardware, component pairing, licensing and consent before optional downloads.
+Outputs use the owning session's private `media` directory, including WebM
+with muxed audio for H3; existing media routing serves completed files,
+not progressive inference streams. Remote workdirs cannot use Main-local
+weights or `sd-cli`.
+
 `bot.config.example.json` selects `gpt-6-astra@copilot` with medium reasoning
 effort, SQLite session storage, web settings,
 and `restrictToWorkspace: true`. These are example choices, not all schema
@@ -2697,7 +2722,7 @@ baked into the image.
 | `src/mcp` | MCP client/transports/adapters and serialized catalog updates |
 | `src/bus`, `src/events`, `src/cron` | In-process messaging, subscriptions, scheduling |
 | `src/slash-commands`, `src/tools/shell-commands` | User slash-command adapters and separate tool-side shell-command handlers |
-| `src/channels`, `src/voice` | Platform adapters, web chat/media, optional STT |
+| `src/channels`, `src/audio-cpp`, `src/diffusion-cpp` | Platform adapters, web chat/media, optional local audio.cpp ASR/TTS and sd.cpp image/video; no binary or model is bundled |
 | `src/gateway` | Hono policy/serving, plugin contract, UI proxy/static serving |
 | `src/otel` | Tracing, project telemetry-context integration, storage/query/streaming and distributed-job audit helpers |
 | `src/browser` | Browser discovery, port allocation and process/profile lifecycle |

@@ -143,6 +143,10 @@ import { IO_TERMINAL, IoError } from '../../io/contracts.ts'
 import { registerIoRoutes } from '../../io/routes.ts'
 import { IoCapabilitiesTool, IoRunTool } from '../../tools/io.ts'
 import { IoSurfaceTool } from '../../tools/io-surface.ts'
+import { AudioCppService } from '../../audio-cpp/service.ts'
+import { AudioCppTool } from '../../tools/audio-cpp.ts'
+import { DiffusionCppService } from '../../diffusion-cpp/service.ts'
+import { DiffusionCppTool } from '../../tools/diffusion-cpp.ts'
 import { createPromptCaptureStore } from '../../sessions/prompt-capture.ts'
 import { createA2aRuntime } from '../../a2a/runtime.ts'
 import { isDeepStrictEqual } from 'node:util'
@@ -557,6 +561,14 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('io_capabilities', new IoCapabilitiesTool(io, project.id))
   importTool.registerBuiltin('io_run', new IoRunTool(io, project.id))
   importTool.registerBuiltin('io_surface', new IoSurfaceTool(io, project.id))
+  importTool.registerBuiltin('audio_cpp', new AudioCppTool(new AudioCppService(workspace), project.id, workspace))
+  importTool.registerBuiltin('diffusion_cpp', new DiffusionCppTool(
+    new DiffusionCppService(workspace), project.id, workspace, sessionId => {
+      const state = sessions.getSessionState(sessionId)
+      if (!state) throw new Error('sd-cli session no longer exists')
+      return resolveSessionLocations(workspace, state).sessionDataDir
+    },
+  ))
 
   const initiatives = new InitiativeStore(workspace, {
     trackWork: true,

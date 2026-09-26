@@ -1,7 +1,6 @@
 import { extname } from 'node:path'
 import type { Hono } from 'hono'
 import type { SessionManager } from '../sessions/session-manager.ts'
-import type { VoicePipeline } from '../voice/mod.ts'
 import type { OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import { Span } from '../otel/tracing.ts'
@@ -28,7 +27,6 @@ export interface DiscordChannelOptions {
   /** Group-chat IDs (Discord channel IDs) that have admin privileges. DMs are admin by default. */
   adminChats?: string[]
   sessionManager?: SessionManager
-  voicePipeline?: VoicePipeline
 }
 
 /**
@@ -57,7 +55,6 @@ export class DiscordChannel extends AbstractChannel {
   private reactionEmoji: string
   private workspace: string
   private sessionManager?: SessionManager
-  private voicePipeline?: VoicePipeline
   /** Maps channel or thread IDs to human-readable Discord names. */
   private channelNameCache = new Map<string, string>()
   /** Maps thread channel IDs to their parent channel IDs */
@@ -70,7 +67,6 @@ export class DiscordChannel extends AbstractChannel {
     this.reactionEmoji = opts.reactionEmoji ?? '👀'
     this.workspace = opts.workspace ?? '.'
     this.sessionManager = opts.sessionManager
-    this.voicePipeline = opts.voicePipeline
   }
 
   @Span('DiscordChannel.start')
@@ -864,45 +860,27 @@ export class DiscordChannel extends AbstractChannel {
       }
 
       // Strip bot mention from content so the LLM sees clean text
-      const cleaned = this.stripBotMention(content)
+      let cleaned = this.stripBotMention(content)
 
-      // Download and cache attachments locally, convert to base64 data URIs
+      // Download and cache attachments locally.
       const attachments = data.attachments as
         | Array<Record<string, unknown>>
         | undefined
 
-      // Separate audio attachments from non-audio ones
-      const audioAttachments: Array<Record<string, unknown>> = []
-      const otherAttachments: Array<Record<string, unknown>> = []
-      if (attachments && attachments.length > 0) {
-        for (const a of attachments) {
-          const ct = a.content_type as string | undefined
-          if (ct?.startsWith('audio/')) {
-            audioAttachments.push(a)
-          } else {
-            otherAttachments.push(a)
-          }
-        }
-      }
-
-      // Transcribe audio attachments and append to content
-      let finalContent = cleaned
-      if (audioAttachments.length > 0 && this.voicePipeline) {
-        const transcribed = await this._handleAudioAttachments(audioAttachments)
-        finalContent = [cleaned, transcribed].filter(Boolean).join('\n')
-      }
-
-      // Non-audio attachments: download as media
+      // Preserve audio as a file; transcription is an optional agent operation.
       const channelId = data.channel_id as string
       let media: string[] | undefined
-      if (otherAttachments.length > 0) {
+      if (attachments?.length) {
         const results = await Promise.all(
-          otherAttachments.map((a) =>
+          attachments.map((a) =>
             this.downloadAttachment(a, this.logicalSessionId(channelId))
           ),
         )
         const uris = results.filter(Boolean) as string[]
         if (uris.length > 0) media = uris
+        if (uris.length !== results.length) {
+          cleaned = [cleaned, '[attachment unavailable: download failed]'].filter(Boolean).join('\n')
+        }
       }
 
       const channelName = await this.resolveChannelName(channelId)
@@ -921,7 +899,7 @@ export class DiscordChannel extends AbstractChannel {
       await this.handleIncoming(
         author.id,
         channelId,
-        finalContent,
+        cleaned,
         data.id as string,
         {
           chatName: channelName ?? undefined,
@@ -978,56 +956,6 @@ export class DiscordChannel extends AbstractChannel {
       )
       return null
     }
-  }
-
-  /**
-   * Download and transcribe audio attachments, return concatenated text.
-   */
-  private async _handleAudioAttachments(
-    attachments: Array<Record<string, unknown>>,
-  ): Promise<string> {
-    if (!this.voicePipeline) {
-      return attachments.map(() => '[audio]').join('\n')
-    }
-
-    const results: string[] = []
-
-    for (const attachment of attachments) {
-      const url = attachment.url as string | undefined
-      const filename = attachment.filename as string | undefined
-      if (!url || !filename) {
-        results.push('[audio]')
-        continue
-      }
-
-      try {
-        const res = await this.request(url, {
-          headers: { Authorization: `Bot ${this.token}` },
-        })
-        if (!res.ok) {
-          console.warn(
-            `[discord] Failed to download audio ${filename}: ${res.status}`,
-          )
-          results.push('[audio]')
-          continue
-        }
-
-        const buf = new Uint8Array(await res.arrayBuffer())
-        const ext = extname(filename) || '.ogg'
-        const attachId = attachment.id as string ?? String(Date.now())
-        const text = await this.voicePipeline.processVoice(
-          buf,
-          ext,
-          this.mediaSourceId(attachId),
-        )
-        results.push(text)
-      } catch (err) {
-        console.error('[discord] Failed to transcribe audio', errMsg(err))
-        results.push('[audio]')
-      }
-    }
-
-    return results.join('\n')
   }
 
   /**

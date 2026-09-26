@@ -6,6 +6,53 @@ import { withTempWorkspace } from '../testing/workspace.ts'
 import { ConfigStore } from './store.ts'
 import { ConfigSchema } from './schema.ts'
 
+test('stored voice settings are retired on read and removed only by a successful normal save', async t => {
+  await withTempWorkspace(async root => {
+    const configPath = join(root, 'config.json')
+    const original = JSON.stringify({
+      voice: { enabled: false, timeoutMs: 30000 },
+      providers: { openai: { apiKey: 'synthetic-persisted-key' } },
+      agent: { model: 'fixture@openai' }, customMetadata: { retained: true },
+    })
+    await writeFile(configPath, original)
+    const warnings: string[] = []
+    t.mock.method(console, 'warn', (message: string) => warnings.push(message))
+    let fail = true
+    const store = new ConfigStore({ configPath, onChanged: () => {
+      if (fail) throw new Error('synthetic activation failure')
+    } })
+    const raw = await store.read()
+    assert.equal(Object.hasOwn(raw, 'voice'), false)
+    assert.equal(await readFile(configPath, 'utf8'), original)
+    await store.read()
+    assert.equal(warnings.length, 1)
+    assert.match(warnings[0], /voice/)
+    await assert.rejects(store.update(value => ({ ...value, voice: { enabled: true } })), /voice/)
+    await assert.rejects(store.update(value => ({ ...value, agent: { reasoningEffort: 'invalid' } })), /reasoningEffort/)
+    await assert.rejects(store.update(value => value), /previous file was restored/)
+    assert.equal(await readFile(configPath, 'utf8'), original)
+    fail = false
+    await store.update(value => ({ ...value, agent: { model: 'updated@openai' } }))
+    const expected = { ...raw, agent: { model: 'updated@openai' } }
+    assert.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), expected)
+    assert.deepEqual(await new ConfigStore({ configPath }).read(), expected)
+    assert.equal(warnings.length, 1)
+  })
+})
+
+test('retiring voice settings still preserves an external edit instead of overwriting it', async () => {
+  await withTempWorkspace(async root => {
+    const configPath = join(root, 'config.json')
+    await writeFile(configPath, JSON.stringify({ voice: { enabled: false } }))
+    const store = new ConfigStore({ configPath })
+    await store.read()
+    const external = '{"voice":{"enabled":false},"agent":{"model":"external"}}'
+    await writeFile(configPath, external)
+    await assert.rejects(store.update(raw => raw), /changed on disk/)
+    assert.equal(await readFile(configPath, 'utf8'), external)
+  })
+})
+
 test('saving model defaults retains startup-only environment settings without writing secrets', async () => {
   await withTempWorkspace(async root => {
     const configPath = join(root, 'config.json')

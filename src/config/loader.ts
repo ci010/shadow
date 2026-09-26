@@ -30,6 +30,18 @@ export async function resolveConfigPath(
   return null
 }
 
+export function normalizePersistedConfig(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Configuration must be an object.')
+  }
+  const raw: Record<string, unknown> = { ...value }
+  if (Object.hasOwn(raw, 'voice')) {
+    delete raw.voice
+    console.warn('[config] Retired voice settings are ignored; automatic STT is no longer available. Use audio_cpp for transcription. The retired field is removed on the next configuration save.')
+  }
+  return raw
+}
+
 /**
  * Load config from file or fall back to defaults + env vars.
  */
@@ -52,6 +64,7 @@ export async function loadConfig(explicitPath?: string): Promise<Config> {
     }
   }
 
+  raw = normalizePersistedConfig(raw)
   // Overlay environment variables into the raw config
   overlayEnv(raw)
 

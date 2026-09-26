@@ -249,16 +249,6 @@ export const TunnelSchema = z.object({
   args: z.array(z.string()).optional(),
 })
 
-// ── Voice / STT config ──────────────────────────────────────────────────
-
-export const VoiceSchema = z.object({
-  enabled: z.boolean().default(false),
-  /** STT service endpoint URL */
-  sttUrl: z.string().optional(),
-  /** Request timeout in milliseconds. Default: 30000 */
-  timeoutMs: z.number().default(30_000),
-})
-
 // ── Root config ─────────────────────────────────────────────────────────
 
 export const ConfigSchema = z.object({
@@ -271,7 +261,7 @@ export const ConfigSchema = z.object({
   learning: LearningSchema.default({}),
   cron: CronConfigSchema.default({}),
   tunnel: TunnelSchema.default({}),
-  voice: VoiceSchema.default({}),
+  voice: z.never().optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>

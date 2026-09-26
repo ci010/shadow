@@ -7,6 +7,36 @@ import { redactConfig } from '../config/store.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { AppProviderConfigStore, ProjectConfigStore } from './config-store.ts'
 
+test('existing Projects start with retired voice settings and keep unrelated configuration', async () => {
+  await withTempWorkspace(async root => {
+    const shared = ConfigSchema.parse({ providers: { openai: { apiKey: 'synthetic-shared-key' } } })
+    const options = { configPath: join(root, 'project.json'), home: join(root, 'home'), getSharedConfig: () => shared }
+    const original = JSON.stringify({
+      voice: { enabled: true, sttUrl: 'http://127.0.0.1:1', timeoutMs: 30000 },
+      agent: { model: 'project@openai' }, learning: { enabled: false }, channels: { web: { enabled: true } },
+    })
+    await writeFile(options.configPath, original)
+    const store = new ProjectConfigStore(options)
+    await store.init()
+    assert.equal(Object.hasOwn(store.current(), 'voice'), false)
+    assert.equal(store.current().agent.model, 'project@openai')
+    assert.equal(store.current().providers.openai.apiKey, 'synthetic-shared-key')
+    assert.deepEqual(store.current().learning, { ...shared.learning, enabled: false })
+    assert.deepEqual(await store.persistedChannels(), { web: { enabled: true } })
+    assert.equal(await readFile(options.configPath, 'utf8'), original)
+    await store.updateModelDefaults({ reasoningEffort: 'high' })
+    const persisted = JSON.parse(await readFile(options.configPath, 'utf8'))
+    assert.equal(Object.hasOwn(persisted, 'voice'), false)
+    assert.equal(Object.hasOwn(persisted, 'providers'), false)
+    const restored = new ProjectConfigStore(options)
+    await restored.init()
+    assert.equal(restored.current().agent.model, 'project@openai')
+    assert.equal(restored.current().agent.reasoningEffort, 'high')
+    assert.deepEqual(restored.current().learning, { ...shared.learning, enabled: false })
+    await assert.rejects(restored.update(raw => ({ ...raw, voice: { enabled: true } })), /voice/)
+  })
+})
+
 test('unset project defaults inherit App values without persisting resolved choices', async () => {
   await withTempWorkspace(async root => {
     let shared = ConfigSchema.parse({})

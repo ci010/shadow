@@ -12,7 +12,6 @@ import { FeishuChannel } from './feishu.ts'
 import { QQChannel } from './qq.ts'
 import { WebChannel } from './web.ts'
 import { WeChatChannel } from './wechat.ts'
-import { SttClient, VoicePipeline } from '../voice/mod.ts'
 import { CHANNEL_IDS, type BotInstanceStatus, type ChannelId, type ChannelSetupStatus, type ChannelState } from './setup-contract.ts'
 import { channelConfigured, channelSetupStatus, ChannelSetupError, isChannelId } from './setup.ts'
 import type { BotInstance, BotInstanceStore } from './bot-store.ts'
@@ -39,7 +38,6 @@ const scopedApps = new WeakMap<Hono, ChannelManager>()
 export class ChannelManager {
   private channels = new Map<string, BaseChannel>()
   private running = false
-  private voicePipeline?: VoicePipeline
   private dispatchController?: AbortController
   private dispatchTask?: Promise<void>
   private transportsStopping = false
@@ -84,19 +82,6 @@ export class ChannelManager {
 
   private async initChannels(): Promise<void> {
     const ch = this.config.channels
-
-    // Initialize voice pipeline if enabled
-    if (this.config.voice?.enabled && this.config.voice.sttUrl) {
-      const sttClient = new SttClient(
-        this.config.voice.sttUrl,
-        this.config.voice.timeoutMs,
-      )
-      this.voicePipeline = new VoicePipeline(
-        sttClient,
-        this.config.agent.workspace,
-      )
-      console.info(`[channel-manager] Voice pipeline enabled, STT URL: ${this.config.voice.sttUrl}`)
-    }
 
     if (this.options) {
       for (const bot of this.options.instanceStore.list()) {
@@ -413,7 +398,6 @@ export class ChannelManager {
         workspace: this.config.agent.workspace,
         adminChats: ch.discord.adminChats,
         sessionManager: this.sessionManager,
-        voicePipeline: this.voicePipeline,
       })
     }
 
@@ -427,7 +411,6 @@ export class ChannelManager {
         allowFrom: ch.feishu.allowFrom,
         workspace: this.config.agent.workspace,
         adminChats: ch.feishu.adminChats,
-        voicePipeline: this.voicePipeline,
       })
     }
 

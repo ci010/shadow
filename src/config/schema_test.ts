@@ -16,6 +16,10 @@ test('explicit model and effort selections survive loading', () => {
   assert.equal(config.agent.reasoningEffort, 'high')
 })
 
+test('legacy voice configuration is rejected rather than silently ignored', () => {
+  assert.equal(ConfigSchema.safeParse({ voice: { sttUrl: 'http://localhost:8000' } }).success, false)
+})
+
 test('example config agrees with the application defaults', async () => {
   const example = ConfigSchema.parse(JSON.parse(await readFile(new URL('../../bot.config.example.json', import.meta.url), 'utf8')))
   const defaults = ConfigSchema.parse({})

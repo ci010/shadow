@@ -1,6 +1,6 @@
 import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { resolveConfigPath } from './loader.ts'
+import { normalizePersistedConfig, resolveConfigPath } from './loader.ts'
 import { ChannelsSchema, ConfigSchema, type Config } from './schema.ts'
 import { WEB_SEARCH_KEY_FIELDS } from './web-search.ts'
 
@@ -93,8 +93,7 @@ export class ConfigStore {
       const path = this.options.configPath ?? await resolveConfigPath()
       if (!path) throw new Error('No configuration file is available.')
       const text = readFileSync(path, 'utf8')
-      const raw: unknown = JSON.parse(text)
-      if (!isRecord(raw)) throw new TypeError('Configuration must be an object.')
+      const raw = normalizePersistedConfig(JSON.parse(text))
       ConfigSchema.parse(raw)
       this.snapshot = { path, text, raw }
     })().finally(() => { this.loading = undefined })

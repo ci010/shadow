@@ -28,7 +28,6 @@ import { Span } from '../otel/tracing.ts'
 import { readMediaFile, saveToUploads } from '../utils/paths.ts'
 import { RingSet } from '../utils/ring-set.ts'
 import { AbstractChannel } from './base.ts'
-import type { VoicePipeline } from '../voice/mod.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { resolveSessionLocations } from '../sessions/locality.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
@@ -53,8 +52,6 @@ export interface FeishuChannelOptions {
   workspace?: string
   /** Group-chat IDs that have admin privileges. DMs are admin by default. */
   adminChats?: string[]
-  /** Voice pipeline for STT transcription (optional) */
-  voicePipeline?: VoicePipeline
   /** Read persisted child ownership to recover root-message routing after restart. */
   sessionManager?: Pick<SessionManager, 'getSessionState'>
   transportFactory?: (
@@ -273,7 +270,6 @@ export class FeishuChannel extends AbstractChannel {
   private verificationToken: string
 
   private workspace: string
-  private voicePipeline?: VoicePipeline
 
   private _client: Client | null = null
   private _wsClient: FeishuTransport | null = null
@@ -308,7 +304,6 @@ export class FeishuChannel extends AbstractChannel {
     this.encryptKey = opts.encryptKey ?? ''
     this.verificationToken = opts.verificationToken ?? ''
     this.workspace = opts.workspace ?? '.'
-    this.voicePipeline = opts.voicePipeline
     this.sessionManager = opts.sessionManager
     this.transportFactory = opts.transportFactory ?? ((options, onEvent, onState, onCard) =>
       new FeishuWorkerTransport(options, onEvent, onState, undefined, onCard))
@@ -1014,7 +1009,9 @@ export class FeishuChannel extends AbstractChannel {
         content = result.content
         if (result.media) fileMedia = result.media
       } else if (msgType === 'audio') {
-        content = await this._handleAudioMessage(messageId, message)
+        const result = await this._handleAudioMessage(messageId, message, replyTo)
+        content = result.content
+        fileMedia = result.media
       } else {
         content = MSG_TYPE_MAP[msgType] ?? `[${msgType}]`
       }
@@ -1037,8 +1034,7 @@ export class FeishuChannel extends AbstractChannel {
       }
 
       // Add a reaction only for messages the bot will actually respond to.
-      // Audio messages already sent a reaction before STT, skip here.
-      if (!silent && msgType !== 'audio') {
+      if (!silent) {
         this._addReaction(messageId, SEEN_EMOJI).catch(() => {})
       }
 
@@ -1170,21 +1166,18 @@ export class FeishuChannel extends AbstractChannel {
   private async _handleAudioMessage(
     messageId: string,
     message: Record<string, unknown>,
-  ): Promise<string> {
-    if (!this._client || !this.voicePipeline) return '[audio]'
+    chatId: string,
+  ): Promise<{ content: string; media?: string[] }> {
+    if (!this._client) return { content: '[audio unavailable: client disconnected]' }
 
     try {
       const rawContent = message['content'] as string | undefined
-      if (!rawContent) return '[audio]'
+      if (!rawContent) return { content: '[audio unavailable: missing content]' }
 
       const parsed = JSON.parse(rawContent) as Record<string, unknown>
       const fileKey = parsed['file_key'] as string | undefined
-      if (!fileKey) return '[audio]'
+      if (!fileKey) return { content: '[audio unavailable: missing file key]' }
 
-      // Send reaction before starting STT so user knows bot received the message
-      this._addReaction(messageId, SEEN_EMOJI).catch(() => {})
-
-      // Download audio via Feishu message resource API
       type ResourceGet = (opts: {
         path: { message_id: string; file_key: string }
         params: { type: string }
@@ -1196,17 +1189,17 @@ export class FeishuChannel extends AbstractChannel {
         params: { type: 'file' },
       })
 
-      // Feishu audio is typically opus in ogg container
-      const text = await this.voicePipeline.processVoice(
+      this.assertConnection()
+      const path = await saveToUploads(
+        this.workspace,
+        this._mediaSessionId(chatId),
+        `feishu_audio_${messageId.replace(/[^a-zA-Z0-9_-]/g, '_')}.ogg`,
         buf,
-        '.ogg',
-        this.mediaSourceId(messageId),
       )
-      console.info(`[feishu] Audio transcribed: ${text.substring(0, 80)}...`)
-      return text
+      return { content: '', media: [path] }
     } catch (err) {
-      console.error('[feishu] Failed to transcribe audio')
-      return '[audio]'
+      console.error('[feishu] Failed to save audio', err)
+      return { content: '[audio unavailable: download failed]' }
     }
   }
 
