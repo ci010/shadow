@@ -40,6 +40,8 @@ export interface SystemEvent {
   /** Typed cause of this event; display metadata cannot replace provenance. */
   origin?: InputOrigin
   targetSessionId?: string
+  /** Host-assigned audience restriction; subscription matches cannot widen it. */
+  audienceSessionIds?: string[]
   /** Legacy record-only override; wins over any declared delivery policy. */
   silent?: boolean
   /**

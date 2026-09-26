@@ -4,7 +4,12 @@
 
 | Document | Read it for |
 | --- | --- |
-| [Project README](../README.md) | Node/pnpm setup, running, builds, and deployment cautions |
+| [Project README](../README.md) | Node/pnpm setup, local development, builds, and entry points |
+| [Using Shadow](using-shadow.md) | Project/folder navigation, conversations, files, and answering agent questions |
+| [Messaging channels](channels.md) | Project bots, trust settings, and QQ passive-reply limits |
+| [Browser access](browser-access.md) | Local PIN and one-use pairing, trusted LAN, and PWA installation limits |
+| [Tools and automations](tools-and-automations.md) | Virtual discovery, Project MCP configuration, skills, and schedules |
+| [Session diagnosis](diagnostics.md) | Read-only export/API/CLI and development-only prompt capture |
 | [Desktop release verification](release.md) | Native Windows/macOS/Linux build gates, Actions artifacts, package identity and installation acceptance boundaries |
 | [Mobile client](mobile.md) | Capacitor client architecture, HTTPS gateway, pairing/revocation, native release and operational boundaries |
 | [Two-device Electron pairing](desktop-pairing.md) | Trusted-LAN/VPN Main/Child setup, fingerprint approval, remote-work verification, reconnect and test boundaries |
@@ -25,7 +30,7 @@ The architecture reference identifies those boundaries.
 Project groups now have independently composed backend runtimes and Homes,
 not a global project switcher or UI-only tags. Provider credentials and
 devices stay App-wide; model defaults, sessions, bots, and learning belong to a
-project. See the [README project guide](../README.md#projects) and
+project. See [using Shadow](using-shadow.md#projects-folders-and-conversations) and the
 [source-backed architecture](architecture.md#projects-ownership-storage-and-routing)
 for the canonical sibling storage layout, fresh Default startup, recovery,
 and verified remote-folder ownership with its Child upgrade boundary. This implementation does not
@@ -68,13 +73,9 @@ proposal: that would invent a historical implementation that did not exist.
 
 ## Design history
 
-| Document | How to interpret it |
-| --- | --- |
-| [DESIGN-BRAINSTORM.md](../DESIGN-BRAINSTORM.md) | Earlier architecture analysis and multi-device design space; its “current architecture” describes the older Deno-era baseline |
-| [MEM.md](../MEM.md) | Memory model rationale and proposed invariants; several pieces are implemented, but exact paths, prompt inclusion, and enforcement must be checked in source |
-| [KEY.md](../KEY.md) | Product/agent interaction ideas and desired behavior, not a feature inventory |
-| [PROBLEMS.md](../PROBLEMS.md) | Historical observations and open questions, not a maintained bug-status dashboard |
-| [ui-refactor.md](../ui-refactor.md) | UI refactoring design material, not the live route/API contract |
+The [distributed desktop workstreams](implementation/README.md) preserve
+historical proposals and checkpoints. Use the current references above for
+operational instructions; the historical workstreams are not a feature inventory.
 
 Runtime prompt documents are another category: `src/agent/types/builtin/*/AGENT.md`,
 `src/agent/context/*.md`, `src/sessions/handoff/HANDOFF.md`, and

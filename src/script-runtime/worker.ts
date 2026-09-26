@@ -131,9 +131,17 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
       existing = (async () => {
         if (specifier.startsWith('@shadow/')) {
           const invoke = (input: unknown) => call(specifier.slice('@shadow/'.length), input)
-          return new vm.SyntheticModule(['default', 'call'], function () {
+          const fetchFactory = vm.runInContext(
+            '(invoke) => (path, options = {}) => { if (typeof path !== "string" || !options || typeof options !== "object" || Array.isArray(options)) throw new TypeError("fetch requires a path and options object"); return invoke({ ...options, path, method: options.method ?? "GET" }) }',
+            context,
+          ) as (sendRequest: (input: unknown) => Promise<unknown>) =>
+            (path: string, options?: Record<string, unknown>) => Promise<unknown>
+          const fetch = fetchFactory(invoke)
+          const exports = specifier === '@shadow/fetch' ? ['default', 'call', 'fetch'] : ['default', 'call']
+          return new vm.SyntheticModule(exports, function () {
             this.setExport('default', invoke)
             this.setExport('call', invoke)
+            if (specifier === '@shadow/fetch') this.setExport('fetch', fetch)
           }, { context, identifier: specifier })
         }
         const resolved = host ? import.meta.resolve(specifier, identifier) : specifier

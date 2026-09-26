@@ -1592,7 +1592,7 @@ loads so they cannot repopulate a reset session. Sleep clears live session state
 not Project MCP configuration. Skill declarations must be activated again by
 reading the skill. Legacy internal preload restoration is session-only
 and never writes persistent configuration. See the
-[configuration examples](../README.md#configure-project-mcp-servers).
+[Project MCP configuration guide](tools-and-automations.md#configure-project-mcp-servers).
 
 User-authored TypeScript uses Node's `registerHooks` and
 `stripTypeScriptTypes` in transform mode, rather than requiring packaged `tsx`.

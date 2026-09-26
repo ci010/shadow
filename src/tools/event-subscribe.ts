@@ -164,6 +164,7 @@ export class EventSubscribeTool implements Tool {
           chatId: typeof args.chat_id === 'string' ? args.chat_id : undefined,
           delivery: parseDelivery(args),
         })
+        await this.events.flush()
         return `Subscribed ${sessionId} to ${event} (id=${sub.id})`
       }
 
@@ -171,6 +172,7 @@ export class EventSubscribeTool implements Tool {
         const id = String(args.id ?? '').trim()
         if (!id) return 'Error: id is required for unsubscribe'
         const ok = this.events.unsubscribe(id)
+        if (ok) await this.events.flush()
         return ok ? `Unsubscribed ${id}` : `Subscription ${id} not found`
       }
 
@@ -208,6 +210,7 @@ export class EventSubscribeTool implements Tool {
           delivery: parseDelivery(args),
           ownerSessionId: sessionId,
         })
+        await this.events.flush()
         return `Registered source ${desc.source} (${desc.kind})`
       }
 
@@ -215,6 +218,7 @@ export class EventSubscribeTool implements Tool {
         const source = String(args.source ?? '').trim()
         if (!source) return 'Error: source is required for unregister_source'
         const ok = this.events.unregisterSource(source)
+        if (ok) await this.events.flush()
         return ok
           ? `Unregistered source ${source}`
           : `Source ${source} not found or is a protected built-in`

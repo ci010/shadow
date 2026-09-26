@@ -50,6 +50,7 @@ export class EventService {
   private subscriptionsPath: string
   /** Registered event sources, keyed by their `source` tag. */
   private sources = new Map<string, EventSourceDescriptor>()
+  private managedSources = new Set<string>()
   private sourcesPath: string
   private stopped = false
   private deliveries = new Set<Promise<void>>()
@@ -130,6 +131,7 @@ export class EventService {
     this.assertRunning()
     const source = desc.source.trim()
     if (!source) throw new TypeError('source is required')
+    if (this.managedSources.has(source)) throw new Error(`Source ${source} is managed by a running producer`)
     const full: EventSourceDescriptor = {
       ...desc,
       source,
@@ -140,8 +142,27 @@ export class EventService {
     return full
   }
 
+  registerManagedSource(desc: Omit<EventSourceDescriptor, 'createdAt'>): void {
+    const existing = this.sources.get(desc.source)
+    if (this.managedSources.has(desc.source)) {
+      if (existing?.ownerSessionId === desc.ownerSessionId) return
+      throw new Error(`Source ${desc.source} belongs to another producer`)
+    }
+    if (existing && existing.ownerSessionId !== desc.ownerSessionId) {
+      throw new Error(`Source ${desc.source} is already registered`)
+    }
+    this.registerSource(desc)
+    this.managedSources.add(desc.source)
+  }
+
+  unregisterManagedSource(source: string): void {
+    this.managedSources.delete(source)
+    this.unregisterSource(source)
+  }
+
   unregisterSource(source: string): boolean {
     this.assertRunning()
+    if (this.managedSources.has(source)) return false
     const existing = this.sources.get(source)
     // Built-in sources cannot be removed.
     if (!existing || ['channel', 'cron', 'agent', 'system'].includes(existing.kind) && !existing.ownerSessionId) {
@@ -284,7 +305,8 @@ export class EventService {
     if (excludedSessionId) delivered.add(excludedSessionId)
     const acceptances: Promise<void>[] = []
 
-    if (full.targetSessionId && !delivered.has(full.targetSessionId)) {
+    if (full.targetSessionId && !delivered.has(full.targetSessionId) &&
+      (!full.audienceSessionIds || full.audienceSessionIds.includes(full.targetSessionId))) {
       const pseudo: EventSubscription = {
         id: 'target',
         sessionId: full.targetSessionId,
@@ -296,6 +318,7 @@ export class EventService {
     }
 
     for (const sub of this.subscriptions.values()) {
+      if (full.audienceSessionIds && !full.audienceSessionIds.includes(sub.sessionId)) continue
       if (!this.matches(sub, full)) continue
       if (delivered.has(sub.sessionId)) continue
       acceptances.push(this.route(full, sub))
