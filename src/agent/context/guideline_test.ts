@@ -146,6 +146,8 @@ test('general retains evidence, delegation ownership and message conventions', a
     /In a reusable user conversation, final text addresses its reader, not the Agent or event/,
     /MEDIA:<path-or-url>.*end of a response line.*direct replies or the message tool/,
     /workspace-relative, absolute or HTTPS/,
+    /reopenable entry point and repeat runs, not just setup/,
+    /Do not expand information-only questions into app builds/,
   ]) assert.match(prompt, rule)
 })
 

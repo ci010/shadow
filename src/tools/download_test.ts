@@ -73,6 +73,7 @@ test('large downloads return a background execution ID and expose verified compl
         approved: true,
       }, context))
       assert.equal(result.executionId, 'bg:0000000000000001')
+      assert.equal(result.outputPath, 'v:bg/bg:0000000000000001')
       assert.equal(result.taskId, '0000000000000001')
       await ready
       assert.equal(JSON.parse(await observe()).downloadedBytes, payload.length)

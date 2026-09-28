@@ -91,6 +91,7 @@ function isFactoryLoadable(entry: LoadableEntry): entry is FactoryLoadable {
 
 interface ImportOptions {
   signal: AbortSignal
+  cwd?: string
 }
 
 class ScriptToolAdapter implements Tool {
@@ -251,7 +252,7 @@ export class ImportTool implements Tool {
           }
           const instance = this.browsers.create(context.tools, request.target)
           const result = await this.withImports(instance.tools, signal, () =>
-            this.loadByName('chrome-devtools', instance.tools, [], { signal }))
+            this.loadByName('chrome-devtools', instance.tools, [], { signal, cwd: context.cwd ?? this.workspace }))
           if (typeof result === 'string') return result
           return JSON.stringify(this.browserReceipt(instance))
         })
@@ -502,10 +503,10 @@ export class ImportTool implements Tool {
   async importSource(
     args: Record<string, unknown>,
     tools: SessionTools,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; cwd?: string } = {},
   ): Promise<string> {
     const signal = options.signal ? AbortSignal.any([options.signal, tools.dynamicSignal]) : tools.dynamicSignal
-    return this.withImports(tools, signal, () => this.performImport(args, tools, { signal }))
+    return this.withImports(tools, signal, () => this.performImport(args, tools, { signal, cwd: options.cwd }))
   }
 
   private async withImports<T>(tools: SessionTools, signal: AbortSignal, action: () => Promise<T>): Promise<T> {
@@ -582,7 +583,7 @@ export class ImportTool implements Tool {
   ): Promise<string> {
     const error = this.contextError(String(args.source ?? ''), context)
     if (error) return error
-    return await this.importSource(args, context.tools, { signal: context.signal })
+    return await this.importSource(args, context.tools, { signal: context.signal, cwd: context.cwd ?? this.workspace })
   }
 
   private contextError(source: string, context: ExecutionContext): string | undefined {
@@ -619,6 +620,7 @@ export class ImportTool implements Tool {
     toolName: string,
     sessionTools: SessionTools,
     signal?: AbortSignal,
+    cwd?: string,
   ): Promise<string | undefined> {
     if (!sessionTools.canUseDynamic(toolName)) return undefined
     if (toolName.startsWith('chrome-devtools__') && this.sessionBrowsersEnabled()) {
@@ -629,7 +631,7 @@ export class ImportTool implements Tool {
     if (sessionTools.hasDynamic(toolName)) return undefined
     const activeSignal = signal ? AbortSignal.any([signal, sessionTools.dynamicSignal]) : sessionTools.dynamicSignal
     const load = (name: string) => this.withImports(sessionTools, activeSignal, async () => {
-      const result = await this.loadByName(name, sessionTools, [], { signal: activeSignal })
+      const result = await this.loadByName(name, sessionTools, [], { signal: activeSignal, cwd })
       return typeof result === 'string' ? result : undefined
     })
 
@@ -673,6 +675,7 @@ export class ImportTool implements Tool {
       if (name === 'chrome-devtools' && this.sessionBrowsersEnabled()) {
         const instance = this.browsers.resolve(tools)
         if (typeof instance === 'string') return instance
+        instance.fileRoot ??= options.cwd ?? this.workspace
         if (extraArgs.length && instance.importArgs && !isDeepStrictEqual(extraArgs, instance.importArgs)) {
           return 'Error loading project Chrome: browser instance startup arguments are fixed. Close it before changing preload arguments. Use browser_setup for separately routed browser targets.'
         }
@@ -680,7 +683,7 @@ export class ImportTool implements Tool {
         const load = async () => {
           const signal = AbortSignal.any([options.signal, instance.tools.dynamicSignal])
           try {
-            const result = await this.loadMcp(name, entry, instance.tools, instanceArgs, { signal })
+            const result = await this.loadMcp(name, entry, instance.tools, instanceArgs, { ...options, signal })
             signal.throwIfAborted()
             if (typeof result !== 'string') {
               instance.ready = true
@@ -855,14 +858,15 @@ export class ImportTool implements Tool {
       if (!isCurrent()) throw new Error('MCP configuration changed during import; import the source again.')
     }
     checkCurrent()
+    const browserRoot = this.browsers.forTools(sessionTools)?.fileRoot
     let cached = sessionTools.getMcpConn(connKey)
-    if (cached && JSON.stringify(cached.conn.config) !== JSON.stringify(config)) {
+    if (cached && (JSON.stringify(cached.conn.config) !== JSON.stringify(config) || cached.conn.workspaceRoot !== browserRoot)) {
       await sessionTools.disconnectMcpConn(connKey)
       cached = undefined
     }
     const connect = async () => {
       checkCurrent()
-      const conn = new McpConnection(config, this.workspace)
+      const conn = new McpConnection(config, browserRoot ?? this.workspace, browserRoot)
       try {
         await conn.connect(options.signal)
         checkCurrent()

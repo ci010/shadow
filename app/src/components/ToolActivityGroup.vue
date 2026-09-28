@@ -1,13 +1,13 @@
 <template>
   <details class="tool-group tool-activity" @toggle.self="groupOpen = isOpen($event)">
-    <summary class="tool-activity-summary" @click="emit('interact')">
+    <summary class="tool-activity-summary trace-header" @click="emit('interact')">
       <span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />
       <span class="activity-title">{{ batch.entries[0].title }}<span v-if="batch.entries.length > 1"> and {{ batch.entries.length - 1 }} other tool {{ batch.entries.length === 2 ? 'call' : 'calls' }}</span></span>
       <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
       <span v-if="batch.entries.some(entry => entry.failed)" class="activity-failed">Failed</span>
       <span v-if="running" class="activity-status">Running</span>
     </summary>
-    <div class="activity-list">
+    <div class="activity-list trace-guide">
       <div v-if="batch.files" class="activity-files">
         <span class="activity-icon i-lucide-file-diff" aria-hidden="true" />
         <span>{{ batch.files }} {{ batch.files === 1 ? 'file' : 'files' }} edited</span>
@@ -16,7 +16,7 @@
       </div>
       <details v-for="entry in batch.entries" :key="entry.index" class="tool-entry" @toggle.self="setExpanded(entry.index, $event)">
         <summary class="tool-call-header" :title="entry.summary || entry.title" @click="emit('interact')">
-          <span class="tool-icon activity-icon" :class="icons[entry.icon]" aria-hidden="true" />
+          <span class="tool-icon activity-icon" :class="entry.path ? (matchedFileIcon(entry.path) ?? icons[entry.icon]) : icons[entry.icon]" aria-hidden="true" />
           <span class="tool-name">{{ entry.title }}</span>
           <LineChangeCounts v-if="entry.changes" :changes="entry.changes" />
           <span v-else-if="entry.failed" class="activity-failed">Failed</span>
@@ -43,6 +43,7 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
+import { matchedFileIcon } from '../file-icons.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
 import ToolPayload from './ToolPayload.vue'
 defineProps<{ batch: ToolActivityBatch; running?: boolean }>()
@@ -74,13 +75,14 @@ const icons: Record<ToolActivity['icon'], string> = {
 .tool-activity { container-type: inline-size; width: 100%; min-width: 0; border-radius: var(--radius-surface); color: var(--c-text-secondary); font-size: 13px; }
 summary { list-style: none; cursor: pointer; }
 summary::-webkit-details-marker { display: none; }
-.tool-activity-summary, .tool-call-header, .activity-files { display: flex; align-items: center; min-height: 32px; gap: 8px; line-height: 20px; }
-.tool-activity-summary { padding: 4px 0; }
+.tool-activity-summary, .tool-call-header, .activity-files { display: flex; align-items: center; gap: 8px; line-height: 20px; }
+.tool-call-header, .activity-files { min-height: 32px; }
+.tool-activity-summary { padding: 4px 8px; }
 .activity-title, .tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-title { flex: 0 1 auto; }
 .activity-chevron { display: block; flex: 0 0 16px; width: 16px; height: 16px; }
 .tool-activity[open] > summary .activity-chevron { transform: rotate(90deg); }
-.activity-list { margin: 0 0 8px 7px; padding-left: 16px; border-left: 1px solid var(--c-border); }
+.activity-list { margin-bottom: 8px; }
 .tool-call-header { padding: 4px; border-radius: var(--radius-control); }
 .tool-call-header:hover, summary:focus-visible { background: var(--c-bg-muted); color: var(--c-text); }
 summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

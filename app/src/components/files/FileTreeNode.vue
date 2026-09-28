@@ -14,7 +14,7 @@
     <div v-if="entry.type === 'dir'" v-show="expanded" class="tree-children">
       <div v-if="loadError && !changesOnly" class="tree-note error" role="alert">{{ loadError }} <button class="btn btn-sm" @click="loadChildren">Retry</button></div>
       <FileTreeNode
-        v-for="child in displayChildren"
+        v-for="child in filteredChildren"
         :key="fileEntryKey(child)"
         :api-base="apiBase"
         :session-id="sessionId"
@@ -23,6 +23,7 @@
         :entry="child"
         :depth="depth + 1"
         :active="active && expanded"
+        :filter-query="filterQuery"
         :refresh-version="refreshVersion"
         :workspace-key="workspaceKey"
         :home-state="homeState"
@@ -68,6 +69,7 @@ const props = withDefaults(defineProps<{
   homeState?: HomeTreeState
   selectedPath?: string
   revealVersion?: number
+  filterQuery?: string
 }>(), { active: true, changes: () => [], changesOnly: false, refreshVersion: 0 })
 
 const emit = defineEmits<{ open: [payload: { path: string; entry: FileEntry }]; 'node-offline': [] }>()
@@ -80,6 +82,8 @@ const decoration = computed(() => gitDecoration(fullPath.value, props.entry.type
 
 const { expanded, children, loaded, stale } = toRefs(homeDirectoryState(props.homeState, fullPath.value, props.changesOnly && props.entry.type === 'dir'))
 const displayChildren = computed(() => props.changesOnly ? changedDirectory(props.changes, fullPath.value) : children.value)
+const filteredChildren = computed(() => displayChildren.value.filter(child =>
+  !props.filterQuery || child.type === 'dir' || child.name.toLocaleLowerCase().includes(props.filterQuery)))
 const loading = ref(false)
 const loadError = ref('')
 const node = ref<HTMLElement>()

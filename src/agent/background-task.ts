@@ -330,7 +330,7 @@ export class BackgroundTaskManager {
   /**
    * Set a continuation string on a task. When the task's completion event fires
    * back to the session, it will carry this continuation text as a prefix.
-   * If the task already completed, re-fires the callback with the continuation.
+   * Completion is delivered once; late annotations must not replay old work.
    */
   setContinuation(taskId: string, continuation: string): string {
     if (this.stopped) throw new Error('BackgroundTaskManager is stopped')
@@ -340,17 +340,14 @@ export class BackgroundTaskManager {
     if (task.status === 'cancelling' || task.status === 'cancelled') {
       throw new Error('Cancelled executions do not deliver completion callbacks.')
     }
+    if (!active(task)) {
+      return `Continuation not changed: ${backgroundExecutionId(taskId)} is already ${task.status}. No completion event was replayed. Read v:bg/${backgroundExecutionId(taskId)} for its result.`
+    }
     if (!task.callback) {
       if (!task.sessionId) return `Error: task ${taskId} has no callback session`
       task.callback = { sessionId: task.sessionId }
     }
     task.callback.contentPrefix = continuation
-
-    if (!active(task)) {
-      // Task already finished — re-fire the callback with the continuation
-      this.notifyCallback(task)
-      return `Continuation set and callback scheduled for ${backgroundExecutionId(taskId)} (${task.status}).`
-    }
 
     return `Continuation set for ${backgroundExecutionId(taskId)}. It will be included when the task completes.`
   }

@@ -14,6 +14,7 @@ import { createMediaCaptureApi } from './media-capture-preload.js'
 import { createStartupDiagnosticsApi } from './startup-diagnostics-ipc.js'
 import { createWebPairingApi } from './web-pairing-preload.js'
 import type { ChildPairInput } from './bootstrap/child.js'
+import { MICRO_APP_CHANNELS, parseMicroAppIdentity, type MicroAppIdentity } from './micro-app-contract.js'
 
 const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction) => {
   window.dispatchEvent(new CustomEvent(DOCUMENT_TAB_CHANNEL, { detail: direction }))
@@ -21,6 +22,10 @@ const disposeDocumentTabs = receiveDocumentTabShortcuts(ipcRenderer, (direction)
 window.addEventListener('unload', disposeDocumentTabs, { once: true })
 
 const api: ShadowDesktopApi = Object.freeze({
+  microApps: Object.freeze({
+    open: (identity: MicroAppIdentity) => ipcRenderer.invoke(MICRO_APP_CHANNELS.open, parseMicroAppIdentity(identity)),
+    refresh: () => ipcRenderer.invoke(MICRO_APP_CHANNELS.refresh),
+  }),
   webPairing: createWebPairingApi(ipcRenderer),
   diagnostics: createStartupDiagnosticsApi(ipcRenderer),
   mediaCapture: createMediaCaptureApi(ipcRenderer, () => navigator.userActivation.isActive),

@@ -55,7 +55,17 @@ invoke_tool({ name: "browser_setup", args: { action: "launch", browser: "edge" }
 `browser` accepts `edge`, `brave`, `chrome`, or `default`. Alternatively pass
 `executablePath` instead of `browser`. An explicit choice never falls back.
 Each owned launch uses a fresh private profile, never copied host profiles.
+Managed launches disable browser sync and extensions and start at `about:blank`
+instead of a network new-tab feed. Do not accept browser/vendor account sign-in
+or data-import prompts during automation. A managed profile is not an OS-account
+sandbox. Explicitly attached targets retain their own profile and lifecycle behavior.
 Setup does not change Project configuration.
+The managed adapter runs in the effective local session workdir and advertises
+that directory as its MCP file root, not the whole Project or another session.
+The root stays bound to the instance across tool refreshes and borrowed calls;
+close and set up a new instance if the owning workdir changes.
+Screenshot/file output paths must stay inside that root; relative paths use
+the session workdir. MCP roots are a protocol boundary, not an OS sandbox.
 
 To attach an explicitly preenabled CDP target, including compatible Electron:
 

@@ -6,11 +6,12 @@ import { WorkConflict, workAdoptionSchema, workChangeSchema, workDefinitionSchem
   type WorkActor, type WorkRecord, type WorkStamp, type WorkDecision } from '../initiatives/work-contract.ts'
 import type { YieldDecisionRecord, YieldReference, YieldRequest } from './yield-contract.ts'
 import type { DecisionEvidence } from './decision-brief.ts'
-import { parseDecisionEvidence } from './decision-brief.ts'
+import { DECISION_EVIDENCE_HELP, parseDecisionEvidence } from './decision-brief.ts'
 import type { SessionState } from './session-store.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool as TypedTool, ToolResult } from '../tools/tool.ts'
 import { delegationOwner } from './execution-scope.ts'
+import { isSkillRootPath } from '../skills/paths.ts'
 
 type Tool = TypedTool<ToolResult>
 
@@ -18,7 +19,7 @@ export interface WorkToolGuard {
   snapshot(sessionId: string): WorkStamp[]
   prompt(sessionId: string): string
   current(stamps: WorkStamp[]): boolean
-  before(tool: Tool, args: Record<string, unknown>, context: ExecutionContext): { finish(failed: boolean): string } | undefined
+  before(tool: Tool, args: Record<string, unknown>, context: ExecutionContext): { finish(failed: boolean, effect?: 'none'): string } | undefined
 }
 
 export interface WorkAlignmentDeps {
@@ -31,6 +32,7 @@ export interface WorkAlignmentDeps {
 
 export const WORK_HELP = {
   notice: 'Contracts describe work, never grant permissions or transfer assignments. Legacy untracked work has unknown provenance. Reporting responsibility is not control authority.',
+  evidenceSchema: DECISION_EVIDENCE_HELP,
   update: { change: 'understanding|goal|authorization|pause', reason: 'Why this is changing, not just the new plan',
     definition: { objective: 'Outcome, not the current phase', acceptance: ['Final acceptance'], boundaries: ['Existing limits; not new permission'], evidence: [] },
     paused: false },
@@ -38,7 +40,7 @@ export const WORK_HELP = {
   checkpoint: { completed: [], artifacts: [], inFlight: [], unknown: [], retired: ['Obsolete assumptions, summaries and memory conclusions'] },
   transition: { strategy: 'fresh|successor' },
   select: 'Use key + revision to select an assigned agreement for subsequent inference; omit key to restore the all-assigned-work fence.',
-  settle: { effectId: 'interrupted invocation', evidence: 'an exact tool-receipt reference, or an authenticated human review' },
+  settle: { effectId: 'interrupted invocation', evidence: DECISION_EVIDENCE_HELP },
   workflow: 'context -> create or update/propose by key + revision -> executor adopt. Revisions and assignments fence old calls. Use checkpoint then transition at a safe boundary. No implicit ownership transfer. Custom answer text may correct the goal; never interpret it automatically as approval.',
   create: { title: 'Short work name', parentKey: 'optional root/parent work key',
     assignee: 'optional durable Session ID; defaults to the creating session',
@@ -171,7 +173,7 @@ export class WorkAlignment implements WorkToolGuard {
   before(tool: Tool, args: Record<string, unknown>, context: ExecutionContext) {
     if (['work', 'session', 'sql', 'invoke_tool', 'ask', 'reply', 'message', 'cancel'].includes(tool.name)) return
     const readOnly = typeof tool.readonly === 'function' ? tool.readonly(args) : tool.readonly === true
-    if (readOnly) return
+    if (readOnly || (tool.name === 'read' && isSkillRootPath(args.path))) return
     const stamps = context.workStamps ?? []
     if (!stamps.length && !this.records(context.sessionId, true).length && context.tools.has('work')
       && !['session', 'topic', 'initiative'].includes(tool.name)) {
@@ -181,12 +183,12 @@ export class WorkAlignment implements WorkToolGuard {
     if (!stamps.length) return
     const id = randomUUID()
     this.store.startWorkEffect(id, context.sessionId, tool.name, stamps)
-    return { finish: (failed: boolean): string => {
-      this.store.finishWorkEffect(id, failed)
+    return { finish: (failed: boolean, effect?: 'none'): string => {
+      this.store.finishWorkEffect(id, failed && effect !== 'none')
       const current = this.snapshot(context.sessionId)
       const stale = stamps.some(old => !current.some(now => now.key === old.key && now.revision === old.revision && now.adoptionId === old.adoptionId))
       for (const stamp of stamps) this.store.workEvent(stamp.key, context.sessionId, 'tool_result', {
-        invocationId: id, tool: tool.name, revision: stamp.revision, stale, outcome: failed ? 'unknown' : 'returned',
+        invocationId: id, tool: tool.name, revision: stamp.revision, stale, outcome: effect === 'none' ? 'not_applied' : failed ? 'unknown' : 'returned',
       })
       return stale ? '\n[STALE WORK RESULT: archived evidence from an obsolete task basis. This does not complete, approve or update current work. Revalidate before reuse.]' : ''
     } }
@@ -195,8 +197,14 @@ export class WorkAlignment implements WorkToolGuard {
   context(sessionId: string, key?: string, history = true) {
     if (!this.deps.state(sessionId)) throw new WorkConflict('Session not found in this Project.')
     const records = key === undefined ? this.records(sessionId) : [this.get(key)]
+    return this.view(records, this.store.workFocus(this.executor(sessionId)), history)
+  }
+
+  inspect(key: string) { return this.view([this.get(key)], key, true) }
+
+  private view(records: WorkRecord[], selected: string | undefined, history: boolean) {
     const keys = new Set(records.map(record => record.key))
-    return { schema: WORK_HELP, selected: this.store.workFocus(this.executor(sessionId)), records: records.map(record => ({
+    return { schema: WORK_HELP, selected, records: records.map(record => ({
       ...record, authority: this.store.workAuthority(record.subject), history: history ? this.store.workHistory(record.key) : [],
     })), effects: this.store.workEffects().filter(effect => effect.stamps.some(stamp => keys.has(stamp.key))) }
   }
@@ -434,7 +442,7 @@ export class WorkAlignment implements WorkToolGuard {
       const effect = this.store.workEffects().find(item => item.id === request.effectId && item.status === 'unknown'
         && item.stamps.some(stamp => stamp.key === key))
       if (!effect) throw new WorkConflict('Unknown interrupted operation; running operations cannot be settled manually.')
-      if (actor.kind === 'session') await this.deps.evidence(parseDecisionEvidence(request.evidence))
+      if (actor.kind === 'session') await this.deps.evidence(parseDecisionEvidence(request.evidence, 'data.evidence'))
       signal?.throwIfAborted()
       if (this.get(key).revision !== revision) throw new WorkConflict('Work changed during evidence review; reload before settling.')
       this.assertController(record, actor)

@@ -36,3 +36,16 @@ test('keyboard resize moves 24 pixels and Home/End reach bounds', () => {
   assert.equal(sidebarKeyWidth('Tab', 260, bounds), undefined)
   assert.equal(sidebarKeyWidth('Escape', 260, bounds), undefined)
 })
+
+test('left-edge resize expands a right-hand panel towards the left without changing existing sidebar defaults', () => {
+  const bounds = sidebarWidthBounds(1440, 320, 1440)
+  assert.deepEqual(bounds, { min: 320, max: 1080 })
+  assert.equal(sidebarDragWidth(400, 1040, 880, bounds, 'left'), 560)
+  assert.equal(sidebarDragWidth(400, 1040, 1400, bounds, 'left'), 320)
+  assert.equal(sidebarDragWidth(400, 1040, -500, bounds, 'left'), 1080)
+  assert.equal(sidebarKeyWidth('ArrowLeft', 400, bounds, 'left'), 424)
+  assert.equal(sidebarKeyWidth('ArrowRight', 400, bounds, 'left'), 376)
+  assert.equal(sidebarKeyWidth('Home', 400, bounds, 'left'), 320)
+  assert.equal(sidebarKeyWidth('End', 400, bounds, 'left'), 1080)
+  assert.equal(clampSidebarWidth(1080, sidebarWidthBounds(1000, 320, 1000)), 640)
+})

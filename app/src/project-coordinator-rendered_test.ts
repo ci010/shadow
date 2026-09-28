@@ -18,6 +18,37 @@ interface ElementNode {
 const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [], style: {} })
 const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 
+test('rendered chat task status stays absent for ordinary conversation, refreshes on facts and releases hidden reads', async t => {
+  const requests: Array<{ url: string; signal: AbortSignal; finish: (data: unknown, status?: number) => void }> = []
+  t.mock.method(globalThis, 'fetch', (url: string, init: RequestInit) => new Promise<Response>(resolve => {
+    requests.push({ url: String(url), signal: init.signal!, finish: (data, status = 200) => resolve(Response.json(data, { status })) })
+  }))
+  const opened: string[] = []
+  const view = mount(t, 'SessionWorkStatus.vue', { apiBase: 'http://fixture/projects/a', sessionId: 'web:one',
+    active: true, revision: 0, onOpen: (key: string) => opened.push(key) })
+  const read = async () => { await new Promise(resolve => setTimeout(resolve, 70)); await settle() }
+  await read()
+  assert.equal(requests[0].url, 'http://fixture/projects/a/api/sessions/web%3Aone/work?history=0')
+  requests[0].finish({ records: [], effects: [] }); await settle()
+  assert.equal(view.nodes().filter(node => node.tag === 'button').length, 0)
+  view.state.revision = 1; await settle(); await read()
+  requests[1].finish({ records: [{
+    key: 'topic:web:one', subject: { kind: 'topic', sessionId: 'web:one' }, revision: 1,
+    definition: { objective: 'Current assignment', acceptance: [], boundaries: [], evidence: [] },
+    origin: 'human', reason: 'Assigned', paused: false, authority: { manager: 'web:one', executor: 'web:one', active: true }, history: [],
+  }], effects: [] }); await settle()
+  assert.match(view.text(), /Current assignment/)
+  await view.button().click(); assert.deepEqual(opened, ['topic:web:one'])
+  view.state.revision = 2; await settle(); await read()
+  requests[2].finish({}, 503); await settle()
+  assert.match(view.text(), /Task status unavailable/)
+  view.state.revision = 3; await settle(); await read()
+  view.state.active = false; await settle()
+  assert.equal(requests[3].signal.aborted, true)
+  view.state.revision = 4; await settle(); await read()
+  assert.equal(requests.length, 4)
+})
+
 function mount(t: TestContext, filename: string, props: Record<string, unknown>) {
   const popover = defineComponent({
     setup: (_, { slots }) => () => h('div', [slots.trigger?.(), slots.default?.({ triggerProps: {} })]),

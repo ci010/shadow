@@ -102,6 +102,9 @@ test('background callback targets a session and retains task/input causality wit
   task.complete('result')
   await tick()
   assert.equal(inputs.length, 1)
+  assert.match(tasks.setContinuation(task.taskId, 'Late while delivery is pending'), /Continuation not changed/)
+  await tick()
+  assert.equal(inputs.length, 1)
   assert.equal(displays, 0)
   assert(inputs[0].kind === 'message')
   assert.equal(inputs[0].policy, 'queue')
@@ -113,6 +116,9 @@ test('background callback targets a session and retains task/input causality wit
   await tick()
   assert.equal(displays, 1)
   assert.equal(tasks.complete(task.taskId, 'duplicate'), false)
+  assert.equal(inputs.length, 1)
+  assert.match(tasks.setContinuation(task.taskId, 'Late after delivery'), /No completion event was replayed/)
+  await tick()
   assert.equal(inputs.length, 1)
 })
 
@@ -132,6 +138,27 @@ test('callback rejection is tracked without pretending a completed process itsel
   assert.match(tasks.listTasks()[0].callbackError ?? '', /target unavailable|Event delivery failed/)
   assert.match(await tasks.getTaskOutput(task.taskId), /Callback delivery failed/)
   assert.equal(displays, 0)
+  assert.match(tasks.setContinuation(task.taskId, 'Retry by accident'), /Continuation not changed/)
+  await tick()
+  assert.match(tasks.listTasks()[0].callbackError ?? '', /target unavailable|Event delivery failed/)
+  assert.equal(displays, 0)
+})
+
+test('continuation annotates only running work, and late registration never revives a terminal task', async t => {
+  const { tasks, owner, deliveries } = cancellationFixture(t)
+  const task = tasks.createDeferredTask({
+    kind: 'process', title: 'Annotation', sessionId: owner.sessionId, callback: { sessionId: owner.sessionId },
+  })
+  assert.match(tasks.setContinuation(task.taskId, 'Use this result for the approved next phase'), /Continuation set/)
+  task.complete('result')
+  await tick()
+  assert.equal(deliveries.length, 1)
+  assert.match(JSON.stringify(deliveries[0]), /approved next phase/)
+  const silent = tasks.createDeferredTask({ kind: 'process', title: 'No callback', sessionId: owner.sessionId })
+  silent.complete('saved')
+  assert.match(tasks.setContinuation(silent.taskId, 'Do not create a new event'), /Continuation not changed/)
+  await tick()
+  assert.equal(deliveries.length, 1)
 })
 
 function cancellationFixture(t: TestContext) {

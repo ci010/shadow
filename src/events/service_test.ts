@@ -71,6 +71,28 @@ test('default and explicit queue become typed queue inputs with unique delivery 
   })
 })
 
+test('background results default to next-step while explicit and persisted delivery choices remain authoritative', async () => {
+  await withTempWorkspace(async workspace => {
+    const { events, deliveries } = await setup(workspace)
+    try {
+      const event = { type: 'background-task-complete', source: 'background-task', content: 'Full result', targetSessionId: 'owner' }
+      await events.emit(event)
+      await events.emit({ ...event, delivery: { urgency: 'queue' } })
+      events.subscribe({ sessionId: 'owner', event: event.type, delivery: { urgency: 'silent' } })
+      await events.emit({ ...event, targetSessionId: undefined })
+      await events.emit({ ...event, targetSessionId: undefined, delivery: { urgency: 'next-step' } })
+      await events.emit({ ...event, delivery: { urgency: 'next-step' }, silent: true })
+      assertEquals(deliveries.map(({ input }) => input.policy), ['next-step', 'queue', 'silent', 'next-step', 'silent'])
+      assert(deliveries.every(({ input }) => input.content === 'Full result'))
+      events.registerSource({ source: 'background-task', kind: 'custom', delivery: { urgency: 'queue' } })
+      await events.stop()
+      await events.start()
+      await events.emit({ ...event, targetSessionId: 'another-owner' })
+      assertEquals(deliveries.at(-1)?.input.policy, 'queue')
+    } finally { await events.stop() }
+  })
+})
+
 test('eventToInput carries typed source, sender, timestamp, media, and origin; metadata is only display data', () => {
   const origin = sessionOrigin('causal-input')
   const meta = {

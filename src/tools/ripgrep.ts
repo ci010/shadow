@@ -10,8 +10,6 @@ import { isVirtualPath, type VirtualFs, type VirtualEntry } from '../vfs/virtual
 
 export { detectRipgrep, installRipgrep } from '../utils/ripgrep.ts'
 
-const GLOB_LIMIT = 100
-const GREP_LIMIT = 100
 const MAX_LINE_LENGTH = 2000
 
 async function spawnRg(
@@ -20,7 +18,7 @@ async function spawnRg(
 ): Promise<{ stdout: string; exitCode: number }> {
   signal?.throwIfAborted()
   const proc = childSpawn('rg', args, {
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   })
   const onAbort = () => {
     try {
@@ -31,6 +29,8 @@ async function spawnRg(
   try {
     // Collect stdout chunks and wait for both stream end and process exit.
     const chunks: Buffer[] = []
+    let stderr = ''
+    proc.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 16_384) stderr += chunk.toString('utf8').slice(0, 16_384 - stderr.length) })
     proc.stdout?.on('data', (c: Buffer) => chunks.push(c))
 
     const exitCode = await new Promise<number>((resolve, reject) => {
@@ -48,6 +48,7 @@ async function spawnRg(
       proc.once('close', (code) => resolve(code ?? -1))
     })
     signal?.throwIfAborted()
+    if (exitCode !== 0 && exitCode !== 1) throw new Error(`ripgrep search failed (exit ${exitCode}): ${stderr.trim() || 'No diagnostic output'}`)
     return { stdout: Buffer.concat(chunks).toString('utf8'), exitCode }
   } catch (e) {
     if (e instanceof Error && e.name === 'AbortError') throw e
@@ -114,11 +115,11 @@ export class GlobTool implements Tool {
   ): Promise<string> {
     const pattern = String(args.pattern)
     const rawPath = args.path ? String(args.path) : ''
+    const page = virtualPage(args)
 
     const virtualPath = isVirtualPath(rawPath) ? rawPath
       : !rawPath && isVirtualPath(pattern) ? pattern.replace(/\\/g, '/').replace(/^\/+/, '').split('/')[0] : undefined
     if (virtualPath) {
-      const page = virtualPage(args)
       if (!this.virtualFs) throw new Error('Virtual filesystem search is not configured.')
       const entries = await this.virtualFs.list(virtualPath, context, { content: false })
       if (!entries) throw new Error('Unknown virtual folder.')
@@ -144,23 +145,11 @@ export class GlobTool implements Tool {
     }
 
     const rawPaths = stdout.trim().split(/\r?\n/).filter(Boolean)
-    const truncated = rawPaths.length > GLOB_LIMIT
-    const limited = rawPaths.slice(0, GLOB_LIMIT)
-
     const files = await Promise.all(
-      limited.map(async (p) => ({ path: p, mtime: await statMtime(p) })),
+      rawPaths.map(async (p) => ({ path: p, mtime: await statMtime(p) })),
     )
-    files.sort((a, b) => b.mtime - a.mtime)
-
-    const lines: string[] = files.map((f) => f.path)
-    if (truncated) {
-      lines.push('')
-      lines.push(
-        `(Results are truncated: showing first ${GLOB_LIMIT} results. Consider using a more specific path or pattern.)`,
-      )
-    }
-
-    return lines.join('\n')
+    files.sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path))
+    return virtualResults(files.map(file => file.path), [], page, 'No files found')
   }
 }
 
@@ -210,9 +199,9 @@ export class GrepTool implements Tool {
     context: ExecutionContext,
   ): Promise<string> {
     const pattern = String(args.pattern)
+    const page = virtualPage(args)
 
     if (args.path && isVirtualPath(String(args.path))) {
-      const page = virtualPage(args)
       const re = new RegExp(pattern)
       if (!this.virtualFs) throw new Error('Virtual filesystem search is not configured.')
       const entries = await this.virtualFs.list(String(args.path), context)
@@ -239,7 +228,6 @@ export class GrepTool implements Tool {
     const rgArgs = [
       '-nH',
       '--hidden',
-      '--no-messages',
       '--field-match-separator=|',
       '--regexp',
       pattern,
@@ -251,8 +239,7 @@ export class GrepTool implements Tool {
 
     const { stdout, exitCode } = await spawnRg(rgArgs, context.signal)
 
-    // Exit codes: 0 = matches found, 1 = no matches, 2 = partial errors (still usable)
-    if (exitCode === 1 || (exitCode === 2 && !stdout.trim())) {
+    if (exitCode === 1 || !stdout.trim()) {
       return 'No matches found'
     }
 
@@ -288,16 +275,16 @@ export class GrepTool implements Tool {
       m.mtime = mtimeMap.get(m.path) ?? 0
     }
 
-    allMatches.sort((a, b) => b.mtime - a.mtime || a.lineNum - b.lineNum)
+    allMatches.sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path) || a.lineNum - b.lineNum)
 
-    const truncated = allMatches.length > GREP_LIMIT
-    const final = truncated ? allMatches.slice(0, GREP_LIMIT) : allMatches
+    const final = allMatches.slice(page.offset, page.offset + page.limit)
+    const truncated = allMatches.length > page.offset + final.length
 
-    if (final.length === 0) return 'No matches found'
+    if (final.length === 0) return allMatches.length ? 'No results at this offset.' : 'No matches found'
 
     const out: string[] = [
       `Found ${allMatches.length} match${allMatches.length !== 1 ? 'es' : ''}${
-        truncated ? ` (showing first ${GREP_LIMIT})` : ''
+        final.length < allMatches.length ? ` (showing ${page.offset + 1}-${page.offset + final.length})` : ''
       }`,
     ]
     let currentFile = ''
@@ -316,7 +303,7 @@ export class GrepTool implements Tool {
     if (truncated) {
       out.push('')
       out.push(
-        `(Results truncated: showing ${GREP_LIMIT} of ${allMatches.length} matches. Consider using a more specific path or pattern.)`,
+        `(Showing ${final.length} of ${allMatches.length} results; continue with offset: ${page.offset + final.length}.)`,
       )
     }
 

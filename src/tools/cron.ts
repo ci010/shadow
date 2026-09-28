@@ -5,7 +5,7 @@ import type { ExecutionContext } from './context.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { ImportTool } from './load-tool.ts'
 
-const URGENCIES: EventUrgency[] = ['steering', 'queue', 'debounce', 'silent']
+const URGENCIES: EventUrgency[] = ['steering', 'next-step', 'queue', 'debounce', 'silent']
 
 export class CronAddTool implements Tool {
   readonly name = 'cron_add'
@@ -33,7 +33,7 @@ export class CronAddTool implements Tool {
       once: { type: 'boolean', description: 'Delete job after first run.' },
       urgency: {
         type: 'string',
-        description: 'existing only: steering (interrupt), queue (default, after current turn), debounce (coalesce burst), silent (record only).',
+        description: 'existing only: steering (interrupt), next-step (next inference without aborting work), queue (default, after current turn), debounce (coalesce burst), silent (record only).',
         enum: URGENCIES,
       },
       debounce_ms: {

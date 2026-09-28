@@ -11,12 +11,12 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   if (mode === 'session' && isToolAllowed(ctx.agent, 'work')) {
     sections.push(`### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.`)
   }
 

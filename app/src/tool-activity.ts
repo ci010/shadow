@@ -25,6 +25,7 @@ export interface ToolActivity {
   result?: string
   images?: string[]
   usage?: ToolActivityMessage['usage']
+  path?: string
   file?: string
   changes?: LineChanges
   failed: boolean
@@ -100,6 +101,7 @@ function activity(message: ToolActivityMessage, index: number, result?: ToolActi
   return {
     index, name, title, summary, arguments: call.raw, result: text, usage: result?.usage, images: result?.media,
     icon: write ? 'write' : read ? 'read' : search ? 'search' : exec ? 'exec' : 'tool',
+    path: (write || read) && path ? path : undefined,
     file: success && path ? path : undefined,
     changes: success ? parseLineChanges(text) : undefined,
     failed: text !== undefined && /^(?:Error:|ERROR\b|Failed\b)/i.test(text.trimStart()),

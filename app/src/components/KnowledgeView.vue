@@ -1,36 +1,45 @@
 <template>
-  <div class="knowledge-scroll">
-  <section class="knowledge" aria-label="Project knowledge">
+  <div ref="scroll" class="knowledge-scroll">
+  <section class="knowledge" :class="{ 'sidebar-layout': !!sidebarTarget }" aria-label="Project knowledge">
     <header class="heading">
-      <div><h1>Knowledge</h1><p>Memory, wiki and skills for this project. References are explicit links, not inferred relationships.</p></div>
-      <button type="button" :disabled="loading || !!deletion" @click="refresh">Refresh</button>
+      <div v-if="!selectedId"><h1>Knowledge</h1><p>Memory, wiki and skills for this project. References are explicit links, not inferred relationships.</p></div>
+      <div v-else class="page-location"><button type="button" @click="emit('home')">Knowledge</button><span aria-hidden="true">/</span><span>{{ title(selectedId) }}</span></div>
+      <div class="heading-actions">
+        <button type="button" aria-label="Back" title="Back (Alt+Left)" @click="router.back()">Back</button>
+        <button type="button" aria-label="Forward" title="Forward (Alt+Right)" @click="router.forward()">Forward</button>
+        <button v-if="!selectedId" type="button" :aria-pressed="showGraph" @click="showGraph = !showGraph">Relationship graph</button>
+        <button type="button" :disabled="loading || !!deletion" @click="refresh">Refresh</button>
+      </div>
     </header>
     <p v-if="!canManage" role="alert">Knowledge management requires Main administrator access.</p>
     <template v-else>
-      <KnowledgeMaintenance :api-base="apiBase" :project-id="projectId" :revision="maintenanceRevision" :active="active"
+      <KnowledgeMaintenance v-show="!selectedId" :api-base="apiBase" :project-id="projectId" :revision="maintenanceRevision" :active="active"
         @select="select" @changed="refresh" />
-      <div class="toolbar">
-        <div class="filters" aria-label="Knowledge categories">
-          <button v-for="tab in tabs" :key="tab.kind" type="button" :aria-pressed="kind === tab.kind" @click="kind = tab.kind">
-            {{ tab.label }} <span>{{ count(tab.kind) }}</span>
-          </button>
-        </div>
-        <input v-model="query" type="search" aria-label="Search knowledge" placeholder="Search titles, paths and descriptions" />
-        <button type="button" :aria-pressed="showGraph" @click="showGraph = !showGraph">Relationship graph</button>
-      </div>
       <p v-if="loading" role="status">Loading knowledge...</p>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <p v-if="notice" role="status">{{ notice }}</p>
       <div class="workspace">
-        <aside class="entries" aria-label="Knowledge entries">
-          <p class="muted">{{ filtered.length }} / {{ catalog.entries.length }} entries</p>
-          <p v-if="!loading && !filtered.length" class="muted">{{ catalog.entries.length ? 'No matching entries.' : 'No knowledge entries yet.' }}</p>
-          <button v-for="item in filtered" :key="item.id" type="button" class="entry" :aria-pressed="selectedId === item.id" @click="select(item.id)">
-            <strong>{{ item.title }}</strong><span>{{ item.kind }} · {{ item.source === 'builtin' ? 'Built-in / read-only' : 'Project' }}</span><small>{{ item.path }}</small>
-          </button>
-        </aside>
+        <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget">
+          <aside class="knowledge-navigation" aria-label="Knowledge entries">
+            <div class="navigation-controls">
+              <div class="filters" aria-label="Knowledge categories">
+                <button v-for="tab in tabs" :key="tab.kind" type="button" :aria-pressed="kind === tab.kind" @click="kind = tab.kind">
+                  {{ tab.label }} <span>{{ count(tab.kind) }}</span>
+                </button>
+              </div>
+              <input v-model="query" type="search" aria-label="Search knowledge" placeholder="Search knowledge" />
+              <p class="muted">{{ filtered.length }} / {{ catalog.entries.length }} entries</p>
+            </div>
+            <div class="entries">
+              <p v-if="!loading && !filtered.length" class="muted">{{ catalog.entries.length ? 'No matching entries.' : 'No knowledge entries yet.' }}</p>
+              <button v-for="item in filtered" :key="item.id" type="button" class="entry" :aria-pressed="selectedId === item.id" @click="select(item.id)">
+                <strong>{{ item.title }}</strong><span>{{ item.kind }} · {{ item.source === 'builtin' ? 'Built-in / read-only' : 'Project' }}</span><small>{{ item.path }}</small>
+              </button>
+            </div>
+          </aside>
+        </Teleport>
         <main class="content">
-          <template v-if="showGraph">
+          <template v-if="showGraph && !selectedId">
             <label class="focus-filter"><input v-model="focusGraph" type="checkbox" :disabled="!selectedId" /> Focus on selected entry and its direct references</label>
             <KnowledgeGraph :catalog="catalog" :visible-ids="graphIds" :selected-id="selectedId" @select="select" />
             <p class="muted graph-hint">Filtered graphs also include direct neighbors from other categories. Dashed nodes are outside the catalog, not necessarily missing files. Use Link health to verify them.</p>
@@ -80,7 +89,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
@@ -89,11 +99,14 @@ import KnowledgeGraph from './KnowledgeGraph.vue'
 import KnowledgeDeleteDialog from './KnowledgeDeleteDialog.vue'
 import KnowledgeMaintenance from './KnowledgeMaintenance.vue'
 
-const props = withDefaults(defineProps<{ apiBase: string; projectId: string; entryId?: string; active?: boolean }>(), { active: true })
-const emit = defineEmits<{ select: [id: string] }>()
+const props = withDefaults(defineProps<{ apiBase: string; projectId: string; entryId?: string; active?: boolean; sidebarTarget?: string }>(), { active: true })
+const emit = defineEmits<{ select: [id: string]; home: []; catalog: [entries: KnowledgeEntry[]] }>()
+const router = useRouter()
 const context = useInstallationContext()
 const canManage = computed(() => context.value.uiScopes.includes('main:admin'))
 const selectedId = ref(props.entryId ?? '')
+const scroll = ref<HTMLDivElement>()
+const scrollPositions = new Map<string, number>()
 const catalog = ref<KnowledgeCatalog>({ entries: [], links: [] })
 const detail = ref<KnowledgeDetail>()
 const deletion = ref<KnowledgeEntry>()
@@ -110,6 +123,12 @@ const notice = ref('')
 const maintenanceRevision = ref(0)
 let catalogRequest: AbortController | undefined
 let detailRequest: AbortController | undefined
+const detailCache = new Map<string, KnowledgeDetail>()
+function restoreScroll(id: string) {
+  void nextTick(() => {
+    if (selectedId.value === id && scroll.value) scroll.value.scrollTop = scrollPositions.get(id) ?? 0
+  })
+}
 const tabs = [
   { kind: 'all', label: 'All' }, { kind: 'memory', label: 'Memory' },
   { kind: 'wiki', label: 'Wiki' }, { kind: 'skill', label: 'Skills' },
@@ -128,16 +147,17 @@ function select(id: string) { selectedId.value = id; emit('select', id) }
 
 async function loadDetail() {
   detailRequest?.abort()
-  detail.value = undefined
+  detail.value = detailCache.get(selectedId.value)
   detailError.value = ''
   detailLoading.value = false
   if (!props.active || !canManage.value || !selectedId.value || !entriesById.value.has(selectedId.value)) return
+  if (detail.value) return
   const request = new AbortController()
   detailRequest = request
   detailLoading.value = true
   try {
     const result = await createKnowledgeClient(props.apiBase).read(selectedId.value, request.signal)
-    if (!request.signal.aborted) detail.value = result
+    if (!request.signal.aborted) { detailCache.set(result.entry.id, result); detail.value = result }
   } catch (cause) {
     if (!request.signal.aborted) detailError.value = cause instanceof Error ? cause.message : 'Could not load this entry.'
   } finally { if (!request.signal.aborted) detailLoading.value = false }
@@ -145,6 +165,7 @@ async function loadDetail() {
 async function refresh() {
   catalogRequest?.abort()
   detailRequest?.abort()
+  detailCache.clear()
   detail.value = undefined
   detailLoading.value = false
   detailError.value = ''
@@ -158,6 +179,7 @@ async function refresh() {
     const result = await createKnowledgeClient(props.apiBase).list(request.signal)
     if (request.signal.aborted) return
     catalog.value = result
+    emit('catalog', result.entries)
     await loadDetail()
   } catch (cause) {
     if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load knowledge.'
@@ -167,6 +189,7 @@ async function deleted(id: string) {
   deletion.value = undefined
   detail.value = undefined
   detailRequest?.abort()
+  detailCache.delete(id)
   catalog.value = {
     entries: catalog.value.entries.filter(item => item.id !== id),
     links: catalog.value.links.filter(link => link.source !== id),
@@ -175,11 +198,19 @@ async function deleted(id: string) {
   maintenanceRevision.value++
   await refresh()
 }
-watch(selectedId, () => { notice.value = ''; void loadDetail() })
+watch(selectedId, (id, previous) => {
+  if (scroll.value) scrollPositions.set(previous, scroll.value.scrollTop)
+  notice.value = ''
+  void loadDetail()
+  restoreScroll(id)
+})
+watch(detail, () => restoreScroll(selectedId.value), { flush: 'post' })
 watch(() => props.entryId, id => { selectedId.value = id ?? '' })
 watch(() => [props.apiBase, canManage.value, props.active] as const, ([base, allowed, active], previous) => {
   deletion.value = undefined
   if (base !== previous?.[0] || allowed !== previous?.[1]) {
+    detailCache.clear()
+    scrollPositions.clear()
     catalog.value = { entries: [], links: [] }
     query.value = ''
     notice.value = ''
@@ -199,6 +230,9 @@ onUnmounted(() => { catalogRequest?.abort(); detailRequest?.abort() })
 .knowledge-scroll { flex: 1; min-height: 0; min-width: 0; width: 100%; overflow: auto; }
 .knowledge { width: 100%; max-width: 1600px; box-sizing: border-box; padding: 20px; margin: 0 auto; color: var(--c-text); }
 .heading, .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.page-location { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; color: var(--c-text-secondary); font-size: 13px; }
+.page-location button { border: 0; padding: 4px 0; color: var(--c-blue); background: transparent; }
 h1 { font-size: 22px; margin: 0; }
 h2 { font-size: 18px; margin: 0 0 6px; }
 h3 { font-size: 13px; font-weight: 600; }
@@ -208,12 +242,17 @@ button { cursor: pointer; }
 button:hover, button[aria-pressed=true] { background: var(--c-bg-muted); border-color: var(--c-blue); }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 button:disabled { cursor: not-allowed; opacity: .5; }
-.toolbar { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
-.filters { display: flex; gap: 4px; }
+.knowledge-navigation { display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; color: var(--c-text); }
+.navigation-controls { padding: 12px 8px 4px; border-bottom: 1px solid var(--c-border); }
+.filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.filters button { padding: 6px; }
 .filters span { color: var(--c-text-muted); margin-left: 4px; }
-input[type=search] { flex: 1; min-width: 200px; }
+input[type=search] { display: block; box-sizing: border-box; width: 100%; margin: 10px 0; }
 .workspace { display: grid; grid-template-columns: minmax(200px, 270px) minmax(0, 1fr); gap: 20px; }
-.entries { max-height: 78vh; overflow: auto; padding: 0 4px 8px 0; }
+.sidebar-layout .workspace { display: block; }
+.workspace > .knowledge-navigation { height: auto; }
+.entries { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
+.workspace > .knowledge-navigation .entries { max-height: 78vh; }
 .entry { display: grid; gap: 6px; width: 100%; margin-bottom: 6px; text-align: left; overflow-wrap: anywhere; }
 .entry span { font-size: 11px; color: var(--c-text-secondary); }
 .content { min-width: 0; }

@@ -14,6 +14,17 @@ type ChromeConfig = z.infer<typeof ChromeToolSchema>
 
 export type BrowserKind = 'default' | 'chrome' | 'edge' | 'brave'
 
+export function browserProcessArguments(port: number, userDataDir: string | undefined, isolated: boolean): string[] {
+  if (isolated && !userDataDir) throw new Error('Isolated browser launch requires a managed profile')
+  return [
+    `--remote-debugging-port=${port}`,
+    '--remote-debugging-address=127.0.0.1',
+    '--no-first-run',
+    ...(userDataDir ? [`--user-data-dir=${userDataDir}`] : []),
+    ...(isolated ? ['--disable-sync', '--disable-extensions', '--no-default-browser-check', 'about:blank'] : []),
+  ]
+}
+
 export interface BrowserLaunchOptions {
   browser?: BrowserKind
   executablePath?: string
@@ -685,14 +696,7 @@ export class ChromeManager {
     userDataDir?: string,
     signal?: AbortSignal,
   ): Promise<{ pid: number } | { error: string }> {
-    const args = [
-      `--remote-debugging-port=${port}`,
-      '--remote-debugging-address=127.0.0.1',
-      '--no-first-run',
-    ]
-    if (userDataDir) {
-      args.push(`--user-data-dir=${userDataDir}`)
-    }
+    const args = browserProcessArguments(port, userDataDir, this.projectId !== undefined)
 
     console.info(`[chrome-manager] Launching Chrome: ${exePath} ${args.join(' ')}`)
 

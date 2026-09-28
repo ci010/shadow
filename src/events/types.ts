@@ -4,14 +4,16 @@ import type { InputOrigin } from '../sessions/input.ts'
  * How urgently an event should reach the target session's agent loop.
  *
  * - `steering` — inject at an active turn's steering checkpoint without
- *   reclassifying the event as a human interrupt.
+ *   reclassifying the event as a human interrupt; abort an in-flight LLM request.
+ * - `next-step` — wait for the next inference checkpoint without aborting the
+ *   current request or tool. If the turn ends first, preserve a queued wake.
  * - `queue` — never interrupt an active turn; wait in the inbox and get
  *   handled after the current turn finishes. The default.
  * - `debounce` — coalesce bursts: buffer events sharing a `coalesceKey` and
  *   deliver a single queued wake once the source goes quiet for `debounceMs`.
  * - `silent` — record into session history without invoking the model.
  */
-export type EventUrgency = 'steering' | 'queue' | 'debounce' | 'silent'
+export type EventUrgency = 'steering' | 'next-step' | 'queue' | 'debounce' | 'silent'
 
 export interface EventDelivery {
   urgency: EventUrgency

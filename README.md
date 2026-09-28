@@ -50,6 +50,30 @@ gateway serves the built UI on `http://localhost:3123` when present.
 Keep the build outputs and installed runtime dependencies together when
 deploying headlessly.
 
+### Local download tool
+
+The optional `download` tool requires **aria2 1.37.0**. It is bundled in desktop
+release packages, but `pnpm install` does not install it. Source development,
+`desktop:dev`, and the built backend in this checkout look for
+`desktop/aria2/aria2c.exe` on Windows or `desktop/aria2/aria2c` on macOS/Linux,
+independently of the process working directory. Alternatively, set
+`SHADOW_ARIA2C_PATH` to an absolute path to a trusted copy of that exact version.
+System PATH is not used as a fallback; no downloads run at startup.
+
+For Windows x64, upstream publishes
+[aria2-1.37.0-win-64bit-build1.zip](https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip).
+Verify its SHA-256 before extraction:
+`67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288`
+([WinGet manifest](https://github.com/microsoft/winget-pkgs/blob/master/manifests/a/aria2/aria2/1.37.0/aria2.aria2.installer.yaml)).
+Copy `aria2c.exe`, `COPYING`, and `LICENSE.OpenSSL` into `desktop/aria2`.
+These local assets are Git-ignored. This portable development binary does not
+replace the native-build and corresponding-source requirements for release
+packaging; see [aria2 build instructions](desktop/aria2/BUILD.md).
+
+After changing the executable path or rebuilding backend code, restart the
+backend and use `download` with `action: "status"` to verify availability.
+The rest of Shadow can run without aria2; only new downloads require it.
+
 ## Other ways to run
 
 | Client | Start here |

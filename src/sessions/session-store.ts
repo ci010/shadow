@@ -32,6 +32,8 @@ export function parseContextResetAt(value: unknown): string | undefined {
 export interface SessionRecovery {
   id: string
   reason: 'stopped' | 'interrupted' | 'failed'
+  /** Audience of the unfinished turn; absent on older recoveries. */
+  userInvolved?: boolean
 }
 
 export function parseSessionRecovery(value: unknown): SessionRecovery | undefined {
@@ -40,7 +42,12 @@ export function parseSessionRecovery(value: unknown): SessionRecovery | undefine
     || !('reason' in value) || (value.reason !== 'stopped' && value.reason !== 'interrupted' && value.reason !== 'failed')) {
     throw new TypeError('Invalid session recovery metadata')
   }
-  return { id: value.id, reason: value.reason }
+  const userInvolved = 'userInvolved' in value ? value.userInvolved : undefined
+  if ('userInvolved' in value && typeof userInvolved !== 'boolean') {
+    throw new TypeError('Invalid session recovery metadata')
+  }
+  return { id: value.id, reason: value.reason,
+    ...(typeof userInvolved === 'boolean' ? { userInvolved } : {}) }
 }
 
 // ── Shared types ────────────────────────────────────────────────────────────

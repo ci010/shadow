@@ -598,6 +598,48 @@ controls, and ask/reply, excluding invoke_tool/exec/write/subagent.
 It routes to reusable sessions and lets users continue there, rather than owning
 their session hierarchy. Ensuring its existence never automatically runs an LLM.
 
+Opening Coord shows a **Project workbench**, not a second kind of session:
+an Initiative-grouped work board, a switchable parent/dependency graph, and the
+existing coordinator conversation in a collapsible side panel.
+On wide containers the side panel's left separator supports
+dragging and keyboard resizing (arrows, Home/End), retaining the preferred width
+across panel switches and temporary container shrinkage. It reserves at least
+360px for the workbench; narrow containers keep the single-panel layout without
+a resize handle. The graph is a
+read-only layout, not a freeform canvas or a drag-to-reassign interface. Work
+progress comes from Work records; a session's running/idle stage never implies
+that its work is in progress or complete. Unassigned and historical work remain
+visible, and filters do not change assignments.
+
+The authorized Project-scoped `GET /api/work` exposes a thin overview of all
+Work records in the bound Project, known sessions, live human requests and
+unresolved effects. `GET /api/work/:key` loads agreement details and history;
+`POST /api/work/:key` reuses the existing human WorkAlignment operations, exact
+revision/proposal checks and handoff/acceptance gates. Viewing or selecting work
+does not create a session, adopt work or confer authority. Discuss/New work
+append an editable coordinator draft; they do not send it automatically.
+Request links open their original conversation, where the existing Ask,
+credential and publication controls retain their scope.
+
+Ordinary chat no longer has permanent Decision reporting / Work alignment
+buttons. Relevant work appears as a compact task link (loaded without history);
+advanced recovery and assigned-session reporting settings remain in work
+details. Background-task and subagent disclosures are unchanged.
+
+The workbench's **GitHub** panel binds explicitly allowed repositories to this
+Project. Issue/PR snapshots and Work links live in Project Home's
+`github-integration.json`; Work definitions still belong to WorkAlignment.
+Owner-confirmed Issue imports create unassigned Work, not sessions. Cards show
+linked resources and last-read CI/review facts. Publishing requires a saved
+preview and a separate confirmation, with Work revision/sequence, repository
+identity and remote snapshot/head checks. Write receipts and uncertain outcomes
+are durable; uncertain writes also fence Work through its existing effect store.
+Explicit subscriptions poll one linked resource per minute, round-robin, and
+deliver through EventService to the bound durable session, either silently or
+as an explicitly enabled queued turn. Neither GitHub state nor review approval
+revises goals, grants permissions, reassigns Work or proves acceptance.
+See [GitHub collaboration](github.md) for setup, recovery and polling limitations.
+
 Durable conversations are `web:chat-UUID` root peers. Topic is no longer a
 separate business object. Project-scoped `search({space: "grep:v:sessions", query})`
 searches histories and session metadata.
@@ -644,9 +686,17 @@ Graph parentage comes from delegation ownership, not a historical context parent
 - New human input during an LLM request aborts that request and queues the
   message. During tool work it can steer into the next model iteration; longer
   tool work can use `quickModel` to classify steer versus abort.
-- Content has an explicit `interactive`, `queue`, `steering`, or `silent` policy.
-  Event defaults and trailing-debounce flushes are explicitly queued, including
+- Content has an explicit `interactive`, `queue`, `steering`, `next-step`, or `silent` policy.
+  General event defaults and trailing-debounce flushes are explicitly queued, including
   during LLM/tool work; they cannot accidentally take the human-interruption path.
+  Background execution results default to `next-step`: an active persistent
+  session incorporates them before its next inference without aborting the current
+  request or tool. Results arriving after that checkpoint retain a queued wake;
+  idle receivers still wake normally. Explicit event delivery, matching broadcast
+  subscription policies, and persisted source overrides take precedence. Directed
+  events retain their existing source/event policy rather than subscription routing.
+  This does not acknowledge reads,
+  discard completion payloads, or change the existing `queue`/`steering` semantics.
   Silent inputs only record content after any active turn; they neither inject
   into its context nor start a later model turn. The `message` tool queues requests
   without interrupting active work. Routine progress/acknowledgements archive by
@@ -1264,7 +1314,8 @@ independently of whether session history uses JSONL or SQLite. Migration retains
 old assignments and does not invent historical goals, contracts or human approval.
 Creating or renaming a session never creates a work definition. Ordinary work-enabled sessions must explicitly register
 untracked work before side-effecting tools; historical scope is not reconstructed
-or assumed unrestricted. Read-only investigation, questions, coordination and
+or assumed unrestricted. Read-only investigation (including explicitly reading/activating a Skill),
+questions, coordination and
 existing permission-checked cancellation remain available during realignment.
 Agent-authored interpretation is labeled separately from authenticated human edits.
 Boundary text is not an access grant or an OS sandbox.
@@ -1310,6 +1361,11 @@ historical too: durable sessions re-evaluate, while bounded executions fail rath
 than report successful completion of the changed assignment.
 Interrupted invocations become unknown on restart and require
 explicit evidence/human `settle`; startup never replays them as confirmed work.
+Native tools may explicitly signal `ToolNoEffectError` for a verified
+pre-commit rejection; the registry preserves the error and records `not_applied`
+without retaining an unknown effect. Audio.cpp uses this only for malformed
+loader catalogs before configuration writes, not for process/probe failures.
+Unmarked exceptions, cancellation and interrupted writes remain conservative.
 A returned background-process receipt is not proof that the external process
 finished: the executor must include ongoing jobs and uncertainties in its
 checkpoint. Already-running external effects are not rolled back or cancelled.
@@ -1401,12 +1457,16 @@ mode rather than rewriting the previously read contents.
   revealing commands, environment values, URLs, or authentication headers;
 - `v:memory`: shared file-backed knowledge;
 - `v:events`: event subscriptions.
+- `v:github`: read-only cached GitHub snapshots for this Project's enabled
+  repositories, including source timestamps and refresh errors; unpublished
+  operation drafts are not exposed. External content remains data, not authority.
 
 The public `search` tool accepts only grep/glob/web protocols. Use
 `grep:v:memory`, `glob:v:skills` or another searchable virtual path; a bare
 `v:` path is not a protocol. Virtual grep uses case-sensitive JavaScript regexes;
 virtual glob uses POSIX glob matching with recursive patterns. Subpaths restrict
-the scope and output retains canonical read paths. Limit/offset page virtual
+the scope and output retains canonical read paths. Explicit `path` separates the
+search root from grep's `include` file glob. Limit/offset page file and virtual
 results (default/max 100); continuation footers and source warnings stay visible.
 Unknown/non-searchable mounts fail explicitly, never fall through to Main's
 filesystem or trigger ripgrep installation. Virtual memory resolves against the
@@ -1414,6 +1474,9 @@ owning Project Home, independent of the session workdir. Skill listing includes
 visible bodies and bundled resources without registering tools. Session grep
 uses the complete history available through SessionManager, not a last-50 window;
 topic metadata is separately readable at `<session-id>/brief`.
+Read's one-based text ranges apply to virtual and URL text as well as files;
+local session line ranges use that same complete-history search view, while
+unpaged reads retain the recent-message default.
 
 `v:tools/<name>` identifies a virtual catalog source for the internal lazy
 loader, not an ordinary filesystem directory. Models
@@ -1795,6 +1858,8 @@ events. Continuation text tells the resumed agent what to do; it is not a
 serialized execution stack. Restarting the backend does not restore OS
 processes from these records. Session-bound tasks use turn facts rather than UI
 `done`. Callback delivery errors are reported separately from the real task result.
+`continuation` annotates running tasks only. Terminal tasks report no change,
+without replaying an already queued/delivered callback or retrying failed delivery.
 
 `CronService` persists user definitions in `.cron/jobs.json` and schedules them
 only while the backend is running. `cron_add`, `cron_list` and `cron_remove`
@@ -2069,6 +2134,25 @@ ignores key repeats, IME composition, and open dialogs/menus. Closing it while
 focus is inside the tree returns focus to the explorer control.
 Electron forwards the same action through the existing document-shortcut bridge
 so editor iframe focus does not prevent toggling; the renderer owns eligibility.
+The file tree's path search uses `rg --files` in the owning local or remote
+workdir, honors ripgrep ignore rules, and returns at most 200 matching paths.
+It does not search file contents or fall back to Main's filesystem when a remote
+executor is unavailable. The Changes view still filters its loaded Git entries.
+Missing ripgrep and remote failures are displayed as errors, not empty results.
+
+Knowledge shares the explorer position on desktop: category filters, search,
+and entry navigation replace the file tree while Knowledge is selected. The
+catalog stays open as its own document tab, and each entry opens a separate
+deduplicated tab. `panel=knowledge&entry=...` identifies the active entry in
+the conversation URL; browser back/forward and Alt+Left/Right move through
+visited views, while the Knowledge breadcrumb returns to the catalog. On narrow
+layouts the navigation stays inside Knowledge instead of taking a second pane.
+Project Settings (General, Models, Bots, Learning) and Agents also open as
+deduplicated, closable tabs in the selected project's conversation workbench.
+Their project-scoped URLs remain deep links; switching tabs keeps the current
+conversation mounted. Agents is reached from the project sidebar rather than
+the Diagnostics navigation, which still owns Spans and Logs. Session Diagnosis
+remains a separate permanent conversation tab.
 
 Folder registry loading does not insert a sidebar text row. Existing folder
 icons become same-size loading indicators, with a header indicator for initial
@@ -2374,6 +2458,38 @@ whole-host sandbox. It does not add another script execution mechanism;
 ordinary agent scripts retain their host execution privileges. Arbitrary embedded webpages,
 remote capture and unattended recording are outside the first implementation.
 See [Programmable I/O](io.md) for supported flows and validation boundaries.
+
+### Reusable applications and LLM access
+
+There is already an OpenAI-style, non-streaming model HTTP surface:
+`GET /v1/models` and `POST /v1/chat/completions` in `src/providers/routes.ts`,
+mounted at the host and under `/projects/<id>`. It calls the configured provider;
+it is not a SessionManager tool loop or a complete OpenAI API implementation.
+The normal gateway authentication and origin rules apply. A standalone
+application backend can integrate with that surface using authorized access;
+do not embed provider secrets or the broad host launch credential in generated
+frontend code.
+
+`src/microapps/` supplies a separate Project-owned app registry, immutable source
+revisions, owner approval, start/stop/reopen lifecycle and an app-scoped model
+bridge. `micro_app` is a discoverable agent tool, not an approval API. The
+coordinator's Apps workspace reviews source. Web opens an isolated loopback
+iframe; Electron opens a separate sandboxed BrowserWindow with no host preload
+or credentials. Approved apps have Windows task-menu launch entries that retain
+only stable Project/app identities and request fresh authorization on open.
+Optional PNG branding is part of the reviewed revision. Electron authorizes host
+requests from its workbench main frame only, not app windows or subframes.
+The model bridge calls the provider with no tools and enforces the
+approved model, output limit, persistent attempt allowance and concurrency cap.
+
+Static Web assets may use an optional Node/Python backend. The backend is a
+normal host process, not a sandbox, and dependencies are not auto-installed.
+Durable `.microapps` records/data do not depend on the author conversation or
+its JSONL/SQLite store; processes never automatically resume after restart.
+See [Micro Apps](microapps.md) for limits and opt-in isolated A2A acceptance.
+This initial local framework is not standalone distribution, remote/mobile app
+hosting, or evidence of audio/device integration readiness. I/O capture cards
+and A2A delegation remain distinct capabilities.
 
 ## Electron lifecycle
 
@@ -2686,7 +2802,12 @@ still be exercised on each target platform. The local-only `download` tool requi
 SHA-256 and consent, stages and resumes a partial file and exposes it only
 after verification; large downloads run through the existing background-task
 system so they can be observed or cancelled without holding a tool call.
-It never silently uses a `PATH` binary. Its Skill
+It never silently uses a `PATH` binary. Source and built development backends
+in a repository checkout resolve `desktop/aria2/aria2c` (`aria2c.exe` on Windows)
+relative to the code, not the session workdir. These ignored local assets must
+be prepared explicitly; an absolute `SHADOW_ARIA2C_PATH` can select a trusted
+pinned copy instead. Packaged backends retain the neighboring resource path.
+Its Skill
 describes cache reuse and leaves repository resolution and authentication
 to HF/ModelScope tooling. Bundling this small downloader does not bundle
 the audio.cpp or sd.cpp binaries or any model weights.

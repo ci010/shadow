@@ -2,10 +2,8 @@ import { createRouter, createWebHashHistory, createWebHistory, type RouteRecordR
 import LogsTab from './components/LogsTab.vue'
 import SpansTab from './components/SpansTab.vue'
 import ProjectsWorkspace from './components/ProjectsWorkspace.vue'
-import AgentsTab from './components/AgentsTab.vue'
 import NodesView from './components/NodesView.vue'
 import SettingsView from './components/SettingsView.vue'
-import ProjectSettings from './components/ProjectSettings.vue'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/chat' },
@@ -16,7 +14,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/projects/:projectId/knowledge', name: 'knowledge', redirect: to => ({
     name: 'chat', params: { projectId: to.params.projectId }, query: { ...to.query, panel: 'knowledge' }, hash: to.hash,
   }) },
-  { path: '/projects/:projectId/settings/:section(general|models|bots|learning)?', name: 'project-settings', component: ProjectSettings },
+  { path: '/projects/:projectId/settings/:section(general|models|bots|learning)?', name: 'project-settings', component: ProjectsWorkspace },
   { path: '/workspaces', redirect: '/nodes' },
   { path: '/nodes', name: 'nodes', component: NodesView },
   { path: '/providers', name: 'providers', redirect: '/settings/providers' },
@@ -24,7 +22,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/settings/:section(providers|models|web-search|sounds)?', name: 'settings', component: SettingsView },
   { path: '/approvals', redirect: '/nodes' },
   { path: '/agents/:agentName?', redirect: to => ({ name: 'agents', params: { projectId: 'default', agentName: to.params.agentName } }) },
-  { path: '/projects/:projectId/agents/:agentName?', name: 'agents', component: AgentsTab },
+  { path: '/projects/:projectId/agents/:agentName?', name: 'agents', component: ProjectsWorkspace },
   { path: '/spans', redirect: '/projects/default/spans' },
   { path: '/projects/:projectId/spans', name: 'spans', component: SpansTab },
   { path: '/logs', redirect: '/projects/default/logs' },

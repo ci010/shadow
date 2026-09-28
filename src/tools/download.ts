@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { BackgroundTaskManager } from '../agent/background-task.ts'
+import { backgroundExecutionId, type BackgroundTaskManager } from '../agent/background-task.ts'
 import { Aria2Downloader, downloadSchema } from '../downloader/aria2.ts'
 import type { ExecutionContext } from './context.ts'
 import type { Tool, ToolParameters } from './tool.ts'
@@ -70,7 +70,8 @@ export class DownloadTool implements Tool {
         },
         onCancel: () => controller.abort(new Error('Download cancelled; partial file kept for resumption')),
       }, promise)
-      return JSON.stringify({ executionId: `bg:${id}`, taskId: id, filename: request.filename })
+      const executionId = backgroundExecutionId(id)
+      return JSON.stringify({ executionId, outputPath: `v:bg/${executionId}`, taskId: id, filename: request.filename })
     } catch (error) {
       controller.abort(error)
       await promise.catch(() => {})

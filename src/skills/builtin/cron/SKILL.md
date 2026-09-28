@@ -26,7 +26,7 @@ Use `invoke_tool({name: "cron_add", args: {...}})` to schedule a task:
 | `name` | string | no | Readable job name; defaults to the task |
 | `agentType` | string | no | Agent type for fresh runs, default `general` |
 | `once` | boolean | no | Delete after first run |
-| `urgency` | string | no | `steering`, `queue`, `debounce`, or `silent`; existing mode only |
+| `urgency` | string | no | `steering`, `next-step`, `queue`, `debounce`, or `silent`; existing mode only. `next-step` joins the next inference without aborting an active request or tool. |
 | `debounce_ms` | number | no | Debounce duration when `urgency` is `debounce` |
 
 ## List and Remove

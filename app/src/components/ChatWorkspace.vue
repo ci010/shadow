@@ -1,16 +1,17 @@
 <template>
   <div ref="workspace" class="conversation-workspace" :class="{ 'has-child': childId, 'is-split': split, 'is-resizing': !!drag }" :style="split ? { gridTemplateColumns: `minmax(0, 1fr) ${SPLIT_HANDLE_WIDTH}px ${childWidth}px` } : undefined">
-    <div v-show="!childId || wide" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
+    <div v-show="!childId || wide || route.name === 'project-settings' || route.name === 'agents'" class="primary-conversation" @pointerdown.capture="activePane = 'primary'" @focusin="activePane = 'primary'">
       <ChatTab ref="primary" :api-base="apiBase" enable-child-pane :child-session-id="childId"
         :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
+        @project-navigation="emit('project-navigation', $event)"
         :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote"
-        :visible="visible && route.name === 'chat' && (!childId || wide)" :keyboard-active="visible && (!childId || wide) && activePane === 'primary'"
-        @open-child="openChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
+        :visible="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name)) && (!childId || wide || route.name !== 'chat')" :keyboard-active="visible && (!childId || wide || route.name !== 'chat') && activePane === 'primary'"
+        @open-child="openChild" @close-child="closeChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
     </div>
     <div v-if="split" class="conversation-resizer" role="separator" tabindex="0" aria-label="Resize child conversation"
       aria-orientation="vertical" aria-controls="child-conversation-pane" :aria-valuemin="bounds.min" :aria-valuemax="bounds.max" :aria-valuenow="childWidth"
       @pointerdown="startResize" @pointermove="resize" @pointerup="stopResize" @pointercancel="stopResize" @lostpointercapture="stopResize" @keydown="resizeKey" />
-    <aside v-if="childId" id="child-conversation-pane" class="child-conversation" aria-label="Child conversation"
+    <aside v-if="childId" v-show="route.name === 'chat'" id="child-conversation-pane" class="child-conversation" aria-label="Child conversation"
       @pointerdown.capture="activePane = 'child'" @focusin="activePane = 'child'">
       <ChatTab :key="childId" :api-base="apiBase" :project-id="projectId" :project-name="projectName" embedded :session-id="childId" :visible="visible && route.name === 'chat'" :keyboard-active="visible && (!wide || activePane === 'child')" @child-navigation="navigateChild">
         <template #pane-actions>
@@ -30,10 +31,10 @@ import { useRoute, useRouter } from 'vue-router'
 import ChatTab from './ChatTab.vue'
 import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_HANDLE_WIDTH, SPLIT_MIN_WIDTH } from '../conversation-split.ts'
 import type { FolderRecord } from '../folders-client.ts'
-import type { KnowledgeTabRequest } from '../file-workbench.ts'
+import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest }>(), { visible: true })
-const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string] }>()
+const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab] }>()
 const route = useRoute()
 const router = useRouter()
 const workspace = ref<HTMLElement>()
@@ -43,7 +44,7 @@ const activePane = ref<'primary' | 'child'>('primary')
 const workspaceWidth = ref(0)
 const preferredWidth = ref(480)
 const wide = computed(() => workspaceWidth.value >= SPLIT_MIN_WIDTH)
-const split = computed(() => wide.value && !!childId.value)
+const split = computed(() => wide.value && !!childId.value && route.name === 'chat')
 const bounds = computed(() => childWidthBounds(workspaceWidth.value))
 const childWidth = computed(() => clampChildWidth(preferredWidth.value, workspaceWidth.value))
 const drag = shallowRef<{ x: number; width: number; target: HTMLElement; pointerId: number }>()
@@ -126,7 +127,13 @@ watch(() => props.childSessionId, id => {
   childId.value = id && id !== props.sessionId ? id : ''
   activePane.value = childId.value ? 'child' : 'primary'
 }, { immediate: true })
-defineExpose({ requestSession: (id: string) => primary.value?.requestSession(id) })
+defineExpose({
+  requestSession: (id: string) => primary.value?.requestSession(id),
+  appendDraft: (text: string) => {
+    if (childId.value) closeChild()
+    primary.value?.appendDraft(text)
+  },
+})
 onMounted(activate)
 onActivated(activate)
 onDeactivated(deactivate)

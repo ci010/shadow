@@ -7,6 +7,7 @@ import type { ExecutionContext } from './context.ts'
 import { groupTools } from '../utils/tools-group.ts'
 import { Tools, SessionTools } from './registry.ts'
 import { SearchTool } from './search.ts'
+import { ReadTool } from './read.ts'
 import { detectRipgrep, GlobTool, GrepTool } from './ripgrep.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { createMemoryHandler, createSessionsHandler } from '../vfs/mounts.ts'
@@ -75,8 +76,14 @@ test('virtual session search includes earlier history while glob avoids loading 
   const search = new SearchTool('.', undefined, vfs)
   assert.equal(await search.execute({ space: 'glob:v:sessions', query: '*' }, context), 'v:sessions/web:one')
   assert.equal(historyReads, 0)
-  assert.match(await search.execute({ space: 'grep:v:sessions/web:one', query: 'old needle' }, context), /old needle/)
+  const match = await search.execute({ space: 'grep:v:sessions/web:one', query: 'old needle' }, context)
+  assert.match(match, /old needle/)
   assert.equal(historyReads, 1)
+  const line = Number(match.match(/Line (\d+):/)?.[1])
+  assert.ok(line > 0)
+  const page = await new ReadTool('.', vfs).execute({ path: 'v:sessions/web:one', offset: line, limit: 1 }, context)
+  assert.match(requireToolText(page), /^old needle\n\n\[truncated:/)
+  assert.doesNotMatch(requireToolText(page), /recent/)
 })
 
 test('file searches still use real paths and can match literal virtual-path text', async t => {
@@ -91,6 +98,19 @@ test('file searches still use real paths and can match literal virtual-path text
   const context = { tools, cwd: home, signal: new AbortController().signal } as ExecutionContext
   assert.match(await search.execute({ space: 'glob:memory', query: '*.md' }, context), /lesson\.md/)
   assert.match(await search.execute({ space: 'grep:*.md', query: 'v:tools' }, context), /Read v:tools for metadata/)
+  assert.match(await search.execute({ space: `grep:${resolve(home, 'memory')}`, query: 'v:tools' }, context), /Read v:tools for metadata/)
+  assert.match(await search.execute({ space: 'grep', path: 'memory', include: '*.md', query: 'v:tools' }, context), /Read v:tools for metadata/)
+  await writeFile(resolve(home, 'memory', 'two.md'), 'needle 1\nneedle 2\nneedle 3')
+  const first = await search.execute({ space: 'grep', path: 'memory', include: '*.md', query: 'needle', limit: 1 }, context)
+  assert.match(first, /Line 1: needle 1[\s\S]*continue with offset: 1/)
+  const second = await search.execute({ space: 'grep', path: 'memory', query: 'needle', limit: 1, offset: 1 }, context)
+  assert.match(second, /Line 2: needle 2/)
+  assert.doesNotMatch(second, /needle 1|needle 3/)
+  const glob = await search.execute({ space: 'glob', path: 'memory', query: '*.md', limit: 1 }, context)
+  assert.match(glob, /continue with offset: 1/)
+  await assert.rejects(search.execute({ space: 'grep', path: 'missing', query: 'x' }, context), /ripgrep search failed/)
+  await assert.rejects(search.execute({ space: 'grep', path: 'memory', query: '[' }, context), /ripgrep search failed/)
+  await assert.rejects(search.execute({ space: 'glob', path: 'missing', query: '*' }, context), /ripgrep search failed/)
 })
 
 test('search keeps the space contract and concise virtual-path boundary', () => {
@@ -100,6 +120,22 @@ test('search keeps the space contract and concise virtual-path boundary', () => 
   assert.equal('instance' in search.parameters.properties, false)
   assert(search.description.length <= 180)
   assert.match(search.description, /without activating skills/)
+})
+
+test('explicit roots cannot bypass remote scope or silently override another root', async () => {
+  const search = new SearchTool('.')
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+  const remote = { ...context, remoteWorkdir: {
+    nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not execute') },
+  } }
+  for (const args of [
+    { space: 'grep', path: 'src', query: 'x' },
+    { space: 'glob', path: 'src', query: 'v:sessions/**' },
+    { space: 'grep', path: 'v:memory', query: 'x' },
+  ]) assert.match(await search.execute(args, remote), /only v:sessions searches/)
+  assert.match(await search.execute({ space: 'grep:v:memory', path: 'src', query: 'x' }, context), /not both/)
+  assert.match(await search.execute({ space: 'web', path: 'src', query: 'x' }, context), /does not support/)
+  assert.match(await search.execute({ space: 'grep', include: resolve('src'), query: 'x' }, context), /put the search root in path/)
 })
 
 test('virtual search preserves continuation and warnings while physical search keeps generic truncation', async t => {
@@ -118,6 +154,8 @@ test('virtual search preserves continuation and warnings while physical search k
       { space: 'grep:v:memory', query: 'x' },
       { space: 'glob:v:memory', query: '**' },
       { space: 'glob:', query: 'v:memory/**' },
+      { space: 'grep', path: 'v:memory', include: '*.md', query: 'x' },
+      { space: 'glob', path: 'v:memory', query: '**' },
     ]) {
       const result = requireToolText(await tools.execute('search', { ...args, limit: 1 }, context))
       assert.match(result, /continue with offset: 1/)

@@ -3,7 +3,7 @@ import type { EventService } from '../events/service.ts'
 import type { EventDelivery, EventSourceDescriptor, EventUrgency } from '../events/types.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 
-const URGENCIES: EventUrgency[] = ['steering', 'queue', 'debounce', 'silent']
+const URGENCIES: EventUrgency[] = ['steering', 'next-step', 'queue', 'debounce', 'silent']
 
 /** Build a delivery policy from tool args, or undefined if no urgency given. */
 function parseDelivery(args: Record<string, unknown>): EventDelivery | undefined {
@@ -49,7 +49,7 @@ export class EventSubscribeTool implements Tool {
   readonly description =
     'Manage event subscriptions, event sources, and emit custom events. ' +
     'Events are signals that wake a session; declare urgency to control how they arrive ' +
-    '(steering=interrupt now, queue=after current turn, debounce=coalesce a burst, silent=record only). ' +
+    '(steering=interrupt now, next-step=next inference without aborting work, queue=after current turn, debounce=coalesce a burst, silent=record only). ' +
     'Read v:events for subscriptions and v:events/sources for registered sources. Discover tools:cron and use cron_add to schedule periodic events.'
   readonly parameters: ToolParameters = {
     type: 'object',
@@ -105,8 +105,9 @@ export class EventSubscribeTool implements Tool {
         type: 'string',
         description:
           'Delivery urgency for subscribe/emit/register_source: steering (interrupt), ' +
+          'next-step (next inference without aborting work), ' +
           'queue (default, after current turn), debounce (coalesce burst), silent (record only).',
-        enum: ['steering', 'queue', 'debounce', 'silent'],
+        enum: URGENCIES,
       },
       coalesce_key: {
         type: 'string',

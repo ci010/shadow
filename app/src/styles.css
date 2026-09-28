@@ -26,6 +26,8 @@
   --sidebar-section-gap: 16px;
   --sidebar-action-size: 28px;
 
+  --trace-row-height: 40px;
+
   /* ── Core surfaces ─────────────────────────────── */
   --c-bg: #f3f3f3;
   --c-bg-card: #ffffff;
@@ -346,10 +348,30 @@ input:not([type]), textarea {
   font-size: 12px;
 }
 
+.trace-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--trace-row-height);
+  padding: 4px 8px;
+  list-style: none;
+  line-height: 20px;
+}
+.trace-header::-webkit-details-marker { display: none; }
+.trace-header:hover:not(:disabled) { background: var(--c-bg-muted); color: var(--c-text); }
+.trace-header:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.trace-guide { min-width: 0; margin: 0 0 8px 15px; padding-left: 16px; border-left: 1px solid var(--c-border); }
+.trace-chevron { flex: 0 0 16px; width: 16px; height: 16px; }
+[open] > .trace-header > .trace-chevron { transform: rotate(90deg); }
+
 @media (max-width: 700px), (pointer: coarse) {
   :where(.btn) {
     min-height: 44px;
   }
+  .trace-header { min-height: 44px; }
 }
 
 .mono {

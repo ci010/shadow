@@ -135,8 +135,8 @@ const folders = associations<readonly [MaterialIcon, MaterialIcon]>({
   'skills': ['i-material-icon-theme-folder-skills', 'i-material-icon-theme-folder-skills-open'],
 })
 
-export function fileIcon(name: string): MaterialIcon {
-  const normalized = name.toLowerCase()
+export function matchedFileIcon(name: string): MaterialIcon | undefined {
+  const normalized = name.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
   const exact = fileNames.get(normalized)
   if (exact) return exact
   for (const [pattern, icon] of configNames) {
@@ -147,7 +147,10 @@ export function fileIcon(name: string): MaterialIcon {
     const icon = extensions.get(normalized.slice(dot + 1))
     if (icon) return icon
   }
-  return 'i-material-icon-theme-document'
+}
+
+export function fileIcon(name: string): MaterialIcon {
+  return matchedFileIcon(name) ?? 'i-material-icon-theme-document'
 }
 
 export function folderIcon(name: string, expanded = false): MaterialIcon {

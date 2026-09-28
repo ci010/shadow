@@ -8,7 +8,7 @@ import type { SessionStore } from './session-store.ts'
 import { withResponseAudience } from '../agent/context/response-audience.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import type { InputSource } from './input.ts'
-import { createResponseContext, isBackgroundResponse, parseResponseContext } from './response-context.ts'
+import { continuedUserInvolvement, createResponseContext, isBackgroundResponse, parseResponseContext } from './response-context.ts'
 
 const user: InputSource = { kind: 'user', sender: { channel: 'web', chatId: 'owner', senderId: 'owner', messageId: 'input' } }
 const event: InputSource = { kind: 'event', eventId: 'event', type: 'subagent-failed', source: 'worker',
@@ -52,6 +52,27 @@ test('response context is a small runtime projection, not historical user involv
   assert(!isBackgroundResponse(createResponseContext('turn', user, 'session', 'web')))
   assert(!isBackgroundResponse(undefined))
   assert.deepEqual(parseResponseContext(context), context)
+})
+
+test('continuation finds the unfinished input audience without mistaking old user turns for current ones', () => {
+  const direct = { role: 'user' as const, content: [
+    { type: 'text' as const, text: '<sender id="owner" name="owner" chat="direct" />' },
+    { type: 'text' as const, text: 'Original request' },
+  ] }
+  const background = { role: 'user' as const, content: [
+    { type: 'text' as const, text: '<event type="fixture" source="system" event-id="event" />' },
+    { type: 'text' as const, text: '<sender id="owner" name="owner" chat="direct" />' },
+  ] }
+  assert(continuedUserInvolvement([direct, { role: 'tool', content: 'Completed' }]))
+  assert(continuedUserInvolvement([direct, { role: 'assistant', content: 'Rechecking',
+    responseContext: createResponseContext('turn', user, 'session', 'web') },
+  { role: 'user', name: '__work_realignment__', content: 'Work changed' }]))
+  assert(!continuedUserInvolvement([direct, { role: 'assistant', content: 'Finished' }, background]))
+  assert(!continuedUserInvolvement([background, { role: 'assistant', content: 'Working',
+    responseContext: createResponseContext('event-turn', event, 'session', 'web') }]))
+  assert(continuedUserInvolvement([background, { role: 'assistant', content: 'Working',
+    responseContext: { ...createResponseContext('event-turn', event, 'session', 'web')!, userInvolved: true } }]))
+  assert(!continuedUserInvolvement([{ role: 'user', content: 'Legacy text without provenance' }]))
 })
 
 test('legacy and malformed response metadata remain visible with a diagnostic for malformed data', t => {

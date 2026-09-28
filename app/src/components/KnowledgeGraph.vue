@@ -4,9 +4,9 @@
       <span>{{ graph.nodes.length }} nodes / {{ graph.links.length }} links. Arrows point to referenced entries.</span>
       <label>Zoom <input v-model.number="zoom" aria-label="Graph zoom" type="range" min="50" max="150" step="10" /></label>
     </div>
-    <p v-if="!graph.nodes.length" class="empty">No entries match. Change the filter or search.</p>
-    <div v-else class="graph-scroll" tabindex="0" aria-label="Scrollable relationship graph">
-      <svg :width="graph.width * zoom / 100" :height="graph.height * zoom / 100" :viewBox="`0 0 ${graph.width} ${graph.height}`">
+    <div class="graph-scroll" tabindex="0" aria-label="Scrollable relationship graph">
+      <p v-if="!graph.nodes.length" class="empty">No entries match. Change the filter or search.</p>
+      <svg v-else :width="graph.width * zoom / 100" :height="graph.height * zoom / 100" :viewBox="`0 0 ${graph.width} ${graph.height}`">
         <defs><marker :id="arrowId" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker></defs>
         <text v-for="(label, index) in ['Memory', 'Wiki', 'Skills', 'Outside catalog']" :key="label" :x="20 + index * 280" y="25" class="column-label">{{ label }}</text>
         <path v-for="(link, index) in edges" :key="index" :d="link.path" class="edge"
@@ -59,7 +59,7 @@ const short = (value: string, size: number) => value.length > size ? `${value.sl
 .graph-panel { min-width: 0; border: 1px solid var(--c-border); border-radius: var(--radius-control); }
 .graph-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; font-size: 12px; color: var(--c-text-secondary); }
 label { display: flex; align-items: center; gap: 8px; }
-.graph-scroll { overflow: auto; max-height: 55vh; background: var(--c-bg-soft); }
+.graph-scroll { overflow: auto; height: min(55vh, 480px); background: var(--c-bg-soft); }
 svg { display: block; color: var(--c-text-muted); }
 .column-label { fill: var(--c-text-secondary); font-size: 13px; font-weight: 600; }
 .edge { fill: none; stroke: var(--c-text-muted); stroke-width: 1.2; opacity: .45; }

@@ -7,13 +7,14 @@ import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import type { KnowledgeCatalog, KnowledgeEntry } from './knowledge.ts'
 import type { KnowledgeMaintenanceReport, KnowledgeRepairPreview } from './knowledge-maintenance.ts'
-import { KNOWLEDGE_TAB_KEY } from './file-workbench.ts'
+import { KNOWLEDGE_TAB_KEY, projectTabKey } from './file-workbench.ts'
 
 interface ElementNode {
   tag: string; text: string; props: Record<string, unknown>; children: ElementNode[]; parent?: ElementNode
+  scrollTop: number
   showModal(): void; close(): void; focus(): void
 }
-const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [], showModal() {}, close() {}, focus() {} })
+const element = (tag: string, text = ''): ElementNode => ({ tag, text, props: {}, children: [], scrollTop: 0, showModal() {}, close() {}, focus() {} })
 const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await Vue.nextTick() }
 const wiki: KnowledgeEntry = { id: 'memory/topics/node.md', path: 'memory/topics/node.md', title: 'Node wiki', kind: 'wiki', source: 'project', deletable: true, revision: 'r1' }
 const memory: KnowledgeEntry = { ...wiki, id: 'memory/sessions/chat.md', path: 'memory/sessions/chat.md', title: 'Chat memory', kind: 'memory' }
@@ -21,7 +22,8 @@ const builtin: KnowledgeEntry = { ...wiki, id: 'builtin:skills/node', path: 'ski
 const catalog: KnowledgeCatalog = { entries: [wiki, memory, builtin], links: [{ source: memory.id, target: wiki.id, label: 'node' }] }
 
 function mount(t: TestContext, filename: string, initial: Record<string, unknown>, selected = '') {
-  const route = Vue.reactive({ query: { entry: selected } })
+  const route = Vue.reactive({ name: 'chat', params: { projectId: 'a' }, query: { entry: selected } })
+  const history: number[] = []
   if (filename === 'KnowledgeView.vue') initial = { entryId: selected, ...initial }
   const scope = Vue.ref({ uiScopes: ['main:admin'] })
   const dialogStub = Vue.defineComponent({
@@ -43,20 +45,32 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
       },
       ...(filename === 'files/FileWorkbench.vue' ? { onMounted() {}, onUnmounted() {} } : {}),
     }
-    if (id === 'vue-router') return { useRoute: () => route, useRouter: () => ({ replace: ({ query }: { query: typeof route.query }) => { route.query = query } }) }
+    if (id === 'vue-router') return { useRoute: () => route, useRouter: () => ({
+      replace: ({ query }: { query: typeof route.query }) => { route.query = query },
+      back: () => history.push(-1), forward: () => history.push(1), go: (direction: number) => history.push(direction),
+    }) }
     if (id.endsWith('useInstallationContext.ts')) return { useInstallationContext: () => scope }
     if (id === 'dompurify') return { default: { sanitize: (value: string) => value } }
     if (id.endsWith('/useWorkdirGit.ts')) return { useWorkdirGit: () => ({
       status: Vue.ref(), loading: Vue.ref(false), error: Vue.ref(''), offline: Vue.ref(false), revision: Vue.ref(0), refresh() {},
     }) }
     if (id === '../HoverInfo.vue') return { default: Vue.defineComponent({
+      props: ['text'],
       setup: (_props, { slots }) => () => slots.default?.({ triggerProps: {} }),
     }) }
     if (id === '../KnowledgeView.vue') return { default: Vue.defineComponent({
-      props: ['apiBase', 'projectId', 'entryId', 'active'],
-      setup: props => () => Vue.h('div', { 'data-test': 'knowledge-panel', ...props }),
+      props: ['apiBase', 'projectId', 'entryId', 'active', 'sidebarTarget'],
+      emits: ['select', 'catalog'],
+      setup: (props, { emit }) => () => Vue.h('div', { 'data-test': 'knowledge-panel', ...props, onClick: () => emit('select', builtin.id) }),
+    }) }
+    if (id === './FileTreeNode.vue') return { default: Vue.defineComponent({
+      props: ['entry'],
+      setup: props => () => Vue.h('div', { 'data-test': 'file-entry' }, props.entry.name),
     }) }
     if (id === './KnowledgeDeleteDialog.vue') return { default: dialogStub }
+    if (id === './KnowledgeGraph.vue') return { default: Vue.defineComponent({
+      setup: () => () => Vue.h('div', { 'data-test': 'knowledge-graph' }),
+    }) }
     if (id === './KnowledgeRepairDialog.vue') return { default: Vue.defineComponent({
       props: ['preview'],
       setup: (props, { emit }) => () => Vue.h('button', { 'data-test': 'confirm-repair', onClick: () => emit('applied', props.preview.sourceId) }, 'Confirm repair stub'),
@@ -80,10 +94,18 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
     patchProp: (node, key, _previous, value) => { node.props[key] = value },
     parentNode: node => node.parent ?? null,
     nextSibling: node => node.parent?.children[node.parent.children.indexOf(node) + 1] ?? null,
-    querySelector: () => body,
+    querySelector: selector => selector === 'body' ? body : find(root, selector) ?? null,
   })
   const props = Vue.reactive(initial)
   const root = element('root')
+  if (initial.sidebarTarget) {
+    const sidebar = element('aside')
+    sidebar.props.id = String(initial.sidebarTarget).slice(1)
+    sidebar.parent = root
+    root.children.push(sidebar)
+  }
+  const find = (node: ElementNode, selector: string): ElementNode | undefined =>
+    node.props.id === selector.slice(1) ? node : node.children.map(child => find(child, selector)).find(Boolean)
   const app = renderer.createApp(Vue.defineComponent({ setup: () => () => Vue.h(module.exports.default, props) }))
   app.mount(root)
   let mounted = true
@@ -99,7 +121,7 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
     assert(node, `Missing button ${label}: ${text()}`)
     return node
   }
-  return { route, props, scope, nodes, text, button, unmount }
+  return { route, history, props, scope, nodes, text, button, unmount }
 }
 
 test('workbench renders Knowledge next to Conversation, deduplicates and closes without deleting', async t => {
@@ -112,21 +134,33 @@ test('workbench renders Knowledge next to Conversation, deduplicates and closes 
   await settle()
   const tabs = () => view.nodes().filter(node => node.props.role === 'tab')
   const knowledgeTab = () => tabs().find(node => String(node.props.id).endsWith(encodeURIComponent(KNOWLEDGE_TAB_KEY)))!
+  const entryTab = (id: string) => tabs().find(node => String(node.props.id).endsWith(encodeURIComponent(`\0knowledge-entry:${id}`)))!
   const panel = () => view.nodes().find(node => node.props['data-test'] === 'knowledge-panel')
-  assert.equal(tabs().length, 2)
-  assert.equal(knowledgeTab().props['aria-selected'], true)
+  assert.equal(tabs().length, 3)
+  assert.equal(entryTab(wiki.id).props['aria-selected'], true)
   assert.equal(panel()?.props.apiBase, 'http://fixture/projects/a')
   assert.equal(panel()?.props.entryId, wiki.id)
+  assert(view.nodes().some(node => node.props['aria-label'] === 'Knowledge explorer'))
+  assert(!view.nodes().some(node => node.props['aria-label'] === 'File explorer'))
   assert.deepEqual(navigation.at(-1), [true, wiki.id])
   view.props.knowledgeRequest = {}
   await settle()
-  assert.equal(tabs().length, 2)
+  assert.equal(tabs().length, 3)
+  assert.equal(knowledgeTab().props['aria-selected'], true)
+  assert.equal(panel()?.props.entryId, '')
+  ;(entryTab(wiki.id).props.onClick as () => void)()
+  await settle()
   assert.equal(panel()?.props.entryId, wiki.id)
+  ;(panel()?.props.onClick as () => void)()
+  await settle()
+  assert.equal(tabs().length, 4)
+  assert.equal(entryTab(builtin.id).props['aria-selected'], true)
+  assert.deepEqual(navigation.at(-1), [true, builtin.id])
   ;(tabs()[0].props.onClick as () => void)()
   await settle()
   assert.equal(panel()?.props.active, false)
   assert.equal(panel()?.parent?.props.hidden, true)
-  assert.deepEqual(navigation.at(-1), [false, wiki.id])
+  assert.deepEqual(navigation.at(-1), [false, undefined])
   ;(knowledgeTab().props.onClick as () => void)()
   await settle()
   assert.equal(panel()?.props.active, true)
@@ -138,14 +172,14 @@ test('workbench renders Knowledge next to Conversation, deduplicates and closes 
   assert.equal(panel(), undefined, 'Closing destroys Knowledge, not the conversation')
   view.props.knowledgeRequest = { entryId: builtin.id }
   await settle()
-  assert.equal(tabs().length, 2)
+  assert.equal(tabs().length, 3)
   assert.equal(panel()?.props.entryId, builtin.id)
   ;(knowledgeTab().props.onKeydown as (event: object) => void)({ key: 'ArrowLeft', preventDefault() {} })
   await settle()
   assert.equal(tabs()[0].props['aria-selected'], true)
   ;(tabs()[0].props.onKeydown as (event: object) => void)({ key: 'End', preventDefault() {} })
   await settle()
-  assert.equal(knowledgeTab().props['aria-selected'], true)
+  assert.equal(entryTab(builtin.id).props['aria-selected'], true)
   ;(knowledgeTab().props.onKeydown as (event: object) => void)({ key: 'Delete', preventDefault() {} })
   await settle()
   assert.equal(panel(), undefined)
@@ -160,15 +194,126 @@ test('workbench renders Knowledge next to Conversation, deduplicates and closes 
   assert.equal(panel(), undefined)
 })
 
-test('knowledge tab browses content, navigates references, filters and keeps builtin skills read-only', async t => {
+test('project Settings and Agents deep links open independent workbench tabs and return to Conversation', async t => {
+  const changes: Array<string | undefined> = []
+  const view = mount(t, 'files/FileWorkbench.vue', {
+    apiBase: 'http://fixture/projects/a', projectId: 'a', sessionId: '', contextKey: 'a:draft',
+    active: true, knowledgeEnabled: true, onProjectNavigation: (tab?: string) => changes.push(tab),
+  })
+  const tab = (key: string) => view.nodes().find(node =>
+    node.props.role === 'tab' && String(node.props.id).endsWith(encodeURIComponent(key)))!
+  view.route.name = 'project-settings'
+  await settle()
+  assert.equal(tab(projectTabKey('settings')).props['aria-selected'], true)
+  view.route.name = 'agents'
+  await settle()
+  assert.equal(tab(projectTabKey('agents')).props['aria-selected'], true)
+  assert.equal(tab(projectTabKey('settings')).props['aria-selected'], false)
+  ;(tab(projectTabKey('settings')).props.onClick as () => void)()
+  await settle()
+  assert.equal(changes.at(-1), 'settings')
+  ;(view.nodes().find(node => node.props['aria-label'] === 'Close Project settings')!.props.onClick as () => void)()
+  await settle()
+  assert.equal(tab('').props['aria-selected'], true)
+  assert.equal(changes.at(-1), undefined)
+  assert.equal(tab(projectTabKey('agents')).props['aria-selected'], false)
+  view.route.name = 'chat'
+  await settle()
+  assert.equal(tab(projectTabKey('agents')).props['aria-selected'], false)
+})
+
+test('knowledge navigation moves to the explorer while details and filters stay in sync', async t => {
   t.mock.method(globalThis, 'fetch', async (input: URL) => {
     const id = new URL(String(input)).searchParams.get('id')
+    return Response.json(id ? { entry: catalog.entries.find(item => item.id === id), content: '# Content' } : catalog)
+  })
+  const view = mount(t, 'KnowledgeView.vue', {
+    apiBase: 'http://fixture/projects/a', projectId: 'a', sidebarTarget: '#knowledge-target',
+  }, wiki.id)
+  await settle()
+  const sidebar = view.nodes().find(node => node.props.id === 'knowledge-target')!
+  assert(sidebar.children.some(node => node.props['aria-label'] === 'Knowledge entries'))
+  const skills = view.nodes().find(node => node.tag === 'button' && node.children.some(child => child.text.trim() === 'Skills'))!
+  assert(skills)
+  ;(skills.props.onClick as () => void)()
+  await settle()
+  assert.match(view.text(), /1 \/ 3 entries/)
+  assert.equal(view.nodes().filter(node => node.props.class === 'entry').length, 1)
+  assert.match(view.text(), /Node wiki/, 'The selected detail remains readable while filtering the navigation')
+  view.props.sidebarTarget = undefined
+  await settle()
+  assert(!sidebar.children.some(node => node.props['aria-label'] === 'Knowledge entries'))
+  assert(view.nodes().some(node => node.props['aria-label'] === 'Knowledge entries'))
+})
+
+test('knowledge entry tabs restore their own reading positions', async t => {
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    const id = new URL(String(input)).searchParams.get('id')
+    return Response.json(id ? { entry: catalog.entries.find(item => item.id === id), content: '# Content' } : catalog)
+  })
+  const view = mount(t, 'KnowledgeView.vue', { apiBase: 'http://fixture/projects/a', projectId: 'a' }, wiki.id)
+  await settle()
+  const scroll = view.nodes().find(node => node.props.class === 'knowledge-scroll')!
+  scroll.scrollTop = 120
+  view.props.entryId = builtin.id
+  await settle()
+  assert.equal(scroll.scrollTop, 0)
+  scroll.scrollTop = 55
+  view.props.entryId = wiki.id
+  await settle()
+  assert.equal(scroll.scrollTop, 120)
+  view.props.entryId = builtin.id
+  await settle()
+  assert.equal(scroll.scrollTop, 55)
+})
+
+test('file tree searches paths beyond loaded directories and restores browsing when cleared', async t => {
+  const requests: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    requests.push(String(input))
+    if (new URL(String(input)).pathname.endsWith('/files/search')) return Response.json({
+      paths: ['src/deep/notes.md'], truncated: false,
+    })
+    return Response.json({
+      path: '', entries: [
+        { name: 'notes.md', type: 'file', ext: '.md', size: 10, mtime: null },
+        { name: 'picture.png', type: 'file', ext: '.png', size: 10, mtime: null },
+        { name: 'src', type: 'dir', ext: '', size: 0, mtime: null },
+      ],
+    })
+  })
+  const view = mount(t, 'files/FileTree.vue', { apiBase: 'http://fixture', sessionId: 'a', treeOnly: true })
+  await settle()
+  const names = () => view.nodes().filter(node => node.props['data-test'] === 'file-entry').map(node => node.text)
+  assert.deepEqual(names(), ['notes.md', 'picture.png', 'src'])
+  const search = view.nodes().find(node => node.props['aria-label'] === 'Search file paths')!
+  ;(search.props['onUpdate:modelValue'] as (value: string) => void)('NOTES')
+  await new Promise(resolve => setTimeout(resolve, 250))
+  await settle()
+  assert.deepEqual(view.nodes().filter(node => node.props.class === 'file-search-result').map(node => node.children.at(-1)?.text), ['src/deep/notes.md'])
+  assert.equal(requests.length, 2)
+  assert.equal(new URL(requests[1]!).searchParams.get('query'), 'notes')
+  ;(search.props['onUpdate:modelValue'] as (value: string) => void)('')
+  await settle()
+  assert.deepEqual(names(), ['notes.md', 'picture.png', 'src'])
+})
+
+test('knowledge tab browses content, navigates references, filters and keeps builtin skills read-only', async t => {
+  const reads: string[] = []
+  t.mock.method(globalThis, 'fetch', async (input: URL) => {
+    const id = new URL(String(input)).searchParams.get('id')
+    if (id) reads.push(id)
     return Response.json(id ? { entry: catalog.entries.find(item => item.id === id), content: '# Knowledge content' } : catalog)
   })
   const view = mount(t, 'KnowledgeView.vue', { apiBase: 'http://fixture/projects/a', projectId: 'a' }, wiki.id)
   await settle()
   assert.match(view.text(), /Node wiki/)
   assert.match(view.text(), /Referenced by \(1\)/)
+  ;(view.button('Back').props.onClick as () => void)()
+  ;(view.button('Forward').props.onClick as () => void)()
+  assert.deepEqual(view.history, [-1, 1])
+  assert(!view.nodes().some(node => node.props['data-test'] === 'knowledge-graph'),
+    'Entry documents show the page rather than the catalog graph')
   assert(view.button('Delete'))
   const outgoing = view.nodes().find(node => node.tag === 'button' && node.children.some(child => child.text === 'node'))
   assert(outgoing, 'Incoming references are rendered as navigation buttons')
@@ -180,6 +325,12 @@ test('knowledge tab browses content, navigates references, filters and keeps bui
   await settle()
   assert.match(view.text(), /Built-in \/ read-only/)
   assert(!view.nodes().some(node => node.tag === 'button' && node.text === 'Delete'))
+  view.props.entryId = wiki.id
+  await settle()
+  assert.equal(reads.filter(id => id === wiki.id).length, 1, 'Returning to an open page reuses its detail')
+  view.props.entryId = ''
+  await settle()
+  assert(view.nodes().some(node => node.props['data-test'] === 'knowledge-graph'))
   const search = view.nodes().find(node => node.props['aria-label'] === 'Search knowledge')!
   ;(search.props['onUpdate:modelValue'] as (value: string) => void)('no-match')
   await settle()
@@ -263,6 +414,27 @@ test('relationship graph renders directed edges, selectable unresolved nodes and
   const handlers = Array.isArray(selected.props.onKeydown) ? selected.props.onKeydown : [selected.props.onKeydown]
   for (const handler of handlers) (handler as (event: object) => void)({ key: 'Enter', preventDefault() {} })
   assert.deepEqual(selections, ['memory/topics/missing.md', wiki.id])
+})
+
+test('relationship graph keeps its viewport when category filters change or have no matches', async t => {
+  const view = mount(t, 'KnowledgeGraph.vue', {
+    catalog, visibleIds: catalog.entries.map(item => item.id), selectedId: wiki.id,
+  })
+  const viewport = view.nodes().find(node => node.props['aria-label'] === 'Scrollable relationship graph')!
+  assert.equal(view.nodes().filter(node => node.tag === 'g' && node.props.role === 'button').length, 3)
+  view.props.visibleIds = [builtin.id]
+  await settle()
+  assert.equal(view.nodes().find(node => node.props['aria-label'] === 'Scrollable relationship graph'), viewport)
+  assert.equal(view.nodes().filter(node => node.tag === 'g' && node.props.role === 'button').length, 1)
+  view.props.visibleIds = []
+  await settle()
+  assert.equal(view.nodes().find(node => node.props['aria-label'] === 'Scrollable relationship graph'), viewport)
+  assert.match(view.text(), /No entries match/)
+  view.props.visibleIds = [memory.id]
+  await settle()
+  assert.equal(view.nodes().find(node => node.props['aria-label'] === 'Scrollable relationship graph'), viewport)
+  const { descriptor } = parse(readFileSync(new URL('./components/KnowledgeGraph.vue', import.meta.url), 'utf8'))
+  assert.match(descriptor.styles[0]!.content, /\.graph-scroll\s*\{[^}]*height:\s*min\(55vh,\s*480px\)/)
 })
 
 test('knowledge deletion removes the entry but keeps incoming edges and shows refresh failures explicitly', async t => {

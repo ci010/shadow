@@ -31,6 +31,34 @@ function fixture(t: TestContext) {
   return { store, observers, requests, tick, event }
 }
 const graph = (name: string) => ({ sessions: [{ sessionId: 'web:one', title: name }], nodes: [] })
+const emptyWork = { items: [], sessions: [], requests: [], effects: [] }
+
+test('workbench overview shares one live reader and stops reading when the surface is hidden', async t => {
+  const f = fixture(t)
+  const sidebar = f.store.acquireProject('http://fixture', 'a')
+  const first = f.store.acquireProject('http://fixture', 'a', undefined, true)
+  const second = f.store.acquireProject('http://fixture', 'a', undefined, true)
+  await f.tick()
+  assert.equal(f.requests.length, 3)
+  const work = f.requests.find(request => request.path.endsWith('/work'))!
+  work.finish(emptyWork)
+  f.requests.find(request => request.path.endsWith('/graph'))!.finish(graph('One'))
+  f.requests.find(request => request.path.endsWith('/stages'))!.finish({ stages: {} })
+  await flush()
+  assert.equal(first.work.state.value, second.work.state.value)
+  assert.equal(f.observers.size, 1)
+  first.release(); second.release()
+  f.event({ kind: 'sessions', projectId: 'a' })
+  await f.tick()
+  assert.equal(f.requests.filter(request => request.path.endsWith('/work')).length, 1)
+  const reopened = f.store.acquireProject('http://fixture', 'a', undefined, true)
+  await f.tick()
+  assert.equal(f.requests.filter(request => request.path.endsWith('/work')).length, 2)
+  const pending = f.requests.at(-1)!
+  reopened.release()
+  assert.equal(pending.signal.aborted, true, 'Hidden workbench reads are aborted without stopping shared sidebar state')
+  sidebar.release()
+})
 
 test('chat, sidebar and sound consumers share snapshots and produce zero idle HTTP reads', async t => {
   const f = fixture(t)

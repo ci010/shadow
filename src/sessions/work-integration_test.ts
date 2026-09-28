@@ -29,6 +29,13 @@ import { WorkAlignment } from './work-alignment.ts'
 import { YieldRecords } from './yield-records.ts'
 import { WORK_APPROVE, WORK_REJECT, type WorkRecord } from '../initiatives/work-contract.ts'
 import { sessionsApiPlugin } from './routes.ts'
+import { projectWorkPlugin } from '../projects/work-routes.ts'
+import { projectWorkOverviewSchema } from '../projects/work-overview.ts'
+import { createGitHubFixture } from '../testing/github.ts'
+import { GitHubService } from '../projects/github/service.ts'
+import { GitHubStore } from '../projects/github/store.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import { ReadTool } from '../tools/read.ts'
 
 const id = 'web:worker', key = 'topic:web:worker'
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
@@ -93,6 +100,7 @@ async function fixture(workspace: string, store: SessionStore) {
     async execute() { writes++; return 'saved' } })
   const app = new Hono()
   sessionsApiPlugin(sessions)(app)
+  projectWorkPlugin(sessions, request => request.headers.get('x-work-fixture') === 'human')(app)
   const post = (body: unknown, path = 'work') => app.request(`/api/sessions/web%3Aworker/${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   })
@@ -111,11 +119,113 @@ async function fixture(workspace: string, store: SessionStore) {
   async function close() {
     await sessions.stop(); await backgroundTasks.stop(); await events.stop(); conventions.close(); initiatives.close()
   }
-  return { sessions, alignment, initiatives, conventions, calls, app, post, revise, send, quiet, close, writes: () => writes,
+  return { sessions, alignment, initiatives, conventions, events, tools, calls, app, post, revise, send, quiet, close, writes: () => writes,
     enableNotifications: () => { notifications = true } }
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: GitHub follow-up uses real silent/queue admission and cached tool evidence without approving Work`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store), remote = await createGitHubFixture(join(workspace, 'github-fixture'))
+    const github = new GitHubService(new GitHubStore(workspace), remote.client, {
+      alignment: f.alignment, durableSession: target => f.sessions.getSessionState(target)?.mode === 'session',
+      emit: event => f.events.emit(event), changed: () => {},
+    })
+    try {
+      await f.sessions.prepareCommandSession(id)
+      await f.sessions.prepareCommandSession('web:peer')
+      f.initiatives.migrateWorkItems()
+      const work = await f.alignment.execute({ kind: 'session', sessionId: id }, 'create', undefined, undefined,
+        { title: 'GitHub-linked acceptance', definition, reason: 'Synthetic integration' }) as WorkRecord
+      const vfs = new VirtualFs()
+      vfs.mount('v:github', 'Cached external GitHub evidence', path => github.readVirtual(path), () => github.virtualEntries())
+      f.tools.register(new ReadTool(workspace, vfs))
+      f.events.subscribe({ sessionId: 'web:peer', event: 'github.changed', source: 'github', delivery: { urgency: 'queue' } })
+      await github.configureRepository('octo/demo', true, false)
+      await github.link(remote.remote.issue.html_url, work.key)
+      const subscription = { resourceId: 'I_1', workKey: work.key, sessionId: id, enabled: true,
+        mode: 'silent' as const, events: ['source' as const] }
+      await github.subscribe(subscription)
+      remote.remote.issue.body += '\nObserved change, not authorization.'
+      await github.refresh('I_1')
+      await waitFor(f.quiet)
+      assert.equal(f.calls.length, 0)
+      const records: unknown[] = []
+      for await (const record of store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!))) records.push(record)
+      assert.match(JSON.stringify(records), /github.changed/)
+      assert.equal(github.state().notifications[0].status, 'sent')
+      await github.subscribe({ ...subscription, mode: 'queue' })
+      remote.remote.issue.body += '\nA second observation.'
+      await github.refresh('I_1')
+      await waitFor(() => f.calls.length === 1)
+      assert.match(JSON.stringify(f.calls[0].messages), /not an instruction or approval/)
+      f.calls[0].resolve(call('read', { path: 'v:github/I_1' }, 'github-read'))
+      await waitFor(() => f.calls.length === 2)
+      assert.match(JSON.stringify(f.calls[1].messages), /External GitHub snapshot/)
+      f.calls[1].resolve(done())
+      await waitFor(f.quiet)
+      await f.sessions.validateWorkEvidence({ sessionId: id, physicalId: physicalSessionId(f.sessions.getSessionState(id)!),
+        kind: 'tool', id: 'github-read', quote: 'External GitHub snapshot' })
+      assert.equal(f.calls.length, 2, 'A wildcard subscription cannot broaden the exact GitHub audience')
+      assert.deepEqual(f.alignment.get(work.key).definition, definition)
+      assert.equal(f.alignment.get(work.key).workflow?.status, 'pending')
+    } finally { await github.stop(); await remote.close(); await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: Project work routes expose all assignments and retain human, revision and handoff gates`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store)
+    try {
+      await f.sessions.prepareCommandSession(id)
+      await f.sessions.prepareCommandSession('web:coordinator')
+      f.initiatives.migrateWorkItems()
+      const work = await f.alignment.execute({ kind: 'session', sessionId: 'web:coordinator' }, 'create', undefined, undefined,
+        { title: 'Project-wide work', definition, reason: 'New initiative', assignee: null }) as WorkRecord
+      assert.equal(f.alignment.context(id).records.length, 0)
+      const request = (path: string, body?: unknown, human = true) => f.app.request(path, {
+        method: body ? 'POST' : 'GET', headers: { ...(human ? { 'x-work-fixture': 'human' } : {}), 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      })
+      const path = `/api/work/${encodeURIComponent(work.key)}`
+      assert.equal((await request('/api/work', undefined, false)).status, 401)
+      assert.equal((await request(path, undefined, false)).status, 401)
+      const overview = await request('/api/work')
+      assert.equal(overview.headers.get('cache-control'), 'no-store')
+      const first = projectWorkOverviewSchema.parse(await overview.json())
+      assert.equal(first.items.length, 1)
+      assert.equal(first.items[0].assignee, null)
+      assert.equal(first.items[0].manager, 'web:coordinator')
+      assert.equal(first.items[0].status, 'pending')
+      assert.equal(f.calls.length, 0, 'Viewing the workbench never starts a coordinator turn')
+      const action = { action: 'assign', key: work.key, revision: 1, data: { expectedSequence: 1, assignee: id } }
+      assert.equal((await request(path, action, false)).status, 401)
+      assert.equal((await request(path, { ...action, key: 'work:foreign' })).status, 400)
+      assert.equal((await request('/api/work/work%3Aforeign')).status, 404)
+      const assigned = await request(path, action)
+      assert.equal(assigned.status, 200, await assigned.text())
+      assert.equal((await request(path, action)).status, 409, 'Stale assignment sequence is rejected')
+      const current = f.alignment.get(work.key)
+      const steal = { ...action, data: { expectedSequence: current.sequence, assignee: 'web:coordinator' } }
+      assert.equal((await request(path, steal)).status, 409, 'A board cannot steal an assignment')
+      const effectId = crypto.randomUUID()
+      f.initiatives.startWorkEffect(effectId, id, 'fixture_write', [{ key: work.key, revision: 1 }])
+      f.initiatives.finishWorkEffect(effectId, true)
+      const next = projectWorkOverviewSchema.parse(await (await request('/api/work')).json())
+      assert.equal(next.items[0].assignee, id)
+      assert.deepEqual(next.effects[0].workKeys, [work.key])
+      assert.equal(next.effects[0].status, 'unknown')
+      assert.equal((await request(path, { action: 'progress', key: work.key, revision: 1,
+        data: { expectedSequence: current.sequence, status: 'done', result: { summary: 'Checked', evidence: [] } } })).status, 409)
+      const settled = await request(path, { action: 'settle', key: work.key, revision: 1, data: { effectId } })
+      assert.equal(settled.status, 200, await settled.text())
+      const detail = await (await request(path)).json()
+      assert.equal(detail.records[0].key, work.key)
+      assert.ok(detail.records[0].history.length)
+    } finally { await f.close(); store.close?.() }
+  }))
+
   test(`${Store.name}: Project SQL records direct preferences and exact decisions without creating Work`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()
@@ -154,7 +264,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     finally { reopened.close() }
   }))
 
-  for (const surface of ['ask', 'work']) test(`${Store.name}: one ${surface} approval applies the exact work proposal and settles Ask`, async () => withTempWorkspace(async workspace => {
+  for (const surface of ['ask', 'work', 'project']) test(`${Store.name}: one ${surface} approval applies the exact work proposal and settles Ask`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()
     const f = await fixture(workspace, store)
@@ -172,6 +282,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       f.calls[0].resolve(call('ask', { kind: 'decision', proposal: { key: work.key, id: proposed.proposalId }, brief: decisionBrief }))
       await waitFor(() => !!f.sessions.yields.get(id)?.origin)
       const request = f.sessions.yields.get(id)!
+      const overview = projectWorkOverviewSchema.parse(await (await f.app.request('/api/work', { headers: { 'x-work-fixture': 'human' } })).json())
+      assert.deepEqual(overview.requests.map(item => item.id), [request.id])
+      assert.deepEqual(overview.requests[0].workKeys, [work.key])
       assert.equal(request.defaultOption, WORK_REJECT)
       assert.equal(request.workProposal?.definition.objective, 'Both outcomes with documentation')
       assert.throws(() => f.sessions.yields.reviseUser(id, request.id,
@@ -180,9 +293,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         { change: 'understanding', definition, reason: 'Alternative, not an applied change', paused: false })
       assert.equal(f.sessions.yields.get(id)?.id, request.id, 'A pending proposal must not invalidate another question')
       const response = surface === 'ask' ? await f.post({ requestId: request.id, option: WORK_APPROVE }, 'ask')
+        : surface === 'project' ? await f.app.request(`/api/work/${encodeURIComponent(work.key)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-work-fixture': 'human' },
+          body: JSON.stringify({ action: 'apply_proposal', key: work.key, revision: 1, data: { proposalId: proposed.proposalId } }),
+        })
         : await f.post({ action: 'apply_proposal', key: work.key, revision: 1, data: { proposalId: proposed.proposalId } })
       assert.equal(response.status, 200, await response.text())
       await waitFor(() => f.calls.length === 2)
+      assert.equal(projectWorkOverviewSchema.parse(await (await f.app.request('/api/work', { headers: { 'x-work-fixture': 'human' } })).json()).requests.length, 0)
       assert.equal(f.alignment.get(work.key).revision, 2)
       assert.equal(f.alignment.get(work.key).proposals?.[0].status, 'applied')
       f.calls[1].resolve(call('work', { action: 'adopt', key: work.key, revision: 2, data: adoption }))

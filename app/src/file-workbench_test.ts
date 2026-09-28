@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
-import { documentTabKeys, DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, openKnowledgeTab, withDiagnosisTab } from './file-workbench.ts'
+import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
+import { documentTabKeys, DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, openKnowledgeTab, openProjectTab, projectTabFromKey, projectTabKey, withDiagnosisTab } from './file-workbench.ts'
 
 const file = (path: string) => ({ path, entry: { name: path.split('/').at(-1)!, ext: '.md', type: 'file' as const, size: 12, mtime: null } })
 test('opening files retains existing tabs, deduplicates by full path and selects without replacing state', () => {
@@ -53,6 +53,15 @@ const available = {
   active: true, keyboardActive: true, visible: true, explorerEnabled: true,
   overlayOpen: false, composing: false,
 }
+test('Alt+Left and Alt+Right use browser history only for unhandled, nonrepeating keys', () => {
+  const back = { ...tabKey, key: 'ArrowLeft', altKey: true, ctrlKey: false }
+  assert.equal(knowledgeHistoryDirection(back), -1)
+  assert.equal(knowledgeHistoryDirection({ ...back, key: 'ArrowRight' }), 1)
+  for (const patch of [{ altKey: false }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true },
+    { isComposing: true }, { keyCode: 229 }, { defaultPrevented: true }, { repeat: true }]) {
+    assert.equal(knowledgeHistoryDirection({ ...back, ...patch }), undefined)
+  }
+})
 
 test('Ctrl+Shift+E toggles the explorer only for an exact, unhandled, nonrepeating shortcut', () => {
   const event = { ...tabKey, key: 'E', keyCode: 69, shiftKey: true }
@@ -98,19 +107,42 @@ test('optional Diagnosis is a permanent peer of Conversation, including keyboard
 test('Knowledge shares document navigation and closing without impersonating a file or discarding other tabs', () => {
   const initial = openFileTab({ files: [], selected: '' }, file('notes.md'))
   const opened = openKnowledgeTab(initial, 'memory/wiki.md')
-  assert.deepEqual(documentTabKeys(opened), ['', KNOWLEDGE_TAB_KEY, 'notes.md'])
+  const entryKey = knowledgeEntryTabKey('memory/wiki.md')
+  assert.deepEqual(documentTabKeys(opened), ['', KNOWLEDGE_TAB_KEY, entryKey, 'notes.md'])
+  assert.equal(opened.selected, entryKey)
   const reopened = openKnowledgeTab(opened)
   assert.equal(reopened.files, initial.files)
-  assert.equal(reopened.knowledge?.entryId, 'memory/wiki.md')
-  assert.equal(documentTabKeys(reopened).length, 3)
+  assert.equal(reopened.selected, KNOWLEDGE_TAB_KEY)
+  assert.equal(openKnowledgeTab(reopened, 'memory/wiki.md').knowledgeEntries?.length, 1)
+  assert.equal(documentTabKeys(reopened).length, 4)
   const source = openFileTab(reopened, file('other.md'))
-  assert.equal(source.knowledge?.entryId, 'memory/wiki.md')
+  assert.deepEqual(source.knowledgeEntries, ['memory/wiki.md'])
   assert.equal(closeFileTab(source, KNOWLEDGE_TAB_KEY).selected, 'other.md')
   assert.equal(closeFileTab(opened, KNOWLEDGE_TAB_KEY).selected, '')
   assert.equal(closeFileTab(opened, KNOWLEDGE_TAB_KEY).knowledge, undefined)
+  assert.equal(closeFileTab(opened, entryKey).selected, KNOWLEDGE_TAB_KEY)
+  assert.deepEqual(closeFileTab(opened, entryKey).knowledgeEntries, [])
   assert.deepEqual(closeOtherFileTabs(source, KNOWLEDGE_TAB_KEY), {
-    files: [], knowledge: { entryId: 'memory/wiki.md' }, selected: KNOWLEDGE_TAB_KEY,
+    files: [], knowledge: {}, knowledgeEntries: [], selected: KNOWLEDGE_TAB_KEY,
   })
+  test('Project Settings and Agents are independent, deduplicated documents with normal closing and cycling', () => {
+    const initial = openFileTab(openKnowledgeTab({ files: [], selected: '' }), file('notes.md'))
+    const settings = openProjectTab(initial, 'settings')
+    const agents = openProjectTab(settings, 'agents')
+    assert.deepEqual(documentTabKeys(agents), ['', KNOWLEDGE_TAB_KEY, projectTabKey('settings'), projectTabKey('agents'), 'notes.md'])
+    assert.equal(openProjectTab(agents, 'settings').projectTabs, agents.projectTabs)
+    assert.equal(projectTabFromKey('agents'), undefined)
+    assert.equal(projectTabFromKey(projectTabKey('agents')), 'agents')
+    assert.equal(cycleDocumentTab(agents, 1, available), 'notes.md')
+    assert.equal(closeFileTab(agents, projectTabKey('agents')).selected, '')
+    assert.deepEqual(closeFileTab(agents, projectTabKey('agents')).projectTabs, ['settings'])
+    assert.equal(closeFileTab(settings, projectTabKey('settings')).selected, '')
+    assert.deepEqual(closeOtherFileTabs(agents, projectTabKey('agents')).projectTabs, ['agents'])
+    assert.equal(closeOtherFileTabs(agents, projectTabKey('agents')).knowledge, undefined)
+    assert.deepEqual(closeAllFileTabs(agents), { files: [], selected: '' })
+    assert.equal(canCloseAllDocuments(openProjectTab({ files: [], selected: '' }, 'settings'), available), true)
+  })
+  assert.deepEqual(closeOtherFileTabs(opened, entryKey).knowledgeEntries, ['memory/wiki.md'])
   assert.equal(closeOtherFileTabs(source, 'notes.md').knowledge, undefined)
   assert.deepEqual(closeAllFileTabs(opened), { files: [], selected: '' })
   const knowledgeOnly = openKnowledgeTab({ files: [], selected: '' })

@@ -65,6 +65,18 @@ test('failed, legacy and pending edits never invent counts; partial aggregates a
   assert.equal(batch.entries[3].changes, undefined)
 })
 
+test('read and write entries keep file paths even before results or on failure', () => {
+  const entries = groupToolActivity([
+    call('read', { path: 'src\\server.py' }), result('contents'),
+    call('write', { path: 'src/server.py', match: 'before' }), result('Error: permission denied'),
+    call('write', { path: 'src/mystery.xyz', match: 'before' }),
+    call('exec', { command: 'echo server.py' }),
+  ]).get(0)!.entries
+  assert.deepEqual(entries.map(entry => entry.path), ['src\\server.py', 'src/server.py', 'src/mystery.xyz', undefined])
+  assert.equal(entries[1].file, undefined, 'Failed edits are not counted as completed file changes')
+  assert.equal(entries[2].file, undefined, 'Pending edits are not counted as completed file changes')
+})
+
 test('dynamic writes, legacy JSON calls and orphan results retain detail', () => {
   const batch = groupToolActivity([
     call('invoke_tool', { name: 'write', args: { path: '/folder/a.ts', match: 'old' } }), success(1, 1),

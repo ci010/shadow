@@ -39,7 +39,8 @@ test('background chips and sidebar delegated activity update without making an i
           import ProjectGroup from '/src/components/ProjectGroup.vue';
           const router = createRouter({history:createWebHistory(),routes:[
             {name:'chat',path:'/projects/:projectId/chat/:sessionId',component:{}},
-            {name:'project-settings',path:'/projects/:projectId/settings/:section',component:{}}
+            {name:'project-settings',path:'/projects/:projectId/settings/:section',component:{}},
+            {name:'agents',path:'/projects/:projectId/agents',component:{}}
           ]});
           const subscriptions = new Set();
           window.__invalidate = () => { for (const observer of subscriptions) observer.reset?.('subscription'); };
@@ -100,7 +101,15 @@ test('background chips and sidebar delegated activity update without making an i
               id: '1234567890abcdef', sessionId, kind: 'process', title: 'Build preview server', status: background, createdAt: '2026-09-23T00:00:00Z',
             }] : []
             json({ sessionId, total: tasks.length, tasks })
-          } else if (path.endsWith('/api/folders')) json({ folders: [] })
+          } else if (path.endsWith('/work')) json({
+            records: path.includes('web%3Achat-owner') || path.includes('web:chat-owner') ? [{
+              key: 'topic:web:chat-owner', subject: { kind: 'topic', sessionId: 'web:chat-owner' }, revision: 1,
+              definition: { objective: 'Review a long assignment title that must fit beside the activity chips', acceptance: [], boundaries: [], evidence: [] },
+              origin: 'human', reason: 'Fixture', paused: false,
+              authority: { manager: 'web:chat-owner', executor: 'web:chat-owner', active: true }, history: [],
+            }] : [], effects: [],
+          })
+          else if (path.endsWith('/api/folders')) json({ folders: [] })
           else if (path.endsWith('/api/chat/session')) json({ history: [], systemPrompt: '', tools: [] })
           else if (path.endsWith('/details')) {
             const sessionId = decodeURIComponent(path.split('/').at(-2)!)

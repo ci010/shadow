@@ -1,5 +1,7 @@
 import { requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
+import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { ChromeManager, ChromePortAllocator, type ChromeRuntimeOperations } from '../browser/chrome-manager.ts'
 import { McpConnection } from '../mcp/client.ts'
@@ -112,6 +114,40 @@ test('setup is discoverable without starting a browser; default use stays lazy a
     assert.equal(f.connect.mock.callCount(), 1)
     assert.equal(f.live.size, 1)
     assert(!context.tools.getDefinitions().some(def => def.function.name === 'browser_setup'))
+  })
+})
+
+test('explicit setup, lazy invocation and imports bind browser file roots to the effective session workdir', async t => {
+  await withTempWorkspace(async home => {
+    const f = fixture(t, home)
+    const contexts = [0, 1, 2].map(index => ({ ...f.session(), cwd: join(home, `session ${index}`) }))
+    await Promise.all(contexts.map(context => mkdir(context.cwd)))
+    await f.setup(contexts[0], { action: 'launch', browser: 'edge' })
+    await f.invoke(contexts[1], { value: 'lazy' })
+    await f.importer.execute({ source: 'v:tools/chrome-devtools' }, contexts[2])
+    const connections = f.connect.mock.calls.map(call => {
+      assert.ok(call.this instanceof McpConnection)
+      return call.this
+    })
+    assert.deepEqual(connections.map(connection => connection.workspaceRoot), contexts.map(context => context.cwd))
+    assert.deepEqual(connections.map(connection => Reflect.get(connection, 'cwd')), contexts.map(context => context.cwd))
+    assert.ok(connections.every(connection => connection.workspaceRoot !== home))
+  })
+})
+
+test('schema refresh cannot relocate an existing browser root to a different caller workdir', async t => {
+  await withTempWorkspace(async home => {
+    const f = fixture(t, home)
+    const original = join(home, 'owner'), changed = join(home, 'another-session')
+    await Promise.all([mkdir(original), mkdir(changed)])
+    const context = { ...f.session(), cwd: original }
+    await f.setup(context, { action: 'launch', browser: 'edge' })
+    f.changed.get('edge')!()
+    await f.invoke({ ...context, cwd: changed }, { value: 'refresh' })
+    assert.equal(f.connect.mock.callCount(), 1)
+    const connection = f.connect.mock.calls[0].this
+    assert.ok(connection instanceof McpConnection)
+    assert.equal(connection.workspaceRoot, original)
   })
 })
 

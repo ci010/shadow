@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { AudioCppService, runAudioCpp } from './service.ts'
+import { ToolNoEffectError } from '../tools/tool.ts'
 
 test('audio.cpp remains optional and reports broken explicit configuration', async () => {
   await withTempWorkspace(async workspace => {
@@ -90,6 +91,26 @@ test('CLI process rejects nonzero exits and can be aborted', async () => {
   const running = runAudioCpp(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], controller.signal)
   controller.abort()
   await assert.rejects(running, { name: 'AbortError' })
+})
+
+test('configure accepts both loader catalog generations and leaves saved settings unchanged on malformed catalogs', async () => {
+  await withTempWorkspace(async workspace => {
+    for (const catalog of [
+      [{ family: 'kokoro_tts' }],
+      { schema_version: 1, loaders: { kokoro_tts: { tasks: { tts: ['offline'] }, instructions_policy: 'none', api_endpoints: [] } } },
+    ]) {
+      const service = new AudioCppService(workspace, async () => JSON.stringify(catalog))
+      await service.configure({ binary: process.execPath })
+      assert.equal((await service.status()).status, 'available')
+    }
+    const config = await readFile(join(workspace, '.audio-cpp.json'), 'utf8')
+    for (const catalog of ['not json', '{}', '[]', '{"schema_version":2,"loaders":{}}',
+      '{"schema_version":1,"loaders":{"kokoro_tts":{"tasks":"tts"}}}']) {
+      const service = new AudioCppService(workspace, async () => catalog)
+      await assert.rejects(service.configure({ binary: process.execPath }), ToolNoEffectError)
+      assert.equal(await readFile(join(workspace, '.audio-cpp.json'), 'utf8'), config)
+    }
+  })
 })
 
 test('malformed stored settings are rejected instead of silently resetting configuration', async () => {

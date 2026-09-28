@@ -4,9 +4,10 @@ import { isRecord, parseSessionGraph } from './folders-sidebar.ts'
 import { createProjectsClient, projectJson } from './projects.ts'
 import { parseActiveRequestIds, parseSessionRecoveries, parseSessionStages } from './session-activity.ts'
 import type { LiveClient, LiveObserver } from './live-client.ts'
+import { projectWorkOverviewSchema } from '../../src/projects/work-overview.ts'
 
 /** A snapshot has one serialized reader, regardless of how many views use it. */
-function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number) {
+export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: number) {
   const state = shallowReactive({ value: undefined as T | undefined, loading: false, error: '', revision: 0, readRevision: 0 })
   let controller: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -62,6 +63,15 @@ function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, delayMs: n
       controller = undefined
       invalidate()
     },
+    pause() {
+      clearTimeout(timer)
+      timer = undefined
+      controller?.abort()
+      controller = undefined
+      pending = false
+      state.loading = false
+      settle()
+    },
     dispose() {
       closed = true
       clearTimeout(timer)
@@ -104,25 +114,30 @@ export function createProjectLiveState(
         recoveries: parseSessionRecoveries(value),
       }
     }, delay)
+    const work = createSnapshot(async signal =>
+      projectWorkOverviewSchema.parse(await projectJson(scope, '/api/work', { signal }, request)), delay)
+    const usage = { work: 0 }
     const observers = new Set<Partial<LiveObserver>>()
     function reset(reason: Parameters<LiveObserver['reset']>[0]) {
       for (const observer of observers) observer.reset?.(reason)
       graph.reset()
       activity.reset()
+      if (usage.work) work.reset()
     }
     const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId }, {
       event: event => {
         for (const observer of observers) observer.event?.(event)
         if (!isRecord(event.payload) || event.payload.event !== 'activity') graph.invalidate()
         activity.invalidate()
+        if (usage.work) work.invalidate()
       },
       reset,
       reconnected: () => reset('reconnect'),
     })
     void graph.read()
     void activity.read()
-    return { graph, activity, observers, users: 0,
-      dispose() { subscription.close(); graph.dispose(); activity.dispose(); observers.clear() },
+    return { graph, activity, work, usage, observers, users: 0,
+      dispose() { subscription.close(); graph.dispose(); activity.dispose(); work.dispose(); observers.clear() },
     }
   }
   return {
@@ -145,7 +160,7 @@ export function createProjectLiveState(
         },
       }
     },
-    acquireProject(base: string, projectId: string, observer?: Partial<LiveObserver>) {
+    acquireProject(base: string, projectId: string, observer?: Partial<LiveObserver>, includeWork = false) {
       if (disposed) throw new Error('Project live state has been disposed.')
       const host = hostBase(base)
       const key = JSON.stringify([host, projectId])
@@ -153,15 +168,19 @@ export function createProjectLiveState(
       if (!entry) { entry = createProject(host, projectId); projects.set(key, entry) }
       const current = entry
       current.users++
+      if (includeWork && current.usage.work++ === 0) void current.work.refresh()
       if (observer) current.observers.add(observer)
       let released = false
       return {
-        graph: current.graph, activity: current.activity,
-        refresh: () => released ? Promise.resolve() : Promise.all([current.graph.refresh(), current.activity.refresh()]).then(() => {}),
+        graph: current.graph, activity: current.activity, work: current.work,
+        refresh: () => released ? Promise.resolve() : Promise.all([
+          current.graph.refresh(), current.activity.refresh(), ...(includeWork ? [current.work.refresh()] : []),
+        ]).then(() => {}),
         release() {
           if (released) return
           released = true
           if (observer) current.observers.delete(observer)
+          if (includeWork && --current.usage.work === 0) current.work.pause()
           if (--current.users === 0) { current.dispose(); projects.delete(key) }
         },
       }

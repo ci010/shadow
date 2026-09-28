@@ -80,7 +80,11 @@ full input, a reply address, or an authorization grant.
 that produced this response. Merely queued or silent input does not count;
 user steering affects subsequent output without rewriting earlier responses.
 An event's historical user origin does not count as present user participation.
-User Retry/Continue actions count even though they reuse existing model history.
+Continue reuses the unfinished request's audience: an interrupted user request
+remains user-involved, including after restart, while continuing background work
+does not turn it into a user request. Older recovery records without audience
+metadata use the saved turn's response or input provenance. A user Retry is a
+new user-involved turn even when it reuses existing model history.
 
 Web defaults explicitly marked, non-user conversational responses to a
 **Background response** disclosure, both live and after history reload. Full
@@ -251,6 +255,22 @@ following existing bus facts and publishes
 These facts are not a universal store-change notification or intermediate
 LLM/tool stage feed. Consumers must coalesce snapshots and retain the explicitly
 bounded reconciliation paths described above.
+
+## Project work overview
+
+The coordination workbench lazily acquires `GET /projects/<project>/api/work`
+through `project-live-state.ts`. Work mutations invalidate the Project sessions
+topic; session activity/invalidations, reset and reconnect also refresh this
+authoritative overview. Concurrent workbench consumers share a serialized,
+coalesced reader. Ordinary sidebar/chat consumers do not fetch this Project-wide
+inventory. The last workbench consumer aborts its pending read when hidden;
+there is no idle polling. Failed reads keep the last snapshot with a visible
+error, not a success-shaped empty board.
+
+Task details are fetched separately, and ordinary chat uses
+`GET /projects/<project>/api/sessions/<id>/work?history=0` for its compact task
+link. Neither view derives business completion from LLM/tool activity. Pending
+human requests are current waiters, not historical decision records.
 
 ## Active background tasks
 

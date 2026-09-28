@@ -67,6 +67,7 @@
         :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
         :child-session-id="resource.childSessionId"
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
+        @project-navigation="tab => projectNavigation(resource, tab)"
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" />
     </div>
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
@@ -96,6 +97,7 @@ import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import { useAutomationNavigation } from '../composables/useAutomationNavigation.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
+import type { ProjectTab } from '../file-workbench.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
 const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean }>(), { visible: true })
@@ -231,7 +233,7 @@ function publish(resource: ConversationResource) {
   closeSidebar()
 }
 function syncRoute() {
-  if (!props.visible || route.name !== 'chat') return
+  if (!props.visible || !['chat', 'project-settings', 'agents'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
@@ -247,6 +249,8 @@ function syncRoute() {
     resource.childSessionId = typeof route.query.child === 'string' ? route.query.child : undefined
   }
   else if (automationId) { selected.value = undefined; closeSidebar(); return }
+  else if (route.name !== 'chat') resource = selected.value?.projectId === projectId ? selected.value
+    : registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
   else resource = selected.value?.projectId === projectId && !selected.value.sessionId ? selected.value : registry.draft(projectId)
   resource.knowledgeRequest = route.query.panel === 'knowledge'
     ? { entryId: typeof route.query.entry === 'string' ? route.query.entry : undefined } : undefined
@@ -311,8 +315,8 @@ function openKnowledge(projectId: string) {
   void router.push({ ...projectChatLocation(resource), query: { panel: 'knowledge' } })
 }
 function knowledgeNavigation(resource: ConversationResource, active: boolean, entryId?: string) {
-  if (!props.visible || selected.value?.key !== resource.key || route.name !== 'chat'
-    || route.params.projectId !== resource.projectId || (route.params.sessionId || '') !== resource.sessionId) return
+  if (!props.visible || selected.value?.key !== resource.key || !['chat', 'project-settings', 'agents'].includes(String(route.name))
+    || route.params.projectId !== resource.projectId || (route.name === 'chat' && (route.params.sessionId || '') !== resource.sessionId)) return
   const query = { ...route.query }
   if (active) {
     query.panel = 'knowledge'
@@ -324,7 +328,19 @@ function knowledgeNavigation(resource: ConversationResource, active: boolean, en
     delete query.panel
     delete query.entry
   }
-  if (query.panel !== route.query.panel || query.entry !== route.query.entry) void router.replace({ query })
+  if (route.name !== 'chat' && active) void router.push({ ...projectChatLocation(resource), query })
+  else if (query.panel !== route.query.panel || query.entry !== route.query.entry) void router.push({ query })
+}
+function projectNavigation(resource: ConversationResource, tab?: ProjectTab) {
+  if (!props.visible || selected.value?.key !== resource.key || route.params.projectId !== resource.projectId) return
+  if (tab) {
+    if (route.name !== (tab === 'settings' ? 'project-settings' : 'agents')) {
+      void router.push({ name: tab === 'settings' ? 'project-settings' : 'agents',
+        params: { projectId: resource.projectId, ...(tab === 'settings' ? { section: 'general' } : {}) } })
+    }
+  } else if (route.name === 'project-settings' || route.name === 'agents') {
+    void router.push(projectChatLocation(resource))
+  }
 }
 function prepared(key: string, sessionId: string) {
   const resource = registry.prepared(key, sessionId)

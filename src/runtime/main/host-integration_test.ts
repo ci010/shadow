@@ -81,6 +81,8 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       runtime = await startMainRuntime(config, options)
       await runtime.ready
       assert.deepEqual(await json('/api/projects/default/status'), { state: 'ready' })
+      assert.equal((await fetch(base + '/projects/default/api/microapps')).status, 401)
+      assert.deepEqual(await json('/projects/default/api/microapps'), { apps: [] })
       for (const [path, method] of [
         ['/projects/default/a2a/.well-known/agent-card.json', 'GET'],
         ['/projects/default/a2a', 'POST'],

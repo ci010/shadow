@@ -129,6 +129,17 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     return { path: data.path, entries: data.entries, ...(workdir ? { workdir } : {}) }
   }
 
+  async function searchPaths(sessionId: string, query: string, signal?: AbortSignal): Promise<{ paths: string[]; truncated: boolean }> {
+    const res = await requestFile(buildUrl(apiBase, `${root(sessionId)}/files/search`, { query }), signal)
+    if (!res.ok) throw await fileRequestError(res)
+    const data: unknown = await res.json()
+    if (!isRecord(data) || !Array.isArray(data.paths) || data.paths.length > 200
+      || data.paths.some(path => typeof path !== 'string' || !path || path.startsWith('/')
+        || /^[a-z]:/i.test(path) || path.includes('\\') || path.split('/').includes('..'))
+      || typeof data.truncated !== 'boolean') throw new Error('Invalid file search result. Retry.')
+    return { paths: data.paths as string[], truncated: data.truncated }
+  }
+
   function rawUrl(sessionId: string, path: string): string {
     return buildUrl(apiBase, `${root(sessionId)}/raw`, { path })
   }
@@ -201,5 +212,5 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     return new Error(`Could not load files (${response.status}). Retry when Main is available.`)
   }
 
-  return { listDir, rawUrl, staticUrl, preview }
+  return { listDir, searchPaths, rawUrl, staticUrl, preview }
 }

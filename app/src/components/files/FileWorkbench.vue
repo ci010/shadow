@@ -15,6 +15,14 @@
         <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>Knowledge</span></button>
         <button v-if="tabs.knowledge" class="mobile-view-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
+      <div v-for="entryId in tabs.knowledgeEntries ?? []" :key="entryId" class="mobile-view-row">
+        <button :aria-current="tabs.selected === knowledgeEntryTabKey(entryId) ? 'page' : undefined" @click="chooseMobileView(knowledgeEntryTabKey(entryId))"><span class="i-lucide-book-open" aria-hidden="true" /><span>{{ knowledgeLabel(entryId) }}</span></button>
+        <button class="mobile-view-close" :aria-label="`Close ${knowledgeLabel(entryId)}`" @click="closeFile(knowledgeEntryTabKey(entryId), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+      </div>
+      <div v-for="tab in tabs.projectTabs ?? []" :key="tab" class="mobile-view-row">
+        <button :aria-current="tabs.selected === projectTabKey(tab) ? 'page' : undefined" @click="chooseMobileView(projectTabKey(tab))"><span :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span>{{ tab === 'settings' ? 'Project settings' : 'Agents' }}</span></button>
+        <button class="mobile-view-close" :aria-label="`Close ${tab === 'settings' ? 'Project settings' : 'Agents'}`" @click="closeFile(projectTabKey(tab), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+      </div>
       <div v-for="file in tabs.files" :key="fileTabKey(file)" class="mobile-view-row">
         <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span></button>
         <button class="mobile-view-close" :aria-label="`Close ${file.path}`" @click="closeFile(fileTabKey(file), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
@@ -23,28 +31,29 @@
     <MobileSheet v-if="mobileLayout" :open="actionsOpen" label="Conversation and document actions" :return-focus="mobileActionsButton" @update:open="actionsOpen = $event">
       <div class="mobile-workbench-actions">
         <slot name="actions" />
-        <button v-if="explorerAvailable" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />Browse files</button>
+        <button v-if="explorerAvailable && !knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />Browse files</button>
         <button v-if="tabs.selected && tabs.selected !== DIAGNOSIS_TAB_KEY" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />Close current document</button>
-        <button v-if="tabs.files.length > 1 || tabs.knowledge" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">Close all documents</button>
+        <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">Close all documents</button>
         <slot name="mobile-actions" :close="closeMobileActions" />
       </div>
     </MobileSheet>
     <button v-if="expanded && !wide" class="explorer-backdrop" aria-label="Dismiss files" @click="collapseExplorer" />
-    <aside v-if="explorerAvailable" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" aria-label="File explorer" @keydown.esc.stop.prevent="collapseExplorer">
-      <FileTree :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded"
+    <aside v-if="explorerAvailable || (tabs.knowledge && knowledgeEnabled)" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? 'Knowledge explorer' : 'File explorer'" @keydown.esc.stop.prevent="collapseExplorer">
+      <FileTree v-if="explorerAvailable" v-show="!knowledgeSelected" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded && !knowledgeSelected"
         :remote="remote" :selected-path="selectedFilePath" :reveal-version="revealVersion"
         :git-status="gitStatus" :git-loading="gitLoading" :git-error="gitError" :git-offline="gitOffline" @refresh-git="refreshGit" @open="openFile">
         <template #actions>
           <HoverInfo text="Collapse files" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="workbench-button" aria-label="Collapse files" @click="collapseExplorer"><span class="i-lucide-panel-left-close" aria-hidden="true" /></button></HoverInfo>
         </template>
       </FileTree>
+      <div v-if="tabs.knowledge && knowledgeEnabled" :id="`${id}-knowledge-sidebar`" v-show="knowledgeSelected" class="knowledge-explorer" />
       <SidebarResizer v-if="expanded && wide && active" class="files-resizer" :model-value="explorerWidth" :bounds="resizeBounds"
-        label="Resize files" :controls="`${id}-explorer`" @update:model-value="preferredWidth = $event" />
+        :label="knowledgeSelected ? 'Resize Knowledge navigation' : 'Resize files'" :controls="`${id}-explorer`" @update:model-value="preferredWidth = $event" />
     </aside>
     <div class="workbench-editor">
       <div v-show="!mobileLayout" class="document-toolbar">
-        <HoverInfo v-if="explorerAvailable" text="Toggle files (Ctrl+Shift+E)" v-slot="{ triggerProps }">
-        <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" aria-label="Toggle files" aria-keyshortcuts="Control+Shift+E" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
+        <HoverInfo v-if="explorerAvailable || knowledgeSelected" :text="knowledgeSelected ? 'Toggle Knowledge navigation (Ctrl+Shift+E)' : 'Toggle files (Ctrl+Shift+E)'" v-slot="{ triggerProps }">
+        <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" :aria-label="knowledgeSelected ? 'Toggle Knowledge navigation' : 'Toggle files'" aria-keyshortcuts="Control+Shift+E" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
           <span class="i-lucide-panel-left" aria-hidden="true" />
         </button>
         </HoverInfo>
@@ -70,6 +79,24 @@
             </button>
             <button class="document-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY)"><span class="i-lucide-x" aria-hidden="true" /></button>
           </div>
+          <div v-for="entryId in tabs.knowledgeEntries ?? []" :key="knowledgeEntryTabKey(entryId)" class="document-tab" :class="{ selected: tabs.selected === knowledgeEntryTabKey(entryId) }"
+            @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, knowledgeEntryTabKey(entryId))" @contextmenu.prevent.stop="openTabMenu($event, knowledgeEntryTabKey(entryId))">
+            <button :id="tabId(knowledgeEntryTabKey(entryId))" role="tab" :aria-selected="tabs.selected === knowledgeEntryTabKey(entryId)"
+              :tabindex="tabs.selected === knowledgeEntryTabKey(entryId) ? 0 : -1" :aria-controls="panelId(knowledgeEntryTabKey(entryId))"
+              :title="entryId" @click="selectTab(knowledgeEntryTabKey(entryId))" @keydown="tabKey($event, knowledgeEntryTabKey(entryId))">
+              <span class="document-icon i-lucide-book-open" aria-hidden="true" /><span class="document-name">{{ knowledgeLabel(entryId) }}</span>
+            </button>
+            <button class="document-close" :aria-label="`Close ${knowledgeLabel(entryId)}`" @click="closeFile(knowledgeEntryTabKey(entryId))"><span class="i-lucide-x" aria-hidden="true" /></button>
+          </div>
+          <div v-for="tab in tabs.projectTabs ?? []" :key="tab" class="document-tab" :class="{ selected: tabs.selected === projectTabKey(tab) }"
+            @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, projectTabKey(tab))" @contextmenu.prevent.stop="openTabMenu($event, projectTabKey(tab))">
+            <button :id="tabId(projectTabKey(tab))" role="tab" :aria-selected="tabs.selected === projectTabKey(tab)"
+              :tabindex="tabs.selected === projectTabKey(tab) ? 0 : -1" :aria-controls="panelId(projectTabKey(tab))"
+              @click="selectTab(projectTabKey(tab))" @keydown="tabKey($event, projectTabKey(tab))">
+              <span class="document-icon" :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span class="document-name">{{ tab === 'settings' ? 'Project settings' : 'Agents' }}</span>
+            </button>
+            <button class="document-close" :aria-label="`Close ${tab === 'settings' ? 'Project settings' : 'Agents'}`" @click="closeFile(projectTabKey(tab))"><span class="i-lucide-x" aria-hidden="true" /></button>
+          </div>
           <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))" @contextmenu.prevent.stop="openTabMenu($event, fileTabKey(file))">
             <HoverInfo :text="`${file.path}${file.view === 'diff' ? '\nChanges from HEAD' : ''}`" v-slot="{ triggerProps }">
             <button v-bind="triggerProps" :id="tabId(fileTabKey(file))" role="tab" :aria-selected="tabs.selected === fileTabKey(file)" :tabindex="tabs.selected === fileTabKey(file) ? 0 : -1" :aria-controls="panelId(fileTabKey(file))" :aria-label="`${file.path}${file.view === 'diff' ? ' changes' : ''}`" @click="selectTab(fileTabKey(file))" @keydown="tabKey($event, fileTabKey(file))">
@@ -84,7 +111,7 @@
             <div v-if="tabMenu" class="document-menu-backdrop" @pointerdown.self="dismissTabMenu(true)" @contextmenu.prevent.self="dismissTabMenu(true)">
               <div ref="menuElement" class="document-menu" role="menu" aria-label="Document tab actions" :style="menuPosition" @keydown="menuKey">
                 <button type="button" role="menuitem" @click="runTabAction('close')">Close</button>
-                <button type="button" role="menuitem" :disabled="tabs.files.length + Number(!!tabs.knowledge) < 2" @click="runTabAction('others')">Close others</button>
+                <button type="button" role="menuitem" :disabled="tabs.files.length + (tabs.knowledgeEntries?.length ?? 0) + (tabs.projectTabs?.length ?? 0) + Number(!!tabs.knowledge) < 2" @click="runTabAction('others')">Close others</button>
                 <button type="button" role="menuitem" @click="runTabAction('all')"><span>Close all</span><span class="document-menu-shortcut">Ctrl+Shift+W</span></button>
               </div>
             </div>
@@ -100,10 +127,25 @@
         <div v-if="tabs.diagnosis" v-show="tabs.selected === DIAGNOSIS_TAB_KEY" :id="panelId(DIAGNOSIS_TAB_KEY)" class="diagnosis-document" role="tabpanel" :aria-labelledby="tabId(DIAGNOSIS_TAB_KEY)">
           <slot name="diagnosis" />
         </div>
-        <div v-if="tabs.knowledge && knowledgeEnabled" v-show="tabs.selected === KNOWLEDGE_TAB_KEY"
-          :id="panelId(KNOWLEDGE_TAB_KEY)" class="knowledge-document" role="tabpanel" :aria-labelledby="tabId(KNOWLEDGE_TAB_KEY)">
-          <KnowledgeView :api-base="apiBase" :project-id="projectId ?? ''" :entry-id="tabs.knowledge.entryId"
-            :active="active && tabs.selected === KNOWLEDGE_TAB_KEY" @select="selectKnowledgeEntry" />
+        <div v-if="tabs.knowledge && knowledgeEnabled" v-show="knowledgeSelected"
+          :id="panelId(knowledgeSelected ? tabs.selected : KNOWLEDGE_TAB_KEY)" class="knowledge-document" role="tabpanel" :aria-labelledby="tabId(knowledgeSelected ? tabs.selected : KNOWLEDGE_TAB_KEY)">
+          <KnowledgeView :api-base="apiBase" :project-id="projectId ?? ''" :entry-id="knowledgeEntryId(tabs.selected) ?? ''"
+            :sidebar-target="knowledgeSelected && expanded && wide ? `#${id}-knowledge-sidebar` : undefined"
+            :active="active && knowledgeSelected" @select="selectKnowledgeEntry" @home="selectTab(KNOWLEDGE_TAB_KEY)" @catalog="updateKnowledgeLabels" />
+        </div>
+        <div v-if="tabs.knowledge && tabs.selected !== KNOWLEDGE_TAB_KEY" v-show="false" :id="panelId(KNOWLEDGE_TAB_KEY)"
+          role="tabpanel" :aria-labelledby="tabId(KNOWLEDGE_TAB_KEY)" />
+        <template v-for="entryId in tabs.knowledgeEntries ?? []" :key="`knowledge-panel:${entryId}`">
+          <div v-if="tabs.selected !== knowledgeEntryTabKey(entryId)" v-show="false" :id="panelId(knowledgeEntryTabKey(entryId))"
+            role="tabpanel" :aria-labelledby="tabId(knowledgeEntryTabKey(entryId))" />
+        </template>
+        <div v-if="tabs.projectTabs?.includes('settings')" v-show="tabs.selected === projectTabKey('settings')"
+          :id="panelId(projectTabKey('settings'))" class="project-document" role="tabpanel" :aria-labelledby="tabId(projectTabKey('settings'))">
+          <ProjectSettings :api-base="apiBase" :host-api-base="installation.apiBase" :project-id="projectId ?? ''" />
+        </div>
+        <div v-if="tabs.projectTabs?.includes('agents')" v-show="tabs.selected === projectTabKey('agents')"
+          :id="panelId(projectTabKey('agents'))" class="project-document" role="tabpanel" :aria-labelledby="tabId(projectTabKey('agents'))">
+          <div class="agents-document"><AgentsTab :api-base="apiBase" /></div>
         </div>
         <div v-for="file in tabs.files" v-show="tabs.selected === fileTabKey(file)" :id="panelId(fileTabKey(file))" :key="`${contextKey}:${fileTabKey(file)}`" class="file-document" role="tabpanel" :aria-labelledby="tabId(fileTabKey(file))">
           <FileDiffPreview v-if="(sessionId || folderId) && file.view === 'diff'" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
@@ -124,22 +166,30 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import FileTree from './FileTree.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
 import FileDiffPreview from './FileDiffPreview.vue'
 import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
 import KnowledgeView from '../KnowledgeView.vue'
+import ProjectSettings from '../ProjectSettings.vue'
+import AgentsTab from '../AgentsTab.vue'
 import MobileSheet from '../MobileSheet.vue'
 import { useMobileHeader } from '../../composables/useMobileChrome.ts'
 import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
-import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile } from '../../file-workbench.ts'
+import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, knowledgeEntryTabKey, knowledgeEntryId, projectTabKey, projectTabFromKey, openProjectTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile, type ProjectTab } from '../../file-workbench.ts'
+import type { KnowledgeEntry } from '../../knowledge.ts'
+import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
-const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
+const router = useRouter()
+const route = useRoute()
+const installation = useInstallationContext()
+const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
 const mobileHeader = useMobileHeader(() => props.active)
@@ -158,17 +208,28 @@ const wide = computed(() => width.value >= 760)
 const preference = ref<boolean>()
 const remoteExpanded = ref(false)
 const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.folderId))
-const expanded = computed(() => explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? wide.value)))
+const knowledgeSelected = computed(() => props.knowledgeEnabled && (tabs.value.selected === KNOWLEDGE_TAB_KEY || !!knowledgeEntryId(tabs.value.selected)))
+const knowledgeExpanded = ref(true)
+const expanded = computed(() => knowledgeSelected.value
+  ? wide.value && knowledgeExpanded.value
+  : explorerAvailable.value && (props.remote ? remoteExpanded.value : (preference.value ?? wide.value)))
 const tabs = ref<FileTabs>(withDiagnosisTab({ files: [], selected: '' }, props.diagnosisEnabled))
+const knowledgeLabels = ref<Record<string, string>>({})
+const knowledgeLabel = (entryId: string) => knowledgeLabels.value[entryId] ?? entryId.split('/').at(-1) ?? entryId
+function updateKnowledgeLabels(entries: KnowledgeEntry[]) {
+  knowledgeLabels.value = Object.fromEntries(entries.map(entry => [entry.id, entry.title]))
+}
 const selectedFilePath = computed(() => tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.path)
 const revealVersion = ref(0)
 const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? 'Diagnosis' : tabs.value.selected === KNOWLEDGE_TAB_KEY ? 'Knowledge'
+  : tabs.value.selected === projectTabKey('settings') ? 'Project settings' : tabs.value.selected === projectTabKey('agents') ? 'Agents'
+  : knowledgeEntryId(tabs.value.selected) ? knowledgeLabel(knowledgeEntryId(tabs.value.selected)!)
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
     ?? props.conversationTitle ?? 'Conversation')
 function closeMobileActions() { actionsOpen.value = false }
 function chooseMobileView(key: string) { selectTab(key); viewsOpen.value = false }
 function chooseMobileKnowledge() {
-  tabs.value = openKnowledgeTab(tabs.value, tabs.value.knowledge?.entryId)
+  tabs.value = openKnowledgeTab(tabs.value)
   viewsOpen.value = false
 }
 async function showMobileFiles() {
@@ -182,7 +243,7 @@ watch(() => [mobileHeader.visible.value, props.contextKey], () => {
   viewsOpen.value = false
   actionsOpen.value = false
 })
-const gitActive = computed(() => explorerAvailable.value && props.active && (expanded.value || tabs.value.files.some(file => file.view === 'diff' && fileTabKey(file) === tabs.value.selected)))
+const gitActive = computed(() => explorerAvailable.value && props.active && (!knowledgeSelected.value && expanded.value || tabs.value.files.some(file => file.view === 'diff' && fileTabKey(file) === tabs.value.selected)))
 const { status: gitStatus, loading: gitLoading, error: gitError, offline: gitOffline, revision: gitRevision, refresh: refreshGit } = useWorkdirGit(
   () => ({ apiBase: props.apiBase, sessionId: props.sessionId, folderId: props.folderId }), gitActive)
 const cachedTabs = new Map<string, FileTabs>()
@@ -207,7 +268,7 @@ function openLinkedFile(file: OpenFile) {
   }
 }
 function selectKnowledgeEntry(entryId: string) {
-  if (tabs.value.knowledge) tabs.value = { ...tabs.value, knowledge: { entryId } }
+  if (tabs.value.knowledge) tabs.value = openKnowledgeTab(tabs.value, entryId)
 }
 function openFile(file: OpenFile) {
   tabs.value = openFileTab(tabs.value, file)
@@ -340,12 +401,18 @@ function cycleTab(direction: DocumentTabDirection): boolean {
   return true
 }
 function toggleExplorerShortcut(): boolean {
-  if (!explorerAvailable.value || !canHandleDocumentShortcut(shortcutContext())) return false
+  if (!(explorerAvailable.value || knowledgeSelected.value) || !canHandleDocumentShortcut(shortcutContext())) return false
   if (expanded.value && root.value?.querySelector('.workbench-explorer')?.contains(document.activeElement)) collapseExplorer()
   else toggleExplorer()
   return true
 }
 function documentKey(event: KeyboardEvent) {
+  const historyDirection = knowledgeHistoryDirection(event)
+  if (historyDirection !== undefined && knowledgeSelected.value && canHandleDocumentShortcut(shortcutContext())) {
+    event.preventDefault()
+    router.go(historyDirection)
+    return
+  }
   if (isToggleExplorerKey(event) && toggleExplorerShortcut()) {
     event.preventDefault()
     event.stopPropagation()
@@ -376,12 +443,14 @@ function nativeDocumentKey(event: Event) {
 function compositionStart() { composing = true }
 function compositionEnd() { composing = false }
 function collapseExplorer() {
-  if (props.remote) remoteExpanded.value = false
+  if (knowledgeSelected.value) knowledgeExpanded.value = false
+  else if (props.remote) remoteExpanded.value = false
   else preference.value = false
   ;(mobileLayout.value ? mobileActionsButton.value : explorerButton.value)?.focus({ preventScroll: true })
 }
 function toggleExplorer() {
-  if (props.remote) remoteExpanded.value = !expanded.value
+  if (knowledgeSelected.value) knowledgeExpanded.value = !knowledgeExpanded.value
+  else if (props.remote) remoteExpanded.value = !expanded.value
   else preference.value = !expanded.value
 }
 function measureWidth() {
@@ -401,10 +470,17 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
     tabs.value = closeFileTab(tabs.value, KNOWLEDGE_TAB_KEY)
   } else if (props.knowledgeRequest) {
     tabs.value = openKnowledgeTab(tabs.value, props.knowledgeRequest.entryId)
-  } else if (tabs.value.selected === KNOWLEDGE_TAB_KEY) {
+  } else if (knowledgeSelected.value) {
     selectTab('')
   }
 }, { immediate: true })
+watch(() => [route?.name, route?.params?.projectId, props.active, props.projectId, props.contextKey], () => {
+  if (!props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
+  const tab = route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'agents' : undefined
+  if (tab && installation.value.uiScopes.includes('main:admin')) tabs.value = openProjectTab(tabs.value, tab)
+  else if (projectTabFromKey(tabs.value.selected)) selectTab('')
+}, { immediate: true })
+watch(() => [props.apiBase, props.contextKey], () => { knowledgeLabels.value = {} })
 watch(() => props.active && props.keyboardActive, active => { if (!active) dismissTabMenu() })
 watch(() => [props.diagnosisRequest, props.contextKey, props.diagnosisEnabled], () => {
   if (props.diagnosisRequest && props.diagnosisEnabled) selectTab(DIAGNOSIS_TAB_KEY)
@@ -413,8 +489,13 @@ watch(() => [props.diagnosisRequest, props.contextKey, props.diagnosisEnabled], 
 watch(() => tabs.value.selected === '', value => emit('conversation-visible', value), { immediate: true, flush: 'sync' })
 watch(() => [props.contextKey, tabs.value.selected === DIAGNOSIS_TAB_KEY] as const,
   ([, value]) => emit('diagnosis-visible', value), { immediate: true, flush: 'sync' })
-watch(() => [tabs.value.selected === KNOWLEDGE_TAB_KEY, tabs.value.knowledge?.entryId] as const,
+watch(() => [knowledgeSelected.value, knowledgeEntryId(tabs.value.selected)] as const,
   ([active, entryId]) => emit('knowledge-navigation', active, entryId), { immediate: true })
+watch(() => [tabs.value.selected, props.active] as const, ([selected]) => {
+  if (props.active && props.projectId && route?.params?.projectId === props.projectId && !knowledgeSelected.value) {
+    emit('project-navigation', projectTabFromKey(selected))
+  }
+})
 onMounted(() => {
   // Check overlays before a target's Tab handler can dismiss them.
   document.addEventListener('keydown', documentKey, true)
@@ -457,6 +538,7 @@ onUnmounted(() => {
 .mobile-view-row button:focus-visible, .mobile-workbench-actions :deep(button:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .mobile-workbench .workbench-explorer.drawer, .mobile-workbench .explorer-backdrop { top: 0; }
 .workbench-explorer { position: relative; display: flex; flex: 0 0 var(--explorer-width, 220px); min-width: 0; min-height: 0; box-sizing: border-box; border-right: 1px solid var(--c-border); background: var(--c-bg-card); }
+.knowledge-explorer { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .workbench-editor { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .workbench-content { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .workbench-content.draft-document { justify-content: safe center; overflow-y: auto; padding: 40px 0 80px; box-sizing: border-box; }
@@ -484,7 +566,9 @@ onUnmounted(() => {
 .document-close { margin-right: 4px; }
 button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.conversation-document, .diagnosis-document, .file-document, .knowledge-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.conversation-document, .diagnosis-document, .file-document, .knowledge-document, .project-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.project-document { overflow-y: auto; }
+.agents-document { width: 100%; max-width: 1240px; margin: 0 auto; padding: 28px 24px 48px; box-sizing: border-box; }
 .workbench-explorer.drawer { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .explorer-backdrop { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }
 @media (max-width: 700px) {

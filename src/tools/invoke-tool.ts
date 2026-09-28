@@ -9,6 +9,7 @@ export interface DynamicToolImporter {
     toolName: string,
     sessionTools: SessionTools,
     signal?: AbortSignal,
+    cwd?: string,
   ): Promise<string | undefined>
 }
 
@@ -70,7 +71,7 @@ export class InvokeTool implements Tool<ToolResult> {
     }
 
     if (!context.tools.hasDynamic(name) && this.importer) {
-      const result = await this.importer.importForInvocation(name, context.tools, context.signal)
+      const result = await this.importer.importForInvocation(name, context.tools, context.signal, context.cwd)
       if (!context.tools.hasDynamic(name)) {
         if (result) return result.startsWith('Error') ? result : `Error: ${result}`
         return `Error: dynamic tool "${name}" is not active and could not be imported automatically. Search grep:v:tools and read the matching paths for current tool IDs.`

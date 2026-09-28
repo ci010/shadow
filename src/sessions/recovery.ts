@@ -1,6 +1,7 @@
 import { physicalSessionId } from './session-identity.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import { parseSessionRecovery, type SessionState, type SessionStore } from './session-store.ts'
+import { continuedUserInvolvement, parseResponseContext } from './response-context.ts'
 
 export class SessionResumeError extends Error {
   constructor(message: string) { super(message); this.name = 'SessionResumeError' }
@@ -29,9 +30,19 @@ export async function prepareSessionRecovery(store: SessionStore, state: Session
   const physicalId = physicalSessionId(state)
   let lastRole: string | undefined
   let finalResponse = false
+  let userInvolved = false
   for await (const record of store.readSessionLog(physicalId)) {
     if (!['user', 'assistant', 'tool'].includes(String(record.role))) continue
     lastRole = String(record.role)
+    if (lastRole === 'user') {
+      if (record.name !== '__work_realignment__') {
+        userInvolved = continuedUserInvolvement([{
+          role: 'user', content: record.content as ChatMessage['content'],
+        }])
+      }
+    } else if (lastRole === 'assistant' && record.responseContext !== undefined) {
+      userInvolved = parseResponseContext(record.responseContext)?.userInvolved ?? false
+    }
     const calls = Array.isArray(record.tool_calls) ? record.tool_calls : []
     finalResponse = lastRole === 'assistant' && calls.length === 0
   }
@@ -47,6 +58,7 @@ export async function prepareSessionRecovery(store: SessionStore, state: Session
     state.recovery = {
       id: crypto.randomUUID(),
       reason: state.executionStatus === 'cancelled' ? 'stopped' : state.executionStatus === 'failed' ? 'failed' : 'interrupted',
+      userInvolved,
     }
     if (state.executionStatus !== 'failed') state.executionStatus = 'cancelled'
     await store.saveState(state.sessionId, state)

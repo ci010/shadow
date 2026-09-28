@@ -67,6 +67,8 @@ test('conversation presentation and compacted history render across themes and v
           import { createApp, computed, reactive, toRefs } from 'vue';
           import DOMPurify from 'dompurify'; import { marked } from 'marked';
           import MessageAction from '/src/components/MessageAction.vue';
+          import ExecutionMessage from '/src/components/ExecutionMessage.vue';
+          import ConversationEvent from '/src/components/ConversationEvent.vue';
           import ConversationSkeleton from '/src/components/ConversationSkeleton.vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
           import YieldDecision from '/src/components/YieldDecision.vue';
@@ -111,6 +113,12 @@ test('conversation presentation and compacted history render across themes and v
             { role:'assistant', content:'The background review failed. The original changes are untouched.',
               responseContext:{version:1,turnId:'background-turn',responseId:'background-response',userInvolved:false,
                 source:{kind:'event',eventId:'review-failed',type:'subagent-failed',source:'Reviewer',status:'failed'}} },
+            { role:'user', isSystemEvent:true, eventMeta:{ type:'subagent-failed', source:'Reviewer',
+              attrs:{type:'subagent-failed',mode:'task','source-session-id':'web:peer'} },
+              content:'## terminated', timestamp:'2026-09-21T10:01:00Z' },
+            { role:'assistant', event:'tool_call', content:'', toolCallId:'delegate',
+              toolCall:{name:'subagent',arguments:{mode:'task',description:'Compile and finish native helper'}} },
+            { role:'tool', event:'tool_result', toolCallId:'delegate', content:'Task completed.' },
           ];
           Object.assign(window, { __conversationFixture:state, __showConversation:() => { state.messages = samples; state.loadingHistory = false } });
           window.__showCompaction = () => {
@@ -130,7 +138,7 @@ test('conversation presentation and compacted history render across themes and v
           createApp({
             __scopeId:'data-v-fixture',
             components:{ MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, CollaborationMessage,
-              SessionHeading, SegmentNavigation, ConversationSummary, ResponseDisclosure, CommandResult:empty, ExecutionMessage:empty, ConversationEvent:empty,
+              SessionHeading, SegmentNavigation, ConversationSummary, ResponseDisclosure, ExecutionMessage, ConversationEvent, CommandResult:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
             setup() {
@@ -147,9 +155,12 @@ test('conversation presentation and compacted history render across themes and v
                 expandedResponses, isBackgroundResponse,
                 setResponseExpanded(context, open) { if (!context) return; if (open) expandedResponses.add(context.responseId); else expandedResponses.delete(context.responseId) },
                 displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
-                inlineExecutions:{entries:new Map()}, ioAfter:new Map(), expandedThinking:new Set(),
-                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded]))),
-                inspectExecution:nav.inspectExecution, clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
+                inlineExecutions:{entries:new Map([[11,{mode:'task',label:'Compile and finish native helper',agentType:'sub',
+                  sessionId:'web:peer',stage:'completed',blocked:false,arguments:'{"mode":"task"}',receipt:'Task completed.'}]])},
+                ioAfter:new Map(), expandedThinking:new Set(),
+                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, 11, 12]))),
+                inspectExecution:nav.inspectExecution, sourceForEvent:() => ({...sessions[0],mode:'task'}),
+                eventSourceSession:meta => meta.attrs['source-session-id'], clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
                 viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },
                 goBackToCurrentSegment(){ state.viewingPhysicalId = null },
                 viewNextSegment(){ state.viewingPhysicalId = null },

@@ -125,6 +125,28 @@ test('loading ring and center stay circular independently of square interface to
   assert.match(compiled.code, /\.activity-spinner\[data-v-activity\]\s*\{[^}]*border-radius: 50%;/)
 })
 
+test('compact conversation activity uses a colored icon for every session stage', async () => {
+  const source = await readFile(new URL('./components/SessionActivity.vue', import.meta.url), 'utf8')
+  const { descriptor } = parse(source)
+  const template = descriptor.template!.content
+  const script = descriptor.scriptSetup!.content
+  const sheet = descriptor.styles.map(style => style.content).join('\n')
+  assert.match(template, /v-if="compact \|\| statusIcons" :class="statusIcon"/)
+  for (const stage of ['llm', 'tool', 'waiting', 'waiting-for-call', 'idle', 'inactive', 'pending', 'running', 'completed', 'failed', 'cancelled', 'unknown']) {
+    assert.match(script, new RegExp(`(?:^|[,\\s])(?:'${stage}'|${stage}): 'i-lucide-[^']+'`), `${stage} needs a mapped status icon`)
+  }
+  for (const [stage, color] of Object.entries({
+    llm: 'info', tool: 'info', running: 'info', 'waiting-for-call': 'info', pending: 'info',
+    waiting: 'warn', completed: 'success', failed: 'error', inactive: 'text-muted',
+    cancelled: 'text-muted', unknown: 'text-muted',
+  })) {
+    assert.match(sheet, new RegExp(`\\.session-activity[^\\{]*\\.${stage}(?:[,.)\\s]|[^\\{]*\\{)[^\\}]*color: var\\(--c-${color}\\);`), `${stage} needs its semantic color`)
+  }
+  assert.match(sheet, /\.session-activity \{[^}]*color: var\(--c-text-secondary\);/, 'Ready remains neutral')
+  const compiled = compileStyle({ source: sheet, filename: 'SessionActivity.vue', id: 'data-v-activity', scoped: true })
+  assert.deepEqual(compiled.errors, [])
+})
+
 test('assistant, system, compaction, tool and execution rows share one message-rail width cap without changing user alignment', () => {
   assert.match(styles, /--conversation-item-max-width:\s*80%;/)
   const { descriptor } = parse(chat)

@@ -13,6 +13,7 @@ class FakeWebRequest {
         url: string
         requestHeaders: Record<string, string>
         webContentsId?: number
+        frame?: { parent: unknown | null } | null
       },
       callback: (response: { requestHeaders: Record<string, string> }) => void,
     ) => void)
@@ -25,6 +26,7 @@ class FakeWebRequest {
         url: string
         requestHeaders: Record<string, string>
         webContentsId?: number
+        frame?: { parent: unknown | null } | null
       },
       callback: (response: { requestHeaders: Record<string, string> }) => void,
     ) => void,
@@ -37,11 +39,13 @@ class FakeWebRequest {
     url: string,
     requestHeaders: Record<string, string> = {},
     webContentsId?: number,
+    frame: { parent: unknown | null } | null = { parent: null },
   ): Record<string, string> {
     let result: Record<string, string> | undefined
     this.listener?.({
       url,
       requestHeaders,
+      frame,
       ...(webContentsId === undefined ? {} : { webContentsId }),
     }, (response) => {
       result = response.requestHeaders
@@ -128,5 +132,14 @@ test('rejects non-literal, credentialed, and non-origin API bases', () => {
     ]
   ) {
     assert.equal(normalizeLoopbackOrigin(apiBase), null)
+  }
+})
+
+test('embedded apps in trusted WebContents never inherit the host launch credential', () => {
+  const webRequest = new FakeWebRequest()
+  const update = installRuntimeRequestAuthorization({ webRequest }, details => details.webContentsId === 42)
+  update({ apiBase: 'http://127.0.0.1:43123', launchToken: 'synthetic-host-token' })
+  for (const frame of [null, { parent: {} }]) {
+    assert.equal(webRequest.request('http://127.0.0.1:43123/api', {}, 42, frame).Authorization, undefined)
   }
 })

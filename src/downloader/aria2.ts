@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { link, lstat, open, realpath, rm, stat, statfs } from 'node:fs/promises'
-import { dirname, isAbsolute, join, parse, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, join, parse, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { z } from 'zod'
+import { localProxyConfiguration, proxyForUrl } from '../execution/network/proxy.ts'
 
 export const ARIA2_VERSION = '1.37.0'
 const sha256 = z.string().regex(/^[a-fA-F0-9]{64}$/)
@@ -25,13 +27,17 @@ export function releaseBinary(moduleUrl: string = import.meta.url): string {
   return join(dirname(fileURLToPath(moduleUrl)), '..', '..', '..', '..', 'aria2', executable)
 }
 
-function requestedBinary(): string {
-  const override = process.env.SHADOW_ARIA2C_PATH
+export function requestedBinary(moduleUrl: string = import.meta.url, override = process.env.SHADOW_ARIA2C_PATH): string {
   if (override) {
     if (!isAbsolute(override)) throw new TypeError('SHADOW_ARIA2C_PATH must be absolute')
     return override
   }
-  return releaseBinary()
+  const modulePath = fileURLToPath(moduleUrl)
+  const root = resolve(dirname(modulePath), '..', '..', extname(modulePath) === '.ts' ? '.' : '..')
+  if (existsSync(join(root, 'pnpm-workspace.yaml')) && existsSync(join(root, 'scripts', 'desktop.ts'))) {
+    return join(root, 'desktop', 'aria2', process.platform === 'win32' ? 'aria2c.exe' : 'aria2c')
+  }
+  return releaseBinary(moduleUrl)
 }
 
 function validateUrl(value: string): void {
@@ -89,23 +95,43 @@ async function digest(path: string): Promise<string> {
 export async function runAria2(binary: string, args: string[], signal?: AbortSignal, input?: string): Promise<void> {
   signal?.throwIfAborted()
   await new Promise<void>((resolveRun, reject) => {
+    let processError: Error | undefined
+    let diagnostics = ''
     const child = spawn(binary, args, {
-      shell: false, windowsHide: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'ignore', 'ignore'], signal,
+      shell: false, windowsHide: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], signal,
     })
-    child.once('error', reject)
+    // Parse only bounded diagnostic categories: aria2 output may contain signed URLs.
+    for (const stream of [child.stdout, child.stderr]) stream?.on('data', (bytes: Buffer) => {
+      diagnostics = (diagnostics + bytes.toString('utf8')).slice(-16_384)
+    })
+    child.once('error', error => { processError = error })
     if (input !== undefined) {
       const stdin = child.stdin
       if (!stdin) {
+        processError = new Error('aria2c stdin is unavailable')
         child.kill()
-        reject(new Error('aria2c stdin is unavailable'))
-        return
+      } else {
+        stdin.on('error', error => { processError ??= error; child.kill() })
+        stdin.end(input)
       }
-      stdin.on('error', reject)
-      stdin.end(input)
     }
     child.once('close', code => {
-      if (code === 0) resolveRun()
-      else reject(new Error(`aria2c exited ${code}; inspect the download URL, network and available disk space`))
+      if (processError) reject(processError)
+      else if (code === 0) resolveRun()
+      else {
+        const reason = /SSL\/TLS handshake|certificate verification|certificate.*not trusted/i.test(diagnostics)
+          ? 'TLS handshake or certificate verification failed. Do not disable certificate checks; check the network and TLS trust configuration.'
+          : /name resolution|could not resolve|failed to resolve/i.test(diagnostics)
+          ? 'DNS resolution failed. Check name resolution for the approved source.'
+          : /timeout|timed out/i.test(diagnostics)
+          ? 'The connection or transfer timed out. Check the approved source and network before resuming.'
+          : /not enough disk|insufficient disk|no space left|disk.*full/i.test(diagnostics)
+          ? 'Insufficient destination disk space.'
+          : /status=40[134]|status=50[0234]|HTTP.*(?:401|403|404|500|502|503|504)/i.test(diagnostics)
+          ? 'The source returned an HTTP error. Recheck source availability and authorization.'
+          : 'Inspect the approved source, network and available disk space.'
+        reject(new Error(`aria2c exited ${code}: ${reason} Any partial data is retained for an explicit resume.`))
+      }
     })
   })
 }
@@ -118,13 +144,15 @@ export class Aria2Downloader {
       (await execFileAsync(binary, ['--version'], {
         timeout: 10_000, maxBuffer: 4096, windowsHide: true,
       })).stdout,
+    private readonly proxy: (url: string, signal?: AbortSignal) => Promise<string | undefined> = async (url, signal) =>
+      proxyForUrl(await localProxyConfiguration(signal), url),
   ) {}
 
   async binary(): Promise<string> {
     const binary = this.binaryPath()
     const file = await stat(binary).catch(error => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        throw new Error(`Bundled aria2c is missing: ${binary}`)
+        throw new Error(`Pinned aria2c ${ARIA2_VERSION} is missing: ${binary}. For local development, place the trusted binary in desktop/aria2 or set an absolute SHADOW_ARIA2C_PATH. For an installed app, repair the package; do not substitute a PATH binary.`)
       }
       throw error
     })
@@ -181,14 +209,16 @@ export class Aria2Downloader {
         }
       }
       signal?.throwIfAborted()
+      const proxy = await this.proxy(input.url, signal)
       await this.run(binary, [
         '--no-conf=true', '--enable-rpc=false',
+        '--http-proxy=', '--https-proxy=', '--all-proxy=',
         '--continue=true', '--auto-file-renaming=false', '--allow-overwrite=false',
         '--max-connection-per-server=4', '--split=4', '--min-split-size=16M',
         '--max-tries=5', '--retry-wait=5', '--connect-timeout=30', '--timeout=30',
         '--summary-interval=0', '--console-log-level=error',
         `--dir=${directory}`, '--input-file=-',
-      ], signal, `${input.url}\n  out=${stage}\n`)
+      ], signal, `${input.url}\n  out=${stage}\n${proxy ? `  all-proxy=${proxy}\n` : ''}`)
       const result = await lstat(partial)
       if (!result.isFile() || (input.bytes && result.size !== input.bytes) || await digest(partial) !== expectedHash) {
         await rm(partial, { force: true })

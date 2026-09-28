@@ -16,6 +16,7 @@ import { SqliteSessionStore } from './session-store-sqlite.ts'
 import { sessionsApiPlugin } from './routes.ts'
 import type { SessionMessageInput, SessionTurnFact } from './input.ts'
 import type { SessionState, SessionStore, StoredMessage } from './session-store.ts'
+import { isBackgroundResponse } from './response-context.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
@@ -79,6 +80,67 @@ async function seed(store: SessionStore, id: string, state: Partial<SessionState
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: Continue keeps an aborted user request expanded without expanding a background request`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        for (const [id, source] of [
+          ['web:chat-user-continue', { kind: 'user' as const, sender: {
+            channel: 'web', chatId: 'chat-user-continue', senderId: 'owner', messageId: 'original',
+          } }],
+          ['web:chat-event-continue', { kind: 'event' as const, eventId: 'original', type: 'fixture', source: 'fixture' }],
+        ] as const) {
+          const index = f.calls.length
+          await f.sessions.deliver(id, { ...input('original'), source })
+          await waitFor(() => f.calls.length === index + 1)
+          assert.equal((await post(f.app, id, 'cancel', { requestId: 'original' })).status, 200)
+          await waitFor(() => !!f.sessions.getSessionRecovery(id))
+          const recovery = f.sessions.getSessionRecovery(id)!
+          assert.equal(recovery.userInvolved, source.kind === 'user')
+          assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
+          await waitFor(() => f.calls.length === index + 2)
+          assert.equal(String(f.calls[index + 1].messages[0].content).includes('Answer the user\'s request normally'),
+            source.kind === 'user')
+          f.calls[index + 1].resolve(done())
+          await waitFor(() => f.facts.length === (index + 2))
+          const history = (await f.sessions.getHistory(id, { shallow: true })).messages
+          const response = history.filter(message => message.role === 'assistant').at(-1)!
+          assert.equal(isBackgroundResponse(response.responseContext), source.kind !== 'user')
+        }
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: older recovery metadata still recognizes a pending user request`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const id = 'web:chat-legacy-user-resume'
+      await seed(store, id, { mode: 'session', executionStatus: 'cancelled',
+        recovery: { id: 'legacy-recovery', reason: 'stopped' } }, [{
+        role: 'user', content: [
+          { type: 'text', text: '<sender id="owner" name="owner" chat="direct" />' },
+          { type: 'text', text: 'Pending user request' },
+        ],
+      }])
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        assert.equal(f.sessions.getSessionRecovery(id)?.userInvolved, undefined)
+        assert.equal((await post(f.app, id, 'resume', { recoveryId: 'legacy-recovery' })).status, 202)
+        await waitFor(() => f.calls.length === 1)
+        assert.match(String(f.calls[0].messages[0].content), /Answer the user's request normally/)
+        f.calls[0].resolve(done())
+        await waitFor(() => f.facts.length === 1)
+        const reply = (await f.sessions.getHistory(id, { shallow: true })).messages.filter(message => message.role === 'assistant').at(-1)!
+        assert.equal(isBackgroundResponse(reply.responseContext), false)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: explicit Stop -> Resume continues saved history once without replaying completed tools`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -142,7 +204,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         ],
       }
       await seed(store, id, { mode: 'session', executionStatus: 'running', lastActivityAt: '2025-01-01T00:00:00Z' }, [
-        { role: 'user', content: 'Original interrupted input' },
+        { role: 'user', content: [
+          { type: 'text', text: '<sender id="owner" name="owner" chat="direct" />' },
+          { type: 'text', text: 'Original interrupted input' },
+        ] },
         { role: 'assistant', content: null, provider_state: continuity, reasoning_content: 'Original reasoning', tool_calls: [
           { id: 'known', type: 'function', function: { name: 'fixture_effect', arguments: '{}' } },
           { id: 'unknown', type: 'function', function: { name: 'fixture_effect', arguments: '{"value":42}' } },
@@ -161,6 +226,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.emitted(), 0)
         const recovery = f.sessions.getSessionRecovery(id)!
         assert.equal(recovery.reason, 'interrupted')
+        assert.equal(recovery.userInvolved, true)
         assert.equal(f.sessions.getSessionRecovery('web:chat-legacy')?.reason, 'interrupted')
         assert.equal(f.sessions.getSessionRecovery('web:chat-completed'), undefined)
         assert.equal(f.sessions.getSessionRecovery('web:chat-empty'), undefined)
@@ -191,6 +257,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           restored.failPreparation(false)
           assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
           await waitFor(() => restored.calls.length === 1)
+          assert.match(String(restored.calls[0].messages[0].content), /Answer the user's request normally/)
           assert.deepEqual(restored.calls[0].messages.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['known', 'unknown'])
           assert.equal(restored.calls[0].messages.at(-1)!.content, 'Recovered result')
           assert.deepEqual(executions, ['unknown'])
@@ -200,6 +267,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal(restored.calls[0].messages.find(message => message.role === 'assistant')?.reasoning_content, 'Original reasoning')
           restored.calls[0].resolve(done())
           await waitFor(() => restored.facts.length === 1)
+          const reply = (await restored.sessions.getHistory(id, { shallow: true })).messages.filter(message => message.role === 'assistant').at(-1)!
+          assert.equal(isBackgroundResponse(reply.responseContext), false)
         } finally { await restored.sessions.stop() }
       } finally { await f.sessions.stop(); store.close?.() }
     })

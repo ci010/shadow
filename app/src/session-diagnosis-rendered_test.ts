@@ -52,12 +52,16 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
         if (id === '\0tool-details-fixture') return `import { createApp, h, reactive } from 'vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
           import '/src/styles.css';
-          const batch = reactive({ end: 2, files: 0, incomplete: false, entries: [
-            { index: 0, name: 'read', title: 'Read fixture', summary: '', icon: 'read', failed: false,
+          const batch = reactive({ end: 4, files: 0, incomplete: false, entries: [
+            { index: 0, name: 'read', title: 'Read fixture', summary: '', icon: 'read', path:'fixture.json', failed: false,
               arguments: '{\\n  "path": "fixture.json",\\n  "count": 42\\n}',
               result: '{"ok":true,"html":"<img src=x onerror=alert(1)>"}' },
             { index: 1, name: 'message', title: 'Send fixture', summary: '', icon: 'tool', failed: false,
-              arguments: '{"content":"hello"}', result: '' }
+              arguments: '{"content":"hello"}', result: '' },
+            { index: 2, name: 'write', title: 'Edit server.py', summary: '', icon: 'write', path:'src/server.py', failed: true,
+              arguments: '{"path":"src/server.py"}', result: 'Error: permission denied' },
+            { index: 3, name: 'write', title: 'Edit mystery.xyz', summary: '', icon: 'write', path:'src/mystery.xyz', failed: false,
+              arguments: '{"path":"src/mystery.xyz"}' }
           ] });
           window.updateToolResult = source => { batch.entries[0].result = source; };
           window.showToolImage = () => { batch.entries[0].images = [${JSON.stringify(image)}]; };

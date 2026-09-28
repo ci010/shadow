@@ -14,6 +14,7 @@ import { isImageFile, isImagePath, readImage } from '../utils/image-input.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
+import { isSkillRootPath } from '../skills/paths.ts'
 
 const MAX_SIZE_BYTES = 256 * 1024 // 256 KB
 const MAX_TOKENS = 25_000
@@ -182,12 +183,11 @@ const nhm = new NodeHtmlMarkdown({
 export class ReadTool implements Tool<ToolResult> {
   private readCache = new Map<string, ReadCacheEntry>()
   readonly name = 'read'
-  readonly readonly = (args: Record<string, unknown>) =>
-    typeof args.path !== 'string' || !/^v:skills[\\/][^\\/]+[\\/]?$/.test(args.path)
+  readonly readonly = (args: Record<string, unknown>) => !isSkillRootPath(args.path)
   readonly supportsRemoteWorkdir = true
   readonly description =
     'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +
-    'Text supports offset/limit. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
+    'Text supports offset/limit, including URLs and virtual text. Session line ranges use the same view as grep; omit ranges for recent messages. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -198,7 +198,7 @@ export class ReadTool implements Tool<ToolResult> {
       offset: {
         type: 'number',
         description:
-          '1-based starting position. For files: line number. With flag "l": item index.',
+          '1-based starting line for files, URLs and virtual text. With flag "l": item index.',
       },
       limit: {
         type: 'number',
@@ -224,23 +224,39 @@ export class ReadTool implements Tool<ToolResult> {
     const showLineNumbers = flags.includes('n')
     const rawFormat = flags.includes('r')
     const listMode = flags.includes('l')
+    for (const key of ['offset', 'limit']) {
+      if (args[key] !== undefined && (!Number.isSafeInteger(args[key]) || Number(args[key]) < 1)) {
+        throw new TypeError(`${key} must be a positive safe integer.`)
+      }
+    }
 
     // ── Virtual filesystem ──
     if (this.virtualFs) {
       const rel = isAbsolute(raw) ? relative(this.workspace, raw) : raw
       // Only check virtual mounts for paths that don't escape the workspace
       if (!rel.startsWith('..')) {
+        if (!listMode && (args.offset !== undefined || args.limit !== undefined)
+          && /^v:sessions\/(?!remote:)[^?]+$/.test(rel.replace(/\\/g, '/'))) {
+          const entries = await this.virtualFs.list(rel, context)
+          const entry = entries?.find(entry => entry.path === rel.replace(/\\/g, '/'))
+          if (!entry) throw new Error('Session search view not found. Use the returned session reference; message paging uses ?index=0&page_size=20.')
+          return this.pageText(entry.content, args, showLineNumbers)
+        }
         const result = this.virtualFs.resolve(rel, context)
         if (result != null) {
           const content = await result
-          if (listMode) return this.applyListPaging(content, args)
-          return content
+          if (listMode) {
+            const page = this.applyListPaging(content, args)
+            validateContentTokens(page, '.txt')
+            return page
+          }
+          return this.pageText(content, args, showLineNumbers)
         }
       }
     }
 
     // ── URL fetch ──
-    if (URL_RE.test(raw)) return await this.fetchUrl(raw, rawFormat)
+    if (URL_RE.test(raw)) return await this.fetchUrl(raw, rawFormat, args, context.signal)
 
     if (context.remoteWorkdir) {
       if (isImagePath(raw) && extname(raw).toLowerCase() !== '.svg') throw new Error('Remote image reads are not supported by this executor. No Main filesystem fallback is allowed.')
@@ -255,7 +271,7 @@ export class ReadTool implements Tool<ToolResult> {
     // ── File or directory ──
     const resolved = this.resolve(raw, context)
     const stat = await nodeStat(resolved)
-    if (stat.isDirectory()) return await this.listDir(resolved)
+    if (stat.isDirectory()) return this.pageText(await this.listDir(resolved), args, showLineNumbers)
     if (!stat.isFile()) throw new Error('Read requires a regular file or directory.')
     if (await isImageFile(resolved)) {
       if (args.offset !== undefined || args.limit !== undefined || flags) {
@@ -430,9 +446,11 @@ export class ReadTool implements Tool<ToolResult> {
   private async fetchUrl(
     url: string,
     rawFormat: boolean,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
   ): Promise<string> {
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
     })
     if (!res.ok) return `Error: HTTP ${res.status}`
 
@@ -467,8 +485,15 @@ export class ReadTool implements Tool<ToolResult> {
     if (format === 'markdown' && isHtmlContentType(contentType)) {
       content = nhm.translate(text)
     } else {
-      // Raw: strip tags
-      content = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+      content = text
+    }
+    if (String(args.flag ?? '').includes('l')) {
+      const page = this.applyListPaging(content, args)
+      validateContentTokens(page, '.txt')
+      return page
+    }
+    if (args.offset !== undefined || args.limit !== undefined || String(args.flag ?? '').includes('n')) {
+      return this.pageText(content, args, String(args.flag ?? '').includes('n'))
     }
 
     // Enforce token limit — if the fetched content is too large, write it to
@@ -497,6 +522,20 @@ export class ReadTool implements Tool<ToolResult> {
     }
 
     return content
+  }
+
+  private pageText(content: string, args: Record<string, unknown>, numbered: boolean): string {
+    if (args.offset === undefined && args.limit === undefined && !numbered) {
+      validateContentTokens(content, '.txt')
+      return content
+    }
+    const lines = content.split('\n')
+    const start = args.offset === undefined ? 0 : Number(args.offset) - 1
+    const page = lines.slice(start, args.limit === undefined ? undefined : start + Number(args.limit))
+    let result = numbered ? formatWithLineNumbers(page, start) : page.join('\n')
+    validateContentTokens(result, '.txt')
+    if (start + page.length < lines.length) result += `\n\n[truncated: showing lines ${start + 1}-${start + page.length} of ${lines.length}; use offset=${start + page.length + 1} to continue]`
+    return result
   }
 
   /** Remove all cached read entries for a given session. Call on sleep/stop. */

@@ -2509,10 +2509,14 @@ ${JSON.stringify(request)}`,
             ? this.deps.toolLoader ?? sessionTools.get('import_tool') as ImportTool | undefined
             : undefined
           if (importTool) {
+            const { workdir } = resolveSessionLocations(this.workspace, state, undefined, this.workdirCapabilityLookup)
+            if (toolName === 'chrome-devtools' && (!workdir.available || workdir.locality !== 'local')) {
+              throw new Error('Browser preload requires an available local session workdir')
+            }
             const imported = await importTool.importSource({
               source: `v:tools/${toolName}`,
               args: toolArgs,
-            }, sessionTools)
+            }, sessionTools, { cwd: workdir.available && workdir.locality === 'local' ? workdir.path : undefined })
             if (imported.startsWith('Error') || imported.startsWith('Unknown tool')) {
               console.warn(`[session-manager] Could not preload tool "${toolName}": ${imported}`)
               continue

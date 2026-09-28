@@ -16,6 +16,7 @@ Do not create a standalone HTML recorder merely to obtain missing task input.
 An explicit request to build a recording app or website is a development task;
 do not force that deliverable into an I/O card. Browser automation remains
 appropriate for existing websites and explicitly requested web applications.
+For a reusable Shadow-hosted tool, read `v:skills/micro-app` instead.
 If the I/O client or a source is unavailable, report the limitation and ask before
 switching to a separate browser implementation; do not silently substitute one.
 

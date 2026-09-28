@@ -12,7 +12,8 @@ test('the audio.cpp integration is disclosed to new sessions with setup instruct
       assert.match(summary, /<skill name="audio-cpp">.*ASR\/TTS/)
       const body = skills.getSkillBody('audio-cpp')
       assert.ok(body)
-      for (const detail of ['audio_cpp status', 'audio_cpp configure', '--source modelscope', 'AUDIOCPP_CLI_PATH']) {
+      for (const detail of ['audio_cpp status', 'audio_cpp configure', '--source modelscope', 'AUDIOCPP_CLI_PATH',
+        'schema-version-1', 'short Japanese WAV', 'safety margin is an assumption']) {
         assert.ok(body.includes(detail), `Missing setup guidance: ${detail}`)
       }
     } finally {

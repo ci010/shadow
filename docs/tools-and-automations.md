@@ -16,12 +16,36 @@ fail rather than silently searching Main's filesystem. See
 [tool layers](architecture.md#tools-skills-and-mcp) for their scope and
 remote-workdir limitations.
 
+For filesystem content, prefer explicit root and filter fields:
+
+```js
+search({ space: "grep", path: "src", include: "**/*.ts", query: "symbol", limit: 10 })
+search({ space: "glob", path: "src", query: "**/*test.ts", limit: 10 })
+```
+
+`path` defaults to the effective workdir. Legacy `grep:*.ts` is still a file
+filter; an absolute `grep:<path>` is a root, not a glob. Do not specify two roots
+or two filters. File and virtual searches accept `limit` (1-100) and zero-based
+`offset`; web searches do not. Ripgrep errors are failures, not "no matches".
+
+`read` uses **one-based** line `offset`/`limit` for files, URL text and virtual
+text. Local `v:sessions/<id>` line ranges use the same complete-history view as
+grep, so a match's line number can be read directly. Without a line range,
+session reads retain their recent-message window; `?index=0&page_size=20` uses
+message indices instead of lines. Plain URL text keeps its line structure;
+`flag: "r"` preserves raw HTML. Large inline text must be paged.
+
 ## Inspect and cancel executions
 
 `read({path: "v:bg"})` lists the current session's background work, local task/call,
 and remote A2A executions. `grep:v:bg` and `glob:v:bg` search that same inventory.
 Use a returned reference with `read({path: "v:bg/<executionId>"})` or
 `cancel({executionId: "<executionId>"})`; background references start with `bg:`.
+Keep that prefix: `bg:0123456789abcdef` is read at
+`v:bg/bg:0123456789abcdef`, not `v:bg/0123456789abcdef`. The `v:bg` mount is an
+inventory of several execution kinds, not an implied ID prefix. Background
+downloads also return `outputPath`, which can be passed directly to `read`;
+their raw `taskId` is compatibility metadata, not a public execution reference.
 The old `kill` tool is removed. References do not grant access to another owner's
 execution, even if its completion was routed to you.
 
@@ -32,6 +56,36 @@ failures explicitly; remote cancellation returns the remote state. Cancellation
 does not delete conversations or roll back side effects. Background completion
 callbacks are suppressed on explicit cancellation; `continuation` accepts the
 same `bg:` reference but does not change task/call or A2A delivery.
+It only annotates a **running** background task. Completion notification is
+automatic when a callback was registered; calling `continuation` after completion
+reports no change and never replays the callback, including while delivery is
+pending. Callback failures remain visible in the execution output; continuation
+is not a delivery retry command.
+
+## Work evidence and uncertain effects
+
+`work` context includes `evidenceSchema`. Evidence entries are references
+`{sessionId, physicalId, kind: "user" | "tool", id, quote}`, not strings or a
+Decision brief. Use real recorded input/tool-call IDs and exact excerpts;
+definitions may omit evidence, but completion and agent settlement still enforce
+their required evidence checks.
+
+A trusted native tool can explicitly attest to a failed operation with no
+effect. For example, audio.cpp rejects malformed loader catalogs before saving
+configuration, records `not_applied`, and does not leave an unknown Work effect.
+Ordinary errors, failed probes, interrupted writes and arbitrary error text do
+not make that guarantee: they retain the existing unknown-effect fence and
+require reconciliation. This is not rollback or a blanket exemption for
+validation-looking errors.
+
+## Publish reusable apps
+
+For a tool the user will use repeatedly, read `v:skills/micro-app` and discover
+`micro_app`. It publishes immutable Project apps; the user reviews source and
+permissions in coordinator **Apps** before opening. A normal button can call
+the scoped model bridge without starting another agent turn. This is separate
+from temporary I/O capture cards and A2A delegation. Optional local backends
+have host privileges, not an OS sandbox. See [Micro Apps](microapps.md).
 
 ## Configure Project MCP servers
 

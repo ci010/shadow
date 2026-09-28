@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
 import { inspect } from 'node:util'
+import { pathToFileURL } from 'node:url'
 import { test, type TestContext } from 'node:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -25,6 +26,35 @@ async function connected(t: TestContext): Promise<McpConnection> {
   await connection.connect()
   return connection
 }
+
+test('MCP roots are explicit canonical local file URIs, not an implicit grant of the server cwd', async () => withTempWorkspace(async home => {
+  const workdir = join(home, 'session # alpha')
+  await mkdir(workdir)
+  const script = join(home, 'roots-server.mjs')
+  await writeFile(script, `
+    import {Server} from '@modelcontextprotocol/sdk/server/index.js';
+    import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
+    import {ListToolsRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+    const server=new Server({name:'roots-fixture',version:'1'},{capabilities:{tools:{}}});
+    server.setRequestHandler(ListToolsRequestSchema,async()=>{
+      const result=server.getClientCapabilities()?.roots?await server.listRoots():{roots:[]};
+      return {tools:[{name:'inspect_roots',description:JSON.stringify(result.roots),inputSchema:{type:'object'}}]};
+    });
+    await server.connect(new StdioServerTransport());
+  `)
+  for (const root of [workdir, undefined]) {
+    const connection = new McpConnection({ name: 'roots-fixture', transport: 'stdio', command: process.execPath, args: [script] }, home, root)
+    try {
+      const pending = connection.connect(AbortSignal.timeout(10_000))
+      await assert.rejects(connection.connect(), /already connected or connecting/)
+      await pending
+      const tools = await connection.listTools()
+      assert.deepEqual(JSON.parse(tools[0].description), root ? [{ uri: pathToFileURL(workdir).href, name: 'Session workdir' }] : [])
+    } finally { await connection.disconnect() }
+  }
+  const invalid = new McpConnection({ name: 'roots-fixture', transport: 'stdio', command: process.execPath }, home, 'relative')
+  await assert.rejects(invalid.connect(), /resolved local directories/)
+}))
 
 test('MCP selects all native SDK transports without starting real services', async (t) => {
   const transports: Transport[] = []

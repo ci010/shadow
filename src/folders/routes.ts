@@ -4,6 +4,7 @@ import type { Context } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { GatewayPlugin } from '../gateway/types.ts'
 import { serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
+import { fileSearchQuery, remoteFileSearchResult, serveLocalFileSearch } from '../gateway/file-search.ts'
 import { serveLocalGit } from '../gateway/local-git.ts'
 import type { CloneOperation, FolderRecord } from './contracts.ts'
 import { CloneTerminationError, runGitClone, validateCloneUrl, validateDirectoryName, type GitCloneRunner } from './git.ts'
@@ -12,6 +13,8 @@ import type { Executor } from '../execution/executor.ts'
 import { serveRemoteGit } from '../gateway/remote-git.ts'
 import { serveRemoteFolderFiles } from './remote-files.ts'
 import { RemoteFolderWorkdirUnavailableError } from './remote-ownership.ts'
+import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
+import { executeRemoteFilesystemText, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
 
 export interface FolderServiceOptions {
   registry: FolderRegistry
@@ -109,6 +112,22 @@ export class FolderService {
       } catch (error) { return errorResponse(c, error) }
     })
     app.get('/api/folders', (c) => c.json({ folders: this.#options.registry.list() }))
+    app.get('/api/folders/:id/files/search', async c => {
+      try {
+        this.#assertOpen()
+        const query = fileSearchQuery(c)
+        if (!query) return c.json({ error: 'invalid_query' }, 400)
+        const folder = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
+        if (folder.kind !== 'remote') return serveLocalFileSearch(c, folder.path)
+        const output = await executeRemoteFilesystemText(this.#remoteTarget(c, folder),
+          FILESYSTEM_READ_OPERATION, { path: '.', query })
+        try { return c.json(remoteFileSearchResult(output)) }
+        catch { return c.json({ error: 'invalid_remote_search_result', message: 'The owning node returned an invalid file search result.' }, 503) }
+      } catch (error) {
+        if (error instanceof RemoteFilesystemError) return c.json({ error: 'remote_file_search_failed', message: error.message }, 503)
+        return errorResponse(c, error)
+      }
+    })
     for (const operation of ['status', 'diff'] as const) {
       app.get(`/api/folders/:id/git/${operation}`, async c => {
         try {

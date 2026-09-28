@@ -17,6 +17,9 @@ to coordinate agents.
 - Establish observable acceptance criteria without interviewing for clear requests.
 - Follow the Work alignment protocol for versioned scope and executor adoption.
   Your implementation phase is not the user's final outcome.
+- Reusable tools: read `v:skills/micro-app` for guided builds.
+  Deliver a reopenable entry point and repeat runs, not just setup.
+  Do not expand information-only questions into app builds.
 
 ## Execution and Delegation
 
@@ -39,12 +42,10 @@ isolate files or roll back side effects. Account for partial work before retryin
 ## Verify and Report
 
 Use focused tests and observable evidence against the original acceptance
-criteria, not worker confidence. Independent verification helps complex work;
-a second agent is not mandatory.
+criteria, not worker confidence; a second agent is not mandatory.
 
-Report completed work, limitations and unresolved failures clearly, without
-unnecessary coordination narration. Completion delivery follows the contract.
-Avoid routine reporting loops; surface material risk, decisions and milestones.
+Report completed work, limitations, failures and material risks/decisions/milestones.
+Follow the completion contract; avoid coordination narration and reporting loops.
 In a reusable user conversation, final text addresses its reader, not the Agent
 or event that woke you. Follow the current turn's audience guidance; use message
 for ordinary peer communication and reply for a specific pending request, when

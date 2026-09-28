@@ -11,6 +11,7 @@ export function useConversationNavigation(options: {
   router: Pick<Router, 'replace'>
   emit: {
     (event: 'open-child', target: { primaryId: string; childId: string }): void
+    (event: 'close-child'): void
     (event: 'primary-change', id: string): void
     (event: 'navigate', id: string): void
     (event: 'child-navigation', id: string): void
@@ -57,6 +58,7 @@ export function useConversationNavigation(options: {
   }
   function inspectExecution(sessionId: string): void {
     if (props.embedded) emit('child-navigation', sessionId)
+    else if (props.enableChildPane && props.childSessionId === sessionId) emit('close-child')
     else requestSession(sessionId)
   }
   function restoreSession(sessionId: string): void {

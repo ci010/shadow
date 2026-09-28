@@ -30,12 +30,13 @@
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? activeSessionName : 'New conversation'" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
-      :active="visible && route.name === 'chat'" :keyboard-active="keyboardActive" :draft="!activeSessionId"
+      :active="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
       :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
       @diagnosis-visible="diagnosisVisibilityChanged"
       @knowledge-navigation="knowledgeNavigation"
+      @project-navigation="emit('project-navigation', $event)"
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
     <template #mobile-actions="{ close }">
@@ -111,6 +112,7 @@
               <div class="prose" v-html="renderMarkdown(msg.content)" />
             </CommandResult>
             <ExecutionMessage v-else-if="inlineExecutions.entries.has(idx)" :execution="inlineExecutions.entries.get(idx)!"
+              :selected="childSessionId === inlineExecutions.entries.get(idx)!.sessionId"
               @inspect="inspectExecution" @interact="clearSelection">
               <div v-if="inlineExecutions.entries.get(idx)!.output" class="prose" v-html="renderMarkdown(inlineExecutions.entries.get(idx)!.output!)" />
             </ExecutionMessage>
@@ -128,6 +130,7 @@
             <ConversationEvent v-else-if="msg.role === 'user' && msg.isSystemEvent && msg.eventMeta"
               :data-msg-idx="idx"
               :meta="msg.eventMeta" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
+              :selected="childSessionId === eventSourceSession(msg.eventMeta)"
               @inspect="inspectExecution" @interact="clearSelection">
               <div v-if="msg.content" class="prose" v-html="renderMarkdown(msg.content)" />
             </ConversationEvent>
@@ -229,18 +232,24 @@
     </template>
     <template #composer>
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible }">
-        <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
-          <SessionActivity :stage="sessionStage" />
-          <span class="chat-working-detail">{{ isCall ? 'Call · inherited context · blocking' : 'Task · fresh context · async' }} · Read-only trace</span>
+        <div class="session-status-row">
+          <SessionWorkStatus v-if="activeSessionId && activeSessionId !== 'web:orchestrator' && !isExecution && !viewingPhysicalId"
+            :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
+            :active="paneActive && composerVisible && route.name === 'chat'" @open="openProjectWork" />
+          <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="activeSessionId"
+            :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
+            :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
+          <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
+            <SessionActivity :stage="sessionStage" />
+            <span class="chat-working-detail">{{ isCall ? 'Call · inherited context · blocking' : 'Task · fresh context · async' }} · Read-only trace</span>
+          </div>
+          <div v-else-if="sessionWorking && !viewingPhysicalId" class="chat-working" :class="sessionStage" role="status" aria-live="polite"
+            :title="sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : undefined">
+            <SessionActivity :stage="sessionStage" />
+            <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
+            <WorkingWave v-if="!isWaitingStage(sessionStage)" />
+          </div>
         </div>
-        <div v-else-if="sessionWorking && !viewingPhysicalId" class="chat-working" :class="sessionStage" role="status" aria-live="polite">
-          <SessionActivity :stage="sessionStage" />
-          <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
-          <WorkingWave v-if="!isWaitingStage(sessionStage)" />
-        </div>
-        <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="activeSessionId" :revision="workRevision"
-          :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
-          :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
         <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled"
@@ -427,7 +436,7 @@ import ComposerPopover from './ComposerPopover.vue'
 import SlashCommandMenu from './SlashCommandMenu.vue'
 import MessageHistoryRail from './MessageHistoryRail.vue'
 import FileWorkbench from './files/FileWorkbench.vue'
-import type { KnowledgeTabRequest } from '../file-workbench.ts'
+import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 import { createHomeTreeCache, HomeTreeCacheKey } from '../home-tree-cache.ts'
 import SelectionMenu from './SelectionMenu.vue'
 import { insertQuote } from '../selection-actions.ts'
@@ -437,6 +446,8 @@ import SegmentNavigation from './SegmentNavigation.vue'
 import WorkingWave from './WorkingWave.vue'
 import YieldQuestion from './YieldQuestion.vue'
 import SessionWorkControls from './SessionWorkControls.vue'
+import SessionWorkStatus from './SessionWorkStatus.vue'
+import { ensureProjectOrchestrator } from '../projects.ts'
 import CollaborationMessage from './CollaborationMessage.vue'
 import YieldDecision from './YieldDecision.vue'
 import { inlineYieldDecisions, parseDecisionRecords } from '../yield-history.ts'
@@ -456,7 +467,7 @@ import { inlineExecutionMessages } from '../execution-messages.ts'
 import { parseChatEvent, parseLiveSessionMessage, eventSourceSession, type ChatEventMeta } from '../chat-events.ts'
 import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions } from '../subagent-executions.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
-import { apiUrl } from '../api-url.ts'
+import { apiUrl, hostBase } from '../api-url.ts'
 import { automationChatLocation } from '../automations.ts'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
@@ -567,12 +578,14 @@ onActivated(() => { activated.value = true })
 onDeactivated(() => { activated.value = false })
 const emit = defineEmits<{
   'open-child': [target: { primaryId: string; childId: string }]
+  'close-child': []
   'primary-change': [id: string]
   'child-navigation': [id: string]
   deleted: [id: string]
   navigate: [id: string]
   prepared: [id: string]
   'knowledge-navigation': [active: boolean, entryId?: string]
+  'project-navigation': [tab?: ProjectTab]
 }>()
 const paneId = useId()
 const domId = (id: string) => props.embedded || props.managed ? `${paneId}-${id}` : id
@@ -1716,7 +1729,24 @@ function focusConversation(): void {
   const target = chatInput.value?.getClientRects().length ? chatInput.value : paneRoot.value?.querySelector<HTMLElement>('.document-tabs [aria-selected="true"]')
   target?.focus({ preventScroll: true })
 }
-defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions })
+async function appendDraft(text: string) {
+  inputText.value = inputText.value ? `${inputText.value}\n\n${text}` : text
+  await nextTick()
+  focusConversation()
+}
+async function openProjectWork(key: string) {
+  const id = props.projectId || liveProjectId(props.apiBase)
+  const source = route.fullPath
+  try {
+    const coordinator = await ensureProjectOrchestrator(hostBase(props.apiBase), id, AbortSignal.timeout(15000))
+    if (source !== route.fullPath || !paneActive.value) return
+    await router.push({ name: 'chat', params: { projectId: id, sessionId: coordinator }, query: { work: key } })
+  } catch (cause) {
+    if (source !== route.fullPath || !paneActive.value) return
+    composerError.value = cause instanceof Error ? cause.message : 'Could not open Project work. Retry from the Project entry.'
+  }
+}
+defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft })
 
 // ── History ───────────────────────────────────────────────────────────────────
 
@@ -2546,7 +2576,7 @@ function resendLastMessage() {
   );
 }
 .conversation-dock > * { pointer-events: auto; }
-.conversation-dock > .chat-working:last-child { margin-bottom: 16px; }
+.conversation-dock > .session-status-row:last-child { margin-bottom: 16px; }
 .conversation-dock.in-flow { position: static; flex: 0 0 auto; }
 .chat-workspace.is-embedded { display: flex; width: 100%; }
 .chat-workspace.is-managed { grid-template-columns: minmax(0, 1fr); }
@@ -2567,12 +2597,16 @@ function resendLastMessage() {
 .draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
-.chat-working { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; box-sizing: border-box; width: calc(100% - 40px); max-width: 860px; margin: 8px auto 0; padding: 11px 14px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-surface); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
+.session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: 860px; min-width: 0; margin: 0 auto; }
+.chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: 32px; margin: 8px 0 0 auto; padding: 5px 10px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
 .chat-working.waiting { border-color: var(--c-warn); background: var(--c-warn-bg); color: var(--c-warn); }
 .chat-working-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 12px; }
+.session-status-row:has(.session-work-controls:not([style*="display: none"])) .chat-working-detail,
+.session-status-row:has(.session-work-controls:not([style*="display: none"])) .chat-working :deep(.working-wave) { display: none; }
 .execution-summary { flex-wrap: wrap; border-color: var(--c-border); background: var(--c-bg-soft); }
+.session-status-row .execution-summary .chat-working-detail { display: block; }
 .execution-summary .chat-working-detail { display: block; white-space: normal; }
-.working-wave { margin-left: auto; }
+.chat-working :deep(.working-wave) { flex: 0 0 auto; }
 .chat-composer { flex: 0 0 auto; min-width: 0; width: calc(100% - 40px); max-width: 860px; margin: 12px auto 16px; }
 .composer-box { padding: 12px 12px 9px; border: 1px solid var(--c-border); border-radius: var(--radius-overlay); background: var(--c-bg-input); transition: border-color .15s ease; }
 .composer-box:focus-within, .composer-box:has(.composer-control[aria-expanded="true"]) { border-color: var(--c-blue); }
@@ -2630,7 +2664,7 @@ function resendLastMessage() {
   .draft-mark { width: 48px; height: 48px; margin-bottom: 16px; }
   .draft-folder { padding: 14px; gap: 12px; }
   .draft-folder strong { font-size: 21px; }
-  .chat-working { width: calc(100% - 24px); gap: 8px; }
+  .session-status-row { width: calc(100% - 24px); }
   .chat-working-detail { display: none; }
   .chat-composer { width: calc(100% - 24px); margin-bottom: 12px; }
   .composer-controls { gap: 0; }
@@ -2750,7 +2784,7 @@ function resendLastMessage() {
 .mobile-chat .chat-message-list { width: auto; margin-inline: max(8px, env(safe-area-inset-left, 0px)) max(8px, env(safe-area-inset-right, 0px)); }
 .mobile-chat .chat-bubble { box-sizing: border-box; max-width: 100%; }
 .mobile-chat .chat-user { max-width: 92%; }
-.mobile-chat .chat-working, .mobile-chat .chat-composer { width: calc(100% - max(8px, env(safe-area-inset-left, 0px)) - max(8px, env(safe-area-inset-right, 0px))); }
+.mobile-chat .session-status-row, .mobile-chat .chat-composer { width: calc(100% - max(8px, env(safe-area-inset-left, 0px)) - max(8px, env(safe-area-inset-right, 0px))); }
 .mobile-chat .chat-composer { margin: 8px auto max(8px, env(safe-area-inset-bottom, 0px)); }
 .mobile-history summary { min-height: 44px; box-sizing: border-box; padding: 12px 10px; font-size: 14px; cursor: pointer; }
 .mobile-history summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
@@ -2766,11 +2800,12 @@ function resendLastMessage() {
 .mobile-message-settings :deep(.composer-control), .mobile-message-settings .context-action { width: 100%; min-height: 44px; justify-content: flex-start; font-size: 14px; }
 .conversation-empty { color: var(--c-text-secondary); font-size: 14px; user-select: none; }
 
-.chat-message-list > :deep(:is(.chat-assistant, .system-event, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
+.chat-message-list > :deep(:is(.chat-assistant, .system-event, .response-disclosure, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
   min-width: 0;
   max-width: var(--conversation-item-max-width);
   align-self: flex-start;
 }
+.chat-message-list > :deep(.response-disclosure .chat-assistant) { max-width: 100%; }
 
 .system-event, .compaction-summary, .execution-card {
   width: 100%;

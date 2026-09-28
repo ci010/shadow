@@ -2,7 +2,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { withCurrentWork } from '../agent/context/builder.ts'
 import { withResponseAudience } from '../agent/context/response-audience.ts'
-import { createResponseContext, type ResponseContext } from './response-context.ts'
+import { continuedUserInvolvement, createResponseContext, type ResponseContext } from './response-context.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
@@ -167,7 +167,8 @@ export abstract class BaseSession {
     this.state.executionStatus = fact.status
     if (this.state.mode === 'session' && fact.status !== 'completed'
       && this.messages.some(message => message.role !== 'system')) {
-      this.state.recovery = { id: fact.turnId, reason: fact.status === 'cancelled' ? 'stopped' : 'failed' }
+      this.state.recovery = { id: fact.turnId, reason: fact.status === 'cancelled' ? 'stopped' : 'failed',
+        userInvolved: this.responseContext?.userInvolved ?? false }
     } else delete this.state.recovery
     await this.store.saveState(this.id, this.state)
     if (this.state.mode && this.state.mode !== 'session') {
@@ -490,6 +491,10 @@ export abstract class BaseSession {
     const isGroup = !!msg.isGroup
     const queryId = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
     this.responseContext = createResponseContext(queryId, input.source, this.state.mode, msg.channel)
+    if (input.kind === 'control' && input.command.type === 'resume' && this.responseContext
+      && (this.state.recovery?.userInvolved ?? continuedUserInvolvement(this.messages))) {
+      this.responseContext = { ...this.responseContext, userInvolved: true }
+    }
 
     const attributes = {
       channel: msg.channel,
@@ -639,9 +644,10 @@ export abstract class BaseSession {
         event: 'response',
       })
     } finally {
-      this.responseContext = undefined
-      if (attempted) {
-        await this.finishTurn(fact)
+      try {
+        if (attempted) await this.finishTurn(fact)
+      } finally {
+        this.responseContext = undefined
       }
     }
 

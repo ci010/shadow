@@ -6,6 +6,7 @@ import type { DesktopMediaCaptureApi } from './media-capture-contract.js'
 import type { DesktopWebPairingApi } from './web-pairing-contract.js'
 import type { ChildPairInput, ChildSetupInfo } from './bootstrap/child.js'
 import { parseChildPairInput } from './bootstrap/child.js'
+import type { DesktopMicroAppsApi } from './micro-app-contract.js'
 
 export const IPC_CHANNELS = {
   loadWizard: 'shadow:bootstrap:load',
@@ -58,6 +59,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+  readonly microApps: DesktopMicroAppsApi
   readonly webPairing: DesktopWebPairingApi
   readonly diagnostics: {
     revealStartupLog(): Promise<void>

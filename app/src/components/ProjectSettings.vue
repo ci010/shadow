@@ -3,7 +3,6 @@
     <header class="settings-heading">
       <h1>{{ project?.name ?? 'Project' }} settings</h1>
       <p>Settings apply only to this project. Provider connections and Nodes are shared across the app.</p>
-      <RouterLink :to="{ name: 'chat', params: { projectId } }">Back to conversations</RouterLink>
     </header>
     <div class="settings-layout">
       <nav class="settings-navigation" aria-label="Project settings">
@@ -156,7 +155,7 @@ onUnmounted(() => { request?.abort(); mutation?.abort() })
 .settings-heading { margin-bottom: 28px; }
 .settings-heading h1 { margin: 0 0 8px; font-size: 24px; overflow-wrap: anywhere; }
 .settings-heading p, .settings-help { color: var(--c-text-secondary); font-size: 14px; line-height: 1.6; max-width: 70ch; }
-.settings-heading a, .settings-related { color: var(--c-text); font-size: 13px; text-underline-offset: 3px; }
+.settings-related { color: var(--c-text); font-size: 13px; text-underline-offset: 3px; }
 .settings-layout { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 32px; }
 .settings-navigation { display: flex; flex-direction: column; gap: 4px; align-self: start; }
 .settings-navigation a { padding: 12px; color: var(--c-text-secondary); text-decoration: none; font-size: 14px; }

@@ -30,7 +30,9 @@ class RouteFilesystemExecutor implements Executor {
   async *execute(request: JobRequestV1): AsyncIterable<JobEventV1> {
     this.requests.push(request)
     const path = (request.args as { path: string }).path
-    const chunk = request.operation === 'workdir.git.status'
+    const chunk = request.operation === 'filesystem.read' && 'query' in (request.args as object)
+      ? JSON.stringify({ paths: ['folder/notes.md'], truncated: false })
+      : request.operation === 'workdir.git.status'
       ? JSON.stringify({ status: 200, body: { available: true, entries: [{ path: 'a.md', status: 'modified' }] } })
       : request.operation === 'workdir.git.diff'
       ? JSON.stringify({ status: 200, body: { path, status: 'modified', base: 'HEAD', binary: false, truncated: false, hunks: [] } })
@@ -91,7 +93,7 @@ test('file and Git routes distinguish offline nodes from unavailable capabilitie
   ] as const) {
     node = state
     capability = folder
-    for (const suffix of ['files', 'files?path=child', 'preview?path=notes.txt', 'raw?path=notes.txt', 'git/status', 'git/diff?path=notes.txt']) {
+    for (const suffix of ['files', 'files/search?query=notes', 'files?path=child', 'preview?path=notes.txt', 'raw?path=notes.txt', 'git/status', 'git/diff?path=notes.txt']) {
       const response = await app.request(`/api/sessions/remote/${suffix}`)
       assert.equal(response.status, 503)
       assert.deepEqual(await response.json(), workdirUnavailableApiResult('remote', {
@@ -380,6 +382,11 @@ test('session file routes dispatch remote listings and previews but not raw byte
       { name: 'z.txt', type: 'file', ext: '.txt', size: 0, mtime: null },
     ],
   })
+  const searchResponse = await app.request('/api/sessions/remote/files/search?query=notes')
+  assertEquals(searchResponse.status, 200)
+  assertEquals(await searchResponse.json(), { paths: ['folder/notes.md'], truncated: false })
+  assertEquals(executor.requests.at(-1)?.args, { path: '.', query: 'notes' })
+  assertEquals((await app.request('/api/sessions/remote/files/search?query=')).status, 400)
 
   const previewResponse = await app.request(
     '/api/sessions/remote/preview?path=notes.txt',
@@ -403,7 +410,7 @@ test('session file routes dispatch remote listings and previews but not raw byte
   assertEquals(encoded.status, 501)
   assertEquals(await encoded.json(), { error: 'remote_encoding_unavailable' })
   assertEquals((await app.request('/api/sessions/remote/preview?path=notes.txt&encoding=invalid')).status, 400)
-  assertEquals(executor.requests.length, 2)
+  assertEquals(executor.requests.length, 3)
   const gitStatus = await remoteGitRequest('status')
   assertEquals(gitStatus, { available: true, entries: [{ path: 'a.md', status: 'modified' }] })
   assertEquals((await remoteGitRequest('diff?path=a.md')).path, 'a.md')

@@ -10,7 +10,8 @@ export class ContinuationTool implements Tool {
   readonly description =
     'Set a continuation string on a background task. ' +
     'When the task completes and its event fires back to the session, ' +
-    'the continuation text will be carried as a prefix in the callback message.'
+    'the continuation text will be carried as a prefix in the callback message. ' +
+    'Optional for running tasks only; completion is automatic and terminal tasks are never replayed.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

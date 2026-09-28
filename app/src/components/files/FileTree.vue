@@ -18,6 +18,10 @@
           <slot name="actions" />
         </div>
       </header>
+      <div class="file-tree-search">
+        <input v-model="filterQuery" type="search" aria-label="Search file paths" placeholder="Search file paths" />
+        <p v-if="filterQuery && !changesOnly" class="file-tree-search-hint">Searches file paths with ripgrep; respects ignore rules.</p>
+      </div>
       <div ref="body" :id="`${id}-body`" class="file-tree-body" :role="treeOnly ? 'tabpanel' : undefined" :aria-labelledby="treeOnly ? `${id}-${changesOnly ? 'changes' : 'files'}-tab` : undefined" @scroll="saveScroll">
         <HoverInfo v-if="loaded" :text="workspaceInfo" v-slot="{ triggerProps }">
           <div v-bind="triggerProps" class="file-tree-root" tabindex="0" :aria-label="workspaceInfo">
@@ -37,13 +41,27 @@
           <p>{{ error }}</p><button class="file-tree-retry" @click="reload()">Retry</button>
         </div>
         <p v-if="hasSource && changesOnly && gitStatus?.available && !gitLoading && displayEntries.length === 0 && !gitError" class="file-tree-note">Working tree clean.</p>
+        <template v-if="normalizedFilter && !changesOnly && hasSource">
+          <p v-if="searching" class="file-tree-note" role="status">Searching file paths...</p>
+          <p v-if="searchError" class="file-tree-note error" role="alert">{{ searchError }}</p>
+          <p v-if="!searching && !searchError && !searchPaths.length" class="file-tree-note">No matching file paths.</p>
+          <p v-if="searchTruncated" class="file-tree-note">Showing the first 200 matches. Narrow your search to find more.</p>
+          <button v-for="path in searchPaths" :key="path" type="button" class="file-search-result"
+            :aria-current="selectedPath === path ? 'page' : undefined" :title="path" @click="openSearchResult(path)">
+            <span class="i-lucide-file w-4 h-4" aria-hidden="true" /><span>{{ path }}</span>
+          </button>
+        </template>
+        <p v-if="filterQuery && changesOnly && !filteredEntries.length && gitStatus?.available" class="file-tree-note">No matching changes.</p>
+        <template v-if="!normalizedFilter || changesOnly">
         <template v-if="hasSource && (changesOnly ? gitStatus?.available : loaded)">
-          <FileTreeNode v-for="entry in displayEntries" :key="`${workspaceKey}:${changesOnly}:${fileEntryKey(entry)}`" :api-base="displaySource.apiBase"
+          <FileTreeNode v-for="entry in filteredEntries" :key="`${workspaceKey}:${changesOnly}:${fileEntryKey(entry)}`" :api-base="displaySource.apiBase"
             :session-id="displaySource.sessionId" :folder-id="displaySource.folderId" dir="" :entry="entry" :depth="0" :active="active && !sourcePending"
+            :filter-query="changesOnly ? normalizedFilter : ''"
             :workspace-key="workspaceKey"
             :selected-path="selectedPath" :reveal-version="revealVersion"
             :refresh-version="homeState?.revision ?? revision" :home-state="changesOnly ? undefined : homeState"
             :changes-only="changesOnly" :changes="gitStatus?.available ? gitStatus.entries : []" @open="onOpen" @node-offline="fileOffline = true" />
+        </template>
         </template>
         </template>
       </div>
@@ -73,6 +91,12 @@ const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; fol
 const emit = defineEmits<{ open: [payload: OpenFile]; 'refresh-git': [] }>()
 const id = `file-tree-${useId()}`
 const changesOnly = ref(false)
+const filterQuery = ref('')
+const normalizedFilter = computed(() => filterQuery.value.trim().toLocaleLowerCase())
+const searchPaths = ref<string[]>([])
+const searching = ref(false)
+const searchError = ref('')
+const searchTruncated = ref(false)
 const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
 const hasSource = computed(() => !!(props.folderId || props.sessionId))
 const tree = ref<HTMLElement>()
@@ -81,6 +105,8 @@ const homeCache = inject(HomeTreeCacheKey, undefined)
 const homeState = shallowRef<HomeTreeState>()
 const rootEntries = ref<FileEntry[]>([])
 const displayEntries = computed(() => changesOnly.value ? changedDirectory(props.gitStatus?.entries ?? []) : homeState.value?.entries ?? rootEntries.value)
+const filteredEntries = computed(() => displayEntries.value.filter(entry =>
+  !normalizedFilter.value || entry.type === 'dir' || entry.name.toLocaleLowerCase().includes(normalizedFilter.value)))
 const loading = ref(false)
 const loaded = ref(false)
 const workdir = ref<DirListing['workdir']>()
@@ -168,6 +194,11 @@ function onOpen(payload: { path: string; entry: FileEntry }): void {
   previewPath.value = payload.path
   previewEntry.value = payload.entry
 }
+function openSearchResult(path: string) {
+  const name = path.split('/').at(-1)!
+  const dot = name.lastIndexOf('.')
+  onOpen({ path, entry: { name, type: 'file', ext: dot < 0 ? '' : name.slice(dot).toLowerCase(), size: 0, mtime: null } })
+}
 function closePreview(): void {
   previewEntry.value = null
   void nextTick(() => Array.from(tree.value?.querySelectorAll<HTMLButtonElement>('.tree-row') ?? [])
@@ -203,6 +234,7 @@ watch([() => props.apiBase, () => props.sessionId, () => props.folderId, expecte
   }
   sourcePending.value = hasSource.value
   changesOnly.value = false
+  filterQuery.value = ''
   previewEntry.value = null
   if (props.active) void reload(false)
 }, { immediate: true })
@@ -210,6 +242,28 @@ watch(() => props.active, active => {
   if (active && (!loaded.value || sourcePending.value)) void reload(false)
   else if (!active) { request?.abort(); request = undefined; loading.value = false; previewEntry.value = null }
 })
+watch([normalizedFilter, changesOnly, () => props.active, () => props.apiBase, () => props.sessionId, () => props.folderId, loaded, sourcePending],
+  ([query, changes, active], _previous, onCleanup) => {
+    searchPaths.value = []
+    searching.value = false
+    searchError.value = ''
+    searchTruncated.value = false
+    if (!query || changes || !active || !hasSource.value || !loaded.value || sourcePending.value) return
+    const controller = new AbortController()
+    searching.value = true
+    const timer = setTimeout(async () => {
+      try {
+        const result = await files.value.searchPaths(props.sessionId, query, controller.signal)
+        if (!controller.signal.aborted) {
+          searchPaths.value = result.paths
+          searchTruncated.value = result.truncated
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted) searchError.value = cause instanceof Error ? cause.message : 'File search failed. Retry.'
+      } finally { if (!controller.signal.aborted) searching.value = false }
+    }, 200)
+    onCleanup(() => { clearTimeout(timer); controller.abort() })
+  }, { immediate: true })
 watch(() => props.revealVersion, () => {
   changesOnly.value = false
   if (props.active && loaded.value && !loading.value) void reload()
@@ -232,6 +286,14 @@ defineExpose({ reload })
 .tree-only .file-tree-list { flex: 1; max-width: none; min-width: 0; border-right: 0; }
 .file-tree-actions { display: flex; align-items: center; gap: 2px; }
 .tree-only .file-tree-header { min-height: 40px; box-sizing: border-box; padding: 4px 6px; border-bottom: 1px solid var(--c-border); }
+.file-tree-search { padding: 8px; border-bottom: 1px solid var(--c-border); }
+.file-tree-search input { box-sizing: border-box; width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 12px; }
+.file-tree-search input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.file-tree-search-hint { margin: 6px 0 0; color: var(--c-text-secondary); font-size: 12px; }
+.file-search-result { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 6px; border: 0; background: transparent; color: var(--c-text); text-align: left; font: inherit; font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
+.file-search-result:hover, .file-search-result[aria-current="page"] { background: var(--c-bg-muted); }
+.file-search-result:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+.file-search-result > span:last-child { min-width: 0; }
 .file-tree-modes { display: flex; align-items: stretch; min-width: 0; }
 .file-tree-modes button { padding: 6px; min-height: 32px; border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; cursor: pointer; }
 .file-tree-modes button[aria-selected="true"] { color: var(--c-text); box-shadow: inset 0 -2px var(--c-blue); }

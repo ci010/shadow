@@ -1,10 +1,10 @@
 <template>
   <component :is="embedded ? 'section' : 'details'" v-show="!embedded || expanded" class="work-alignment" :class="{ 'is-embedded': embedded }" @toggle="toggle">
     <summary v-if="!embedded">Work <span v-if="needsAttention">— review needed</span></summary>
-    <p>Goals, human boundaries and the agent's current phase are separate. A revision grants no permissions and does not cancel external work.</p>
+    <p class="work-note">A revision changes the agreement, not permissions or external operations.</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <button type="button" :disabled="busy" @click="load">{{ busy ? 'Loading...' : 'Refresh work state' }}</button>
-    <label v-if="view.records.length">Work item
+    <label v-if="view.records.length > 1">Work item
       <select v-model="selected" :disabled="busy || editing">
         <option v-for="item in view.records" :key="item.key" :value="item.key">{{ item.workflow?.title || item.key }} · v{{ item.revision }}</option>
       </select>
@@ -12,7 +12,7 @@
     <template v-if="current">
       <p><strong>{{ current.definition.objective }}</strong></p>
       <p>{{ current.origin === 'human' ? 'Human-confirmed agreement' : 'Agent interpretation — not a quoted user requirement' }}</p>
-      <p>Controller: {{ current.authority.manager || 'unassigned' }} · Executor: {{ current.authority.executor || 'unassigned' }}</p>
+      <p>Managed by: {{ sessionTitle(current.authority.manager) }} · Assigned to: {{ sessionTitle(current.authority.executor) }}</p>
       <p v-if="current.workflow">Progress: {{ current.workflow.status }}<template v-if="current.workflow.blockedReason"> — {{ current.workflow.blockedReason }}</template></p>
       <p v-if="current.workflow?.parentKey">Parent work: {{ current.workflow.parentKey }}</p>
       <p v-if="current.workflow?.dependencies.length">Dependencies: {{ current.workflow.dependencies.join(', ') }}</p>
@@ -52,21 +52,17 @@
           <pre>{{ JSON.stringify(event.data, null, 2) }}</pre>
         </article>
       </details>
-      <details v-if="current.checkpoint">
-        <summary>Executor checkpoint · v{{ current.checkpoint.revision }}</summary>
-        <p v-for="field in inventoryFields" :key="field">{{ field }}: {{ current.checkpoint[field].join('; ') || 'None reported' }}</p>
-      </details>
       <div v-if="canWrite" class="work-actions">
-        <button type="button" :disabled="busy || editing" @click="edit()">Revise work</button>
-        <button type="button" :disabled="busy || editing" @click="edit(false, true)">New work item</button>
-        <button type="button" :disabled="busy || editing" @click="edit(true)">Add child work</button>
-        <button type="button" :disabled="busy" @click="perform('request_checkpoint')">Request executor checkpoint</button>
-        <button type="button" :disabled="busy || !canTransition" @click="transition = 'fresh'">Fresh context</button>
-        <button type="button" :disabled="busy || !canTransition" @click="transition = 'successor'">Prepare successor</button>
+        <button type="button" :disabled="busy || editing || !current.authority.active" @click="edit()">Revise work</button>
+        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(false, true)">New work item</button>
+        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(true)">Add child work</button>
       </div>
       <details v-if="canWrite && current.workflow && current.sequence">
         <summary>Assignment and progress</summary>
-        <label v-if="!current.workflow.assignee">Assign to Session <input v-model="assignee" placeholder="Session ID"></label>
+        <label v-if="!current.workflow.assignee">Assign to session
+          <select v-if="sessions" v-model="assignee"><option value="">Choose a session</option><option v-for="session in sessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option></select>
+          <input v-else v-model="assignee" placeholder="Session ID">
+        </label>
         <button v-if="!current.workflow.assignee" type="button" :disabled="busy || !assignee.trim()" @click="manage('assign', { assignee: assignee.trim() })">Assign work</button>
         <template v-else>
           <label>Release reason <input v-model="releaseReason" placeholder="Verified handoff context"></label>
@@ -78,11 +74,23 @@
         <label v-if="progress === 'done'">Verified acceptance and result <textarea v-model="result" required /></label>
         <button type="button" :disabled="busy || progress === 'done' && !result.trim() || progress === 'blocked' && !blocker.trim()" @click="saveProgress">Record progress</button>
       </details>
-      <p v-if="!canTransition">A current executor checkpoint with no unresolved effects is required before context replacement.</p>
+      <details class="advanced-work">
+        <summary>Advanced recovery</summary>
+        <details v-if="current.checkpoint">
+          <summary>Executor checkpoint · v{{ current.checkpoint.revision }}</summary>
+          <p v-for="field in inventoryFields" :key="field">{{ field }}: {{ current.checkpoint[field].join('; ') || 'None reported' }}</p>
+        </details>
+        <div v-if="canWrite" class="work-actions">
+          <button type="button" :disabled="busy || !current.authority.executor" @click="perform('request_checkpoint')">Request executor checkpoint</button>
+          <button type="button" :disabled="busy || !canTransition" @click="transition = 'fresh'">Fresh context</button>
+          <button type="button" :disabled="busy || !canTransition" @click="transition = 'successor'">Prepare successor</button>
+        </div>
+        <p v-if="!canTransition">A current executor checkpoint with no unresolved effects is required before context replacement.</p>
+      </details>
     </template>
     <template v-else-if="!busy">
       <p>No work is assigned here. Conversation needs no work item; create one when execution or tracking is needed.</p>
-      <button v-if="canWrite" type="button" @click="edit()">Create work item</button>
+      <button v-if="canWrite && !project" type="button" @click="edit()">Create work item</button>
     </template>
     <form v-if="editing && canWrite" @submit.prevent="save">
       <label v-if="creating">Work title <input v-model="title" required maxlength="160"></label>
@@ -115,8 +123,10 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
 import { parseWorkView, type WorkView } from '../work-alignment.ts'
-const props = defineProps<{ sessionId: string; apiBase: string; canWrite: boolean; embedded?: boolean; expanded?: boolean; revision?: number }>()
-const emit = defineEmits<{ attention: [needed: boolean] }>()
+const props = defineProps<{ sessionId: string; apiBase: string; canWrite: boolean; embedded?: boolean; expanded?: boolean; revision?: number;
+  project?: boolean; workKey?: string; sessions?: { sessionId: string; title: string }[] }>()
+const emit = defineEmits<{ attention: [needed: boolean]; updated: []; editing: [value: boolean] }>()
+const sessionTitle = (id: string | null) => id ? props.sessions?.find(session => session.sessionId === id)?.title ?? id : 'Unassigned'
 const view = ref<WorkView>({ records: [], effects: [] })
 const selected = ref('')
 const current = computed(() => view.value.records.find(record => record.key === selected.value))
@@ -128,7 +138,8 @@ const needsAttention = computed(() => view.value.records.some(record =>
 const canTransition = computed(() => current.value?.checkpoint?.revision === current.value?.revision
   && !!current.value?.checkpoint && !current.value.checkpoint.inFlight.length && !current.value.checkpoint.unknown.length && !view.value.effects.length)
 const inventoryFields = ['completed', 'artifacts', 'inFlight', 'unknown', 'retired'] as const
-const busy = ref(false), error = ref(''), editing = ref(false)
+const busy = ref(false), readError = ref(''), actionError = ref(''), editing = ref(false)
+const error = computed(() => actionError.value || readError.value)
 const objective = ref(''), acceptance = ref(''), boundaries = ref(''), reason = ref('')
 const title = ref(''), creating = ref(false), parentKey = ref<string>()
 const assignee = ref(''), releaseReason = ref(''), progress = ref('in_progress'), blocker = ref(''), result = ref('')
@@ -141,9 +152,12 @@ let refreshPending = false
 async function request(body?: object) {
   controller?.abort()
   const pending = new AbortController()
-  controller = pending; busy.value = true; error.value = ''
+  controller = pending; busy.value = true
+  if (body) actionError.value = ''
+  else readError.value = ''
   try {
-    const response = await fetch(apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.sessionId)}/work`), {
+    const path = props.project ? `/api/work/${encodeURIComponent(props.workKey ?? '')}` : `/api/sessions/${encodeURIComponent(props.sessionId)}/work`
+    const response = await fetch(apiUrl(props.apiBase, path), {
       method: body ? 'POST' : 'GET', signal: AbortSignal.any([pending.signal, AbortSignal.timeout(15000)]),
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
     })
@@ -153,8 +167,16 @@ async function request(body?: object) {
     if (pending.signal.aborted) return false
     view.value = parsed
     if (!parsed.records.some(record => record.key === selected.value)) selected.value = parsed.selected ?? parsed.records[0]?.key ?? ''
+    if (body) emit('updated')
     return true
-  } catch (cause) { if (!pending.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Work alignment failed.'; return false }
+  } catch (cause) {
+    if (!pending.signal.aborted) {
+      const message = cause instanceof Error ? cause.message : 'Work alignment failed.'
+      if (body) actionError.value = message
+      else readError.value = message
+    }
+    return false
+  }
   finally {
     if (controller === pending) {
       busy.value = false
@@ -170,6 +192,7 @@ watch(() => props.revision, () => {
 })
 function toggle(event: Event) { opened = (event.currentTarget as HTMLDetailsElement).open; if (opened) void load(); else controller?.abort() }
 watch(needsAttention, needed => emit('attention', !!needed), { immediate: true })
+watch(editing, value => emit('editing', value))
 watch(() => props.expanded, expanded => {
   if (!props.embedded) return
   opened = !!expanded
@@ -177,6 +200,7 @@ watch(() => props.expanded, expanded => {
   else controller?.abort()
 }, { immediate: true })
 function edit(child = false, root = false) {
+  actionError.value = ''
   creating.value = root || child || !current.value
   parentKey.value = child ? current.value?.key : undefined
   const record = creating.value ? undefined : current.value
@@ -211,8 +235,8 @@ async function perform(action: string, data?: object) {
   if (!props.canWrite || !current.value) return
   if (await request({ action, key: current.value.key, revision: current.value.revision, data })) { transition.value = ''; settleId.value = '' }
 }
-watch(() => [props.apiBase, props.sessionId, props.canWrite], () => {
-  controller?.abort(); view.value = { records: [], effects: [] }; selected.value = error.value = transition.value = settleId.value = ''
+watch(() => [props.apiBase, props.sessionId, props.canWrite, props.workKey], () => {
+  controller?.abort(); view.value = { records: [], effects: [] }; selected.value = readError.value = actionError.value = transition.value = settleId.value = ''
   editing.value = false; if (opened) void load()
 })
 onUnmounted(() => controller?.abort())

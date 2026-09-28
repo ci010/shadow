@@ -59,6 +59,22 @@ test('managed run navigation delegates ownership without replacing or resetting 
   assert.deepEqual(view.events.slice(-2), [['primary-change', 'opaque-run'], ['navigate', 'opaque-run']])
 })
 
+test('inspecting the selected execution toggles its child pane without changing sidebar selection', () => {
+  const view = fixture({ managed: true, sessionId: 'opaque-run', enableChildPane: true })
+  view.navigation.inspectExecution('trace')
+  assert.deepEqual(view.events, [['open-child', { primaryId: 'opaque-run', childId: 'trace' }]])
+  view.props.childSessionId = 'trace'
+  view.navigation.inspectExecution('trace')
+  assert.deepEqual(view.events.at(-1), ['close-child', undefined])
+  assert.deepEqual(view.effects, [])
+  view.props.childSessionId = undefined
+  view.navigation.inspectExecution('trace')
+  assert.deepEqual(view.events.at(-1), ['open-child', { primaryId: 'opaque-run', childId: 'trace' }])
+  view.props.childSessionId = 'trace'
+  view.navigation.requestSession('trace')
+  assert.deepEqual(view.events.at(-1), ['open-child', { primaryId: 'opaque-run', childId: 'trace' }], 'Sidebar navigation does not toggle')
+})
+
 test('unmanaged child navigation restores the owning run and embedded inspection never changes the primary', () => {
   const view = fixture({ enableChildPane: true })
   view.navigation.requestSession('trace')

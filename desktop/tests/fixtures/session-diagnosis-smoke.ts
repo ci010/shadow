@@ -63,7 +63,10 @@ async function main() {
     assert.equal(await execute(`document.querySelector('#diagnosis-tools .tool-def-name').textContent`), 'read')
     window.setContentSize(1200, 1100)
     await window.loadURL(`${process.env.TRACE_SMOKE_URL}/__tool-details`)
-    await wait(`document.querySelectorAll('.tool-entry').length === 2`)
+    await wait(`document.querySelectorAll('.tool-entry').length === 4`)
+    assert.deepEqual(await execute(`[...document.querySelectorAll('.tool-entry .tool-icon')].map(icon =>
+      [...icon.classList].find(name => name.startsWith('i-material-icon-theme-') || name.startsWith('i-lucide-')))`),
+    ['i-material-icon-theme-json', 'i-lucide-wrench', 'i-material-icon-theme-python', 'i-lucide-file-pen-line'])
     assert.equal(await execute(`document.querySelectorAll('.tool-payload, .file-highlight-content').length`), 0, 'Collapsed tool groups mount no payload renderers')
     await click('.tool-activity-summary')
     await wait(`document.querySelector('.tool-activity').open`)

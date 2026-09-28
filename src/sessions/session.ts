@@ -159,6 +159,11 @@ export class Session extends BaseSession {
       return
     }
 
+    if (msg.policy === 'next-step') {
+      this.turn.steerQueue.push(msg)
+      return
+    }
+
     if (!this.turn.toolStartedAt) {
       this.turn.abort()
       console.log(

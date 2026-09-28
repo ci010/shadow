@@ -1,5 +1,6 @@
 import type { ExecutionMode } from './execution-mode.ts'
 import type { InputSource } from './input.ts'
+import type { ChatMessage } from '../providers/provider.ts'
 
 /** Display provenance for conversational responses, never routing or authority. */
 export interface ResponseContext {
@@ -33,6 +34,19 @@ export function createResponseContext(
 
 export function isBackgroundResponse(context: ResponseContext | undefined): boolean {
   return !!context && !context.userInvolved && context.source.kind !== 'user'
+}
+
+/** Recover the audience of an unfinished turn from its most recent persisted input or response. */
+export function continuedUserInvolvement(messages: ChatMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.role === 'assistant' && message.responseContext) return message.responseContext.userInvolved
+    if (message.role !== 'user') continue
+    if (message.name === '__work_realignment__') continue
+    const tag = Array.isArray(message.content) ? message.content[0] : undefined
+    return tag?.type === 'text' && /^<sender id="[^"]*" name="[^"]*" chat="(?:direct|group)"\s*\/>$/.test(tag.text)
+  }
+  return false
 }
 
 function record(value: unknown): value is Record<string, unknown> {

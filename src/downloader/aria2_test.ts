@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { access, readFile, symlink, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import { join, parse } from 'node:path'
 import { platform } from 'node:os'
 import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import { Aria2Downloader, downloadSchema, releaseBinary, runAria2 } from './aria2.ts'
+import { Aria2Downloader, downloadSchema, releaseBinary, requestedBinary, runAria2 } from './aria2.ts'
 
 const bytes = Buffer.from('synthetic resumable release payload')
 const sha256 = createHash('sha256').update(bytes).digest('hex')
@@ -25,7 +26,7 @@ test('pinned aria2 stages, resumes, hashes and atomically exposes approved files
       }
       assert.deepEqual(await readFile(stage), bytes.subarray(0, 12))
       await writeFile(stage, bytes)
-    }, () => process.execPath, async () => 'aria2 version 1.37.0\n')
+    }, () => process.execPath, async () => 'aria2 version 1.37.0\n', async () => undefined)
     const input = {
       url: 'https://example.org/model.gguf?signature=private', directory, filename: 'model.gguf',
       sha256, bytes: bytes.length, approved: true as const,
@@ -52,7 +53,7 @@ test('download refuses unapproved, insecure, unverified or unsafe targets and di
       assert.ok(args.includes('--input-file=-'))
       assert.equal(commandInput, 'https://example.org/model.gguf\n  out=model.gguf.shadow-part\n')
       await writeFile(join(directory, 'model.gguf.shadow-part'), 'corrupt model')
-    }, () => process.execPath, async () => 'aria2 version 1.37.0\n')
+    }, () => process.execPath, async () => 'aria2 version 1.37.0\n', async () => undefined)
     const input = { url: 'https://example.org/model.gguf', directory, filename: 'model.gguf', sha256, approved: true as const }
     assert.throws(() => downloadSchema.parse({ ...input, approved: false }), /Invalid literal/)
     await assert.rejects(() => downloader.download({ ...input, url: 'http://example.org/model.gguf' }), /HTTPS/)
@@ -82,14 +83,14 @@ test('concurrent downloads to the same target fail rather than mixing partial da
       started()
       await held
       await writeFile(join(directory, 'model.gguf.shadow-part'), bytes)
-    }, () => process.execPath, async () => 'aria2 version 1.37.0\n')
+    }, () => process.execPath, async () => 'aria2 version 1.37.0\n', async () => undefined)
     const input = { url: 'https://example.org/model.gguf', directory, filename: 'model.gguf', sha256, approved: true as const }
     const running = downloader.download(input)
     await ready
     await assert.rejects(() => downloader.download(input), /already running/)
     const anotherProject = new Aria2Downloader(async () => {
       throw new Error('Concurrent project must not start a second transfer')
-    }, () => process.execPath, async () => 'aria2 version 1.37.0\n')
+    }, () => process.execPath, async () => 'aria2 version 1.37.0\n', async () => undefined)
     await assert.rejects(() => anotherProject.download(input), /already running/)
     release()
     await running
@@ -102,11 +103,79 @@ test('signed URLs travel through stdin, not process arguments', async () => {
     'https://example.org/model?token=secret\n  out=model.shadow-part\n')
 })
 
+test('configured proxies use the private stdin channel without weakening TLS or changing the source', async () => withTempWorkspace(async directory => {
+  const downloader = new Aria2Downloader(async (_binary, args, _signal, input) => {
+    assert.ok(args.includes('--all-proxy='))
+    assert.ok(!args.some(value => value.includes('proxy.example') || value.includes('check-certificate=false')))
+    assert.equal(input, 'https://example.org/model.gguf\n  out=model.gguf.shadow-part\n  all-proxy=http://proxy.example:8080/\n')
+    await writeFile(join(directory, 'model.gguf.shadow-part'), bytes)
+  }, () => process.execPath, async () => 'aria2 version 1.37.0\n', async url => {
+    assert.equal(url, 'https://example.org/model.gguf')
+    return 'http://proxy.example:8080/'
+  })
+  await downloader.download({ url: 'https://example.org/model.gguf', directory, filename: 'model.gguf', sha256, approved: true })
+}))
+
+test('download errors expose actionable categories without echoing signed URLs or raw output', async () => {
+  for (const [diagnostic, expected] of [
+    ['errorCode=1 SSL/TLS handshake failure: https://example.org/file?token=private-token', /TLS handshake/],
+    ['Failed to resolve example.org; private-token', /DNS resolution/],
+    ['Connection timed out private-token', /timed out/],
+    ['HTTP status=403 private-token', /HTTP error/],
+    ['some unrecognized failure private-token', /Inspect the approved source/],
+  ] as const) {
+    const script = `console.error(${JSON.stringify(diagnostic)});process.exitCode=1`
+    await assert.rejects(runAria2(process.execPath, ['-e', script]), error => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, expected)
+      assert.doesNotMatch(error.message, /private-token|https:\/\/|example\.org/)
+      return true
+    })
+  }
+})
+
+test('cancellation settles only after the downloader process has exited', async () => withTempWorkspace(async directory => {
+  const pidFile = join(directory, 'pid.txt')
+  const script = `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
+    process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),200));setInterval(()=>{},1000)`
+  const controller = new AbortController()
+  const running = runAria2(process.execPath, ['-e', script], controller.signal)
+  const rejected = assert.rejects(running, { name: 'AbortError' })
+  let pid = 0
+  try {
+    for (let i = 0; i < 100 && !pid; i++) {
+      try { pid = Number(await readFile(pidFile, 'utf8')) }
+      catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error }
+      if (!pid) await delay(20)
+    }
+    assert.ok(pid)
+  } finally { controller.abort() }
+  await rejected
+  assert.throws(() => process.kill(pid, 0), /ESRCH/)
+}))
+
 test('packaged backend locates the neighboring fixed downloader instead of PATH', async () => {
   await withTempWorkspace(async root => {
     const module = join(root, 'resources', 'backend', 'dist', 'src', 'downloader', 'aria2.js')
     const filename = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c'
     assert.equal(releaseBinary(pathToFileURL(module).href), join(root, 'resources', 'aria2', filename))
+    assert.equal(requestedBinary(pathToFileURL(module).href, ''), join(root, 'resources', 'aria2', filename))
+  })
+})
+
+test('source and built development backends resolve the checkout binary independently of cwd', async () => {
+  await withTempWorkspace(async root => {
+    await mkdir(join(root, 'scripts'))
+    await writeFile(join(root, 'scripts', 'desktop.ts'), '// synthetic checkout marker')
+    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n')
+    const filename = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c'
+    for (const module of [join(root, 'src', 'downloader', 'aria2.ts'), join(root, 'dist', 'src', 'downloader', 'aria2.js')]) {
+      assert.equal(requestedBinary(pathToFileURL(module).href, ''), join(root, 'desktop', 'aria2', filename))
+      assert.equal(requestedBinary(pathToFileURL(module).href, process.execPath), process.execPath)
+      assert.throws(() => requestedBinary(pathToFileURL(module).href, filename), /must be absolute/)
+    }
+    const downloader = new Aria2Downloader(undefined, () => requestedBinary(pathToFileURL(join(root, 'src', 'downloader', 'aria2.ts')).href, ''))
+    await assert.rejects(downloader.status(), /Pinned aria2c 1\.37\.0 is missing:.*SHADOW_ARIA2C_PATH/)
   })
 })
 

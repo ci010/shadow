@@ -11,6 +11,7 @@ interface BeforeSendHeadersDetails {
   readonly url: string
   readonly requestHeaders: Record<string, string>
   readonly webContentsId?: number
+  readonly frame?: { readonly parent: unknown | null } | null
 }
 
 interface BeforeSendHeadersResponse {
@@ -44,6 +45,7 @@ export function installRuntimeRequestAuthorization(
       if (
         current !== null &&
         isTrustedRequest(details) &&
+        details.frame?.parent === null &&
         isExactOrigin(details.url, current.apiBase) &&
         !hasAuthorizationHeader(requestHeaders)
       ) {

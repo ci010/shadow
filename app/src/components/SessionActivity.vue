@@ -1,7 +1,7 @@
 <template>
   <span class="session-activity" :class="[activity.kind, { working: activity.working, compact, 'status-icons': statusIcons }]" :title="label" :aria-label="compact ? label : undefined" :role="compact ? 'img' : undefined">
     <span v-if="stage || !delegatedLabel" class="activity-symbol" aria-hidden="true">
-      <span v-if="statusIcons" :class="statusIcon" class="status-icon" />
+      <span v-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
       <span v-else-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
       <span v-else-if="activity.kind === 'running'" class="activity-wave"><i /><i /><i /></span>
       <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
@@ -42,10 +42,12 @@ const label = computed(() => [props.stage || !delegatedLabel.value ? activity.va
 .session-activity.completed { color: var(--c-success); }
 .session-activity.failed { color: var(--c-error); }
 .session-activity.waiting { color: var(--c-warn); }
+.session-activity:is(.compact, .status-icons):is(.llm, .tool, .running, .waiting-for-call, .pending) { color: var(--c-info); }
 .session-activity.waiting.compact { gap: 4px; padding: 2px 5px; background: var(--c-warn-bg); border: 1px solid var(--c-warn); border-radius: var(--radius-control); }
 .attention-icon { width: 16px; height: 16px; }
 .status-icon { width: 16px; height: 16px; }
 .session-activity.inactive, .session-activity.unknown { color: var(--c-text-muted); }
+.session-activity.cancelled { color: var(--c-text-muted); }
 .activity-symbol { position: relative; display: grid; place-items: center; width: 16px; height: 16px; }
 .activity-spinner { box-sizing: border-box; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-bottom-color: transparent; border-radius: 50%; animation: activity-spin .8s linear infinite; }
 .activity-dot { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: var(--radius-circle); }

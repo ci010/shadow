@@ -1,5 +1,6 @@
 import { normalizeLoopbackOrigin, type RuntimeAuthorization } from './runtime-authorization.js'
 import type { LocalControlFetch } from './sidecar/local-control-client.js'
+import { projectIds } from './project-catalog.js'
 
 interface TaskbarWindow {
   isDestroyed(): boolean
@@ -15,17 +16,6 @@ interface ActivityOptions {
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function projectIds(value: unknown): string[] {
-  if (!record(value) || !Array.isArray(value.projects)) throw new Error('Invalid project activity catalog')
-  const ids = value.projects.map(project => {
-    if (!record(project) || typeof project.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(project.id)) {
-      throw new Error('Invalid project activity identity')
-    }
-    return project.id
-  })
-  return [...new Set(ids)]
 }
 
 function isWorking(value: unknown): boolean {

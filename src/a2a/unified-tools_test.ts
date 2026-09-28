@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createHash } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
@@ -27,6 +29,8 @@ import { CancelTool } from '../tools/cancel.ts'
 import { ReplyTool } from '../tools/reply.ts'
 import { ContinuationTool } from '../tools/background.ts'
 import { ExecTool } from '../tools/shell.ts'
+import { DownloadTool } from '../tools/download.ts'
+import { Aria2Downloader } from '../downloader/aria2.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import { defaultManagedShell } from '../execution/processes/shells.ts'
 import { CommandHandlerManager } from '../tools/shell-commands/command-handler.ts'
@@ -270,7 +274,7 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         for (const other of [{ ...ctx, projectId: 'other' }, { ...ctx, sessionId: '' }]) {
           await assert.rejects(async () => view.read('', other), /owning session/)
         }
-        await assert.rejects(async () => view.read(background.taskId, ctx), /owner/)
+        await assert.rejects(async () => view.read(background.taskId, ctx), /Execution not found or access denied.*full executionId.*bg:/)
         const continuation = new ContinuationTool(f.backgroundTasks, f.sessions)
         assert.match(await continuation.execute({ executionId: bgId, continuation: 'Next step' }, ctx), /bg:/)
         await assert.rejects(continuation.execute({ executionId: bgId, continuation: 'Steal' }, f.context('web:other')), /owner/)
@@ -285,6 +289,37 @@ for (const storage of ['jsonl', 'sqlite'] as const) {
         await assert.rejects(f.cancel.execute({ executionId: bgId }, { ...ctx, signal: aborted.signal }), /Turn aborted/)
         assert.equal(f.backgroundTasks.listTasks(ctx.sessionId)[0].status, 'running')
         assert.equal(JSON.parse(await f.cancel.execute({ executionId: bgId }, ctx)).status, 'cancelled')
+      } finally { await f.close() }
+    })
+  })
+
+  test(`background downloads return directly readable owner-scoped execution paths (${storage})`, async () => {
+    await withTempWorkspace(async root => {
+      const f = await fixture(root, storage, { async run() { throw new Error('No remote execution expected') } })
+      try {
+        const payload = 'synthetic download output'
+        const downloader = new Aria2Downloader(async () => {
+          await writeFile(join(root, 'fixture.bin.shadow-part'), payload)
+        }, () => process.execPath, async () => 'aria2 version 1.37.0\n')
+        const tool = new DownloadTool(downloader, 'p', f.backgroundTasks)
+        const ctx = f.context()
+        const receipt = JSON.parse(await tool.execute({
+          action: 'start', directory: root, filename: 'fixture.bin', url: 'https://example.org/fixture.bin',
+          sha256: createHash('sha256').update(payload).digest('hex'), approved: true,
+        }, ctx))
+        assert.match(receipt.executionId, /^bg:[a-f0-9]{16}$/)
+        assert.equal(receipt.outputPath, `v:bg/${receipt.executionId}`)
+        const view = createBgTasksHandler(f.backgroundTasks, f.sessions, f.remote)
+        const vfs = new VirtualFs()
+        vfs.mount('v:bg', 'Executions', view.read, view.list)
+        assert.match((await vfs.resolve(receipt.outputPath, ctx))!, /Execution ID: bg:/)
+        await f.backgroundTasks.awaitTask(receipt.taskId, 2000)
+        assert.match((await vfs.resolve(receipt.outputPath, ctx))!, /Status: completed/)
+        await assert.rejects(async () => vfs.resolve(`v:bg/${receipt.taskId}`, ctx), /full executionId.*bg:/)
+        await assert.rejects(async () => vfs.resolve(receipt.outputPath, f.context('web:other')), /owner/)
+        await assert.rejects(async () => vfs.resolve(receipt.outputPath, { ...ctx, projectId: 'other' }), /owning session/)
+        const cancelled = JSON.parse(await f.cancel.execute({ executionId: receipt.executionId }, ctx))
+        assert.equal(cancelled.status, 'completed', 'Cancel preserves an already-completed transfer')
       } finally { await f.close() }
     })
   })

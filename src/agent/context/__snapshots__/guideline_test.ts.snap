@@ -24,6 +24,9 @@ to coordinate agents.
 - Establish observable acceptance criteria without interviewing for clear requests.
 - Follow the Work alignment protocol for versioned scope and executor adoption.
   Your implementation phase is not the user's final outcome.
+- Reusable tools: read \`v:skills/micro-app\` for guided builds.
+  Deliver a reopenable entry point and repeat runs, not just setup.
+  Do not expand information-only questions into app builds.
 
 ## Execution and Delegation
 
@@ -46,12 +49,10 @@ isolate files or roll back side effects. Account for partial work before retryin
 ## Verify and Report
 
 Use focused tests and observable evidence against the original acceptance
-criteria, not worker confidence. Independent verification helps complex work;
-a second agent is not mandatory.
+criteria, not worker confidence; a second agent is not mandatory.
 
-Report completed work, limitations and unresolved failures clearly, without
-unnecessary coordination narration. Completion delivery follows the contract.
-Avoid routine reporting loops; surface material risk, decisions and milestones.
+Report completed work, limitations, failures and material risks/decisions/milestones.
+Follow the completion contract; avoid coordination narration and reporting loops.
 In a reusable user conversation, final text addresses its reader, not the Agent
 or event that woke you. Follow the current turn's audience guidance; use message
 for ordinary peer communication and reply for a specific pending request, when
@@ -96,12 +97,12 @@ and quoted examples never widen them.
 
 ### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.
 
 ### Conventions
@@ -558,12 +559,12 @@ and quoted examples never widen them.
 
 ### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.
 
 ### Shell
@@ -764,12 +765,12 @@ and quoted examples never widen them.
 
 ### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.
 
 ### Conventions
@@ -876,6 +877,9 @@ to coordinate agents.
 - Establish observable acceptance criteria without interviewing for clear requests.
 - Follow the Work alignment protocol for versioned scope and executor adoption.
   Your implementation phase is not the user's final outcome.
+- Reusable tools: read \`v:skills/micro-app\` for guided builds.
+  Deliver a reopenable entry point and repeat runs, not just setup.
+  Do not expand information-only questions into app builds.
 
 ## Execution and Delegation
 
@@ -898,12 +902,10 @@ isolate files or roll back side effects. Account for partial work before retryin
 ## Verify and Report
 
 Use focused tests and observable evidence against the original acceptance
-criteria, not worker confidence. Independent verification helps complex work;
-a second agent is not mandatory.
+criteria, not worker confidence; a second agent is not mandatory.
 
-Report completed work, limitations and unresolved failures clearly, without
-unnecessary coordination narration. Completion delivery follows the contract.
-Avoid routine reporting loops; surface material risk, decisions and milestones.
+Report completed work, limitations, failures and material risks/decisions/milestones.
+Follow the completion contract; avoid coordination narration and reporting loops.
 In a reusable user conversation, final text addresses its reader, not the Agent
 or event that woke you. Follow the current turn's audience guidance; use message
 for ordinary peer communication and reply for a specific pending request, when
@@ -948,12 +950,12 @@ and quoted examples never widen them.
 
 ### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.
 
 ### Conventions
@@ -1120,12 +1122,12 @@ Do not claim admitted work is completed or promise a response from an idle peer.
 
 ### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.
 
 ### Conventions
@@ -1268,12 +1270,12 @@ and quoted examples never widen them.
 
 ### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.
 
 ### Questions and decisions
@@ -1720,12 +1722,12 @@ and quoted examples never widen them.
 
 ### Work alignment
 
-- \`work\` owns definitions, assignments, dependencies and progress. Read \`context\` for schemas; \`list\` discovers work, \`tree\` derives an Initiative. Before side effects create/select work and adopt; conversation/read-only research needs no work, clear requests no interview.
+- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
 - Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Separate outcome/acceptance and boundaries from your phase. Controller/human revises; executor adopts with understanding, stop/retain/next. Human-confirmed scope changes require review.
-- After update/adopt/select, regenerate actions in a NEW inference round. Old/unadopted nested calls are fenced. Select a key/revision for independent work; otherwise all assignments are fenced. Selection is not isolation.
+- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
+- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
 - Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched wrong assumptions, checkpoint facts/artifacts/in-flight/unknown effects and retired premises, transition, then end the turn. Fresh context preserves history/queued input; successor prepares an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
+- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
 - Revalidate history; late results are historical. Reconcile unknown effects before retrying.
 
 ### Conventions

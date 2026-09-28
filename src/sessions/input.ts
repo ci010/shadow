@@ -49,7 +49,7 @@ export interface EventInputSource {
 }
 
 export type InputSource = UserInputSource | SessionInputSource | EventInputSource
-export type DeliveryPolicy = 'interactive' | 'queue' | 'steering' | 'silent'
+export type DeliveryPolicy = 'interactive' | 'queue' | 'steering' | 'next-step' | 'silent'
 
 interface InputEnvelope {
   id: string

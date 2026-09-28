@@ -1,19 +1,6 @@
 <template>
-  <section ref="root" class="session-work-controls" aria-label="Session controls" @keydown.esc="closePanel">
+  <section v-show="backgroundStatus.total || backgroundStatus.error || subagents?.length || expanded" ref="root" class="session-work-controls" aria-label="Session controls" @keydown.esc="closePanel">
     <div class="session-work-triggers">
-      <button v-if="canWrite" :id="`${id}-reporting`" ref="reportingTrigger" type="button" data-session-work="reporting"
-        :aria-expanded="expanded === 'reporting'" :aria-controls="`${id}-panel`" aria-haspopup="dialog"
-        aria-label="Decision reporting responsibility" @click="toggle('reporting')">
-        <span>Decision reporting</span>
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
-      </button>
-      <button :id="`${id}-work`" ref="workTrigger" type="button" data-session-work="work"
-        :aria-expanded="expanded === 'work'" :aria-controls="`${id}-panel`" aria-haspopup="dialog"
-        :aria-label="needsAttention ? 'Work alignment — review needed' : undefined" @click="toggle('work')">
-        <span>Work alignment</span>
-        <span v-if="needsAttention" class="session-work-attention" title="Review needed" aria-hidden="true">!</span>
-        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
-      </button>
       <button v-if="backgroundStatus.total || backgroundStatus.error || expanded === 'background'" :id="`${id}-background`" ref="backgroundTrigger"
         type="button" data-session-work="background" :aria-expanded="expanded === 'background'" :aria-controls="`${id}-panel`"
         aria-haspopup="dialog" @click="toggle('background')">
@@ -33,10 +20,7 @@
     </div>
     <Teleport to="body">
       <div v-show="expanded" :id="`${id}-panel`" ref="popup" class="session-work-panel" role="dialog" tabindex="-1"
-        :aria-labelledby="`${id}-${expanded || 'work'}`" :style="position" @keydown="popupKeydown">
-        <DecisionOwner v-if="canWrite" :api-base="apiBase" :session-id="sessionId" embedded :expanded="expanded === 'reporting'" />
-        <WorkAlignment :api-base="apiBase" :session-id="sessionId" :can-write="canWrite"
-          embedded :expanded="expanded === 'work'" :revision="revision" @attention="needsAttention = $event" />
+        :aria-labelledby="`${id}-${expanded || 'background'}`" :style="position" @keydown="popupKeydown">
         <div v-show="expanded === 'background'">
           <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
         </div>
@@ -56,23 +40,18 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
-import DecisionOwner from './DecisionOwner.vue'
-import WorkAlignment from './WorkAlignment.vue'
 import BackgroundTasks from './BackgroundTasks.vue'
 import SessionActivity from './SessionActivity.vue'
 import type { SidebarSession } from '../folders-sidebar.ts'
 import { executionDisplayStage, subagentActivityLabel, summarizeSubagents } from '../subagent-executions.ts'
 
-const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean; subagents?: SidebarSession[]; stages?: Record<string, string>; revision?: number }>()
+const props = defineProps<{ apiBase: string; sessionId: string; canWrite: boolean; active?: boolean; subagents?: SidebarSession[]; stages?: Record<string, string> }>()
 const emit = defineEmits<{ inspect: [sessionId: string] }>()
 const id = useId()
-type Panel = 'reporting' | 'work' | 'background' | 'subagents'
+type Panel = 'background' | 'subagents'
 const expanded = ref<Panel | null>(null)
-const needsAttention = ref(false)
 const backgroundStatus = ref({ total: 0, loading: false, error: '' })
 const subagentStatus = computed(() => summarizeSubagents(props.subagents ?? [], props.stages ?? {}))
-const reportingTrigger = ref<HTMLButtonElement>()
-const workTrigger = ref<HTMLButtonElement>()
 const backgroundTrigger = ref<HTMLButtonElement>()
 const subagentsTrigger = ref<HTMLButtonElement>()
 const root = ref<HTMLElement>()
@@ -80,7 +59,7 @@ const popup = ref<HTMLElement>()
 const position = ref<Record<string, string>>({})
 
 function trigger(panel: Panel) {
-  return ({ reporting: reportingTrigger, work: workTrigger, background: backgroundTrigger, subagents: subagentsTrigger })[panel].value
+  return ({ background: backgroundTrigger, subagents: subagentsTrigger })[panel].value
 }
 function toggle(panel: Panel) {
   if (props.active === false) return
@@ -92,7 +71,8 @@ function closePanel(event: KeyboardEvent) {
   event.stopPropagation()
   const anchor = trigger(expanded.value)
   expanded.value = null
-  void nextTick(() => (anchor?.isConnected ? anchor : workTrigger.value)?.focus())
+  void nextTick(() => (anchor?.isConnected ? anchor : backgroundTrigger.value ?? subagentsTrigger.value
+    ?? root.value?.closest('.conversation-dock')?.querySelector<HTMLTextAreaElement>('.composer-input textarea'))?.focus())
 }
 function inspect(sessionId: string) {
   expanded.value = null
@@ -150,21 +130,14 @@ watch(expanded, async (panel, _previous, onCleanup) => {
 }, { flush: 'post' })
 watch(() => [props.apiBase, props.sessionId], () => {
   expanded.value = null
-  needsAttention.value = false
   backgroundStatus.value = { total: 0, loading: false, error: '' }
-})
-watch(() => props.canWrite, canWrite => {
-  if (!canWrite && expanded.value === 'reporting') {
-    expanded.value = null
-    workTrigger.value?.focus()
-  }
 })
 watch(() => props.active, active => { if (active === false) expanded.value = null })
 onDeactivated(() => { expanded.value = null })
 </script>
 
 <style scoped>
-.session-work-controls { width: calc(100% - 40px); max-width: 860px; min-width: 0; margin: 8px auto 0; }
+.session-work-controls { min-width: 0; max-width: 100%; margin-top: 8px; }
 .session-work-triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .session-work-triggers button {
   display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px;
@@ -193,7 +166,6 @@ onDeactivated(() => { expanded.value = null })
 }
 .session-work-panel:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 @media (max-width: 700px) {
-  .session-work-controls { width: calc(100% - max(8px, env(safe-area-inset-left, 0px)) - max(8px, env(safe-area-inset-right, 0px))); }
   .session-work-panel { padding: 12px; }
 }
 @media (max-width: 700px), (pointer: coarse) {

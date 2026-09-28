@@ -16,7 +16,14 @@ export type WorkActor = { kind: 'user' } | { kind: 'session'; sessionId: string 
 export const workDefinitionSchema = z.object({
   objective: longText,
   acceptance: z.array(longText).min(1).max(12), boundaries: z.array(longText).max(12),
-  evidence: z.array(z.unknown().transform(value => parseDecisionEvidence(value))).max(8).default([]),
+  evidence: z.array(z.unknown().transform((value, ctx) => {
+    try { return parseDecisionEvidence(value, ctx.path.join('.')) }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error.message })
+      return z.NEVER
+    }
+  })).max(8).default([]),
 }).strict()
 export type WorkDefinition = z.infer<typeof workDefinitionSchema>
 export const workAdoptionSchema = z.object({

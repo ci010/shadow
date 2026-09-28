@@ -2,6 +2,7 @@ import type { InstallationContextV1 } from './installation-context.ts'
 import { parseRuntimeFailure, type RuntimeFailure } from './runtime-recovery.ts'
 import type { DesktopWebPairingApi } from '../../desktop/src/web-pairing-contract.ts'
 import type { ChildPairInput, ChildSetupInfo } from '../../desktop/src/bootstrap/child.ts'
+import type { DesktopMicroAppsApi } from '../../desktop/src/micro-app-contract.ts'
 
 export type InstallationMode = 'main' | 'child'
 
@@ -60,6 +61,7 @@ export interface DesktopWindowControls {
 }
 
 export interface ShadowDesktopApi {
+	readonly microApps?: DesktopMicroAppsApi
 	readonly webPairing?: DesktopWebPairingApi
 	readonly diagnostics?: {
 		revealStartupLog(): Promise<void>

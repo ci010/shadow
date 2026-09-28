@@ -48,13 +48,6 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
     modes: ['main', 'client'],
   },
   {
-    name: 'agents',
-    label: 'Agents',
-    group: 'diagnostics',
-    scopes: ['main:admin'],
-    modes: ['main', 'child', 'client'],
-  },
-  {
     name: 'spans',
     label: 'Spans',
     group: 'diagnostics',

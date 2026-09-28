@@ -61,6 +61,25 @@ async function main() {
     assert.equal(await execute(`document.querySelectorAll('.yield-decision button, .yield-decision input').length`), 0, 'Historical decisions cannot submit answers')
     assert.equal(await execute(`document.querySelector('.response-disclosure').open`), false)
     assert.match(await execute(`document.querySelector('.response-disclosure > summary').textContent`), /Background response.*subagent-failed.*Reviewer.*Trigger failed/)
+    assert.equal(await execute(`document.querySelector('.system-event .event-details').open`), false)
+    assert.equal(await execute(`document.querySelector('.system-event .event-inspect-header').getAttribute('aria-pressed')`), 'false')
+    assert.ok(await execute(`document.querySelector('.system-event .event-inspect-header .i-lucide-git-branch')`))
+    await execute(`document.querySelector('.system-event .event-details summary').click()`)
+    await wait(`document.querySelector('.system-event .event-details').open`)
+    assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0, 'Opening event details does not navigate')
+    assert.match(await execute(`document.querySelector('.system-event .event-body').textContent`), /terminated[\s\S]*subagent-failed/)
+    assert.match(await execute(`document.querySelector('.execution-card .execution-copy').textContent`), /Compile and finish native helper.*fresh context/)
+    assert.ok(await execute(`document.querySelector('.execution-details summary .trace-chevron')`), 'Tool details use a chevron, not a permanently visible guide')
+    assert.equal(await execute(`document.querySelector('.execution-details').open`), false)
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.execution-trace')).borderLeftStyle`), 'none', 'Closed tool details have no always-visible guide')
+    assert.ok(await execute(`{ const headers=['.tool-activity-summary','.response-disclosure > summary','.system-event .event-inspect-header','.execution-inspect']
+      .map(selector => getComputedStyle(document.querySelector(selector)).minHeight);
+      new Set(headers).size === 1 && headers[0] === '40px'; }`), 'Execution and event headers share the trace rhythm')
+    assert.ok(await execute(`{ const response=document.querySelector('.response-disclosure').getBoundingClientRect();
+      const event=document.querySelector('.system-event').getBoundingClientRect();
+      const execution=document.querySelector('.execution-card').getBoundingClientRect();
+      Math.abs(response.right - event.right) < 2 && Math.abs(event.right - execution.right) < 2; }`), 'All trace rows share the same edge')
+    assert.equal(await execute(`getComputedStyle(document.querySelector('.system-event .prose h2')).fontSize`), '13px')
     assert.equal(await execute(`document.querySelector('.yield-decision').closest('.response-disclosure')`), null)
     assert.equal(await execute(`document.querySelector('.tool-activity').closest('.response-disclosure')`), null)
     await execute(`document.querySelector('.response-disclosure > summary').focus()`)
@@ -116,6 +135,11 @@ async function main() {
         assert.equal(layout.overflow, false)
         assert.equal(layout.actionOverflow, false)
         assert.equal(await execute(`document.querySelector('.response-disclosure').scrollWidth > document.querySelector('.response-disclosure').clientWidth`), false)
+        if (width === 390) assert.ok(await execute(`{ const body=document.querySelector('.response-body').getBoundingClientRect();
+          const message=document.querySelector('.response-body .chat-assistant').getBoundingClientRect();
+          message.width >= body.width * .8 && message.right <= body.right + 1; }`), 'Expanded background text uses the available mobile rail')
+        assert.equal(await execute(`document.querySelector('.execution-card').scrollWidth > document.querySelector('.execution-card').clientWidth`), false)
+        assert.equal(await execute(`document.querySelector('.system-event').scrollWidth > document.querySelector('.system-event').clientWidth`), false)
         const colors = await execute(`(() => {
           const root = getComputedStyle(document.documentElement);
           const token = name => { const el = document.createElement('span'); el.style.color = root.getPropertyValue(name); document.body.append(el); const value = getComputedStyle(el).color; el.remove(); return value };

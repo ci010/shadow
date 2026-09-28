@@ -1,4 +1,4 @@
-import { requireToolText } from '../tools/tool.ts'
+import { ToolNoEffectError, requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { randomUUID } from 'node:crypto'
@@ -14,6 +14,12 @@ import type { SessionState } from './session-store.ts'
 import { WorkTool } from '../tools/work.ts'
 import { InitiativeTool } from '../tools/initiative.ts'
 import { INITIATIVE_SCHEMA_PROMPT } from '../initiatives/schema.ts'
+import { ReadTool } from '../tools/read.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import { AudioCppService } from '../audio-cpp/service.ts'
+import { AudioCppTool } from '../tools/audio-cpp.ts'
+import { parseDecisionEvidence } from './decision-brief.ts'
+import { access } from 'node:fs/promises'
 
 const worker = 'web:worker', owner = 'web:owner', peer = 'web:peer'
 const adoption = { understanding: 'Both evaluations are required.', stop: ['Treating smoke as final scope'], retain: ['Verified inputs'], next: ['Run a bounded first phase'] }
@@ -75,6 +81,77 @@ test('contracts separate human provenance, agent phase, control and executor ado
   } finally { f.store.close() }
 }))
 
+test('Work evidence reports the actual field and shared reference shape, not a Decision brief', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  try {
+    const result = requireToolText(await f.tools.execute('work', { action: 'create', data: {
+      title: 'Fixture', reason: 'User request',
+      definition: { objective: 'Outcome', acceptance: ['Verified'], boundaries: [], evidence: ['user said so'] },
+    } }, f.context()))
+    assert.match(result, /definition\.evidence\.0/)
+    assert.match(result, /sessionId, physicalId, kind/)
+    assert.doesNotMatch(result, /Decision brief requires an object/)
+    const help = JSON.stringify(await f.alignment.execute({ kind: 'session', sessionId: worker }, 'context', undefined, undefined, undefined))
+    assert.match(help, /evidenceSchema/)
+    assert.match(help, /physicalId/)
+    assert.throws(() => parseDecisionEvidence('summary', 'data.evidence'), /data\.evidence.*evidence reference/)
+    const reference = { sessionId: worker, physicalId: 'segment', kind: 'tool' as const, id: 'call', quote: 'receipt' }
+    assert.deepEqual(parseDecisionEvidence(reference), reference)
+    assert.throws(() => parseDecisionEvidence({ ...reference, quote: '' }), /evidence\.quote/)
+  } finally { f.store.close() }
+}))
+
+test('audio catalog rejection stays a visible failure without fencing unrelated work; uncertain errors still fence', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  let probeFailure = false
+  const service = new AudioCppService(workspace, async () => {
+    if (probeFailure) throw new Error('Probe terminated unexpectedly')
+    return '{"schema_version":1,"loaders":{}}'
+  })
+  f.base.register(new AudioCppTool(service, 'project', workspace))
+  f.base.register({ name: 'write_fixture', description: '', parameters: { type: 'object', properties: {} }, async execute() { return 'written' } })
+  try {
+    await f.apply(); await f.adopt()
+    assert.match(requireToolText(await f.tools.execute('audio_cpp', { action: 'configure', binary: process.execPath }, f.context())), /Configuration was not written/)
+    await assert.rejects(access(join(workspace, '.audio-cpp.json')), { code: 'ENOENT' })
+    assert.equal(f.store.workEffects().length, 0)
+    assert.ok(f.store.workHistory(workKey(change().subject)).some(event => event.kind === 'tool_result'
+      && (event.data as { outcome: string }).outcome === 'not_applied'))
+    assert.equal(await f.tools.execute('write_fixture', {}, f.context()), 'written')
+    probeFailure = true
+    assert.match(requireToolText(await f.tools.execute('audio_cpp', { action: 'configure', binary: process.execPath }, f.context())), /terminated unexpectedly/)
+    assert.equal(f.store.workEffects()[0].status, 'unknown')
+    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /unknown|unresolved/i)
+  } finally { f.store.close() }
+}))
+
+test('only the trusted no-effect error clears an effect; error text and properties cannot impersonate it', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  f.base.register({ name: 'preflight_fixture', description: '', parameters: { type: 'object', properties: {} },
+    async execute() { throw new ToolNoEffectError('Validation failed before changes') } })
+  f.base.register({ name: 'uncertain_fixture', description: '', parameters: { type: 'object', properties: {} },
+    async execute() { throw Object.assign(new Error('Validation failed before changes'), { effect: 'none' }) } })
+  try {
+    await f.apply(); await f.adopt()
+    assert.match(requireToolText(await f.tools.execute('preflight_fixture', {}, f.context())), /Validation failed/)
+    assert.equal(f.store.workEffects().length, 0)
+    assert.match(requireToolText(await f.tools.execute('uncertain_fixture', {}, f.context())), /Validation failed/)
+    assert.equal(f.store.workEffects()[0].status, 'unknown')
+  } finally { f.store.close() }
+}))
+
+test('cancellation retains the uncertain-effect fence even if a tool reports a no-effect error', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const controller = new AbortController()
+  f.base.register({ name: 'aborted_fixture', description: '', parameters: { type: 'object', properties: {} },
+    async execute() { controller.abort(); throw new ToolNoEffectError('Cancelled preflight') } })
+  try {
+    await f.apply(); await f.adopt()
+    await assert.rejects(f.tools.execute('aborted_fixture', {}, { ...f.context(), signal: controller.signal }), /Cancelled preflight/)
+    assert.equal(f.store.workEffects()[0].status, 'unknown')
+  } finally { f.store.close() }
+}))
+
 test('registry fences old inference, same-batch adoption, nested tools, and restored pending calls', async () => withTempWorkspace(async workspace => {
   const f = fixture(workspace)
   let writes = 0
@@ -101,6 +178,31 @@ test('registry fences old inference, same-batch adoption, nested tools, and rest
     assert.equal(writes, 1)
     assert.equal(await f.tools.execute('write_fixture', {}, f.context()), 'written')
     assert.equal(writes, 2)
+  } finally { f.store.close() }
+}))
+
+test('reading and activating a Skill does not require a work item or adoption', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const vfs = new VirtualFs()
+  let activations = 0
+  vfs.mount('v:skills', 'Skills', () => { activations++; return 'Skill instructions and tools registered.' })
+  const read = new ReadTool(workspace, vfs)
+  f.base.register(read)
+  f.base.register({ name: 'write_fixture', description: '', parameters: { type: 'object', properties: {} },
+    async execute() { return 'written' } })
+  try {
+    assert.equal(read.readonly({ path: 'v:skills/audio-cpp' }), false, 'Skill activation stays non-parallel')
+    assert.equal(read.readonly({ path: 'v:skills/audio-cpp/SKILL.md' }), true)
+    assert.equal(await f.tools.execute('read', { path: 'v:skills/audio-cpp' }, f.context()), 'Skill instructions and tools registered.')
+    assert.equal(activations, 1)
+    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /Untracked execution/)
+    await f.apply()
+    assert.equal(await f.tools.execute('read', { path: 'v:skills/audio-cpp' }, f.context()), 'Skill instructions and tools registered.')
+    assert.equal(activations, 2)
+    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /not adopted/)
+    assert.throws(() => f.alignment.before({ name: 'read', readonly: false, description: '',
+      parameters: { type: 'object', properties: {} }, async execute() { return '' } },
+    { path: 'v:skills/audio-cpp/tool.ts' }, f.context()), /not adopted/)
   } finally { f.store.close() }
 }))
 

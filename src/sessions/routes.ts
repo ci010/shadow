@@ -6,6 +6,7 @@ import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
 import { z } from 'zod'
 import { WorkConflict, workChangeSchema, workKey } from '../initiatives/work-contract.ts'
+import { applyHumanWorkAction, humanWorkActionSchema } from '../projects/work-routes.ts'
 import { parseYieldReference } from './yield-contract.ts'
 import { SessionResumeError } from './recovery.ts'
 import type { SessionRecovery } from './session-store.ts'
@@ -23,6 +24,7 @@ import {
 } from './locality.ts'
 import { extname, resolve } from 'node:path'
 import { serveLocalFiles, staticFilePath } from '../gateway/local-files.ts'
+import { fileSearchQuery, remoteFileSearchResult, serveLocalFileSearch } from '../gateway/file-search.ts'
 import { filePreviewLimit } from '../execution/filesystem/contracts.ts'
 import { isTextEncoding } from '../execution/filesystem/text-encoding.ts'
 import { serveLocalGit } from '../gateway/local-git.ts'
@@ -356,7 +358,7 @@ export function sessionsApiPlugin(
       const id = c.req.param('key')
       if (!sessions.getSessionState(id)) return c.json({ error: 'session_not_found' }, 404)
       sessions.assertFolderAccess(id)
-      return c.json(sessions.alignment.context(id))
+      return c.json(sessions.alignment.context(id, undefined, c.req.query('history') !== '0'))
     })
 
     app.post('/api/sessions/:key/work', async c => {
@@ -365,10 +367,7 @@ export function sessionsApiPlugin(
       if (!sessions.getSessionState(id)) return c.json({ error: 'session_not_found' }, 404)
       sessions.assertFolderAccess(id)
       try {
-        const body = z.object({
-          action: z.enum(['create', 'update', 'apply_proposal', 'assign', 'manage', 'progress', 'dependencies', 'transition', 'settle', 'request_checkpoint']),
-          key: z.string().optional(), revision: z.number().int().positive().optional(), data: z.unknown().optional(),
-        }).strict().parse(await c.req.json())
+        const body = humanWorkActionSchema.parse(await c.req.json())
         const visible = sessions.alignment.records(id)
         if (body.action === 'create') {
           const data = z.object({ title: z.string(), parentKey: z.string().optional(), definition: z.unknown(), reason: z.string() }).strict().parse(body.data)
@@ -382,19 +381,7 @@ export function sessionsApiPlugin(
             return c.json({ error: 'forbidden' }, 403)
           }
         } else if (!visible.some(record => record.key === body.key)) return c.json({ error: 'forbidden' }, 403)
-        if (body.action === 'request_checkpoint') {
-          const record = sessions.alignment.get(body.key!)
-          if (body.revision !== record.revision) throw new WorkConflict('Work revision changed.')
-          const target = sessions.alignment.store.workAuthority(record.subject).executor
-          if (!target) throw new WorkConflict('No executor is assigned.')
-          await sessions.deliver(target, {
-            kind: 'message', id: crypto.randomUUID(), timestamp: new Date().toISOString(), policy: 'steering',
-            source: { kind: 'event', eventId: record.key, type: 'work-checkpoint-request', source: 'human-work-review' },
-            content: `The human requests a factual checkpoint for ${record.key} revision ${record.revision}. At a safe boundary record completed work, artifacts, inFlight, unknown and retired premises with work action=checkpoint, then end the turn. Do not start new external work, claim cancellation, or change assignments.`,
-          })
-        } else {
-          await sessions.alignment.execute({ kind: 'user' }, body.action, body.key, body.revision, body.data, c.req.raw.signal)
-        }
+        await applyHumanWorkAction(sessions, body, c.req.raw.signal)
         return c.json(sessions.alignment.context(id))
       } catch (error) {
         if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof TypeError) {
@@ -651,6 +638,33 @@ export function sessionsApiPlugin(
     })
 
     // ── Session workspace file browsing ────────────────────────────────
+    app.get('/api/sessions/:key/files/search', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = c.req.param('key')
+      const query = fileSearchQuery(c)
+      if (!query) return c.json({ error: 'invalid_query' }, 400)
+      const base = sessionFileBase(sessions, key)
+      if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
+      if (base.locality === 'local') return serveLocalFileSearch(c, base.path)
+      if (!sessions.remoteExecutor) return c.json(remoteWorkdirRequiresExecutorApiResult(key, base), 501)
+      try {
+        const output = await executeRemoteFilesystemText({
+          executor: sessions.remoteExecutor,
+          nodeId: base.workdir.nodeId,
+          capabilityId: base.workdir.capabilityId,
+          sessionId: key,
+          turnId: `session-file-search:${crypto.randomUUID()}`,
+          signal: c.req.raw.signal,
+        }, FILESYSTEM_READ_OPERATION, { path: '.', query })
+        return c.json(remoteFileSearchResult(output))
+      } catch (error) {
+        if (error instanceof RemoteFilesystemError) return c.json({
+          error: 'remote_file_search_failed', message: error.message,
+        }, remoteFilesystemStatus(error))
+        if (c.req.raw.signal.aborted) return c.json({ error: 'request_cancelled' }, 409)
+        return c.json({ error: 'invalid_remote_search_result', message: 'The owning node returned an invalid file search result.' }, 503)
+      }
+    })
     // List a directory inside a session's working directory.
     app.get('/api/sessions/:key/files', async (c) => {
       if (!sessions) {

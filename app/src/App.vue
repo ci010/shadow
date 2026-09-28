@@ -40,7 +40,7 @@
 
     <main class="app-main">
       <IoHost :bridge="ioBridge" @open-conversation="router.push(projectChatLocation($event))" />
-      <div v-if="['agents', 'spans', 'logs'].includes(String(route.name))" class="resource-scope" aria-label="Project scope">
+      <div v-if="['spans', 'logs'].includes(String(route.name))" class="resource-scope" aria-label="Project scope">
         Project
         <router-link :to="{ name: 'project-settings', params: { projectId: route.params.projectId, section: 'general' } }">{{ route.params.projectId }}</router-link>
       </div>
@@ -49,14 +49,14 @@
         @retry="livePool.retry()" @manage-node="router.push({ name: 'nodes' })" />
       <div
         class="route-content"
-        :class="{ 'chat-route': route.name === 'chat' || route.name === 'projects' }"
+        :class="{ 'chat-route': workspaceRoutes.includes(String(route.name)) }"
       >
       <router-view v-slot="{ Component, route: viewRoute }">
-        <KeepAlive :key="resolvedBase" include="ProjectsWorkspace,ProjectSettings">
+        <KeepAlive :key="resolvedBase" include="ProjectsWorkspace">
           <component
             :is="Component"
-            :key="viewRoute.name === 'chat' || viewRoute.name === 'projects' ? 'projects-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.projectId ?? '')}`"
-            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: route.name === 'chat' || route.name === 'projects' }"
+            :key="workspaceRoutes.includes(String(viewRoute.name)) ? 'projects-workspace' : `${String(viewRoute.name)}:${String(viewRoute.params.projectId ?? '')}`"
+            v-bind="viewRoute.name === 'settings' ? providerViewProps : { apiBase: contentBase, projectId: viewRoute.params.projectId, hostApiBase: resolvedBase, visible: workspaceRoutes.includes(String(route.name)) }"
             v-on="viewRoute.name === 'settings' ? providerViewEvents : {}"
             @update:log-count="logCount = $event"
           />
@@ -92,6 +92,7 @@ import type { LiveStatus } from './live-client.ts'
 import { useAppNotificationSounds } from './composables/useAppNotificationSounds.ts'
 
 const route = useRoute()
+const workspaceRoutes: readonly string[] = ['chat', 'projects', 'project-settings', 'agents']
 const mobile = provideMobileChrome()
 const mobilePageTitles: Record<string, string> = { chat: 'Chat', projects: 'Projects', nodes: 'Nodes', settings: 'Settings', 'project-settings': 'Project settings', agents: 'Agents', spans: 'Spans', logs: 'Logs' }
 const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
@@ -123,7 +124,7 @@ const stopLiveStatus = livePool.observe(statuses => {
 const liveError = computed(() => liveStatuses.value.find(status => status.error)?.error ?? '')
 
 const resolvedBase = computed(() => installationContext.value.apiBase)
-const contentBase = computed(() => typeof route.params.projectId === 'string' && route.name !== 'chat'
+const contentBase = computed(() => typeof route.params.projectId === 'string' && !workspaceRoutes.includes(String(route.name))
   ? projectBase(resolvedBase.value, route.params.projectId) : resolvedBase.value)
 const showChildRecovery = computed(() =>
   installationContext.value.mode === 'child' &&

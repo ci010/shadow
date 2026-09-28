@@ -8,8 +8,9 @@ app.setPath('userData', join(process.cwd(), 'profile'))
 app.on('window-all-closed', () => {})
 async function main() {
   await app.whenReady()
-  const window = new BrowserWindow({ show: false, width: 1200, height: 844,
+  const window = new BrowserWindow({ show: false, width: 1440, height: 900,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
+  window.setContentSize(1440, 900)
   const execute = (code: string) => window.webContents.executeJavaScript(code)
   const wait = async (code: string) => {
     const deadline = Date.now() + 10000
@@ -17,130 +18,134 @@ async function main() {
     throw new Error(`Timed out: ${code}\n${await execute('document.body.innerText')}`)
   }
   const click = (text: string) => execute(`(() => {
-    const button = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(text)});
+    const button = [...document.querySelectorAll('button')].find(button => button.getClientRects().length && button.textContent.trim() === ${JSON.stringify(text)});
     if (!button || button.disabled) throw new Error('Button unavailable: ' + ${JSON.stringify(text)});
     button.click();
   })()`)
   const fill = (index: number, value: string) => execute(`(() => {
-    const field = document.querySelectorAll('textarea')[${index}];
+    const field = document.querySelectorAll('.work-alignment textarea')[${index}];
     field.value = ${JSON.stringify(value)}; field.dispatchEvent(new Event('input', {bubbles:true}));
   })()`)
-  const trigger = (panel: 'reporting' | 'work') => execute(`document.querySelector('[data-session-work="${panel}"]').click()`)
-  const collapsedLayouts = new Map<number, unknown>()
+  const separator = '.coordination-panel > [role="separator"]'
+  const paneWidth = () => execute('document.querySelector(".coordination-panel").getBoundingClientRect().width')
+  const resizeKey = (key: string) => execute(`document.querySelector('${separator}').dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)}, bubbles:true, cancelable:true}))`)
+  const startDrag = async () => {
+    const point = await execute(`(() => { const r = document.querySelector('${separator}').getBoundingClientRect(); return { x:Math.round(r.x + r.width/2), y:Math.round(r.y + 80) }; })()`)
+    window.webContents.sendInputEvent({ type: 'mouseMove', ...point })
+    window.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 })
+    await wait('document.documentElement.classList.contains("sidebar-pointer-resizing")')
+    return point
+  }
   const screenshot = async (state: string) => {
-    for (const width of [1200, 390]) {
-      window.setContentSize(width, 844)
+    for (const width of [1440, 390]) {
+      window.setContentSize(width, 900)
       for (const dark of [false, true]) {
         await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
-        await execute(`document.querySelectorAll('.session-work-panel').forEach(panel => { panel.scrollTop = 0 })`)
-        await delay(60)
-        assert.equal(await execute(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`), true)
-        const metrics = await execute(`(() => {
-          const buttons = [...document.querySelectorAll('[data-session-work]')];
-          return buttons.map(button => ({radius: getComputedStyle(button).borderRadius,
-            height: button.getBoundingClientRect().height, top: button.getBoundingClientRect().top}));
-        })()`)
-        assert.equal(metrics.length, 2)
-        assert.ok(metrics.every((button: { radius: string; height: number }) => button.radius === '0px' && button.height >= (width <= 700 ? 44 : 32)))
-        assert.equal(metrics[0].top, metrics[1].top, 'Session controls stay in one compact row')
-        const layout = await execute(`(() => {
-          const toolbar = document.querySelector('.session-work-controls').getBoundingClientRect();
-          const composer = document.querySelector('#fixture-composer').getBoundingClientRect();
-          return { top: toolbar.top, height: toolbar.height, composerTop: composer.top };
-        })()`)
-        if (state === 'collapsed') collapsedLayouts.set(width, layout)
-        else {
-          assert.deepEqual(layout, collapsedLayouts.get(width), 'Opening the popover must not move the toolbar or composer')
-          assert.equal(await execute(`(() => {
-            const popup = document.querySelector('.session-work-panel');
-            const rect = popup.getBoundingClientRect();
-            const trigger = document.querySelector('[data-session-work="work"]').getBoundingClientRect();
-            return popup.parentElement === document.body && getComputedStyle(popup).position === 'fixed'
-              && rect.bottom <= trigger.top - 7 && rect.top >= 12 && rect.left >= 12
-              && rect.right <= innerWidth - 11 && rect.height <= 421;
-          })()`), true, 'Popover is a bounded overlay above its trigger, not an inline panel')
-        }
-        if (process.env.WORK_SCREENSHOTS) await writeFile(
-          join(process.env.WORK_SCREENSHOTS, `session-controls-${state}-${width}-${dark ? 'dark' : 'light'}.png`),
-          (await window.webContents.capturePage()).toPNG(),
-        )
+        await delay(90)
+        assert.equal(await execute(`!!document.querySelector('${separator}')`), width >= 1000 && await execute('document.querySelector(".project-workbench").classList.contains("has-panel")'))
+        assert.equal(await execute('document.documentElement.scrollWidth <= document.documentElement.clientWidth'), true, `${state} has no page overflow`)
+        if (process.env.WORK_SCREENSHOTS) await writeFile(join(process.env.WORK_SCREENSHOTS,
+          `workbench-${state}-${width}-${dark ? 'dark' : 'light'}.png`), (await window.webContents.capturePage()).toPNG())
       }
     }
+    window.setContentSize(1440, 900)
+    await delay(90)
   }
   try {
     await window.loadURL(new URL('__work', process.env.WORK_SMOKE_URL).href)
-    await wait(`document.querySelector('[data-session-work="work"]')`)
-    assert.equal(await execute(`[...document.querySelectorAll('[data-session-work]')].every(button => button.getAttribute('aria-expanded') === 'false')`), true)
-    assert.equal(await execute(`document.querySelector('.work-alignment').getBoundingClientRect().height`), 0)
-    await screenshot('collapsed')
-    await trigger('work')
-    await wait(`document.body.innerText.includes('Run both evaluations')`)
-    assert.match(await execute('document.body.innerText'), /Agent interpretation.*not a quoted user requirement/)
-    assert.match(await execute('document.body.innerText'), /Agent-chosen next phase/)
+    await wait('document.querySelectorAll(".work-board .work-item-card").length === 4')
+    assert.equal(await execute(`document.querySelector('[data-session-work="reporting"], [data-session-work="work"]')`), null)
+    assert.match(await execute('document.body.innerText'), /Unassigned/)
+    assert.match(await execute('document.body.innerText'), /Needs your attention/)
+    if (!await execute('document.querySelector(".project-workbench").classList.contains("has-panel")')) await click('Coordinator')
+    await wait(`document.querySelector('${separator}')`)
+    assert.equal(await paneWidth(), 400)
+    assert.equal(await execute(`document.querySelector('${separator}').getAttribute('aria-controls') === document.querySelector('.coordination-panel').id`), true)
+    const drag = await startDrag()
+    window.webContents.sendInputEvent({ type: 'mouseMove', x: drag.x - 160, y: drag.y, button: 'left' })
+    await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 560')
+    window.webContents.sendInputEvent({ type: 'mouseUp', x: drag.x - 160, y: drag.y, button: 'left', clickCount: 1 })
+    await wait('!document.documentElement.classList.contains("sidebar-pointer-resizing")')
+    assert.equal(await execute('document.querySelector("#fixture-composer").value'), 'Keep my unsent draft')
+    await resizeKey('ArrowLeft'); await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 584')
+    await resizeKey('ArrowRight'); await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 560')
+    await resizeKey('End'); await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 1080')
+    window.setContentSize(1000, 900)
+    await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 640')
+    assert.equal(await execute('document.querySelector(".workbench-main").getBoundingClientRect().width'), 360)
+    window.setContentSize(1440, 900)
+    await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 1080')
+    await resizeKey('Home'); await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 320')
+    for (let step = 0; step < 10; step++) { await resizeKey('ArrowLeft'); await delay(10) }
+    await wait('document.querySelector(".coordination-panel").getBoundingClientRect().width === 560')
+    const interrupted = await startDrag()
+    await execute('window.fixture.visible = false')
+    await wait(`!document.querySelector('${separator}') && !document.documentElement.classList.contains('sidebar-pointer-resizing')`)
+    window.webContents.sendInputEvent({ type: 'mouseUp', ...interrupted, button: 'left', clickCount: 1 })
+    await execute('window.fixture.visible = true')
+    await wait(`document.querySelector('${separator}')`)
+    await execute('document.querySelector("[aria-label=\\"Close coordination panel\\"]").click()')
+    assert.equal(await execute(`!!document.querySelector('${separator}')`), false)
+    await click('Coordinator')
+    await wait(`document.querySelector('${separator}')`)
+    assert.equal(await paneWidth(), 560)
+    await screenshot('board')
+    assert.equal(await paneWidth(), 560, 'Returning from compact mode preserves the preferred pane width')
+    await click('Graph')
+    await wait('document.querySelectorAll(".graph-node").length === 4')
+    assert.equal(await execute('document.querySelectorAll("svg > path.dependency").length'), 1)
+    await screenshot('graph')
+    await click('Board')
+    await execute(`(() => { const select = document.querySelectorAll('.work-filters select')[1]; select.value = 'unassigned'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
+    await wait('document.querySelectorAll(".work-board .work-item-card").length === 2')
+    await execute(`(() => { const select = document.querySelectorAll('.work-filters select')[1]; select.value = ''; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
+    await click('Run both evaluations')
+    assert.equal(await paneWidth(), 560, 'Work details use the same resizable pane')
+    await wait('document.querySelector(".work-alignment")?.innerText.includes("Agent-chosen next phase")')
+    assert.match(await execute('document.querySelector(".work-alignment").innerText'), /Agent interpretation.*not a quoted user requirement/)
     assert.match(await execute('document.querySelector("[aria-label=\\"Pending work proposal\\"]").textContent'), /New execution: paused/)
+    await screenshot('detail')
+    await execute('document.querySelector(".reporting-settings").open = true; document.querySelector(".decision-owner").open = true')
+    await wait('document.querySelector(".decision-owner select")')
+    assert.match(await execute('document.querySelector(".decision-owner").textContent'), /Assigned to: web:fixture/)
+    await execute(`(() => { const select = document.querySelector('.decision-owner select'); select.value = 'web:reviewer'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
+    await click('Save responsibility')
+    await wait('document.querySelector(".decision-owner").textContent.includes("Assigned to: web:reviewer")')
+    await execute('document.querySelector(".advanced-work").open = true')
     await click('Fresh context')
-    await wait(`document.body.innerText.includes('next safe boundary')`)
     await click('Confirm fresh')
     await wait(`![...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Confirm fresh')`)
     await click('Revise work')
-    await wait(`document.querySelectorAll('textarea').length === 4`)
     await fill(0, 'Corrected final outcome')
     await fill(3, 'Conflict')
-    await execute('window.fixture.revision++')
-    await wait(`!document.querySelector('.work-alignment button').disabled`)
-    assert.equal(await execute(`document.querySelector('.work-alignment textarea').value`), 'Corrected final outcome', 'Live work refresh preserves the exact draft')
-    assert.equal(await execute(`document.querySelector('input[type=checkbox]').getBoundingClientRect().width < 32`), true)
-    await trigger('reporting')
-    await wait(`document.querySelector('.decision-owner select')`)
-    assert.equal(await execute(`document.querySelector('.work-alignment').getBoundingClientRect().height`), 0)
-    await execute(`(() => { const select = document.querySelector('.decision-owner select'); select.value = 'web:reviewer'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
-    await trigger('work')
-    await wait(`!document.querySelector('.work-alignment button').disabled`)
-    await trigger('reporting')
-    await wait(`!document.querySelector('.decision-owner select').disabled`)
-    assert.equal(await execute(`document.querySelector('.decision-owner select').value`), 'web:reviewer', 'Switching panels must retain an unsaved reporting selection')
-    await click('Save responsibility')
-    await wait(`document.querySelector('.decision-owner').textContent.includes('Assigned to: web:reviewer')`)
-    await trigger('work')
-    await wait(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded') === 'true' && !document.querySelector('.work-alignment button').disabled`)
-    assert.equal(await execute(`document.querySelector('.work-alignment textarea').value`), 'Corrected final outcome', 'Switching panels must retain unsaved work')
-    await execute(`document.querySelector('.work-alignment textarea').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',bubbles:true}))`)
-    assert.equal(await execute(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded')`), 'true', 'Tab within the form must not dismiss it')
-    await execute(`document.querySelector('.work-alignment textarea').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}))`)
-    await wait(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded') === 'false'`)
-    assert.equal(await execute(`document.activeElement.matches('[data-session-work="work"]')`), true)
-    await trigger('work')
-    await wait(`!document.querySelector('.work-alignment button').disabled`)
-    await execute(`document.querySelector('form').requestSubmit()`)
-    await wait(`document.querySelector('[role="alert"]')?.textContent.includes('revision changed')`)
-    assert.equal(await execute(`document.querySelector('textarea').value`), 'Corrected final outcome')
+    await execute(`(() => { const confirm = window.confirm; window.confirm = () => false;
+      return window.navigateWork('work:root').finally(() => { window.confirm = confirm; }).then(() => true); })()`)
+    assert.equal(await execute('document.querySelector(".work-alignment textarea").value'), 'Corrected final outcome', 'Cancelled navigation retains the work revision')
+    await execute('window.invalidateWork()')
+    await wait('!document.querySelector(".work-alignment button").disabled')
+    assert.equal(await execute('document.querySelector(".work-alignment textarea").value'), 'Corrected final outcome')
+    await click('Discuss')
+    await wait('document.querySelector("#fixture-composer").getClientRects().length')
+    assert.match(await execute('document.querySelector("#fixture-composer").value'), /Keep my unsent draft[\s\S]*About work topic:web:fixture/)
+    await click('Task')
+    await wait('!document.querySelector(".work-alignment button").disabled')
+    await execute('document.querySelector(".work-alignment form").requestSubmit()')
+    await wait(`document.querySelector('.work-alignment [role="alert"]')?.textContent.includes('revision changed')`)
+    assert.equal(await execute('document.querySelector(".work-alignment textarea").value'), 'Corrected final outcome')
     await fill(3, 'Correct agent interpretation, not a changed user request')
-    await execute(`document.querySelector('form').requestSubmit()`)
-    await wait(`!document.querySelector('form') && document.body.innerText.includes('Human-confirmed agreement')`)
-    assert.match(await execute('document.body.innerText'), /Awaiting executor adoption/)
-    await screenshot('expanded')
-    assert.equal(await execute(`(() => { const panel = document.querySelector('.session-work-panel'); return panel.clientHeight <= 420 && panel.scrollHeight > panel.clientHeight })()`), true, 'Long forms scroll within the floating panel')
-    await execute(`document.querySelector('#fixture-composer').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}))`)
-    await wait(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded') === 'false'`)
-    await trigger('work')
-    await wait(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded') === 'true'`)
-    // Hidden Electron windows update activeElement but do not emit native focusin.
-    await execute(`document.querySelector('#fixture-composer').focus(); document.activeElement.dispatchEvent(new FocusEvent('focusin', {bubbles:true}))`)
-    await wait(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded') === 'false'`)
-    assert.equal(await execute(`document.activeElement.id`), 'fixture-composer', 'Outside focus must not be stolen')
-    await trigger('work')
-    await execute(`window.fixture.active = false`)
-    await wait(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded') === 'false'`)
-    assert.equal(await execute(`document.querySelector('.session-work-panel').getBoundingClientRect().height`), 0)
-    await execute(`window.fixture.active = true`)
-    await trigger('work')
-    await execute(`window.fixture.canWrite = false`)
-    await wait(`document.body.innerText.includes('Corrected final outcome') && ![...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Revise work')`)
-    assert.match(await execute('document.body.innerText'), /Corrected final outcome/)
-    assert.equal(await execute(`document.querySelector('[data-session-work="reporting"]')`), null)
-    await execute(`window.fixture.sessionId = 'web:another'`)
-    await wait(`document.querySelector('[data-session-work="work"]').getAttribute('aria-expanded') === 'false'`)
-    assert.equal(await execute(`document.querySelector('.work-alignment').getBoundingClientRect().height`), 0)
+    await execute('document.querySelector(".work-alignment form").requestSubmit()')
+    await wait('!document.querySelector(".work-alignment form") && document.querySelector(".work-alignment").innerText.includes("Human-confirmed agreement")')
+    await execute('window.setAdmin(false)')
+    await wait(`![...document.querySelectorAll('.work-alignment button')].some(button => button.textContent.trim() === 'Revise work')`)
+    await execute('document.querySelector("[aria-label=\\"Close coordination panel\\"]").click()')
+    await wait('document.querySelector(".workbench-main").getClientRects().length')
+    await execute(`fetch('/__fixture', { method:'POST',body:JSON.stringify({unavailable:true}) }).then(() => window.invalidateWork())`)
+    await wait('document.querySelector(".workbench-error")')
+    assert.equal(await execute('document.querySelectorAll(".work-board .work-item-card").length'), 4, 'Failures retain the last snapshot with an explicit warning')
+    await execute(`fetch('/__fixture', { method:'POST',body:JSON.stringify({empty:true}) }).then(() => window.invalidateWork())`)
+    await wait('document.body.innerText.includes("No work items yet")')
+    await screenshot('empty')
+    await execute('window.fixture.visible = false')
     console.log('WORK_SMOKE_OK')
   } finally { window.destroy() }
 }

@@ -6,6 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { describe, test } from 'node:test'
 import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
+import { BackgroundTaskManager } from '../agent/background-task.ts'
+import { EventService } from '../events/service.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
 import type { LLMProvider, LLMResponse, ChatMessage } from '../providers/provider.ts'
 import type { HandoffManager } from './handoff/manager.ts'
@@ -128,7 +130,7 @@ async function fixture(options: {
     handoff, () => {}, undefined, options.quickModel, options.sleepInactivityMs,
   )
   return {
-    bus, facts, calls, tools, store, state, session: session!, manager: manager!,
+    workspace, bus, facts, calls, tools, store, state, session: session!, manager: manager!,
     reports, ended, accepted, outbound, outboundMessages, preparations: () => preparations,
     async close() {
       const active = manager
@@ -152,6 +154,82 @@ function userInput(id: string, policy: SessionMessageInput['policy'] = 'queue'):
     channel: 'web', chatId: 'owner', messageId: id, senderId: 'owner',
   } } }
 }
+
+for (const phase of ['llm', 'tool'] as const) {
+  test(`background completion during ${phase} joins the next inference without aborts or an unnecessary later turn`, async () => {
+    const f = await fixture({ quickModel: 'fixture' })
+    const work = Promise.withResolvers<string>()
+    const started = Promise.withResolvers<void>()
+    const events = new EventService(f.workspace, f.bus, async (sessionId, message) => {
+      assert.equal(sessionId, f.state.sessionId)
+      f.session.dispatch(message, llm)
+      return { status: 'accepted', sessionId, inputId: message.id }
+    })
+    await events.start()
+    const tasks = new BackgroundTaskManager(f.bus, events)
+    f.tools.register({
+      name: 'wait_for_work', description: '', parameters: { type: 'object', properties: {} },
+      execute: async () => { started.resolve(); return work.promise },
+    })
+    const toolCall: LLMResponse = { content: '', toolCalls: [{ id: 'work', name: 'wait_for_work', arguments: {} }] }
+    try {
+      f.session.dispatch(userInput('build'), llm)
+      await waitFor(() => f.calls.length === 1)
+      if (phase === 'tool') { f.calls[0].resolve(toolCall); await started.promise }
+      const task = tasks.createDeferredTask({
+        kind: 'process', title: 'Completed dependency', sessionId: f.state.sessionId, inputId: 'build',
+        callback: { sessionId: f.state.sessionId },
+      })
+      task.complete('Exact completed output')
+      const observed = await tasks.getTaskOutput(task.taskId)
+      assert.match(observed, /Exact completed output/)
+      assert.equal(f.calls[0].signal.aborted, false)
+      if (phase === 'llm') { f.calls[0].resolve(toolCall); await started.promise }
+      work.resolve(observed)
+      await waitFor(() => f.calls.length === 2)
+      const messages = f.calls[1].messages
+      assert(messages.some(message => message.role === 'tool' && String(message.content).includes('Exact completed output')))
+      assert(messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Exact completed output')))
+      assert.deepEqual(messages.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['work'])
+      f.calls[1].resolve(done())
+      await waitFor(() => f.facts.length === 1)
+      await delay(20)
+      assert.equal(f.calls.length, 2)
+      assert.equal(f.facts[0].status, 'completed')
+      assert.equal(f.calls[1].signal.aborted, false)
+      const late = tasks.createDeferredTask({
+        kind: 'process', title: 'Idle completion', sessionId: f.state.sessionId,
+        callback: { sessionId: f.state.sessionId },
+      })
+      late.complete('A later result still wakes an idle owner')
+      await waitFor(() => f.calls.length === 3)
+      assert.match(JSON.stringify(f.calls[2].messages), /A later result still wakes an idle owner/)
+      f.calls[2].resolve(done())
+      await waitFor(() => f.facts.length === 2)
+    } finally {
+      work.resolve('cleanup')
+      await tasks.stop()
+      await events.stop()
+      await f.close()
+    }
+  })
+}
+
+test('next-step arriving during a final inference retains a later wake without cancelling the result', async () => {
+  const f = await fixture()
+  try {
+    f.session.dispatch(userInput('initial'), llm)
+    await waitFor(() => f.calls.length === 1)
+    f.session.dispatch(input('completion-after-last-checkpoint', 'next-step'), llm)
+    assert.equal(f.calls[0].signal.aborted, false)
+    f.calls[0].resolve(done('Original result'))
+    await waitFor(() => f.calls.length === 2)
+    assert.match(JSON.stringify(f.calls[1].messages), /completion-after-last-checkpoint/)
+    f.calls[1].resolve(done('Processed completion'))
+    await waitFor(() => f.facts.length === 2)
+    assert.deepEqual(f.facts.map(fact => fact.content), ['Original result', 'Processed completion'])
+  } finally { await f.close() }
+})
 
 for (const storage of ['jsonl', 'sqlite'] as const) {
   test(`${storage}: conversational response provenance survives history parsing without changing results`, async () => {

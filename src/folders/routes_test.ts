@@ -111,6 +111,10 @@ describe('folder file browsing', () => {
     assert.equal(data.entries[0].type, 'dir')
     assert.deepEqual((await (await app.request(`${base}/files?path=docs`)).json()).entries
       .map((entry: { name: string }) => entry.name), ['notes.custom'])
+    const search = await app.request(`${base}/files/search?query=NOTES`)
+    assert.equal(search.status, 200)
+    assert.deepEqual(await search.json(), { paths: ['docs/notes.custom'], truncated: false })
+    assert.equal((await app.request(`${base}/files/search?query=`)).status, 400)
     for (const path of ['.node-version', 'docs/notes.custom']) {
       const preview = await app.request(`${base}/preview?path=${encodeURIComponent(path)}`)
       assert.equal(preview.status, 200)

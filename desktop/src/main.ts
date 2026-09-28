@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import {
   app,
   BrowserWindow,
@@ -7,6 +8,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   session,
   shell,
   Tray,
@@ -69,11 +71,31 @@ import { TaskbarActivity } from './taskbar-activity.js'
 import { DesktopConnectionStore, RuntimeConnectionPublication } from './control/publication.js'
 import type { RuntimeEndpointMessage } from './control/runtime-endpoint.js'
 import { installWebPairing } from './web-pairing.js'
+import { DesktopMicroApps } from './micro-apps.js'
+import { createMicroAppWindow } from './micro-app-window.js'
+import { parseMicroAppArguments, type MicroAppIdentity } from './micro-app-contract.js'
+import { installMicroAppIpc } from './micro-app-ipc.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
 let mainWindow: BrowserWindow | null = null
 let mainTray: Tray | null = null
+let openTaskApp: ((identity: MicroAppIdentity) => Promise<void>) | undefined
+const pendingTaskApps: MicroAppIdentity[] = []
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show(); mainWindow.focus()
+}
+
+function requestTaskApp(identity: MicroAppIdentity): void {
+  if (!openTaskApp) { pendingTaskApps.push(identity); return }
+  void openTaskApp(identity).catch(() => {
+    showMainWindow()
+    dialog.showErrorBox('Unable to open app', 'Open Shadow Apps to check the Project, current version and its authorization.')
+  })
+}
 
 export function enforceNavigationPolicy(
   webContents: WebContents,
@@ -169,7 +191,7 @@ export function registerIpcHandlers(coordinator: BootstrapCoordinator): void {
   )
 }
 
-export function createMainWindow(target: RendererTarget): BrowserWindow {
+export function createMainWindow(target: RendererTarget, showOnReady = true): BrowserWindow {
   const window = new BrowserWindow(framelessWindowOptions(join(import.meta.dirname, 'preload.cjs')))
   installMediaPermissions(ipcMain, window, target, {
     getDisplaySources: () => desktopCapturer.getSources({
@@ -210,7 +232,7 @@ export function createMainWindow(target: RendererTarget): BrowserWindow {
     },
   })
   enforceNavigationPolicy(window.webContents, target)
-  window.once('ready-to-show', () => window.show())
+  window.once('ready-to-show', () => { if (showOnReady) window.show() })
   return window
 }
 
@@ -253,6 +275,7 @@ function parseWizardEvent(value: unknown): WizardEvent {
 }
 
 async function start(): Promise<void> {
+  const initialApp = parseMicroAppArguments(process.argv)
   const userDataPath = app.getPath('userData')
   const serviceConnectionPath = selectServiceConnectionPath(
     app.commandLine.hasSwitch('service-connection')
@@ -272,6 +295,7 @@ async function start(): Promise<void> {
     (details) => details.webContentsId === mainWindow?.webContents.id,
   )
   let taskbarActivity: TaskbarActivity | undefined
+  let microApps: DesktopMicroApps | undefined
   let activityAuthorization: RuntimeAuthorization | null = null
   const sendRuntimeEndpoint = (message: RuntimeEndpointMessage): void => {
     if (process.env.SHADOW_DESKTOP_DEV_IPC === '1' && process.connected) {
@@ -304,6 +328,7 @@ async function start(): Promise<void> {
     const status = runtimeHost.status
     activityAuthorization = status.phase === 'ready' && status.role === 'main' ? authorization : null
     taskbarActivity?.setAuthorization(activityAuthorization)
+    microApps?.setAuthorization(activityAuthorization)
     sendRuntimeEndpoint(activityAuthorization
       ? { type: 'shadow:runtime-ready', apiBase: activityAuthorization.apiBase }
       : { type: 'shadow:runtime-stopped' })
@@ -331,7 +356,10 @@ async function start(): Promise<void> {
   )
   registerRuntimeHostQuitLifecycle(app, {
     stop: async () => {
-      try { await Promise.all([runtimeHost.stop(), childPairingCommand.stop()]) } finally { await publication.close() }
+      try {
+        await microApps?.shutdown()
+        await Promise.all([runtimeHost.stop(), childPairingCommand.stop()])
+      } finally { await publication.close() }
     },
   })
   if (serviceConnection) {
@@ -348,17 +376,43 @@ async function start(): Promise<void> {
       : join(app.getAppPath(), '..', 'app', 'dist'),
     ...(developmentUrl ? { developmentUrl } : {}),
   })
-  mainWindow = createMainWindow(target)
+  mainWindow = createMainWindow(target, !initialApp)
+  microApps = new DesktopMicroApps({
+    userDataPath, executablePath: process.execPath, appPath: app.getAppPath(), packaged: app.isPackaged,
+    defaultIconPath: desktopIconPath(),
+    ...(serviceConnectionPath ? { serviceConnectionPath } : {}),
+    createWindow: input => createMicroAppWindow(options => new BrowserWindow(options), input),
+    decodeIcon: bytes => {
+      const image = nativeImage.createFromBuffer(bytes)
+      if (image.isEmpty()) throw new Error('App icon could not be decoded; publish a valid PNG')
+      const size = image.getSize()
+      if (size.width > 512 || size.height > 512) throw new Error('App icon exceeds 512 pixels')
+      const scale = Math.min(1, 256 / Math.max(size.width, size.height))
+      const resized = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) })
+      return { png: resized.toPNG(), ...resized.getSize() }
+    },
+    setUserTasks: tasks => app.setUserTasks(tasks),
+    onError: message => console.error('[desktop] Micro Apps:', message),
+  })
+  microApps.setAuthorization(activityAuthorization)
+  const disposeAppIpc = installMicroAppIpc(ipcMain, () => mainWindow, microApps)
+  openTaskApp = async identity => {
+    const runtime = await coordinator.ensureRuntime()
+    if (!runtime.ok || !activityAuthorization) throw new Error('Local Main is unavailable')
+    await microApps!.open(identity)
+  }
   mainTray = new Tray(desktopIconPath())
   const disposeTray = installTrayMenu(mainTray, Menu, mainWindow, () => app.quit())
   const disposeBackground = installChildBackgroundWindow(app, mainWindow, () => {
     const status = runtimeHost.status
-    return 'role' in status && status.role === 'child'
+    return ('role' in status && status.role === 'child') || !!microApps?.hasOpenWindows
   })
   app.once('will-quit', () => {
     disposeBackground()
     disposeTray()
     mainTray = null
+    openTaskApp = undefined
+    disposeAppIpc()
   })
   installWebPairing(ipcMain, mainWindow, () => activityAuthorization)
   taskbarActivity = new TaskbarActivity(mainWindow)
@@ -370,27 +424,45 @@ async function start(): Promise<void> {
   })
   if (target.kind === 'url') await mainWindow.loadURL(target.url)
   else await mainWindow.loadFile(target.filePath)
+  if (initialApp) requestTaskApp(initialApp)
+  for (const identity of pendingTaskApps.splice(0)) requestTaskApp(identity)
 }
 
 if (!process.env.SHADOW_DESKTOP_DISABLE_AUTO_START) {
   const profilePath = resolveDesktopUserDataPath(
     app.getAppPath(),
     app.isPackaged,
-    process.env.SHADOW_DESKTOP_USER_DATA || app.commandLine.getSwitchValue('user-data-dir'),
+    app.commandLine.getSwitchValue('user-data-dir') || process.env.SHADOW_DESKTOP_USER_DATA,
   )
   if (profilePath) {
     mkdirSync(profilePath, { recursive: true })
     app.setPath('userData', profilePath)
   }
-  app.whenReady().then(start).catch((error: unknown) => {
-    console.error('[desktop] Failed to start', error)
-    if (app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined) {
-      dialog.showErrorBox(
-        'Shadow service connection failed',
-        'The explicitly selected service could not be attached. Check its descriptor, credential permissions, and authenticated readiness with manage.ps1 -Action Start. No local sidecar was launched.',
-      )
-    }
-    app.quit()
-  })
-  app.on('window-all-closed', () => app.quit())
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(app.isPackaged ? 'com.shadow.app'
+      : `com.shadow.app.dev.${createHash('sha256').update(app.getPath('userData')).digest('hex').slice(0, 12)}`)
+  }
+  if (!app.requestSingleInstanceLock()) app.quit()
+  else {
+    app.on('second-instance', (_event, argv) => {
+      try {
+        const identity = parseMicroAppArguments(argv)
+        if (identity) requestTaskApp(identity)
+        else showMainWindow()
+      } catch {
+        dialog.showErrorBox('Invalid app launch', 'The app task contains an invalid identity. Open it from Shadow Apps instead.')
+      }
+    })
+    app.whenReady().then(start).catch((error: unknown) => {
+      console.error('[desktop] Failed to start', error)
+      if (app.commandLine.hasSwitch('service-connection') || process.env.SHADOW_SERVICE_CONNECTION !== undefined) {
+        dialog.showErrorBox(
+          'Shadow service connection failed',
+          'The explicitly selected service could not be attached. Check its descriptor, credential permissions, and authenticated readiness with manage.ps1 -Action Start. No local sidecar was launched.',
+        )
+      }
+      app.quit()
+    })
+    app.on('window-all-closed', () => app.quit())
+  }
 }

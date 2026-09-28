@@ -6,29 +6,52 @@
       <RouterLink :to="{ name: 'project-settings', params: { projectId, section: 'models' } }">Project models</RouterLink>
       <RouterLink :to="{ name: 'settings', params: { section: 'providers' } }">App providers</RouterLink>
     </div>
-    <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
+    <ProjectWorkbench v-if="sessionId === ORCHESTRATOR_SESSION_ID" ref="coordination"
+      :api-base="apiBase" :project-id="projectId" :project-name="projectName" :visible="visible"
+      @navigate="$emit('navigate', $event)" @compose="workspace?.appendDraft($event)">
+      <template #default="{ active }">
+        <ChatWorkspace ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
+          :session-id="sessionId" :visible="active" :child-session-id="childSessionId" :knowledge-request="knowledgeRequest"
+          @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
+          @project-navigation="$emit('project-navigation', $event)"
+          @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" />
+      </template>
+    </ProjectWorkbench>
+    <ChatWorkspace v-else ref="workspace" :api-base="apiBase" managed :project-id="projectId" :project-name="projectName"
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
+      @project-navigation="$emit('project-navigation', $event)"
       :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId"
       @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import ChatWorkspace from './ChatWorkspace.vue'
+import ProjectWorkbench from './ProjectWorkbench.vue'
+import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import { createProjectSettingsClient, configReasoning } from '../project-settings.ts'
 import type { ReasoningSettings } from '../session-settings.ts'
 import { provideModelSelection } from '../model-selection.ts'
 import type { FolderRecord } from '../folders-client.ts'
-import type { KnowledgeTabRequest } from '../file-workbench.ts'
+import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
 const props = defineProps<{
   apiBase: string; projectId: string; projectName: string; sessionId: string
   initialFolder?: FolderRecord; openRemote?: boolean; visible: boolean; childSessionId?: string
   knowledgeRequest?: KnowledgeTabRequest
 }>()
-defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string] }>()
+defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab] }>()
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
+const coordination = ref<InstanceType<typeof ProjectWorkbench>>()
+const route = useRoute()
+watch(() => [coordination.value, props.childSessionId, props.knowledgeRequest, route.name, route.params.projectId], () => {
+  if (props.childSessionId || props.knowledgeRequest
+    || (route.params.projectId === props.projectId && ['project-settings', 'agents'].includes(String(route.name)))) {
+    coordination.value?.openConversation()
+  }
+})
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})
 const options = ref<string[]>([])

@@ -169,7 +169,7 @@ test('coordinator guidance cannot advertise worker tools even with broad role me
   assert.match(prompt, /### Peer conversations/)
   assert.match(prompt, /### Coordinator Capability Boundary/)
   const normalized = prompt.replace(/\s+/g, ' ')
-  assert.match(normalized, /hard runtime cap permits only read\/search\/session\/message\/work\/project_config\/authoring_change\/skill_read\/skill_save\/ask\/reply; never invoke_tool, exec, write, or subagent/)
+  assert.match(normalized, /hard runtime cap permits only read\/search\/session\/message\/work\/sql\/project_config\/authoring_change\/skill_read\/skill_save\/ask\/reply; never invoke_tool, exec, write, or subagent/)
   assert.match(normalized, /Use `skill_read` and `skill_save` for ordinary shared Skill edits/)
   assert.match(normalized, /Use `authoring_change` only for managed Bot prompt\/resources, saved check runs and owner review/)
   assert.match(normalized, /Do not bypass this boundary through skills, discovery, events, URLs or other tools/)

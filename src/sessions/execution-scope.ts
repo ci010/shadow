@@ -19,7 +19,7 @@ export function assertOwnedExecution(sessions: ExecutionAccess, executionId: str
   assertExecutionActor(sessions, context)
   const state = sessions.getSessionState(executionId)
   if (!state || state.projectId !== context.projectId || sessions.getDelegationOwner(executionId) !== context.sessionId) {
-    throw new Error('Only the execution owner in this Project can access it.')
+    throw new Error('Execution not found or access denied: only the execution owner in this Project can access it. Use the full executionId returned by the tool (including bg: for background work); read v:bg to list owned executions.')
   }
   if (state.mode !== 'task' && state.mode !== 'call') throw new Error('Expected an execution, not a durable conversation.')
   sessions.assertFolderAccess(executionId)

@@ -27,13 +27,33 @@ async function main() {
   }
   const close = async (panel: string) => {
     await execute(`document.querySelector('.session-work-panel').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
-    await wait(`document.activeElement?.matches(${JSON.stringify(chip(panel))})`)
+    await wait(panel === 'composer' ? `document.activeElement?.tagName === 'TEXTAREA'`
+      : `document.activeElement?.matches(${JSON.stringify(chip(panel))})`)
   }
   try {
     await window.loadURL(new URL('projects/a/chat/web%3Achat-owner', process.env.BACKGROUND_ACTIVITY_URL).href)
     await wait(`document.querySelector('${chip('background')}') && document.querySelector('${chip('subagents')}')`)
     assert.equal(await execute(`document.querySelector('.chat-composer .background-tasks')`), null, 'No separate full-width task row')
-    assert.equal(await execute(`document.querySelectorAll('.session-work-triggers > button').length`), 4)
+    assert.equal(await execute(`document.querySelectorAll('.session-work-triggers > button').length`), 2)
+    await wait(`document.querySelector('.current-task')?.getClientRects().length`)
+    assert.ok(await execute(`{ const row=document.querySelector('.session-status-row').getBoundingClientRect();
+      const task=document.querySelector('.current-task').getBoundingClientRect();
+      const agents=document.querySelector('${chip('subagents')}').getBoundingClientRect();
+      row.width > task.width && Math.abs(task.top - agents.top) < 2; }`), 'Assignment and subagents share one chip row')
+    await change('parent=tool')
+    await wait(`document.querySelector('.chat-working.tool')?.getClientRects().length`)
+    const toolChip = await execute(`{ const status=document.querySelector('.chat-working').getBoundingClientRect();
+      const agents=document.querySelector('${chip('subagents')}').getBoundingClientRect();
+      const chip=document.querySelector('.chat-working');
+      ({ top:status.top, agentsTop:agents.top, left:status.left, agentsRight:agents.right,
+        right:status.right, rowRight:document.querySelector('.session-status-row').getBoundingClientRect().right,
+        border:getComputedStyle(chip).borderStyle, text:chip.textContent }); }`)
+    assert.ok(Math.abs(toolChip.top - toolChip.agentsTop) < 2 && toolChip.left >= toolChip.agentsRight
+      && Math.abs(toolChip.right - toolChip.rowRight) < 2 && toolChip.border === 'solid'
+      && toolChip.text.includes('Using tools'), `Tool activity is a right-aligned chip: ${JSON.stringify(toolChip)}`)
+    await change('parent=llm')
+    await wait(`document.querySelector('.chat-working.llm')?.textContent.includes('Thinking')`)
+    await change('parent=idle')
     await wait(`(${ownerRow})?.querySelectorAll('.subagent-running .activity-wave i').length === 3`)
     const bars = await execute(`[...(${ownerRow}).querySelectorAll('.activity-wave i')].map(bar => {
       const style = getComputedStyle(bar); return {name:style.animationName,delay:style.animationDelay,width:style.width,height:style.height};
@@ -84,12 +104,18 @@ async function main() {
     window.setSize(390, 844)
     await delay(250)
     assert.ok(await execute(`document.documentElement.scrollWidth <= innerWidth + 1`), 'Chips wrap without page overflow')
+    await change('parent=tool')
+    await wait(`document.querySelector('.chat-working.tool')?.getClientRects().length`)
+    assert.ok(await execute(`{ const row=document.querySelector('.session-status-row').getBoundingClientRect();
+      const status=document.querySelector('.chat-working').getBoundingClientRect();
+      status.right <= row.right + 1 && status.left >= row.left - 1; }`), 'Activity chip stays inside the narrow dock')
+    await change('parent=idle')
     await click(chip('subagents'))
     await wait(`document.querySelector('.subagent-inspect')?.getClientRects().length`)
     assert.ok(await execute(`{ const rect=document.querySelector('.session-work-panel').getBoundingClientRect(); rect.left>=0 && rect.right<=innerWidth && rect.top>=0; }`), 'Popup stays inside the narrow viewport')
     await change('phase=cancelled')
     await wait(`document.querySelector('.subagent-list').textContent.includes('No subagents active.')`)
-    await close('work')
+    await close('background')
     await wait(`!document.querySelector('${chip('subagents')}')`)
     await click(chip('background'))
     await change('background=cancelling')
@@ -97,7 +123,7 @@ async function main() {
     assert.ok(await execute(`document.documentElement.scrollWidth <= innerWidth + 1`), 'Execution reference and cancellation state fit mobile')
     await change('background=empty')
     await wait(`document.querySelector('.background-empty')?.textContent === 'No background tasks running.'`)
-    await close('work')
+    await close('composer')
     await wait(`!document.querySelector('${chip('background')}')`)
     assert.ok(!errors.some(error => error.includes('Unhandled error')), errors.join('\n'))
     console.log('BACKGROUND_ACTIVITY_SMOKE_OK')

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { fileIcon, folderIcon } from './file-icons.ts'
+import { fileIcon, folderIcon, matchedFileIcon } from './file-icons.ts'
 
 test('file icons recognize common source, document, media, and archive extensions', () => {
   const cases = {
@@ -67,7 +67,15 @@ test('file names and config patterns take precedence over extensions', () => {
 test('unknown files and dotfiles always have a document fallback', () => {
   for (const name of ['unknown.xyz', 'unknown', '.custom', '', 'constructor', 'toString', '__proto__', 'file.']) {
     assert.equal(fileIcon(name), 'i-material-icon-theme-document', name)
+    assert.equal(matchedFileIcon(name), undefined, name)
   }
+})
+
+test('file paths share the tree mapping without treating unknown extensions as matched', () => {
+  assert.equal(matchedFileIcon('src\\server.py'), fileIcon('server.py'))
+  assert.equal(matchedFileIcon('src/config/tsconfig.app.json'), fileIcon('tsconfig.app.json'))
+  assert.equal(matchedFileIcon('src/types.d.ts'), fileIcon('types.d.ts'))
+  assert.equal(matchedFileIcon('src/unknown.xyz'), undefined)
 })
 
 test('folders use their own mapping and expose closed and expanded icons', () => {

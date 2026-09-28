@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 export interface DecisionEvidence {
   sessionId: string
   physicalId: string
@@ -5,6 +7,22 @@ export interface DecisionEvidence {
   id: string
   quote: string
 }
+
+export const DECISION_EVIDENCE_HELP = {
+  sessionId: 'source session ID',
+  physicalId: 'source physical segment ID',
+  kind: 'user | tool',
+  id: 'recorded input ID or tool call ID',
+  quote: 'Exact source excerpt, not a summary. Reuse a returned reference when available.',
+}
+
+export const decisionEvidenceSchema = z.object({
+  sessionId: z.string().max(512).trim().min(1),
+  physicalId: z.string().max(512).trim().min(1),
+  kind: z.enum(['user', 'tool']),
+  id: z.string().max(512).trim().min(1),
+  quote: z.string().max(2000).trim().min(1),
+}).strict()
 
 export interface DecisionBrief {
   goal: string
@@ -27,9 +45,8 @@ export const DECISION_BRIEF_HELP = {
   tradeoff: 'How alternatives affect the goal, cost and uncertainty.',
   blocked: ['Work that must not proceed without this decision (1-6 entries).'],
   unaffected: ['Independent work still within existing authorization (0-6 entries).'],
-  claims: [{ kind: 'user_constraint | observation | assumption | proposal', text: 'One claim (at most 8 claims).',
-    evidence: { sessionId: 'source owner', physicalId: 'source segment', kind: 'user | tool', id: 'input ID or tool call ID',
-      quote: 'Exact source excerpt. Required for user_constraint and observation. A user_constraint must equal its user quote, not a paraphrase.' } }],
+  claims: [{ kind: 'user_constraint | observation | assumption | proposal', text: 'One claim (at most 8 claims). Constraints and observations need evidence; a user_constraint must equal its user quote, not a paraphrase.',
+    evidence: DECISION_EVIDENCE_HELP }],
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -48,12 +65,13 @@ function list(value: unknown, min: number): string[] {
   return Array.from(value, item => text(item, 500))
 }
 
-export function parseDecisionEvidence(value: unknown): DecisionEvidence {
-  const entry = object(value)
-  keys(entry, ['sessionId', 'physicalId', 'kind', 'id', 'quote'])
-  if (entry.kind !== 'user' && entry.kind !== 'tool') throw new TypeError('Evidence must identify a user input or tool receipt.')
-  return { sessionId: text(entry.sessionId, 512), physicalId: text(entry.physicalId, 512),
-    kind: entry.kind, id: text(entry.id, 512), quote: text(entry.quote, 2000) }
+export function parseDecisionEvidence(value: unknown, path = 'evidence'): DecisionEvidence {
+  const parsed = decisionEvidenceSchema.safeParse(value)
+  if (!parsed.success) {
+    const details = parsed.error.issues.map(issue => `${[path, ...issue.path].join('.')}: ${issue.message}`).join('; ')
+    throw new TypeError(`${details}. Expected an evidence reference {sessionId, physicalId, kind: "user" | "tool", id, quote}; not a decision brief or a prose summary.`)
+  }
+  return parsed.data
 }
 
 export function parseDecisionBrief(value: unknown): DecisionBrief {

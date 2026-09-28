@@ -119,6 +119,7 @@ export class EventService {
       { source: 'system', kind: 'system', description: 'Internal system events', createdAt: new Date().toISOString() },
       { source: 'cron', kind: 'cron', description: 'Scheduled cron jobs', createdAt: new Date().toISOString() },
       { source: 'agent', kind: 'agent', description: 'Events emitted by agents via the event tool', createdAt: new Date().toISOString() },
+      { source: 'background-task', kind: 'system', description: 'Background execution results, admitted before the next inference without interrupting work', delivery: { urgency: 'next-step' }, createdAt: new Date().toISOString() },
     ]
     for (const b of builtins) {
       // Do not clobber a persisted custom override with the same tag.

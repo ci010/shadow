@@ -18,7 +18,6 @@ test('local Main admin sees product and diagnostic routes', () => {
     'chat',
     'nodes',
     'settings',
-    'agents',
     'spans',
     'logs',
   ])
@@ -33,7 +32,6 @@ test('Main-facing navigation is scope-aware rather than role-gated', () => {
   assertEquals(routeNames(context), [
     'chat',
     'nodes',
-    'agents',
     'spans',
     'logs',
   ])
@@ -85,7 +83,7 @@ test('diagnostic routes are grouped without adding a product route', () => {
     .filter((item) => item.group === 'diagnostics')
     .map((item) => item.name)
 
-  assertEquals(diagnostics, ['agents', 'spans', 'logs'])
+  assertEquals(diagnostics, ['spans', 'logs'])
 })
 
 test('app content follows navigation without a persistent runtime status row', async () => {

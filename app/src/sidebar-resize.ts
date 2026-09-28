@@ -2,6 +2,7 @@ export interface SidebarWidthBounds {
   min: number
   max: number
 }
+export type SidebarResizeEdge = 'left' | 'right'
 
 export function sidebarWidthBounds(containerWidth: number, min: number, max: number, contentMin = 360): SidebarWidthBounds {
   const available = Math.max(0, Math.floor(containerWidth - contentMin))
@@ -13,14 +14,15 @@ export function clampSidebarWidth(width: number, bounds: SidebarWidthBounds): nu
   return Math.max(bounds.min, Math.min(bounds.max, Math.round(width)))
 }
 
-export function sidebarDragWidth(startWidth: number, startX: number, clientX: number, bounds: SidebarWidthBounds): number {
-  return clampSidebarWidth(startWidth + clientX - startX, bounds)
+export function sidebarDragWidth(startWidth: number, startX: number, clientX: number, bounds: SidebarWidthBounds, edge: SidebarResizeEdge = 'right'): number {
+  return clampSidebarWidth(startWidth + (clientX - startX) * (edge === 'left' ? -1 : 1), bounds)
 }
 
-export function sidebarKeyWidth(key: string, width: number, bounds: SidebarWidthBounds): number | undefined {
+export function sidebarKeyWidth(key: string, width: number, bounds: SidebarWidthBounds, edge: SidebarResizeEdge = 'right'): number | undefined {
   if (key === 'Home') return bounds.min
   if (key === 'End') return bounds.max
-  if (key === 'ArrowLeft') return clampSidebarWidth(width - 24, bounds)
-  if (key === 'ArrowRight') return clampSidebarWidth(width + 24, bounds)
+  const step = edge === 'left' ? -24 : 24
+  if (key === 'ArrowLeft') return clampSidebarWidth(width - step, bounds)
+  if (key === 'ArrowRight') return clampSidebarWidth(width + step, bounds)
   return undefined
 }

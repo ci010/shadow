@@ -264,11 +264,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         ]) assert.match(await tool.execute({ ...add, ...args }, ctx), /^Error:/)
         assert.equal(f.cron.listJobs().length, 0)
 
-        for (const urgency of ['queue', 'steering', 'debounce', 'silent']) {
+        for (const urgency of ['queue', 'steering', 'next-step', 'debounce', 'silent']) {
           assert.match(await tool.execute({ ...add, urgency, ...(urgency === 'debounce' ? { debounce_ms: 42 } : {}) }, ctx), /Created job/)
         }
         assert.deepEqual(f.cron.listJobs().map(job => job.event?.delivery), [
-          { urgency: 'queue' }, { urgency: 'steering' }, { urgency: 'debounce', debounceMs: 42 }, { urgency: 'silent' },
+          { urgency: 'queue' }, { urgency: 'steering' }, { urgency: 'next-step' }, { urgency: 'debounce', debounceMs: 42 }, { urgency: 'silent' },
         ])
         const job = f.cron.listJobs()[0]
         const source = f.manager.getSessionState('web:source')!

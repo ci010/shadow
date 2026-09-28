@@ -385,6 +385,11 @@ Sidebar hover details distinguish identity, state and technical metadata.
 Bot names lead at (14px) semibold, followed by a labeled connection icon, then
 Platform and Bot ID below a quiet divider. Conversation details show a
 state-specific icon beside their status, including inactive and unknown states.
+Sidebar conversation rows use the same 16px state icons instead of square
+activity dots: information blue for active, pending, or call-blocked work;
+amber for replies needed; green for completion; red for failure; and neutral
+ink for ready, inactive, cancelled, or unavailable states. Icon shape and the
+accessible state label carry the distinction as well as color.
 Session IDs have an adjacent copy icon with copied/error feedback; Bot IDs use
 the same control. Copy the complete value even when its display is truncated.
 Keep normal hover dismissal, keyboard entry and square controls.
@@ -422,7 +427,7 @@ layouts, targets grow to (44px); the controls remain above the conversation.
 
 `ChatTab.vue` uses the chat aliases with a one-pixel border and padding (0.5rem 0.75rem). Peer messages preserve their source label and dashed border; source-label strong text is secondary neutral ink. An actionable source label underlines and uses normal ink on hover and exposes blue focus; sender identity itself is not teal or a success state.
 
-`MessageAction.vue` uses content-fit width, action surface, (12px) padding, a chat border, and (13px) text. Recipient navigation is neutral at rest, underlined on hover, and blue-outlined on focus. Delivery notes and tool details stay secondary; failed results use error ink. `ExecutionMessage.vue` shares the action surface/border. Reasoning uses neutral headers and a quiet action surface, not warning amber.
+`MessageAction.vue` uses content-fit width, action surface, (12px) padding, a chat border, and (13px) text. Recipient navigation is neutral at rest, underlined on hover, and blue-outlined on focus. Delivery notes and tool details stay secondary; failed results use error ink. Tool groups, execution links, system events, and background responses share transparent (40px) trace headers, the same capped conversation rail, and one-pixel detail guides; touch targets grow to (44px). Execution and completion-event headers open the child conversation (or close it when already selected); separate chevron rows expand Tool or Event details without navigating. Detail guides appear only alongside visible content. Recognized read/write file paths use the file tree's name/extension icons; unknown paths keep the operation icon. Routine trace labels remain neutral while completion and failure use semantic status ink. Reasoning uses neutral headers and a quiet action surface, not warning amber.
 
 ### Activity and tool details
 
@@ -470,7 +475,7 @@ shared narrow/coarse-pointer touch sizes.
 - Do use shared CSS variables and inherited chat aliases in both themes.
 - Do reserve blue for interaction, selection, and information needing attention.
 - Do reserve green for success, connection, or completion; amber for human attention or warnings; red for failures or destructive actions.
-- Do preserve neutral source labels, routine tool activity, thinking, idle state, and static trace information.
+- Do preserve neutral source labels, routine tool activity, thinking outside compact sidebar status, idle state, and static trace information.
 - Do retain the sidebar rhythm, square corners, content-fitting message cards, and the shared prose measure.
 - Do verify actual foreground/background pairs and focus states when adding or changing a component.
 

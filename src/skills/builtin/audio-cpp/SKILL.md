@@ -43,7 +43,10 @@ large disk use or a model with special license terms.
    `v:skills/download` and the bundled `download` tool for resumable
    transfer; do not invent a digest if the release has none.
 3. Call `audio_cpp configure` with `binary` set to its absolute path. Shadow
-   probes `--list-loaders --json` before saving. If the binary is already on
+   probes `--list-loaders --json` before saving. Both the legacy family array and
+   the schema-version-1 `loaders` object are supported. Validate the CLI first,
+   before downloading a large model. A rejected catalog leaves configuration
+   unchanged; a probe/process failure still needs investigation. If the binary is already on
    `PATH`, the tool can discover it without configuration. Use `AUDIOCPP_CLI_PATH`
    as an optional host-level override; a configured binary takes priority.
    Nothing is added to an Electron installer or downloaded on Shadow startup.
@@ -99,6 +102,20 @@ selectors. Explicitly choose a backend built into the installed binary; CPU
 is a compatibility default, not a performance guarantee.
 
 ## Inference and troubleshooting
+
+For Japanese Kokoro, check the selected release's voice/language support, MeCab
+runtime and dictionary resources before inference; an English eSpeak setup does
+not establish Japanese readiness. Verify a short Japanese WAV first, then user
+playback, and only then an explicitly authorized virtual-microphone route.
+Successful tokenization, accessible model paths and a working VRChat input are
+different checkpoints. Do not install drivers, change default devices or route
+audio into another application without authorization.
+
+Use documented requirements and measurements for memory estimates. A chosen
+safety margin is an assumption, not a proven minimum or user restriction.
+Within approved resource/risk limits, prefer a short, cancellable low-concurrency
+test over blocking indefinitely on an invented threshold. If no safe test is
+possible, explain the measured risk and alternatives.
 
 `audio_cpp transcribe` accepts a **WAV** path and returns `{"text":...}`.
 Convert MP3/OGG/Opus/other uploads to WAV with an installed decoder such as

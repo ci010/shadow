@@ -294,6 +294,16 @@ test('LocalExecutor confines capability filesystem reads and writes to the physi
       }),
       new AbortController().signal,
     ))
+    const searchEvents = await collect(executor.execute(
+      request('fs-search', {
+        capabilityId: 'workdir-1',
+        operation: FILESYSTEM_READ_OPERATION,
+        args: { path: '.', query: 'nested/input' },
+      }),
+      new AbortController().signal,
+    ))
+    assert.deepEqual(JSON.parse(searchEvents.flatMap(event => event.type === 'stdout' ? [event.chunk] : []).join('')),
+      { paths: ['nested/input.txt'], truncated: false })
     const escapeEvents = await collect(executor.execute(
       request('fs-escape', {
         capabilityId: 'workdir-1',

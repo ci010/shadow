@@ -13,6 +13,7 @@ export interface BrowserInstance {
   active: boolean
   ready: boolean
   importArgs?: string[]
+  fileRoot?: string
 }
 
 export function attachmentTarget(endpoint: string): BrowserTarget {

@@ -3,6 +3,9 @@ import type { ContentPart } from '../providers/provider.ts'
 
 export type ToolResult = string | { content: ContentPart[]; isError?: boolean }
 
+/** Only trusted implementations may attest that a failed operation had no effect. */
+export class ToolNoEffectError extends Error {}
+
 export function toolResultText(result: ToolResult): string {
   return typeof result === 'string' ? result : result.content
     .filter(part => part.type === 'text').map(part => part.text).join('\n')

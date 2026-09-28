@@ -5,6 +5,7 @@ import { delimiter, extname, join } from 'node:path'
 import { z } from 'zod'
 import { writePrivateFile } from '../config/store.ts'
 import { workspacePath } from '../utils/paths.ts'
+import { ToolNoEffectError } from '../tools/tool.ts'
 
 const model = z.object({
   family: z.string().regex(/^[a-z][a-z0-9_]*$/),
@@ -18,7 +19,15 @@ const configSchema = z.object({
   asr: model.optional(),
   tts: model.optional(),
 }).strict()
-const loaderCatalog = z.array(z.object({ family: z.string().min(1) }).passthrough()).nonempty()
+const loaderCatalog = z.union([
+  z.array(z.object({ family: z.string().min(1) }).passthrough()).nonempty(),
+  z.object({
+    schema_version: z.literal(1),
+    loaders: z.record(z.string().regex(/^[a-z][a-z0-9_]*$/), z.object({
+      tasks: z.record(z.array(z.string().min(1))).refine(tasks => Object.keys(tasks).length > 0),
+    }).passthrough()).refine(loaders => Object.keys(loaders).length > 0),
+  }).passthrough(),
+])
 type AudioConfig = z.infer<typeof configSchema>
 type Task = 'asr' | 'tts'
 const MAX_OUTPUT = 1024 * 1024
@@ -157,7 +166,12 @@ export class AudioCppService {
       const next: AudioConfig = { ...current }
       if (update.binary) {
         const binary = await existingFile(update.binary)
-        loaderCatalog.parse(JSON.parse(await this.run(binary, ['--list-loaders', '--json'], signal, PROBE_TIMEOUT_MS)))
+        const catalog = await this.run(binary, ['--list-loaders', '--json'], signal, PROBE_TIMEOUT_MS)
+        try { loaderCatalog.parse(JSON.parse(catalog)) }
+        catch (error) {
+          if (!(error instanceof SyntaxError || error instanceof z.ZodError)) throw error
+          throw new ToolNoEffectError('audio.cpp returned an unsupported loader catalog; expected a nonempty family array or schema_version=1 with a loaders object. Configuration was not written.', { cause: error })
+        }
         next.binary = binary
       }
       if (update.task) {

@@ -11,9 +11,12 @@ metadata:
 Shadow bundles a pinned `aria2c` with the desktop application; it does not
 silently use the system `PATH`. Use `download` through `invoke_tool` (find its
 contract with `search(query="download", space="grep:v:tools")`). Run
-`download status` to check the bundled binary and version. A missing or
-different version is a packaging error; do not silently run another binary.
-Local development without a package can set the absolute
+`download status` to check the binary and version. Source and built backends
+running from a repository checkout use `desktop/aria2/aria2c` (`aria2c.exe`
+on Windows); these development assets are not downloaded at startup.
+A missing or different version in an installed app is a packaging error;
+do not silently run another binary.
+Local development can also set the absolute
 `SHADOW_ARIA2C_PATH` to an **explicitly trusted copy of the pinned version**.
 Remote workdirs cannot use Main's local binary or downloaded files.
 
@@ -33,12 +36,16 @@ before using `approved: true`. No download happens at startup. Use a
 persistent user-chosen directory, not a session temp directory or the source
 repository. The `download` action accepts `url`, `directory`, `filename`,
 `sha256`, optional `bytes` and `approved: true`. Prefer `action: "start"`
-for large downloads: it immediately returns a `bg:` execution ID and a raw
-`taskId`. On the current background-task API, read `v:bg/<taskId>` for
-progress or call `kill({task_id: taskId})` to stop the transfer. Where the
-execution-ID API is available, use `v:bg/<executionId>` and
-`cancel({executionId})` instead. Cancellation preserves resumable partial
-data. `action: "download"` waits for completion and is intended only for
+for large downloads: it immediately returns `executionId` and `outputPath`.
+Read the returned `outputPath` directly for progress/output, and use
+`cancel({executionId})` to stop the transfer. Keep the full `bg:` prefix:
+`executionId: "bg:0123456789abcdef"` has
+`outputPath: "v:bg/bg:0123456789abcdef"`.
+The raw `taskId` is compatibility metadata, not a VFS path or cancellation
+reference. `v:bg` aggregates several execution kinds; its mount name does not
+replace the `bg:` part of an execution ID. Do not poll; completion is delivered
+automatically. Cancellation preserves resumable partial data.
+`action: "download"` waits for completion and is intended only for
 short files. Both actions stage under
 `<filename>.shadow-part` with aria2 resume metadata, checks the final length
 and SHA-256, then exposes the named file. The same destination and file name
@@ -51,9 +58,19 @@ can resume. If a signed link expires, reacquire it from the same trusted
 repository and revision; **do not combine unrelated revisions or URLs**
 into one partial file. If resume fails or a server ignores range requests,
 report the error and retry only after checking the source and disk state.
+Failures include bounded TLS, DNS, timeout, HTTP or disk hints when recognized,
+not raw downloader output. A TLS failure is not evidence that the source file
+is missing; do not disable certificate checks or blindly repeat the transfer.
 Do not log signed URLs, tokens, cookies or authorization headers; signed
 links are passed to aria2 through stdin rather than command-line arguments. This
 tool does not accept credentials. Avoid arbitrary download scripts, insecure
 TLS flags, unaudited installer commands or unauthenticated aria2 RPC
 servers. It spawns one bounded local CLI process without a shell and
 supports cancellation while preserving resumable partial files.
+
+Transfers respect standard HTTP(S) proxy environment variables or, on Windows
+when those are absent, the user's existing static system proxy and bypass
+rules. Shadow does not change system settings or disable TLS verification.
+Proxy addresses also travel through stdin, not process arguments. PAC/SOCKS
+configuration and credential-bearing proxy URLs fail explicitly; this tool
+does not retrieve proxy credentials or substitute an unapproved network route.

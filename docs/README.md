@@ -10,6 +10,7 @@
 | [Browser access](browser-access.md) | Local PIN and one-use pairing, trusted LAN, and PWA installation limits |
 | [Tools and automations](tools-and-automations.md) | Virtual discovery, Project MCP configuration, skills, and schedules |
 | [Project conventions](project-conventions.md) | Project SQL, attributable rule changes, Work queries, decisions and personal memory boundaries |
+| [GitHub collaboration](github.md) | Project Issue/PR links, confirmed writes, cached evidence, explicit follow-up and uncertain outcome recovery |
 | [Session diagnosis](diagnostics.md) | Read-only export/API/CLI and development-only prompt capture |
 | [Desktop release verification](release.md) | Native Windows/macOS/Linux build gates, Actions artifacts, package identity and installation acceptance boundaries |
 | [Mobile client](mobile.md) | Capacitor client architecture, HTTPS gateway, pairing/revocation, native release and operational boundaries |
@@ -19,6 +20,7 @@
 | [Visual design system](../DESIGN.md) | Quiet Workbench light/dark color roles, message hierarchy, components, and implementation guardrails |
 | [Shared live transport](realtime-protocol.md) | Multiplexed SSE, topic ownership, replay/reset, reconnect recovery, and resource limits |
 | [Frontend I/O](io.md) | Browser capture panels, adhoc backend connection protocol, controls, and verification limits |
+| [Project Micro Apps](microapps.md) | Reusable Web tools, reviewed revisions, isolated pages, local backends and scoped model access |
 | [Conversation agent authoring](agent-authoring.md) | Independent Changes, delegated resource edits, saved checks, owner-reviewed probes/publication and legacy drafts |
 | [A2A text integration](a2a.md) | Opt-in A2A server/client, SDK/MCP coding-agent bridges, task continuation, notifications and trust boundaries |
 

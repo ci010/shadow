@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, realpath, stat, writeFile } from 'node:fs/pro
 import { isNotFoundError } from '../utils/runtime.ts'
 import type { JobRequestV1 } from './contracts.ts'
 import type { LocalJobOperationHandler } from './local-executor.ts'
+import { searchWorkspaceFiles, validFileSearchQuery } from './filesystem/search-files.ts'
 
 export const FILESYSTEM_READ_OPERATION = 'filesystem.read'
 export const FILESYSTEM_WRITE_OPERATION = 'filesystem.write'
@@ -25,6 +26,7 @@ export type CapabilityFilesystemErrorCode =
   | 'file-type-denied'
   | 'filesystem-result-too-large'
   | 'filesystem-io-failed'
+  | 'file-search-unavailable'
 
 export class CapabilityFilesystemError extends Error {
   constructor(
@@ -105,6 +107,19 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
     try {
       signal.throwIfAborted()
       const info = await stat(target)
+      if (args.query !== undefined) {
+        if (!info.isDirectory()) throw new CapabilityFilesystemError('file-type-denied', 'File search requires a directory')
+        try {
+          const output = JSON.stringify(await searchWorkspaceFiles(target, args.query, signal))
+          if (new TextEncoder().encode(output).length > this.#maxReadBytes) throw resultTooLarge('read')
+          return output
+        } catch (error) {
+          if (error instanceof CapabilityFilesystemError || signal.aborted) throw error
+          throw new CapabilityFilesystemError('file-search-unavailable',
+            error instanceof Error && 'code' in error && error.code === 'ENOENT'
+              ? 'ripgrep (rg) is not installed on this device' : 'ripgrep file search failed')
+        }
+      }
       if (info.isDirectory()) {
         const entries: string[] = []
         for (const entry of await readdir(target, { withFileTypes: true })) {
@@ -259,12 +274,13 @@ function pathDenied(): CapabilityFilesystemError {
   )
 }
 
-function parseReadArgs(value: unknown): { path: string } {
-  const candidate = recordWithKeys(value, ['path'])
+function parseReadArgs(value: unknown): { path: string; query?: string } {
+  const candidate = recordWithKeys(value, ['path', 'query'])
   if (typeof candidate.path !== 'string' || candidate.path.length === 0) {
     throw invalidArgs()
   }
-  return { path: candidate.path }
+  if (candidate.query !== undefined && !validFileSearchQuery(candidate.query)) throw invalidArgs()
+  return { path: candidate.path, ...(typeof candidate.query === 'string' ? { query: candidate.query } : {}) }
 }
 
 function parseWriteArgs(value: unknown): {

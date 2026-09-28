@@ -1,7 +1,7 @@
 import { trace } from '@opentelemetry/api'
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
+import { ToolNoEffectError, toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
 import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
 import type { McpConnection } from '../mcp/client.ts'
@@ -140,7 +140,8 @@ export class Tools {
         !EXEMPT_TOOLS.has(name) &&
         !(name === 'search' && typeof args.space === 'string' && (
           /^(?:glob|grep):[\\/]*v:/.test(args.space) ||
-          /^(?:glob|glob:)$/.test(args.space) && typeof args.query === 'string' && isVirtualPath(args.query)
+          /^(?:glob|grep)(?::.*)?$/.test(args.space) && typeof args.path === 'string' && isVirtualPath(args.path) ||
+          /^(?:glob|glob:)$/.test(args.space) && args.path === undefined && typeof args.query === 'string' && isVirtualPath(args.query)
         )) &&
         !(context.remoteWorkdir && name === 'exec')
       ) {
@@ -151,7 +152,7 @@ export class Tools {
         ...(typeof result !== 'string' && result.isError ? { isError: true } : {}),
       } : text
     } catch (err) {
-      admission?.finish(true)
+      admission?.finish(true, !context.signal?.aborted && err instanceof ToolNoEffectError ? 'none' : undefined)
       // An interrupted invocation has no result to persist or send to the model.
       if (context.signal?.aborted) throw err
       // handle abort

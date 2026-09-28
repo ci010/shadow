@@ -2,9 +2,23 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isAbsolute, join, relative } from 'node:path'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
-import { ChromeManager, ChromePortAllocator, detectChrome, type BrowserKind, type BrowserLaunchOptions, type ChromeRuntimeOperations } from './chrome-manager.ts'
+import { ChromeManager, ChromePortAllocator, browserProcessArguments, detectChrome, type BrowserKind, type BrowserLaunchOptions, type ChromeRuntimeOperations } from './chrome-manager.ts'
 import { createProjectScope } from '../projects/scope.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
+
+test('managed browser launches disable sync and extensions and start with a blank page', () => {
+  const profile = join(process.cwd(), 'synthetic browser profile')
+  const args = browserProcessArguments(9222, profile, true)
+  assert(!args.includes('--guest'))
+  assert(args.includes('--disable-sync'))
+  assert(args.includes('--disable-extensions'))
+  assert(args.includes(`--user-data-dir=${profile}`))
+  assert.equal(args.at(-1), 'about:blank')
+  assert.throws(() => browserProcessArguments(9222, undefined, true), /managed profile/)
+  assert.deepEqual(browserProcessArguments(9222, undefined, false), [
+    '--remote-debugging-port=9222', '--remote-debugging-address=127.0.0.1', '--no-first-run',
+  ])
+})
 
 test('host browser allocator reserves before async probes and stale lease release cannot free a replacement', async () => {
   const allocator = new ChromePortAllocator(async (port) => {

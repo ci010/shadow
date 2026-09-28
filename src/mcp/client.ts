@@ -3,7 +3,10 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { CallToolResultSchema, ToolListChangedNotificationSchema, type ContentBlock } from '@modelcontextprotocol/sdk/types.js'
+import { CallToolResultSchema, ListRootsRequestSchema, ToolListChangedNotificationSchema, type ContentBlock } from '@modelcontextprotocol/sdk/types.js'
+import { realpath } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { env as sysEnv } from 'node:process'
 import { Readable } from 'node:stream'
 import type { McpServerConfig } from '../config/schema.ts'
@@ -66,6 +69,7 @@ export class McpConnection {
   constructor(
     readonly config: McpServerConfig,
     private readonly cwd?: string,
+    readonly workspaceRoot?: string,
   ) {}
 
   @Span('McpConnection.connect')
@@ -78,8 +82,9 @@ export class McpConnection {
     } catch (error) {
       throw mcpFailure(error, { phase: 'validate_config', config: this.config })
     }
+    if (this.workspaceRoot && !isAbsolute(this.workspaceRoot)) throw new Error('MCP workspace roots must be resolved local directories')
     const state: ConnectionState = {
-      client: new Client({ name: 'bot-agent', version: '0.1.0' }, {}),
+      client: new Client({ name: 'bot-agent', version: '0.1.0' }, { capabilities: this.workspaceRoot ? { roots: {} } : {} }),
       abort: new AbortController(),
       ready: false,
       stderr: '',
@@ -93,6 +98,11 @@ export class McpConnection {
       ? AbortSignal.any([signal, state.abort.signal])
       : state.abort.signal
     try {
+      if (this.workspaceRoot) {
+        const roots = [{ uri: pathToFileURL(await realpath(this.workspaceRoot)).href, name: 'Session workdir' }]
+        startupSignal.throwIfAborted()
+        state.client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots }))
+      }
       const transport = await this.createTransport(config, startupSignal)
       // Client.connect also closes failed initialization. Share cleanup so a
       // concurrent abort cannot close the same transport twice.
