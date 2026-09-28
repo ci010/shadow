@@ -150,10 +150,15 @@ export class WorkAlignment implements WorkToolGuard {
         || record.workflow?.dependencies.some(key => this.get(key).workflow?.status !== 'done')) {
         throw new WorkConflict('Work is blocked or has unfinished dependencies. Select independent ready work instead.')
       }
-      if (record.paused || record.successors?.some(edge => edge.fromSessionId === this.executor(sessionId))
-        || (record.transition && record.transition.sessionId === this.executor(sessionId))
-        || !this.store.workAuthority(record.subject).active) {
-        throw new WorkConflict('Work is paused, terminal, or awaiting a context transition. No new execution is admitted.')
+      if (record.paused) {
+        throw new WorkConflict(`Work "${record.key}" is paused. No new side-effecting execution is admitted.`)
+      }
+      if (!this.store.workAuthority(record.subject).active) {
+        throw new WorkConflict(`Work "${record.key}" is terminal (${record.workflow?.status ?? 'inactive'}). No new side-effecting execution is admitted.`)
+      }
+      if (record.successors?.some(edge => edge.fromSessionId === this.executor(sessionId))
+        || (record.transition && record.transition.sessionId === this.executor(sessionId))) {
+        throw new WorkConflict(`Work "${record.key}" is awaiting a context transition. No new side-effecting execution is admitted.`)
       }
       if (record.handoffFrom) {
         const source = this.get(record.handoffFrom.key)
@@ -175,11 +180,18 @@ export class WorkAlignment implements WorkToolGuard {
     const readOnly = typeof tool.readonly === 'function' ? tool.readonly(args) : tool.readonly === true
     if (readOnly || (tool.name === 'read' && isSkillRootPath(args.path))) return
     const stamps = context.workStamps ?? []
-    if (!stamps.length && !this.records(context.sessionId, true).length && context.tools.has('work')
-      && !['session', 'topic', 'initiative'].includes(tool.name)) {
-      throw new WorkConflict('Untracked execution: create an attributed work item and explicitly adopt it before starting side effects. Historical scope is unknown, not unrestricted.')
+    try {
+      if (!stamps.length && !this.records(context.sessionId, true).length && context.tools.has('work')
+        && !['session', 'topic', 'initiative'].includes(tool.name)) {
+        throw new WorkConflict('Untracked execution: create an attributed work item and explicitly adopt it before starting side effects. Historical scope is unknown, not unrestricted.')
+      }
+      this.assertCurrent(stamps, context.sessionId)
+    } catch (error) {
+      if (error instanceof WorkConflict && tool.readonly === undefined) {
+        throw new WorkConflict(`${error.message} Tool "${tool.name}" is not confirmed read-only; Work execution checks apply.`)
+      }
+      throw error
     }
-    this.assertCurrent(stamps, context.sessionId)
     if (!stamps.length) return
     const id = randomUUID()
     this.store.startWorkEffect(id, context.sessionId, tool.name, stamps)

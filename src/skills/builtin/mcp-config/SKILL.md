@@ -83,6 +83,37 @@ all configured entries; use it only when that complete removal is intended.
 
 ## Concurrency and validation
 
+### Read-only policy requires explicit review
+
+Servers default to untrusted hints. A matching `readOnlyOverrides` rule wins,
+including `false`; otherwise `trustReadOnlyHints: true` allows that server's
+`annotations.readOnlyHint` to classify a tool. Missing/untrusted hints remain
+unknown and subject to Work execution checks. Do not enable trust just to bypass
+a paused or completed Work item.
+
+Read the exact indexed `v:tools/<server>/<tool-id>` path for `readOnlyPolicy`
+(`readOnly`, `source`, `fingerprint`). After reviewing behavior and obtaining
+approval, a server entry may contain:
+
+```json
+"readOnlyOverrides": {
+  "get_record": { "readOnly": true, "fingerprint": "<reviewed 64-character fingerprint>" }
+}
+```
+
+Keys are exact unprefixed tool names. The fingerprint binds server name, tool
+contract/hint, and advertised server version, not private connection settings.
+Metadata changes make reviews stale; stale reviews do not fall back to trusted
+hints. Re-review and remove/replace overrides when changing connection settings
+or implementation even if metadata/version is unchanged. Copying metadata or
+trial-running a tool is not verification. Never probe possible writes to establish
+read-only status. Credentials are excluded from public fingerprints.
+
+Confirmed reads bypass only Work admission, not permissions, allowlists,
+cancellation, or remote-workdir restrictions. Unknown or write tools remain gated.
+
+### Atomic writes
+
 Every write validates the whole document and persists atomically through
 `ProjectConfigStore`. If the revision is stale, the write is rejected with a
 reread instruction. Read the latest document, preserve concurrent changes,

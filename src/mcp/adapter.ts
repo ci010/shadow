@@ -1,12 +1,15 @@
 import type { ExecutionContext } from '../tools/context.ts'
 import type { Tool, ToolParameters, ToolResult } from '../tools/tool.ts'
 import type { McpConnection, McpToolInfo } from './client.ts'
+import type { McpServerConfig } from '../config/schema.ts'
+import { mcpReadOnlyPolicy, type McpReadOnlyPolicy } from './readonly.ts'
 
-export function mcpToolContract(serverName: string, toolInfo: McpToolInfo) {
+export function mcpToolContract(config: McpServerConfig, toolInfo: McpToolInfo) {
   return {
-    name: `${serverName}__${toolInfo.name}`,
-    description: `[MCP:${serverName}] ${toolInfo.description}`,
+    name: `${config.name}__${toolInfo.name}`,
+    description: `[MCP:${config.name}] ${toolInfo.description}`,
     parameters: toolInfo.inputSchema,
+    readOnlyPolicy: mcpReadOnlyPolicy(config, toolInfo),
   }
 }
 
@@ -17,14 +20,18 @@ export class McpToolAdapter implements Tool<ToolResult> {
   readonly name: string
   readonly description: string
   readonly parameters: ToolParameters
+  readonly readonly: boolean | undefined
+  readonly readOnlyPolicy: McpReadOnlyPolicy
 
   constructor(
     private connection: McpConnection,
     private toolInfo: McpToolInfo,
   ) {
-    const contract = mcpToolContract(connection.config.name, toolInfo)
+    const contract = mcpToolContract(connection.config, toolInfo)
     this.name = contract.name
     this.description = contract.description
+    this.readOnlyPolicy = contract.readOnlyPolicy
+    this.readonly = contract.readOnlyPolicy.readOnly
     this.parameters = (toolInfo.inputSchema ??
       { type: 'object', properties: {} }) as unknown as ToolParameters
   }

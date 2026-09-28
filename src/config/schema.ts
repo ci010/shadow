@@ -146,6 +146,8 @@ export interface McpServerConfig {
   env?: Record<string, string>
   headers?: Record<string, string>
   description?: string
+  trustReadOnlyHints?: boolean
+  readOnlyOverrides?: Record<string, { readOnly: boolean; fingerprint: string }>
 }
 
 // ── Agent configs ───────────────────────────────────────────────────────────

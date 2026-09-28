@@ -116,12 +116,27 @@ test('listTools follows all pages including empty cursor and guards cursor cycle
       nextCursor: cursors.length === 1 ? '' : cursors.length === 2 ? 'next' : undefined,
     }
   })
+
   const tools = await connection.listTools(controller.signal)
   assert.deepEqual(cursors, [undefined, '', 'next'])
   assert.deepEqual(tools.map((tool) => tool.name), ['tool1', 'tool2', 'tool3'])
   assert.equal(tools[0].description, '')
   list.mock.mockImplementation(async () => ({ tools: [], nextCursor: 'loop' }))
   await assert.rejects(connection.listTools(), /repeated pagination cursor/)
+})
+
+test('MCP discovery preserves readonly hints and advertised server versions without inventing defaults', async t => {
+  const connection = await connected(t)
+  t.mock.method(Client.prototype, 'getServerVersion', () => ({ name: 'fixture', version: '2' }))
+  t.mock.method(Client.prototype, 'listTools', async () => ({ tools: [
+    { name: 'read', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+    { name: 'write', inputSchema: { type: 'object' }, annotations: { readOnlyHint: false } },
+    { name: 'unknown', inputSchema: { type: 'object' } },
+  ] }))
+  const tools = await connection.listTools()
+  assert.deepEqual(tools.map(tool => tool.readOnlyHint), [true, false, undefined])
+  assert.equal(Object.hasOwn(tools[2], 'readOnlyHint'), false)
+  assert.deepEqual(tools.map(tool => tool.serverVersion), Array(3).fill({ name: 'fixture', version: '2' }))
 })
 
 test('text compatibility, tool errors, structured/media content and private metadata', async (t) => {

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { McpServerConfig } from '../config/schema.ts'
@@ -6,6 +5,7 @@ import { writePrivateFile } from '../config/store.ts'
 import { McpConnection, type McpToolInfo } from './client.ts'
 import { parseMcpServerConfig } from './config.ts'
 import { mcpCleanupFailure, mcpFailure, type McpPhase } from './errors.ts'
+import { mcpMetadataFingerprint } from './readonly.ts'
 
 export interface IndexedMcpTools {
   indexedAt: string
@@ -44,10 +44,23 @@ function validateTools(value: unknown): McpToolInfo[] {
     if (names.has(tool.name)) throw new Error('Invalid MCP tool index: duplicate tool names')
     names.add(tool.name)
     assertJson(tool.inputSchema)
+    if (tool.readOnlyHint !== undefined && typeof tool.readOnlyHint !== 'boolean') {
+      throw new Error('Invalid MCP tool index: readOnlyHint must be a boolean')
+    }
+    let serverVersion: McpToolInfo['serverVersion']
+    if (tool.serverVersion !== undefined) {
+      if (!isRecord(tool.serverVersion) || typeof tool.serverVersion.name !== 'string'
+        || typeof tool.serverVersion.version !== 'string') {
+        throw new Error('Invalid MCP tool index: serverVersion must contain name and version strings')
+      }
+      serverVersion = { name: tool.serverVersion.name, version: tool.serverVersion.version }
+    }
     return {
       name: tool.name,
       description: tool.description,
       inputSchema: JSON.parse(JSON.stringify(tool.inputSchema)) as Record<string, unknown>,
+      ...(tool.readOnlyHint !== undefined ? { readOnlyHint: tool.readOnlyHint } : {}),
+      ...(serverVersion ? { serverVersion } : {}),
     }
   })
 }
@@ -60,16 +73,8 @@ function normalized(config: McpServerConfig): McpServerConfig {
   }
 }
 
-function ordered(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(ordered)
-  if (!isRecord(value)) return value
-  return Object.fromEntries(Object.keys(value).sort()
-    .filter(key => value[key] !== undefined)
-    .map(key => [key, ordered(value[key])]))
-}
-
 function fingerprint(config: McpServerConfig): string {
-  return createHash('sha256').update(JSON.stringify(ordered(config))).digest('hex')
+  return mcpMetadataFingerprint(config)
 }
 
 async function abortable<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {

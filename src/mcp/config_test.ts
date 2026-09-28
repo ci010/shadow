@@ -45,7 +45,24 @@ test('MCP config strips unknown fields and reports record-key validation paths',
   assert.deepEqual(parseMcpServerConfig('fixture', { command: 'node', privateToken: 'secret' }), {
     name: 'fixture', transport: 'stdio', command: 'node',
   })
+
   const result = McpSchema.safeParse({ fixture: { type: 'sse' } })
   assert.equal(result.success, false)
   if (!result.success) assert.deepEqual(result.error.issues[0].path, ['fixture', 'url'])
+})
+
+test('MCP readonly trust and fingerprint-bound review overrides are explicit validated server settings', () => {
+  const policy = {
+    trustReadOnlyHints: true,
+    readOnlyOverrides: { get_record: { readOnly: false, fingerprint: 'a'.repeat(64) } },
+  }
+  assert.deepEqual(parseMcpServerConfig('fixture', { command: 'node', ...policy }), {
+    name: 'fixture', transport: 'stdio', command: 'node', ...policy,
+  })
+  assert.equal(parseMcpServerConfig('fixture', { command: 'node' }).trustReadOnlyHints, undefined)
+  for (const invalid of [
+    { trustReadOnlyHints: 'true' }, { readOnlyOverrides: { get_record: true } },
+    { readOnlyOverrides: { get_record: { readOnly: 'true', fingerprint: 'a'.repeat(64) } } },
+    { readOnlyOverrides: { get_record: { readOnly: true, fingerprint: 'old' } } },
+  ]) assert.throws(() => parseMcpServerConfig('fixture', { command: 'node', ...invalid }))
 })

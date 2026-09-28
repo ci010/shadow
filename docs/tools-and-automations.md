@@ -122,6 +122,57 @@ them. Later tool search uses that index without connecting or executing;
 have side effects. An indexed server is not a guarantee it is online. MCP
 loading errors surface diagnostics instead of silently retrying tool effects.
 
+### MCP read-only policy and Work admission
+
+MCP tools are **unknown by default**, even when named `get_*` or when the server
+advertises `annotations.readOnlyHint: true`. Shadow uses this precedence:
+
+1. A matching locally reviewed `readOnlyOverrides` rule, including explicit `false`.
+2. The server's hint only when that server has `trustReadOnlyHints: true`.
+3. Unknown otherwise; normal Work execution checks apply.
+
+Read an indexed tool's `v:tools/<server>/<tool-id>` metadata to inspect
+`readOnlyPolicy`: `readOnly` is `true`, `false`, or `null` (unknown), `source`
+explains the decision, and `fingerprint` identifies the reviewed contract.
+For example, these optional fields belong inside one approved server entry:
+
+```json
+{
+  "trustReadOnlyHints": false,
+  "readOnlyOverrides": {
+    "get_record": {
+      "readOnly": true,
+      "fingerprint": "<copy the 64-character fingerprint after reviewing this tool>"
+    }
+  }
+}
+```
+
+Override keys are exact, **unprefixed** MCP tool names. Copying a fingerprint
+does not verify behavior: review the implementation and its permissions first.
+A successful trial call, tool name, description, or server claim is not proof.
+Never enable trust or create positive overrides merely to clear a Work error.
+
+Review fingerprints bind the configured server name, tool metadata/schema/hint,
+and advertised server name/version when available. Metadata changes invalidate
+the override (`stale-review`) without falling back to trusted hints. Connection
+arguments, environment, URLs, and headers are deliberately excluded from this
+public fingerprint to avoid exposing credential-derived hashes. **Re-review and
+remove or replace approvals when changing connection configuration or server
+implementation**, including updates that keep the same advertised version and
+contract. These are reviewed policy decisions, not attestation of remote code.
+Old indexes without hints or server versions remain readable; live discovery
+refreshes metadata before lazy invocation. Config changes and tool-list change
+notifications invalidate active adapters and borrowed snapshots.
+
+Confirmed reads remain available when Work is paused, completed, or waiting for
+a context transition, without creating Work effect receipts. Writes and unknown
+tools remain gated, including the inner MCP call through `invoke_tool`.
+Errors distinguish paused Work, terminal status, and context transitions; unknown
+tools also report that they are not confirmed read-only. Read-only classification
+does not bypass tool allowlists, cancellation, remote-workdir restrictions, or
+data-access permissions and is not a sandbox.
+
 ## Skills and script tools
 
 Discover a Skill and read its exact `v:skills/<name>` path to activate any

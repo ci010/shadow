@@ -20,6 +20,11 @@ const ServerConfigSchema = z.object({
   ).optional(),
   headers: z.record(z.string()).optional(),
   description: z.string().optional(),
+  trustReadOnlyHints: z.boolean().optional(),
+  readOnlyOverrides: z.record(z.string().min(1), z.object({
+    readOnly: z.boolean(),
+    fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  }).strict()).optional(),
 }).superRefine((config, ctx) => {
   if (config.type && config.transport && config.type !== config.transport) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['transport'], message: 'Conflicting MCP type and transport' })

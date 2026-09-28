@@ -20,8 +20,72 @@ import { AudioCppService } from '../audio-cpp/service.ts'
 import { AudioCppTool } from '../tools/audio-cpp.ts'
 import { parseDecisionEvidence } from './decision-brief.ts'
 import { access } from 'node:fs/promises'
+import { McpConnection, type McpToolInfo } from '../mcp/client.ts'
+import { McpToolAdapter } from '../mcp/adapter.ts'
+import { mcpReadOnlyPolicy } from '../mcp/readonly.ts'
+import type { McpServerConfig } from '../config/schema.ts'
+import { InvokeTool } from '../tools/invoke-tool.ts'
 
 const worker = 'web:worker', owner = 'web:owner', peer = 'web:peer'
+
+test('MCP reads bypass Work admission, but unknown and write tools never reach paused or terminal Work', async t => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const call = t.mock.method(McpConnection.prototype, 'callTool', async () => 'read result')
+  const effects = t.mock.method(f.store, 'startWorkEffect')
+  f.base.register(new InvokeTool())
+  const config: McpServerConfig = { name: 'fixture', command: 'never-run', transport: 'stdio' }
+  const info: McpToolInfo = { name: 'get_record', description: 'Fixture', inputSchema: { type: 'object' }, readOnlyHint: true }
+  const fingerprint = mcpReadOnlyPolicy(config, info).fingerprint
+  const policies: { config: McpServerConfig; info: McpToolInfo; allowed: boolean; unknown: boolean }[] = [
+    { config, info, allowed: false, unknown: true },
+    { config: { ...config, trustReadOnlyHints: true }, info, allowed: true, unknown: false },
+    { config: { ...config, trustReadOnlyHints: true }, info: { ...info, readOnlyHint: false }, allowed: false, unknown: false },
+    { config: { ...config, readOnlyOverrides: { get_record: { readOnly: true, fingerprint } } }, info, allowed: true, unknown: false },
+    { config: { ...config, trustReadOnlyHints: true, readOnlyOverrides: { get_record: { readOnly: false, fingerprint } } }, info, allowed: false, unknown: false },
+    { config: { ...config, trustReadOnlyHints: true, readOnlyOverrides: { get_record: { readOnly: true, fingerprint: '0'.repeat(64) } } }, info, allowed: false, unknown: true },
+  ]
+  try {
+    f.store.migrateWorkItems()
+    const work = await f.alignment.execute({ kind: 'session', sessionId: worker }, 'create', undefined, undefined, {
+      title: 'Fixture', definition: change().definition, reason: 'Synthetic request',
+    }) as WorkRecord
+    await f.adopt(work.key)
+    for (const state of ['paused', 'done', 'cancelled', 'transition'] as const) {
+      const current = f.alignment.get(work.key)
+      f.store.saveWork({
+        ...current, sequence: current.sequence + 1, paused: state === 'paused',
+        workflow: { ...current.workflow!, status: state === 'done' || state === 'cancelled' ? state : 'pending' },
+        transition: state === 'transition'
+          ? { id: randomUUID(), strategy: 'fresh', sessionId: worker, revision: 1, status: 'pending' } : undefined,
+      }, current.sequence, worker, 'fixture')
+      for (const policy of policies) {
+        f.tools.registerDynamic(new McpToolAdapter(new McpConnection(policy.config), policy.info))
+        const before = call.mock.callCount()
+        const result = requireToolText(await f.tools.execute('invoke_tool', { name: 'fixture__get_record', args: {} }, f.context()))
+        if (policy.allowed) assert.equal(result, 'read result')
+        else {
+          assert.match(result, state === 'paused' ? /is paused/ : state === 'transition' ? /context transition/ : new RegExp(`terminal \\(${state}\\)`))
+          if (state !== 'paused') assert.doesNotMatch(result, /is paused/)
+          if (policy.unknown) assert.match(result, /not confirmed read-only/)
+        }
+        assert.equal(call.mock.callCount() - before, policy.allowed ? 1 : 0)
+        assert.equal(f.store.workEffects().length, 0)
+      }
+    }
+    f.tools.registerDynamic(new McpToolAdapter(new McpConnection({ ...config, trustReadOnlyHints: true }), info))
+    const before = call.mock.callCount()
+    await assert.rejects(f.tools.execute('invoke_tool', { name: 'fixture__get_record', args: {} },
+      { ...f.context(), signal: AbortSignal.abort() }), /abort/i)
+    assert.match(requireToolText(await f.tools.execute('invoke_tool', { name: 'fixture__get_record', args: {} }, {
+      ...f.context(), remoteWorkdir: {
+        nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not use remote executor') },
+      },
+    })), /remote workdirs/)
+    assert.equal(call.mock.callCount(), before)
+    assert.equal(effects.mock.callCount(), 0, 'Read-only calls must never start Work effects')
+  } finally { f.tools.resetDynamic(); f.store.close() }
+}))
+
 const adoption = { understanding: 'Both evaluations are required.', stop: ['Treating smoke as final scope'], retain: ['Verified inputs'], next: ['Run a bounded first phase'] }
 const inventory = { completed: ['Collected inputs'], artifacts: ['synthetic/report.json'], inFlight: [], unknown: [], retired: ['Smoke-only goal'] }
 function change(revision = 0): WorkChange {

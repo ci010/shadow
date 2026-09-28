@@ -2,6 +2,7 @@ import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { McpToolAdapter, mcpToolContract } from '../mcp/adapter.ts'
+import type { McpReadOnlyPolicy } from '../mcp/readonly.ts'
 import { McpConnection } from '../mcp/client.ts'
 import { McpToolIndex } from '../mcp/tool-index.ts'
 import { parseMcpConfigDocument, parseMcpServerConfig } from '../mcp/config.ts'
@@ -430,13 +431,14 @@ export class ImportTool implements Tool {
       const source = `${VIRTUAL_TOOLS_PREFIX}${name}`
       const children: VirtualEntry[] = []
       let warning: string | undefined
-      const add = (tool: { name: string; description: string; parameters: unknown }, instance?: string, indexedAt?: string) => {
+      const add = (tool: { name: string; description: string; parameters: unknown; readOnlyPolicy?: McpReadOnlyPolicy }, instance?: string, indexedAt?: string) => {
         if (!requester.canUseDynamic(tool.name)) return
         const path = `${name}/${instance ? `${instance}/` : ''}${encodeURIComponent(tool.name)}`
         children.push({
           name: path,
           content: options?.content === false ? '' : JSON.stringify({
             name: tool.name, source, instance, indexedAt, description: tool.description, parameters: tool.parameters,
+            ...(tool.readOnlyPolicy ? { readOnlyPolicy: { ...tool.readOnlyPolicy, readOnly: tool.readOnlyPolicy.readOnly ?? null } } : {}),
           }, null, 2),
         })
       }
@@ -459,7 +461,7 @@ export class ImportTool implements Tool {
               signal.throwIfAborted()
               if (indexed) {
                 for (const info of indexed.tools) {
-                  if (!entry.toolFilter || entry.toolFilter.has(info.name)) add(mcpToolContract(entry.config.name, info), undefined, indexed.indexedAt)
+                  if (!entry.toolFilter || entry.toolFilter.has(info.name)) add(mcpToolContract(entry.config, info), undefined, indexed.indexedAt)
                 }
               } else {
                 warning = 'Tool metadata is not indexed. Read v:skills/mcp-config for indexing, or initialize built-in browser sources with browser_setup. Search never connects services.'

@@ -56,6 +56,7 @@ test('cold discovery publishes only after cleanup; reuse and restart are disk-on
   disconnect.mock.mockImplementation(async () => {
     assert.equal(await index.read(config), undefined)
   })
+
   await index.ensure(config)
   const record = await index.read(config)
   assert.deepEqual(record?.tools, tools)
@@ -84,6 +85,21 @@ test('cold discovery publishes only after cleanup; reuse and restart are disk-on
     assert.equal((await stat(path)).mode & 0o777, 0o600)
     assert.equal((await stat(directory)).mode & 0o777, 0o700)
   }
+})
+
+test('tool indexes roundtrip readonly metadata and accept old records without granting trust', async t => {
+  const { index, workspace } = await fixture(t)
+  const metadata = [true, false, undefined].map((readOnlyHint, i) => ({
+    ...tools[0], name: `tool${i}`, ...(readOnlyHint === undefined ? {} : { readOnlyHint }),
+    serverVersion: { name: 'fixture', version: '1' },
+  }))
+  await index.store(config, metadata)
+  assert.deepEqual((await new McpToolIndex(workspace).read(config))?.tools, metadata)
+  await index.store(config, tools)
+  assert.equal((await index.read(config))?.tools[0].readOnlyHint, undefined)
+  // Deliberately malformed wire data exercises runtime validation.
+  await assert.rejects(index.store(config, [{ ...tools[0], readOnlyHint: 'true' } as unknown as McpToolInfo]), /readOnlyHint/)
+  await assert.rejects(index.store(config, [{ ...tools[0], serverVersion: { version: 1 } } as unknown as McpToolInfo]), /serverVersion/)
 })
 
 test('all normalized config fields bind identity; object key order does not', async t => {

@@ -71,6 +71,30 @@ test('VFS searches names, descriptions and full schemas; read returns exact cont
   assert(!f.tools.getDefinitions().some(tool => tool.function.name === 'mail__SearchMessages'))
 })
 
+test('indexed tool reads expose readonly review identity offline and refresh from live metadata', async t => {
+  const f = await setup(t)
+  const initial = JSON.parse(await f.read()).readOnlyPolicy
+  assert.equal(initial.readOnly, null)
+  assert.equal(initial.source, 'unknown')
+  assert.match(initial.fingerprint, /^[a-f0-9]{64}$/)
+  const trusted = { ...config, trustReadOnlyHints: true }
+  const tool = { ...advertised[0], readOnlyHint: true, serverVersion: { name: 'fixture', version: '1' } }
+  await f.importer.updateMcpServers([trusted])
+  await f.index.store(trusted, [tool])
+  const indexed = JSON.parse(await f.read()).readOnlyPolicy
+  assert.equal(indexed.readOnly, true)
+  assert.equal(indexed.source, 'trusted-hint')
+  assert.notEqual(indexed.fingerprint, initial.fingerprint)
+  assert.equal(f.connect.mock.callCount(), 0)
+  assert.equal(f.list.mock.callCount(), 0)
+  f.list.mock.mockImplementation(async () => [{ ...tool, readOnlyHint: false }])
+  assert.equal(await f.invoke({ query: 'read' }), 'success')
+  const live = JSON.parse(await f.read()).readOnlyPolicy
+  assert.equal(live.readOnly, false)
+  assert.equal(live.source, 'trusted-hint')
+  assert.notEqual(live.fingerprint, indexed.fingerprint)
+})
+
 test('invalid arguments never execute and live schemas replace stale indexed metadata', async t => {
   const f = await setup(t)
   for (const args of [{}, { query: 5 }, { query: '' }, { query: 'test', count: 11 }, { query: 'test', extra: 1 }]) {

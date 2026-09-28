@@ -123,6 +123,27 @@ test('server tool-list notifications invalidate adapters and remove missing tool
   assert.equal(f.call.mock.callCount(), 2)
 })
 
+test('lazy imports refresh readonly policy after trust changes and tool-list notifications', async t => {
+  const f = await setup(t)
+  f.list.mock.mockImplementation(async () => [{ ...echo, readOnlyHint: true }])
+  const readOnly = () => f.session.activeDynamicTools().find(tool => tool.name === 'fixture__echo')?.readonly
+  assert.equal(await f.invoke(), 'answer')
+  assert.equal(readOnly(), undefined)
+  await f.manager.load([{ ...server, trustReadOnlyHints: true }])
+  assert.equal(f.session.hasDynamic('fixture__echo'), false)
+  assert.equal(await f.invoke(), 'answer')
+  assert.equal(readOnly(), true)
+  const borrowed = f.session.snapshot()
+  t.after(() => borrowed.resetDynamic())
+  const conn = f.session.getMcpConn('fixture')!.conn
+  f.list.mock.mockImplementation(async () => [{ ...echo, readOnlyHint: false }])
+  f.handlers.get(conn)!()
+  assert.equal(borrowed.hasDynamic('fixture__echo'), false)
+  assert.equal(await f.invoke(), 'answer')
+  assert.equal(readOnly(), false)
+  assert.equal(f.call.mock.callCount(), 3)
+})
+
 test('JSON imports all entries, supports named selection and extra arguments, and reuses unchanged connections', async t => {
   const f = await setup(t)
   const path = join(f.home, 'servers.json')
@@ -237,6 +258,8 @@ test('JSON imports distinguish filesystem and syntax failures without echoing cr
 
 test('restricted agents cannot discover or invoke forbidden MCP tools', async t => {
   const f = await setup(t)
+  await f.manager.load([{ ...server, trustReadOnlyHints: true }])
+  f.list.mock.mockImplementation(async () => [{ ...echo, readOnlyHint: true }])
   const restricted = new SessionTools(f.base, f.home, ['read'])
   const blocked = new SessionTools(f.base, f.home, undefined, ['fixture__echo'])
   t.after(() => { restricted.resetDynamic(); blocked.resetDynamic() })

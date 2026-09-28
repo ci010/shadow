@@ -22,6 +22,8 @@ export interface McpToolInfo {
   name: string
   description: string
   inputSchema: Record<string, unknown>
+  readOnlyHint?: boolean
+  serverVersion?: { name: string; version: string }
 }
 
 interface ConnectionState {
@@ -234,6 +236,7 @@ export class McpConnection {
     const tools: McpToolInfo[] = []
     const cursors = new Set<string>()
     let cursor: string | undefined
+    const serverVersion = client.getServerVersion()
     do {
       signal?.throwIfAborted()
       const result = await client.listTools(cursor === undefined ? undefined : { cursor }, { signal })
@@ -242,6 +245,8 @@ export class McpConnection {
         name: tool.name,
         description: tool.description ?? '',
         inputSchema: tool.inputSchema,
+        ...(tool.annotations?.readOnlyHint !== undefined ? { readOnlyHint: tool.annotations.readOnlyHint } : {}),
+        ...(serverVersion ? { serverVersion: { name: serverVersion.name, version: serverVersion.version } } : {}),
       })))
       cursor = result.nextCursor
       if (cursor !== undefined) {

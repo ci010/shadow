@@ -95,6 +95,22 @@ test('virtual read and indexed overwrite roundtrip secrets and preserve Project 
   assert.equal(f.activations(), 1, 'Only the normal configuration activation callback ran')
 })
 
+test('MCP readonly policies survive revisioned config writes and reload', async t => {
+  const f = await fixture(t)
+  const document = JSON.parse(requireToolText(await f.read()))
+  document.mcpServers.local.trustReadOnlyHints = true
+  document.mcpServers.local.readOnlyOverrides = { read: { readOnly: false, fingerprint: 'a'.repeat(64) } }
+  await f.overwrite(document)
+  const config = f.store.current().mcp.servers.find(server => server.name === 'local')!
+  assert.equal(config.trustReadOnlyHints, true)
+  assert.deepEqual(config.readOnlyOverrides, document.mcpServers.local.readOnlyOverrides)
+  const reread = JSON.parse(requireToolText(await f.read()))
+  assert.deepEqual(reread.mcpServers.local.readOnlyOverrides, config.readOnlyOverrides)
+  const reloaded = ConfigSchema.parse(await f.saved()).mcp.servers.find(server => server.name === 'local')!
+  assert.equal(reloaded.trustReadOnlyHints, true)
+  assert.deepEqual(reloaded.readOnlyOverrides, config.readOnlyOverrides)
+})
+
 test('exact contextual and global edits use a session read and reject fuzzy or ambiguous matches', async t => {
   const f = await fixture(t)
   await assert.rejects(f.writer.execute({ path, match: 'first', content: 'second' }, f.context), /Read v:config/)
