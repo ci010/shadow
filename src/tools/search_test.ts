@@ -13,6 +13,7 @@ import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { createMemoryHandler, createSessionsHandler } from '../vfs/mounts.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import type { Tool } from './tool.ts'
+import { newPhysicalSessionId } from '../utils/paths.ts'
 
 test('virtual glob and grep scope subdirectories, exact files, patterns and pagination without host fallback', async () => {
   const vfs = new VirtualFs()
@@ -84,6 +85,76 @@ test('virtual session search includes earlier history while glob avoids loading 
   const page = await new ReadTool('.', vfs).execute({ path: 'v:sessions/web:one', offset: line, limit: 1 }, context)
   assert.match(requireToolText(page), /^old needle\n\n\[truncated:/)
   assert.doesNotMatch(requireToolText(page), /recent/)
+})
+
+for (const version of [1, 2] as const) {
+  test(`physical session v${version} line ranges read the full segment without changing message paging`, async () => {
+    const id = 'web:chat-00000000-0000-4000-8000-000000000008'
+    const physicalId = newPhysicalSessionId(id, 8, version)
+    const messages = Array.from({ length: 120 }, (_, i) => ({
+      role: 'user' as const,
+      content: `segment message ${i}\nline two ${i}`,
+    }))
+    const handlers = createSessionsHandler({
+      listSessions: () => [{ sessionId: id, segmentIndex: 9 }],
+      getSessionState: key => key === id
+        ? { sessionId: id, segmentIndex: 9, config: {} } : null,
+      getHistory: async (_key, query) => {
+        assert.equal(query?.physicalId, physicalId)
+        const offset = query.offset ?? 0
+        return {
+          total: messages.length,
+          messages: query.pageSize === undefined ? messages : messages.slice(offset, offset + query.pageSize),
+        }
+      },
+    })
+    const vfs = new VirtualFs()
+    vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
+    const context = { tools: new SessionTools(new Tools('.'), '.'), signal: new AbortController().signal } as ExecutionContext
+    const read = new ReadTool('.', vfs)
+    const search = new SearchTool('.', undefined, vfs)
+    const path = `v:sessions/${physicalId}`
+    const first = requireToolText(await read.execute({ path, limit: 35 }, context))
+    assert.match(first, /segment message 0\nline two 0/)
+    assert.doesNotMatch(first, /segment message 100/)
+    assert.equal(first.split('\n\n[truncated:')[0].split('\n').length, 35)
+    const match = await search.execute({ space: `grep:${path}`, query: '^line two 119$' }, context)
+    const line = Number(match.match(/Line (\d+):/)?.[1])
+    assert.ok(line > 100)
+    assert.equal(requireToolText(await read.execute({ path, offset: line, limit: 1, flag: 'n' }, context)), `${line}  line two 119`)
+    assert.equal(requireToolText(await read.execute({ path: path.replaceAll('/', '\\'), offset: line }, context)), 'line two 119')
+    const recent = requireToolText(await read.execute({ path }, context))
+    assert.match(recent, /Messages 101–120 of 120/)
+    assert.doesNotMatch(recent, /segment message 0\n/)
+    const page = requireToolText(await read.execute({ path: `${path}?index=0&page_size=35` }, context))
+    assert.match(page, /Messages 1–35 of 120/)
+    assert.match(page, /segment message 34\n/)
+    assert.doesNotMatch(page, /segment message 35\n/)
+    assert.equal(await search.execute({ space: 'glob:v:sessions', query: '*' }, context), `v:sessions/${id}`)
+  })
+}
+
+test('physical session line views preserve missing-history, storage-error and abort failures', async () => {
+  let failure: Error | undefined
+  const handlers = createSessionsHandler({
+    listSessions: () => [],
+    getSessionState: () => null,
+    getHistory: async () => {
+      if (failure) throw failure
+      return { messages: [], total: 0 }
+    },
+  })
+  const vfs = new VirtualFs()
+  vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
+  const controller = new AbortController()
+  const context = { tools: new SessionTools(new Tools('.'), '.'), signal: controller.signal } as ExecutionContext
+  const read = new ReadTool('.', vfs)
+  const args = { path: 'v:sessions/web_missing-0', limit: 35 }
+  await assert.rejects(read.execute(args, context), /Session search view not found/)
+  failure = new Error('History storage unavailable')
+  await assert.rejects(read.execute(args, context), failure)
+  controller.abort()
+  await assert.rejects(read.execute(args, context), { name: 'AbortError' })
 })
 
 test('file searches still use real paths and can match literal virtual-path text', async t => {

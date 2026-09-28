@@ -30,8 +30,12 @@ or two filters. File and virtual searches accept `limit` (1-100) and zero-based
 
 `read` uses **one-based** line `offset`/`limit` for files, URL text and virtual
 text. Local `v:sessions/<id>` line ranges use the same complete-history view as
-grep, so a match's line number can be read directly. Without a line range,
-session reads retain their recent-message window; `?index=0&page_size=20` uses
+grep, so a match's line number can be read directly. Physical segment references
+returned by compact/handoff also support line ranges and exact-reference search:
+their view contains that segment's full history, not the current segment or only
+the most recent messages. Root session discovery still lists logical sessions.
+Without a line range, session reads retain their recent-message window;
+`?index=0&page_size=20` uses
 message indices instead of lines. Plain URL text keeps its line structure;
 `flag: "r"` preserves raw HTML. Large inline text must be paged.
 

@@ -14,6 +14,11 @@ import { EventService } from '../events/service.ts'
 import type { ChatMessage, LLMProvider, LLMResponseUsage } from '../providers/provider.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
+import { ReadTool } from '../tools/read.ts'
+import { requireToolText } from '../tools/tool.ts'
+import type { ExecutionContext } from '../tools/context.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import { createSessionsHandler } from '../vfs/mounts.ts'
 import { HandoffManager, type CompactResult } from './handoff/manager.ts'
 import type { SessionTurnFact } from './input.ts'
 import { Session } from './session.ts'
@@ -150,6 +155,22 @@ for (const [name, createStore] of stores) {
         assert.match(String(messages[1].content), /v:sessions\//)
       }
 
+      async function assertPreviousSegmentReadable(sessions: SessionManager) {
+        const summary = String(calls.at(-1)![1].content)
+        const path = summary.match(/read\("(v:sessions\/[^"]+)"\)/)?.[1]
+        assert.ok(path)
+        const handlers = createSessionsHandler(sessions)
+        const vfs = new VirtualFs()
+        vfs.mount('v:sessions', 'Sessions', handlers.read, handlers.list)
+        const context = {
+          sessionId: id, signal: new AbortController().signal,
+          tools: new SessionTools(new Tools(workspace), workspace),
+        } as ExecutionContext
+        const result = requireToolText(await new ReadTool(workspace, vfs).execute({ path, limit: 35 }, context))
+        assert.match(result, /Original task/)
+        assert.doesNotMatch(result, /Continue after compact|Continue after restart/)
+      }
+
       let runtime = await openRuntime()
       try {
         await runtime.send('Original task')
@@ -170,11 +191,13 @@ for (const [name, createStore] of stores) {
         assert.match(saved, /UNIQUE_COMPACT_OBJECTIVE/)
         await runtime.send('Continue after compact')
         assertSingleSummary()
+        await assertPreviousSegmentReadable(runtime.sessions)
 
         await runtime.close()
         runtime = await openRuntime()
         await runtime.send('Continue after restart')
         assertSingleSummary()
+        await assertPreviousSegmentReadable(runtime.sessions)
         assert.equal(calls.at(-1)![1].name, '__compaction_summary__')
         assert.equal(await readFile(summaryPath, 'utf8'), saved)
       } finally { await runtime.close() }

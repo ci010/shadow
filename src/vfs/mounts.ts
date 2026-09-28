@@ -65,6 +65,10 @@ function formatSessionMessage(
   ]
 }
 
+function formatSessionHistory(messages: ChatMessage[]): string {
+  return messages.map((message, index) => formatSessionMessage(message, index + 1).join('\n')).join('\n\n')
+}
+
 // ── Sessions ─────────────────────────────────────────────────────────────
 
 export function createSessionsHandler(
@@ -215,6 +219,20 @@ export function createSessionsHandler(
       if (!remote) throw new Error('A2A is not configured in this Project.')
       return remote.entries(context, options)
     }
+    // Handoff references name physical segments, not discoverable logical sessions.
+    if (subpath && !/[:/?]/.test(subpath)) {
+      const { messages, total } = await sessions.getHistory(subpath, {
+        physicalId: subpath,
+        maxMessages: Number.MAX_SAFE_INTEGER,
+      })
+      context.signal.throwIfAborted()
+      if (total === 0) return []
+      return [{
+        name: subpath,
+        content: options?.content === false ? ''
+          : `Physical Session ID: ${subpath}\n\n${formatSessionHistory(messages)}`,
+      }]
+    }
     if (remote?.canDiscover(context)) entries.push(...remote.entries(context, options))
     for (const summary of await topics?.().summaries() ?? []) {
       if (selected(`${summary.sessionId}/brief`)) {
@@ -239,9 +257,7 @@ export function createSessionsHandler(
       const { messages: history } = await sessions.getHistory(s.sessionId, {
         maxMessages: Number.MAX_SAFE_INTEGER,
       })
-      const historyText = history
-        .map((m, i) => formatSessionMessage(m, i + 1).join('\n'))
-        .join('\n\n')
+      const historyText = formatSessionHistory(history)
 
       entries.push({
         name: s.sessionId,
