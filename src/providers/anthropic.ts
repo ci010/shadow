@@ -61,9 +61,9 @@ function convertMessages(
     }
     if (msg.role === 'tool') {
       const block = {
-        type: 'tool_result',
-        tool_use_id: msg.tool_call_id!,
-        content: imageContent(msg.content),
+            type: 'tool_result',
+            tool_use_id: msg.tool_call_id!,
+            content: imageContent(msg.content),
       }
       const previous = converted.at(-1)
       if (previous?.role === 'user' && Array.isArray(previous.content) &&

@@ -17,7 +17,6 @@ import type {
   ModelInfo,
 } from './provider.ts'
 import { Span } from '../otel/tracing.ts'
-import { imageFromResponse } from '../utils/image-input.ts'
 
 // ---------------------------------------------------------------------------
 //  Constants (matches litellm / VS Code Copilot extension)
@@ -581,7 +580,6 @@ export class CopilotProvider implements LLMProvider {
           (m.capabilities?.type ?? 'chat') !== 'chat'
         ) continue
         if ((m.supported_endpoints !== undefined && !stringList(m.supported_endpoints)) ||
-          (m.capabilities?.supports?.vision !== undefined && typeof m.capabilities.supports.vision !== 'boolean') ||
           (m.capabilities?.supports?.reasoning_effort !== undefined &&
             !stringList(m.capabilities.supports.reasoning_effort))) {
           throw new Error(`Copilot returned invalid endpoint capabilities for model "${m.id}"`)
@@ -591,7 +589,7 @@ export class CopilotProvider implements LLMProvider {
           id: m.id,
           name: m.name,
           ...(m.model_picker_enabled === false ? { selectable: false } : {}),
-          ...(m.capabilities?.supports?.vision === undefined ? {} : { vision: m.capabilities.supports.vision }),
+          vision: m.capabilities?.supports?.vision ?? false,
           contextWindow: m.capabilities?.limits?.max_context_window_tokens,
           ...(m.supported_endpoints === undefined ? {} : { supportedEndpoints: [...m.supported_endpoints] }),
           ...(m.capabilities?.supports?.reasoning_effort === undefined ? {} : {
@@ -656,19 +654,41 @@ async function inlineExternalImages(
     messages.map(async (msg) => {
       if (!Array.isArray(msg.content)) return msg
       const parts = await Promise.all(
-        msg.content.map(async (part) => {
+        (msg.content as ContentPart[]).map(async (part) => {
           if (
             part.type !== 'image_url' ||
             !part.image_url.url.startsWith('http')
           ) {
             return part
           }
-          const res = await fetch(part.image_url.url, { signal })
-          const image = await imageFromResponse(res, signal)
-          return {
-            ...part,
-            image_url: { ...part.image_url, url: image.part.image_url.url },
-          } satisfies ContentPart
+          try {
+            const res = await fetch(part.image_url.url, { signal })
+            if (!res.ok) {
+              console.warn(
+                `[copilot] Failed to fetch image ${part.image_url.url}: ${res.status}`,
+              )
+              return part
+            }
+            const contentType = res.headers.get('content-type') ?? 'image/jpeg'
+            const buffer = await res.arrayBuffer()
+            const b64 = btoa(
+              String.fromCharCode(...new Uint8Array(buffer)),
+            )
+            return {
+              ...part,
+              image_url: {
+                ...part.image_url,
+                url: `data:${contentType};base64,${b64}`,
+              },
+            } satisfies ContentPart
+          } catch (e) {
+            if (signal?.aborted) throw signal.reason
+            console.warn(
+              `[copilot] Could not inline image ${part.image_url.url}:`,
+              e,
+            )
+            return part
+          }
         }),
       )
       return { ...msg, content: parts }

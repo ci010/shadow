@@ -9,6 +9,7 @@ import { parseMcpConfigDocument, parseMcpServerConfig } from '../mcp/config.ts'
 import { mcpCleanupFailure, mcpFailure } from '../mcp/errors.ts'
 import type { McpServerConfig } from '../config/schema.ts'
 import type { Tool as TypedTool, ToolParameters, ToolResult } from './tool.ts'
+type Tool = TypedTool<ToolResult>
 import { toolInvocationContract, type SessionTools } from './registry.ts'
 import type { ChromeManager } from '../browser/chrome-manager.ts'
 import { executeScript } from '../script-runtime/runtime.ts'
@@ -23,8 +24,6 @@ import { parseSkillFile } from '../skills/parse.ts'
 import { SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
 import type { VirtualEntry, VirtualListOptions } from '../vfs/virtual-fs.ts'
-
-type Tool = TypedTool<ToolResult>
 
 /**
  * Describes an MCP server that can be connected on-demand and whose tools

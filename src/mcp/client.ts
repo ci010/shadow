@@ -15,8 +15,6 @@ import { loadDotEnv } from '../utils/env.ts'
 import { parseMcpServerConfig } from './config.ts'
 import { mcpCleanupFailure, mcpFailure, mcpSecrets, type McpPhase } from './errors.ts'
 import { readableMcpText } from './text.ts'
-import type { ToolResult } from '../tools/tool.ts'
-import type { ContentPart } from '../providers/provider.ts'
 
 export interface McpToolInfo {
   name: string
@@ -257,7 +255,7 @@ export class McpConnection {
     return tools
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<import('../tools/tool.ts').ToolResult> {
     signal?.throwIfAborted()
     if (this.state) this.state.transportError = undefined
     const raw = await this.connectedClient('call_tool').callTool({ name, arguments: args }, CallToolResultSchema, { signal })
@@ -266,7 +264,7 @@ export class McpConnection {
     if (!parsed.success) throw this.safeFailure(new Error('Malformed MCP tool result'), 'call_tool', signal)
     const result = parsed.data
     if (result.content.some(block => block.type === 'image')) {
-      const content: ContentPart[] = result.content.map(block => {
+      const content: import('../providers/provider.ts').ContentPart[] = result.content.map(block => {
         if (block.type === 'image') return {
           type: 'image_url', image_url: { url: `data:${block.mimeType};base64,${block.data}`, detail: 'auto' },
         }

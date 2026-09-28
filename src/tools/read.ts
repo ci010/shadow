@@ -10,7 +10,7 @@ import { NodeHtmlMarkdown } from 'node-html-markdown'
 import type { ExecutionContext } from './context.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
-import { isImageFile, isImagePath, readImage } from '../utils/image-input.ts'
+import { isImagePath, readImage } from '../utils/image-input.ts'
 import type { VirtualFs } from '../vfs/virtual-fs.ts'
 import { FILESYSTEM_READ_OPERATION } from '../execution/capability-filesystem.ts'
 import { executeRemoteFilesystemText } from '../execution/remote-filesystem-client.ts'
@@ -49,7 +49,7 @@ async function readFileInRange(
   if (raw.subarray(0, 8192).includes(0)) throw new Error('Binary file cannot be read as text. Use a tool for its format.')
   const decoder = new TextDecoder('utf-8', { fatal: true })
   const text = raw.byteLength > maxSizeBytes && limit === undefined
-    ? decoder.decode(raw.subarray(0, maxSizeBytes), { stream: true })
+    ? decoder.decode(raw.subarray(0, maxSizeBytes))
     : decoder.decode(raw)
 
   const allLines = text.split('\n')
@@ -259,7 +259,7 @@ export class ReadTool implements Tool<ToolResult> {
     if (URL_RE.test(raw)) return await this.fetchUrl(raw, rawFormat, args, context.signal)
 
     if (context.remoteWorkdir) {
-      if (isImagePath(raw) && extname(raw).toLowerCase() !== '.svg') throw new Error('Remote image reads are not supported by this executor. No Main filesystem fallback is allowed.')
+      if (isImagePath(raw)) throw new Error('Remote image reads are not supported by this executor. No Main filesystem fallback is allowed.')
       return await this.readRemoteFile(
         raw,
         args,
@@ -273,7 +273,7 @@ export class ReadTool implements Tool<ToolResult> {
     const stat = await nodeStat(resolved)
     if (stat.isDirectory()) return this.pageText(await this.listDir(resolved), args, showLineNumbers)
     if (!stat.isFile()) throw new Error('Read requires a regular file or directory.')
-    if (await isImageFile(resolved)) {
+    if (isImagePath(resolved)) {
       if (args.offset !== undefined || args.limit !== undefined || flags) {
         throw new Error('Images do not support line paging or flags. Read the image without offset, limit or flag.')
       }

@@ -123,11 +123,10 @@ export class Tools {
       await this.onBefore(name, args, context)
       context.signal?.throwIfAborted()
       admission = context.tools.getWorkGuard()?.before(tool, args, context)
-      const result = await tool.execute(args, context)
+      let result = await tool.execute(args, context)
       const receipt = admission
       admission = undefined
       let text = toolResultText(result)
-      if (typeof result !== 'string' && result.isError && !/^Error:/.test(text)) text = `Error: ${text}`
       text += receipt?.finish((typeof result !== 'string' && result.isError === true) || /^(Error|Blocked):/.test(text)) ?? ''
       const images = typeof result === 'string' ? [] : result.content.filter(part => part.type === 'image_url')
       if (images.length > MAX_TOOL_IMAGES) throw new Error(`A tool result supports at most ${MAX_TOOL_IMAGES} images. Request fewer images.`)
@@ -147,10 +146,7 @@ export class Tools {
       ) {
         text = await this.truncateAndSave(name, text)
       }
-      return images.length ? {
-        content: [...(text ? [{ type: 'text' as const, text }] : []), ...images],
-        ...(typeof result !== 'string' && result.isError ? { isError: true } : {}),
-      } : text
+      return images.length ? { content: [{ type: 'text', text }, ...images], ...(typeof result !== 'string' && result.isError ? { isError: true } : {}) } : text
     } catch (err) {
       admission?.finish(true, !context.signal?.aborted && err instanceof ToolNoEffectError ? 'none' : undefined)
       // An interrupted invocation has no result to persist or send to the model.

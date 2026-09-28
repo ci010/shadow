@@ -14,19 +14,6 @@ export function isImagePath(path: string): boolean {
   return extensions.has(extname(/^https?:\/\//i.test(path) ? new URL(path).pathname : path).toLowerCase())
 }
 
-export async function isImageFile(path: string): Promise<boolean> {
-  if (isImagePath(path) && extname(path).toLowerCase() !== '.svg') return true
-  const file = await open(path, 'r')
-  try {
-    const header = Buffer.alloc(12)
-    const { bytesRead } = await file.read(header, 0, header.length, 0)
-    return (bytesRead >= 8 && header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
-      (bytesRead >= 3 && header[0] === 255 && header[1] === 216 && header[2] === 255) ||
-      (bytesRead >= 6 && /^GIF8[79]a$/.test(header.toString('ascii', 0, 6))) ||
-      (bytesRead >= 12 && header.toString('ascii', 0, 4) === 'RIFF' && header.toString('ascii', 8, 12) === 'WEBP')
-  } finally { await file.close() }
-}
-
 /** Immutable bytes are stored in the existing multimodal history, not reread from mutable paths. */
 export function imageFromBytes(bytes: Uint8Array, expectedMime?: string): {
   part: ImageContentPart; width: number; height: number; mime: string
@@ -54,31 +41,7 @@ export function imageFromDataUrl(url: string): ImageContentPart {
   if (!match || match[2].length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) {
     throw new Error('Expected a PNG, JPEG, GIF or WebP data URL of at most 5 MiB.')
   }
-  const bytes = Buffer.from(match[2], 'base64')
-  if (bytes.toString('base64') !== match[2]) throw new Error('Invalid image base64 encoding.')
-  return imageFromBytes(bytes, match[1]).part
-}
-
-export async function imageFromResponse(response: Response, signal?: AbortSignal) {
-  if (!response.ok) throw new Error(`Image download failed: HTTP ${response.status}.`)
-  if (!response.body) throw new Error('Image download returned no body.')
-  const reader = response.body.getReader()
-  try {
-    const chunks: Uint8Array[] = []
-    let length = 0
-    while (true) {
-      signal?.throwIfAborted()
-      const { done, value } = await reader.read()
-      if (done) break
-      length += value.length
-      if (length > MAX_IMAGE_BYTES) throw new Error('Image exceeds 5 MiB. Resize or crop it before reading.')
-      chunks.push(value)
-    }
-    signal?.throwIfAborted()
-    return imageFromBytes(Buffer.concat(chunks, length))
-  } finally {
-    try { await reader.cancel() } finally { reader.releaseLock() }
-  }
+  return imageFromBytes(Buffer.from(match[2], 'base64'), match[1]).part
 }
 
 export async function readImage(path: string, signal?: AbortSignal) {

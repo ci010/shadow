@@ -37,7 +37,7 @@ import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import { ReadTool } from '../tools/read.ts'
 import { pendingToolCalls } from './recovery.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
-import { IMAGE_SNAPSHOT_LABEL, saveToolImages } from './tool-images.ts'
+import { saveToolImages } from './tool-images.ts'
 
 /**
  * Shared base for all session types.
@@ -213,7 +213,7 @@ export abstract class BaseSession {
       }), executionContext, llm, signal)
     }
 
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 100; i++) {
       const toolDefs = this.tools.getDefinitions()
       signal.throwIfAborted()
 
@@ -369,20 +369,11 @@ export abstract class BaseSession {
     const traceAttributes = { sessionId: this.id, physicalSessionId: this.physicalSessionId }
     using span = uspan('agent.tools', { attributes: traceAttributes })
     const recordResult = async (call: ToolCall, result: ToolResult) => {
-      let media: string[] = []
-      if (typeof result !== 'string') {
-        try {
-          media = await saveToolImages(
-            resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).sessionDataDir,
-            result.content, signal,
-          )
-        } catch (error) {
-          if (signal.aborted) throw error
-          // The tool already ran; close its pair rather than replaying side effects on Continue.
-          result = `Error: tool ${call.name} completed, but saving its image result failed: ${errMsg(error)}. Do not repeat side effects to recover this image.`
-        }
-      }
-      const snapshotText = media.length ? IMAGE_SNAPSHOT_LABEL + media.map(path => JSON.stringify(path)).join('\n') : ''
+      const media = typeof result === 'string' ? [] : await saveToolImages(
+        resolveSessionLocations(this.workspace, this.state, undefined, this.workdirCapabilityLookup).sessionDataDir,
+        result.content, signal,
+      )
+      const snapshotText = media.length ? '\nImage snapshots (read these paths to view the same images again):\n' + media.map(path => JSON.stringify(path)).join('\n') : ''
       const content = typeof result === 'string' ? result : [
         ...result.content, ...(snapshotText ? [{ type: 'text' as const, text: snapshotText }] : []),
       ]

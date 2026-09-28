@@ -17,9 +17,6 @@ import { registerGatewayRoutes } from '../gateway/server.ts'
 import { MessageTool } from '../tools/message.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
-import { saveToolImages } from '../sessions/tool-images.ts'
-import { imageFromBytes } from '../utils/image-input.ts'
-import { pngFixture } from '../testing/image.ts'
 import { createResponseContext } from '../sessions/response-context.ts'
 
 test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
@@ -278,13 +275,6 @@ test('folder media uses capability cwd while uploads stay in inherited private s
     }
     const otherUpload = await app.request(`/api/media?chatId=other&path=${encodeURIComponent(upload.path)}`)
     assertEquals(otherUpload.status, 404)
-    const pixels = pngFixture()
-    const [snapshot] = await saveToolImages(sessionWorkspacePath(workspace, 'web:owner'), [imageFromBytes(pixels).part], new AbortController().signal)
-    const visual = await app.request(`/api/media?chatId=child&path=${encodeURIComponent(snapshot)}`)
-    assertEquals(visual.status, 200)
-    assertEquals(visual.headers.get('Content-Type'), 'image/png')
-    assertEquals(Buffer.from(await visual.arrayBuffer()), pixels)
-    assertEquals((await app.request(`/api/media?chatId=other&path=${encodeURIComponent(snapshot)}`)).status, 404)
     assertEquals(await (await app.request('/api/media?chatId=child&path=image.txt')).text(), 'folder image')
     assertEquals(await (await app.request('/api/media?chatId=other&path=image.txt')).text(), 'other image')
     await writeFile(join(sessionWorkspacePath(workspace, 'web:owner'), 'main-only.txt'), 'private file')

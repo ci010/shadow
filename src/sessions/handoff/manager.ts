@@ -17,7 +17,6 @@ import { type HandoffCapture, HandoffSummaryTool } from './tools.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
 import type { SessionStore } from '../session-store.ts'
 import { getProjectScope, type ProjectScope } from '../../projects/scope.ts'
-import { IMAGE_SNAPSHOT_LABEL } from '../tool-images.ts'
 const handoffPromptTemplate = readFileSync(new URL('./HANDOFF.md', import.meta.url), 'utf8')
 
 const MAX_HANDOFF_SUMMARY_LENGTH = 10_000
@@ -37,7 +36,6 @@ interface HandoffOptions {
   targetSessionId: string
   ts: string
   context: HandoffContext
-  imageReferences: string[]
 }
 
 export interface CompactResult {
@@ -131,11 +129,6 @@ export class HandoffManager {
       targetSessionId,
       ts: new Date().toISOString(),
       context,
-      imageReferences: messages.filter(message => message.role === 'tool' && Array.isArray(message.content))
-        .flatMap(message => Array.isArray(message.content) ? message.content
-          .filter(part => part.type === 'text' && part.text.startsWith(IMAGE_SNAPSHOT_LABEL))
-          .flatMap(part => part.type === 'text' ? part.text.slice(IMAGE_SNAPSHOT_LABEL.length).split('\n') : []) : [])
-        .slice(-4),
     }
 
     const summary = this.buildHandoffSummary(snapshot)
@@ -328,12 +321,6 @@ export class HandoffManager {
       `- Previous session (${snapshot.sourceMessageCount} messages) can be accessed via: read("v:sessions/${snapshot.sourceSessionId}")`,
       `- Current Session: ${snapshot.targetSessionId}`,
       '',
-      ...(snapshot.imageReferences.length ? [
-        '## Recent tool image snapshots',
-        'Read these paths directly to view the original images; this summary does not contain their pixels.',
-        ...snapshot.imageReferences,
-        '',
-      ] : []),
       ...(snapshot.context.summary
         ? [
           '## Summary',

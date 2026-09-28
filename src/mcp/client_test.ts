@@ -13,11 +13,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { McpConnection } from './client.ts'
 import { McpError } from './errors.ts'
-import { McpToolAdapter } from './adapter.ts'
-import { Tools, SessionTools } from '../tools/registry.ts'
-import { pngFixture } from '../testing/image.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
-import type { ExecutionContext } from '../tools/context.ts'
 
 async function connected(t: TestContext): Promise<McpConnection> {
   t.mock.method(Client.prototype, 'connect', async () => {})
@@ -181,35 +177,6 @@ test('malformed tool results fail explicitly', async (t) => {
     reply = result
     await assert.rejects(connection.callTool('fixture', {}), /Malformed MCP tool result/)
   }
-})
-
-test('MCP image output reaches the registry as validated visual content, retaining errors and mixed text', async t => {
-  const connection = await connected(t)
-  await withTempWorkspace(async home => {
-    const base = new Tools(home)
-    const adapter = new McpToolAdapter(connection, { name: 'screenshot', description: '', inputSchema: { type: 'object', properties: {} } })
-    base.register(adapter)
-    const tools = new SessionTools(base, home)
-    const context: ExecutionContext = {
-      sessionId: 'mcp-images', physicalSessionId: 'mcp-images-0', channel: 'web', chatId: 'fixture',
-      senderId: 'fixture', messageId: 'fixture', tools, signal: new AbortController().signal,
-    }
-    let data = pngFixture().toString('base64')
-    let isError = false
-    t.mock.method(Client.prototype, 'callTool', async () => ({
-      isError, content: [{ type: 'text', text: 'Screenshot evidence' }, { type: 'image', data, mimeType: 'image/png' }],
-    }))
-    for (const failed of [false, true]) {
-      isError = failed
-      const result = await tools.execute(adapter.name, {}, context)
-      assert(typeof result !== 'string')
-      assert.equal(result.isError === true, failed)
-      assert(result.content.some(part => part.type === 'image_url' && part.image_url.url === `data:image/png;base64,${data}`))
-      assert(result.content.some(part => part.type === 'text' && part.text.includes('Screenshot evidence')))
-    }
-    data = 'aGk='
-    assert.match(requireToolText(await tools.execute(adapter.name, {}, context)), /Invalid image header/)
-  })
 })
 
 test('aborting startup closes stalled SDK transport and permits reconnect', async (t) => {

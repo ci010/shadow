@@ -9,7 +9,7 @@ import { requireToolText, type ToolResult } from './tool.ts'
 import type { ExecutionContext } from './context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { pngFixture } from '../testing/image.ts'
-import { MAX_IMAGE_BYTES, MAX_TOOL_IMAGES, imageFromBytes, imageFromDataUrl } from '../utils/image-input.ts'
+import { MAX_IMAGE_BYTES, imageFromBytes, imageFromDataUrl } from '../utils/image-input.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
 
 function fixture(home: string) {
@@ -47,22 +47,15 @@ test('read delivers real large PNG bytes without line paging, text limits or ded
   for (const args of [{ offset: 1 }, { limit: 4 }, { flag: 'n' }]) {
     assert.match(requireToolText(await tools.execute('read', { path, ...args }, context)), /Images do not support line paging/)
   }
-  for (const name of ['extensionless', 'wrong-extension.txt']) {
-    await writeFile(join(home, name), bytes)
-    assert.deepEqual(images(await tools.execute('read', { path: name }, context)), images(await tools.execute('read', { path }, context)))
-  }
   await writeFile(join(home, 'text.txt'), 'plain text')
   assert.equal(await tools.execute('read', { path: 'text.txt' }, context), 'plain text')
-  const svg = '<svg width="10" height="10"></svg>'
-  await writeFile(join(home, 'vector.svg'), svg)
-  assert.equal(await tools.execute('read', { path: 'vector.svg' }, context), svg, 'SVG source stays readable as text')
-  assert.throws(() => imageFromBytes(Buffer.from(svg)), /Unsupported image format/)
 }))
 
 test('unsupported, corrupted, oversized and remote images fail explicitly without text or Main fallback', async () => withTempWorkspace(async home => {
   const { tools, context } = fixture(home)
   for (const [name, bytes, error] of [
     ['invalid.png', Buffer.from('not a PNG'), /Invalid image header/],
+    ['vector.svg', Buffer.from('<svg width="10" height="10"></svg>'), /Unsupported image format/],
     ['large.png', Buffer.alloc(MAX_IMAGE_BYTES + 1), /exceeds 5 MiB/],
     ['binary.bin', Buffer.from([0, 1, 2, 255]), /Binary file/],
   ] as const) {
@@ -83,7 +76,6 @@ test('unsupported, corrupted, oversized and remote images fail explicitly withou
   oversizedPixels.writeUInt32BE(30_000, 20)
   assert.throws(() => imageFromBytes(oversizedPixels), /25 million pixels/)
   assert.throws(() => imageFromDataUrl('data:image/jpeg;base64,' + pngFixture().toString('base64')), /does not match/)
-  assert.throws(() => imageFromDataUrl('data:image/png;base64,YR=='), /Invalid image base64/)
   const controller = new AbortController()
   controller.abort(new Error('cancel fixture'))
   await assert.rejects(tools.execute('read', { path: 'invalid.png' }, { ...context, signal: controller.signal }), /cancel fixture/)
@@ -105,12 +97,4 @@ test('dynamic image results survive invoke_tool, text hooks and truncation with 
     execute: async () => ({ content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,eA==' } }] }),
   })
   assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'bad-image', args: {} }, context)), /Invalid image header/)
-  let count = MAX_TOOL_IMAGES
-  tools.registerDynamic({
-    name: 'many-images', description: '', parameters: { type: 'object', properties: {} },
-    execute: async () => ({ content: Array.from({ length: count }, () => image) }),
-  })
-  assert.equal(images(await tools.execute('invoke_tool', { name: 'many-images', args: {} }, context)).length, MAX_TOOL_IMAGES)
-  count++
-  assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'many-images', args: {} }, context)), /at most 4 images/)
 }))

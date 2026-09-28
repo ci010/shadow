@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { BaseSession } from './base-session.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
@@ -15,10 +15,6 @@ import type { ExecutionContext } from '../tools/context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { pngFixture } from '../testing/image.ts'
 import { toolResultText } from '../tools/tool.ts'
-import { saveToolImages } from './tool-images.ts'
-import { imageFromBytes } from '../utils/image-input.ts'
-import { resolveSessionLocations } from './locality.ts'
-import { HandoffManager } from './handoff/manager.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 class ImageSession extends BaseSession {
@@ -79,12 +75,6 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       assert(restored)
       assert.deepEqual(restored.content, result.content)
       assert.equal(restored.tool_call_id, 'read-image')
-      const handoff = new HandoffManager(provider, llm.contextWindow, {}, home, store)
-      try {
-        const summary = await handoff.create(sessionId, session.physicalSessionId, 'next-segment', inputs[1], 'fixture')
-        assert(summary.prompt.includes(JSON.stringify(live.media[0])), 'Even fallback compaction must retain a reread path, not only [image]')
-        assert(!summary.prompt.includes('base64,'))
-      } finally { await handoff.stop() }
       // Same conversion guard as a provider payload: retain typed parts from saved records.
       assert(Array.isArray(restored.content))
       const parts: ContentPart[] = restored.content.map(part => {
@@ -99,7 +89,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         { role: 'tool', name: 'read', tool_call_id: 'read-image', content: parts },
       ], provider, sessionTools, bus, store)
       await resumed.run(context)
-      assert.deepEqual(inputs.at(-1)?.find(message => message.role === 'tool')?.content, parts)
+      assert.deepEqual(inputs[2].find(message => message.role === 'tool')?.content, parts)
 
       await writeFile(path, pngFixture(2, 2))
       const reread = await sessionTools.execute('read', { path: live.media[0] }, context)
@@ -109,52 +99,3 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     } finally { store.close?.() }
   }))
 }
-
-test('snapshot publication is complete under concurrent writes and cancellation cannot poison the content path', async () => withTempWorkspace(async home => {
-  const bytes = pngFixture(256, 256)
-  const parts = [imageFromBytes(bytes).part]
-  const signal = new AbortController().signal
-  const saved = await Promise.all(Array.from({ length: 8 }, () => saveToolImages(home, parts, signal)))
-  assert.equal(new Set(saved.flat()).size, 1)
-  assert.deepEqual(await readFile(saved[0][0]), bytes)
-  const cancelled = AbortSignal.abort(new Error('cancel image snapshot'))
-  await assert.rejects(saveToolImages(home, parts, cancelled), /cancel image snapshot/)
-  assert.deepEqual(await saveToolImages(home, parts, signal), saved[0])
-}))
-
-test('failed snapshot persistence records a paired error instead of replaying the completed tool', async () => withTempWorkspace(async home => {
-  const store = new JsonlSessionStore(join(home, '.sessions'))
-  await store.init()
-  const tools = new Tools(home)
-  let calls = 0
-  tools.register({
-    name: 'screenshot', description: '', parameters: { type: 'object', properties: {} },
-    execute: async () => { calls++; return { content: [imageFromBytes(pngFixture()).part] } },
-  })
-  const sessionTools = new SessionTools(tools, home)
-  const state = { sessionId: 'web:broken-image', segmentIndex: 0, mode: 'session' as const }
-  const directory = resolveSessionLocations(home, state).sessionDataDir
-  await mkdir(directory, { recursive: true })
-  await writeFile(join(directory, 'uploads'), 'Not a directory')
-  let inputs: ChatMessage[] = []
-  const provider: LLMProvider = {
-    name: 'fixture', listModels: () => ['fixture'],
-    chat: async messages => {
-      inputs = structuredClone(messages)
-      return calls ? { content: 'Image persistence error reported', toolCalls: [] }
-        : { content: null, toolCalls: [{ id: 'shot', name: 'screenshot', arguments: {} }] }
-    },
-  }
-  const session = new ImageSession(home, state.sessionId, state, [], provider, sessionTools, new Bus(), store)
-  const context: ExecutionContext = {
-    sessionId: state.sessionId, physicalSessionId: session.physicalSessionId, cwd: home,
-    channel: 'web', chatId: 'fixture', senderId: 'fixture', messageId: 'fixture',
-    tools: sessionTools, signal: new AbortController().signal,
-  }
-  await session.run(context)
-  const result = inputs.find(message => message.role === 'tool')
-  assert.equal(result?.tool_call_id, 'shot')
-  assert.match(String(result?.content), /completed, but saving its image result failed/)
-  await session.run(context)
-  assert.equal(calls, 1)
-}))

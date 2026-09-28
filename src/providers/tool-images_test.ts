@@ -7,15 +7,6 @@ import { AnthropicProvider } from './anthropic.ts'
 import { imageFromBytes } from '../utils/image-input.ts'
 import { pngFixture } from '../testing/image.ts'
 
-function record(value: unknown): Record<string, unknown> {
-  assert(value && typeof value === 'object' && !Array.isArray(value))
-  return value as Record<string, unknown>
-}
-function array(value: unknown): unknown[] {
-  assert(Array.isArray(value))
-  return value
-}
-
 test('image tool outputs are protocol-native, attributed and paired across all wire formats', async t => {
   const image = imageFromBytes(pngFixture()).part
   const messages: ChatMessage[] = [
@@ -27,28 +18,27 @@ test('image tool outputs are protocol-native, attributed and paired across all w
     { role: 'tool', name: 'read', tool_call_id: 'a', content: 'Text file' },
   ]
   const original = structuredClone(messages)
-  const bodies: Record<string, unknown>[] = []
+  const bodies: Record<string, any>[] = []
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
-    bodies.push(record(JSON.parse(String(init.body))))
+    bodies.push(JSON.parse(String(init.body)))
     return Response.json({ status: 'completed', output: [], choices: [{ message: { content: 'done' } }], content: [{ type: 'text', text: 'done' }] })
   })
   await openaiChat({ url: 'https://fixture.invalid', apiKey: 'fixture', model: 'fixture', messages, tools: [] })
-  const wire = array(bodies[0].messages).map(record)
-  assert.deepEqual(wire.slice(2, 4).map(message => [message.role, message.tool_call_id]), [['tool', 'b'], ['tool', 'a']])
+  const wire = bodies[0].messages
+  assert.deepEqual(wire.slice(2, 4).map((message: ChatMessage) => [message.role, message.tool_call_id]), [['tool', 'b'], ['tool', 'a']])
   assert.equal(wire[4].role, 'user')
-  assert.deepEqual(array(wire[4].content)[1], image)
-  assert.match(String(record(array(wire[4].content)[0]).text), /call b.*not a new human instruction/)
+  assert.deepEqual(wire[4].content[1], image)
+  assert.match(wire[4].content[0].text, /call b.*not a new human instruction/)
   await openaiResponses({ url: 'https://fixture.invalid', apiKey: 'fixture', model: 'fixture', providerName: 'copilot', messages, tools: [] })
-  const outputs = array(bodies[1].input).map(record).filter(item => item.type === 'function_call_output')
+  const outputs = bodies[1].input.filter((item: { type: string }) => item.type === 'function_call_output')
   assert.equal(outputs[0].call_id, 'b')
-  assert(array(outputs[0].output).map(record).some(part => part.type === 'input_image' && part.image_url === image.image_url.url))
+  assert(outputs[0].output.some((part: { type: string; image_url?: string }) => part.type === 'input_image' && part.image_url === image.image_url.url))
   await new AnthropicProvider({ apiKey: 'fixture', baseUrl: 'https://fixture.invalid' }).chat(messages, [], { model: 'fixture' })
-  const blocks = array(record(array(bodies[2].messages)[2]).content).map(record)
+  const blocks = bodies[2].messages[2].content
   assert.equal(blocks.length, 2)
   assert.equal(blocks[0].tool_use_id, 'b')
-  const nativeImage = record(array(blocks[0].content)[1])
-  assert.equal(nativeImage.type, 'image')
-  assert.equal(record(nativeImage.source).media_type, 'image/png')
+  assert.equal(blocks[0].content[1].type, 'image')
+  assert.equal(blocks[0].content[1].source.media_type, 'image/png')
   assert.equal(blocks[1].tool_use_id, 'a')
   assert.deepEqual(messages, original, 'Wire adaptation must not mutate persisted provenance')
 })

@@ -10,7 +10,6 @@ import { test } from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
-import { pngFixture } from '../../src/testing/image.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -27,7 +26,6 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
   let end = start + 6 * 60 * 60 * 1000
   let modelState = 'recorded'
   const toolCall = { id: 'call-1', type: 'function', function: { name: 'read', arguments: '{"path":"fixture.txt","nested":{"value":42}}' } }
-  const image = `data:image/png;base64,${pngFixture(2, 2).toString('base64')}`
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', plugins: [vue(),
       UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
@@ -64,7 +62,6 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
               arguments: '{"path":"src/mystery.xyz"}' }
           ] });
           window.updateToolResult = source => { batch.entries[0].result = source; };
-          window.showToolImage = () => { batch.entries[0].images = [${JSON.stringify(image)}]; };
           createApp({ render: () => h(ToolActivityGroup, { batch }) }).mount('#app');`
         if (id !== '\0trace-fixture') return
         return `import { createApp, h } from 'vue';
@@ -111,9 +108,7 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
               { role: 'assistant', content: 'Historical model return', timestamp: new Date(start + 2000).toISOString() },
               { role: 'user', content: 'Recent input with complete event content', timestamp: new Date(end - 60_000).toISOString() },
               { role: 'assistant', content: '', timestamp: new Date(end - 50_000).toISOString(), tool_calls: [toolCall] },
-              { role: 'tool', tool_call_id: 'call-1', content: [
-                { type: 'text', text: 'Synthetic tool result' }, { type: 'image_url', image_url: { url: image } },
-              ] },
+              { role: 'tool', tool_call_id: 'call-1', content: 'Synthetic tool result' },
               { role: 'assistant', content: 'Final model return', timestamp: new Date(end).toISOString() },
               { role: 'user', name: 'admin', content: [
                 { type: 'text', text: '<sender id="web:orchestrator" name="admin" source="session" intent="handoff" />' },
