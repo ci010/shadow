@@ -1,6 +1,6 @@
 import { sessionMessageTitle, type SessionMessageSource } from './message-author.ts'
 import { eventPresentation, eventSourceSession, type ChatEventMeta } from './chat-events.ts'
-import { decisionStatusLabel, inlineYieldDecisions, type YieldDecision } from './yield-history.ts'
+import { decisionStatusLabel, inlineYieldDecisions, type YieldDecision, type InlineYieldDecisions } from './yield-history.ts'
 import type { ToolActivityMessage } from './tool-activity.ts'
 
 export interface HistoryMessage extends ToolActivityMessage {
@@ -51,6 +51,7 @@ export function messageHistoryMarkers(
   messages: readonly HistoryMessage[],
   sessions: readonly { sessionId: string; label: string }[] = [],
   decisions: ReadonlyMap<number, YieldDecision> = inlineYieldDecisions(messages).entries,
+  after: InlineYieldDecisions['after'] = new Map(),
 ): MessageHistoryMarker[] {
   const names = new Map(sessions.map(session => [session.sessionId, session.label]))
   const markers: MessageHistoryMarker[] = messages.flatMap((message, index) => {
@@ -89,7 +90,9 @@ export function messageHistoryMarkers(
       preview: [decision.question, decision.answer ? `Response: ${decision.answer.option}` : ''].filter(Boolean).join('\n'),
     })
   }
-  return markers.sort((a, b) => a.index - b.index)
+  const positions = new Map([...after].flatMap(([anchor, decisions]) => decisions.map(([index]) => [index, anchor] as const)))
+  const position = (index: number) => positions.get(index) ?? (index >= messages.length ? -1 : index)
+  return markers.sort((a, b) => position(a.index) - position(b.index) || a.index - b.index)
 }
 
 /** Compress routine peer updates, never human turns, decisions, requests or completion events. */

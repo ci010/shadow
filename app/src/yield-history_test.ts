@@ -152,3 +152,58 @@ test('journal identities restore context without restoring waits and survive rep
   assert.equal(inlineYieldDecisions([], replacement, records).entries.size, 2, 'Identical text cannot merge distinct identities')
   assert.throws(() => parseDecisionRecords({}), TypeError)
 })
+
+test('proposal decisions use recorded identity rather than missing question arguments', () => {
+  const request = { ...pending, origin: { physicalId: 'web_owner-0', toolCallId: 'ask' } }
+  const proposal = { kind: 'decision', proposal: { key: 'work:fixture', id: 'proposal' }, brief: {} }
+  for (const toolCall of [
+    { name: 'ask', arguments: proposal },
+    { name: 'invoke_tool', arguments: { name: 'ask', args: proposal } },
+  ]) {
+    const messages = [ { ...call(), toolCall }, result(receipt()), { content: 'Later conversation' } ]
+    const records = parseDecisionRecords([{ request, answer: receipt() }])
+    const view = inlineYieldDecisions(messages, null, records)
+    assert.equal(view.entries.get(0)?.requestId, request.id)
+    assert.equal(view.entries.get(0)?.question, request.question)
+    assert.equal(view.entries.get(0)?.status, 'user')
+    assert.equal(view.entries.size, 1)
+    assert.deepEqual([...view.excluded], [0, 1])
+    assert.equal(view.unlinked.length, 0)
+    assert.equal(view.after.size, 0)
+    const waiting = inlineYieldDecisions(messages.slice(0, 1), request)
+    assert.equal(waiting.entries.get(0)?.status, 'waiting-user')
+    const unavailable = inlineYieldDecisions(messages)
+    assert.equal(unavailable.entries.size, 0, 'Without the generated request, do not invent a question or permission')
+    assert.equal(unavailable.excluded.size, 0)
+  }
+})
+
+test('unbound historical revisions stay beside their original ask, including invalidated decisions', () => {
+  const request = { ...pending, origin: { physicalId: 'web_owner-0', toolCallId: 'ask' } }
+  const replacement = { ...request, id: 'replacement' }
+  const reference = { sessionId: request.sessionId, physicalId: request.origin.physicalId, requestId: request.id }
+  const invalidated = { reference, at: request.createdAt, reason: 'The task agreement changed.' }
+  const records = parseDecisionRecords([{ request, answer: receipt(), invalidated }, { request: replacement }])
+  const messages = [call(), { content: 'Later conversation' }]
+  const view = inlineYieldDecisions(messages, replacement, records)
+  assert.equal(view.entries.get(0)?.requestId, replacement.id)
+  assert.equal(view.entries.get(0)?.status, 'waiting-user')
+  assert.deepEqual(view.after.get(0)?.map(([index, decision]) => [index, decision.requestId, decision.status]),
+    [[2, request.id, 'invalidated']])
+  assert.deepEqual(view.unlinked, [])
+  assert.equal(view.after.get(0)?.[0][1].answer?.option, receipt().option)
+})
+
+test('receipt identities locate decisions without call origins but missing or ambiguous asks stay explicitly unlinked', () => {
+  const records = parseDecisionRecords([{ request: { ...pending, origin: { physicalId: 'web_owner-0' } }, answer: receipt() }])
+  const proposal = { ...call(), toolCall: { name: 'ask', arguments: { kind: 'decision', proposal: { key: 'work:fixture', id: 'proposal' } } } }
+  assert.equal(inlineYieldDecisions([proposal, result(receipt())], null, records).entries.get(0)?.requestId, pending.id)
+  const missing = inlineYieldDecisions([{ content: 'Current segment only' }], null, records)
+  assert.deepEqual(missing.unlinked.map(([index, decision]) => [index, decision.requestId]), [[1, pending.id]])
+  const withOrigin = parseDecisionRecords([{ request: { ...pending, origin: { physicalId: 'web_owner-0', toolCallId: 'ask' } } }])
+  const ambiguous = inlineYieldDecisions([proposal, proposal], null, withOrigin)
+  assert.equal(ambiguous.unlinked.length, 1)
+  assert.equal(ambiguous.after.size, 0)
+  const resolved = inlineYieldDecisions([proposal, { ...proposal, toolCallId: 'another' }, result(receipt())], null, withOrigin)
+  assert.equal(resolved.entries.get(0)?.requestId, pending.id)
+})

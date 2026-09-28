@@ -20,6 +20,13 @@ export interface YieldDecision {
   invalidated?: YieldDecisionRecord['invalidated']
 }
 
+export interface InlineYieldDecisions {
+  entries: Map<number, YieldDecision>
+  excluded: Set<number>
+  after: Map<number, [number, YieldDecision][]>
+  unlinked: [number, YieldDecision][]
+}
+
 export function decisionStatusLabel(status: YieldDecision['status']): string {
   return {
     'waiting-user': 'Needs your reply',
@@ -68,10 +75,23 @@ export function inlineYieldDecisions(
   messages: readonly (ToolActivityMessage & { timestamp?: string })[],
   pending?: YieldRequest | null,
   records: readonly YieldDecisionRecord[] = [],
-): { entries: Map<number, YieldDecision>; excluded: Set<number> } {
+): InlineYieldDecisions {
   const entries = new Map<number, YieldDecision>()
   const excluded = new Set<number>()
   const pairs = pairToolResults(messages)
+  const askIndices = messages.flatMap((message, index) => {
+    if (message.event !== 'tool_call') return []
+    const call = resolveToolCall(message)
+    return call.name === 'ask' && (call.args.action === undefined || call.args.action === 'ask') ? [index] : []
+  })
+  const originIndex = (requestId?: string, origin?: YieldRequest['origin']): number | undefined => {
+    const candidates = askIndices.filter(index => !origin?.toolCallId || messages[index].toolCallId === origin.toolCallId)
+    const receiptMatch = candidates.find(index => {
+      const text = messages[pairs.get(index) ?? -1]?.content
+      return !!requestId && (readAnswer(text)?.requestId === requestId || readContinuation(text)?.requestId === requestId)
+    })
+    return receiptMatch ?? (origin?.toolCallId && candidates.length === 1 ? candidates[0] : undefined)
+  }
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index]
     if (message.event !== 'tool_call') continue
@@ -80,15 +100,24 @@ export function inlineYieldDecisions(
     const action = call.name === 'reply' ? 'answer' : call.args.action === undefined ? 'ask' : call.args.action
     let decision: YieldDecision
     if (action === 'ask') {
-      try {
-        const question = parseYieldQuestion({
-          question: call.args.question, options: call.args.options, defaultOption: call.args.default_option, brief: call.args.brief,
-        })
-        decision = { ...question, action, status: 'unknown' }
-      } catch (error) {
-        if (!(error instanceof TypeError)) throw error
-        // Invalid/legacy payloads stay visible in the ordinary tool inspector.
-        continue
+      const saved = records.findLast(record => originIndex(record.request.id, record.request.origin) === index)
+      const live = pending && originIndex(pending.id, pending.origin) === index ? pending : undefined
+      if (saved) {
+        // Proposal asks omit question/options; the persisted request is the display contract.
+        decision = recordedDecision(saved)
+      } else if (live) {
+        decision = recordedDecision({ request: live })
+      } else {
+        try {
+          const question = parseYieldQuestion({
+            question: call.args.question, options: call.args.options, defaultOption: call.args.default_option, brief: call.args.brief,
+          })
+          decision = { ...question, action, status: 'unknown' }
+        } catch (error) {
+          if (!(error instanceof TypeError)) throw error
+          // Invalid/legacy payloads stay visible in the ordinary tool inspector.
+          continue
+        }
       }
     } else if (call.name === 'reply' && typeof call.args.request_id === 'string'
       && typeof call.args.text === 'string' && readAnswer(messages[pairs.get(index) ?? -1]?.content)) {
@@ -121,7 +150,7 @@ export function inlineYieldDecisions(
     if (entry.action !== 'ask') continue
     const record = records.findLast(record => entry.requestId
       ? record.request.id === entry.requestId
-      : !!messages[index].toolCallId && record.request.origin?.toolCallId === messages[index].toolCallId)
+      : originIndex(record.request.id, record.request.origin) === index)
     if (!record || attached.has(record.request.id)) continue
     attached.add(record.request.id)
     const saved = recordedDecision(record)
@@ -154,5 +183,13 @@ export function inlineYieldDecisions(
       status: pending.recipient.kind === 'user' ? 'waiting-user' : 'waiting-parent',
     })
   }
-  return { entries, excluded }
+  const after: InlineYieldDecisions['after'] = new Map()
+  const unlinked: InlineYieldDecisions['unlinked'] = []
+  for (const [index, decision] of entries) {
+    if (index < messages.length) continue
+    const anchor = originIndex(decision.requestId, decision.origin)
+    if (anchor === undefined) unlinked.push([index, decision])
+    else after.set(anchor, [...(after.get(anchor) ?? []), [index, decision]])
+  }
+  return { entries, excluded, after, unlinked }
 }

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { formatMessageTime, messageTime, resendableUserMessage, messageHistoryMarkers, groupMessageHistoryMarkers, type HistoryMessage } from './message-history.ts'
 import { parseLiveSessionMessage } from './chat-events.ts'
+import { inlineYieldDecisions } from './yield-history.ts'
+import type { YieldRequest } from '../../src/sessions/yield-contract.ts'
 
 test('resend targets only a trailing human message and preserves its attachments', () => {
   assert.equal(resendableUserMessage([]), undefined)
@@ -173,4 +175,25 @@ test('decisions, explicit requests, completion events and context boundaries bre
   assert.equal(markers[0].kind, 'decision')
   assert.match(markers[0].label, /timeout/)
   assert.match(markers[0].preview, /Increase budget\?.*Response: No/s)
+})
+
+test('decision navigation follows anchored revisions and the separate unloaded-history section', () => {
+  const messages: HistoryMessage[] = [
+    { role: 'user', content: 'Before the ask' },
+    { role: 'assistant', content: '', event: 'tool_call', toolCallId: 'ask', toolCall: {
+      name: 'ask', arguments: { kind: 'decision', proposal: { key: 'work:fixture', id: 'proposal' } },
+    } },
+    { role: 'user', content: 'After the ask' },
+  ]
+  const request: YieldRequest = {
+    id: 'old', sessionId: 'web:owner', question: 'Apply?', options: ['Yes', 'No'], defaultOption: 'No',
+    recipient: { kind: 'user', sessionId: 'web:owner' }, createdAt: '2026-09-28T00:00:00Z', deadline: null,
+    origin: { physicalId: 'web_owner-0', toolCallId: 'ask' },
+  }
+  const view = inlineYieldDecisions(messages, null, [
+    { request }, { request: { ...request, id: 'new' } },
+    { request: { ...request, id: 'outside', origin: { physicalId: 'web_owner-0', toolCallId: 'missing' } } },
+  ])
+  const markers = messageHistoryMarkers(messages, [], view.entries, view.after)
+  assert.deepEqual(markers.map(marker => marker.index), [4, 0, 1, 3, 2])
 })

@@ -249,6 +249,53 @@ async function main() {
     await execute(`window.__conversationFixture.messages[2].toolCall.arguments.sessionId = ''`)
     await wait(`!document.querySelector('.message-recipient')`)
     assert.match(await execute(`document.querySelector('.message-action').textContent`), /Unknown recipient/)
+    await execute(`(() => {
+      const state = window.__conversationFixture;
+      const request = {
+        id:'proposal-new', sessionId:'web:owner', question:'Apply the proposed change to work:fixture (revision 2)?',
+        options:['Apply this work proposal','Keep current work'], defaultOption:'Keep current work',
+        recipient:{kind:'user',sessionId:'web:owner'}, createdAt:'2026-09-28T06:00:00Z', deadline:null,
+        origin:{physicalId:'owner-0',toolCallId:'proposal-call'},
+      };
+      const answer = {requestId:request.id,option:request.options[0],answeredBy:'user',answeredAt:'2026-09-28T06:01:00Z'};
+      state.streaming = false;
+      state.messages = [
+        {role:'user',content:'Before the original ask'},
+        {role:'assistant',event:'tool_call',content:'',toolCallId:'proposal-call',
+          toolCall:{name:'ask',arguments:{kind:'decision',proposal:{key:'work:fixture',id:'proposal'},brief:{}}}},
+        {role:'tool',event:'tool_result',toolCallId:'proposal-call',content:JSON.stringify(answer)},
+        {role:'user',content:'After the original ask'},
+      ];
+      state.decisionRecords = [
+        {request:{...request,id:'proposal-old',question:'Earlier version of the proposal'},
+          invalidated:{reference:{sessionId:'web:owner',physicalId:'owner-0',requestId:'proposal-old'},
+            at:'2026-09-28T06:02:00Z',reason:'The task agreement changed.'}},
+        {request,answer},
+        {request:{...request,id:'outside',question:'Decision from unloaded history',
+          origin:{physicalId:'owner-0',toolCallId:'missing-call'}}},
+      ];
+    })()`)
+    await wait(`document.querySelectorAll('.yield-decision').length === 3`)
+    for (const width of [1100, 390]) {
+      window.setContentSize(width, 844)
+      for (const dark of [false, true]) {
+        await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
+        await frame()
+        assert.deepEqual(await execute(`[...document.querySelectorAll('.yield-decision')].map(el => el.getAttribute('data-msg-idx'))`),
+          ['5', '1', '4'], 'Unloaded history is separate; revised decisions stay at the original ask')
+        assert.match(await execute(`document.querySelector('.unlinked-decisions').textContent`), /Unlinked decision history.*original ask/s)
+        const positions = await execute(`(() => {
+          const top = index => document.querySelector('[data-msg-idx="' + index + '"]').getBoundingClientRect().top;
+          return [top(5),top(0),top(1),top(4),top(3)];
+        })()`)
+        assert.ok(positions.every((position: number, index: number) => index === 0 || position > positions[index - 1]),
+          'Both current and invalidated cards must precede later conversation')
+        assert.match(await execute(`document.querySelector('[data-msg-idx="4"]').textContent`), /revalidation required/)
+        assert.equal(await execute(`document.querySelectorAll('.tool-activity').length`), 0, 'A bound ask is not duplicated in generic tool activity')
+        assert.equal(await execute(`document.documentElement.scrollWidth > innerWidth`), false)
+        await screenshot(`decision-placement-${width}-${dark ? 'dark' : 'light'}`)
+      }
+    }
     await execute(`window.__showCompaction()`)
     await wait(`!!document.querySelector('.history-disclosure') && document.querySelector('.heading-folder')?.textContent === 'review'`)
     assert.equal(await execute(`!!document.querySelector('.compaction-summary-body')`), false, 'Summary Markdown stays lazy')

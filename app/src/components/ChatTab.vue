@@ -107,6 +107,12 @@
               </ul>
             </div>
           </details>
+          <div v-if="yieldDecisions.unlinked.length" class="unlinked-decisions">
+            <p class="decision-history-note">Unlinked decision history · {{ yieldDecisions.unlinked.length }}. The original ask could not be located in this view.</p>
+            <YieldDecision v-for="[index, decision] in yieldDecisions.unlinked"
+              :key="decision.requestId" :decision="decision" :api-base="apiBase"
+              :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
+          </div>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
             <CommandResult v-if="msg.commandReceipt" :receipt="msg.commandReceipt">
               <div class="prose" v-html="renderMarkdown(msg.content)" />
@@ -190,11 +196,11 @@
               </div>
             </div>
             </ResponseDisclosure>
+            <YieldDecision v-for="[index, decision] in yieldDecisions.after.get(idx)"
+              :key="decision.requestId" :decision="decision" :api-base="apiBase"
+              :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </template>
-          <YieldDecision v-for="[index, decision] in [...yieldDecisions.entries].filter(([index]) => index >= displayMessages.length)"
-            :key="decision.requestId" :decision="decision" :api-base="apiBase"
-            :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
             <button type="button" @click="refreshDecisionRecords">Retry decision history</button>
           </p>
@@ -2528,7 +2534,7 @@ watch(composerDock, element => {
 const resendCandidate = computed(() => resendableUserMessage(messages.value))
 const canResend = computed(() => !requestBusy.value && !currentRecovery.value && !!resendCandidate.value)
 const historyMarkers = computed(() => groupMessageHistoryMarkers(
-  messageHistoryMarkers(messages.value, allSessions.value, yieldDecisions.value.entries), messages.value,
+  messageHistoryMarkers(messages.value, allSessions.value, yieldDecisions.value.entries, yieldDecisions.value.after), messages.value,
 ))
 
 function resendLastMessage() {
@@ -2844,6 +2850,8 @@ button.chat-session-source:focus-visible { outline: 2px solid var(--c-blue); out
 /* ── Segment navigation bar ──────────────────────────────── */
 
 .unlinked-executions { margin: 8px 0 16px; color: var(--c-text-secondary); font-size: 12px; }
+.unlinked-decisions { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.decision-history-note { margin: 0; color: var(--c-text-secondary); font-size: 12px; }
 .unlinked-executions summary { cursor: pointer; }
 .unlinked-executions summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .history-disclosure { width: 100%; margin: 0; }
