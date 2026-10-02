@@ -202,6 +202,7 @@ export async function terminateProcessTree(
   exit: Promise<ManagedProcessStatus>,
   isolated = false,
 ): Promise<ManagedProcessStatus> {
+  let terminationError: unknown
   const closed = () => (child.exitCode !== null || child.signalCode !== null)
     && (!child.stdout || child.stdout.destroyed) && (!child.stderr || child.stderr.destroyed)
   // A closed foreground shell can still leave children with redirected stdio.
@@ -214,7 +215,7 @@ export async function terminateProcessTree(
           { windowsHide: true, timeout: 5000 },
         )
       } catch (error) {
-        if (!closed()) throw new Error(`Failed to terminate process tree PID=${child.pid}`, { cause: error })
+        terminationError = error
       }
     } else {
       try {
@@ -226,12 +227,18 @@ export async function terminateProcessTree(
   }
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    return await Promise.race([
+    const status = await Promise.race([
       exit,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Process PID=${child.pid} did not close after termination`)), 5000)
+        timer = setTimeout(() => reject(new Error(`Process PID=${child.pid} did not close after termination`,
+          terminationError === undefined ? undefined : { cause: terminationError })), 5000)
       }),
     ])
+    if (terminationError !== undefined) {
+      if (!closed()) throw new Error(`Process PID=${child.pid} has not exited and drained`, { cause: terminationError })
+      console.warn(`[processes] Termination command failed for PID=${child.pid}, but its owned process exited and output drained.`)
+    }
+    return status
   } finally { clearTimeout(timer) }
 }
 

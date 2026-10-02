@@ -41,6 +41,29 @@ test('full writes report UTF-8 size, real line labels and bounded head/tail exce
   assert.match(await tool.execute({ path: 'unicode.txt', content: unicode }, context), /UTF-8 bytes written: 7/)
 })
 
+test('explicit UTF-8 BOM writes preserve exact bytes across edits without changing default encoding', async t => {
+  const { root, context, tool } = await fixture(t)
+  const text = 'Write-Output "\u4e2d\u6587\u65e5\u672c\u8a9e"\n'
+  await tool.execute({ path: 'helper.ps1', content: text, encoding: 'utf8-bom' }, context)
+  assert.equal(await readFile(join(root, 'helper.ps1'), 'utf8'), '\uFEFF' + text)
+  await tool.execute({ path: 'helper.ps1', content: '\uFEFF' + text, encoding: 'utf8-bom' }, context)
+  await tool.execute({ path: 'helper.ps1', match: 'Write-Output', content: 'Write-Host' }, context)
+  assert.equal(await readFile(join(root, 'helper.ps1'), 'utf8'), '\uFEFF' + text.replace('Write-Output', 'Write-Host'))
+  await tool.execute({ path: 'plain.ps1', content: text }, context)
+  assert.equal(await readFile(join(root, 'plain.ps1'), 'utf8'), text)
+  for (const args of [{ encoding: 'utf16' }, { encoding: 'utf8-bom', flag: 'a' }, { encoding: 'utf8-bom', match: 'Write-Host' }]) {
+    await assert.rejects(tool.execute({ path: 'helper.ps1', content: 'bad', ...args }, context), /encoding/)
+  }
+})
+
+test('Windows PowerShell helper round-trips non-ASCII JSON using the explicit BOM write mode', { skip: process.platform !== 'win32' }, async t => {
+  const { root, context, tool } = await fixture(t)
+  await tool.execute({ path: 'roundtrip.ps1', encoding: 'utf8-bom', content:
+    `[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n@{text='\u4e2d\u6587\u3068\u65e5\u672c\u8a9e'} | ConvertTo-Json -Compress` }, context)
+  const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', join(root, 'roundtrip.ps1')],
+    { encoding: 'utf8', windowsHide: true, timeout: 10000 })
+  assert.deepEqual(JSON.parse(stdout), { text: '\u4e2d\u6587\u3068\u65e5\u672c\u8a9e' })
+})
 test('exact edits show final-file boundaries and adjacent unchanged lines', async t => {
   const { root, context, tool } = await fixture(t)
   await writeFile(join(root, 'edit.txt'), 'one\ntwo\nold\nfour\nfive\n')

@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import type { ToolDefinition } from '../tools/tool.ts'
 import { isGptModel, type ReasoningEffort, type ThinkingConfig } from '../agent/llm-config.ts'
 import { spanAttributes } from '../otel/tracing.ts'
@@ -8,7 +9,7 @@ import type {
   LLMResponse,
   ToolCall,
 } from './provider.ts'
-import { ProviderHttpError, TokenLimitExceededError } from './provider.ts'
+import { ProviderHttpError, ProviderTransportError, TokenLimitExceededError, providerTransportFailure } from './provider.ts'
 import { chatCompletionImages } from './tool-images.ts'
 
 // ---------------------------------------------------------------------------
@@ -93,19 +94,21 @@ export async function openaiChat(params: {
 
   console.debug(`Calling LLM`)
 
-  // Retry up to 5 extra times for transient network errors (TLS, connection reset, etc.)
+  // Only failures known to precede a connection may replay the request.
   const MAX_RETRIES = 5
   let lastErr: unknown
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
-      const delay = 1000 * attempt
+      const wait = 1000 * attempt
       console.warn(
-        `LLM fetch attempt ${attempt + 1} after ${delay}ms (${
+        `LLM fetch attempt ${attempt + 1} after ${wait}ms (${
           lastErr instanceof Error ? lastErr.message : lastErr
         })`,
       )
-      await new Promise((r) => setTimeout(r, delay))
+      await delay(wait, undefined, { signal: params.signal })
     }
+    params.signal?.throwIfAborted()
+    let phase: 'connect' | 'response' = 'connect'
     try {
       const res = await fetch(params.url, {
         method: 'POST',
@@ -117,6 +120,7 @@ export async function openaiChat(params: {
         body: JSON.stringify(body),
         signal: params.signal,
       })
+      phase = 'response'
 
       if (!res.ok) {
         const text = await res.text()
@@ -191,9 +195,8 @@ export async function openaiChat(params: {
           : undefined,
       }
     } catch (err) {
-      lastErr = err
-      // Non-network errors (e.g. JSON parse, API 4xx) — don't retry
-      if (!(err instanceof TypeError)) throw err
+      lastErr = providerTransportFailure(err, phase, params.signal)
+      if (!(lastErr instanceof ProviderTransportError) || lastErr.mayHaveBeenProcessed) throw lastErr
     }
   }
   throw lastErr

@@ -6,20 +6,25 @@ import { WorkConflict, workAdoptionSchema, workChangeSchema, workDefinitionSchem
   type WorkActor, type WorkRecord, type WorkStamp, type WorkDecision } from '../initiatives/work-contract.ts'
 import type { YieldDecisionRecord, YieldReference, YieldRequest } from './yield-contract.ts'
 import type { DecisionEvidence } from './decision-brief.ts'
-import { DECISION_EVIDENCE_HELP, parseDecisionEvidence } from './decision-brief.ts'
+import { DECISION_EVIDENCE_HELP, decisionEvidenceSchema, parseDecisionEvidence } from './decision-brief.ts'
 import type { SessionState } from './session-store.ts'
-import type { ExecutionContext } from '../tools/context.ts'
+import { currentOwnerWorkInput, type ExecutionContext } from '../tools/context.ts'
 import type { Tool as TypedTool, ToolResult } from '../tools/tool.ts'
 import { delegationOwner } from './execution-scope.ts'
 import { isSkillRootPath } from '../skills/paths.ts'
 
 type Tool = TypedTool<ToolResult>
 
+const effectResultSourceSchema = z.object({
+  invocationId: z.string(),
+  resultSource: decisionEvidenceSchema.omit({ quote: true }).extend({ kind: z.literal('tool') }),
+})
+
 export interface WorkToolGuard {
   snapshot(sessionId: string): WorkStamp[]
-  prompt(sessionId: string): string
+  prompt(sessionId: string, context?: ExecutionContext): string
   current(stamps: WorkStamp[]): boolean
-  before(tool: Tool, args: Record<string, unknown>, context: ExecutionContext): { finish(failed: boolean, effect?: 'none'): string } | undefined
+  before(tool: Tool, args: Record<string, unknown>, context: ExecutionContext): { finish(failed: boolean, effect?: 'none' | 'returned'): string } | undefined
 }
 
 export interface WorkAlignmentDeps {
@@ -35,23 +40,28 @@ export const WORK_HELP = {
   evidenceSchema: DECISION_EVIDENCE_HELP,
   update: { change: 'understanding|goal|authorization|pause', reason: 'Why this is changing, not just the new plan',
     definition: { objective: 'Outcome, not the current phase', acceptance: ['Final acceptance'], boundaries: ['Existing limits; not new permission'], evidence: [] },
-    paused: false },
-  adopt: { understanding: 'Restate outcome and acceptance', stop: ['Obsolete actions'], retain: ['Still-valid evidence/work'], next: ['Agent-chosen phase, not user requirements'] },
+    paused: false, requestQuote: 'Optional exact excerpt of the current authenticated owner message. With update, permits only appended acceptance, not changed objective/boundaries, removed acceptance or pause/resume. Never counts as proposal or capability approval.' },
+  adopt: { understanding: 'Required: restate outcome and acceptance', stop: ['Optional obsolete actions; defaults to []'], retain: ['Optional still-valid evidence/work; defaults to []'], next: ['Required agent-chosen phase, not user requirements'],
+    acceptance: ['Optional in-scope criteria missing from definition.acceptance. For controller-owned agent interpretations, appends these and adopts the new revision atomically; never changes objective/boundaries or approves access. Human-confirmed changes still use update/requestQuote or propose.'] },
   checkpoint: { completed: [], artifacts: [], inFlight: [], unknown: [], retired: ['Obsolete assumptions, summaries and memory conclusions'] },
   transition: { strategy: 'fresh|successor' },
   select: 'Use key + revision to select an assigned agreement for subsequent inference; omit key to restore the all-assigned-work fence.',
   settle: { effectId: 'interrupted invocation', evidence: DECISION_EVIDENCE_HELP },
+  settleGuidance: 'When an effect has resultSource, reuse it with an exact quote from that recorded result. Inspect possible partial changes before settling; the reference is not proof of success or rollback. Missing references remain unknown, not permission to invent evidence.',
   workflow: 'context -> create or update/propose by key + revision -> executor adopt. Revisions and assignments fence old calls. Use checkpoint then transition at a safe boundary. No implicit ownership transfer. Custom answer text may correct the goal; never interpret it automatically as approval.',
   create: { title: 'Short work name', parentKey: 'optional root/parent work key',
     assignee: 'optional durable Session ID; defaults to the creating session',
     definition: { objective: 'Outcome', acceptance: ['Observable completion'], boundaries: [], evidence: [] },
     reason: 'Source and interpretation' },
-  discovery: { query: 'optional text filter for list', limit: '1-20; defaults to 5', offset: 'defaults to 0; use nextOffset', detail: 'Read context with a key for the full work definition.' },
+  discovery: { query: 'optional text filter for list', limit: '1-20; defaults to 5', offset: 'defaults to 0; use nextOffset',
+    detail: 'Read context with a key for the full work definition. context data.includeSchema=true includes action schemas; default includes them only when no records exist.' },
   management: {
     assign: { expectedSequence: 1, assignee: 'Session ID, or null to release; assigned work cannot be stolen', reason: 'Explicit handoff' },
     manage: { expectedSequence: 1, manager: 'Session ID or null; only current manager may hand off' },
     progress: { expectedSequence: 1, status: 'pending|in_progress|blocked|done|cancelled', blockedReason: 'required only when blocked',
-      result: { summary: 'What was verified', evidence: ['genuine evidence references; required for agent completion'] } },
+      blockedScope: 'step|work; new waits default to step. A step wait permits only independent authorized work. Existing whole-work/legacy blockers retain their scope unless explicitly changed after resolution. Use pause for an explicit stop.',
+      result: { summary: 'What was verified; agent completion requires attributable evidence, not prose or filenames',
+        evidence: [DECISION_EVIDENCE_HELP] } },
     dependencies: { expectedSequence: 1, keys: ['existing work keys'] },
   },
   unified: 'Use create for new work, update/propose with key + revision and {definition,change,reason,paused}; no separate Initiative SQL or session goal. Initiative is action=tree with a root key. Assignments, progress and definitions are one work item. Definitions and assignment generations fence execution; progress does not revise goals. Session creation never creates work. Propose returns a proposalId; ask(kind=decision, proposal={key,id}, brief=...) or the human Work panel reviews that exact proposal once.',
@@ -122,19 +132,39 @@ export class WorkAlignment implements WorkToolGuard {
       && proposal.request.physicalId === request.origin?.physicalId)
   }
 
-  prompt(sessionId: string): string {
+  prompt(sessionId: string, context?: ExecutionContext): string {
     const records = this.records(sessionId)
-    if (!records.length) return ''
+    const ownerInput = context && currentOwnerWorkInput(context)
+    const inputFact = ownerInput
+      ? 'Current input supports an owner-directed additive update: requestQuote must quote this input exactly and preserve objective, boundaries and existing acceptance. This is an interpretation, not proposal/capability approval.\n'
+      : 'Current input has no authenticated owner follow-up authority: requestQuote is unavailable. A2A/caller answers, peers, events and Retry/Continue are not owner approvals. Record in-scope acceptance refinements of your own agent interpretation; use propose for changes needing owner review.\n'
+    if (!records.length) return context?.tools.has('work')
+      ? '# Current work contracts (runtime facts)\nNo Work is registered for this executor. Read-only discovery remains available. Before exec or other unclassified/side-effecting tools, create and adopt Work, then use a new inference round. Shell inventory is not a confirmed read-only tool.\n' + inputFact
+      : ''
     const scope = this.store.workFocus(this.executor(sessionId)) ?? 'all assigned agreements'
     const payload = JSON.stringify(records.map(record => ({ ...record, authority: this.store.workAuthority(record.subject) })))
     const detail = payload.length <= 32000 ? payload : JSON.stringify(records.map(record => ({
       key: record.key, revision: record.revision, origin: record.origin, paused: record.paused,
       adopted: record.adoption?.revision === record.revision,
     }))) + '\nFull agreements exceed automatic context: read work action=context with a key for exact objectives, boundaries and checkpoints. This index is not the full agreement.'
+    const effects = this.view(records, undefined, false).effects.filter(effect => effect.status === 'unknown')
+    let effectDetail = JSON.stringify(effects.slice(0, 3).map(({ id, tool, resultSource }) => ({ id, tool, resultSource })))
+    if (effectDetail.length > 8000) {
+      effectDetail = JSON.stringify(effects.slice(0, 3).map(({ id, tool }) => ({ id, tool }))) +
+        '\nResult references exceed automatic context; read work action=context for details.'
+    }
+    const effectPrompt = effects.length
+      ? `\n# Unresolved Work effects (${effects.length}; showing ${Math.min(effects.length, 3)})\n` +
+        'Further side effects are fenced. First inspect the actual partial changes using read-only tools, then settle with attributable evidence. ' +
+        'Reuse resultSource with an exact recorded quote when available; otherwise inspect work context/history. Do not guess identifiers, replay blindly, or mask exit codes. ' +
+        'Reconciliation does not grant missing approval or prove rollback.\n' + effectDetail
+      : ''
     return `# Current work contracts (runtime facts)\nExecution scope: ${scope}\n` +
       'These supersede incompatible old plans, summaries and memory conclusions. Agent interpretations and next steps are NOT user requirements. Boundaries do not grant permission. ' +
-      'Only definition is the current goal; pending proposals are not applied. Use work context/adopt before executing an unacknowledged revision. Read-only investigation remains available. Unresolved effects need reconciliation.\n' +
-      detail
+      'Only definition is the current goal; pending proposals are not applied. New requirements belong in definition.acceptance, not only adoption prose or progress. Adopt may append missing in-scope acceptance to your own agent interpretation. ' +
+      'Use work context/adopt before executing an unacknowledged revision. ' +
+      'Blocked progress with blockedScope=step reports a waiting step, not permission for that step: continue only independent authorized work. Missing blockedScope means a legacy whole-work fence. Pause, dependencies and unresolved effects still fence execution. ' +
+      'Read-only investigation remains available.\n' + inputFact + detail + effectPrompt
   }
 
   assertCurrent(stamps: WorkStamp[], sessionId: string): void {
@@ -146,9 +176,11 @@ export class WorkAlignment implements WorkToolGuard {
     }
     for (const stamp of current) {
       const record = this.get(stamp.key)
-      if (record.workflow?.status === 'blocked'
-        || record.workflow?.dependencies.some(key => this.get(key).workflow?.status !== 'done')) {
-        throw new WorkConflict('Work is blocked or has unfinished dependencies. Select independent ready work instead.')
+      if (record.workflow?.status === 'blocked' && record.workflow.blockedScope !== 'step') {
+        throw new WorkConflict(`Work "${record.key}" is blocked: ${record.workflow.blockedReason}. Adoption does not change progress. Read work context; only if the blocker is resolved, use progress with the current expectedSequence to resume authorized work. Do not clear an unmet approval or dependency; otherwise select independent ready work.`)
+      }
+      if (record.workflow?.dependencies.some(key => this.get(key).workflow?.status !== 'done')) {
+        throw new WorkConflict(`Work "${record.key}" has unfinished dependencies. Read work context and select independent ready work; adoption or progress cannot bypass dependencies.`)
       }
       if (record.paused) {
         throw new WorkConflict(`Work "${record.key}" is paused. No new side-effecting execution is admitted.`)
@@ -176,7 +208,8 @@ export class WorkAlignment implements WorkToolGuard {
   }
 
   before(tool: Tool, args: Record<string, unknown>, context: ExecutionContext) {
-    if (['work', 'session', 'sql', 'invoke_tool', 'ask', 'reply', 'message', 'cancel'].includes(tool.name)) return
+    if (['work', 'session', 'sql', 'invoke_tool', 'ask', 'reply', 'message'].includes(tool.name)) return
+    if (tool.workAdmission?.(args) === 'cleanup') return
     const readOnly = typeof tool.readonly === 'function' ? tool.readonly(args) : tool.readonly === true
     if (readOnly || (tool.name === 'read' && isSkillRootPath(args.path))) return
     const stamps = context.workStamps ?? []
@@ -195,12 +228,15 @@ export class WorkAlignment implements WorkToolGuard {
     if (!stamps.length) return
     const id = randomUUID()
     this.store.startWorkEffect(id, context.sessionId, tool.name, stamps)
-    return { finish: (failed: boolean, effect?: 'none'): string => {
-      this.store.finishWorkEffect(id, failed && effect !== 'none')
+    return { finish: (failed: boolean, effect?: 'none' | 'returned'): string => {
+      this.store.finishWorkEffect(id, failed && effect === undefined)
       const current = this.snapshot(context.sessionId)
       const stale = stamps.some(old => !current.some(now => now.key === old.key && now.revision === old.revision && now.adoptionId === old.adoptionId))
       for (const stamp of stamps) this.store.workEvent(stamp.key, context.sessionId, 'tool_result', {
-        invocationId: id, tool: tool.name, revision: stamp.revision, stale, outcome: effect === 'none' ? 'not_applied' : failed ? 'unknown' : 'returned',
+        invocationId: id, tool: tool.name, revision: stamp.revision, stale, outcome: effect === 'none' ? 'not_applied' : effect === 'returned' ? 'returned_error' : failed ? 'unknown' : 'returned',
+        ...(!context.signal?.aborted && context.toolCallId && context.physicalSessionId ? {
+          resultSource: { sessionId: context.sessionId, physicalId: context.physicalSessionId, kind: 'tool', id: context.toolCallId },
+        } : {}),
       })
       return stale ? '\n[STALE WORK RESULT: archived evidence from an obsolete task basis. This does not complete, approve or update current work. Revalidate before reuse.]' : ''
     } }
@@ -216,9 +252,21 @@ export class WorkAlignment implements WorkToolGuard {
 
   private view(records: WorkRecord[], selected: string | undefined, history: boolean) {
     const keys = new Set(records.map(record => record.key))
+    const effects = this.store.workEffects().filter(effect => effect.stamps.some(stamp => keys.has(stamp.key)))
+    const histories = new Map(records.map(record => [
+      record.key, history || effects.length ? this.store.workHistory(record.key) : [],
+    ]))
+    const sources = new Map<string, z.infer<typeof effectResultSourceSchema>['resultSource']>()
+    for (const entries of histories.values()) for (const entry of entries) {
+      if (entry.kind !== 'tool_result') continue
+      const parsed = effectResultSourceSchema.safeParse(entry.data)
+      if (parsed.success) sources.set(parsed.data.invocationId, parsed.data.resultSource)
+    }
     return { schema: WORK_HELP, selected, records: records.map(record => ({
-      ...record, authority: this.store.workAuthority(record.subject), history: history ? this.store.workHistory(record.key) : [],
-    })), effects: this.store.workEffects().filter(effect => effect.stamps.some(stamp => keys.has(stamp.key))) }
+      ...record, authority: this.store.workAuthority(record.subject), history: history ? histories.get(record.key)! : [],
+    })), effects: effects.map(effect => ({
+      ...effect, ...(sources.has(effect.id) ? { resultSource: sources.get(effect.id) } : {}),
+    })) }
   }
 
   private actorName(actor: WorkActor): string { return actor.kind === 'user' ? 'human' : actor.sessionId }
@@ -240,11 +288,17 @@ export class WorkAlignment implements WorkToolGuard {
     }
   }
 
-  async execute(actor: WorkActor, action: string, key: string | undefined, revision: number | undefined, data: unknown, signal?: AbortSignal): Promise<unknown> {
+  async execute(actor: WorkActor, action: string, key: string | undefined, revision: number | undefined, data: unknown, signal?: AbortSignal,
+    userInput?: { text: string; source: Omit<DecisionEvidence, 'quote'> }): Promise<unknown> {
     signal?.throwIfAborted()
     if (action === 'context') {
       if (actor.kind !== 'session') throw new WorkConflict('Context needs a session identity.')
-      return this.context(actor.sessionId, key, false)
+      const request = z.object({ includeSchema: z.boolean().optional() }).strict().parse(data ?? {})
+      const { schema, ...context } = this.context(actor.sessionId, key, false)
+      const includeSchema = request.includeSchema ?? context.records.length === 0
+      return { ...context, ...(includeSchema ? { schema } : {
+        schemaRequest: { action: 'context', ...(key ? { key } : {}), data: { includeSchema: true } },
+      }), currentInput: { ownerFollowup: !!userInput } }
     }
     if (action === 'list' || action === 'tree') {
       const request = z.object({
@@ -315,15 +369,38 @@ export class WorkAlignment implements WorkToolGuard {
       return { selected: key ?? null, notice: 'Subsequent inference is scoped to this work. This is not filesystem isolation or new permission. Omitting key restores the conservative all-assigned-work fence.' }
     }
     if (action === 'update' || action === 'propose') {
+      const update = key ? z.object({ definition: workDefinitionSchema, change: workChangeSchema.shape.change,
+        reason: workChangeSchema.shape.reason, paused: z.boolean().default(false),
+        requestQuote: decisionEvidenceSchema.shape.quote.optional() }).strict().parse(data) : undefined
       const change = key
-        ? workChangeSchema.parse({ ...z.object({ definition: workDefinitionSchema, change: workChangeSchema.shape.change,
-          reason: workChangeSchema.shape.reason, paused: z.boolean().default(false) }).strict().parse(data),
+        ? workChangeSchema.parse({ definition: update!.definition, change: update!.change, reason: update!.reason, paused: update!.paused,
           subject: this.get(key).subject, expectedRevision: revision })
         : workChangeSchema.parse(data)
       if (this.store.unifiedWork && !key) throw new WorkConflict('Use create for new work; revise existing work by key and revision.')
       const work = workKey(change.subject)
       const prior = this.store.workRecords().find(record => record.key === work)
       if ((prior?.revision ?? 0) !== change.expectedRevision) throw new WorkConflict('Work revision changed; reload before editing.')
+      let requestSource: WorkRecord['requestSource']
+      if (update?.requestQuote !== undefined) {
+        if (action !== 'update' || actor.kind !== 'session' || !prior || !userInput
+          || userInput.source.kind !== 'user' || userInput.source.sessionId !== actor.sessionId
+          || !userInput.text.includes(update.requestQuote)) {
+          throw new WorkConflict('requestQuote must quote the current authenticated owner input; external messages, Retry and Continue do not authorize a new goal. Use propose when human review is needed.')
+        }
+        const authority = this.store.workAuthority(prior.subject)
+        const additive = (change.change === 'goal' || change.change === 'understanding')
+          && !prior.paused && !change.paused && !prior.transition && !prior.answerReview
+          && !prior.proposals?.some(proposal => proposal.status === 'pending')
+          && authority.executor === actor.sessionId && authority.manager === actor.sessionId
+          && change.definition.objective === prior.definition.objective
+          && JSON.stringify(change.definition.boundaries) === JSON.stringify(prior.definition.boundaries)
+          && change.definition.acceptance.length > prior.definition.acceptance.length
+          && prior.definition.acceptance.every((entry, index) => entry === change.definition.acceptance[index])
+          && prior.definition.evidence.every(entry => change.definition.evidence.some(source => JSON.stringify(source) === JSON.stringify(entry)))
+        if (!additive) throw new WorkConflict('A user-directed update may only append acceptance while preserving objective, boundaries and evidence. It cannot resume paused work or resolve a pending decision. Use propose for other changes.')
+        requestSource = { ...userInput.source, kind: 'user', quote: update.requestQuote }
+        await this.deps.evidence(requestSource)
+      }
       for (const source of change.definition.evidence) {
         await this.deps.evidence(source)
         signal?.throwIfAborted()
@@ -344,13 +421,17 @@ export class WorkAlignment implements WorkToolGuard {
       const pauseOnly = !!prior && change.change === 'pause' && change.paused
         && JSON.stringify(change.definition) === JSON.stringify(prior.definition)
       if (!(pauseOnly && actor.kind === 'session' && actor.sessionId === authority.executor)) this.assertController({ subject: change.subject }, actor)
-      if (actor.kind === 'session' && prior && !pauseOnly && (change.change === 'goal' || change.change === 'authorization' || prior.origin === 'human')) {
-        throw new WorkConflict('Changing a confirmed goal or authorization requires human review. Use propose; a quoted input alone does not prove your interpretation.')
+      if (actor.kind === 'session' && prior && !pauseOnly && !requestSource
+        && (change.change === 'goal' || change.change === 'authorization' || prior.origin === 'human' || prior.requestSource
+          || prior.paused !== change.paused
+          || JSON.stringify(change.definition.boundaries) !== JSON.stringify(prior.definition.boundaries))) {
+        throw new WorkConflict('Goal or authorization changes, and changes to human-confirmed agreements, require human review. Use propose; a quoted input alone does not prove your interpretation.')
       }
       const record: WorkRecord = { ...prior, key: work, subject: change.subject, revision: change.expectedRevision + 1,
         sequence: (prior?.sequence ?? 0) + 1, definition: change.definition,
         adoption: undefined, checkpoint: undefined, transition: undefined, answerReview: undefined,
         origin: pauseOnly ? prior!.origin : actor.kind === 'user' ? 'human' : 'agent_interpretation',
+        requestSource: pauseOnly ? prior!.requestSource : requestSource,
         changedBy: this.actorName(actor), changedAt: new Date().toISOString(),
         change: change.change, reason: change.reason, paused: change.paused,
         ...(prior?.handoffFrom ? { handoffFrom: prior.handoffFrom } : {}),
@@ -378,12 +459,13 @@ export class WorkAlignment implements WorkToolGuard {
         assignee: z.string().min(1).max(512).nullable().optional(), manager: z.string().min(1).max(512).nullable().optional(),
         reason: z.string().trim().min(1).max(2000).optional(), status: workProgressSchema.optional(),
         blockedReason: z.string().trim().min(1).max(2000).optional(),
+        blockedScope: z.enum(['step', 'work']).optional(),
         result: z.object({ summary: z.string().trim().min(1).max(2000), evidence: workDefinitionSchema.shape.evidence }).strict().optional(),
         keys: z.array(z.string().min(1).max(600)).max(100).optional(),
       }).strict().parse(data)
       if (request.expectedSequence !== record.sequence) throw new WorkConflict('Work changed; reload before managing it.')
       const fields = action === 'assign' ? ['assignee', 'reason'] : action === 'manage' ? ['manager']
-        : action === 'progress' ? ['status', 'blockedReason', 'result'] : ['keys']
+        : action === 'progress' ? ['status', 'blockedReason', 'blockedScope', 'result'] : ['keys']
       if (Object.keys(request).some(key => key !== 'expectedSequence' && !fields.includes(key))) throw new WorkConflict('Unexpected fields for this work action.')
       const workflow = { ...record.workflow }
       const orphanRecovery = actor.kind === 'user' && !!workflow.assignee && !this.deps.state(workflow.assignee)
@@ -414,6 +496,7 @@ export class WorkAlignment implements WorkToolGuard {
       } else {
         if (actor.kind === 'session' && actor.sessionId !== workflow.assignee) throw new WorkConflict('Only the assigned executor may report progress.')
         if (!request.status) throw new WorkConflict('Provide a work status.')
+        if (request.blockedScope !== undefined && request.status !== 'blocked') throw new WorkConflict('blockedScope requires blocked progress.')
         if (['done', 'cancelled'].includes(workflow.status)) throw new WorkConflict('Terminal work cannot be silently reopened.')
         if (request.status === 'done') {
           if (actor.kind === 'session' && (record.adoption?.revision !== record.revision || record.adoption.sessionId !== actor.sessionId)) {
@@ -427,6 +510,9 @@ export class WorkAlignment implements WorkToolGuard {
           }
           for (const source of request.result.evidence) await this.deps.evidence(source)
         }
+        workflow.blockedScope = request.status === 'blocked'
+          ? request.blockedScope ?? (workflow.status === 'blocked' ? workflow.blockedScope ?? 'work' : 'step')
+          : undefined
         workflow.status = request.status; workflow.blockedReason = request.blockedReason
         if (request.result) workflow.result = request.result
       }
@@ -466,17 +552,32 @@ export class WorkAlignment implements WorkToolGuard {
       if (actor.kind !== 'session' || actor.sessionId !== authority.executor || this.deps.state(actor.sessionId)?.mode !== 'session') {
         throw new WorkConflict('Only the current durable executor can acknowledge or inventory its work. A human/controller cannot impersonate acceptance.')
       }
+      const previous = record
       if (action === 'adopt') {
         if (record.paused || record.transition?.status === 'pending' || !authority.active) throw new WorkConflict('Resume or finish the pending transition before adoption.')
         if (record.successors?.some(edge => edge.fromSessionId === actor.sessionId)) throw new WorkConflict('This execution was retired; use the prepared successor.')
+        const { acceptance, ...adoption } = workAdoptionSchema.extend({
+          acceptance: workDefinitionSchema.shape.acceptance.optional(),
+        }).strict().parse(data)
+        const additions = [...new Set(acceptance ?? [])].filter(criterion => !record.definition.acceptance.includes(criterion))
+        if (additions.length) {
+          if (authority.manager !== actor.sessionId || record.origin !== 'agent_interpretation' || record.requestSource
+            || record.transition || record.proposals?.some(proposal => proposal.status === 'pending')) {
+            throw new WorkConflict('Adoption cannot revise a human-confirmed, delegated or pending agreement. Use update with authenticated owner input or propose for review.')
+          }
+          record = { ...record, revision: record.revision + 1, checkpoint: undefined,
+            definition: workDefinitionSchema.parse({ ...record.definition, acceptance: [...record.definition.acceptance, ...additions] }),
+            changedBy: name, changedAt: new Date().toISOString(), change: 'understanding', reason: adoption.understanding }
+        }
         record = { ...record, transition: record.transition?.strategy === 'successor' ? record.transition : undefined,
           ...(record.workflow ? { workflow: { ...record.workflow, assignmentStarted: true } } : {}),
-          answerReview: undefined, adoption: { ...workAdoptionSchema.parse(data),
+          answerReview: undefined, adoption: { ...adoption,
           id: randomUUID(), sessionId: actor.sessionId, revision: record.revision } }
       } else {
         record = { ...record, checkpoint: { ...workInventorySchema.parse(data), sessionId: actor.sessionId, revision: record.revision } }
       }
       save(action)
+      if (record.revision !== previous.revision) await this.deps.changed(record, previous)
       return record
     }
     if (action === 'transition') {

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { parseDecisionEvidence } from '../sessions/decision-brief.ts'
+import { decisionEvidenceSchema, parseDecisionEvidence } from '../sessions/decision-brief.ts'
 
 const text = z.string().trim().min(1).max(2000)
 const longText = z.string().trim().min(1).max(4000)
@@ -27,7 +27,7 @@ export const workDefinitionSchema = z.object({
 }).strict()
 export type WorkDefinition = z.infer<typeof workDefinitionSchema>
 export const workAdoptionSchema = z.object({
-  understanding: text, stop: list, retain: list, next: list.min(1),
+  understanding: text, stop: list.default([]), retain: list.default([]), next: list.min(1),
 }).strict()
 export const workInventorySchema = z.object({
   completed: list, artifacts: list, inFlight: list, unknown: list, retired: list,
@@ -50,10 +50,13 @@ export const workWorkflowSchema = z.object({
   assignmentStarted: z.boolean().optional(),
   status: workProgressSchema,
   blockedReason: text.optional(),
+  blockedScope: z.enum(['step', 'work']).optional(),
   dependencies: z.array(z.string().min(1).max(600)).max(100),
   result: z.object({ summary: text, evidence: workDefinitionSchema.shape.evidence }).strict().optional(),
 }).strict().refine(value => (value.status === 'blocked') === !!value.blockedReason,
   'Blocked work needs a reason; clear it when leaving blocked.')
+  .refine(value => value.blockedScope === undefined || value.status === 'blocked',
+    'A blocked scope requires blocked progress.')
 export const workProposalSchema = z.object({
   id: z.string().uuid(),
   baseRevision: z.number().int().positive(),
@@ -79,6 +82,7 @@ export const workRecordSchema = z.object({
   origin: z.enum(['human', 'agent_interpretation']),
   changedBy: z.string().min(1), changedAt: z.string().datetime(),
   change: workChangeSchema.shape.change, reason: text, paused: z.boolean(),
+  requestSource: decisionEvidenceSchema.extend({ kind: z.literal('user') }).optional(),
   adoption: workAdoptionSchema.extend({
     id: z.string().uuid(), sessionId: z.string().min(1), revision: z.number().int().positive(),
   }).strict().optional(),

@@ -59,32 +59,60 @@ async function canBindPort(port: number): Promise<boolean> {
   })
 }
 
+async function dynamicPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        server.close(() => reject(new Error('Unable to allocate a browser debug port')))
+        return
+      }
+      server.close(error => error ? reject(error) : resolve(address.port))
+    })
+  })
+}
+
 /** One host-owned allocator is shared across projects; leases never share profiles or processes. */
 export class ChromePortAllocator {
   private reservations = new Map<number, symbol>()
 
-  constructor(private available: (port: number) => Promise<boolean> = canBindPort) {}
+  constructor(
+    private available: (port: number) => Promise<boolean> = canBindPort,
+    private allocateDynamicPort: () => Promise<number> = dynamicPort,
+  ) {}
+
+  private async tryReserve(port: number): Promise<ChromePortLease | undefined> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('Invalid Chrome debug port')
+    if (this.reservations.has(port)) return
+    const owner = Symbol('chrome-port')
+    this.reservations.set(port, owner)
+    try {
+      if (await this.available(port)) {
+        return { port, release: () => { if (this.reservations.get(port) === owner) this.reservations.delete(port) } }
+      }
+    } catch (error) {
+      this.reservations.delete(port)
+      throw error
+    }
+    this.reservations.delete(port)
+  }
 
   async reserve(basePort: number, explicitPort?: number): Promise<ChromePortLease> {
     const first = explicitPort ?? basePort
     if (!Number.isInteger(first) || first < 1 || first > 65535) throw new TypeError('Invalid Chrome debug port')
     const last = explicitPort === undefined ? Math.min(first + 99, 65535) : first
     for (let port = first; port <= last; port++) {
-      if (this.reservations.has(port)) continue
-      const owner = Symbol('chrome-port')
-      this.reservations.set(port, owner)
-      try {
-        if (await this.available(port)) {
-          return {
-            port,
-            release: () => { if (this.reservations.get(port) === owner) this.reservations.delete(port) },
-          }
-        }
-      } catch (error) {
-        this.reservations.delete(port)
-        throw error
+      const lease = await this.tryReserve(port)
+      if (lease) return lease
+    }
+    // Windows may exclude the entire preferred range without any listening process.
+    if (explicitPort === undefined) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const lease = await this.tryReserve(await this.allocateDynamicPort())
+        if (lease) return lease
       }
-      this.reservations.delete(port)
     }
     throw new Error('No unreserved Chrome debug port is available')
   }

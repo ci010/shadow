@@ -1,10 +1,127 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { AUDIO_ACCEPTANCE_PROMPT, acceptanceMessage, acceptanceProviderFailure, exportAcceptanceBundles, loadAcceptancePrompt, writeAcceptanceArtifact } from './microapp-a2a.ts'
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { AUDIO_ACCEPTANCE_PROMPT, AcceptanceControlError, acceptanceOperatorAttempt, acceptanceBudgetError, acceptanceCallBudget, acceptanceMessage, acceptanceProviderFailure, acceptanceRuntimeDirectory, acceptanceRuntimeEnv, acceptanceWorkApproval, exportAcceptanceBundles, loadAcceptancePrompt, runAcceptance, writeAcceptanceArtifact } from './microapp-a2a.ts'
+import { CopilotProvider } from '../src/providers/copilot.ts'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 import { MicroAppStore, bundleRevision } from '../src/microapps/store.ts'
+
+test('operator rejections are explicit recoverable results, without retrying or swallowing uncertain failures', async () => {
+  let calls = 0
+  const result = await acceptanceOperatorAttempt('review-1', 'approve-work', async () => {
+    calls++
+    throw new AcceptanceControlError('Stale proposal; inspect again')
+  })
+  assert.deepEqual(result, { id: 'review-1', action: 'approve-work', done: false, error: 'Stale proposal; inspect again' })
+  assert.equal(calls, 1)
+  assert.deepEqual(await acceptanceOperatorAttempt('review-2', 'review-work', async () => { calls++ }),
+    { id: 'review-2', action: 'review-work', done: true })
+  for (const error of [new TypeError('fetch failed'), new Error('Invalid response'), new DOMException('Cancelled', 'AbortError')]) {
+    await assert.rejects(acceptanceOperatorAttempt('uncertain', 'approve-work', async () => { calls++; throw error }), actual => actual === error)
+  }
+  assert.equal(calls, 5)
+})
+
+test('operator Work approval binds an exact pending revision and assignment, not A2A text or a broad approval', () => {
+  const id = randomUUID(), key = `work:${id}`, proposalId = randomUUID()
+  const definition = { objective: 'Add a confirmation button', acceptance: ['Cancel preserves the original note'], boundaries: ['No new access'], evidence: [] }
+  const record = {
+    key, subject: { kind: 'work', id }, revision: 1, sequence: 3, definition, origin: 'agent_interpretation',
+    changedBy: 'a2a:fixture', changedAt: new Date().toISOString(), change: 'understanding', reason: 'Synthetic goal', paused: false,
+    workflow: { title: 'Note app', manager: 'a2a:fixture', assignee: 'a2a:fixture', assignmentRevision: 1, status: 'pending', dependencies: [] },
+    proposals: [{ id: proposalId, baseRevision: 1, assignmentRevision: 1, change: 'goal', reason: 'Explicit requested refinement', definition, paused: false, status: 'pending' }],
+    authority: { active: true, manager: 'a2a:fixture', executor: 'a2a:fixture' }, history: [],
+  }
+  const target = { key, proposalId, revision: 1 }, detail = { records: [record] }
+  assert.deepEqual(acceptanceWorkApproval(target, detail), { action: 'apply_proposal', key, revision: 1, data: { proposalId } })
+  for (const wrong of [{ ...target, key: `work:${randomUUID()}` }, { ...target, proposalId: randomUUID() }, { ...target, revision: 2 }]) {
+    assert.throws(() => acceptanceWorkApproval(wrong, detail), /stale or unavailable/)
+  }
+  for (const changed of [
+    { ...record, authority: { ...record.authority, active: false } },
+    { ...record, workflow: { ...record.workflow, assignmentRevision: 2 } },
+    { ...record, proposals: record.proposals.map(proposal => ({ ...proposal, baseRevision: 2 })) },
+    { ...record, proposals: record.proposals.map(proposal => ({ ...proposal, status: 'applied', appliedRevision: 2 })) },
+    { ...record, proposals: record.proposals.map(proposal => ({ ...proposal, status: 'rejected' })) },
+  ]) assert.throws(() => acceptanceWorkApproval(target, { records: [changed] }), /stale or unavailable/)
+  for (const invalid of ['yes', { key }, { key, proposalId }, { ...target, action: 'update' }]) {
+    assert.throws(() => acceptanceWorkApproval(invalid, detail))
+  }
+  assert.throws(() => acceptanceWorkApproval(target, { records: [record, record] }))
+  assert.deepEqual(record.proposals[0].status, 'pending', 'Validation never applies approval itself')
+})
+
+test('focused acceptance budgets can lower but never disable or raise the live call ceiling', () => {
+  assert.equal(acceptanceCallBudget(), 100)
+  for (const value of ['1', '20', '100']) assert.equal(acceptanceCallBudget(value), Number(value))
+  for (const value of ['', ' ', '0', '-1', '1.5', '101', 'Infinity', 'NaN', '1e2', '0x10', '9007199254740993']) {
+    assert.throws(() => acceptanceCallBudget(value), /integer from 1 to 100/)
+  }
+})
+
+test('live admission stops at either exact budget boundary, even with requests left', () => {
+  assert.equal(acceptanceBudgetError(99, 100, 1000, 999), undefined)
+  assert.equal(acceptanceBudgetError(100, 100, 1000, 999), 'live_test_call_budget_exhausted')
+  assert.equal(acceptanceBudgetError(66, 100, 1000, 1000), 'live_test_deadline_exhausted')
+  assert.equal(acceptanceBudgetError(0, 100, 1000, 1001), 'live_test_deadline_exhausted')
+  assert.equal(acceptanceBudgetError(0, 1, undefined, 1000), undefined)
+  assert.equal(acceptanceBudgetError(1, 1), 'live_test_call_budget_exhausted')
+})
+
+test('acceptance runtime never inherits normal dev credentials, dataroot or package/model caches', () => {
+  const directory = join(process.cwd(), '.test-data', 'synthetic-isolation')
+  const env = acceptanceRuntimeEnv(directory, {
+    Path: 'synthetic-tools', SYSTEMROOT: 'synthetic-windows', SHADOW_HOME: 'private-dev-data',
+    HOME: 'private-home', npm_config_cache: 'private-cache', HF_HOME: 'private-models', PRIVATE_TOKEN: 'private',
+  })
+
+  assert.equal(env.Path, 'synthetic-tools')
+  assert.equal(env.SYSTEMROOT, 'synthetic-windows')
+  for (const [key, value] of Object.entries(env)) {
+    if (key === 'Path' || key === 'SYSTEMROOT') continue
+    assert.ok(value?.startsWith(directory), key)
+  }
+  assert.equal(env.SHADOW_HOME, undefined)
+  assert.equal(env.PRIVATE_TOKEN, undefined)
+  assert.equal(env.npm_config_userconfig, join(directory, 'profile', 'empty.npmrc'))
+  assert.equal(env.HF_HOME, join(directory, 'profile', 'huggingface'))
+})
+
+test('acceptance can use a short runtime root without nesting or deleting artifact output', () => {
+  const output = resolve('.test-data', 'long-artifact-directory')
+  assert.equal(acceptanceRuntimeDirectory(output), join(output, 'runtime'))
+  const runtime = join('.test-data', 'short-runtime')
+  assert.equal(acceptanceRuntimeDirectory(output, runtime), resolve(runtime))
+  assert.equal(acceptanceRuntimeDirectory(output, `${output}-runtime`), `${output}-runtime`)
+  for (const overlapping of [output, join(output, 'runtime'), resolve(output, '..'), resolve(output, '..', '..')]) {
+    assert.throws(() => acceptanceRuntimeDirectory(output, overlapping), /separate, non-nested/)
+  }
+})
+
+test('acceptance startup only cleans its newly created runtime root and preserves existing data', async t => withTempWorkspace(async home => {
+  const providerError = new Error('Synthetic provider startup failure')
+  const provider = t.mock.method(CopilotProvider.prototype, 'listModels', async () => { throw providerError })
+  const previous = process.env.SHADOW_MICROAPP_LIVE
+  process.env.SHADOW_MICROAPP_LIVE = '1'
+  try {
+    const output = join(home, 'evidence'), runtime = join(home, 'short')
+    await assert.rejects(runAcceptance(output, 'Fixture', undefined, 101, runtime), /integer from 1 to 100/)
+    await assert.rejects(access(output), { code: 'ENOENT' })
+    await assert.rejects(runAcceptance(output, 'Fixture', undefined, 1, runtime), error => error === providerError)
+    await assert.rejects(access(runtime), { code: 'ENOENT' })
+    await access(output)
+    await mkdir(runtime)
+    await writeFile(join(runtime, 'keep.txt'), 'existing data')
+    await assert.rejects(runAcceptance(join(home, 'other-evidence'), 'Fixture', undefined, 1, runtime), { code: 'EEXIST' })
+    assert.equal(await readFile(join(runtime, 'keep.txt'), 'utf8'), 'existing data')
+    assert.equal(provider.mock.callCount(), 1, 'Existing roots are rejected before provider access')
+  } finally {
+    if (previous === undefined) delete process.env.SHADOW_MICROAPP_LIVE
+    else process.env.SHADOW_MICROAPP_LIVE = previous
+  }
+}))
 
 test('provider acceptance diagnostics retain safe network codes, not request payloads or credentials', () => {
   const cause = Object.assign(new Error('Secret URL and request body'), { code: 'ECONNRESET', headers: { authorization: 'synthetic-secret' } })

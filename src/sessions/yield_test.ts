@@ -11,6 +11,29 @@ const question = (): YieldQuestion => ({
 const code = (expected: YieldError['code']) => (error: unknown) => error instanceof YieldError && error.code === expected
 const signal = () => new AbortController().signal
 
+test('host owner confirmations resolve stored lineage, never ask A2A callers or channel participants', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const states: Record<string, SessionState> = {
+    'discord:root': { sessionId: 'discord:root', segmentIndex: 0 },
+    'a2a:author': { sessionId: 'a2a:author', segmentIndex: 0, parentSessionId: 'discord:root' },
+  }
+  let deliveries = 0
+  const manager = new YieldManager({
+    getState: id => states[id], getPolicy: () => ({ timeoutMs: null }),
+    notifyUser: async () => { deliveries++ }, notifyParent: async () => { deliveries++ },
+  })
+  const pending = manager.askOwner('a2a:author', question(), signal(), 60_000)
+  const request = manager.get('discord:root')!
+  assert.equal(request.ownerOnly, true)
+  assert.equal(request.recipient.kind, 'user')
+  assert.equal(deliveries, 0)
+  assert.throws(() => manager.answerChannel('discord:root', request.id, 'Continue', 'discord', 'someone'), code('forbidden'))
+  assert.throws(() => manager.answerParent('discord:root', request.id, 'Continue'), code('forbidden'))
+  t.mock.timers.tick(60_000)
+  assert.equal((await pending).answeredBy, 'timeout')
+  assert.throws(() => manager.askOwner('unknown', question(), signal(), 60_000), code('not_found'))
+})
+
 test('waiting, answering, cancellation and timeout notify observers after visible state changes', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const changes: Array<string | null> = []

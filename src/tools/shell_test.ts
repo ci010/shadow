@@ -1,4 +1,4 @@
-import { requireToolText } from './tool.ts'
+import { isCompletedToolFailure, requireToolText, type ToolResult } from './tool.ts'
 import assert, {
   deepEqual as assertEquals,
   match as assertMatch,
@@ -18,7 +18,9 @@ import type {
   ManagedProcessStatus,
   ProcessManager,
 } from '../execution/processes/manager.ts'
-import type { BackgroundTaskManager } from '../agent/background-task.ts'
+import { BackgroundTaskManager } from '../agent/background-task.ts'
+import { Bus } from '../bus/bus.ts'
+import { EventService } from '../events/service.ts'
 import type {
   LocalProcessExecutor,
   ProcessExecuteArgsV1,
@@ -172,7 +174,7 @@ test('ExecTool foreground LocalExecutor parity: stdout, stderr, cwd, shell, args
       cwd: '.',
     }, context(sessionCwd))
 
-    assertEquals(result, 'stdout-value\n[stderr]\nstderr-value')
+    assertEquals(requireToolText(result), 'stdout-value\n[stderr]\nstderr-value')
     assertEquals(executor.calls, [{
       script: 'printf test',
       cwd: resolveAgentPath(workspace, sessionCwd, '.'),
@@ -192,7 +194,94 @@ test('ExecTool foreground LocalExecutor parity: nonzero exit without output', as
   const result = await execTool(cwd(), new RecordingExecutor(process))
     .execute({ script: 'exit 7' }, context(cwd()))
 
-  assertEquals(result, 'Error: command exited with code 7')
+  assertEquals(requireToolText(result), 'Error: command exited with code 7')
+  assert.equal(isCompletedToolFailure(result), true)
+})
+
+test('signal exits and missing exit codes do not attest completed failures', async () => {
+  for (const status of [{ success: false, code: -1, signal: null }, { success: false, code: 7, signal: 'SIGTERM' as const }]) {
+    const result = await execTool(cwd(), new RecordingExecutor(managedProcess(Promise.resolve(status))))
+      .execute({ script: 'interrupted' }, context(cwd()))
+    assert.equal(isCompletedToolFailure(result), false)
+  }
+})
+
+for (const mode of ['session', 'call'] as const) {
+  for (const output of [{ stdout: 'PASS before failure', stderr: 'assertion failed' }, { stderr: 'assertion failed' }]) {
+    test(`exec ${mode} preserves failed status and output (${output.stdout ? 'stdout + stderr' : 'stderr only'})`, async () => {
+      const status = { success: false, code: 7, signal: null }
+      const managed = managedProcess(Promise.resolve(status), output)
+      const tool = new ExecTool(sandbox, 120_000, new CommandHandlerManager(),
+        { terminate: async () => status } as unknown as ProcessManager, defaultManagedShell(),
+        new RecordingBackgroundTasks() as unknown as BackgroundTaskManager, new RecordingExecutor(managed))
+      const ctx = mode === 'call' ? callContext(sandbox, tool) : context(sandbox)
+      const result = await tool.execute({ script: 'synthetic failure' }, ctx)
+      assert(typeof result !== 'string' && result.isError === true)
+      assertMatch(requireToolText(result), /^Error: command exited with code 7\n/)
+      assertMatch(requireToolText(result), /\[stderr\]\nassertion failed/)
+      if (output.stdout) assertMatch(requireToolText(result), /PASS before failure/)
+    })
+  }
+}
+
+for (const shell of [defaultManagedShell(), 'node'] as const) {
+  for (const timeout_ms of [0, 1]) {
+    test(`background ${shell} timeout=${timeout_ms} reports real failure with preserved output`, async t => {
+      const manager = new RealProcessManager(), bus = new Bus()
+      const inputs: string[] = []
+      const events = new EventService(sandbox, bus, async (sessionId, input) => {
+        inputs.push(JSON.stringify(input))
+        return { status: 'accepted', sessionId, inputId: input.id }
+      })
+      const tasks = new BackgroundTaskManager(bus, events)
+      const tool = new ExecTool(sandbox, 120_000, new CommandHandlerManager(), manager, defaultManagedShell(), tasks)
+      const base = new Tools(sandbox)
+      base.register(tool)
+      const source = 'setTimeout(() => { console.log("PASS before failure"); console.error("assertion failed"); process.exit(7) }, 100)'
+      const file = join(sandbox, `background-failure-${shell}-${timeout_ms}.cjs`)
+      await writeFile(file, source)
+      try {
+        const result = await tool.execute({
+          shell, timeout_ms, script: shell === 'node' ? source : `"${process.execPath}" "${file}"`,
+        }, { ...context(sandbox), tools: new SessionTools(base, sandbox) })
+        assertMatch(requireToolText(result), /Execution ID: bg:/)
+        const task = tasks.listTasks()[0]
+        await t.waitFor(() => assert.equal(tasks.listTasks()[0].status, 'failed'))
+        const output = await tasks.getTaskOutput(task.id)
+        assertMatch(output, /Status: failed/)
+        assertMatch(output, /PASS before failure/)
+        assertMatch(output, /assertion failed/)
+        assert.equal(tasks.listTasks()[0].status, 'failed')
+        await t.waitFor(() => assert.equal(inputs.length, 1))
+        assertMatch(inputs[0], /failed/)
+      } finally {
+        await tasks.stop()
+        await events.stop()
+        bus.stopAll()
+        for (const managed of manager.list()) await manager.terminate(managed)
+      }
+    })
+  }
+}
+
+test('PowerShell native pipelines preserve Unicode without changing the default shell', { skip: process.platform !== 'win32' }, async () => {
+  const manager = new RealProcessManager()
+  const input = String.fromCodePoint(0x4f60, 0x597d, 0x65e5, 0x672c, 0x1f3a7)
+  const script = join(sandbox, 'unicode-pipe.cjs')
+  await writeFile(script, "process.stdin.setEncoding('utf8');let text='';process.stdin.on('data',s=>text+=s);process.stdin.on('end',()=>console.log(JSON.stringify(text.trim())))")
+  try {
+    const tool = new ExecTool(sandbox, 120_000, new CommandHandlerManager(), manager,
+      defaultManagedShell(), new RecordingBackgroundTasks() as unknown as BackgroundTaskManager)
+    const result = await tool.execute({
+      shell: 'powershell',
+      script: `'${input}' | & '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}'`,
+    }, context(sandbox))
+    assertEquals(JSON.parse(requireToolText(result)), input)
+    assertEquals(defaultManagedShell(), 'cmd')
+    assertMatch(tool.parameters.properties!.shell.description!, /Select powershell\/pwsh explicitly/)
+  } finally {
+    for (const managed of manager.list()) await manager.terminate(managed)
+  }
 })
 
 test('ExecTool foreground LocalExecutor parity: timeout preserves process and partial output', async () => {
@@ -209,9 +298,9 @@ test('ExecTool foreground LocalExecutor parity: timeout preserves process and pa
     timeout_ms: 1,
   }, context(cwd()))
 
-  assertMatch(result, /^Process PID=9876 still running after /)
-  assert(result.includes('partial-out\n[stderr]\npartial-err'))
-  assert(result.includes('Execution ID: bg:background-123'))
+  assertMatch(requireToolText(result), /^Process PID=9876 still running after /)
+  assert(requireToolText(result).includes('partial-out\n[stderr]\npartial-err'))
+  assert(requireToolText(result).includes('Execution ID: bg:background-123'))
   assertEquals(backgroundTasks.calls, 1)
   assertEquals(process.killCount(), 0)
   exit.resolve({ success: true, code: 0, signal: null })
@@ -246,8 +335,8 @@ test('ExecTool timeout_ms=0 keeps the existing ProcessManager background path', 
     context(cwd()),
   )
 
-  assert(result.includes('Process started. PID=2468'))
-  assert(result.includes('Execution ID: bg:background-123'))
+  assert(requireToolText(result).includes('Process started. PID=2468'))
+  assert(requireToolText(result).includes('Execution ID: bg:background-123'))
   assertEquals(spawnCount, 1)
   assertEquals(executor.calls, [])
 })
@@ -307,8 +396,8 @@ test('node exec uses the shared TS runtime with native imports, args, cwd, env a
         'export default async (args: string[]) => ({ number, args, calls: [await fixture({ value: 1 }), await fixture({ value: 2 })] });',
       ].join('\n'),
     }, ctx)
-    const result = JSON.parse(response)
-    assert.equal(result.ok, true, response)
+    const result = JSON.parse(requireToolText(response))
+    assert.equal(result.ok, true, requireToolText(response))
     assert.match(result.stdout, /synthetic/)
     assert.deepEqual(result.result, {
       number: 42, args: ['one', 'two'],
@@ -331,10 +420,10 @@ test('node exec refuses missing project bindings and invalid finite timeouts bef
   const ctx = { ...context(sandbox), tools: new SessionTools(new Tools(sandbox), sandbox), projectId: 'unbound' }
   const script = 'throw new Error("source must not execute")'
   for (const timeout_ms of [0, 100]) {
-    assert.match(await tool.execute({ shell: 'node', script, timeout_ms }, ctx), /injected eval bridge/)
+    assert.match(requireToolText(await tool.execute({ shell: 'node', script, timeout_ms }, ctx)), /injected eval bridge/)
   }
   for (const timeout_ms of [NaN, Infinity, -1, 0.5, 2_147_483_648]) {
-    assert.match(await tool.execute({ shell: 'node', script, timeout_ms }, ctx), /finite non-negative integer/)
+    assert.match(requireToolText(await tool.execute({ shell: 'node', script, timeout_ms }, ctx)), /finite non-negative integer/)
   }
 })
 
@@ -348,6 +437,7 @@ class ScriptBackgroundTasks extends RecordingBackgroundTasks {
   ): string {
     this.options = options
     this.completion = completion
+    void completion?.catch(() => {})
     return super.runPromiseTask()
   }
 }
@@ -383,7 +473,7 @@ for (const timeout_ms of [0, 50]) {
           'setInterval(async () => console.log(await heartbeat({})), 5);',
         ].join('\n'),
       }, { ...context(workspace, controller.signal), tools })
-      assert.match(response, /Execution ID: bg:/)
+      assert.match(requireToolText(response), /Execution ID: bg:/)
       assert.equal(background.calls, 1)
       controller.abort(new Error('turn ended'))
       const deadline = Date.now() + 10_000
@@ -392,7 +482,7 @@ for (const timeout_ms of [0, 50]) {
         await delay(20)
       }
       await background.options?.onCancel?.('cancel')
-      await background.completion
+      await assertRejects(background.completion!, /abort|cancel|terminated/i)
       for (const file of [ownerFile, childFile]) {
         const pid = Number(await readFile(file, 'utf8'))
         assert.throws(() => process.kill(pid, 0), (error: any) => error.code === 'ESRCH')
@@ -400,7 +490,7 @@ for (const timeout_ms of [0, 50]) {
       assert.equal(existsSync(join(workspace, '.eval')), false)
     } finally {
       await background.options?.onCancel?.('cancel')
-      await background.completion
+      await background.completion?.catch(() => {})
       await rm(workspace, { recursive: true, force: true })
     }
   })
@@ -416,12 +506,12 @@ test('call exec exposes foreground-only schema and rejects background, invalid l
   assertEquals(schema.minimum, 1)
   assertEquals(schema.maximum, MAX_CALL_TIMEOUT_MS)
   for (const timeout_ms of [0, -1, 0.5, NaN, Infinity, MAX_CALL_TIMEOUT_MS + 1, '1']) {
-    assertMatch(await tool.execute({ script: 'must not spawn', timeout_ms }, ctx), /background execution is forbidden/)
+    assertMatch(requireToolText(await tool.execute({ script: 'must not spawn', timeout_ms }, ctx)), /background execution is forbidden/)
     assertMatch(requireToolText(await ctx.tools.execute('exec', { script: 'must not spawn', timeout_ms }, ctx)), /background execution is forbidden/)
   }
-  assertMatch(await tool.execute({ script: 'remote must not fall back' }, {
+  assertMatch(requireToolText(await tool.execute({ script: 'remote must not fall back' }, {
     ...ctx, remoteWorkdir: { nodeId: 'remote', capabilityId: 'opaque', executor: {} as any },
-  }), /remote workdirs/)
+  })), /remote workdirs/)
   assertEquals(executor.calls.length, 0)
   assertEquals(background.calls, 0)
 })
@@ -488,8 +578,8 @@ test('call node exec cancels and joins unawaited foreground bridge work before r
     ].join('\n')
     const result = await tool.execute({ shell: 'node', script, timeout_ms: 5000 },
       callContext(workspace, tool, controller.signal))
-    assertEquals(JSON.parse(result).ok, true)
-    assertMatch(result, /outer-finished/)
+    assertEquals(JSON.parse(requireToolText(result)).ok, true)
+    assertMatch(requireToolText(result), /outer-finished/)
     assertEquals(manager.list(), [])
     assertEquals(background.calls, 0)
     const pid = Number(await readFile(pidFile, 'utf8'))
@@ -511,8 +601,8 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
     try {
       const script = shell === 'node' ? 'console.log("foreground-success")' : 'echo foreground-success'
       const result = await tool.execute({ shell, script }, callContext(workspace, tool))
-      assertMatch(result, /foreground-success/)
-      if (shell === 'node') assertEquals(JSON.parse(result).ok, true)
+      assertMatch(requireToolText(result), /foreground-success/)
+      if (shell === 'node') assertEquals(JSON.parse(requireToolText(result)).ok, true)
       assertEquals(manager.list(), [])
       assertEquals(background.calls, 0)
       if (shell === 'node') assertEquals(existsSync(join(workspace, '.eval')), false)
@@ -538,7 +628,7 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
         'process.stdout.write("foreground-partial\\n");',
         'await new Promise(() => { setInterval(() => {}, 1000) });',
       ].join('\n')
-      let work: Promise<string> | undefined
+      let work: Promise<ToolResult> | undefined
       try {
         const module = join(workspace, 'process-fixture.mjs')
         await writeFile(module, source)
@@ -560,9 +650,9 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
           assertMatch(String(completed.error), /parent cancelled/)
         } else {
           assert('value' in completed)
-          assertMatch(completed.value, /timed out/)
-          assertMatch(completed.value, /foreground-partial/)
-          assert(!completed.value.includes('Execution ID: bg:'))
+          assertMatch(requireToolText(completed.value), /timed out/)
+          assertMatch(requireToolText(completed.value), /foreground-partial/)
+          assert(!requireToolText(completed.value).includes('Execution ID: bg:'))
         }
         for (const file of [ownerFile, descendantFile]) {
           const pid = Number(await readFile(file, 'utf8'))

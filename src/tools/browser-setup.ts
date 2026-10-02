@@ -16,6 +16,7 @@ const requestSchema = z.discriminatedUnion('action', [
 
 export class BrowserSetupTool implements Tool {
   readonly name = 'browser_setup'
+  readonly readonly = (args: Record<string, unknown>) => args.action === 'list'
   readonly description = 'Configure session-local Chrome DevTools browser instances: launch Chrome, Edge, Brave or a custom executable with a fresh isolated profile; attach to an explicitly selected loopback CDP browser/Electron target; list or close instances. Does not change Project configuration. Returns an instance ID for search and invoke_tool. Closing attached instances only disconnects; owned browsers are terminated. Default browser use needs no setup.'
   readonly parameters: ToolParameters = {
     type: 'object',
@@ -34,6 +35,11 @@ export class BrowserSetupTool implements Tool {
     request: { action: 'open'; target: BrowserTarget } | { action: 'list' } | { action: 'close'; instance: string },
     context: ExecutionContext,
   ) => Promise<string>) {}
+
+  workAdmission(args: Record<string, unknown>): 'cleanup' | undefined {
+    const request = requestSchema.safeParse(args)
+    return request.success && request.data.action === 'close' ? 'cleanup' : undefined
+  }
 
   async execute(args: Record<string, unknown>, context: ExecutionContext): Promise<string> {
     const result = requestSchema.safeParse(args)

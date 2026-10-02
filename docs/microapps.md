@@ -4,7 +4,9 @@ Micro Apps are reusable Web tools owned by a Project, not temporary conversation
 cards or another agent loop. Open the Project coordinator's **Apps** workspace.
 Ask the agent to build a tool, then **Refresh** Apps to see its publication.
 Review the exact source, local backend behavior and model allowance before
-approving. Approval does not itself start the app: use **Open window** on
+approving. Approval does not immediately start the app. The runtime asks whether
+its author should continue testing; an unanswered 60-second confirmation defaults
+to continuing. Choose **Not now** to test it yourself with **Open window** on
 Electron or **Open app** in a Web browser.
 
 The initial framework supports static HTML/CSS/JavaScript and an optional local
@@ -13,6 +15,13 @@ installer, app marketplace, standalone desktop packaging, remote execution,
 mobile/LAN app hosting, or browser microphone/device permission broker.
 
 ## Guided construction from a short request
+
+Agree on shared interfaces and cancellation ownership before parallel coding,
+then exercise a thin end-to-end path early. Keep fixture checks, actual app
+checks, tool blockers and pending owner review distinct. After a transport
+interruption, inspect existing work and worker state rather than recreating
+completed effects or launching a second writer. Late reports already incorporated
+into a result need no additional user-facing acknowledgement.
 
 A reusable app request can start with the user's goal, not a complete technical
 specification. The general agent discovers the Micro App skill, checks available
@@ -25,7 +34,8 @@ Ordinary preferences use the existing `ask(kind: "input")` path; consequential
 decisions follow the existing decision contract. An answer, a recommended default
 or A2A caller input never substitutes for exact-version app owner review or
 separate protected-action authorization. Safe discovery does not grant device
-access. There is no new wizard, permission mechanism or minimum question count.
+access. There is no setup wizard or minimum interview question count; the
+post-review testing confirmation is separate from execution approval.
 
 The agent should preserve earlier answers and requested behavior across feedback,
 build an end-to-end candidate, explain what remains unverified and update the same
@@ -37,6 +47,100 @@ When correcting that assumption leaves the recorded goal, acceptance and
 authorization unchanged, the executor can update its approach through adoption
 without inventing a new goal-review gate. Actual goal/permission changes still
 follow the guarded review path.
+
+## Author runtime acceptance
+
+After approval, the existing owner question card offers **Continue runtime
+testing** or **Not now; I will test it myself**. The question is local to the
+Project owner, even for an A2A or child author; it is not sent to a remote caller,
+parent agent or channel. Its answer is recorded through the existing JSONL/SQLite
+decision journal. The 60-second default applies only to continuing tests of the
+already approved revision, never to code approval, new device access or Work
+changes. Cancellation and custom replies pause testing. Cancelling this host
+confirmation does not cancel unrelated conversation work.
+
+Continuing queues a runtime event to the original author through SessionManager.
+`micro_app test` opens the approved app in a fresh, session-owned managed browser,
+returning an instance handle rather than a launch ticket. Normal browser tools,
+role checks and Work admission remain in force. An owner-opened runtime is not
+taken over or stopped by the author: the owner stops it first. Tests consume agent calls and any app calls they make
+count against the existing allowance. Device permissions and the backend's normal
+host access are unchanged; this is not a sandbox.
+
+Notification admission is separate from author execution. Apps distinguishes
+queued, author working, runtime testing, and a saved report. Matching native
+turn-start/finish events record author activity; an ended turn without a report
+becomes incomplete, blocked by a recorded Work reason, failed or interrupted.
+Only a completed turn may be classified using a Work blocker. A failed turn
+retains its execution error (bounded to 1000 characters); cancellation remains
+interrupted. An old "waiting for approval" progress note cannot replace a newer
+provider/budget failure, and a saved report is not overwritten by a later error.
+Unrelated turns and stale requests cannot finish the current test. No state
+automatically resends the event or renews allowance.
+
+The author saves `micro_app report` for startup/preparation, SDK state across
+runs, failure/cancel recovery, and stop/reopen. Host observations contain bounded
+run IDs, event kinds, counts and state versions, not request bodies or credentials.
+They establish that a runtime boundary was exercised, not that a business result
+is correct. Passing assessments need genuine recorded tool excerpts; runtime
+claims also need matching host observations. Fixture and untested results remain
+explicitly separate, and device/translation quality must not be inferred from
+fixture providers. Apps shows the report as the **author's assessment**, not a
+blanket host-certified pass.
+
+`micro_app evidence` accepts the approved app ID, exact revision and 1-12
+`sources:[{id,quote}]` entries identifying recorded tool calls and exact result
+excerpts. It returns canonical `{sessionId,physicalId,kind:"tool",id,quote}`
+references for copying into reports. Lookup is read-only, limited to the
+original author's own current/historical segments, and rechecks testing
+authorization after reading. It does not search peer/parent logs or guess the
+current segment. Missing calls, ambiguous cross-segment IDs and inexact excerpts
+fail explicitly; they never become a fabricated reference or passing assessment.
+Complete references remain supported and are independently verified at report
+submission. Lookup does not write a report or consume app model allowance.
+
+Publication captures the active, adopted Work acceptance criteria with their
+Work keys and revisions. This is a version-bound audit snapshot, not a second
+task store; later Work edits do not rewrite the published baseline. The report's
+`requirements` must account for every captured criterion exactly once using
+`workKey`, `workRevision`, and a zero-based `criterion`, plus the same assessment,
+observations and evidence fields as lifecycle checks. `blocked` and `not_tested`
+are valid: unavailable hardware must not be fabricated as a pass. Legacy
+publications without captured Work criteria explicitly show incomplete coverage
+information rather than implying that lifecycle checks prove feature delivery.
+Report validation is a no-effect rejection, allowing corrected evidence without
+settling a fictitious execution; persistence failures remain uncertain.
+Observation validation reports all unknown IDs and missing lifecycle citations
+in one rejection, with check/requirement paths, the required relationship and a
+small candidate ID set from the same testing request. It never inserts evidence,
+changes results or saves a partial report. Candidates establish only a host
+boundary; the author must verify relevance and retain genuine tool excerpts.
+An empty candidate set means retained observations cannot establish that check,
+not that a truncated history proves it never happened. Repair affected citations
+without downgrading unrelated supported checks; other evidence is validated
+after citation errors are corrected.
+Schema errors name the exact field, for example
+`report.requirements[1].observations`. `basis=runtime` requires nonempty host
+observations even when `result=blocked` or `failed`; result describes the outcome,
+whereas basis describes what was exercised. Invalid tool-source references name
+their evidence item and provide an `evidence` lookup request, rather than requiring
+the author to discover physical session metadata through decision tools.
+
+For runtime state, cite `state_saved` and a later `state_read` of the same version
+on another run. Reopen requires `stopped` then a later `sdk_connected` on another
+run, not a full Shadow restart. Recovery requires a model/backend failure or
+cancellation followed by a completion of that same kind. Starting a run or
+reading its state does not substitute for its SDK connection. These requirements
+do not certify dependency readiness, device isolation or business correctness.
+
+Testing requests and reports bind both revision and approval. Updating code or
+revoking authorization prevents further author test entry. Previous records stay
+in `.microapps/<app-id>/acceptance-<request-id>.json`; new publications do not
+inherit them. Old approvals do not silently acquire testing permission.
+Restarted confirmations and uncertain notifications do not automatically replay:
+inspect prior effects, stop the app, and use **Ask to run tests again**. This asks
+again without resetting the model allowance. Missing/deleted/one-shot authors,
+existing pending decisions and notification failures remain explicit blockers.
 
 ## Native windows and branding
 
@@ -90,6 +194,10 @@ desktops retain their connection descriptor rather than launching a replacement 
   blocked until the retained run is removed. This also applies to failed startup:
   the runtime retains ownership of a spawned backend before its health check
   succeeds, so a failed initial termination cannot leave an untracked process.
+  On Windows, a failing `taskkill` can race with a backend's natural exit.
+  Cleanup waits up to five seconds for the owned close/output-drain receipt.
+  A verified close is retained with a warning; unresolved exit or pipes remain
+  failures with the original termination error, not a fabricated stopped state.
 - App snapshots, approval, used-call count and data survive Shadow restarts.
   Processes do not automatically restart. An unclean prior run is shown as
   **Interrupted**, not successful or rolled back.
@@ -127,6 +235,28 @@ An app directory contains `shadow-app.json` and only explicitly listed assets;
 the framework accepts at most 128 files, 4 MiB each, 16 MiB total. Hidden paths,
 symlinks, traversal and non-portable Windows names are rejected.
 
+Directory/manifest validation failures in `micro_app publish` are reported before
+the publishing service runs, so Work does not require reconciling a publication
+that never started. Cancellation and failures after the service is entered remain
+conservative: inspect possible effects before retrying. This does not approve an
+app or relax manifest validation.
+
+The read-only authoring action `micro_app({action:"check",directory,id,revision})`
+compares the current manifest and its listed files with the exact published
+bundle, returning a candidate hash and added/modified/removed file names. It
+uses the same file validation as publication and refuses stale or concurrently
+changed revisions. It does not publish, grant approval, start a process, resolve
+unlisted dependencies or verify behavior. A changed draft is not a shipped fix;
+publish and review the new revision before testing the actual app.
+
+`publish` and `check` tool replies are compact receipts: exact ID/revision,
+approval and model allowance, run/error status, versioned `workRefs`, an
+`acceptanceSummary`, and the full source comparison for `check`. `reportSaved`
+only says a report exists, not that its checks passed. Use the returned `detail`
+(`get`) for the full manifest, acceptance criteria, observations and report
+before assessing or reporting acceptance. The owner HTTP views, persisted
+records and `get`/`test`/`report` evidence are unchanged.
+
 The owner API exposes lightweight app metadata at `GET /api/microapps/:id/status`
 and an optional PNG at `GET /api/microapps/:id/icon?revision=<sha256>`, under the
 owning Project prefix. Both require owner access; icons are not arbitrary file
@@ -135,8 +265,12 @@ reads and a stale revision is rejected.
 The framework does not install app dependencies. Frontend dependencies must be
 bundled. Node uses the host runtime (including Electron's Node mode); Python
 must be available on PATH. Use `SHADOW_APP_DATA` for persistent files, not the
-temporary script directory. Backend stdout/stderr are drained, not persisted:
-report actionable, non-secret failures through HTTP responses and health checks.
+temporary script directory. Backend stdout/stderr are drained, not persisted.
+During startup the host recognizes missing-dependency and syntax-error signatures
+using bounded transient text, then reports only a fixed diagnostic category in
+the startup error. It does not expose raw output, module names, tokens or payloads.
+This helps distinguish author-directory success from packaged-runtime failure;
+it is not automatic dependency installation or a substitute for app health checks.
 
 Node backend startup installs a host-owned `fetch` dispatcher. It uses standard
 HTTP(S) proxy environment configuration, otherwise the Windows static system
@@ -209,7 +343,10 @@ endpoint to a fresh Shadow runtime. It never prebuilds the audio app. A temporar
 role uses the general agent's instructions with an explicit tool allowlist,
 as required by A2A. Model credentials stay in the controller process; the child
 gets only a loopback model proxy credential limited to the selected model and
-100 attempts. The harness requires an existing standard Copilot provider login.
+at most 100 attempts. `--max-calls <1-100>` can lower that cap for a focused
+recovery or interaction probe; the effective cap is recorded in the run artifacts.
+A passing narrow probe is not evidence of complete app acceptance.
+The harness requires an existing standard Copilot provider login.
 It makes live model calls and can incur charges.
 
 ```powershell
@@ -220,7 +357,15 @@ node --import tsx scripts\microapp-a2a.ts --output <new-artifact-directory>
 Use `--prompt <UTF-8-file>` to replace the initial product request, without
 appending implementation hints. Omit the operator `message` control when
 measuring a one-shot run. A fresh round never reuses generated app code.
-Runtime data is created under the fresh output directory and removed on finish.
+Runtime data defaults to `<output>/runtime`. Before removing it, the controller
+awaits shutdown and exports published bundles plus bounded source recovery
+snapshots. On Windows,
+use `--runtime-root <fresh-short-project-local-directory>` (for example,
+`.test-data\a2a-run-1`) when the artifact directory is deep: Python native
+extensions and older compilers may fail under long session paths. The explicit
+runtime root must not exist or contain/be contained by the artifact output;
+the harness does not reuse or clean an existing directory. Profiles and caches
+follow this root, which is recorded in `isolation.json`; artifacts stay in output.
 The model proxy binds directly to port zero; the test Main gets a separately
 selected free loopback port and must acknowledge readiness before owner requests.
 No conflicting listener is terminated or reused. `isolation.json` records the
@@ -235,6 +380,28 @@ contention at most four times, with bounded delays and explicit diagnostics.
 It does not retry model requests; unrelated or persistent write failures still
 fail the controller. A controller failure with a last-observed working task is
 not a completed app revision.
+
+`recovery.json` indexes exact-byte/base64 source archives under `recovery/`,
+including UTF-8 BOMs, unfinished manifests, unlisted source files and differences
+from published versions. `work-details.json` retains last-observed full Work
+records, separately from version-bound published acceptance. These are drafts
+and evidence, not new publications, approval or successful acceptance.
+Recovery uses registered local session workdirs within the isolated Project;
+it does not follow links or inspect remote display paths. Hidden metadata,
+credential-named files and generated dependency/test-data directories are excluded.
+Python environments are also recognized by a regular `pyvenv.cfg`, regardless of
+their directory name, and excluded before traversing installed packages. Linked
+markers are not followed and do not hide otherwise recoverable source.
+The source scan is capped at 8192 entries, 256 files, 4 MiB per file and 16 MiB
+total. Known runtime credentials reject export. Source hashes are checked before
+runtime deletion. Failed shutdown/export preserves the runtime directory and
+reports `recovery-failure.json`; it must not delete the only remaining source.
+This is source recovery, not a backup of environments, app data or permissions.
+
+Python app backends start with `-X utf8` and explicit UTF-8 stdio environment.
+Generated isolated Python workers should also use `-I -X utf8`, since `-I`
+ignores `PYTHON*` environment variables. PowerShell source-file encoding remains
+separate from console input/output encoding; the Micro App skill documents both.
 
 For guided multi-turn tests, start with a short user goal and use `message` only
 to answer the actual pending question or give user-level feedback after a turn.
@@ -252,15 +419,63 @@ instance is in use: separate data/ports alone do not prevent source watchers or
 live skill reloads from observing edits. Keep device/paid-model acceptance separate
 from deterministic fixtures; a scripted provider verifies plumbing, not that a
 real model will ask good questions or build a working application.
+Source snapshots must not run package installation through junctions pointing at
+the normal development `node_modules`; use independent writable dependency copies.
+
+Each session inference receives the remaining requests in its existing 100-step
+turn limit, including the current request. The live controller additionally shows
+the remaining evaluation-wide budget to tool-using author requests; follow-ups
+and author testing share that budget. It does not inject authoring guidance into
+the app's tool-free translation requests. At 20 or fewer remaining requests,
+guidance prioritizes a reviewable publication and honest acceptance record over
+optional polish. The live controller reserves separate bounded phases:
+
+| Phase | Wall-time limit | Transition |
+| --- | --- | --- |
+| Creation | 30 minutes, including feedback and clarification | Explicit `review`/`approve` after the creation task ends, or the creation cutoff |
+| Owner source review | 5 minutes, with no model requests admitted | Exact-version owner `approve`; timeout never approves |
+| Author testing | 10 minutes from the first successful version approval | Includes the existing 60-second testing question, preparation and reporting |
+
+The absolute maximum is 45 minutes; early handoff does not wait out unused
+creation time. At the creation cutoff, in-flight model requests are aborted and
+an active A2A task is cancelled with its actual terminal outcome recorded before
+review. Already published bytes remain available for inspection; interrupted
+implementation is not declared complete or silently published. No candidate means
+the run ends with source recovery rather than fabricated delivery.
+Phase closures return non-retryable model-admission rejections. The final five
+minutes of creation and testing carry closing guidance, even when requests remain.
+Requests in progress receive the phase deadline signal.
+
+`timeline.json` and `progress.json.timeline` expose the phase, its deadline and
+the absolute ceiling. `progress.json.deadlineAt` is the **current phase** deadline,
+not always the final shutdown time. Repeat reviews do not extend review; later
+revision approvals, runtime restarts and testing retries do not reset the first
+testing deadline. New product follow-ups are accepted only during creation.
+During testing, new revisions still require independent exact-version review,
+within the remaining testing window, not another five-plus-ten-minute allowance.
+The request ceiling is unchanged and shared; reserving time does not reserve
+additional model calls, grant permission, guarantee a report, or turn a timeout
+into a passed test. `finish` may end any phase early without claiming acceptance.
+Transient budget text is not added to persisted conversation history.
 
 Every run uses a new Home, Project, session store, workdir, user profile, ports
 and test credentials. It does not copy or delete the user's current memory,
-sessions or apps. The fixed request allows at most 1 GiB new downloads and
+sessions or apps. Package/model caches (npm, pip, uv, Hugging Face, Torch and
+NuGet) and Python's user install prefix are also redirected inside that run;
+dev environment variables are not inherited. Controller failures leave a failed
+final state and a diagnostic, not a stale claim that the run is still running.
+The fixed request allows at most 1 GiB new downloads and
 4 GiB test resources, asks for repeatable LLM translation and local Japanese
 TTS/WAV, and forbids drivers/default-device changes/VRChat playback. These
 resource limits are instructions to the agent, not filesystem quotas.
 
-Inspect `progress.json`, `task.json` and `apps.json` in the artifact directory.
+Inspect `progress.json`, `task.json`, `apps.json` and `work.json` in the artifact
+directory. Progress includes blocked Work and pending proposal counts: a completed
+A2A turn does not imply that the requested refinement has been implemented or
+accepted. `creation-stop.json` records a timed creation cutoff, including any
+actual cancellation outcome. The author may still be in its separate testing
+turn after the original A2A task completed; inspect `apps.json` acceptance status
+and its version-bound report, not just `task.json`.
 Provider failures also save a bounded, allowlisted error-class/network-code
 chain in `provider-failure.json`, without request content, URLs or credentials.
 The operator must review generated code before creating `control.json` with a
@@ -268,12 +483,20 @@ new command `id`. Supported controls:
 
 | Action | Required fields beyond `id`, `action` |
 | --- | --- |
-| `message` | `text`; continues the same A2A context, including input-required tasks |
-| `approve` | `appId`, exact reviewed `revision`; invokes the real owner API |
+| `message` | `text`; during creation, continues the same A2A context, including input-required tasks |
+| `snapshot` | None; exports current immutable published bundles without changing phase or granting access |
+| `review` | `appId`, exact `revision`; after the creation task ends, begins review early and saves source in `review.json` and `bundles/` |
+| `review-work` | `workKey`; saves the exact current contract/proposals in `work-review.json` |
+| `approve-work` | `workKey`, `workRevision`, `proposalId`; applies only that current pending proposal via the dedicated owner API |
+| `approve` | `appId`, exact reviewed `revision`; invokes the real owner API and starts the first testing window; can enter review implicitly from completed creation |
 | `open` | `appId`; writes a one-use URL to `launch.private.json`, never to logs |
 | `restart` | None; restarts only this test's Shadow runtime, preserving this round's app |
 | `finish` | None; stops the round and cleans only its uniquely named test directory |
 
+After the final product input is handled and the creation task ends, use
+`{"id":"inspect-1","action":"review","appId":"<uuid>","revision":"<sha256>"}`
+to reserve review time before inspecting the exact source. This closes creation;
+do not send it after an intermediate delivery when more product feedback remains.
 An example approval control is
 `{"id":"review-1","action":"approve","appId":"<uuid>","revision":"<sha256>"}`.
 Read `control-result.json` before sending the next command. Finish is cleanup,
@@ -281,6 +504,17 @@ not an assertion that audio acceptance passed: inspect the actual app UI,
 translation, WAV bytes, repeat runs and restart result. Artifacts preserve
 sanitized task/trace/source evidence; the private launch handoff is removed.
 Each subsequent round must use a new artifact directory.
+Work approval is separate from app-version approval. Inspect `work-review.json`
+before selecting a proposal; stale revisions or assignment generations are
+rejected. `work-approval.json` preserves the exact owner request and result.
+Invalid/stale Work review or approval fields and explicit owner API rejections write
+`control-result.json` with `done:false` and an error, without destroying the
+isolated runtime and its draft. Inspect it and submit a new command ID; the
+rejected command is never retried automatically. Network failures, malformed
+server responses and uncertain outcomes still fail the round rather than
+pretending approval succeeded or replaying a request.
+Neither an A2A message nor an operator Work approval grants app execution/model
+access, changes adoption or progress automatically, or approves future proposals.
 `bundles/<app-id>.json` preserves the final immutable source bundle before
 test cleanup; it is not an installed app or an execution authorization.
 

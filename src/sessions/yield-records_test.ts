@@ -18,6 +18,56 @@ const request = (sessionId = 'web:worker', id = 'decision-1'): YieldRequest => (
 })
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: tool evidence lookup returns canonical own-segment references without guessing or widening scope`, async () => {
+    await withTempWorkspace(async workspace => {
+      let store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const state: SessionState = { sessionId: 'web:author', segmentIndex: 0, physicalIdVersion: 2 }
+      const foreign: SessionState = { sessionId: 'web:peer', segmentIndex: 0, physicalIdVersion: 2 }
+      await store.saveState(state.sessionId, state)
+      await store.saveState(foreign.sessionId, foreign)
+      const old = physicalSessionId(state), peer = physicalSessionId(foreign)
+      const signal = AbortSignal.timeout(5000)
+      try {
+        await store.appendRawEvents(old, [
+          { role: 'tool', tool_call_id: 'old-call', content: 'Old result: 保存成功' },
+          { role: 'tool', tool_call_id: 'ambiguous', content: 'Repeated receipt' },
+          { role: 'assistant', tool_call_id: 'not-a-receipt', content: 'Invented result' },
+        ])
+        await store.appendRawEvents(peer, [{ role: 'tool', tool_call_id: 'peer-call', content: 'Private peer result' }])
+        state.segmentIndex = 1
+        await store.saveState(state.sessionId, state)
+        const current = physicalSessionId(state)
+        await store.appendRawEvents(current, [
+          { role: 'tool', tool_call_id: 'new-call', content: 'New result: reopened' },
+          { role: 'tool', tool_call_id: 'ambiguous', content: 'Repeated receipt' },
+        ])
+        store.close?.()
+        store = new Store(join(workspace, 'sessions'))
+        await store.init()
+        const records = new YieldRecords(store, id => id === state.sessionId ? state : id === foreign.sessionId ? foreign : undefined)
+        const sources = [{ id: 'old-call', quote: '保存成功' }, { id: 'new-call', quote: 'reopened' }]
+        const references = await records.resolveToolEvidence(state.sessionId, sources, signal)
+        assert.deepEqual(references, [
+          { sessionId: state.sessionId, physicalId: old, kind: 'tool', ...sources[0] },
+          { sessionId: state.sessionId, physicalId: current, kind: 'tool', ...sources[1] },
+        ])
+        for (const reference of references) await records.evidence(reference)
+        await assert.rejects(records.resolveToolEvidence(state.sessionId, [
+          { id: 'peer-call', quote: 'Private peer result' }, { id: 'old-call', quote: 'Fabricated success' },
+          { id: 'ambiguous', quote: 'Repeated receipt' }, { id: 'not-a-receipt', quote: 'Invented result' },
+        ], signal), error => error instanceof YieldError &&
+          /sources\[0\]\.id/.test(error.message) && /sources\[1\]\.quote/.test(error.message) &&
+          /sources\[2\]\.id: Ambiguous/.test(error.message) && /sources\[3\]\.id/.test(error.message))
+        await assert.rejects(records.resolveToolEvidence(state.sessionId, Array(13).fill(sources[0]), signal))
+        await assert.rejects(records.resolveToolEvidence(state.sessionId, [], signal))
+        await assert.rejects(records.resolveToolEvidence(state.sessionId, sources, AbortSignal.abort()), { name: 'AbortError' })
+        await assert.rejects(records.resolveToolEvidence('web:missing', sources, signal), /not found/)
+        await assert.rejects(records.evidence({ ...references[0], physicalId: current }), /does not match/)
+      } finally { store.close?.() }
+    })
+  })
+
   test(`${Store.name}: convention sources require the current human input or an explicit live human decision`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

@@ -1,5 +1,46 @@
 # Tools, skills, MCP, and automations
 
+## Shell and interrupted model requests
+
+`exec` uses the Runtime's declared default shell, normally `cmd` on Windows
+and `sh` on Unix. Choose `shell: "powershell"` or `"pwsh"` explicitly for
+PowerShell syntax; a semicolon is not a command separator in `cmd`.
+Managed PowerShell sets both console output and native pipeline encoding to
+UTF-8 without a BOM. This is per process, not a system-wide encoding change.
+This does not determine how Windows PowerShell 5.1 decodes a `.ps1` source file.
+For non-ASCII scripts, a full filesystem `write` can explicitly select
+`encoding: "utf8-bom"`; normal writes remain UTF-8 without adding a BOM.
+The option also uses the existing remote filesystem capability rather than
+Main paths. Append, edit and virtual writes reject the encoding option; edits
+already retain a file's existing BOM.
+Nonzero OS command exits always include an `Error:` header and exit code, even
+after successful-looking output. Failed inline Node scripts retain their JSON
+envelope and report failure to Work tracking. Background process/script failures
+have failed status and preserve their output; a successful launch receipt is not
+proof that the eventual command succeeded. Failed commands can still have made
+partial changes and must not be blindly replayed.
+Native execution can distinguish a normally completed error from a lost outcome.
+Normal local process exits, acknowledged remote `process-exit` failures, and
+inline Node error replies without tool-bridge calls record `returned_error`
+instead of freezing the Work. This preserves the failure and any partial changes;
+it does not attest no effects or authorize retry. Cancellation, signal exits,
+missing/mismatched remote receipts, cleanup failures and unmarked tool errors
+remain uncertain and require reconciliation. Completion evidence is native
+in-memory metadata, never an output string, model argument or MCP annotation.
+Scripts must propagate native failures rather than force `exit 0`; in PowerShell,
+check `$LASTEXITCODE` after each native command in a sequence. The shell's actual
+exit status is authoritative: arbitrary scripts can mask a child command's error,
+and the tool cannot reconstruct that status from output text.
+
+Recognized model connection/response failures include their phase and a bounded
+transport code. An interrupted response is discarded, including partial tool
+calls, and is not automatically replayed: the provider may already have processed
+or billed the request. Inspect completed work before explicitly continuing.
+Chat Completions retains bounded retries only for known failures before connection
+(DNS, connection refusal or connect timeout); cancellation interrupts backoff.
+Responses requests are not automatically retried. HTTP authorization handling
+remains provider-specific.
+
 Shadow keeps the base tool list small. Search and read virtual paths to
 discover skills or tool contracts; use `invoke_tool` for a known dynamic
 tool. Search does not activate a skill or run a tool.
@@ -68,6 +109,51 @@ is not a delivery retry command.
 
 ## Work evidence and uncertain effects
 
+`adopt` requires `understanding` and a nonempty `next` list. Omitted `stop` and
+`retain` inventories default to empty arrays; explicit malformed values still
+fail. These defaults do not adopt an old revision, change an assignee, resolve
+unknown effects, or grant permission.
+
+Progress is not a permission grant. New `work progress` reports with
+`status: "blocked"` default to `blockedScope: "step"`: the named step is
+waiting, while independent work within the existing agreement may continue.
+Use `blockedScope: "work"` for a whole-work blocker, or `update` with
+`change: "pause", paused: true` for an explicit stop. Existing blocked records
+without a scope retain the whole-work fence; editing their reason does not
+weaken it. Resuming progress or choosing a step scope cannot clear a pause,
+unfinished dependency, missing adoption, stale assignment or unknown effect.
+Step scope does not classify arbitrary shell/MCP actions as independent:
+the executor must respect the stated blocker, and capability/publication
+approval remains enforced by the owning service.
+
+For a controller executing its own agent-interpreted Work, `adopt` may include
+`data.acceptance` with missing in-scope criteria. The runtime appends distinct
+criteria and commits the revised definition and adoption together, retaining
+the objective, boundaries, evidence, assignments, dependencies and progress.
+Old inference stamps remain stale; unresolved effects remain unresolved.
+Repeated criteria do not increment the semantic revision. This shortcut cannot
+revise human-confirmed or owner-sourced requirements, delegated agreements,
+pending proposals or transitioning work. Use the guarded update/review path for
+those changes. Adoption prose alone never updates the acceptance definition,
+and no acceptance refinement authorizes device access or publication.
+
+A fresh, authenticated owner's direct message can extend the current
+agreement without a second confirmation. Use `update` with `requestQuote`
+quoting that message and append acceptance criteria, keeping the objective,
+boundaries, prior criteria and evidence. This is available only to the durable
+session that both manages and executes the work. The runtime records the exact
+input reference as `requestSource`, retains `agent_interpretation` provenance,
+increments the revision and requires fresh adoption. It does not approve an
+app, an outstanding proposal or a paused/terminal work item. Changing the
+objective, removing requirements or changing boundaries still requires review.
+A2A callers, peers, events, group messages, old quotes and Retry/Continue cannot
+supply this owner authority. Later revisions cannot discard the added
+requirements by relabeling the change as an `understanding`.
+Inference-time Work facts and `work context` (`currentInput.ownerFollowup`)
+state whether the current input carries that authority, rather than asking the
+model to infer it from message wording. When an executor has Work access but
+no contract, runtime facts say so before its first effectful invocation.
+
 Decision cards are placed at their original `ask` using recorded request and
 tool-call identities, including proposal-based asks whose question and options
 are generated by the backend. Historical revisions and invalidated decisions
@@ -75,7 +161,16 @@ remain beside that ask; placement never restores answer authority. If the
 original ask is missing or cannot be uniquely located in the loaded history, its decision is shown in a
 separate section before the conversation rather than appended as a new event.
 
-`work` context includes `evidenceSchema`. Evidence entries are references
+`work context` returns full records and unresolved effects. It includes action
+schemas automatically when no Work exists; use `data: {includeSchema: true}` to
+request them later (`schemaRequest` supplies the exact call). Repeated state
+reads omit the unchanged schemas, not requirements or evidence. Mutation
+receipts retain keys, semantic/assignment revisions, sequence, authority,
+adoption identity, waits, transitions and unresolved effects. They omit repeated
+definitions and adoption prose; `detail` reads the complete persisted record.
+This changes only tool presentation, not the stored record or execution fences.
+
+The context's requested schema includes `evidenceSchema`. Evidence entries are references
 `{sessionId, physicalId, kind: "user" | "tool", id, quote}`, not strings or a
 Decision brief. Use real recorded input/tool-call IDs and exact excerpts;
 definitions may omit evidence, but completion and agent settlement still enforce
@@ -84,10 +179,13 @@ their required evidence checks.
 A trusted native tool can explicitly attest to a failed operation with no
 effect. For example, audio.cpp rejects malformed loader catalogs before saving
 configuration, records `not_applied`, and does not leave an unknown Work effect.
-Ordinary errors, failed probes, interrupted writes and arbitrary error text do
+`exec` also uses this outcome for a missing script or unsupported shell rejected
+before dispatch, command interception or process creation, on Main or a Child.
+Unattested errors, failed probes, interrupted writes and arbitrary error text do
 not make that guarantee: they retain the existing unknown-effect fence and
 require reconciliation. This is not rollback or a blanket exemption for
-validation-looking errors.
+validation-looking errors. The separate native `returned_error` outcome described
+above acknowledges completed execution, not absence of effects.
 
 ## Publish reusable apps
 
@@ -121,6 +219,33 @@ them. Later tool search uses that index without connecting or executing;
 `invoke_tool({name, args})` connects lazily, checks the live schema, and may
 have side effects. An indexed server is not a guarantee it is online. MCP
 loading errors surface diagnostics instead of silently retrying tool effects.
+Explicit absolute stdio executable paths are checked before SDK startup, so a
+missing file reports native `ENOENT` instead of depending on an English Windows
+shell message. Windows suffix candidates remain eligible for SDK `PATHEXT`
+resolution, including extensionless absolute commands. Bare command lookup still
+belongs to the SDK. Stderr capture is
+bounded to 32 KiB, decoded from complete captured bytes with the shared UTF-8/OEM
+decoder, then redacted; oversized captures are omitted rather than retaining a
+potentially truncated secret.
+Npm launcher `ETARGET`/`E404` (unavailable package/version) and `EBADENGINE`
+(incompatible runtime) errors are reported separately from the SDK's subsequent
+connection-closed error. They require correcting the package/feed or runtime,
+not reconnecting the same command. Shadow does not silently substitute versions,
+switch registries or relax runtime/TLS checks.
+Connection diagnostics include elapsed initialization time. For a stdio timeout,
+inspect sanitized stderr to separate package/bootstrap problems from MCP
+initialization; a running managed browser does not establish adapter readiness.
+Retry import at most once without replaying tool effects.
+`call_tool` timeouts instead report elapsed request time and an unknown execution
+outcome: inspect pending effects before any retry. A long browser evaluation
+can exceed the request deadline even on a healthy connection. For idle checks,
+record state/time and inspect later with a short call, rather than sleeping
+inside one RPC. MCP-declared text errors retain their JSON envelope and explicit
+failure status for Work tracking.
+The project browser tries its configured preferred port range first, then uses
+bounded OS-assigned candidates if that whole range is occupied or OS-reserved.
+An explicitly requested port never silently changes. Existing listeners are not
+reused or terminated; browser profiles and process ownership stay project-scoped.
 
 ### MCP read-only policy and Work admission
 
@@ -168,6 +293,21 @@ notifications invalidate active adapters and borrowed snapshots.
 Confirmed reads remain available when Work is paused, completed, or waiting for
 a context transition, without creating Work effect receipts. Writes and unknown
 tools remain gated, including the inner MCP call through `invoke_tool`.
+The built-in `browser_setup list` only inspects session-owned instance metadata.
+Its validated `close` action is a separate cleanup control, not a read-only
+browser command: it remains available after Work becomes blocked, paused,
+terminal, stale or uncertain. Closing cannot resume or accept Work, reconcile
+earlier effects, launch a browser or acquire another session's instance. Attached
+targets are only disconnected; owned browsers are terminated. Project, tool-role,
+leaf-call and cancellation checks still apply. No other MCP/browser operation
+inherits this cleanup exception.
+Native cleanup implementations declare `workAdmission` instead of adding tool
+names or browser classes to Work's allowlist. Execution cancellation uses the
+same policy. External MCP annotations and tool arguments cannot opt into it.
+Within a model tool batch, only confirmed reads share a parallel group;
+mutations and unclassified calls execute in order so goal changes cannot race
+subsequent operations.
+
 Errors distinguish paused Work, terminal status, and context transitions; unknown
 tools also report that they are not confirmed read-only. Read-only classification
 does not bypass tool allowlists, cancellation, remote-workdir restrictions, or

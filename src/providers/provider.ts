@@ -234,6 +234,37 @@ export class ProviderHttpError extends Error {
   }
 }
 
+const transportCodes = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+])
+const beforeConnectionCodes = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT'])
+
+export class ProviderTransportError extends Error {
+  readonly mayHaveBeenProcessed: boolean
+  constructor(readonly phase: 'connect' | 'response', readonly code?: string, cause?: unknown) {
+    const uncertain = phase === 'response' || !code || !beforeConnectionCodes.has(code)
+    super(`LLM ${phase === 'response' ? 'response interrupted before completion' : 'connection failed'}${code ? ` (${code})` : ''}. ` +
+      (uncertain ? 'The request may have been processed or billed; it was not automatically replayed. ' : '') +
+      'No incomplete tool calls were dispatched. Inspect existing work before explicitly continuing.', { cause })
+    this.name = 'ProviderTransportError'
+    this.mayHaveBeenProcessed = uncertain
+  }
+}
+
+export function providerTransportFailure(error: unknown, phase: 'connect' | 'response', signal?: AbortSignal): unknown {
+  signal?.throwIfAborted()
+  if (error instanceof ProviderTransportError) return error
+  let current = error
+  for (let depth = 0; current instanceof Error && depth < 4; depth++, current = current.cause) {
+    if ('code' in current && typeof current.code === 'string' && transportCodes.has(current.code)) {
+      return new ProviderTransportError(phase, current.code, error)
+    }
+  }
+  return error instanceof TypeError && /^(fetch failed|terminated)$/.test(error.message)
+    ? new ProviderTransportError(phase, undefined, error) : error
+}
+
 /**
  * Extract a plain text string from a message's `content` field, regardless of
  * whether it is a plain string, an array of `ContentPart`s, or `null`.

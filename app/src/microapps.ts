@@ -7,6 +7,7 @@ export const microAppView = appRecordSchema.extend({
   status: z.enum(['awaiting_approval', 'starting', 'running', 'stopped', 'failed', 'interrupted']),
   uiPath: z.string(),
   cleanupPending: z.boolean().optional(),
+  acceptanceAvailable: z.boolean().optional(),
 })
 export const microAppReview = microAppView.extend({
   files: z.array(z.object({ path: z.string(), bytes: z.number(), text: z.string().optional() })),
@@ -48,4 +49,10 @@ export async function microAppRequest(base: string, path: string, body?: unknown
 export const microAppStatus: Record<MicroAppView['status'], string> = {
   awaiting_approval: 'Needs review', starting: 'Starting', running: 'Running',
   stopped: 'Stopped', failed: 'Failed', interrupted: 'Interrupted',
+}
+export const microAppTestingStatus: Record<NonNullable<MicroAppView['acceptance']>['status'], string> = {
+  asking: 'Waiting for your choice', paused: 'Testing paused', dispatching: 'Notifying the author',
+  notified: 'Queued for the author', running: 'Author is working', testing: 'Runtime testing started',
+  blocked: 'Author reported a Work blocker', incomplete: 'Author finished without a report',
+  failed: 'Testing handoff or author turn failed', interrupted: 'Testing interrupted', reported: 'Report saved',
 }

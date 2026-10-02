@@ -37,6 +37,9 @@ export interface ScriptRun {
   output(): { stdout: string; stderr: string }
 }
 
+/** A script error response was received and its owned runtime was closed. */
+export class ScriptExecutionError extends Error {}
+
 /** Only this error's allowlisted code/status are exposed in restricted mode. */
 export class ScriptCallError extends Error {
   constructor(readonly code: string, message?: string, readonly status?: number) {
@@ -185,7 +188,7 @@ export function startScript(options: ScriptOptions): ScriptRun {
       if (child) {
         const worker = child
         termination = terminateTree(worker).catch(error => {
-          failure ??= new Error('Script child process tree cleanup failed.', { cause: error })
+          failure = new Error('Script child process tree cleanup failed.', { cause: error })
           worker.kill('SIGKILL')
         })
       }
@@ -275,7 +278,8 @@ export function startScript(options: ScriptOptions): ScriptRun {
             && message.code === 'guest_failed' && !message.failure ? message.diagnostic : undefined
           const detail = host ? message.message ?? message.failure?.message
             : diagnostic ? `Script guest_failed: ${diagnostic}` : undefined
-          finish(new Error(detail ?? (message.failure
+          const Failure = host && calls === 0 ? ScriptExecutionError : Error
+          finish(new Failure(detail ?? (message.failure
             ? callFailureMessage(message.failure) : `Script ${message.code}.`)))
         } else {
           if (message.id !== calls + 1 || ++calls > maxCalls) {

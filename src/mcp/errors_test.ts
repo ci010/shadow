@@ -40,6 +40,9 @@ test('network causes, OS errors, RPC failures and rate limits have distinct reco
   assert.equal(running.diagnostic.rpcCode, -32001)
   assert.equal(running.diagnostic.toolExecution, 'unknown')
   assert.equal(running.diagnostic.retryable, false)
+  assert.match(running.diagnostic.nextAction, /not necessarily MCP initialization/)
+  assert.match(running.diagnostic.nextAction, /short observation calls/)
+  assert.doesNotMatch(running.diagnostic.nextAction, /retry the import at most once/)
 })
 
 test('cleanup cannot replace the original failure and blocks unsafe reconnects', () => {
@@ -55,6 +58,17 @@ test('cleanup cannot replace the original failure and blocks unsafe reconnects',
   assert.equal(error.diagnostic.needsUserAction, true)
 })
 
+test('stdio initialization timeouts distinguish adapter startup from browser readiness', () => {
+  const error = mcpFailure(Object.assign(new Error('Request timed out'), { code: -32001 }), {
+    phase: 'connect', elapsedMs: 60_005,
+    config: { name: 'chrome-devtools', transport: 'stdio', command: 'npx', args: ['chrome-devtools-mcp@latest'] },
+  })
+  assert.equal(error.diagnostic.elapsedMs, 60_005)
+  assert.equal(error.diagnostic.toolExecution, 'not_started')
+  assert.match(error.diagnostic.nextAction, /package download, interactive install/)
+  assert.match(error.diagnostic.nextAction, /not proof its adapter initialized/)
+})
+
 test('JSON syntax excerpts and stderr are sanitized before error construction', () => {
   const syntax = mcpFailure(new SyntaxError('Unexpected token in {"password":"synthetic-private-value"} at position 42'), { phase: 'validate_config' })
   assert.match(syntax.message, /Invalid JSON/)
@@ -64,6 +78,33 @@ test('JSON syntax excerpts and stderr are sanitized before error construction', 
     config: { name: 'fixture', transport: 'stdio', command: 'node', env: { API_KEY: 'synthetic-private-value' } },
     stderr: 'Missing dependency; API_KEY=synthetic-private-value',
   })
+
   assert.match(stderr.message, /Missing dependency/)
   assert.doesNotMatch(inspect(stderr), /synthetic-private-value/)
+})
+
+test('npm package resolution and engine failures are not retriable MCP connection failures', () => {
+  for (const prefix of ['npm error', 'npm ERR!']) {
+    for (const code of ['ETARGET', 'E404', 'EBADENGINE']) {
+      const failure = mcpFailure(Object.assign(new Error('Connection closed'), { code: -32000 }), {
+        phase: 'connect', config: { name: 'fixture', transport: 'stdio', command: 'npx' },
+        stderr: `${prefix} code ${code}\n${prefix} failed at https://user:secret@example.invalid/pkg?token=secret\n`,
+      })
+      assert.equal(failure.diagnostic.packageErrorCode, code)
+      assert.equal(failure.diagnostic.category, code === 'EBADENGINE' ? 'runtime_incompatible' : 'package_unavailable')
+      assert.equal(failure.diagnostic.rpcCode, -32000)
+      assert.equal(failure.diagnostic.systemCode, undefined)
+      assert.equal(failure.diagnostic.retryable, false)
+      assert.equal(failure.diagnostic.toolExecution, 'not_started')
+      assert.match(failure.diagnostic.nextAction, /before MCP initialized/)
+      assert.doesNotMatch(inspect(failure), /secret|user:/)
+    }
+  }
+  for (const context of [
+    { phase: 'call_tool' as const, config: { name: 'fixture', transport: 'stdio' as const, command: 'npx' }, stderr: 'npm error code ETARGET' },
+    { phase: 'connect' as const, config: { name: 'fixture', transport: 'streamable-http' as const }, stderr: 'npm error code ETARGET' },
+    { phase: 'connect' as const, config: { name: 'fixture', transport: 'stdio' as const }, stderr: 'An app mentioned ETARGET but npm is not reporting a failure.' },
+  ]) {
+    assert.equal(mcpFailure(new Error('Connection closed'), context).diagnostic.packageErrorCode, undefined)
+  }
 })

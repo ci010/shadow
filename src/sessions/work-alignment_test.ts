@@ -1,4 +1,4 @@
-import { ToolNoEffectError, requireToolText } from '../tools/tool.ts'
+import { ToolNoEffectError, completedToolFailure, requireToolText } from '../tools/tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { randomUUID } from 'node:crypto'
@@ -11,7 +11,7 @@ import { WorkAlignment } from './work-alignment.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { SessionState } from './session-store.ts'
-import { WorkTool } from '../tools/work.ts'
+import { WorkTool, workReceipt } from '../tools/work.ts'
 import { InitiativeTool } from '../tools/initiative.ts'
 import { INITIATIVE_SCHEMA_PROMPT } from '../initiatives/schema.ts'
 import { ReadTool } from '../tools/read.ts'
@@ -19,12 +19,24 @@ import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { AudioCppService } from '../audio-cpp/service.ts'
 import { AudioCppTool } from '../tools/audio-cpp.ts'
 import { parseDecisionEvidence } from './decision-brief.ts'
-import { access } from 'node:fs/promises'
+import { access, writeFile } from 'node:fs/promises'
+import { ExecTool } from '../tools/shell.ts'
+import { CommandHandlerManager } from '../tools/shell-commands/command-handler.ts'
+import { ProcessManager } from '../execution/processes/manager.ts'
+import { defaultManagedShell } from '../execution/processes/shells.ts'
+import { BackgroundTaskManager } from '../agent/background-task.ts'
+import { Bus } from '../bus/bus.ts'
+import { EventService } from '../events/service.ts'
+import { EvalBridgeRuntime } from '../script-runtime/bridge.ts'
+import { createProjectScope } from '../projects/scope.ts'
 import { McpConnection, type McpToolInfo } from '../mcp/client.ts'
 import { McpToolAdapter } from '../mcp/adapter.ts'
 import { mcpReadOnlyPolicy } from '../mcp/readonly.ts'
 import type { McpServerConfig } from '../config/schema.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
+import { MicroApps } from '../microapps/service.ts'
+import { MicroAppTool } from '../tools/micro-app.ts'
+import { CancelTool } from '../tools/cancel.ts'
 
 const worker = 'web:worker', owner = 'web:owner', peer = 'web:peer'
 
@@ -122,6 +134,280 @@ function fixture(workspace: string, trackWork = false) {
   return { states, options, store, alignment, base, tools, context, apply, adopt, changes, transitions }
 }
 
+test('runtime Work facts distinguish absent contracts and the current authenticated owner input', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  try {
+    const ownerContext = { ...f.context(), inputSource: 'user' as const, admin: true, isGroup: false, workUserInput: 'Append one requirement.' }
+    assert.match(f.alignment.prompt(worker, ownerContext), /No Work is registered[\s\S]*Before exec[\s\S]*owner-directed additive/)
+    const restrictedTools = new SessionTools(f.base, workspace, ['read'])
+    assert.equal(f.alignment.prompt(peer, { ...f.context(peer), tools: restrictedTools }), '',
+      'Do not instruct roles without Work access to create work')
+    await f.apply(); await f.adopt()
+    for (const input of [
+      ownerContext, { ...ownerContext, admin: false }, { ...ownerContext, isGroup: true },
+      { ...ownerContext, inputSource: 'session' as const }, { ...ownerContext, inputSource: 'event' as const },
+      { ...ownerContext, workUserInput: undefined }, { ...ownerContext, channel: 'a2a' },
+    ]) {
+      const allowed = input === ownerContext
+      const prompt = f.alignment.prompt(worker, input)
+      assert.match(prompt, allowed ? /Current input supports an owner-directed additive/ : /requestQuote is unavailable/)
+      const result = JSON.parse(requireToolText(await f.tools.execute('work', { action: 'context' }, input)))
+      assert.deepEqual(result.currentInput, { ownerFollowup: allowed })
+      assert.equal(f.alignment.get(workKey(change().subject)).revision, 1, 'Facts never change a contract or grant approval')
+    }
+  } finally { f.store.close() }
+}))
+
+test('Work tool receipts omit repeated definitions but retain fencing, waits, effects and full-detail access', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const invoke = async (args: Record<string, unknown>) => JSON.parse(requireToolText(await f.tools.execute('work', args, f.context())))
+  try {
+    const initial = await invoke({ action: 'context' })
+    assert.ok(initial.schema.create)
+    const definition = { objective: 'Deliver the complete reusable application. '.repeat(12),
+      acceptance: Array.from({ length: 8 }, (_, index) => `${index}: Preserve the requested behavior, repeat-use lifecycle and attributable verification. `.repeat(3)),
+      boundaries: ['No implicit approval or device access. '.repeat(8)], evidence: [] }
+    const created = await invoke({ action: 'create', data: { title: 'Receipt fixture', reason: 'Synthetic test', definition } })
+    assert.equal(created.definition, undefined)
+    assert.equal(created.definitionChanged, true)
+    assert.equal(created.acceptanceCount, 8)
+    assert.equal(created.workflow.assignmentRevision, 1)
+    assert.equal(created.authority.executor, worker)
+    assert.equal(created.paused, false)
+    assert.equal(created.adoption, null)
+    const stored = f.alignment.get(created.key)
+    assert.ok(JSON.stringify(created).length < JSON.stringify(stored).length * 0.5, 'Representative mutation receipt shrinks by at least half')
+    const detail = await invoke(created.detail)
+    assert.deepEqual(detail.records[0].definition, stored.definition)
+    assert.equal(detail.schema, undefined)
+    assert.deepEqual((await invoke(detail.schemaRequest)).schema, initial.schema)
+    assert.deepEqual(detail.currentInput, { ownerFollowup: false })
+    const adopted = await invoke({ action: 'adopt', key: created.key, revision: created.revision,
+      data: { understanding: 'Complete scope', next: ['Verify'], acceptance: ['One additional in-scope check'] } })
+    assert.equal(adopted.revision, 2)
+    assert.equal(adopted.definitionChanged, true)
+    assert.equal(adopted.acceptanceCount, 9)
+    assert.equal(adopted.adoption.revision, 2)
+    assert.equal(adopted.adoption.sessionId, worker)
+    assert.equal(adopted.adoption.understanding, undefined)
+    assert.match(requireToolText(await f.tools.execute('work', { action: 'progress', key: created.key, revision: 1,
+      data: { expectedSequence: adopted.sequence, status: 'in_progress' } }, f.context())), /revision changed/)
+    const effectId = randomUUID()
+    f.store.startWorkEffect(effectId, worker, 'fixture', f.alignment.snapshot(worker))
+    f.store.finishWorkEffect(effectId, true)
+    const blocked = await invoke({ action: 'progress', key: created.key, revision: 2,
+      data: { expectedSequence: adopted.sequence, status: 'blocked', blockedScope: 'step', blockedReason: 'Await exact owner review' } })
+    assert.equal(blocked.workflow.blockedReason, 'Await exact owner review')
+    assert.equal(blocked.workflow.blockedScope, 'step')
+    assert.equal(blocked.definitionChanged, false)
+    assert.ok(blocked.effects.some((effect: { id: string; status: string }) => effect.id === effectId && effect.status === 'unknown'))
+    assert.deepEqual((await invoke(blocked.detail)).effects, blocked.effects)
+    const pending: WorkRecord = { ...f.alignment.get(created.key),
+      checkpoint: { sessionId: worker, revision: 2, completed: ['Source saved'], artifacts: ['app.html'],
+        inFlight: ['Existing background job'], unknown: [effectId], retired: [] },
+      transition: { id: randomUUID(), strategy: 'successor', sessionId: worker, revision: 2, status: 'pending' },
+      answerReview: { requestId: 'pending-answer', text: 'Owner answer is not adopted yet' },
+      proposals: [{ id: randomUUID(), baseRevision: 2, assignmentRevision: 1, change: 'goal',
+        reason: 'Needs explicit review', definition: stored.definition, paused: false, status: 'pending' }],
+    }
+    const receipt = workReceipt(pending, f.alignment.context(worker, created.key, false), 2)
+    assert.deepEqual(receipt.checkpoint, pending.checkpoint)
+    assert.deepEqual(receipt.transition, pending.transition)
+    assert.deepEqual(receipt.answerReview, pending.answerReview)
+    assert.equal(receipt.pendingProposals?.[0].id, pending.proposals![0].id)
+    assert.equal(receipt.pendingProposals?.[0].baseRevision, 2)
+    assert.equal('definition' in receipt.pendingProposals![0], false)
+    assert.match(requireToolText(await f.tools.execute('work', { action: 'context', data: { includeSchema: 'yes' } }, f.context())), /Error/)
+    assert.equal(f.alignment.get(created.key).sequence, blocked.sequence, 'Read validation never changes persisted state')
+  } finally { f.store.close() }
+}))
+
+test('exec argument rejection has no unknown effect and never starts local or remote execution', async t => withTempWorkspace(async workspace => {
+  const f = fixture(workspace), manager = new ProcessManager(), bus = new Bus()
+  const events = new EventService(workspace, bus, async (sessionId, input) => ({ status: 'accepted', sessionId, inputId: input.id }))
+  const tasks = new BackgroundTaskManager(bus, events)
+  const commandHandler = new CommandHandlerManager()
+  f.base.register(new ExecTool(workspace, 120_000, commandHandler, manager, defaultManagedShell(), tasks))
+  const spawn = t.mock.method(manager, 'spawn', async () => { throw new Error('Must not spawn') })
+  try {
+    await f.apply(); await f.adopt()
+    for (const remote of [false, true]) {
+      const context = { ...f.context(), cwd: workspace, ...(remote ? { remoteWorkdir: {
+        nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not contact remote') },
+      } } : {}) }
+      for (const args of [{ script: 'print("not executed")', shell: 'python' }, { shell: 'node' }, { script: ' ' }]) {
+        assert.match(requireToolText(await f.tools.execute('exec', args, context)), /Error executing exec:.*(shell|script)/)
+        assert.deepEqual(f.store.workEffects(), [])
+        f.alignment.assertCurrent(f.alignment.snapshot(worker), worker)
+      }
+    }
+    assert.equal(spawn.mock.callCount(), 0)
+    assert.deepEqual(manager.list(), [])
+  } finally { await tasks.stop(); await events.stop(); bus.stopAll(); f.store.close() }
+}))
+
+for (const shell of [defaultManagedShell(), 'node'] as const) {
+  for (const failed of [false, true]) {
+    test(`Work receipts use ${shell} execution status, not successful-looking output (${failed ? 'failed' : 'success'})`, async () => withTempWorkspace(async workspace => {
+      const f = fixture(workspace), manager = new ProcessManager(), bus = new Bus()
+      const scope = createProjectScope('project')
+      const runtime = new EvalBridgeRuntime({ projectId: scope.projectId, scope })
+      const events = new EventService(workspace, bus, async (sessionId, input) => ({ status: 'accepted', sessionId, inputId: input.id }))
+      const tasks = new BackgroundTaskManager(bus, events)
+      f.base.register(new ExecTool(workspace, 120_000, new CommandHandlerManager(), manager, defaultManagedShell(), tasks))
+      try {
+        await f.apply()
+        await f.adopt()
+        const source = failed
+          ? 'console.log("PASS before failure"); console.error("assertion failed"); throw new Error("fixture failure")'
+          : 'console.log("Error: quoted test fixture, not failure"); console.error("warning")'
+        const file = join(workspace, 'outcome.cjs')
+        await writeFile(file, source)
+        const result = await f.tools.execute('exec', {
+          shell, script: shell === 'node' ? source : `"${process.execPath}" "${file}"`,
+        }, { ...f.context(), cwd: workspace, evalBridge: runtime })
+        const text = requireToolText(result)
+        if (failed) {
+          assert.match(text, /PASS before failure/)
+          assert.match(text, /assertion failed/)
+          if (shell === 'node') assert.equal(JSON.parse(text).ok, false, 'JSON script envelope stays compatible')
+          else assert.match(text, /^Error: command exited with code 1/)
+          assert.equal(f.store.workEffects().length, 0, 'A complete error receipt is not a lost execution or a rollback')
+          assert.ok(f.store.workHistory(workKey(change().subject)).some(event => event.kind === 'tool_result'
+            && (event.data as { outcome: string }).outcome === 'returned_error'))
+          f.alignment.assertCurrent(f.alignment.snapshot(worker), worker)
+        } else {
+          assert.match(text, /Error: quoted test fixture/)
+          assert.equal(f.store.workEffects().length, 0)
+          f.alignment.assertCurrent(f.alignment.snapshot(worker), worker)
+        }
+      } finally {
+        await tasks.stop(); await events.stop(); bus.stopAll()
+        for (const managed of manager.list()) await manager.terminate(managed)
+        await runtime.shutdown(); scope.close(); f.store.close()
+      }
+    }))
+  }
+}
+
+test('adopting feedback does not silently unblock work; diagnostics distinguish progress from approval', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const actor = { kind: 'session' as const, sessionId: worker }
+  try {
+    f.store.migrateWorkItems()
+    const work = await f.alignment.execute(actor, 'create', undefined, undefined, {
+      title: 'Feedback', definition: change().definition, reason: 'Synthetic request',
+    }) as WorkRecord
+    await f.adopt(work.key)
+    await f.alignment.execute(actor, 'progress', work.key, work.revision, {
+      expectedSequence: f.alignment.get(work.key).sequence, status: 'blocked', blockedReason: 'Awaiting a requirement answer', blockedScope: 'work',
+    })
+    await f.adopt(work.key)
+    assert.equal(f.alignment.get(work.key).workflow?.status, 'blocked')
+    assert.throws(() => f.alignment.assertCurrent(f.alignment.snapshot(worker), worker),
+      /Awaiting a requirement answer[\s\S]*Adoption does not change progress[\s\S]*Do not clear an unmet approval/)
+    await f.alignment.execute(actor, 'progress', work.key, work.revision, {
+      expectedSequence: f.alignment.get(work.key).sequence, status: 'in_progress',
+    })
+    f.alignment.assertCurrent(f.alignment.snapshot(worker), worker)
+    assert.deepEqual(f.alignment.get(work.key).definition, work.definition, 'Resuming progress cannot broaden authority')
+  } finally { f.store.close() }
+}))
+
+test('step waits permit independent work without changing progress or bypassing explicit fences', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const actor = { kind: 'session' as const, sessionId: worker }
+  let writes = 0
+  f.base.register({ name: 'fixture_write', description: '', parameters: { type: 'object', properties: {} },
+    async execute() { writes++; return 'saved independent work' } })
+  try {
+    f.store.migrateWorkItems()
+    const work = await f.alignment.execute(actor, 'create', undefined, undefined,
+      { title: 'Independent preparation', definition: change().definition, reason: 'Synthetic request' }) as WorkRecord
+    await f.adopt(work.key)
+    const progress = (data: object) => f.alignment.execute(actor, 'progress', work.key, 1,
+      { expectedSequence: f.alignment.get(work.key).sequence, ...data })
+    await progress({ status: 'blocked', blockedReason: 'Publication approval pending' })
+    assert.equal(f.alignment.get(work.key).workflow?.blockedScope, 'step')
+    assert.equal(await f.tools.execute('fixture_write', {}, f.context()), 'saved independent work')
+    assert.equal(f.alignment.get(work.key).workflow?.status, 'blocked')
+    assert.deepEqual(f.alignment.get(work.key).definition, work.definition)
+    const effect = randomUUID()
+    f.store.startWorkEffect(effect, worker, 'uncertain_publish', f.alignment.snapshot(worker))
+    f.store.finishWorkEffect(effect, true)
+    assert.match(requireToolText(await f.tools.execute('fixture_write', {}, f.context())), /unknown outcome/)
+    f.store.finishWorkEffect(effect, false)
+    await progress({ status: 'blocked', blockedReason: 'Explicit whole-work hold', blockedScope: 'work' })
+    await progress({ status: 'blocked', blockedReason: 'Still waiting' })
+    assert.equal(f.alignment.get(work.key).workflow?.blockedScope, 'work', 'Updating the reason must not weaken an existing hold')
+    assert.match(requireToolText(await f.tools.execute('fixture_write', {}, f.context())), /is blocked/)
+    await progress({ status: 'blocked', blockedReason: 'Independent preparation is available', blockedScope: 'step' })
+    const current = f.alignment.get(work.key)
+    f.store.saveWork({ ...current, sequence: current.sequence + 1, paused: true }, current.sequence, 'human', 'fixture_pause')
+    assert.match(requireToolText(await f.tools.execute('fixture_write', {}, f.context())), /is paused/)
+    assert.equal(writes, 1)
+    await assert.rejects(progress({ status: 'in_progress', blockedScope: 'step' }), /requires blocked/)
+  } finally { f.store.close() }
+}))
+
+test('dynamic argument rejection happens before Work effects and tool execution', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  let executions = 0
+  const tool = { name: 'validated_write', description: '', parameters: {
+    type: 'object' as const, properties: { value: { type: 'integer' } }, required: ['value'], additionalProperties: false,
+  }, async execute() { executions++; return 'saved' } }
+  f.tools.registerDynamic(tool)
+  try {
+    await f.apply(); await f.adopt()
+    for (const args of [{}, { value: 'wrong' }, { value: 1, extra: true }]) {
+      assert.match(requireToolText(await f.tools.executeDynamic(tool.name, args, f.context())), /invalid arguments[\s\S]*no tool was executed/)
+      assert.deepEqual(f.store.workEffects(), [])
+    }
+    assert.equal(executions, 0)
+    assert.equal(await f.tools.executeDynamic(tool.name, { value: 1 }, f.context()), 'saved')
+    assert.equal(executions, 1)
+    assert.deepEqual(f.store.workEffects(), [])
+  } finally { f.store.close() }
+}))
+
+test('runtime effect hints are bounded, scoped and never invent a missing result reference', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  try {
+    await f.apply(); await f.adopt()
+    const ids = Array.from({ length: 5 }, () => randomUUID())
+    for (const id of ids) {
+      f.store.startWorkEffect(id, worker, 'fixture', f.alignment.snapshot(worker))
+      f.store.finishWorkEffect(id, true)
+    }
+    const prompt = f.alignment.prompt(worker)
+    assert.match(prompt, /Unresolved Work effects \(5; showing 3\)/)
+    assert.equal(ids.filter(id => prompt.includes(id)).length, 3)
+    assert.doesNotMatch(prompt, /"resultSource":/)
+    assert.equal(f.alignment.prompt(peer), '')
+    assert.throws(() => f.alignment.assertCurrent(f.alignment.snapshot(worker), worker), /unknown outcome/)
+    const large = '\0'.repeat(511) + 'x'
+    for (const id of ids) f.store.workEvent(workKey(change().subject), worker, 'tool_result', {
+      invocationId: id, resultSource: { sessionId: large, physicalId: large, kind: 'tool', id: large },
+    })
+    const compact = f.alignment.prompt(worker)
+    assert.match(compact, /Result references exceed automatic context/)
+    assert.doesNotMatch(compact, /\\u0000/)
+    assert.ok(compact.slice(compact.indexOf('# Unresolved Work effects')).length < 8000)
+    for (const id of ids) f.store.finishWorkEffect(id, false)
+    assert.doesNotMatch(f.alignment.prompt(worker), /# Unresolved Work effects/)
+  } finally { f.store.close() }
+}))
+
+test('progress discovery describes evidence as references, not a list of strings', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  try {
+    const { schema } = f.alignment.context(worker)
+    assert.deepEqual(schema.management.progress.result.evidence, [schema.evidenceSchema])
+    assert.deepEqual(Object.keys(schema.management.progress.result.evidence[0]).sort(),
+      ['id', 'kind', 'physicalId', 'quote', 'sessionId'])
+  } finally { f.store.close() }
+}))
+
 test('contracts separate human provenance, agent phase, control and executor adoption', async () => withTempWorkspace(async workspace => {
   const f = fixture(workspace)
   try {
@@ -189,6 +475,50 @@ test('audio catalog rejection stays a visible failure without fencing unrelated 
   } finally { f.store.close() }
 }))
 
+test('Micro App manifest preflight does not fence recovery, but a lost publication acknowledgement remains uncertain', async t => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const service = new MicroApps('project', workspace, () => ({
+    name: 'unused', listModels: async () => [],
+    chat: async () => { throw new Error('Publication must not call a model') },
+  }), () => 'unused')
+  await service.init()
+  f.base.register(new InvokeTool())
+  f.tools.registerDynamic(new MicroAppTool(service, id => assert.equal(id, worker)))
+  const publish = service.publish.bind(service)
+  let loseAcknowledgement = false
+  const calls = t.mock.method(service, 'publish', async (...args: Parameters<MicroApps['publish']>) => {
+    const result = await publish(...args)
+    if (loseAcknowledgement) throw new Error('Synthetic lost publication acknowledgement')
+    return result
+  })
+  const invoke = (args: Record<string, unknown>) => f.tools.execute('invoke_tool', { name: 'micro_app', args },
+    { ...f.context(), cwd: workspace })
+  const manifest = { version: 1, name: 'Fixture', description: 'No model calls', entry: 'index.html', files: ['index.html'] }
+  try {
+    await f.apply(); await f.adopt()
+    await writeFile(join(workspace, 'index.html'), '<title>Fixture</title>')
+    for (const content of ['{', JSON.stringify({ ...manifest, llm: { maxCalls: 0, maxOutputTokens: 0 } }), ' '.repeat(65537)]) {
+      await writeFile(join(workspace, 'shadow-app.json'), content)
+      assert.match(requireToolText(await invoke({ action: 'publish', directory: '.' })), /source validation failed before publication/)
+      assert.equal(calls.mock.callCount(), 0)
+      assert.equal(f.store.workEffects().length, 0)
+      assert.deepEqual(service.list(), [])
+    }
+    await writeFile(join(workspace, 'shadow-app.json'), JSON.stringify(manifest))
+    const app = JSON.parse(requireToolText(await invoke({ action: 'publish', directory: '.' })))
+    assert.equal(calls.mock.callCount(), 1)
+    assert.equal(app.status, 'awaiting_approval')
+    assert.equal(f.store.workEffects().length, 0)
+    await writeFile(join(workspace, 'index.html'), '<title>Changed</title>')
+    loseAcknowledgement = true
+    assert.match(requireToolText(await invoke({ action: 'publish', directory: '.', id: app.id, revision: app.revision })), /lost publication acknowledgement/)
+    assert.notEqual(service.get(app.id).revision, app.revision, 'The simulated acknowledgement failure follows a real publication')
+    assert.equal(f.store.workEffects()[0].status, 'unknown')
+    assert.match(requireToolText(await invoke({ action: 'publish', directory: '.' })), /unknown|unresolved/i)
+    assert.equal(calls.mock.callCount(), 2, 'Uncertain publication must still block blind replay')
+  } finally { await f.tools.resetDynamicAndWait(); await service.shutdown(); f.store.close() }
+}))
+
 test('only the trusted no-effect error clears an effect; error text and properties cannot impersonate it', async () => withTempWorkspace(async workspace => {
   const f = fixture(workspace)
   f.base.register({ name: 'preflight_fixture', description: '', parameters: { type: 'object', properties: {} },
@@ -212,6 +542,43 @@ test('cancellation retains the uncertain-effect fence even if a tool reports a n
   try {
     await f.apply(); await f.adopt()
     await assert.rejects(f.tools.execute('aborted_fixture', {}, { ...f.context(), signal: controller.signal }), /Cancelled preflight/)
+    assert.equal(f.store.workEffects()[0].status, 'unknown')
+  } finally { f.store.close() }
+}))
+
+test('trusted completed errors preserve failure and partial effects without freezing Work; serialized hints cannot attest completion', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace)
+  const failure = { isError: true, content: [{ type: 'text' as const, text: 'Error: test failed after writing output' }] }
+  f.base.register({ name: 'completed_fixture', description: '', parameters: { type: 'object', properties: {} },
+    async execute() { await writeFile(join(workspace, 'partial.txt'), 'partial output'); return completedToolFailure(failure) } })
+  f.base.register({ name: 'forged_fixture', description: '', parameters: { type: 'object', properties: {} },
+    async execute() { return { ...structuredClone(failure), completion: 'returned', effect: 'none' } } })
+  f.base.register({ name: 'write_fixture', description: '', parameters: { type: 'object', properties: {} }, async execute() { return 'written' } })
+  try {
+    await f.apply(); await f.adopt()
+    const result = requireToolText(await f.tools.execute('completed_fixture', {}, f.context()))
+    assert.match(result, /Error: test failed/)
+    await access(join(workspace, 'partial.txt'))
+    assert.equal(f.store.workEffects().length, 0)
+    assert.ok(f.store.workHistory(workKey(change().subject)).some(event => event.kind === 'tool_result'
+      && (event.data as { outcome: string }).outcome === 'returned_error'))
+    assert.equal(await f.tools.execute('write_fixture', {}, f.context()), 'written')
+    await f.tools.execute('forged_fixture', {}, f.context())
+    assert.equal(f.store.workEffects()[0].status, 'unknown')
+    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /unknown/)
+  } finally { f.store.close() }
+}))
+
+test('abort overrides a trusted completed result', async () => withTempWorkspace(async workspace => {
+  const f = fixture(workspace), controller = new AbortController()
+  f.base.register({ name: 'abort_fixture', description: '', parameters: { type: 'object', properties: {} },
+    async execute() {
+      controller.abort()
+      return completedToolFailure({ isError: true, content: [{ type: 'text', text: 'Error: stopped' }] })
+    } })
+  try {
+    await f.apply(); await f.adopt()
+    await f.tools.execute('abort_fixture', {}, { ...f.context(), signal: controller.signal })
     assert.equal(f.store.workEffects()[0].status, 'unknown')
   } finally { f.store.close() }
 }))
@@ -289,6 +656,8 @@ test('late results stay attributable and unresolved effects survive restart with
     await f.adopt(key, 2)
     const effectId = randomUUID()
     f.store.startWorkEffect(effectId, worker, 'external', f.alignment.snapshot(worker))
+    assert.equal(f.alignment.context(worker).effects[0].resultSource, undefined,
+      'Legacy or interrupted effects without a returned result must not invent a source')
     f.store.close()
     const reopened = new InitiativeStore(workspace, f.options)
     try {
@@ -304,8 +673,12 @@ test('execution cancellation remains available while work is paused and unadopte
   const f = fixture(workspace)
   try {
     await f.apply({ ...change(), paused: true })
-    const cancel = { name: 'cancel', description: '', parameters: { type: 'object' as const, properties: {} }, async execute() { return 'cancelled' } }
+    const cancel = new CancelTool({ getSessionState: () => null, getDelegationOwner: () => undefined,
+      assertFolderAccess: () => {}, getActiveSession: () => undefined })
     assert.equal(f.alignment.before(cancel, { executionId: 'virtual:child' }, f.context()), undefined)
+    const impostor = { name: 'cancel', description: '', parameters: { type: 'object' as const, properties: {} },
+      async execute() { return 'new work disguised as cancellation' } }
+    assert.throws(() => f.alignment.before(impostor, {}, f.context()), /basis changed|not adopted/)
   } finally { f.store.close() }
 }))
 

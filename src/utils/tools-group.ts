@@ -7,7 +7,7 @@ export function groupTools(toolCalls: ToolCall[], reg: Tools): Array<Group> {
   for (const tc of toolCalls) {
     const isRo = reg.isReadonly(tc.name, tc.arguments)
     const last = groups[groups.length - 1]
-    if (last && last.readonly === isRo) {
+    if (isRo && last?.readonly) {
       last.calls.push(tc)
     } else {
       groups.push({ readonly: isRo, calls: [tc] })

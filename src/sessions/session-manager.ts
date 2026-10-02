@@ -1923,6 +1923,14 @@ ${JSON.stringify(request)}`,
     return this.decisionRecords.evidence(source)
   }
 
+  async resolveToolEvidence(sessionId: string, sources: import('./decision-brief.ts').ToolEvidenceQuery, signal: AbortSignal) {
+    this.assertFolderAccess(sessionId)
+    const evidence = await this.decisionRecords.resolveToolEvidence(sessionId, sources, signal)
+    signal.throwIfAborted()
+    this.assertFolderAccess(sessionId)
+    return evidence
+  }
+
   validateConventionSource(source: import('../projects/conventions.ts').ConventionSource, context: import('../tools/context.ts').ExecutionContext) {
     const state = this.getSessionState(context.sessionId)
     if (!state || (state.mode ?? 'session') !== 'session') throw new Error('Only durable human conversations may change Project conventions.')
@@ -1952,6 +1960,8 @@ ${JSON.stringify(request)}`,
     const authority = this.alignment.store.workAuthority(record.subject)
     for (const executor of new Set([authority.executor, previous?.workflow?.assignee])) {
       if (!executor || !this.getSessionState(executor)) continue
+      if (record.changedBy === executor && record.adoption?.sessionId === executor
+        && record.adoption.revision === record.revision) continue
       this.assertFolderAccess(executor)
       await this.deliver(executor, {
         kind: 'message', id: `work:${record.key}:${record.sequence}`, timestamp: new Date().toISOString(), policy: 'steering',

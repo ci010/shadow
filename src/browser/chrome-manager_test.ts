@@ -97,6 +97,32 @@ test('two project browsers use distinct managed profiles and shared port leases 
       await Promise.all(managers.map((manager) => manager.releaseAll()))
     }
   })
+
+  test('an excluded preferred range falls back to OS-selected ports without changing explicit port requests', async () => {
+    let dynamicCalls = 0
+    const allocator = new ChromePortAllocator(async port => port > 9408, async () => 16000 + dynamicCalls++)
+    const [a, b] = await Promise.all([allocator.reserve(9222), allocator.reserve(9222)])
+    try {
+      assert.equal(a.port, 16000)
+      assert.equal(b.port, 16001)
+      await assert.rejects(allocator.reserve(9222, 9222), /No unreserved/)
+      await assert.rejects(allocator.reserve(9222, a.port), /No unreserved/)
+      assert.equal(dynamicCalls, 2)
+    } finally { a.release(); b.release() }
+  })
+
+  test('dynamic browser collisions are bounded and do not release another lease', async () => {
+    let dynamicCalls = 0
+    const allocator = new ChromePortAllocator(async port => port === 16000, async () => { dynamicCalls++; return 16000 })
+    const first = await allocator.reserve(9222)
+    try {
+      await assert.rejects(allocator.reserve(9222), /No unreserved/)
+      assert.equal(dynamicCalls, 9)
+      await assert.rejects(allocator.reserve(9222, first.port), /No unreserved/)
+    } finally { first.release() }
+    const replacement = await allocator.reserve(9222)
+    replacement.release()
+  })
 })
 
 test('project browser shutdown aborts pending launch and releases its lease without publishing a session', async () => {

@@ -11,13 +11,14 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   if (mode === 'session' && isToolAllowed(ctx.agent, 'work')) {
     sections.push(`### Work alignment
 
-- \`work\`: definitions, assignments, dependencies, progress. \`context\`: schemas; \`list\`: discovery; \`tree\`: Initiative. Create/select and adopt before effects, not conversation, read-only research or Skill activation. Clear requests need no interview; a Skill's side-effecting tools still require adoption.
-- Session metadata is not work scope. Reuse assignments; completion needs acceptance evidence, not tool success.
-- Outcome, acceptance and boundaries are not phases. Controller/human revises; executor adopts understanding, stop/retain/next. Human-confirmed scope needs review to change.
-- After update/adopt/select, use a NEW inference round; old/unadopted nested calls stay fenced. Selecting key/revision narrows the fence, not isolation; otherwise it covers all assignments.
-- Review custom answers before adoption; free text is not approval of the old framing.
-- For entrenched assumptions: checkpoint inventory and retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers work: assignee releases, owner reassigns.
-- Revalidate history; late results are historical. Reconcile unknown effects before retrying.`)
+- \`work context/list/tree\`: schemas/discovery/Initiative. Create/select and adopt before effects, including Skill tools; not conversation, reads or Skill activation. Clear requests need no interview.
+- Reuse assignments; metadata is not scope. Completion needs acceptance evidence, not tool success.
+- Outcomes/boundaries are not phases. \`adopt\` data.acceptance versions missing in-scope criteria in your own agent interpretation. Human-confirmed changes need \`update\` + current owner \`requestQuote\` or reviewed proposals.
+- \`blockedScope=step\` allows independent authorized work, not the blocked step. Whole-work blockers, pause, dependencies and unknown effects still fence execution; progress grants no access.
+- Infer again after update/adopt/select; old/unadopted calls stay fenced. Selection narrows scope, not isolation.
+- Review custom answers before adoption; text is not approval.
+- To replace entrenched assumptions: checkpoint inventory/retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers assignments.
+- Revalidate history and late results; settle unknown effects before retrying.`)
   }
 
   if (isToolAllowed(ctx.agent, 'sql')) {
@@ -55,7 +56,7 @@ ${mode === 'call'
   \`custom: true\` returns human text in \`option\`; respect it, review corrected scope,
   and never force it into a preset or assume approval of the original framing.
   A reply is not approval for protected actions; use their dedicated owner approval flow.
-  For a Work change, use \`work propose\`, then \`ask(kind=decision, proposal={key,id}, brief=...)\`.
+  For a Work change requiring review, use \`work propose\`, then \`ask(kind=decision, proposal={key,id}, brief=...)\`.
   One human approval applies the exact saved version; no second Work-panel confirmation. Custom text/timeout never approves it.
   Your request goes to ${ctx.channel === 'a2a' ? 'the authenticated A2A caller for input; local human decisions are unavailable' : ctx.parentSessionId ? 'your actual parent' : 'the human'}, regardless of completion routing.
   Wait for the result; the default is not permission to proceed early.

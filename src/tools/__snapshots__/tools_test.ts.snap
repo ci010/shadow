@@ -4,7 +4,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "read",
-      "description": "Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. Text supports offset/limit. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.",
+      "description": "Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. Text supports offset/limit, including URLs and virtual text. Session line ranges use the same view as grep; omit ranges for recent messages. Local PNG, JPEG, GIF and WebP images return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts. Remote image reads are not supported.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -14,7 +14,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "offset": {
             "type": "number",
-            "description": "1-based starting position. For files: line number. With flag \\"l\\": item index."
+            "description": "1-based starting line for files, URLs and virtual text. With flag \\"l\\": item index."
           },
           "limit": {
             "type": "number",
@@ -54,6 +54,14 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           "flag": {
             "type": "string",
             "description": "g = replace all occurrences, a = append to file"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "utf8-bom"
+            ],
+            "description": "Full overwrite only; default utf8. Use utf8-bom for non-ASCII .ps1 files executed by Windows PowerShell 5.1. Edits preserve an existing BOM."
           }
         },
         "required": [
@@ -102,11 +110,11 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "script": {
             "type": "string",
-            "description": "Script to run. For OS shells this is the command string; for \`shell=node\` this is inline TypeScript source."
+            "description": "Script to run. For OS shells this is the command string; for \`shell=node\` this is inline TypeScript source. Preserve failures: do not append exit 0 or || true to hide an error. When chaining native commands in PowerShell, check $LASTEXITCODE after each one and propagate failures."
           },
           "shell": {
             "type": "string",
-            "description": "Runtime: OS shell name or \`node\` for inline TypeScript."
+            "description": "Runtime: OS shell name or \`node\` for inline TypeScript. Omitted uses the Runtime default (normally cmd on Windows, sh on Unix). Select powershell/pwsh explicitly for PowerShell syntax; shell syntax is not auto-detected."
           },
           "args": {
             "type": "array",
@@ -134,7 +142,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "work",
-      "description": "Manage work items: definitions, assignments, dependencies, progress and versioned adoption in one place. Read context for schemas; list finds Project work and tree derives an Initiative view. Create work only when executing or tracking it, not for ordinary conversation. Propose material changes for one human review via ask or the Work panel. Session creation is independent. Only the assigned executor adopts and reports progress; execution completion is not acceptance.",
+      "description": "Manage work definitions, assignments, dependencies and progress. context returns full state; data.includeSchema=true adds action schemas (automatic when no work exists). Mutations return compact receipts; use context with key for full definitions. Create only for execution/tracking, not ordinary conversation. Blocked progress defaults to a step wait, not a whole-work stop; use pause for a stop. Record missing in-scope requirements with adopt data.acceptance for your own agent interpretation; this appends acceptance and adopts the new revision without changing boundaries. Human-confirmed changes need update + owner requestQuote or reviewed proposals. Only the assigned executor adopts and reports progress; completion is not acceptance.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -168,7 +176,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "data": {
             "type": "object",
-            "description": "Action-specific bounded payload; obtain its schema with context."
+            "description": "Action-specific bounded payload; context data.includeSchema=true returns schemas."
           }
         },
         "required": [
@@ -192,15 +200,23 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "space": {
             "type": "string",
-            "description": "grep:[file-glob] or grep:v:<folder>[/path] — contents. glob:[path] — names. Virtual folders: skills, memory, sessions, tools. web:[domain] — web search."
+            "description": "grep or glob with path below; web:[domain] for web search. Legacy grep:[file-glob], grep:v:<folder>[/path] and glob:[path] also work."
+          },
+          "path": {
+            "type": "string",
+            "description": "File/directory search root or v:<folder>[/path]. Defaults to the effective workdir, not the repository root."
+          },
+          "include": {
+            "type": "string",
+            "description": "grep only: relative file glob, e.g. **/*.ts. Not the search root."
           },
           "limit": {
             "type": "integer",
-            "description": "Virtual searches only: 1-100 results per page (default 100)."
+            "description": "File/virtual searches: 1-100 results per page (default 100)."
           },
           "offset": {
             "type": "integer",
-            "description": "Virtual searches only: nonnegative result offset (default 0)."
+            "description": "File/virtual searches: nonnegative result offset (default 0)."
           }
         },
         "required": [
@@ -243,7 +259,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "continuation",
-      "description": "Set a continuation string on a background task. When the task completes and its event fires back to the session, the continuation text will be carried as a prefix in the callback message.",
+      "description": "Set a continuation string on a background task. When the task completes and its event fires back to the session, the continuation text will be carried as a prefix in the callback message. Optional for running tasks only; completion is automatic and terminal tasks are never replayed.",
       "parameters": {
         "type": "object",
         "properties": {

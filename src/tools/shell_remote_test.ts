@@ -1,4 +1,4 @@
-import { requireToolText } from './tool.ts'
+import { ToolNoEffectError, isCompletedToolFailure, requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ExecutionContext } from './context.ts'
@@ -57,13 +57,14 @@ test('ExecTool remote rejects unsupported execution modes and malformed inputs b
     { script: 'echo no', timeout_ms: '1' }, { script: 'echo no', timeout_ms: Infinity },
     { script: 'echo no', timeout_ms: 120001 }, { script: 'echo no', timeout_ms: 0.5 },
     { script: 'echo no', cwd: '/display/path' }, { script: 'echo no', args: [7] },
-    { script: 'echo no', shell: 'invalid' },
-  ]) assert.match(await tool.execute(args, context), /^Error:/)
+  ]) assert.match(requireToolText(await tool.execute(args, context)), /^Error:/)
+  await assert.rejects(tool.execute({ script: 'echo no', shell: 'invalid' }, context), ToolNoEffectError)
+  await assert.rejects(tool.execute({ shell: 'sh' }, context), ToolNoEffectError)
   const tools = new Tools(process.cwd())
   tools.register(tool)
   const sessionTools = new SessionTools(tools, process.cwd())
   sessionTools.setExecutionScope('call', [])
-  assert.match(await tool.execute({ script: 'echo no' }, { ...context, tools: sessionTools }), /remote workdirs/)
+  assert.match(requireToolText(await tool.execute({ script: 'echo no' }, { ...context, tools: sessionTools })), /remote workdirs/)
   assert.equal(requests.length, 0)
 })
 
@@ -97,7 +98,8 @@ test('real Tools and SessionTools dispatch remote exec in session/task modes but
   const { tool, context, requests } = fixture()
   const registry = new Tools(process.cwd())
   registry.register(tool)
-  assert.equal(await registry.execute('exec', { script: 'pwd', timeout_ms: 60000 }, context), '(no output, exit code 0)')
+  assert.equal(await registry.execute('exec', { script: 'pwd', timeout_ms: 60000 },
+    { ...context, tools: new SessionTools(registry, process.cwd()) }), '(no output, exit code 0)')
   for (const mode of ['session', 'task'] as const) {
     const tools = new SessionTools(registry, process.cwd())
     tools.setExecutionScope(mode, [])
@@ -111,6 +113,25 @@ test('real Tools and SessionTools dispatch remote exec in session/task modes but
   assert.equal(requests.length, 3)
 })
 
+test('only correlated normal remote process failures carry completion evidence', async () => {
+  for (const variant of ['normal', 'signal', 'missing', 'foreign', 'unavailable', 'wrong-event'] as const) {
+    const { tool, context } = fixture()
+    context.remoteWorkdir!.executor.execute = async function* (request) {
+      if (variant === 'missing') return
+      yield {
+        version: 1, jobId: request.jobId, sequence: 0, timestamp: new Date().toISOString(), type: variant === 'wrong-event' ? 'expired' : 'failed',
+        receipt: { version: 1, jobId: variant === 'foreign' ? 'other-job' : request.jobId, nodeId: request.nodeId,
+          state: 'failed', exitCode: 7, finishedAt: new Date().toISOString(),
+          ...(variant === 'signal' ? { signal: 'SIGTERM' } : {}),
+          reason: { code: variant === 'unavailable' ? 'remote-node-unavailable' : 'process-exit', message: 'Failed', retryable: false } },
+      }
+    }
+    const result = await tool.execute({ script: 'fixture' }, context)
+    assert.match(requireToolText(result), /^Error:/)
+    assert.equal(isCompletedToolFailure(result), variant === 'normal', variant)
+  }
+})
+
 test('registered remote exec keeps bounded output intact instead of spilling to a Main-only path', async () => {
   const { tool, context } = fixture()
   const output = 'remote output '.repeat(1100)
@@ -121,5 +142,6 @@ test('registered remote exec keeps bounded output intact instead of spilling to 
   }
   const registry = new Tools(process.cwd())
   registry.register(tool)
-  assert.equal(await registry.execute('exec', { script: 'produce output' }, context), output)
+  assert.equal(await registry.execute('exec', { script: 'produce output' },
+    { ...context, tools: new SessionTools(registry, process.cwd()) }), output)
 })

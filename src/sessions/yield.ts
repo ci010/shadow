@@ -78,6 +78,25 @@ export class YieldManager {
 
   start(): void { this.stopped = false }
 
+  ownerSession(sessionId: string): string {
+    const seen = new Set<string>()
+    while (true) {
+      if (seen.has(sessionId)) throw new YieldError('unavailable', 'Invalid decision owner lineage.')
+      seen.add(sessionId)
+      const state = this.deps.getState(sessionId)
+      if (!state) throw new YieldError('not_found', 'Decision owner no longer exists.')
+      const parent = this.parentId(state)
+      if (!parent) return sessionId
+      sessionId = parent
+    }
+  }
+
+  /** Host workflows ask the local owner, never an A2A caller or a parent agent. */
+  askOwner(sessionId: string, question: YieldQuestion, signal: AbortSignal, timeoutMs: number,
+    opened?: (request: YieldRequest) => void): Promise<YieldOutcome> {
+    return this.ask(this.ownerSession(sessionId), question, signal, undefined, undefined, undefined, undefined, { timeoutMs }, opened)
+  }
+
   async ask(
     sessionId: string,
     question: YieldQuestion,
@@ -86,6 +105,8 @@ export class YieldManager {
     replyTo?: string,
     toolCallId?: string,
     workStamps?: import('../initiatives/work-contract.ts').WorkStamp[],
+    ownerPolicy?: YieldPolicy,
+    ownerOpened?: (request: YieldRequest) => void,
   ): Promise<YieldOutcome> {
     signal.throwIfAborted()
     this.deps.assertCanYield?.(sessionId)
@@ -96,7 +117,7 @@ export class YieldManager {
     let policy: YieldPolicy
     try {
       parsed = parseYieldQuestion(question)
-      policy = parseYieldPolicy(this.deps.getPolicy(sessionId))
+      policy = parseYieldPolicy(ownerPolicy ?? this.deps.getPolicy(sessionId))
     } catch (error) {
       throw new YieldError('invalid_request', error instanceof Error ? error.message : String(error))
     }
@@ -107,7 +128,7 @@ export class YieldManager {
     if (reportingSessionId && (!this.deps.getState(reportingSessionId) || this.deps.getState(reportingSessionId)?.mode === 'call'
       || this.deps.getState(reportingSessionId)?.mode === 'task')) throw new YieldError('unavailable', 'The decision reporting owner is unavailable; explicitly reassign responsibility.')
     const channelAddress = channelAddressFromSessionId(sessionId)
-    if (recipient.kind === 'user' && (channelAddress || /^(discord|feishu|qq|wechat):/.test(sessionId)) && !channelUser) {
+    if (!ownerPolicy && recipient.kind === 'user' && (channelAddress || /^(discord|feishu|qq|wechat):/.test(sessionId)) && !channelUser) {
       throw new YieldError('forbidden', 'A channel decision needs an initiating human. Return the blocker instead of publishing an unanswerable question.')
     }
     if (channelUser && (!channelUser.senderId.trim() || !channelUser.channel
@@ -117,6 +138,7 @@ export class YieldManager {
     const now = Date.now()
     const request = snapshot({
       ...parsed, id: randomUUID(), sessionId, recipient, ...(reportingSessionId ? { reportingSessionId } : {}),
+      ...(ownerPolicy ? { ownerOnly: true as const } : {}),
       ...(workStamps?.length ? { workStamps } : {}),
       createdAt: new Date(now).toISOString(),
       deadline: policy.timeoutMs === null ? null : new Date(now + policy.timeoutMs).toISOString(),
@@ -138,6 +160,8 @@ export class YieldManager {
       const publish = () => {
         if (pending.prepareError) { void this.fail(pending, pending.prepareError); return }
         if (pending.phase === 'closing') return
+        try { ownerOpened?.(snapshot(pending.request)) }
+        catch (error) { void this.fail(pending, error); return }
         pending.phase = 'waiting'
         this.deps.changed?.(sessionId)
         if (request.deadline !== null) {
@@ -148,11 +172,11 @@ export class YieldManager {
         }
         // Delivery must not prevent an answer or cancellation if the recipient hangs.
         try {
-          const delivery = recipient.kind === 'user'
+          const delivery = ownerPolicy ? Promise.resolve() : recipient.kind === 'user'
             ? this.deps.notifyUser(snapshot(pending.request), replyTo)
             : this.deps.notifyParent(snapshot(pending.request))
           Promise.resolve(delivery).catch(error => this.deliveryFailed(pending, error))
-          if (pending.request.reportingSessionId && pending.request.reportingSessionId !== sessionId) {
+          if (!ownerPolicy && pending.request.reportingSessionId && pending.request.reportingSessionId !== sessionId) {
             Promise.resolve(this.deps.notifyReporter?.(snapshot(pending.request))).catch(error => this.deliveryFailed(pending, error))
           }
         } catch (error) {
@@ -233,10 +257,12 @@ export class YieldManager {
   reviseUser(sessionId: string, requestId: string, question: YieldQuestion, reason: string, reviewerId: string): Promise<YieldRequest> {
     const pending = this.userRequest(sessionId, requestId)
     const previous = pending.request
+    if (previous.ownerOnly) throw new YieldError('conflict', 'Host confirmations cannot be rewritten. Pause this workflow and discuss changes with the author.')
     if (previous.workProposal || question.workProposal) throw new YieldError('conflict', 'Return for investigation and create a new work proposal; its exact decision cannot be rewritten.')
     if (!previous.origin || !this.deps.journal?.replace) throw new YieldError('unavailable', 'Decision revisions require a journal.')
     const next = snapshot({
       ...parseYieldQuestion(question), sources: previous.sources,
+      ...(previous.ownerOnly ? { ownerOnly: true as const } : {}),
       brief: question.brief ?? previous.brief, reportingSessionId: previous.reportingSessionId,
       id: randomUUID(), decisionId: previous.decisionId ?? previous.id, sessionId,
       recipient: { ...previous.recipient }, origin: { ...previous.origin }, createdAt: new Date().toISOString(), deadline: null,

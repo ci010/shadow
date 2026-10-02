@@ -36,6 +36,17 @@ import { GitHubService } from '../projects/github/service.ts'
 import { GitHubStore } from '../projects/github/store.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { ReadTool } from '../tools/read.ts'
+import { acceptanceWorkApproval } from '../../scripts/microapp-a2a.ts'
+import { BrowserSetupTool } from '../tools/browser-setup.ts'
+import { InvokeTool } from '../tools/invoke-tool.ts'
+import { ImportTool } from '../tools/load-tool.ts'
+import type { SessionInput } from './input.ts'
+import { ExecTool } from '../tools/shell.ts'
+import { ProcessManager } from '../execution/processes/manager.ts'
+import { CommandHandlerManager } from '../tools/shell-commands/command-handler.ts'
+import { defaultManagedShell } from '../execution/processes/shells.ts'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { MicroApps } from '../microapps/service.ts'
 
 const id = 'web:worker', key = 'topic:web:worker'
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
@@ -119,11 +130,275 @@ async function fixture(workspace: string, store: SessionStore) {
   async function close() {
     await sessions.stop(); await backgroundTasks.stop(); await events.stop(); conventions.close(); initiatives.close()
   }
-  return { sessions, alignment, initiatives, conventions, events, tools, calls, app, post, revise, send, quiet, close, writes: () => writes,
+  return { sessions, alignment, initiatives, conventions, events, backgroundTasks, tools, calls, app, post, revise, send, quiet, close, writes: () => writes,
     enableNotifications: () => { notifications = true } }
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: caller refinements version acceptance and reach publication without owner impersonation`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store)
+    const service = new MicroApps('fixture', workspace, () => { throw new Error('No app model expected') }, () => 'fixture', {
+      ownerSession: sessionId => sessionId, ask: async () => { throw new Error('No approval expected') },
+      notify: async () => { throw new Error('No author handoff expected') }, evidence: async () => {},
+      work: (sessionId, stamps) => {
+        f.alignment.assertCurrent(stamps, sessionId)
+        return stamps.map(stamp => {
+          const record = f.alignment.get(stamp.key)
+          return { key: record.key, revision: record.revision, acceptance: record.definition.acceptance }
+        })
+      },
+    })
+    try {
+      await service.init()
+      await f.sessions.prepareCommandSession(id)
+      const actor = { kind: 'session' as const, sessionId: id }
+      const work = await f.alignment.execute(actor, 'create', undefined, undefined,
+        { title: 'App', definition, reason: 'Interpret incoming task' }) as WorkRecord
+      await f.alignment.execute(actor, 'adopt', work.key, 1, adoption)
+      f.enableNotifications()
+      await f.sessions.deliver(id, { kind: 'message', id: 'caller-refinement', timestamp: new Date().toISOString(), policy: 'queue',
+        content: 'Keep incoming input while translation is busy.', replyTo: { channel: 'a2a', chatId: 'fixture' },
+        source: { kind: 'user', sender: { channel: 'a2a', chatId: 'fixture', senderId: 'remote', messageId: 'caller-refinement', admin: false } } })
+      await waitFor(() => f.calls.length === 1)
+      assert.match(JSON.stringify(f.calls[0].messages), /requestQuote is unavailable/)
+      f.calls[0].resolve({ content: '', toolCalls: [
+        { id: 'refine-and-adopt', name: 'work', arguments: { action: 'adopt', key: work.key, revision: 1,
+          data: { ...adoption, acceptance: ['Incoming input remains queued while translation is busy'] } } },
+        { id: 'old-basis', name: 'fixture_write', arguments: {} },
+      ] })
+      await waitFor(() => f.calls.length === 2)
+      assert.equal(f.writes(), 0)
+      const revised = f.alignment.get(work.key)
+      assert.equal(revised.revision, 2)
+      assert.equal(revised.adoption?.revision, 2)
+      assert.equal(revised.requestSource, undefined)
+      assert.match(String(f.calls[1].messages.find(message => message.tool_call_id === 'old-basis')?.content), /basis changed/)
+      f.calls[1].resolve(call('fixture_write', {}))
+      await waitFor(() => f.calls.length === 3)
+      assert.equal(f.writes(), 1)
+      f.calls[2].resolve(done())
+      await waitFor(f.quiet)
+      const directory = join(workspace, 'fixture-app')
+      await mkdir(directory)
+      await writeFile(join(directory, 'index.html'), '<title>Fixture</title>')
+      const app = await service.publish(directory,
+        { version: 1, name: 'Fixture', description: 'Fixture only', entry: 'index.html', files: ['index.html'], llm: { maxCalls: 1, maxOutputTokens: 32 } },
+        id, AbortSignal.timeout(5000), undefined, undefined, f.alignment.snapshot(id))
+      assert.deepEqual(app.work, [{ key: work.key, revision: 2, acceptance: revised.definition.acceptance }])
+      assert.equal(app.approval, undefined)
+      const history: unknown[] = []
+      for await (const row of store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!))) history.push(row)
+      assert.match(JSON.stringify(history), /Incoming input remains queued/)
+      assert.doesNotMatch(JSON.stringify(history), /work-realignment/, 'Atomic adoption does not ask its executor to adopt twice')
+    } finally { await service.shutdown(); await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: a real normal command failure stays recorded and the author can repair without settle`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store), manager = new ProcessManager()
+    f.tools.register(new ExecTool(workspace, 5000, new CommandHandlerManager(), manager, defaultManagedShell(), f.backgroundTasks))
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const work = await f.alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
+        { title: 'Native failure repair', assignee: id, definition, reason: 'Synthetic integration request' }) as WorkRecord
+      await f.alignment.execute({ kind: 'session', sessionId: id }, 'adopt', work.key, 1, adoption)
+      await f.send('Run the failing check, inspect the result, then repair the fixture.')
+      await waitFor(() => f.calls.length === 1)
+      f.calls[0].resolve(call('exec', { script: 'exit 7', shell: defaultManagedShell() }, 'normal-failure'))
+      await waitFor(() => f.calls.length === 2)
+      assert.match(JSON.stringify(f.calls[1].messages), /command exited with code 7/)
+      assert.equal(f.initiatives.workEffects().length, 0)
+      f.calls[1].resolve(call('fixture_write', {}, 'repair'))
+      await waitFor(() => f.calls.length === 3)
+      assert.equal(f.writes(), 1)
+      f.calls[2].resolve(done())
+      await waitFor(f.quiet)
+      const history: unknown[] = []
+      for await (const record of store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!))) history.push(record)
+      assert.match(JSON.stringify(history), /command exited with code 7/)
+      assert.ok(f.initiatives.workHistory(work.key).some(event => event.kind === 'tool_result'
+        && (event.data as { outcome: string }).outcome === 'returned_error'))
+    } finally {
+      await f.close()
+      for (const managed of manager.list()) await manager.terminate(managed)
+      store.close?.()
+    }
+  }))
+
+  test(`${Store.name}: an authenticated follow-up continues a step-waiting Work without a second approval`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store)
+    const notebook = { objective: 'Deliver a reusable notebook', acceptance: ['Saved text survives reopening'],
+      boundaries: ['Publication requires owner approval', 'No device access'], evidence: [] }
+    const request = 'Add a Clear button with confirmation; Cancel must keep the saved text.'
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const actor = { kind: 'session' as const, sessionId: id }
+      const work = await f.alignment.execute({ kind: 'user' }, 'create', undefined, undefined,
+        { title: 'Notebook', assignee: id, definition: notebook, reason: 'Owner request' }) as WorkRecord
+      await f.alignment.execute(actor, 'adopt', work.key, 1, adoption)
+      await f.alignment.execute(actor, 'progress', work.key, 1,
+        { expectedSequence: f.alignment.get(work.key).sequence, status: 'blocked', blockedReason: 'Publication approval pending' })
+      await f.send(request)
+      await waitFor(() => f.calls.length === 1)
+      f.calls[0].resolve({ content: '', toolCalls: [
+        { id: 'append-owner-request', name: 'work', arguments: { action: 'update', key: work.key, revision: 1,
+          data: { change: 'goal', reason: 'Owner follow-up', requestQuote: request,
+            definition: { ...notebook, acceptance: [...notebook.acceptance, 'Clear requires confirmation; Cancel preserves saved text'] } } } },
+        { id: 'stale-same-batch-write', name: 'fixture_write', arguments: {} },
+      ] })
+      await waitFor(() => f.calls.length === 2)
+      const changed = f.alignment.get(work.key)
+      assert.equal(changed.revision, 2)
+      assert.equal(changed.origin, 'agent_interpretation')
+      assert.equal(changed.workflow?.status, 'blocked')
+      assert.equal(changed.workflow?.blockedScope, 'step')
+      assert.equal(changed.proposals?.length ?? 0, 0)
+      assert.equal(changed.adoption, undefined)
+      assert(changed.requestSource)
+      assert.equal(changed.requestSource.quote, request)
+      await f.sessions.validateWorkEvidence(changed.requestSource)
+      assert.equal(f.writes(), 0)
+      assert.match(String(f.calls[1].messages.find(message => message.tool_call_id === 'stale-same-batch-write')?.content),
+        /basis changed|not adopted/)
+      f.calls[1].resolve(call('work', { action: 'adopt', key: work.key, revision: 2, data: adoption }))
+      await waitFor(() => f.calls.length === 3)
+      f.calls[2].resolve(call('fixture_write', {}))
+      await waitFor(() => f.calls.length === 4)
+      assert.equal(f.writes(), 1)
+      f.calls[3].resolve(done())
+      await waitFor(f.quiet)
+
+      await f.sessions.prepareCommandSession('web:peer')
+      const sender = { channel: 'web', chatId: 'worker', messageId: 'fixture', senderId: 'owner', admin: true }
+      const inputs: SessionInput[] = [
+        { kind: 'message', id: 'a2a-followup', timestamp: new Date().toISOString(), policy: 'queue', content: request,
+          source: { kind: 'user', sender: { ...sender, channel: 'a2a', admin: false } } },
+        { kind: 'message', id: 'peer-followup', timestamp: new Date().toISOString(), policy: 'queue', content: request,
+          source: { kind: 'session', sessionId: 'web:peer' } },
+        { kind: 'message', id: 'event-followup', timestamp: new Date().toISOString(), policy: 'queue', content: request,
+          source: { kind: 'event', eventId: 'untrusted-event', type: 'fixture', source: 'external' } },
+        { kind: 'control', id: 'owner-retry', timestamp: new Date().toISOString(), command: { type: 'retry' },
+          source: { kind: 'user', sender } },
+      ]
+      for (const input of inputs) {
+        const index = f.calls.length
+        await f.sessions.deliver(id, input, llm)
+        await waitFor(() => f.calls.length === index + 1)
+        f.calls[index].resolve(call('work', { action: 'update', key: work.key, revision: 2,
+          data: { change: 'goal', reason: 'Attempt to reuse earlier owner text', requestQuote: request,
+            definition: { ...changed.definition, acceptance: [...changed.definition.acceptance, 'Unrequested extra feature'] } } }))
+        await waitFor(() => f.calls.length === index + 2)
+        const result = f.calls[index + 1].messages.filter(message => message.role === 'tool').at(-1)
+        assert.match(String(result?.content), /current authenticated owner input/, input.id)
+        assert.equal(f.alignment.get(work.key).revision, 2)
+        f.calls[index + 1].resolve(done())
+        await waitFor(f.quiet)
+      }
+      const reopened = new InitiativeStore(workspace)
+      try {
+        const restored = reopened.workRecords().find(record => record.key === work.key)!
+        assert.deepEqual(restored.requestSource, changed.requestSource)
+        assert.equal(restored.workflow?.blockedScope, 'step')
+        assert.equal(restored.adoption?.revision, 2)
+      } finally { reopened.close() }
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: a Work-blocking batch still completes and records browser cleanup`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store)
+    const closed: string[] = []
+    const browser = new BrowserSetupTool(async request => {
+      assert.equal(request.action, 'close')
+      assert.equal(f.alignment.context(id).records[0].workflow?.status, 'blocked')
+      if (request.action !== 'close') throw new Error('Only closing the existing fixture instance is expected')
+      closed.push(request.instance)
+      return JSON.stringify({ instance: request.instance, closed: true })
+    })
+    f.tools.register(new InvokeTool(new ImportTool(new Map([['browser_setup', browser]]), workspace)))
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const actor = { kind: 'session' as const, sessionId: id }
+      const work = await f.alignment.execute(actor, 'create', undefined, undefined,
+        { title: 'Cleanup after review gate', definition, reason: 'Synthetic request' }) as WorkRecord
+      await f.alignment.execute(actor, 'adopt', work.key, work.revision, adoption)
+      const sequence = f.alignment.get(work.key).sequence
+      await f.send('Report the approval blocker and release the preview browser')
+      await waitFor(() => f.calls.length === 1)
+      f.calls[0].resolve({ content: '', toolCalls: [
+        { id: 'block-work', name: 'work', arguments: { action: 'progress', key: work.key, revision: work.revision,
+          data: { expectedSequence: sequence, status: 'blocked', blockedReason: 'Waiting for owner review', blockedScope: 'work' } } },
+        { id: 'close-preview', name: 'invoke_tool', arguments: { name: 'browser_setup', args: { action: 'close', instance: 'owned-fixture' } } },
+      ] })
+      await waitFor(() => f.calls.length === 2)
+      assert.match(String(f.calls[1].messages.find(message => message.role === 'tool' && message.tool_call_id === 'close-preview')?.content), /"closed":true/)
+      assert.deepEqual(closed, ['owned-fixture'])
+      assert.equal(f.alignment.get(work.key).workflow?.status, 'blocked')
+      assert.deepEqual(f.initiatives.workEffects(), [])
+      f.calls[1].resolve(done())
+      await waitFor(f.quiet)
+      await f.sessions.validateWorkEvidence({
+        sessionId: id, physicalId: physicalSessionId(f.sessions.getSessionState(id)!),
+        kind: 'tool', id: 'close-preview', quote: '"closed":true',
+      })
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: failed Work effects expose persisted, verifiable tool-result references`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store)
+    const failure = 'Error: fixture failure after partial work'
+    f.tools.register({ name: 'fixture_failure', description: '', parameters: { type: 'object', properties: {} },
+      async execute() { return failure } })
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const actor = { kind: 'session' as const, sessionId: id }
+      const work = await f.alignment.execute(actor, 'create', undefined, undefined,
+        { title: 'Failure recovery', definition, reason: 'Synthetic request' }) as WorkRecord
+      await f.alignment.execute(actor, 'adopt', work.key, work.revision, adoption)
+      await f.send('Attempt the bounded operation')
+      await waitFor(() => f.calls.length === 1)
+      f.calls[0].resolve(call('fixture_failure', {}, 'failure-call'))
+      await waitFor(() => f.calls.length === 2)
+      const effect = f.alignment.context(id).effects[0]
+      assert.equal(effect.status, 'unknown')
+      const currentPrompt = String(f.calls[1].messages[0].content)
+      assert.match(currentPrompt, /Unresolved Work effects \(1; showing 1\)/)
+      assert.ok(currentPrompt.includes(effect.id), 'Next inference sees the live effect before attempting another write')
+      assert.match(currentPrompt, /failure-call/)
+      assert.deepEqual(effect.resultSource, {
+        sessionId: id, physicalId: physicalSessionId(f.sessions.getSessionState(id)!), kind: 'tool', id: 'failure-call',
+      })
+      assert(effect.resultSource)
+      const evidence = { ...effect.resultSource, quote: failure }
+      await f.sessions.validateWorkEvidence(evidence)
+      assert.deepEqual(await f.sessions.resolveToolEvidence(id, [{ id: evidence.id, quote: failure }], AbortSignal.timeout(5000)), [evidence])
+      await assert.rejects(f.sessions.validateWorkEvidence({ ...evidence, quote: 'Invented successful output' }), /quote|source|excerpt/i)
+      const reopened = new InitiativeStore(workspace)
+      try {
+        const recovered = new WorkAlignment(reopened, {
+          state: target => f.sessions.getSessionState(target),
+          evidence: source => f.sessions.validateWorkEvidence(source),
+          changed: async () => {}, fresh: async () => {}, successor: async () => undefined,
+        })
+        assert.deepEqual(recovered.context(id).effects[0].resultSource, effect.resultSource)
+        assert.equal(recovered.context(id).effects[0].status, 'unknown', 'Reading a source reference does not settle an effect')
+      } finally { reopened.close() }
+      await f.alignment.execute(actor, 'settle', work.key, work.revision, { effectId: effect.id, evidence })
+      assert.equal(f.alignment.context(id).effects.length, 0)
+      assert.doesNotMatch(f.alignment.prompt(id), /# Unresolved Work effects/)
+      f.calls[1].resolve(done())
+      await waitFor(f.quiet)
+    } finally { await f.close(); store.close?.() }
+  }))
+
   test(`${Store.name}: GitHub follow-up uses real silent/queue admission and cached tool evidence without approving Work`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()
@@ -264,7 +539,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     finally { reopened.close() }
   }))
 
-  for (const surface of ['ask', 'work', 'project']) test(`${Store.name}: one ${surface} approval applies the exact work proposal and settles Ask`, async () => withTempWorkspace(async workspace => {
+  for (const surface of ['ask', 'work', 'project', 'acceptance-harness']) test(`${Store.name}: one ${surface} approval applies the exact work proposal and settles Ask`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()
     const f = await fixture(workspace, store)
@@ -292,10 +567,23 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.alignment.execute({ kind: 'session', sessionId: id }, 'propose', work.key, 1,
         { change: 'understanding', definition, reason: 'Alternative, not an applied change', paused: false })
       assert.equal(f.sessions.yields.get(id)?.id, request.id, 'A pending proposal must not invalidate another question')
+      const projectPath = `/api/work/${encodeURIComponent(work.key)}`
+      const approval = surface === 'acceptance-harness'
+        ? acceptanceWorkApproval({ key: work.key, revision: 1, proposalId: proposed.proposalId },
+          await (await f.app.request(projectPath, { headers: { 'x-work-fixture': 'human' } })).json())
+        : { action: 'apply_proposal', key: work.key, revision: 1, data: { proposalId: proposed.proposalId } }
+      if (surface === 'acceptance-harness') {
+        await assert.rejects(f.alignment.execute({ kind: 'session', sessionId: id },
+          approval.action, approval.key, approval.revision, approval.data), /authenticated human/)
+        assert.equal((await f.app.request(projectPath, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(approval),
+        })).status, 401)
+        assert.equal(f.alignment.get(work.key).revision, 1)
+      }
       const response = surface === 'ask' ? await f.post({ requestId: request.id, option: WORK_APPROVE }, 'ask')
-        : surface === 'project' ? await f.app.request(`/api/work/${encodeURIComponent(work.key)}`, {
+        : surface === 'project' || surface === 'acceptance-harness' ? await f.app.request(projectPath, {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-work-fixture': 'human' },
-          body: JSON.stringify({ action: 'apply_proposal', key: work.key, revision: 1, data: { proposalId: proposed.proposalId } }),
+          body: JSON.stringify(approval),
         })
         : await f.post({ action: 'apply_proposal', key: work.key, revision: 1, data: { proposalId: proposed.proposalId } })
       assert.equal(response.status, 200, await response.text())

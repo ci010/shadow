@@ -9,6 +9,7 @@ export interface McpErrorContext {
   stderr?: string
   secrets?: readonly string[]
   transportError?: unknown
+  elapsedMs?: number
 }
 
 export interface McpDiagnostic {
@@ -27,6 +28,8 @@ export interface McpDiagnostic {
   toolExecution: 'not_started' | 'unknown'
   causes?: string[]
   stderr?: string
+  elapsedMs?: number
+  packageErrorCode?: 'ETARGET' | 'E404' | 'EBADENGINE'
   cleanupFailure?: McpDiagnostic
 }
 
@@ -144,6 +147,10 @@ export function mcpFailure(error: unknown, context: McpErrorContext): McpError {
   const message = messages[0] ?? 'MCP operation failed without an error message'
   const stderr = context.stderr ? redactMcpText(context.stderr, context) : undefined
   const detail = [...messages, stderr ?? ''].join('\n')
+  const npmCode = context.phase === 'connect' && context.config?.transport === 'stdio'
+    ? context.stderr?.match(/^npm (?:error|ERR!) code (ETARGET|E404|EBADENGINE)\s*$/m)?.[1]
+    : undefined
+  const packageErrorCode = npmCode === 'ETARGET' || npmCode === 'E404' || npmCode === 'EBADENGINE' ? npmCode : undefined
   let category = 'unknown'
   let retryable = false
   let needsUserAction = false
@@ -171,6 +178,12 @@ export function mcpFailure(error: unknown, context: McpErrorContext): McpError {
     category = 'tls_error'
     needsUserAction = true
     nextAction = 'Ask the user to verify certificate trust, server URL and network setup. Do not disable TLS verification.'
+  } else if (packageErrorCode) {
+    category = packageErrorCode === 'EBADENGINE' ? 'runtime_incompatible' : 'package_unavailable'
+    needsUserAction = true
+    nextAction = packageErrorCode === 'EBADENGINE'
+      ? 'The package launcher rejected the runtime version before MCP initialized. Check the required Node/npm version and selected executable. Do not disable engine checks or repeatedly reconnect.'
+      : 'The configured package feed could not resolve the requested package/version before MCP initialized. Check the package specification and approved registry configuration; do not repeatedly reconnect, switch registries or substitute versions silently.'
   } else if (httpStatus === 429) {
     category = 'rate_limited'
     retryable = true
@@ -179,6 +192,11 @@ export function mcpFailure(error: unknown, context: McpErrorContext): McpError {
     category = 'timeout'
     retryable = true
     nextAction = 'Check server/network availability, then retry the import at most once. Escalate repeated failures with this diagnostic.'
+    if (context.phase === 'connect' && context.config?.transport === 'stdio') {
+      nextAction = 'MCP initialization did not finish; no tool ran. Check sanitized stderr for package download, interactive install, executable startup or server initialization issues. A launched browser is not proof its adapter initialized. Retry import at most once; preserve this diagnostic if it repeats.'
+    } else if (context.phase === 'call_tool') {
+      nextAction = 'The tool request exceeded its deadline, not necessarily MCP initialization. Compare the requested work or in-page waits with the request timeout. Do not re-import or replay it blindly; use short observation calls to inspect pending effects. For long idle checks, record a timestamp and inspect later rather than sleeping inside one RPC.'
+    }
   } else if (!(context.transportError instanceof SyntaxError) &&
     (rpcCode === -32000 || /^(ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE)$/.test(systemCode ?? ''))) {
     category = 'connection_error'
@@ -207,6 +225,8 @@ export function mcpFailure(error: unknown, context: McpErrorContext): McpError {
     toolExecution: context.phase === 'call_tool' ? 'unknown' : 'not_started',
     ...(messages.length > 1 ? { causes: messages.slice(1) } : {}),
     ...(stderr ? { stderr } : {}),
+    ...(context.elapsedMs !== undefined ? { elapsedMs: context.elapsedMs } : {}),
+    ...(packageErrorCode ? { packageErrorCode } : {}),
   }
   return new McpError(diagnostic)
 }

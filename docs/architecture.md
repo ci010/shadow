@@ -1289,10 +1289,49 @@ semantic revision with the work key; ordinary progress does not increment this
 revision. Each item has its own manager and assigned durable Session.
 Reporting responsibility and session creation provenance grant no
 control rights. Peers can `propose`; material goal/authorization changes and
-agent changes to human-confirmed agreements require human review. An executor
+agent changes to human-confirmed agreements normally require human review.
+A fresh authenticated owner's direct input can instead append acceptance through
+`update` with an exact `requestQuote`. This path requires the same durable
+manager/executor and preserves the objective, boundaries, prior acceptance and
+evidence. It stores a verified `requestSource`, marks the changed definition as
+an agent interpretation rather than human-approved wording, and requires fresh
+adoption. A2A, peers, events, group messages, old quotations and Retry/Continue
+cannot use this path. Pending decisions, pause/resume and terminal work cannot
+be bypassed; subsequent agent revisions cannot discard these user-directed
+requirements by labeling them an understanding change. Dedicated capability and
+app approvals remain separate.
+An executor
 may always pause its unchanged agreement. Only the actual executor can `adopt`,
 recording understanding, stopped actions, retained evidence and chosen next steps.
+For its own controller-owned agent interpretation, `adopt` can also append
+distinct in-scope criteria through `data.acceptance`, atomically incrementing the
+definition revision and adopting it. This preserves existing requirements and
+boundaries, invalidates old inference stamps/checkpoints, and retains unresolved
+effects and progress. Human-confirmed/owner-sourced, delegated, transitioning or
+pending-proposal agreements cannot use this shortcut. Repeating existing
+criteria does not increment the semantic revision; prose alone changes none.
 Session metadata and archived SQL cannot silently replace current work goals.
+Adoption does not clear a blocked progress state. New blocked progress defaults
+to `blockedScope: "step"`: it reports a waiting step without fencing independent
+authorized work. Explicit `"work"` scope and legacy blocked records with no
+scope retain a whole-work fence; updating their reason preserves that scope.
+Pause, unfinished dependencies, stale/unadopted revisions and unknown effects
+remain execution fences regardless of progress scope. Only resolve a blocker
+when it is actually resolved; neither adoption nor progress grants approval.
+Step scope is not automatic dependency analysis or a claim that arbitrary
+shell/MCP operations are safe. Tool/service authorization still applies.
+Failed tool results also journal their exact session/segment/call identity when
+available. Work context exposes this as `effects[].resultSource`, so an executor
+can cite the recorded result without guessing a physical segment. The quote and
+its source still undergo normal evidence validation; references never settle an
+effect automatically. Old/interrupted calls without a recorded reference remain
+unknown, and only references still present in the bounded Work history are shown.
+The runtime refreshes unresolved-effect hints before each inference, not only
+after a rejected retry. It shows at most three effect identities and caps expanded
+references, while the Work tool provides the complete scoped list. The hints
+disappear after reconciliation; the existing execution fence remains enforced.
+Progress completion evidence uses the same structured source references, not
+filenames or prose summaries; the Work discovery example mirrors that wire shape.
 Proposals are persisted on the work item and notify the UI. `ask` can bind to an
 exact proposal, displaying its definition and base revision. Only a human preset
 approval applies it; timeout, parent replies and custom text do not. The Work
@@ -1312,6 +1351,14 @@ without a captured basis fail closed and require fresh inference. A session
 with several assignments can explicitly `select` an unaffected work key; without
 a selection, the fence conservatively covers all assigned agreements. Selection
 does not isolate files or prove that arbitrary shell code implements that task.
+Only consecutive confirmed read-only calls execute in parallel. Mutating or
+unclassified calls are ordered barriers, so an asynchronous Work revision or
+adoption finishes before a following call is checked against its captured basis.
+Native tools can declare an argument-specific `workAdmission` cleanup policy.
+This bypasses only Work admission, not resource ownership, tool roles or aborts;
+it is never inferred from a tool name, model arguments or MCP annotations.
+Browser close and execution cancellation use this policy without being marked
+read-only or settling earlier unknown effects.
 
 Tool admissions with tracked effects persist before invocation. Late results
 are retained with their original revision and marked stale, not treated as new
@@ -1325,6 +1372,13 @@ pre-commit rejection; the registry preserves the error and records `not_applied`
 without retaining an unknown effect. Audio.cpp uses this only for malformed
 loader catalogs before configuration writes, not for process/probe failures.
 Unmarked exceptions, cancellation and interrupted writes remain conservative.
+Native execution also distinguishes an acknowledged error from lost execution:
+normally exited local commands, correlated remote normal-exit failures and
+closed inline Node error replies without tool-bridge calls record `returned_error`.
+They preserve failed output and possible partial changes without an unknown-effect
+fence. This is not `not_applied`, rollback, or permission to replay external
+effects. A private result identity carries the attestation; serialized hints
+cannot grant it. Aborts, signal exits and cleanup failures override completion.
 A returned background-process receipt is not proof that the external process
 finished: the executor must include ongoing jobs and uncertainties in its
 checkpoint. Already-running external effects are not rolled back or cancelled.

@@ -24,6 +24,9 @@ export const decisionEvidenceSchema = z.object({
   quote: z.string().max(2000).trim().min(1),
 }).strict()
 
+export const toolEvidenceQuerySchema = z.array(decisionEvidenceSchema.pick({ id: true, quote: true })).min(1).max(12)
+export type ToolEvidenceQuery = z.infer<typeof toolEvidenceQuerySchema>
+
 export interface DecisionBrief {
   goal: string
   whyHuman: string

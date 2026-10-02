@@ -60,6 +60,23 @@ test('direct choice helper submits exactly the requested option and blocks dupli
   assert.equal(state.request.value, null)
 })
 
+test('a workflow card never renders or answers a different pending question on the same session', async t => {
+  const { state, source, requests } = harness(t, { expectedRequestId: 'app-question' })
+  requests[0].finish(Response.json({ request: question('web:root', 'unrelated-question') }))
+  await settle()
+  assert.equal(state.request.value, null)
+  assert.equal(await state.submit(), false)
+  const refreshed = state.refresh()
+  requests[1].finish(Response.json({ request: { ...question('web:root', 'app-question'), ownerOnly: true } }))
+  await refreshed
+  assert.equal(state.request.value?.id, 'app-question')
+  source.expectedRequestId = 'replacement-question'
+  assert.equal(state.request.value, null)
+  requests[2].finish(Response.json({ request: question('web:root', 'app-question') }))
+  await settle()
+  assert.equal(state.request.value, null)
+})
+
 test('plain input has no default, retains rejected text, and requires a matching input receipt', async t => {
   const { state, requests } = harness(t)
   const input = { kind: 'input', id: 'input-1', sessionId: 'web:root', question: 'Which path?',

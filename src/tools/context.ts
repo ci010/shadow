@@ -9,6 +9,8 @@ export interface ExecutionContext extends MessageContext {
   projectId?: string
   evalBridge?: ToolBridgeFactory
   inputSource?: 'user' | 'session' | 'event'
+  /** Only a newly admitted, authenticated owner's direct message; never reconstructed on Retry/Continue. */
+  workUserInput?: string
   /** Runtime-captured before inference, never supplied in model tool arguments. */
   workStamps?: import('../initiatives/work-contract.ts').WorkStamp[]
   /** Logical session ID (e.g. "discord:1234567890") */
@@ -48,4 +50,11 @@ export interface ExecutionContext extends MessageContext {
   thinking?: ThinkingConfig
   /** DeepSeek reasoning effort level */
   reasoningEffort?: ReasoningEffort
+}
+
+export function currentOwnerWorkInput(context: ExecutionContext) {
+  if (context.inputSource !== 'user' || context.admin !== true || context.isGroup
+    || context.channel === 'a2a' || context.workUserInput === undefined) return undefined
+  return { text: context.workUserInput, source: { sessionId: context.sessionId, physicalId: context.physicalSessionId,
+    kind: 'user' as const, id: context.messageId } }
 }

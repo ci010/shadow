@@ -174,9 +174,19 @@ export function sessionsApiPlugin(
   options: {
     authorizeContext?: (request: Request) => boolean | Promise<boolean>
     authorizeRename?: (request: Request) => boolean | Promise<boolean>
+    authorizeOwnerDecision?: (request: Request) => boolean | Promise<boolean>
   } = {},
 ): GatewayPlugin {
   return (app: Hono) => {
+    const authorizeOwnerQuestion: Parameters<Hono['use']>[1] = async (c, next) => {
+      if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && sessions?.yields.get(c.req.param('key') ?? '')?.ownerOnly &&
+        !await options.authorizeOwnerDecision?.(c.req.raw)) {
+        return c.json({ error: 'unauthorized', message: 'Project owner access is required for this host confirmation.' }, 401)
+      }
+      await next()
+    }
+    app.use('/api/sessions/:key/ask', authorizeOwnerQuestion)
+    app.use('/api/sessions/:key/ask/*', authorizeOwnerQuestion)
     app.use('/api/sessions/:key/*', async (c, next) => {
       if (c.req.path.endsWith('/context')) {
         c.header('Cache-Control', 'no-store')
@@ -526,8 +536,9 @@ export function sessionsApiPlugin(
       }
       try {
         if (cancel) {
+          const ownerOnly = sessions.yields.userRequestSnapshot(key, body.requestId).ownerOnly
           await sessions.yields.cancelUser(key, body.requestId)
-          sessions.getActiveSession(key)?.cancel()
+          if (!ownerOnly) sessions.getActiveSession(key)?.cancel()
           return c.json({ cancelled: true })
         }
         if (typeof body.customText === 'string') {

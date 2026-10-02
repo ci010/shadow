@@ -565,10 +565,54 @@ export async function createProjectRuntime(
   importTool.registerBuiltin('io_capabilities', new IoCapabilitiesTool(io, project.id))
   importTool.registerBuiltin('io_run', new IoRunTool(io, project.id))
   importTool.registerBuiltin('io_surface', new IoSurfaceTool(io, project.id))
-  const microApps = new MicroApps(project.id, workspace, () => provider, () => activeConfig.agent.model)
+  const microApps = new MicroApps(project.id, workspace, () => provider, () => activeConfig.agent.model, {
+    ownerSession: id => { ioLocations(id); return sessions.yields.ownerSession(id) },
+    ask: (...args) => sessions.yields.askOwner(...args),
+    evidence: source => sessions.validateWorkEvidence(source),
+    resolveEvidence: (sessionId, sources, signal) => sessions.resolveToolEvidence(sessionId, sources, signal),
+    work: (sessionId, stamps) => {
+      const alignment = sessions.alignment
+      if (!alignment) throw new Error('Work alignment is unavailable')
+      alignment.assertCurrent(stamps, sessionId)
+      return stamps.map(stamp => {
+        const record = alignment.get(stamp.key)
+        return { key: record.key, revision: record.revision, acceptance: record.definition.acceptance }
+      })
+    },
+    blocker: record => {
+      if (!sessions.alignment) return 'Work alignment is unavailable'
+      const records = sessions.alignment.records(record.createdBy)
+      return (record.acceptance?.work ?? []).map(scope => {
+        const work = records.find(item => item.key === scope.key)
+        if (!work || work.revision !== scope.revision) return `${scope.key} changed since publication`
+        if (work.paused) return `${work.key} is paused`
+        if (work.workflow?.status === 'blocked') return work.workflow.blockedReason
+        if (work.workflow?.status === 'done' || work.workflow?.status === 'cancelled') return `${work.key} is ${work.workflow.status}`
+        return undefined
+      }).find(Boolean)
+    },
+    notify: async (record, acceptance) => {
+      ioLocations(record.createdBy)
+      await sessions.deliver(record.createdBy, {
+        kind: 'message', id: `microapp-test:${acceptance.id}`, timestamp: new Date().toISOString(), policy: 'queue',
+        source: { kind: 'event', eventId: acceptance.id, type: 'microapp.testing.ready', source: 'system',
+          attributes: { appId: record.id, revision: record.revision, acceptanceId: acceptance.id } },
+        content: `Micro App ${record.id}, exact revision ${record.revision}, is owner-approved. ` +
+          `The post-review testing question selected continue (${acceptance.decision}). ` +
+          'Read micro_app get and current Work before acting; stale or already reported requests must not restart testing. ' +
+          'Use micro_app test to open this version in your isolated browser. Exercise startup/preparation, SDK state across reopening, failure/cancel recovery, and stop/reopen. ' +
+          'Use get for host observations and evidence with recorded tool IDs/exact excerpts for canonical references, then report. Separate fixtures from actual runtime behavior and mark untested devices explicitly. ' +
+          'Account for every get.acceptance.work criterion in report.requirements, including blocked/not_tested items. ' +
+          'Do not install, capture, play or transmit beyond existing authorization. A fixed new revision requires a new owner review. Stop the app and close your test browser when finished.',
+      })
+    },
+  })
   await microApps.init()
+  const appAuthorStarted = bus.on('session.turn.started', fact => microApps.acceptance.authorTurn(fact))
+  const appAuthorFinished = bus.on('session.turn.finished', fact => microApps.acceptance.authorTurn(fact, fact.status))
+  cleanup.push(() => { bus.off(appAuthorStarted); bus.off(appAuthorFinished) })
   cleanup.push(() => microApps.shutdown())
-  importTool.registerBuiltin('micro_app', new MicroAppTool(microApps, sessionId => { ioLocations(sessionId) }))
+  importTool.registerBuiltin('micro_app', new MicroAppTool(microApps, sessionId => { ioLocations(sessionId) }, importTool))
   microAppsPlugin(microApps, dependencies.authorize)(app)
   importTool.registerBuiltin('audio_cpp', new AudioCppTool(new AudioCppService(workspace), project.id, workspace))
   importTool.registerBuiltin('diffusion_cpp', new DiffusionCppTool(
@@ -1058,7 +1102,7 @@ export async function createProjectRuntime(
       assertAccess: id => sessions.assertFolderAccess(id),
     }),
     topicsPlugin(topics, dependencies.authorize),
-    sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize }),
+    sessionsApiPlugin(sessions, { authorizeContext: dependencies.authorize, authorizeRename: dependencies.authorize, authorizeOwnerDecision: dependencies.authorize }),
     projectWorkPlugin(sessions, dependencies.authorize, () => github.references()),
     githubPlugin(github, dependencies.authorize),
     backgroundTasksPlugin(backgroundTasks, id => !!sessions.getSessionState(id)),

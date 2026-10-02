@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { decisionEvidenceSchema } from '../sessions/decision-brief.ts'
 
 export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024
 export const MAX_FILE_BYTES = 4 * 1024 * 1024
@@ -16,6 +17,12 @@ export type AppState = z.infer<typeof appStateSchema>
 export const microAppCapabilities = {
   version: 1,
   approval: { execution: 'owner-approved-revision', agentMayApprove: false },
+  acceptance: { afterApproval: 'ask-local-owner', timeoutMs: 60_000, default: 'continue-testing',
+    scope: 'approved-revision-only', open: 'author-owned-browser', reports: 'agent-assessment-with-host-observations',
+    categories: ['startup', 'state', 'recovery', 'reopen'], deviceAuthorization: 'unchanged',
+    requirements: 'published-work-acceptance-snapshot; report each criterion, including blocked/not_tested',
+    evidence: 'action:evidence resolves own recorded tool IDs and exact excerpts into canonical report references',
+    handoff: 'queued-notification, author-turn, runtime-testing, terminal-report-or-explicit-missing-report' },
   model: { input: 'text-only', maxConcurrentCalls: 2, failedAttemptsConsumeAllowance: true },
   storage: {
     browserPartition: 'ephemeral-per-native-window',
@@ -73,11 +80,82 @@ export const bundleSchema = z.object({
   files: z.record(z.string()),
 }).strict()
 export type AppBundle = z.infer<typeof bundleSchema>
+export const appObservationSchema = z.object({
+  id: z.string().uuid(), runId: z.string().uuid(),
+  kind: z.enum(['started', 'startup_failed', 'sdk_connected', 'state_read', 'state_saved',
+    'model_completed', 'model_failed', 'model_cancelled', 'backend_completed', 'backend_failed', 'backend_cancelled',
+    'stopped', 'interrupted']),
+  firstAt: z.string().datetime(), lastAt: z.string().datetime(), count: z.number().int().positive(),
+  firstSequence: z.number().int().positive(), lastSequence: z.number().int().positive(),
+  stateVersion: z.number().int().nonnegative().optional(),
+}).strict()
+const appCheckSchema = z.object({
+  result: z.enum(['passed', 'failed', 'blocked', 'not_tested']),
+  basis: z.enum(['runtime', 'fixture', 'not_tested']),
+  summary: z.string().trim().min(1).max(2000),
+  observations: z.array(z.string().uuid()).max(20),
+  evidence: z.array(decisionEvidenceSchema.extend({ kind: z.literal('tool') })).max(6),
+}).strict()
+export const appWorkScopeSchema = z.object({
+  key: z.string().min(1).max(600), revision: z.number().int().positive(),
+  acceptance: z.array(z.string().min(1).max(4000)).min(1).max(12),
+}).strict()
+export type AppWorkScope = z.infer<typeof appWorkScopeSchema>
+export const appTestReportSchema = z.object({
+  checks: z.array(appCheckSchema.extend({
+    category: z.enum(['startup', 'state', 'recovery', 'reopen', 'business', 'device']),
+  })).min(4).max(6),
+  requirements: z.array(appCheckSchema.extend({
+    workKey: z.string().min(1).max(600), workRevision: z.number().int().positive(),
+    criterion: z.number().int().nonnegative().max(11),
+  })).max(240).optional(),
+}).strict().superRefine(({ checks, requirements }, ctx) => {
+  const categories: string[] = checks.map(check => check.category)
+  if (new Set(categories).size !== checks.length ||
+    ['startup', 'state', 'recovery', 'reopen'].some(category => !categories.includes(category))) {
+    ctx.addIssue({ code: 'custom', path: ['checks'], message: 'Include startup, state, recovery and reopen exactly once; business/device are optional.' })
+  }
+  for (const [collection, items] of [['checks', checks], ['requirements', requirements ?? []]] as const) {
+    for (const [index, check] of items.entries()) {
+      if (check.result === 'passed' && check.basis === 'not_tested') {
+        ctx.addIssue({ code: 'custom', path: [collection, index, 'basis'], message: 'Passed checks cannot use a not_tested basis.' })
+      }
+      if (check.result === 'passed' && !check.evidence.length) {
+        ctx.addIssue({ code: 'custom', path: [collection, index, 'evidence'], message: 'Passed checks need recorded tool evidence.' })
+      }
+      if (check.basis === 'runtime' && !check.observations.length) {
+        ctx.addIssue({ code: 'custom', path: [collection, index, 'observations'],
+          message: 'Runtime basis requires host observations, even for blocked/failed results. Cite IDs from get.acceptance or use the basis actually exercised.' })
+      }
+    }
+  }
+})
+export type AppTestReport = z.infer<typeof appTestReportSchema>
+export const appAcceptanceSchema = z.object({
+  id: z.string().uuid(), revision: revisionId, approvalAt: z.string().datetime(),
+  status: z.enum(['asking', 'paused', 'dispatching', 'notified', 'running', 'testing', 'blocked', 'incomplete', 'failed', 'interrupted', 'reported']),
+  authorTurn: z.object({
+    id: z.string().min(1), startedAt: z.string().datetime(), finishedAt: z.string().datetime().optional(),
+    outcome: z.enum(['completed', 'failed', 'cancelled']).optional(),
+  }).strict().optional(),
+  work: z.array(appWorkScopeSchema).max(20).optional(),
+  decisionSessionId: z.string().min(1).optional(),
+  decisionRequestId: z.string().min(1).optional(),
+  decision: z.enum(['user', 'timeout']).optional(),
+  error: z.string().max(1000).optional(),
+  sequence: z.number().int().nonnegative().default(0),
+  observations: z.array(appObservationSchema).max(128), observationsTruncated: z.boolean().optional(),
+  report: z.object({ at: z.string().datetime(), sessionId: z.string().min(1), result: appTestReportSchema }).strict().optional(),
+}).strict()
+export type AppAcceptance = z.infer<typeof appAcceptanceSchema>
+export type AppObservation = z.infer<typeof appObservationSchema>
 export const appRecordSchema = z.object({
   version: z.literal(1), id: appId, revision: revisionId, manifest: appManifestSchema,
   createdBy: z.string().min(1), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
   approval: z.object({ revision: revisionId, at: z.string().datetime(), model: z.string().min(1).optional() }).strict().optional(),
   calls: z.number().int().nonnegative().default(0),
+  work: z.array(appWorkScopeSchema).max(20).optional(),
+  acceptance: appAcceptanceSchema.optional(),
   lastRun: z.object({
     id: z.string().uuid(), status: z.enum(['starting', 'running', 'stopped', 'failed', 'interrupted']),
     error: z.string().optional(),

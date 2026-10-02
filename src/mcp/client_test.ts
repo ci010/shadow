@@ -154,7 +154,9 @@ test('text compatibility, tool errors, structured/media content and private meta
   ]
   t.mock.method(Client.prototype, 'callTool', async () => replies.shift())
   assert.equal(await connection.callTool('fixture', {}), 'one\ntwo')
-  assert.deepEqual(JSON.parse(requireToolText(await connection.callTool('fixture', {}))), {
+  const failed = await connection.callTool('fixture', {})
+  assert(typeof failed !== 'string' && failed.isError === true, 'MCP failure status must reach Work admission')
+  assert.deepEqual(JSON.parse(requireToolText(failed)), {
     isError: true, content: [{ type: 'text', text: 'failed' }],
   })
   const media = await connection.callTool('fixture', {})
@@ -177,6 +179,25 @@ test('malformed tool results fail explicitly', async (t) => {
     reply = result
     await assert.rejects(connection.callTool('fixture', {}), /Malformed MCP tool result/)
   }
+})
+
+test('tool request timeouts include elapsed time and never recommend blind re-import', async t => {
+  const connection = await connected(t)
+  const calls = t.mock.method(Client.prototype, 'callTool', async () => {
+    throw Object.assign(new Error('Request timed out'), { code: -32001 })
+  })
+  await assert.rejects(connection.callTool('fixture', {}), (error: unknown) => {
+    assert(error instanceof McpError)
+    assert.equal(error.diagnostic.phase, 'call_tool')
+    assert.equal(error.diagnostic.toolExecution, 'unknown')
+    assert.equal(error.diagnostic.retryable, false)
+    assert.equal(typeof error.diagnostic.elapsedMs, 'number')
+    assert(error.diagnostic.elapsedMs! >= 0)
+    assert.match(error.diagnostic.nextAction, /record a timestamp/)
+    assert.doesNotMatch(error.diagnostic.nextAction, /retry the import at most once/)
+    return true
+  })
+  assert.equal(calls.mock.callCount(), 1)
 })
 
 test('aborting startup closes stalled SDK transport and permits reconnect', async (t) => {
@@ -334,6 +355,8 @@ test('real stdio startup failures include bounded sanitized stderr', async () =>
       assert.ok(error instanceof McpError)
       assert.equal(error.diagnostic.phase, 'connect')
       assert.match(error.diagnostic.stderr ?? '', /Missing required setting/)
+      assert.equal(typeof error.diagnostic.elapsedMs, 'number')
+      assert.ok(error.diagnostic.elapsedMs! >= 0)
       assert.doesNotMatch(inspect(error), /synthetic-private-credential/)
       return true
     })
@@ -365,7 +388,8 @@ test('real HTTP SDK failures disclose response status and sanitized server expla
   }
 })
 
-test('a missing stdio executable preserves native ENOENT or Windows shell diagnostics without inventing a code', async () => {
+test('a missing explicit stdio executable reports native ENOENT independently of shell locale', async t => {
+  const connect = t.mock.method(Client.prototype, 'connect', async () => { assert.fail('Missing executable must not start the SDK') })
   const connection = new McpConnection({
     name: 'fixture', transport: 'stdio',
     command: join(process.cwd(), '.tmp', `missing-mcp-${crypto.randomUUID()}.exe`),
@@ -373,18 +397,102 @@ test('a missing stdio executable preserves native ENOENT or Windows shell diagno
   try {
     await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
       assert.ok(error instanceof McpError)
-      if (process.platform === 'win32') {
-        assert.match(error.diagnostic.stderr ?? '', /not recognized as an internal or external command/)
-        assert.equal(error.diagnostic.rpcCode, -32000)
-      } else {
-        assert.equal(error.diagnostic.systemCode, 'ENOENT', error.message)
-      }
+      assert.equal(error.diagnostic.systemCode, 'ENOENT', error.message)
+      assert.equal(error.diagnostic.rpcCode, undefined)
       assert.equal(error.diagnostic.category, 'executable_not_found')
+      assert.equal(error.diagnostic.toolExecution, 'not_started')
+      assert.equal(error.diagnostic.retryable, false)
       return true
     })
+    assert.equal(connect.mock.callCount(), 0)
   } finally {
     await connection.disconnect()
   }
+})
+
+test('stdio stderr preserves split UTF-8 and redacts secrets after decoding', async () => {
+  const text = String.fromCodePoint(0x4e2d, 0x6587, 0x1f3a7)
+  const bytes = Buffer.from(`${text}; API_KEY=synthetic-private-credential`)
+  const connection = new McpConnection({
+    name: 'fixture', transport: 'stdio', command: process.execPath,
+    args: ['-e', `const b=Buffer.from(${JSON.stringify([...bytes])}); process.stderr.write(b.subarray(0,2)); setTimeout(()=>process.stderr.write(b.subarray(2),()=>process.exit(1)),30)`],
+    env: { API_KEY: 'synthetic-private-credential' },
+  })
+
+  try {
+    await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
+      assert(error instanceof McpError)
+      assert.ok(error.diagnostic.stderr?.includes(text))
+      assert.doesNotMatch(error.diagnostic.stderr ?? '', /\uFFFD/)
+      assert.doesNotMatch(inspect(error), /synthetic-private-credential/)
+      return true
+    })
+  } finally { await connection.disconnect() }
+})
+
+test('actual stdio package-launch failures retain npm error codes through SDK connection closure', async () => withTempWorkspace(async home => {
+  const connection = new McpConnection({
+    name: 'fixture', transport: 'stdio', command: process.execPath,
+    args: ['-e', 'process.stderr.write("npm error code ETARGET\\nnpm error notarget No matching version\\n",()=>process.exit(1))'],
+  }, home)
+  try {
+    await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
+      assert(error instanceof McpError)
+      assert.equal(error.diagnostic.category, 'package_unavailable')
+      assert.equal(error.diagnostic.packageErrorCode, 'ETARGET')
+      assert.equal(error.diagnostic.retryable, false)
+      return true
+    })
+  } finally { await connection.disconnect() }
+}))
+
+test('Windows absolute extensionless executables still resolve through SDK PATHEXT lookup', { skip: process.platform !== 'win32' }, async () => {
+  assert.match(process.execPath, /\.exe$/i)
+  const connection = new McpConnection({
+    name: 'fixture', transport: 'stdio', command: process.execPath.slice(0, -4),
+    args: ['-e', 'process.stderr.write("PATHEXT executable reached",()=>process.exit(1))'],
+  })
+  try {
+    await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
+      assert(error instanceof McpError)
+      assert.match(error.diagnostic.stderr ?? '', /PATHEXT executable reached/)
+      assert.notEqual(error.diagnostic.category, 'executable_not_found')
+      return true
+    })
+  } finally { await connection.disconnect() }
+})
+
+test('Windows command-wrapper stderr remains readable in the current OEM locale', { skip: process.platform !== 'win32' }, async () => {
+  const missing = `missing-mcp-${crypto.randomUUID()}`
+  const connection = new McpConnection({
+    name: 'fixture', transport: 'stdio', command: process.env.ComSpec ?? 'cmd.exe',
+    args: ['/d', '/c', missing],
+  })
+  try {
+    await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
+      assert(error instanceof McpError)
+      assert.ok(error.diagnostic.stderr?.includes(missing), error.message)
+      assert.doesNotMatch(error.diagnostic.stderr ?? '', /\uFFFD/)
+      assert.equal(error.diagnostic.toolExecution, 'not_started')
+      return true
+    })
+  } finally { await connection.disconnect() }
+})
+
+test('oversized stdio stderr is omitted without retaining credentials or unbounded chunks', async () => {
+  const connection = new McpConnection({
+    name: 'fixture', transport: 'stdio', command: process.execPath,
+    args: ['-e', 'process.stderr.write("x".repeat(40000) + " API_KEY=synthetic-private-credential",()=>process.exit(1))'],
+    env: { API_KEY: 'synthetic-private-credential' },
+  })
+  try {
+    await assert.rejects(connection.connect(AbortSignal.timeout(10_000)), error => {
+      assert(error instanceof McpError)
+      assert.equal(error.diagnostic.stderr, '[stderr omitted: exceeded diagnostic capture limit]')
+      assert.doesNotMatch(inspect(error), /synthetic-private-credential/)
+      return true
+    })
+  } finally { await connection.disconnect() }
 })
 
 test('invalid stdio JSON retains the transport parse error behind connection closure', async () => {

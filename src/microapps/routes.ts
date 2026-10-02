@@ -26,6 +26,10 @@ export function microAppsPlugin(service: MicroApps, authorize: (request: Request
       const input = z.object({ revision: revisionId, confirm: z.literal(true), model: z.string().trim().min(1).max(256).optional() }).strict().parse(await appJson(c.req.raw))
       return c.json(await service.approve(c.req.param('id'), input.revision, input.model))
     })
+    app.post('/api/microapps/:id/test', async c => {
+      const input = z.object({ revision: revisionId }).strict().parse(await appJson(c.req.raw))
+      return c.json(await service.requestTesting(c.req.param('id'), input.revision))
+    })
     app.post('/api/microapps/:id/:action', async c => {
       z.object({}).strict().parse(await appJson(c.req.raw))
       const action = z.enum(['start', 'stop', 'open', 'revoke']).parse(c.req.param('action'))

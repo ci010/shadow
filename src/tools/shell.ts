@@ -14,8 +14,8 @@ import {
 } from '../execution/processes/shells.ts'
 import type { CommandHandlerManager } from './shell-commands/command-handler.ts'
 import { bindScriptTools } from '../script-runtime/bridge.ts'
-import { startScript, type ScriptRun } from '../script-runtime/runtime.ts'
-import type { Tool, ToolParameters } from './tool.ts'
+import { ScriptExecutionError, startScript, type ScriptRun } from '../script-runtime/runtime.ts'
+import { ToolNoEffectError, completedToolFailure, requireToolText, type Tool, type ToolParameters, type ToolResult } from './tool.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { backgroundExecutionId, type BackgroundTaskManager } from '../agent/background-task.ts'
 import { loadDotEnv } from '../utils/env.ts'
@@ -102,7 +102,7 @@ function parseExecShell(
  * Leaf calls instead require a positive timeout (default/max 120 seconds),
  * terminate owned foreground work on timeout/abort, and never register callbacks.
  */
-export class ExecTool implements Tool {
+export class ExecTool implements Tool<ToolResult> {
   readonly name = 'exec'
   readonly supportsRemoteWorkdir = true
   readonly description =
@@ -113,11 +113,11 @@ export class ExecTool implements Tool {
       script: {
         type: 'string',
         description:
-          'Script to run. For OS shells this is the command string; for `shell=node` this is inline TypeScript source.',
+          'Script to run. For OS shells this is the command string; for `shell=node` this is inline TypeScript source. Preserve failures: do not append exit 0 or || true to hide an error. When chaining native commands in PowerShell, check $LASTEXITCODE after each one and propagate failures.',
       },
       shell: {
         type: 'string',
-        description: 'Runtime: OS shell name or `node` for inline TypeScript.',
+        description: 'Runtime: OS shell name or `node` for inline TypeScript. Omitted uses the Runtime default (normally cmd on Windows, sh on Unix). Select powershell/pwsh explicitly for PowerShell syntax; shell syntax is not auto-detected.',
       },
       args: {
         type: 'array',
@@ -159,16 +159,21 @@ export class ExecTool implements Tool {
     exitCode: number,
     success: boolean,
     shell?: ManagedShell,
-  ): string {
+    completed = false,
+  ): ToolResult {
     const stdout = decodeChunks(stdoutChunks, shell)
     const stderr = decodeChunks(stderrChunks, shell)
     let output = ''
     if (stdout) output += stdout
     if (stderr) output += `\n[stderr]\n${stderr}`
-    if (!output.trim() && !success) {
-      output = `Error: command exited with code ${exitCode}`
+    if (!success) {
+      output = `Error: command exited with code ${exitCode}${output.trim() ? `\n${output}` : ''}`
     }
-    return output || `(no output, exit code ${exitCode})`
+    const result = {
+      isError: !success,
+      content: [{ type: 'text' as const, text: output || `(no output, exit code ${exitCode})` }],
+    }
+    return completed && !success ? completedToolFailure(result) : result
   }
 
   private registerBackgroundProcessTask(
@@ -197,15 +202,17 @@ export class ExecTool implements Tool {
           return output.trim() || '(no output yet)'
         },
       },
-      managed.exitPromise.then((status) =>
-        this.formatManagedProcessOutput(
+      managed.exitPromise.then((status) => {
+        const output = requireToolText(this.formatManagedProcessOutput(
           managed.stdoutChunks,
           managed.stderrChunks,
           status.code,
           status.success,
           managed.shell,
-        )
-      ),
+        ))
+        if (!status.success) throw new Error(output)
+        return output
+      }),
     )
   }
 
@@ -219,7 +226,13 @@ export class ExecTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context: ExecutionContext,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
+    context.signal.throwIfAborted()
+    const script = typeof args.script === 'string' ? args.script : ''
+    if (!script.trim()) throw new ToolNoEffectError('`script` is required')
+    const shell = parseExecShell(args.shell, context.defaultExecShell ?? this.defaultShell)
+    if (!shell) throw new ToolNoEffectError('Invalid `shell`. Supported values include `cmd`, `sh`, `bash`, `git-bash`, `powershell`, `pwsh`, and `node`')
+    const request = { ...args, script, shell }
     const foreground = context.tools?.executionMode === 'call'
     if (context.remoteWorkdir) {
       const reason = 'exec cannot enforce a foreground process lifecycle on remote workdirs.'
@@ -233,6 +246,7 @@ export class ExecTool implements Tool {
       }
       try {
         // Do not resolve cwd, shells, dotenv, or command interceptors on Main.
+        let completed = false
         const output = await executeRemoteShell({
           ...context.remoteWorkdir,
           sessionId: context.sessionId,
@@ -243,9 +257,9 @@ export class ExecTool implements Tool {
           ...(args.shell === undefined ? {} : { shell: parseExecShell(args.shell) }),
           ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
           ...(args.args === undefined ? {} : { args: args.args }),
-        }, args.timeout_ms === undefined ? this._defaultTimeoutMs : args.timeout_ms as number)
+        }, args.timeout_ms === undefined ? this._defaultTimeoutMs : args.timeout_ms as number, () => { completed = true })
         context.signal.throwIfAborted()
-        return output
+        return completed ? completedToolFailure({ isError: true, content: [{ type: 'text', text: output }] }) : output
       } catch (error) {
         context.signal.throwIfAborted()
         return `Error: ${errMsg(error)}`
@@ -256,30 +270,19 @@ export class ExecTool implements Tool {
       const denied = context.tools.executionDenial('exec', args)
       if (denied) return denied
       return context.tools.runForeground(context.signal, (signal, cancel) =>
-        this.executeRequest(args, { ...context, signal }, true, cancel))
+        this.executeRequest(request, { ...context, signal }, true, cancel))
     }
-    return this.executeRequest(args, context, false)
+    return this.executeRequest(request, context, false)
   }
 
   private async executeRequest(
-    args: Record<string, unknown>,
+    args: Record<string, unknown> & { script: string; shell: ExecShell },
     context: ExecutionContext,
     foreground: boolean,
     cancel: () => void = () => {},
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     if (foreground) context.signal.throwIfAborted()
-    const script = typeof args.script === 'string' ? args.script : ''
-    if (!script.trim()) {
-      return 'Error: `script` is required'
-    }
-
-    const shell = parseExecShell(
-      args.shell,
-      context.defaultExecShell ?? this.defaultShell,
-    )
-    if (!shell) {
-      return 'Error: invalid `shell`. Supported values include `cmd`, `sh`, `bash`, `git-bash`, `powershell`, `pwsh`, and `node`'
-    }
+    const { script, shell } = args
 
     const scriptArgs = parseStringArray(args.args)
     const base = context.cwd ?? this.workspace
@@ -395,6 +398,7 @@ export class ExecTool implements Tool {
       result.status.code,
       result.status.success,
       managed.shell,
+      result.status.signal === null && result.status.code >= 0 && !context.signal.aborted,
     )
   }
 
@@ -414,16 +418,17 @@ export class ExecTool implements Tool {
     timeoutMs: number,
     context: ExecutionContext,
     cancel: () => void,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     let cleanup: Promise<ManagedProcessStatus> | undefined
     const terminate = () => cleanup ??= this.cleanupForeground(context, () => this.processManager.terminate(managed))
     try {
       const result = await waitForExit(managed.exitPromise, timeoutMs, context.signal)
-      if (result) return this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, result.status.code, result.status.success, managed.shell)
+      if (result) return this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, result.status.code, result.status.success, managed.shell,
+        result.status.signal === null && result.status.code >= 0 && !context.signal.aborted)
       cancel()
       const status = await terminate()
       return `Error: foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.\n${
-        this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, status.code, status.success, managed.shell)}`
+        requireToolText(this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, status.code, status.success, managed.shell))}`
     } finally {
       cancel()
       await terminate()
@@ -438,7 +443,7 @@ export class ExecTool implements Tool {
     context: ExecutionContext,
     foreground: boolean,
     cancel: () => void,
-  ): Promise<string> {
+  ): Promise<ToolResult> {
     if (timeoutMs === 0 && !this.backgroundTasks) {
       return 'Error: background tasks are not available in this context'
     }
@@ -447,7 +452,7 @@ export class ExecTool implements Tool {
     let transferred = false
     let binding: ReturnType<typeof bindScriptTools> | undefined
     let run: ScriptRun | undefined
-    let completion: Promise<string> | undefined
+    let completion: Promise<ToolResult> | undefined
     const ownedExecCalls = new Set<Promise<unknown>>()
     const detach = () => context.signal.removeEventListener('abort', abort)
     const observe = () => {
@@ -482,14 +487,22 @@ export class ExecTool implements Tool {
         timeoutMs: foreground ? timeoutMs : null,
         env,
       })
-      completion = run.completion.then(
+      const failure = (error: string): ToolResult => ({
+        isError: true,
+        content: [{ type: 'text', text: JSON.stringify({
+          ok: false, module: '<inline script>', cwd, ...run!.output(), error,
+        }, null, 2) }],
+      })
+      completion = run.completion.then<ToolResult, ToolResult>(
         result => JSON.stringify({
           ok: true, module: '<inline script>', cwd,
           stdout: result.stdout, stderr: result.stderr, result: result.value,
         }, null, 2),
-        error => JSON.stringify({
-          ok: false, module: '<inline script>', cwd, ...run!.output(), error: errMsg(error),
-        }, null, 2),
+        error => {
+          const result = failure(errMsg(error))
+          return error instanceof ScriptExecutionError && !controller.signal.aborted && typeof result !== 'string'
+            ? completedToolFailure(result) : result
+        },
       ).finally(async () => {
         await binding!.cleanup()
         await Promise.allSettled(ownedExecCalls)
@@ -503,10 +516,7 @@ export class ExecTool implements Tool {
         cancel()
         run.cancel()
         await completion
-        return JSON.stringify({
-          ok: false, module: '<inline script>', cwd, ...run.output(),
-          error: `Foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.`,
-        }, null, 2)
+        return failure(`Foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.`)
       }
       if (!this.backgroundTasks) throw new Error('Background tasks are not available in this context')
       const taskId = this.backgroundTasks.runPromiseTask({
@@ -525,7 +535,11 @@ export class ExecTool implements Tool {
           controller.abort(new Error('Background task cancelled'))
           run!.cancel()
         },
-      }, completion)
+      }, completion.then(result => {
+        const text = requireToolText(result)
+        if (typeof result !== 'string' && result.isError) throw new Error(text)
+        return text
+      }))
       // Ownership now belongs to the background task, not the LLM turn.
       detach()
       transferred = true

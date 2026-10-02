@@ -28,14 +28,15 @@ export async function startAppProcess(backend: NonNullable<AppManifest['backend'
   }
   Object.assign(env, { SHADOW_APP_PORT: String(port), SHADOW_APP_DATA: data, SHADOW_APP_TEMP: temporary,
     TEMP: temporary, TMP: temporary, TMPDIR: temporary,
-    SHADOW_APP_API: api, SHADOW_APP_TOKEN: token, PYTHONUNBUFFERED: '1', PYTHONNOUSERSITE: '1' })
+    SHADOW_APP_API: api, SHADOW_APP_TOKEN: token, PYTHONUNBUFFERED: '1', PYTHONNOUSERSITE: '1',
+    PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' })
   const args = [join(directory, ...backend.entry.split('/')), ...backend.args]
   if (backend.runtime === 'node') {
     env.ELECTRON_RUN_AS_NODE = '1'
     env.SHADOW_APP_NETWORK_PROXY = JSON.stringify(await localProxyConfiguration(signal))
     const extension = import.meta.url.endsWith('.ts') ? 'ts' : 'js'
     args.unshift('--import', new URL(`../execution/network/proxy-preload.${extension}`, import.meta.url).href)
-  }
+  } else args.unshift('-X', 'utf8')
   signal.throwIfAborted()
   const child = spawn(backend.runtime === 'node' ? process.execPath : 'python',
     args,
@@ -43,9 +44,22 @@ export async function startAppProcess(backend: NonNullable<AppManifest['backend'
   const exited = new Promise<ManagedProcessStatus>(resolve => {
     child.once('close', (code, signal) => resolve({ code: code ?? -1, signal, success: code === 0 && signal === null }))
   })
-  // Drain output without persisting potentially sensitive app payloads or credentials.
+  // Retain only known startup error categories, never app output or credentials.
   child.stdout.resume()
-  child.stderr.resume()
+  let stderrTail = ''
+  let startupHint: 'dependency' | 'syntax' | undefined
+  const inspectStderr = (chunk: Buffer) => {
+    for (let offset = 0; offset < chunk.length; offset += 1024) {
+      const text = stderrTail + chunk.subarray(offset, offset + 1024).toString('utf8')
+      if (/\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|ModuleNotFoundError|ImportError)\b/.test(text)) startupHint = 'dependency'
+      else if (!startupHint && /\b(?:SyntaxError|IndentationError|TabError)\b/.test(text)) startupHint = 'syntax'
+      stderrTail = text.slice(-64)
+    }
+  }
+  child.stderr.on('data', inspectStderr)
+  const startupError = (message: string) => new Error(message + (startupHint === 'dependency'
+    ? '. Startup stderr reported a missing or unloadable dependency. Check the published file list and app-owned dependency setup, not only the author working directory.'
+    : startupHint === 'syntax' ? '. Startup stderr reported invalid source syntax. Check the published backend and helper scripts.' : ''))
   let stopping: Promise<unknown> | undefined
   const run: AppProcess = { child, exited, origin: `http://127.0.0.1:${port}`,
     stop: async () => {
@@ -60,7 +74,7 @@ export async function startAppProcess(backend: NonNullable<AppManifest['backend'
     let lastProbe = 'Listener not ready'
     while (Date.now() < deadline) {
       signal.throwIfAborted()
-      if (run.error || child.exitCode !== null || child.signalCode !== null) throw new Error(run.error ?? `App backend exited before becoming ready (code ${child.exitCode})`)
+      if (run.error || child.exitCode !== null || child.signalCode !== null) throw startupError(run.error ?? `App backend exited before becoming ready (code ${child.exitCode})`)
       try {
         const response = await fetch(`${run.origin}/health`, {
           headers: { Authorization: `Bearer ${token}` }, redirect: 'error',
@@ -76,9 +90,13 @@ export async function startAppProcess(backend: NonNullable<AppManifest['backend'
       }
       await delay(100, undefined, { signal })
     }
-    throw new Error(`App backend did not serve GET /health successfully within 15 seconds: ${lastProbe}`)
+    throw startupError(`App backend did not serve GET /health successfully within 15 seconds: ${lastProbe}`)
   } catch (error) {
     await run.stop()
     throw error
+  } finally {
+    child.stderr.off('data', inspectStderr)
+    child.stderr.resume()
+    stderrTail = ''
   }
 }

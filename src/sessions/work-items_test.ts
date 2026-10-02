@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { randomUUID } from 'node:crypto'
 import { InitiativeStore } from '../initiatives/store.ts'
-import { WORK_APPROVE, WORK_REJECT, type WorkRecord } from '../initiatives/work-contract.ts'
+import { WORK_APPROVE, WORK_REJECT, workAdoptionSchema, type WorkRecord } from '../initiatives/work-contract.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { WorkAlignment } from './work-alignment.ts'
 import type { SessionState } from './session-store.ts'
@@ -12,6 +12,15 @@ const definition = { objective: 'Deliver both protocols', acceptance: ['Inbound 
 const adopt = { understanding: 'Both directions', stop: [], retain: [], next: ['Implement and verify'] }
 const checkpoint = { completed: [], artifacts: [], inFlight: [], unknown: [], retired: [] }
 const actor = (sessionId: string) => ({ kind: 'session' as const, sessionId })
+
+test('adoption defaults only empty inventories, never understanding, next steps or malformed values', () => {
+  assert.deepEqual(workAdoptionSchema.parse({ understanding: 'Current scope', next: ['Verify'] }),
+    { understanding: 'Current scope', next: ['Verify'], stop: [], retain: [] })
+  for (const value of [{ next: ['Verify'] }, { understanding: 'Scope' }, { understanding: 'Scope', next: [] },
+    { understanding: 'Scope', next: ['Verify'], stop: null }, { understanding: 'Scope', next: ['Verify'], retain: 'none' }]) {
+    assert.throws(() => workAdoptionSchema.parse(value))
+  }
+})
 
 function setup(home: string) {
   const states = new Map<string, SessionState>(['owner', 'worker', 'peer'].map(id =>
@@ -84,6 +93,61 @@ test('one work item survives release and reassignment; stale generations and tak
     const current = f.alignment.get(work.key)
     await assert.rejects(f.alignment.execute(actor('worker'), 'progress', work.key, 1,
       { expectedSequence: current.sequence - 1, status: 'in_progress' }), /Work changed/)
+  } finally { f.store.close() }
+}))
+
+test('adoption atomically versions additive acceptance without duplicating criteria or granting authority', async () => withTempWorkspace(async home => {
+  const f = setup(home)
+  try {
+    const original = await f.create('Reusable translator')
+    await f.alignment.execute(actor('owner'), 'adopt', original.key, 1, adopt)
+    const stale = f.alignment.snapshot('owner')
+    await f.alignment.execute(actor('owner'), 'checkpoint', original.key, 1, checkpoint)
+    const before = f.alignment.get(original.key)
+    const updated = await f.alignment.execute(actor('owner'), 'adopt', original.key, 1, {
+      ...adopt, acceptance: ['Only the requested process is captured', 'Pending input is retained', 'Pending input is retained'],
+    }) as WorkRecord
+    assert.equal(updated.revision, 2)
+    assert.equal(updated.sequence, before.sequence + 1, 'Definition and adoption commit once')
+    assert.deepEqual(updated.definition.acceptance, [...definition.acceptance, 'Only the requested process is captured', 'Pending input is retained'])
+    assert.equal(updated.definition.objective, definition.objective)
+    assert.deepEqual(updated.definition.boundaries, definition.boundaries)
+    assert.equal(updated.origin, 'agent_interpretation')
+    assert.equal(updated.requestSource, undefined, 'A refinement is not authenticated owner approval')
+    assert.equal(updated.adoption!.revision, 2)
+    assert.equal(updated.checkpoint, undefined)
+    assert.equal(f.changed(), 2, 'Semantic revision notifies observers')
+    assert.throws(() => f.alignment.assertCurrent(stale, 'owner'), /basis changed/)
+    f.alignment.assertCurrent(f.alignment.snapshot('owner'), 'owner')
+    const same = await f.alignment.execute(actor('owner'), 'adopt', original.key, 2,
+      { ...adopt, acceptance: updated.definition.acceptance }) as WorkRecord
+    assert.equal(same.revision, 2, 'Existing criteria do not create a semantic revision')
+    assert.equal(f.changed(), 2)
+    const restored = new InitiativeStore(home, { isSessionKnown: () => true })
+    try { assert.deepEqual(restored.workRecords().find(record => record.key === original.key), JSON.parse(JSON.stringify(same))) }
+    finally { restored.close() }
+  } finally { f.store.close() }
+}))
+
+test('adoption refinements cannot revise protected agreements or bypass pause and pending review', async () => withTempWorkspace(async home => {
+  const f = setup(home)
+  try {
+    for (const condition of ['human', 'requestSource', 'delegated', 'proposal', 'paused', 'overflow'] as const) {
+      let record = await f.create(condition, condition === 'delegated' ? 'worker' : 'owner')
+      if (condition === 'human') record = { ...record, origin: 'human' }
+      if (condition === 'requestSource') record = { ...record, requestSource: {
+        sessionId: 'owner', physicalId: 'fixture.0', kind: 'user', id: 'owner-input', quote: 'Original requirements',
+      } }
+      if (condition === 'paused') record = { ...record, paused: true }
+      if (condition === 'overflow') record = { ...record, definition: { ...definition, acceptance: Array.from({ length: 12 }, (_, i) => `Required ${i}`) } }
+      f.store.saveWork({ ...record, sequence: record.sequence + 1 }, record.sequence, 'human', 'fixture')
+      if (condition === 'proposal') await f.alignment.execute(actor('owner'), 'propose', record.key, record.revision,
+        { definition, change: 'understanding', reason: 'Pending owner review' })
+      const before = f.alignment.get(record.key)
+      await assert.rejects(f.alignment.execute(actor(condition === 'delegated' ? 'worker' : 'owner'), 'adopt', record.key, record.revision,
+        { ...adopt, acceptance: ['Additional unapproved criterion'] }))
+      assert.deepEqual(f.alignment.get(record.key), before)
+    }
   } finally { f.store.close() }
 }))
 
@@ -204,5 +268,100 @@ test('custom answers affect only their bound work, including a different assigne
     f.alignment.reviewAnswer('owner', 'Correct only A', 'question', stamps)
     assert.equal(f.alignment.get(a.key).adoption, undefined)
     assert(f.alignment.get(b.key).adoption)
+  } finally { f.store.close() }
+}))
+
+test('owner-directed additions preserve constraints, attribution and revision fences', async () => withTempWorkspace(async home => {
+  const f = setup(home)
+  try {
+    const work = await f.create('Additive follow-up')
+    await f.alignment.execute(actor('owner'), 'adopt', work.key, 1, adopt)
+    const stamps = f.alignment.snapshot('owner')
+    const userInput = { text: 'Also test cancellation.', source: {
+      sessionId: 'owner', physicalId: 'owner.0', kind: 'user' as const, id: 'current-request',
+    } }
+    const update = { change: 'goal', reason: 'Owner follow-up', requestQuote: userInput.text,
+      definition: { ...definition, acceptance: [...definition.acceptance, 'Cancellation passes'] } }
+    const revise = (data = update, input: typeof userInput | undefined = userInput) =>
+      f.alignment.execute(actor('owner'), 'update', work.key, 1, data, undefined, input)
+    for (const invalid of [
+      { ...update, requestQuote: 'Unrecorded instruction' },
+      { ...update, change: 'authorization' },
+      { ...update, definition: { ...update.definition, objective: 'Different outcome' } },
+      { ...update, definition: { ...update.definition, boundaries: [] } },
+      { ...update, definition: { ...update.definition, acceptance: ['Cancellation passes'] } },
+    ]) await assert.rejects(revise(invalid), /quote|append acceptance/)
+    await assert.rejects(f.alignment.execute(actor('owner'), 'update', work.key, 1, update), /authenticated owner/)
+    await assert.rejects(revise(update, { ...userInput, source: { ...userInput.source, sessionId: 'peer' } }), /authenticated owner/)
+    const changed = await revise() as WorkRecord
+    assert.equal(changed.revision, 2)
+    assert.equal(changed.origin, 'agent_interpretation', 'The interpretation must not be mislabeled as human-approved wording')
+    assert.deepEqual(changed.requestSource, { ...userInput.source, quote: userInput.text })
+    assert.equal(changed.adoption, undefined)
+    assert.equal(changed.proposals?.length ?? 0, 0)
+    assert.equal(f.alignment.current(stamps), false)
+    await assert.rejects(revise(), /revision changed/)
+    await assert.rejects(f.alignment.execute(actor('owner'), 'update', work.key, 2,
+      { change: 'understanding', reason: 'Try to replace confirmed requirements', definition }), /human review/)
+    const current = f.alignment.get(work.key)
+    await f.alignment.execute(actor('owner'), 'update', work.key, 2,
+      { change: 'pause', paused: true, reason: 'Stop explicitly', definition: current.definition })
+    const paused = f.alignment.get(work.key)
+    await assert.rejects(f.alignment.execute(actor('owner'), 'update', work.key, paused.revision,
+      { change: 'understanding', reason: 'Try implicit resume', definition: paused.definition }), /human review/)
+    await assert.rejects(f.alignment.execute(actor('owner'), 'update', work.key, paused.revision,
+      { ...update, definition: { ...paused.definition, acceptance: [...paused.definition.acceptance, 'Another condition'] } },
+      undefined, userInput), /cannot resume paused/)
+    assert.deepEqual(paused.requestSource, changed.requestSource)
+    const reopened = new InitiativeStore(home, { isSessionKnown: id => f.states.has(id) })
+    try { assert.deepEqual(reopened.workRecords().find(record => record.key === work.key), paused) }
+    finally { reopened.close() }
+  } finally { f.store.close() }
+}))
+
+test('an additive follow-up cannot apply a pending proposal or relabel a boundary change', async () => withTempWorkspace(async home => {
+  const f = setup(home)
+  try {
+    const work = await f.create('Pending decision')
+    await assert.rejects(f.alignment.execute(actor('owner'), 'update', work.key, 1,
+      { change: 'understanding', reason: 'Try to drop a boundary', definition: { ...definition, boundaries: [] } }), /human review/)
+    const proposal = await f.alignment.execute(actor('owner'), 'propose', work.key, 1,
+      { change: 'goal', reason: 'Unresolved material change', definition: { ...definition, objective: 'Different goal' } }) as { proposalId: string }
+    await assert.rejects(f.alignment.execute(actor('owner'), 'update', work.key, 1,
+      { change: 'goal', reason: 'Fresh chat is not proposal approval', requestQuote: 'Add tests.',
+        definition: { ...definition, acceptance: [...definition.acceptance, 'More tests pass'] } }, undefined,
+      { text: 'Add tests.', source: { sessionId: 'owner', physicalId: 'owner.0', kind: 'user', id: 'new-input' } }),
+    /resolve a pending decision/)
+    assert.equal(f.alignment.get(work.key).revision, 1)
+    assert.equal(f.alignment.get(work.key).proposals?.find(item => item.id === proposal.proposalId)?.status, 'pending')
+    await f.alignment.execute(actor('owner'), 'update', work.key, 1,
+      { change: 'pause', paused: true, reason: 'Explicit stop', definition })
+    await assert.rejects(f.alignment.execute(actor('owner'), 'update', work.key, 2,
+      { change: 'understanding', reason: 'Try implicit resume of agent-origin work', definition }), /human review/)
+  } finally { f.store.close() }
+}))
+
+test('legacy whole-work blockers and new step waits retain their meaning after reload', async () => withTempWorkspace(async home => {
+  const f = setup(home)
+  try {
+    const legacy = await f.create('Legacy blocker'), step = await f.create('Step wait')
+    for (const work of [legacy, step]) await f.alignment.execute(actor('owner'), 'adopt', work.key, 1, adopt)
+    const before = f.alignment.get(legacy.key)
+    f.store.saveWork({ ...before, sequence: before.sequence + 1,
+      workflow: { ...before.workflow!, status: 'blocked', blockedReason: 'Historical hold without scope' },
+    }, before.sequence, 'owner', 'legacy_fixture')
+    await f.manage('owner', legacy.key, 'progress', { status: 'blocked', blockedReason: 'Still awaiting approval' })
+    assert.equal(f.alignment.get(legacy.key).workflow?.blockedScope, 'work')
+    await f.manage('owner', step.key, 'progress', { status: 'blocked', blockedReason: 'Waiting for publication only' })
+    const reopened = new InitiativeStore(home, { isSessionKnown: id => f.states.has(id) })
+    try {
+      const alignment = new WorkAlignment(reopened, { state: id => f.states.get(id), evidence: async () => {},
+        changed: async () => {}, fresh: async () => {}, successor: async () => undefined })
+      await alignment.execute(actor('owner'), 'select', legacy.key, 1, {})
+      assert.throws(() => alignment.assertCurrent(alignment.snapshot('owner'), 'owner'), /is blocked/)
+      await alignment.execute(actor('owner'), 'select', step.key, 1, {})
+      alignment.assertCurrent(alignment.snapshot('owner'), 'owner')
+      assert.equal(alignment.get(step.key).workflow?.status, 'blocked')
+    } finally { reopened.close() }
   } finally { f.store.close() }
 }))

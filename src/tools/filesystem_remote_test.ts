@@ -99,6 +99,11 @@ test('WriteTool reads the remote append seam and appends through its capability'
   })
 })
 
+test('explicit BOM encoding remains a capability-backed remote write, independent of Main OS paths', async () => {
+  const executor = new FilesystemExecutor('file-not-found')
+  await new WriteTool('.').execute({ path: 'helper.ps1', content: 'Write-Output "hello"', encoding: 'utf8-bom' }, context(executor))
+  assertEquals(executor.requests[1].args, { path: 'helper.ps1', content: '\uFEFFWrite-Output "hello"', mode: 'replace' })
+})
 test('WriteTool edits remote content with capability read then write', async () => {
   const executor = new FilesystemExecutor()
   const result = await new WriteTool('.').execute(

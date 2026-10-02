@@ -3,7 +3,7 @@ import { appendFile, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { isNotFoundError, isWindows } from '../utils/runtime.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
-import type { Tool, ToolParameters } from './tool.ts'
+import { ToolNoEffectError, type Tool, type ToolParameters } from './tool.ts'
 import {
   FILESYSTEM_READ_OPERATION,
   FILESYSTEM_WRITE_OPERATION,
@@ -238,6 +238,10 @@ export class WriteTool implements Tool {
         type: 'string',
         description: 'g = replace all occurrences, a = append to file',
       },
+      encoding: {
+        type: 'string', enum: ['utf8', 'utf8-bom'],
+        description: 'Full overwrite only; default utf8. Use utf8-bom for non-ASCII .ps1 files executed by Windows PowerShell 5.1. Edits preserve an existing BOM.',
+      },
     },
     required: ['path', 'content'],
   }
@@ -263,6 +267,16 @@ export class WriteTool implements Tool {
     context.signal.throwIfAborted()
     const rawPath = String(args.path)
     const virtualPath = isAbsolute(rawPath) ? relative(this.workspace, rawPath) : rawPath
+    if (args.encoding !== undefined) {
+      if (typeof args.encoding !== 'string' || !['utf8', 'utf8-bom'].includes(args.encoding)
+        || args.match != null || String(args.flag ?? '').includes('a') || isVirtualPath(virtualPath)) {
+        throw new ToolNoEffectError('Invalid encoding: use utf8 or utf8-bom only for a full filesystem overwrite, not append, edit or virtual writes.')
+      }
+      if (args.encoding === 'utf8-bom') {
+        const content = String(args.content)
+        args = { ...args, content: content.startsWith('\uFEFF') ? content : '\uFEFF' + content }
+      }
+    }
     if (isVirtualPath(virtualPath)) {
       if (!this.virtualFs) return 'Error: unknown virtual filesystem path.'
       const flags = typeof args.flag === 'string' ? args.flag : ''

@@ -30,6 +30,7 @@ export interface YieldReference {
 }
 
 export interface YieldRequest extends YieldQuestion {
+  ownerOnly?: true
   workStamps?: import('../initiatives/work-contract.ts').WorkStamp[]
   id: string
   sessionId: string
@@ -207,6 +208,8 @@ export function parseYieldRequest(value: unknown, sessionId: string): YieldReque
       ...(value.origin.toolCallId !== undefined ? { toolCallId: value.origin.toolCallId } : {}) }
   }
   if ((value.decisionId !== undefined && !nonEmptyId(value.decisionId))
+    || (value.ownerOnly !== undefined && value.ownerOnly !== true)
+    || (value.ownerOnly === true && value.recipient.kind !== 'user')
     || (value.reportingSessionId !== undefined && !nonEmptyId(value.reportingSessionId))
     || (value.timeoutPaused !== undefined && value.timeoutPaused !== true)
     || (value.revisionSessionId !== undefined && !nonEmptyId(value.revisionSessionId))) throw new TypeError('Invalid decision revision metadata.')
@@ -215,6 +218,7 @@ export function parseYieldRequest(value: unknown, sessionId: string): YieldReque
     || !value.decisionId || !nonEmptyId(value.revisionSessionId))) throw new TypeError('Invalid decision revision origin.')
   return {
     ...parseYieldQuestion(value), id: value.id, sessionId,
+    ...(value.ownerOnly === true ? { ownerOnly: true } : {}),
     ...(value.workStamps === undefined ? {} : { workStamps: workStampsSchema.parse(value.workStamps) }),
     recipient: { kind: value.recipient.kind, sessionId: value.recipient.sessionId },
     createdAt: value.createdAt, deadline: value.deadline,

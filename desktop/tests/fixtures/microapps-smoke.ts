@@ -10,7 +10,7 @@ app.on('window-all-closed', () => {})
 async function main() {
   await app.whenReady()
   const window = new BrowserWindow({ show: false, width: 1440, height: 900,
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } })
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true } })
   const execute = (code: string) => window.webContents.executeJavaScript(code)
   const update = installRuntimeRequestAuthorization(window.webContents.session, details => details.webContentsId === window.webContents.id)
   update({ apiBase: new URL(process.env.MICROAPPS_SMOKE_URL!).origin, launchToken: 'synthetic-host-token' })
@@ -53,6 +53,42 @@ async function main() {
     window.setContentSize(1440, 900)
     await execute('document.querySelector(".app-confirm input").click()')
     await click('Approve this version')
+    await wait(() => execute('!!document.querySelector(".app-acceptance .yield-question")'), 'Owner testing question')
+    assert.equal(await execute('document.querySelector(".app-acceptance").textContent.includes("60 seconds")'), true)
+    for (const width of [1440, 390]) {
+      window.setContentSize(width, 900)
+      await delay(100)
+      assert.equal(await execute('document.querySelector(".micro-apps").scrollWidth<=document.querySelector(".micro-apps").clientWidth'), true, 'Acceptance question does not overflow')
+      if (process.env.MICROAPPS_SCREENSHOTS) await writeFile(join(process.env.MICROAPPS_SCREENSHOTS,
+        `apps-acceptance-${width}.png`), (await window.webContents.capturePage()).toPNG())
+    }
+    window.setContentSize(1440, 900)
+    await execute(`[...document.querySelectorAll('.app-acceptance input[type="radio"]')].find(input=>input.value==='Not now; I will test it myself').click()`)
+    await click('Continue')
+    await wait(() => execute('document.querySelector(".app-acceptance h3").textContent.includes("paused")'), 'Testing paused by owner')
+    assert.equal(await execute('!!document.querySelector(".app-acceptance .yield-question")'), false)
+    for (const report of [false, true]) {
+      assert.equal(await execute(`fetch('/__acceptance-fixture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({report:${report}})}).then(r=>r.ok)`), true)
+      await click('Refresh')
+      await wait(() => execute(`document.querySelector(".app-acceptance h3").textContent.includes(${JSON.stringify(report ? 'Report saved' : 'Author finished without a report')})`), 'Author outcome is visible')
+      if (!report) {
+        assert.equal(await execute(`!!${button('Ask to run tests again')}`), true)
+        continue
+      }
+      assert.equal(await execute('document.querySelectorAll(".app-test-check").length'), 6)
+      assert.equal(await execute('document.querySelector(".app-acceptance").textContent.includes("Saved preferences survive reopening")'), true)
+      assert.equal(await execute('document.querySelectorAll(".app-test-check h4")[5].textContent.includes("not_tested")'), true)
+      for (const width of [1440, 390]) {
+        window.setContentSize(width, 900)
+        await execute('document.querySelector(".app-acceptance").scrollIntoView({block:"start"})')
+        await execute('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+        await delay(100)
+        assert.equal(await execute('document.querySelector(".micro-apps").scrollWidth<=document.querySelector(".micro-apps").clientWidth'), true)
+        if (process.env.MICROAPPS_SCREENSHOTS) await writeFile(join(process.env.MICROAPPS_SCREENSHOTS,
+          `apps-coverage-${width}.png`), (await window.webContents.capturePage()).toPNG())
+      }
+    }
+    window.setContentSize(1440, 900)
     await click('Open app')
     await wait(() => execute('!!document.querySelector("iframe")'), 'App iframe')
     await wait(async () => frame().executeJavaScript('!!document.querySelector("#run")'), 'App loaded')

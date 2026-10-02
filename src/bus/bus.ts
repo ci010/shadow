@@ -39,6 +39,7 @@ export interface BusTopics {
   'session.input.accepted': AcceptedSessionInput
   'session.message.appended': { sessionId: string; physicalSessionId: string; message: ChatMessage }
   'session.turn.finished': SessionTurnFact
+  'session.turn.started': Pick<SessionTurnFact, 'sessionId' | 'turnId' | 'inputId' | 'source'>
   'session.activity.changed': { sessionId: string }
   'session.changed': { sessionId: string }
   'background.task.changed': { sessionId: string; taskId: string; status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' }

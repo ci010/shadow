@@ -313,7 +313,7 @@ export function buildShellArgs(
         '-NoProfile',
         ...args,
         '-Command',
-        `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${script}`,
+        `[Console]::OutputEncoding = $OutputEncoding = [System.Text.UTF8Encoding]::new($false); ${script}`,
       ]
     case 'git-bash':
     case 'sh':

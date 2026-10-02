@@ -2,6 +2,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { withCurrentWork } from '../agent/context/builder.ts'
 import { withResponseAudience } from '../agent/context/response-audience.ts'
+import { SESSION_ITERATION_LIMIT, withExecutionBudget } from '../agent/context/execution-budget.ts'
 import { continuedUserInvolvement, createResponseContext, type ResponseContext } from './response-context.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
@@ -213,7 +214,7 @@ export abstract class BaseSession {
       }), executionContext, llm, signal)
     }
 
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < SESSION_ITERATION_LIMIT; i++) {
       const toolDefs = this.tools.getDefinitions()
       signal.throwIfAborted()
 
@@ -223,13 +224,13 @@ export abstract class BaseSession {
         ? { ...this.responseContext, responseId: `${turnId}:${i}` } : undefined
       const workGuard = this.tools.getWorkGuard()
       executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
-      const workPrompt = workGuard?.prompt(this.id)
+      const workPrompt = workGuard?.prompt(this.id, executionContext)
       const workMessages: ChatMessage[] = workPrompt
         ? this.messages[0]?.role === 'system' ? this.messages.map((message, index) => index === 0
           ? { ...message, content: withCurrentWork(String(message.content ?? ''), workPrompt) } : message)
           : [{ role: 'system', content: workPrompt }, ...this.messages]
         : this.messages
-      const inferenceMessages = withResponseAudience(workMessages, responseContext)
+      const inferenceMessages = withExecutionBudget(withResponseAudience(workMessages, responseContext), SESSION_ITERATION_LIMIT - i, 'turn')
 
       const traceAttributes = {
         sessionId: this.id,
@@ -516,6 +517,7 @@ export abstract class BaseSession {
         this.state.executionStatus = 'running'
         delete this.state.recovery
         await this.store.saveState(this.id, this.state)
+        this.bus.emit('session.turn.started', { sessionId: this.id, turnId: queryId, inputId: input.id, source: input.source })
       }
 
       console.log(`[${this.id}] Processing message`)
@@ -592,6 +594,8 @@ export abstract class BaseSession {
         channelAddress: msg.channelAddress,
         ...attributes,
         inputSource: input.source.kind,
+        ...(input.kind === 'message' && input.source.kind === 'user' && msg.admin === true && !isGroup
+          ? { workUserInput: input.content } : {}),
         cwd,
         remoteWorkdir,
         tools: this.tools,

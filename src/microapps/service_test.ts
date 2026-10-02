@@ -12,7 +12,7 @@ import { appManifestSchema } from './contracts.ts'
 import { MicroApps } from './service.ts'
 import { microAppsPlugin } from './routes.ts'
 import { localAppDirectory } from './store.ts'
-import { MicroAppTool } from '../tools/micro-app.ts'
+import { MicroAppTool, microAppReceipt } from '../tools/micro-app.ts'
 import { isAppPort } from './ports.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
@@ -46,6 +46,129 @@ async function fixture(home: string) {
 const post = (origin: string, path: string, token: string, body: unknown) => fetch(origin + path, {
   method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 })
+
+test('publication checks distinguish current source from shipped files without changing approval or running code', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  try {
+    await writeFile(join(f.directory, 'old.txt'), 'old')
+    const manifest = { ...f.manifest, files: ['index.html', 'old.txt'] }
+    const app = await f.service.publish(f.directory, manifest, 'web:author', AbortSignal.timeout(5000))
+    await f.service.approve(app.id, app.revision)
+    const before = f.service.get(app.id)
+    const check = (candidate = manifest) => f.service.checkPublication(app.id, app.revision, f.directory, candidate, AbortSignal.timeout(5000))
+    const same = await check()
+    assert.equal(same.publicationCheck.matchesPublished, true)
+    assert.equal(same.publicationCheck.candidateRevision, app.revision)
+    assert.equal(same.publicationCheck.scope, 'listed-bundle-files-only')
+    assert.deepEqual(same.publicationCheck.files, { added: [], modified: [], removed: [] })
+    await writeFile(join(f.directory, 'index.html'), '<title>Unpublished fix</title>')
+    await writeFile(join(f.directory, 'helper.txt'), 'new')
+    const candidate = { ...manifest, description: 'Updated draft', files: ['index.html', 'helper.txt'] }
+    const changed = await check(candidate)
+    assert.equal(changed.publicationCheck.matchesPublished, false)
+    assert.equal(changed.publicationCheck.manifestChanged, true)
+    assert.deepEqual(changed.publicationCheck.files, { added: ['helper.txt'], modified: ['index.html'], removed: ['old.txt'] })
+    assert.deepEqual(f.service.get(app.id), before, 'Inspection must not publish, clear approval or create a run')
+    assert.equal(f.calls.length, 0)
+    const updated = await f.service.publish(f.directory, candidate, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
+    assert.equal(updated.revision, changed.publicationCheck.candidateRevision)
+    assert.equal(updated.approval, undefined)
+    assert.equal((await f.service.checkPublication(app.id, updated.revision, f.directory, candidate, AbortSignal.timeout(5000))).publicationCheck.matchesPublished, true)
+    await assert.rejects(f.service.start(app.id), /approve/)
+  } finally { await f.service.shutdown() }
+}))
+
+test('publication checks reject stale, canceled and concurrently replaced revisions', async t => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  const resume = Promise.withResolvers<void>()
+  try {
+    const app = await f.publish()
+    await assert.rejects(f.service.checkPublication(app.id, '0'.repeat(64), f.directory, f.manifest, AbortSignal.timeout(5000)), /Reload/)
+    const reason = new Error('Canceled comparison')
+    await assert.rejects(f.service.checkPublication(app.id, app.revision, f.directory, f.manifest, AbortSignal.abort(reason)), error => error === reason)
+    const entered = Promise.withResolvers<void>(), original = f.service.store.bundle.bind(f.service.store)
+    t.mock.method(f.service.store, 'bundle', async (...args: Parameters<typeof original>) => {
+      const bundle = await original(...args)
+      entered.resolve()
+      await resume.promise
+      return bundle
+    })
+    const checking = f.service.checkPublication(app.id, app.revision, f.directory, f.manifest, AbortSignal.timeout(5000))
+    await entered.promise
+    await writeFile(join(f.directory, 'index.html'), 'New publication')
+    await f.service.publish(f.directory, f.manifest, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
+    resume.resolve()
+    await assert.rejects(checking, /changed during the publication check/)
+  } finally { resume.resolve(); await f.service.shutdown() }
+}))
+
+test('publication checks share file limits, link rejection and published integrity checks', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  try {
+    const app = await f.publish()
+    const check = (manifest = f.manifest) => f.service.checkPublication(app.id, app.revision, f.directory, manifest, AbortSignal.timeout(5000))
+    await assert.rejects(check({ ...f.manifest, files: ['index.html', 'missing.txt'] }), { code: 'ENOENT' })
+    await writeFile(join(f.directory, 'large.txt'), Buffer.alloc(4 * 1024 * 1024 + 1))
+    await assert.rejects(check({ ...f.manifest, files: ['index.html', 'large.txt'] }), /exceeds 4 MiB/)
+    const target = join(home, 'linked-source')
+    await mkdir(target)
+    await writeFile(join(target, 'helper.txt'), 'not a regular bundled path')
+    await fs.promises.symlink(target, join(f.directory, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+    await assert.rejects(check({ ...f.manifest, files: ['index.html', 'linked/helper.txt'] }), /symbolic links/)
+    const bundle = await f.service.store.bundle(f.service.store.get(app.id))
+    bundle.files['index.html'] = Buffer.from('Tampered published code').toString('base64')
+    await writeFile(join(f.service.store.root, app.id, `${app.revision}.json`), JSON.stringify(bundle))
+    await assert.rejects(check(), /changed after publication/)
+  } finally { await f.service.shutdown() }
+}))
+
+test('packaged dependency failures can be diagnosed, republished, reviewed and reopened without author-directory assumptions', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  let restored: MicroApps | undefined
+  try {
+    await writeFile(join(f.directory, 'helper.mjs'), 'export const ready = "packaged ready";')
+    await writeFile(join(f.directory, 'server.mjs'), `
+      import {createServer} from 'node:http';
+      import {ready} from './helper.mjs';
+      createServer((request,response)=>{
+        if(request.headers.authorization !== 'Bearer ' + process.env.SHADOW_APP_TOKEN) {
+          response.writeHead(401).end(); return;
+        }
+        response.end(ready);
+      }).listen(Number(process.env.SHADOW_APP_PORT),'127.0.0.1');
+    `)
+    const manifest = { ...f.manifest, files: ['index.html', 'server.mjs'],
+      backend: { runtime: 'node', entry: 'server.mjs' } }
+    const app = await f.service.publish(f.directory, manifest, 'web:author', AbortSignal.timeout(5000))
+    const same = await f.service.checkPublication(app.id, app.revision, f.directory, manifest, AbortSignal.timeout(5000))
+    assert.equal(same.publicationCheck.matchesPublished, true, 'Matching listed files cannot certify unlisted dependencies')
+    await f.service.approve(app.id, app.revision)
+    await assert.rejects(f.service.start(app.id), /missing or unloadable dependency/)
+    assert.match(f.service.get(app.id).lastRun!.error!, /published file list/)
+    assert.equal(f.service.get(app.id).status, 'failed')
+    assert.equal(f.service.get(app.id).cleanupPending, false)
+    const complete = { ...manifest, files: [...manifest.files, 'helper.mjs'] }
+    const draft = await f.service.checkPublication(app.id, app.revision, f.directory, complete, AbortSignal.timeout(5000))
+    assert.equal(draft.publicationCheck.matchesPublished, false)
+    assert.deepEqual(draft.publicationCheck.files.added, ['helper.mjs'])
+    const fixed = await f.service.publish(f.directory, complete, 'web:author', AbortSignal.timeout(5000), app.id, app.revision)
+    assert.equal(fixed.revision, draft.publicationCheck.candidateRevision)
+    assert.equal(fixed.status, 'awaiting_approval')
+    await assert.rejects(f.service.start(app.id), /approve/)
+    await f.service.approve(app.id, fixed.revision)
+    const first = await f.connect(app.id)
+    assert.equal(await (await post(first.origin, '/backend/health', first.token, {})).text(), 'packaged ready')
+    const runId = f.service.get(app.id).lastRun!.id
+    await f.service.shutdown()
+    restored = new MicroApps('p', home, () => f.provider, () => 'fixture')
+    await restored.init()
+    await restored.start(app.id)
+    assert.equal(restored.get(app.id).revision, fixed.revision)
+    assert.equal(restored.get(app.id).status, 'running')
+    assert.notEqual(restored.get(app.id).lastRun!.id, runId)
+    assert.equal(f.calls.length, 0)
+  } finally { await restored?.shutdown(); await f.service.shutdown() }
+}))
 
 test('cleanup failures remain visible and retryable without losing approval or permitting a new run', async t => withTempWorkspace(async home => {
   const f = await fixture(home)
@@ -457,6 +580,23 @@ test('agent publication and owner approval use different authenticated surfaces'
     await assert.rejects(tool.execute({ action: 'capabilities' }, { ...context, projectId: 'other' }), /owning local Project/)
     await writeFile(join(f.directory, 'shadow-app.json'), JSON.stringify(f.manifest))
     const app = JSON.parse(await tool.execute({ action: 'publish', directory: 'source' }, context))
+    assert.equal(app.manifest, undefined)
+    assert.equal(app.approval, null)
+    assert.equal(app.name, f.manifest.name)
+    assert.deepEqual(app.llm, f.manifest.llm)
+    assert.deepEqual(JSON.parse(await tool.execute(app.detail, context)), f.service.get(app.id))
+    const check = { action: 'check', directory: 'source', id: app.id, revision: app.revision }
+    assert.equal(tool.readonly(check), true)
+    assert.equal(JSON.parse(await tool.execute(check, context)).publicationCheck.matchesPublished, true)
+    assert.deepEqual(JSON.parse(await tool.execute(check, context)).publicationCheck,
+      (await f.service.checkPublication(app.id, app.revision, f.directory, f.manifest, context.signal)).publicationCheck)
+    assert.equal(f.service.get(app.id).status, 'awaiting_approval')
+    await assert.rejects(tool.execute({ ...check, revision: undefined }, context))
+    await assert.rejects(tool.execute(check, { ...context, projectId: 'other' }), /owning local Project/)
+    await assert.rejects(tool.execute({ ...check, directory: '..' }, { ...context, cwd: f.directory }), /effective local workdir/)
+    await assert.rejects(tool.execute(check, { ...context, remoteWorkdir: {
+      nodeId: 'remote', capabilityId: 'opaque', get executor(): never { throw new Error('Must not interpret remote paths on Main') },
+    } }), /owning local Project/)
     assert.equal((await host.request('/api/microapps')).status, 401)
     assert.equal((await host.request(`/api/microapps/${app.id}/approve`, { method: 'POST', body: JSON.stringify({ revision: app.revision, confirm: true }) })).status, 401)
     await assert.rejects(tool.execute({ action: 'approve', id: app.id }, context))
@@ -473,5 +613,29 @@ test('agent publication and owner approval use different authenticated surfaces'
     for (const path of ['../outside.html', '/absolute.html', '.env', 'a\\b.html']) {
       assert.equal(appManifestSchema.safeParse({ ...f.manifest, files: [path], entry: path }).success, false)
     }
+  } finally { await f.service.shutdown() }
+}))
+
+test('compact Micro App receipts preserve approval, failures and exact scope refs without duplicating evidence', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  try {
+    const app = await f.publish()
+    const work = [{ key: 'work:fixture', revision: 3, acceptance: Array.from({ length: 8 }, (_, index) =>
+      `${index}: Verify startup, state, recovery and repeat-use behavior. `.repeat(8)) }]
+    const record = { ...app, manifest: { ...app.manifest, description: 'Detailed app description. '.repeat(12) },
+      work, lastRun: { id: app.id, status: 'failed' as const, error: 'Backend dependency missing' },
+      approval: { revision: app.revision, at: new Date().toISOString(), model: 'fixture' },
+      acceptance: { id: app.id, revision: app.revision, approvalAt: new Date().toISOString(),
+        status: 'blocked' as const, sequence: 3, observations: [], work, error: 'Device use not approved' } }
+    const before = structuredClone(record), receipt = microAppReceipt(record)
+    assert.ok(JSON.stringify(receipt).length < JSON.stringify(record).length * 0.4, 'Representative receipt shrinks by at least 60%')
+    assert.deepEqual(receipt.approval, record.approval)
+    assert.equal(receipt.lastRun?.error, 'Backend dependency missing')
+    assert.equal(receipt.acceptanceSummary?.error, 'Device use not approved')
+    assert.equal(receipt.acceptanceSummary?.status, 'blocked')
+    assert.equal(receipt.acceptanceSummary?.reportSaved, false)
+    assert.deepEqual(receipt.workRefs, [{ key: 'work:fixture', revision: 3, acceptanceCount: 8 }])
+    assert.deepEqual(record, before)
+    assert.deepEqual(f.service.get(app.id), app, 'Projection does not update storage or grant access')
   } finally { await f.service.shutdown() }
 }))

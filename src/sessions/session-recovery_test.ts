@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
 import { ContextBuilder } from '../agent/context/builder.ts'
+import { SESSION_ITERATION_LIMIT } from '../agent/context/execution-budget.ts'
 import { HandoffManager } from './handoff/manager.ts'
 import { Tools } from '../tools/registry.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -17,6 +18,7 @@ import { sessionsApiPlugin } from './routes.ts'
 import type { SessionMessageInput, SessionTurnFact } from './input.ts'
 import type { SessionState, SessionStore, StoredMessage } from './session-store.ts'
 import { isBackgroundResponse } from './response-context.ts'
+import { ProviderTransportError } from '../providers/provider.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
@@ -80,6 +82,38 @@ async function seed(store: SessionStore, id: string, state: Partial<SessionState
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: a failed model response requires explicit resume and does not repeat committed tools`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-transport-resume'
+      let effects = 0
+      f.tools.register({ name: 'fixture_effect', description: '', parameters: { type: 'object', properties: {} },
+        execute: async () => { effects++; return 'Committed receipt-one' } })
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: null, toolCalls: [{ id: 'effect-one', name: 'fixture_effect', arguments: {} }] })
+        await waitFor(() => f.calls.length === 2)
+        f.calls[1].reject(new ProviderTransportError('response', 'UND_ERR_SOCKET'))
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        const recovery = f.sessions.getSessionRecovery(id)!
+        assert.equal(recovery.reason, 'failed')
+        assert.equal(f.calls.length, 2)
+        assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
+        await waitFor(() => f.calls.length === 3)
+        assert.equal(effects, 1)
+        assert.equal(f.calls[2].messages.filter(message => message.tool_call_id === 'effect-one').length, 1)
+        f.calls[2].resolve(done())
+        await waitFor(() => f.facts.length === 2)
+        assert.equal(f.sessions.getSessionRecovery(id), undefined)
+        assert.equal(effects, 1)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: Continue keeps an aborted user request expanded without expanding a background request`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -170,7 +204,15 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const history = f.calls[2].messages
         assert.equal(history.filter(message => JSON.stringify(message.content).includes('Perform original request')).length, 1)
         assert.equal(history.filter(message => message.tool_call_id === 'effect-one').length, 1)
-        assert.deepEqual(history, f.calls[1].messages, 'Continue submits the exact prior API context, not a new prompt')
+        const previous = f.calls[1].messages
+        const previousPrompt = String(previous[0].content)
+        const previousBudget = `\n${SESSION_ITERATION_LIMIT - 1} inference requests including this one remain for this turn;`
+        assert.ok(previousPrompt.includes(previousBudget))
+        assert.deepEqual(history, [
+          { ...previous[0], content: previousPrompt.replace(previousBudget,
+            `\n${SESSION_ITERATION_LIMIT} inference requests including this one remain for this turn;`) },
+          ...previous.slice(1),
+        ], 'Continue preserves the exact prior context except for the refreshed turn budget')
         assert.equal(effects, 1)
         const accepted = await results.find(result => result.status === 202)!.json()
         const resumedActivity = await (await f.app.request('/api/sessions/stages')).json()

@@ -29,6 +29,7 @@ import { CancelTool } from '../tools/cancel.ts'
 import { ReplyTool } from '../tools/reply.ts'
 import { ContinuationTool } from '../tools/background.ts'
 import { ExecTool } from '../tools/shell.ts'
+import { requireToolText } from '../tools/tool.ts'
 import { DownloadTool } from '../tools/download.ts'
 import { Aria2Downloader } from '../downloader/aria2.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
@@ -465,9 +466,9 @@ test('cancel really terminates owned background shell processes for immediate an
       const view = createBgTasksHandler(f.backgroundTasks, f.sessions, f.remote)
       for (const timeout_ms of [0, 1]) {
         const ctx = f.context()
-        const result = await exec.execute({
+        const result = requireToolText(await exec.execute({
           script: 'node -e "console.log(\'ready\'); setInterval(()=>{},1000)"', timeout_ms,
-        }, ctx)
+        }, ctx))
         const executionId = /Execution ID: (bg:[a-f0-9]{16})/.exec(result)?.[1]
         assert.ok(executionId, result)
         const pid = Number(/PID=(\d+)/.exec(result)?.[1])

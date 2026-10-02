@@ -6,12 +6,15 @@ import { serve } from '@hono/node-server'
 import { z } from 'zod'
 import { type LLMProvider } from '../providers/provider.ts'
 import { appPath, generationSchema, microAppCapabilities, MAX_STATE_BYTES, MicroAppError, type AppRecord, type AppBundle } from './contracts.ts'
-import { MicroAppStore } from './store.ts'
+import { bundleRevision, MicroAppStore, readAppBundle } from './store.ts'
 import { startAppProcess, type AppProcess } from './process.ts'
 import { isAppPort } from './ports.ts'
 import { appIcon } from './icon.ts'
+import { AppAcceptanceFlow, type AppAcceptanceHost } from './acceptance.ts'
+import type { WorkStamp } from '../initiatives/work-contract.ts'
 
 interface AppRun {
+  acceptanceId?: string
   id: string
   token: string
   controller: AbortController
@@ -69,25 +72,29 @@ export { httpError as microAppHttpError }
 
 export class MicroApps {
   readonly store: MicroAppStore
+  readonly acceptance: AppAcceptanceFlow
   private runs = new Map<string, AppRun>()
   private publishing = new Set<string>()
   private stopped = false
   constructor(readonly projectId: string, home: string,
-    private provider: () => LLMProvider, private defaultModel: () => string) {
+    private provider: () => LLMProvider, private defaultModel: () => string, acceptanceHost?: AppAcceptanceHost) {
     this.store = new MicroAppStore(home)
+    this.acceptance = new AppAcceptanceFlow(this.store, acceptanceHost)
   }
   init() { return this.store.init() }
   list() { return this.store.list().map(record => this.view(record)) }
   get(id: string) { return this.view(this.store.get(id)) }
   private view(record: AppRecord) {
     return { ...record, status: !record.approval ? 'awaiting_approval' : record.lastRun?.status ?? 'stopped',
+      acceptanceAvailable: this.acceptance.available,
       cleanupPending: this.runs.get(record.id)?.controller.signal.aborted ?? false,
       uiPath: `/projects/${encodeURIComponent(this.projectId)}/chat/web%3Aorchestrator?microApp=${record.id}` }
   }
   private assertAvailable() {
     if (this.stopped) throw new MicroAppError('runtime_stopped', 'The Project app runtime is stopping', 409)
   }
-  async publish(directory: string, manifest: unknown, sessionId: string, signal: AbortSignal, id?: string, revision?: string) {
+  async publish(directory: string, manifest: unknown, sessionId: string, signal: AbortSignal, id?: string, revision?: string,
+    workStamps: WorkStamp[] = []) {
     this.assertAvailable()
     if (!!id !== !!revision) throw new MicroAppError('revision_required', 'Supply id and revision together when updating an app')
     const key = id ?? randomUUID()
@@ -95,7 +102,10 @@ export class MicroApps {
     this.publishing.add(key)
     try {
       if (id && this.store.get(id).createdBy !== sessionId) throw new MicroAppError('not_app_author', 'Only the original author session can replace this app', 403)
-      return this.view(await this.store.publish(directory, manifest, sessionId, signal, id, revision))
+      const work = this.acceptance.publicationWork(sessionId, workStamps)
+      const record = await this.store.publish(directory, manifest, sessionId, signal, id, revision, work)
+      if (id && record.revision !== revision) await this.acceptance.cancel(id)
+      return this.view(record)
     } finally { this.publishing.delete(key) }
   }
   async review(id: string) {
@@ -104,6 +114,28 @@ export class MicroApps {
       path, bytes: Buffer.byteLength(base64, 'base64'),
       text: sourceText(base64),
     })) }
+  }
+  async checkPublication(id: string, revision: string, directory: string, manifest: unknown, signal: AbortSignal) {
+    signal.throwIfAborted()
+    const record = this.store.get(id)
+    if (record.revision !== revision) throw new MicroAppError('revision_changed', 'Reload the app before checking its publication', 409)
+    const [published, candidate] = await Promise.all([this.store.bundle(record), readAppBundle(directory, manifest, signal)])
+    signal.throwIfAborted()
+    const current = this.get(id)
+    if (current.revision !== revision) throw new MicroAppError('revision_changed', 'App changed during the publication check; check the current revision', 409)
+    const candidateRevision = bundleRevision(candidate)
+    return { ...current, publicationCheck: {
+      scope: 'listed-bundle-files-only',
+      matchesPublished: candidateRevision === revision,
+      candidateRevision,
+      manifestChanged: JSON.stringify(candidate.manifest) !== JSON.stringify(published.manifest),
+      files: {
+        added: Object.keys(candidate.files).filter(name => !Object.hasOwn(published.files, name)),
+        modified: Object.keys(candidate.files).filter(name => Object.hasOwn(published.files, name) && candidate.files[name] !== published.files[name]),
+        removed: Object.keys(published.files).filter(name => !Object.hasOwn(candidate.files, name)),
+      },
+      notice: 'This compares the listed source bytes with the published revision. It does not run code, resolve unlisted dependencies, approve access, or verify app behavior. Unpublished changes are not delivered fixes.',
+    } }
   }
   async icon(id: string, revision: string) {
     const record = this.store.get(id)
@@ -124,9 +156,13 @@ export class MicroApps {
       const chosen = record.manifest.llm ? model ?? this.defaultModel() : undefined
       if (record.manifest.llm && !chosen?.trim()) throw new MicroAppError('model_required', 'Choose a model before approving LLM access')
       if (this.store.get(id).revision !== revision || this.runs.has(id)) throw new MicroAppError('revision_changed', 'App changed during review', 409)
+      await this.acceptance.cancel(id)
+      this.assertAvailable()
       record.approval = { revision, at: new Date().toISOString(), ...(chosen ? { model: chosen } : {}) }
       record.calls = 0
+      record.acceptance = this.acceptance.create(record)
       this.store.save(record)
+      this.acceptance.start(id)
       return this.get(id)
     } finally { this.publishing.delete(id) }
   }
@@ -134,14 +170,16 @@ export class MicroApps {
     if (this.publishing.has(id)) throw new MicroAppError('app_busy', 'Publication is in progress', 409)
     this.publishing.add(id)
     try {
+      await this.acceptance.cancel(id)
       await this.stop(id)
       const record = this.store.get(id)
       delete record.approval
+      if (record.acceptance) record.acceptance.status = 'paused'
       this.store.save(record)
       return this.get(id)
     } finally { this.publishing.delete(id) }
   }
-  async start(id: string) {
+  async start(id: string, acceptanceId?: string) {
     this.assertAvailable()
     if (this.publishing.has(id)) throw new MicroAppError('app_busy', 'Publication is in progress', 409)
     const record = this.store.get(id)
@@ -152,6 +190,7 @@ export class MicroApps {
     if (!run) {
       const runId = randomUUID()
       run = { id: runId, token: randomBytes(32).toString('base64url'), controller: new AbortController(),
+        acceptanceId,
         ready: Promise.resolve(), directory: join(this.store.root, id, 'runs', runId),
         activeCalls: 0, calls: new Set(), tickets: new Map(), expiresAt: Date.now() + 8 * 60 * 60 * 1000 }
       this.runs.set(id, run)
@@ -160,6 +199,38 @@ export class MicroApps {
     await run.ready
     run.controller.signal.throwIfAborted()
     return this.get(id)
+  }
+  async openTest(id: string, revision: string, sessionId: string, signal: AbortSignal) {
+    signal.throwIfAborted()
+    const acceptanceId = this.acceptance.authorize(id, revision, sessionId)
+    const previous = this.runs.get(id)
+    if (previous && previous.acceptanceId !== acceptanceId) throw new MicroAppError('app_busy', 'An owner-opened app is running. Stop it before author testing; it will not be taken over.', 409)
+    try {
+      await this.start(id, acceptanceId)
+      signal.throwIfAborted()
+      if (this.acceptance.authorize(id, revision, sessionId) !== acceptanceId) throw new MicroAppError('acceptance_changed', 'Testing authorization changed', 409)
+      return await this.open(id)
+    } catch (error) {
+      if (signal.aborted && this.runs.get(id)?.acceptanceId === acceptanceId) await this.stop(id)
+      throw error
+    }
+  }
+  async requestTesting(id: string, revision: string) {
+    this.assertAvailable()
+    if (this.publishing.has(id) || this.runs.has(id)) throw new MicroAppError('app_busy', 'Stop the app before requesting another test', 409)
+    await this.acceptance.retry(id, revision)
+    return this.get(id)
+  }
+  async stopFromAuthor(id: string, sessionId: string) {
+    const record = this.store.get(id), run = this.runs.get(id)
+    if (record.createdBy !== sessionId) throw new MicroAppError('not_app_author', 'Only the author may clean up its app run', 403)
+    if (record.acceptance && run && run.acceptanceId !== record.acceptance.id) {
+      throw new MicroAppError('owner_run', 'This runtime was opened by the owner, not by author testing. Ask the owner to stop it in Apps.', 403)
+    }
+    return this.stop(id)
+  }
+  private observe(id: string, run: AppRun, kind: Parameters<AppAcceptanceFlow['observe']>[3], stateVersion?: number) {
+    this.acceptance.observe(id, run.acceptanceId, run.id, kind, stateVersion)
   }
   private state(id: string, run: AppRun, status: NonNullable<AppRecord['lastRun']>['status'], error?: string) {
     const record = this.store.get(id)
@@ -202,6 +273,7 @@ export class MicroApps {
       }
       run.controller.signal.throwIfAborted()
       this.state(record.id, run, 'running')
+      this.observe(record.id, run, 'started')
     } catch (error) {
       run.controller.abort()
       try { await this.release(run) }
@@ -211,6 +283,7 @@ export class MicroApps {
       }
       if (!run.stop) this.runs.delete(record.id)
       this.state(record.id, run, 'failed', error instanceof Error ? error.message : 'App startup failed')
+      this.observe(record.id, run, 'startup_failed')
       throw error
     }
   }
@@ -236,6 +309,7 @@ export class MicroApps {
       await this.release(run)
       this.runs.delete(id)
       this.state(id, run, reason ? 'failed' : 'stopped', reason)
+      if (!reason) this.observe(id, run, 'stopped')
     })()
     try { await stopping }
     catch (error) {
@@ -273,7 +347,7 @@ export class MicroApps {
   }
   async shutdown() {
     this.stopped = true
-    const results = await Promise.allSettled([...this.runs.keys()].map(id => this.stop(id)))
+    const results = await Promise.allSettled([this.acceptance.shutdown(), ...[...this.runs.keys()].map(id => this.stop(id))])
     const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
     if (errors.length) throw new AggregateError(errors, 'Micro App shutdown failed')
   }
@@ -299,6 +373,7 @@ export class MicroApps {
       const ticket = bearer(c.req.raw), expires = run.tickets.get(ticket)
       run.tickets.delete(ticket)
       if (!expires || expires < Date.now()) throw new MicroAppError('invalid_ticket', 'App opening expired or was already used; reopen from Shadow Apps', 401)
+      this.observe(id, run, 'sdk_connected')
       return c.json({ token: run.token })
     })
     const authorize: Parameters<Hono['use']>[1] = async (c, next) => {
@@ -314,15 +389,21 @@ export class MicroApps {
     app.use('/_shadow/state', authorize)
     app.get('/_shadow/status', c => {
       const record = this.store.get(id)
-      return c.json({ id, name: record.manifest.name, model: record.approval?.model,
+      return c.json({ id, revision: record.revision, runId: run.id, name: record.manifest.name, model: record.approval?.model,
         calls: record.calls, maxCalls: record.manifest.llm?.maxCalls ?? 0, backend: !!record.manifest.backend,
         capabilities: microAppCapabilities })
     })
-    app.get('/_shadow/state', c => c.json(this.store.loadState(id)))
+    app.get('/_shadow/state', c => {
+      const state = this.store.loadState(id)
+      this.observe(id, run, 'state_read', state.version)
+      return c.json(state)
+    })
     app.put('/_shadow/state', async c => {
       const body = await boundedBody(c.req.raw, MAX_STATE_BYTES)
       run.controller.signal.throwIfAborted()
-      return c.json(this.store.saveState(id, JSON.parse(Buffer.from(body).toString('utf8'))))
+      const state = this.store.saveState(id, JSON.parse(Buffer.from(body).toString('utf8')))
+      this.observe(id, run, 'state_saved', state.version)
+      return c.json(state)
     })
     app.post('/_shadow/generate', async c => {
       const input = generationSchema.parse(await appJson(c.req.raw))
@@ -335,16 +416,22 @@ export class MicroApps {
       record.calls++
       this.store.save(record)
       run.activeCalls++
+      const signal = AbortSignal.any([run.controller.signal, c.req.raw.signal, AbortSignal.timeout(120_000)])
       const operation = Promise.resolve().then(() => this.provider().chat(input.messages, [], {
         model, maxTokens: Math.min(input.maxTokens ?? grant.maxOutputTokens, grant.maxOutputTokens),
-        signal: AbortSignal.any([run.controller.signal, c.req.raw.signal, AbortSignal.timeout(120_000)]),
+        signal,
       }))
       run.calls.add(operation)
       try {
         const result = await operation
         run.controller.signal.throwIfAborted()
         if (result.toolCalls.length || result.content === null) throw new MicroAppError('unsupported_model_result', 'Model returned no text; app calls do not execute tools', 502)
+        signal.throwIfAborted()
+        this.observe(id, run, 'model_completed')
         return c.json({ text: result.content, usage: result.usage })
+      } catch (error) {
+        this.observe(id, run, signal.aborted ? 'model_cancelled' : 'model_failed')
+        throw error
       } finally { run.calls.delete(operation); run.activeCalls-- }
     })
     app.use('/backend/*', authorize)
@@ -353,17 +440,24 @@ export class MicroApps {
       const path = c.req.path.slice('/backend'.length)
       if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) throw new MicroAppError('invalid_backend_path', 'Invalid backend path')
       const body = await boundedBody(c.req.raw, 16 * 1024 * 1024)
-      const response = await fetch(`${run.backend.origin}${path}${new URL(c.req.url).search}`, {
-        method: c.req.method, redirect: 'error',
-        headers: { Authorization: `Bearer ${run.token}`, 'Content-Type': c.req.header('content-type') ?? 'application/octet-stream' },
-        ...(body.length ? { body: Buffer.from(body) } : {}),
-        signal: AbortSignal.any([run.controller.signal, c.req.raw.signal, AbortSignal.timeout(180_000)]),
-      })
-      const bytes = await boundedBody(response, 16 * 1024 * 1024)
-      return new Response([204, 205, 304].includes(response.status) ? null : Buffer.from(bytes), { status: response.status, headers: {
-        'Content-Type': response.headers.get('content-type') ?? 'application/octet-stream',
-        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-      } })
+      const signal = AbortSignal.any([run.controller.signal, c.req.raw.signal, AbortSignal.timeout(180_000)])
+      try {
+        const response = await fetch(`${run.backend.origin}${path}${new URL(c.req.url).search}`, {
+          method: c.req.method, redirect: 'error',
+          headers: { Authorization: `Bearer ${run.token}`, 'Content-Type': c.req.header('content-type') ?? 'application/octet-stream' },
+          ...(body.length ? { body: Buffer.from(body) } : {}),
+          signal,
+        })
+        const bytes = await boundedBody(response, 16 * 1024 * 1024)
+        this.observe(id, run, response.ok ? 'backend_completed' : 'backend_failed')
+        return new Response([204, 205, 304].includes(response.status) ? null : Buffer.from(bytes), { status: response.status, headers: {
+          'Content-Type': response.headers.get('content-type') ?? 'application/octet-stream',
+          'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        } })
+      } catch (error) {
+        this.observe(id, run, signal.aborted ? 'backend_cancelled' : 'backend_failed')
+        throw error
+      }
     })
     app.get('*', c => {
       const name = c.req.path === '/' ? bundle.manifest.entry : decodeURIComponent(c.req.path.slice(1))

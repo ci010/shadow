@@ -472,7 +472,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const task = await f.next(child)
         assert.equal(task.model, 'fixture')
         assert.ok(!JSON.stringify(task.messages).includes('Parent-only history sentinel'))
-        assert.equal(JSON.parse(String(task.messages[0]!.content)).role, 'limited')
+        assert.equal(JSON.parse(String(task.messages[0]!.content).split('\n', 1)[0]).role, 'limited')
         assert.ok(!task.names.includes('dangerous'))
         parent.resolve(done('Parent can idle independently'))
         await waitFor(() => f.sessions.getActiveSession('web:root')?.phase === 'idle')

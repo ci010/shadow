@@ -42,6 +42,7 @@ async function readResponse(response: Response): Promise<unknown> {
 }
 
 export interface YieldSource {
+  expectedRequestId?: string
   apiBase: string
   sessionId: string
   active: boolean
@@ -91,7 +92,8 @@ export function useYieldRequest(source: () => YieldSource) {
     loading.value = true
     try {
       const response = await fetch(endpoint(), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) })
-      const next = parseYieldResponse(await readResponse(response), sessionId)
+      const received = parseYieldResponse(await readResponse(response), sessionId)
+      const next = source().expectedRequestId && received?.id !== source().expectedRequestId ? null : received
       if (current !== generation || controller.signal.aborted) return
       if (next && next.id === answeredId) return
       const changed = next?.id !== request.value?.id
@@ -181,7 +183,7 @@ export function useYieldRequest(source: () => YieldSource) {
     }
   }
 
-  watch([() => source().apiBase, () => source().sessionId, () => source().active, () => source().stage === 'waiting'], () => {
+  watch([() => source().apiBase, () => source().sessionId, () => source().active, () => source().stage === 'waiting', () => source().expectedRequestId], () => {
     stopRequests()
     request.value = null
     selected.value = error.value = ''

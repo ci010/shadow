@@ -43,6 +43,13 @@ test('short-goal guidance owns engineering work without turning input into permi
       'never relabel them to bypass it',
       'primary input, result and action',
       'both fresh first-use and ready states',
+      'Integrate one\nthin end-to-end path early',
+      'Do not rerun completed side effects',
+      'Keep an explicit acceptance ledger',
+      'ask about that distinction before publishing',
+      'Stop visual polishing once the stated checks pass',
+      'do not sleep through an MCP deadline',
+      '[Console]::InputEncoding',
     ]) assert.ok(body.includes(rule), rule)
     assert.doesNotMatch(body, /VRChat|WASAPI|Silero|26200/, 'The workflow is not a hidden audio recipe')
   } finally { await skills.stopWatching() }

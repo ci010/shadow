@@ -4,14 +4,14 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { CallToolResultSchema, ListRootsRequestSchema, ToolListChangedNotificationSchema, type ContentBlock } from '@modelcontextprotocol/sdk/types.js'
-import { realpath } from 'node:fs/promises'
+import { access, realpath } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { env as sysEnv } from 'node:process'
-import { Readable } from 'node:stream'
 import type { McpServerConfig } from '../config/schema.ts'
 import { Span } from '../otel/tracing.ts'
 import { loadDotEnv } from '../utils/env.ts'
+import { decodeChunks } from '../utils/decode-chunks.ts'
 import { parseMcpServerConfig } from './config.ts'
 import { mcpCleanupFailure, mcpFailure, mcpSecrets, type McpPhase } from './errors.ts'
 import { readableMcpText } from './text.ts'
@@ -31,6 +31,28 @@ interface ConnectionState {
   ready: boolean
   stderr: string
   transportError?: Error
+}
+
+async function checkExplicitCommand(command: string, env: NodeJS.ProcessEnv): Promise<void> {
+  if (!isAbsolute(command)) return
+  try {
+    await access(command)
+  } catch (error) {
+    if (process.platform !== 'win32' || !(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
+    // Check possible suffixes without replacing the SDK's command resolution.
+    const extensions = new Set(['.EXE', '.CMD', '.BAT', '.COM', ...[sysEnv, env].flatMap(environment =>
+      Object.entries(environment).filter(([key]) => key.toUpperCase() === 'PATHEXT')
+        .flatMap(([, value]) => value?.split(';').filter(Boolean) ?? []))])
+    for (const extension of extensions) {
+      try {
+        await access(command + extension)
+        return
+      } catch (candidateError) {
+        if (!(candidateError instanceof Error && 'code' in candidateError && candidateError.code === 'ENOENT')) throw candidateError
+      }
+    }
+    throw error
+  }
 }
 
 function publicContent(block: ContentBlock): Record<string, unknown> {
@@ -97,6 +119,7 @@ export class McpConnection {
     const startupSignal = signal
       ? AbortSignal.any([signal, state.abort.signal])
       : state.abort.signal
+    const startedAt = performance.now()
     try {
       if (this.workspaceRoot) {
         const roots = [{ uri: pathToFileURL(await realpath(this.workspaceRoot)).href, name: 'Session workdir' }]
@@ -116,7 +139,7 @@ export class McpConnection {
       state.ready = true
       state.transportError = undefined
     } catch (error) {
-      const failure = this.safeFailure(error, 'connect', startupSignal, state.stderr)
+      const failure = this.safeFailure(error, 'connect', startupSignal, state.stderr, Math.round(performance.now() - startedAt))
       try {
         await state.transport?.close()
       } catch (cleanupError) {
@@ -151,6 +174,10 @@ export class McpConnection {
           ...config.env,
         }
         this.diagnosticSecrets = mcpSecrets(config, mergedEnv)
+        // An explicit path can fail before the SDK's Windows command wrapper
+        // replaces native ENOENT with a localized shell message.
+        await checkExplicitCommand(config.command, mergedEnv)
+        signal.throwIfAborted()
         const transport = new StdioClientTransport({
           command: config.command,
           args: config.args,
@@ -160,14 +187,20 @@ export class McpConnection {
         })
         const state = this.state
         let exceeded = false
+        let stderrBytes = 0
+        const stderrChunks: Uint8Array[] = []
         const stderr = transport.stderr
-        if (stderr instanceof Readable) stderr.setEncoding('utf8')
         stderr?.on('data', (chunk: string | Buffer) => {
           if (!state || exceeded) return
-          state.stderr += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
-          if (state.stderr.length > 32_768) {
+          const bytes = Buffer.from(chunk)
+          stderrBytes += bytes.byteLength
+          if (stderrBytes > 32_768) {
             state.stderr = '[stderr omitted: exceeded diagnostic capture limit]'
+            stderrChunks.length = 0
             exceeded = true
+          } else {
+            stderrChunks.push(bytes)
+            state.stderr = decodeChunks(stderrChunks)
           }
         })
         return transport
@@ -219,11 +252,11 @@ export class McpConnection {
     this.toolsChangedHandler = handler
   }
 
-  private safeFailure(error: unknown, phase: McpPhase, signal?: AbortSignal, stderr = this.state?.stderr): unknown {
+  private safeFailure(error: unknown, phase: McpPhase, signal?: AbortSignal, stderr = this.state?.stderr, elapsedMs?: number): unknown {
     if (signal?.aborted && error === signal.reason && !(error instanceof Error && error.name === 'TimeoutError')) return error
     return mcpFailure(error, {
       phase, config: this.config, stderr, secrets: this.diagnosticSecrets,
-      transportError: this.state?.transportError,
+      transportError: this.state?.transportError, elapsedMs,
     })
   }
 
@@ -258,8 +291,9 @@ export class McpConnection {
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<import('../tools/tool.ts').ToolResult> {
     signal?.throwIfAborted()
     if (this.state) this.state.transportError = undefined
+    const startedAt = performance.now()
     const raw = await this.connectedClient('call_tool').callTool({ name, arguments: args }, CallToolResultSchema, { signal })
-      .catch((error: unknown) => { throw this.safeFailure(error, 'call_tool', signal) })
+      .catch((error: unknown) => { throw this.safeFailure(error, 'call_tool', signal, undefined, Math.round(performance.now() - startedAt)) })
     const parsed = CallToolResultSchema.safeParse(raw)
     if (!parsed.success) throw this.safeFailure(new Error('Malformed MCP tool result'), 'call_tool', signal)
     const result = parsed.data
@@ -280,10 +314,11 @@ export class McpConnection {
         .map((block) => readableMcpText(block.text))
         .join('\n')
     }
-    return JSON.stringify({
+    const text = JSON.stringify({
       isError: result.isError ?? false,
       content: result.content.map(publicContent),
       ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
     })
+    return result.isError ? { isError: true, content: [{ type: 'text', text }] } : text
   }
 }

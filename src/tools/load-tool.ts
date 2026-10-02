@@ -24,6 +24,9 @@ import { parseSkillFile } from '../skills/parse.ts'
 import { SessionBrowsers, type BrowserInstance } from '../browser/session-browsers.ts'
 import { BrowserSetupTool } from './browser-setup.ts'
 import type { VirtualEntry, VirtualListOptions } from '../vfs/virtual-fs.ts'
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
+import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation/types.js'
+import { toolResultText } from './tool.ts'
 
 /**
  * Describes an MCP server that can be connected on-demand and whose tools
@@ -172,6 +175,15 @@ function managedChromeArgs(args: string[]): { args: string[]; port?: number } {
   return { args: forwarded, port }
 }
 
+function selectedAppPage(result: ToolResult, origin: string): number {
+  const lines = toolResultText(result).split(/\r?\n/).filter(line => /^\d+: .+ \[selected\]$/.test(line))
+  const match = lines.length === 1 ? /^(\d+): (?:.*\()?((?:https?:\/\/)[^\s()]+)\)? \[selected\]$/.exec(lines[0]) : null
+  if (!match || new URL(match[2]).origin !== origin || !Number.isSafeInteger(Number(match[1]))) {
+    throw new Error('Managed browser did not identify one selected page at the approved app origin.')
+  }
+  return Number(match[1])
+}
+
 /**
  * Import a tool or side-effecting resource into the current session.
  *
@@ -273,6 +285,71 @@ export class ImportTool implements Tool {
       ...(instance.target.mode === 'launch' ? instance.target.options : { endpoint: instance.target.endpoint }),
       usage: 'Search glob:v:tools/chrome-devtools/<instance> or grep:v:tools/chrome-devtools/<instance>. Pass instance to invoke_tool({name:"chrome-devtools__...",instance,args:{...}}).',
     }
+  }
+
+  async openApp(context: ExecutionContext, identity: { id: string; revision: string },
+    open: () => Promise<{ url: string }>) {
+    const denied = this.contextError(`${VIRTUAL_TOOLS_PREFIX}chrome-devtools`, context)
+    if (denied) throw new Error(denied)
+    if (!this.sessionBrowsersEnabled() || context.tools.executionMode === 'call' || context.tools.dynamicOwner !== context.tools ||
+      !context.tools.has('invoke_tool') ||
+      ['browser_setup', 'chrome-devtools__new_page', 'chrome-devtools__evaluate_script'].some(name => !context.tools.canUseDynamic(name))) {
+      throw new Error('Author testing requires an owner-held session with managed browser tools enabled.')
+    }
+    const signal = AbortSignal.any([context.signal, context.tools.dynamicSignal])
+    return this.withImports(context.tools.dynamicOwner, signal, async () => {
+      signal.throwIfAborted()
+      const instance = this.browsers.create(context.tools, { mode: 'launch', options: {} })
+      let phase = 'managed browser setup'
+      let setupFailure: string | undefined
+      try {
+        const imported = await this.withImports(instance.tools, signal, () =>
+          this.loadByName('chrome-devtools', instance.tools, [], { signal, cwd: context.cwd ?? this.workspace }))
+        if (typeof imported === 'string') { setupFailure = imported; throw new Error('Managed browser setup failed') }
+        const tools = ['chrome-devtools__new_page', 'chrome-devtools__evaluate_script'].map(name => {
+          const tool = instance.tools.activeDynamicTools().find(tool => tool.name === name)
+          if (!(tool instanceof McpToolAdapter)) throw new Error(`Required managed browser adapter ${name} is unavailable.`)
+          return tool
+        })
+        const validators = tools.map(tool => new AjvJsonSchemaValidator().getValidator(tool.parameters as JsonSchemaType))
+        phase = 'approved app startup'
+        const { url } = await open()
+        const origin = new URL(url).origin
+        const requests: Record<string, unknown>[] = [
+          { url },
+          { function: `async () => {
+            if (location.origin !== ${JSON.stringify(origin)}) throw new Error('App origin changed');
+            const sdk = await import('/_shadow/sdk.js');
+            const status = await sdk.status();
+            if (status.id !== ${JSON.stringify(identity.id)} || status.revision !== ${JSON.stringify(identity.revision)}) throw new Error('App revision changed');
+            return { connected: true };
+          }` },
+        ]
+        let pageId: number | undefined
+        // Private handoff stays inside this admitted native operation, outside tool hooks/transcripts.
+        // Subsequent agent interactions use the normal invoke_tool gateway and its Work guard.
+        for (let i = 0; i < tools.length; i++) {
+          phase = i === 0 ? 'private app navigation' : 'SDK handshake'
+          signal.throwIfAborted()
+          if (!validators[i](requests[i]).valid) throw new Error('App browser adapter contract changed.')
+          const result = await tools[i].execute(requests[i], { ...context, signal, tools: instance.tools })
+          if (typeof result !== 'string' && result.isError || /^(Error|Blocked):/.test(toolResultText(result))) {
+            throw new Error('App browser handshake failed.')
+          }
+          if (i === 0) {
+            pageId = selectedAppPage(result, origin)
+            if (Object.hasOwn(tools[1].parameters.properties, 'pageId')) requests[1].pageId = pageId
+          }
+        }
+        signal.throwIfAborted()
+        return { ...this.browserReceipt(instance), pageId }
+      } catch {
+        // Adapter errors can echo the private launch URL. Never return them to the model.
+        await this.browsers.close(context.tools, instance)
+        signal.throwIfAborted()
+        throw new Error(`Could not open the approved app during ${phase}. ${setupFailure ?? 'Inspect app status and browser availability; the app may still be running.'}`)
+      }
+    })
   }
 
   resolveInvocationTools(toolName: string, context: ExecutionContext, instance?: string): SessionTools | string {

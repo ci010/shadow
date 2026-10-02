@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
+import { setTimeout as delay } from 'node:timers/promises'
 import fs from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
@@ -13,6 +14,7 @@ import { createServer, type ViteDevServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { MicroApps } from '../../src/microapps/service.ts'
 import { microAppsPlugin } from '../../src/microapps/routes.ts'
+import { YieldManager } from '../../src/sessions/yield.ts'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -24,15 +26,33 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
   const directory = resolve(root, '.test-artifacts', `microapp-ui-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   let calls = 0, failCleanup = true
+  const yields = new YieldManager({
+    getState: id => id === 'web:author' ? { sessionId: id, segmentIndex: 0 } : undefined,
+    getPolicy: () => ({ timeoutMs: null }), notifyUser: async () => {}, notifyParent: async () => {},
+  })
   const service = new MicroApps('p', directory, () => ({
     name: 'fixture', listModels: () => ['fixture'],
     chat: async (_messages, tools) => {
       assert.equal(tools.length, 0)
       return { content: `Result ${++calls}`, toolCalls: [] }
     },
-  }), () => 'fixture')
+  }), () => 'fixture', {
+    ownerSession: id => yields.ownerSession(id), ask: (...args) => yields.askOwner(...args),
+    notify: async () => {},
+    evidence: async () => { assert.fail('No report is submitted by this rendered test') },
+    work: () => [{ key: 'work:rendered-fixture', revision: 1, acceptance: ['Text becomes a useful result', 'Saved preferences survive reopening'] }],
+  })
   const host = new Hono()
   microAppsPlugin(service, req => req.headers.get('x-owner') === 'yes')(host)
+  host.use('/api/sessions/*', async (c, next) => {
+    if (c.req.header('x-owner') !== 'yes') return c.json({ error: 'unauthorized' }, 401)
+    await next()
+  })
+  host.get('/api/sessions/:id/ask', c => c.json({ request: yields.get(c.req.param('id')) }))
+  host.post('/api/sessions/:id/ask', async c => {
+    const body = await c.req.json()
+    return c.json({ answer: await yields.answerUser(c.req.param('id'), body.requestId, body.option) })
+  })
   let server: ViteDevServer | undefined, child: ReturnType<typeof spawn> | undefined
   t.after(async () => {
     if (child?.exitCode === null) { child.kill(); await once(child, 'close') }
@@ -53,6 +73,29 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
     };</script></body></html>`)
   const published = await service.publish(source, { version: 1, name: 'Text helper', description: 'A reusable synthetic text tool for checking app integration.',
     entry: 'index.html', files: ['index.html'], llm: { maxCalls: 2, maxOutputTokens: 32 } }, 'web:author', AbortSignal.timeout(5000))
+  host.post('/__acceptance-fixture', async c => {
+    const { report } = await c.req.json()
+    await service.requestTesting(published.id, published.revision)
+    const deadline = Date.now() + 5000
+    while (!yields.get('web:author')) { assert.ok(Date.now() < deadline); await delay(2) }
+    const question = yields.get('web:author')!
+    await yields.answerUser('web:author', question.id, question.defaultOption)
+    while (service.get(published.id).acceptance!.status !== 'notified') { assert.ok(Date.now() < deadline); await delay(2) }
+    const acceptance = service.get(published.id).acceptance!
+    const fact = { sessionId: 'web:author', inputId: `microapp-test:${acceptance.id}`, turnId: randomUUID(),
+      source: { kind: 'event' as const, type: 'microapp.testing.ready', source: 'system', eventId: acceptance.id } }
+    service.acceptance.authorTurn(fact)
+    if (report) {
+      const untested = { result: 'not_tested' as const, basis: 'not_tested' as const, summary: 'Synthetic presentation fixture; no business verification.', observations: [], evidence: [] }
+      await service.acceptance.report(published.id, published.revision, 'web:author', {
+        checks: ['startup', 'state', 'recovery', 'reopen'].map(category => ({ ...untested, category })),
+        requirements: acceptance.work!.flatMap(work => work.acceptance.map((_text, criterion) =>
+          ({ ...untested, workKey: work.key, workRevision: work.revision, criterion }))),
+      }, AbortSignal.timeout(5000))
+    }
+    service.acceptance.authorTurn(fact, 'completed')
+    return c.json({ status: service.get(published.id).acceptance!.status })
+  })
   const originalRemove = fs.promises.rm
   const runPrefix = resolve(service.store.root, published.id, 'runs') + sep
   const remove = t.mock.method(fs.promises, 'rm', async (...[path, options]: Parameters<typeof originalRemove>) => {
@@ -97,9 +140,9 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
             if (path === '/__microapps') {
               res.setHeader('Content-Type', 'text/html')
               res.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module" src="/microapp-fixture.ts"></script></body></html>')
-            } else if (path.startsWith('/projects/p/api/microapps')) {
+            } else if (path === '/__acceptance-fixture' || path.startsWith('/projects/p/api/microapps') || path.startsWith('/projects/p/api/sessions/') && path.endsWith('/ask')) {
               let body = ''; for await (const part of req) body += part
-              const result = await host.request(path.slice('/projects/p'.length), {
+              const result = await host.request(path === '/__acceptance-fixture' ? path : path.slice('/projects/p'.length), {
                 method: req.method, headers: { 'Content-Type': 'application/json',
                   'x-owner': req.headers.authorization === 'Bearer synthetic-host-token' ? 'yes' : 'no' },
                 ...(body ? { body } : {}),

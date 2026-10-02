@@ -7,6 +7,7 @@ import type { Tool, ToolParameters } from './tool.ts'
 
 export class CancelTool implements Tool {
   readonly name = 'cancel'
+  readonly workAdmission = () => 'cleanup' as const
   readonly description = 'Cancel one owned execution from v:bg, exec, or subagent. Waits for local work to stop; remote cancellation reports the remote state. Does not delete conversations or roll back side effects.'
   readonly parameters: ToolParameters = {
     type: 'object',

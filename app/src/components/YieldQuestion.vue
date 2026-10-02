@@ -46,13 +46,13 @@
           : canAnswer ? inputQuestion ? 'Provide the requested information. This reply does not grant new permissions.' : 'Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.' : 'Waiting for an authorized user. You have read-only access.' }}</p>
         <p v-if="request.deadline || decisionRequest?.timeoutPaused || inputQuestion" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
         <p v-if="decisionRequest?.supersedes" class="yield-status">Revised in response to your feedback: {{ decisionRequest.revisionReason }}. This is a new unanswered version.</p>
-        <DecisionDiscussion v-if="decisionRequest?.origin && answerable" :exact-proposal="!!decisionRequest.workProposal"
+        <DecisionDiscussion v-if="decisionRequest?.origin && !decisionRequest.ownerOnly && answerable" :exact-proposal="!!decisionRequest.workProposal"
           :key="request.id" :reference="{ sessionId: request.sessionId, physicalId: decisionRequest.origin.physicalId, requestId: request.id }"
           :api-base="apiBase" :can-request="answerable && !busy" @updated="refresh" />
       </div>
       <div class="yield-actions">
         <button v-if="error" class="btn yield-reload" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? 'Reloading…' : 'Reload question' }}</button>
-        <button v-if="answerable" class="btn yield-cancel" type="button" :disabled="busy" title="Cancel this question and stop the current task without choosing an option" @click="cancelQuestion">{{ cancelling ? 'Cancelling…' : 'Cancel task' }}</button>
+        <button v-if="answerable" class="btn yield-cancel" type="button" :disabled="busy" :title="decisionRequest?.ownerOnly ? 'Cancel only this confirmation without choosing an option' : 'Cancel this question and stop the current task without choosing an option'" @click="cancelQuestion">{{ cancelling ? 'Cancelling…' : decisionRequest?.ownerOnly ? 'Cancel confirmation' : 'Cancel task' }}</button>
         <button v-if="answerable" class="btn yield-continue" type="submit" :disabled="busy || (customMode && !customText.trim())">
           <span>{{ submitting ? 'Submitting…' : customMode ? 'Send response' : 'Continue' }}</span>
           <span v-if="!customMode" class="i-lucide-corner-down-left yield-enter" aria-hidden="true" />
@@ -70,7 +70,7 @@ import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText, isInp
 import DecisionDiscussion from './DecisionDiscussion.vue'
 import DecisionBrief from './DecisionBrief.vue'
 
-const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean; expectedRequestId?: string }>()
 const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; inspect: [sessionId: string] }>()
 const id = `yield-${useId()}`
 const documentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
@@ -118,7 +118,8 @@ async function openCustomResponse() {
 }
 async function cancelQuestion() {
   const sessionId = props.sessionId
-  if (await cancelPendingQuestion()) emit('cancelled', sessionId)
+  const ownerOnly = decisionRequest.value?.ownerOnly
+  if (await cancelPendingQuestion() && !ownerOnly) emit('cancelled', sessionId)
 }
 function updateVisibility() { documentVisible.value = document.visibilityState !== 'hidden' }
 onMounted(() => document.addEventListener('visibilitychange', updateVisibility))

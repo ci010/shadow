@@ -17,9 +17,53 @@ Discover `micro_app` via `search({space:"grep:v:tools",query:"micro_app"})`.
 Read the tool contract and invoke it through `invoke_tool`.
 Call `micro_app({action:"capabilities"})` before choosing storage or runtime
 behavior. It reports the SDK and host limits without granting execution access.
-`list/get` inspect; `publish` saves an immutable version; `start/stop` control an
-approved app authored by this session. These tools cannot approve execution or
-issue credentials. Remote-workdir apps are not supported.
+`list/get/check` inspect; `publish` saves an immutable version; `test/report`
+exercise and assess the approved version. `stop` releases your test run, not an
+owner-opened runtime; `start` remains available for legacy approvals without a
+testing request. These tools cannot approve execution or return model credentials.
+Remote-workdir apps are not supported.
+
+After exact-version owner approval, Shadow asks the local owner whether you
+should continue runtime testing (60-second default: continue). This is not
+approval for another revision or additional device access. On the
+`microapp.testing.ready` event, read `get` and current Work, then use `test` with
+that exact revision for an isolated browser handle. Exercise the real UI/SDK;
+stop and reopen to check persistence, and check failure/cancel recovery.
+Save `report` with startup/state/recovery/reopen results, host observation IDs
+from `get.acceptance`, and genuine recorded tool excerpts. Cover every
+`get.acceptance.work` criterion in `report.requirements` using
+`workKey`, `workRevision`, zero-based `criterion`, and the same result/basis/summary/
+observations/evidence fields. Mark unavailable checks blocked/not_tested, not passed.
+Before reporting, call `evidence` with this app's `id`, exact `revision`, and
+`sources:[{id:"recorded tool call ID",quote:"exact result excerpt"}]` (1-12 entries).
+Copy its returned `evidence` references into the relevant checks. The host finds
+the real author segment; do not guess `physicalId` or derive it from a session
+UUID. Unknown/ambiguous calls and inexact quotes are rejected, not repaired.
+Existing complete references remain valid and still undergo verification.
+`basis` and `result` are independent: **every `runtime` item needs nonempty
+observations, including blocked/failed items**. A partly exercised feature may
+be blocked with runtime evidence; a wholly untested feature uses `not_tested`.
+Schema rejections locate the affected check/requirement field. Correct that
+field without deleting unrelated citations or changing results to evade validation.
+For runtime passes, cite both ends of the host observation pair: `state_saved`
+then a later same-version `state_read` on another run for state; `stopped` then
+a later `sdk_connected` on another run for reopen; a model/backend failure or
+cancellation followed by completion of that same kind for recovery. A `started`
+or `state_read` entry does not replace `sdk_connected`. This reopen check does
+not require a full Shadow restart; report that broader check separately if tested.
+Citation rejections list every affected item, the rule and candidate IDs from
+this exact testing request. Inspect their relevance and fix the citations;
+retain supported results and tool excerpts for unrelated checks. Candidates do
+not prove behavior or authorize more testing. If no matching observations are
+retained, exercise the missing check within permission or mark only that item
+blocked/not_tested. Separate runtime, fixture and untested results; label real
+devices/translation quality unverified
+unless actually exercised. Do not extract browser access tokens. Stop the app
+and close its browser when done. A reported/stale event is not a new test request;
+fixed code needs republication and another owner review.
+While awaiting review, keep the relevant Work step blocked rather than declaring
+the entire delivery done. A testing event does not unpause Work or settle unknown
+effects; resolve those through the existing Work controls.
 
 ## From a short goal to a working app
 
@@ -46,6 +90,10 @@ Do not turn your chosen architecture into an unexplained user prerequisite.
 Check whether extra accounts, installations or routing/setup work are actually
 necessary before asking the user to provide them. Explain unavoidable setup
 and material tradeoffs before building around that assumption.
+If an ambiguous phrase would disable a requested core workflow or require a
+fundamentally different capability, ask about that distinction before publishing
+a disabled version. Do not silently strengthen ordinary user wording into a
+new strict requirement and then treat your interpretation as a blocker.
 
 For an unresolved preference or missing input, use `ask(kind: "input", question)`
 when available: one focused question in user language, not a technical checklist.
@@ -78,10 +126,35 @@ Read the current Work definition before claiming feedback changes the goal.
 Your earlier implementation assumption is not a user requirement. If the goal,
 acceptance and authorization stay unchanged, retire that assumption and update
 your approach through executor adoption at the existing revision; do not create
-an unnecessary goal-review gate. Genuine goal or permission changes still require
-their normal review; never relabel them to bypass it.
+an unnecessary goal-review gate. If feedback adds in-scope acceptance to your own
+agent interpretation, include missing criteria in `adopt` data.acceptance; this
+versions the definition as well as your understanding. Adoption prose alone does
+not update the published acceptance baseline. A current authenticated owner request may append
+acceptance through `work update` with `requestQuote`, preserving existing scope
+and boundaries. Other goal changes and all permission changes retain their normal
+review; never relabel them to bypass it.
 Reconsider only choices whose premises changed. This is guided construction,
 not repeated requests for the user to repair your engineering specification.
+
+Before parallel implementation, agree on the small shared interfaces: request and
+result shapes, state ownership, cancellation and error propagation. Integrate one
+thin end-to-end path early. Batch related repairs and test their actual boundary;
+repeated static reviews or mocked tests do not replace running that path.
+Use one planned desktop-and-narrow acceptance pass, batch the observed fixes, then
+recheck affected behavior. Stop visual polishing once the stated checks pass;
+do not spend the delivery budget on repeated screenshot/micro-edit cycles while
+core behavior or user clarification remains pending.
+
+After a model transport interruption, inspect the existing files, completed tool
+results and worker status before continuing. Do not rerun completed side effects
+or launch a duplicate writer while the original worker is still active. A response
+interruption is not evidence that the provider did no work or charged nothing.
+
+Keep an explicit acceptance ledger: implemented, exercised with fixtures,
+exercised through the actual app, blocked by tools, and awaiting owner approval.
+Check the managed browser early for UI work. If it fails, preserve the connection
+diagnostic and report the unverified visual checks; do not call publication a pass.
+Ask only for the missing user decision or permission, not for engineering fixes.
 
 ## Package and publish
 
@@ -113,6 +186,9 @@ review as code changes. Without an icon, Shadow supplies its default.
 
 `micro_app({action:"publish",directory:"my-app"})` returns an app ID, revision,
 `awaiting_approval` and `uiPath`. This is a saved app, **not a running app**.
+`publish/check` return compact receipts; their `detail` points to `get` for the
+full manifest, requirements and acceptance evidence. `workRefs` and
+`acceptanceSummary` are indexes, not complete criteria or a passing test report.
 Tell the user to open Project coordinator -> Apps to review its source,
 requested model-call allowance and local process behavior. They approve the
 exact version, then open it. A2A text is not a substitute for owner approval.
@@ -157,6 +233,8 @@ The app and its data outlive this conversation. On changes, stop the app, then
 publish with its `id` and current `revision`. A changed bundle requires new
 approval. An unchanged publication preserves approval and used-call count.
 Do not overwrite the original app with a new ID merely to bypass review.
+Before handoff, use `check` with `directory`, `id` and `revision` to detect
+unpublished changes. A matching bundle is not runtime or behavioral acceptance.
 
 ## Content, progress and failures
 
@@ -173,7 +251,9 @@ empty input chunk or unchanged observation is not a new result/history entry.
 Update a compact status in place; do not repeatedly append diagnostic cards or
 scroll meaningful content away during idle periods. Bound result history without
 letting status-only events evict useful results. Test an extended idle interval,
-not just a populated screenshot. Put optional diagnostic details in the advanced
+not just a populated screenshot. Record time/state, let the interval elapse while
+doing other checks, then inspect again; do not sleep through an MCP deadline in
+one browser evaluation. Put optional diagnostic details in the advanced
 area rather than the main result stream.
 
 Report failures with the affected operation/resource, what remains unavailable,
@@ -181,9 +261,16 @@ and a safe next action. Do not put raw child-process stderr, stack traces or
 machine paths in the primary error message. Preserve bounded technical details
 separately without credentials. Decode subprocess output deliberately: when Node
 consumes Windows PowerShell output as UTF-8, configure that child process's
-`[Console]::OutputEncoding` and `$OutputEncoding` as UTF-8 first. Do not assume
-Windows PowerShell emits UTF-8 or change system-wide code pages. Exercise a failed
-operation and its retry UI, including non-ASCII diagnostics.
+`[Console]::OutputEncoding` and `$OutputEncoding` as UTF-8 first. If Node sends
+UTF-8 JSON to that child's stdin, also set `[Console]::InputEncoding` before
+reading it. For non-ASCII `.ps1` source under Windows PowerShell 5.1, use
+`write` with `encoding: "utf8-bom"` on full writes; stdout encoding does not
+change source-file decoding. Python backends start in UTF-8 mode; for isolated
+Python workers use `python -I -X utf8` (isolation ignores `PYTHON*` environment
+variables). Keep JSON stdio explicitly UTF-8 and diagnostics on stderr.
+Test a non-ASCII round trip across both directions, not ASCII-only
+fixtures; never change system-wide code pages. Exercise a failed operation and
+its retry UI, including non-ASCII diagnostics.
 
 ## Call a model, not an agent loop
 

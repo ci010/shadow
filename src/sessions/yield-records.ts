@@ -1,7 +1,7 @@
 import { physicalSessionId } from './session-identity.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
 import { parseYieldDecisionRecord, parseYieldReview, parseDecisionInvalidation, type DecisionInvalidation, type YieldDecisionRecord, type YieldRequest, type YieldReview, type YieldReference } from './yield-contract.ts'
-import { DECISION_BRIEF_HELP, type DecisionEvidence } from './decision-brief.ts'
+import { DECISION_BRIEF_HELP, toolEvidenceQuerySchema, type DecisionEvidence, type ToolEvidenceQuery } from './decision-brief.ts'
 import { YieldError } from './yield.ts'
 import type { ConventionAuthority, ConventionSource } from '../projects/conventions.ts'
 
@@ -129,6 +129,38 @@ export class YieldRecords {
         && typeof event.content === 'string' && event.content.includes(source.quote)) return
     }
     throw new YieldError('invalid_request', 'Evidence quote does not match a recorded input/receipt from that author. Mark unverified claims as assumptions.')
+  }
+
+  async resolveToolEvidence(sessionId: string, value: ToolEvidenceQuery, signal: AbortSignal): Promise<DecisionEvidence[]> {
+    signal.throwIfAborted()
+    const sources = toolEvidenceQuerySchema.parse(value)
+    this.segment(sessionId)
+    const state = this.getState(sessionId)!
+    const segments = Array.from({ length: state.segmentIndex + 1 }, (_, index) => physicalSessionId(state, index))
+    const matches = sources.map(() => new Map<string, boolean>())
+    for (const physicalId of segments) {
+      signal.throwIfAborted()
+      for await (const event of this.store.readSessionLog(physicalId)) {
+        signal.throwIfAborted()
+        if (event.role !== 'tool' || typeof event.content !== 'string') continue
+        for (const [index, source] of sources.entries()) {
+          if (event.tool_call_id === source.id) {
+            matches[index].set(physicalId, matches[index].get(physicalId) === true || event.content.includes(source.quote))
+          }
+        }
+      }
+    }
+    signal.throwIfAborted()
+    const issues: string[] = [], evidence: DecisionEvidence[] = []
+    for (const [index, source] of sources.entries()) {
+      const found = matches[index]
+      if (!found.size) issues.push(`sources[${index}].id: No tool receipt with ID ${source.id} in this author's own segments.`)
+      else if (found.size > 1) issues.push(`sources[${index}].id: Ambiguous tool ID ${source.id}; inspect and cite the exact segment explicitly: ${[...found.keys()].join(', ')}.`)
+      else if (![...found.values()][0]) issues.push(`sources[${index}].quote: Excerpt does not match the recorded tool receipt ${source.id}. Copy an exact excerpt, not a summary.`)
+      else evidence.push({ sessionId, physicalId: this.segment(sessionId, [...found.keys()][0]), kind: 'tool', ...source })
+    }
+    if (issues.length) throw new YieldError('invalid_request', `No evidence references returned. ${issues.join('\n')}`)
+    return evidence
   }
 
   async conventionAuthority(source: ConventionSource, input: { sessionId: string; physicalId: string; id: string }): Promise<ConventionAuthority> {

@@ -2,6 +2,7 @@ import { ReplyTool } from '../tools/reply.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { decisionBrief } from '../testing/decision.ts'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -26,6 +27,7 @@ import type { SessionStore } from './session-store.ts'
 import type { YieldPolicy } from './yield-contract.ts'
 import { channelMessageInput } from './input.ts'
 import type { OutboundMessage } from '../bus/events.ts'
+import { MicroApps } from '../microapps/service.ts'
 
 const question = { question: 'Which approach?', options: ['Continue', 'Change approach', 'Stop'], default_option: 'Continue' }
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
@@ -86,17 +88,107 @@ function fixture(workspace: string, store: SessionStore, deliverYield?: (message
   tools.register(new AskTool(sessions.yields, sessions.inputs))
   tools.register(new ReplyTool(sessions.yields, sessions.inputs))
   const app = new Hono()
-  sessionsApiPlugin(sessions)(app)
-  return { sessions, app, calls, facts, outbound, accepted, tools, setGlobal: (policy: YieldPolicy) => { globalPolicy = policy } }
+  sessionsApiPlugin(sessions, { authorizeOwnerDecision: request => request.headers.get('x-owner') === 'yes' })(app)
+  return { sessions, app, calls, facts, outbound, accepted, tools, bus, setGlobal: (policy: YieldPolicy) => { globalPolicy = policy } }
 }
 
 async function answer(app: Hono, sessionId: string, requestId: string, option: string) {
   return app.request(`/api/sessions/${encodeURIComponent(sessionId)}/ask`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, option }),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-owner': 'yes' }, body: JSON.stringify({ requestId, option }),
   })
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: approved app confirmation resumes the same author through an event, never a forged user turn`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const apps = new MicroApps('p', workspace, () => { throw new Error('No app generation in this test') }, () => 'fixture', {
+        ownerSession: id => f.sessions.yields.ownerSession(id),
+        ask: (...args) => f.sessions.yields.askOwner(...args),
+        evidence: source => f.sessions.validateWorkEvidence(source),
+        notify: async (record, acceptance) => {
+          await f.sessions.deliver(record.createdBy, {
+            kind: 'message', id: `microapp-test:${acceptance.id}`, timestamp: new Date().toISOString(), policy: 'queue',
+            source: { kind: 'event', eventId: acceptance.id, type: 'microapp.testing.ready', source: 'system' },
+            content: `Test approved app ${record.id}, revision ${record.revision}.`,
+          })
+        },
+      })
+      const started = f.bus.on('session.turn.started', fact => apps.acceptance.authorTurn(fact))
+      const finished = f.bus.on('session.turn.finished', fact => apps.acceptance.authorTurn(fact, fact.status))
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:author', undefined, { agentType: 'general' })
+        await apps.init()
+        const source = join(workspace, 'app-source'); await mkdir(source)
+        await writeFile(join(source, 'index.html'), '<title>Fixture</title>')
+        const app = await apps.publish(source, { version: 1, name: 'Fixture', description: 'Synthetic app',
+          entry: 'index.html', files: ['index.html'] }, 'web:author', AbortSignal.timeout(5000))
+        await apps.approve(app.id, app.revision)
+        await waitFor(() => !!f.sessions.yields.get('web:author'))
+        assert.equal(f.calls.length, 0, 'No author inference before the testing choice')
+        const request = f.sessions.yields.get('web:author')!
+        assert.equal((await f.app.request('/api/sessions/web:author/ask', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId: request.id, option: request.defaultOption }),
+        })).status, 401)
+        assert.equal((await answer(f.app, 'web:author', request.id, request.defaultOption)).status, 200)
+        await waitFor(() => f.calls.length === 1)
+        await waitFor(() => apps.get(app.id).acceptance!.status === 'running')
+        assert.equal(f.accepted.length, 1)
+        assert.equal(f.accepted[0].sessionId, 'web:author')
+        assert.equal(f.accepted[0].input.source.kind, 'event')
+        const accepted = f.accepted[0].input
+        assert.ok(accepted.kind === 'message')
+        assert.equal(accepted.policy, 'queue')
+        f.calls[0].resolve(done())
+        await waitFor(() => f.facts.length === 1)
+        await waitFor(() => apps.get(app.id).acceptance!.status === 'incomplete')
+        assert.equal(apps.get(app.id).acceptance!.authorTurn?.outcome, 'completed')
+        assert.equal(f.facts[0].source.kind, 'event')
+        const history = await f.sessions.getYieldRecords('web:author')
+        assert.equal(history[0].request.ownerOnly, true)
+        assert.equal(history[0].answer?.answeredBy, 'user')
+      } finally { f.bus.off(started); f.bus.off(finished); await apps.shutdown(); await f.sessions.stop(); store.close?.() }
+    })
+  })
+
+  test(`${Store.name}: host owner questions stay local, persist, and cancel without stopping unrelated author work`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession('web:author', undefined, { agentType: 'general' })
+        await f.sessions.deliver('web:author', message('independent-work'))
+        await waitFor(() => f.calls.length === 1)
+        const pending = f.sessions.yields.askOwner('web:author', {
+          question: 'Continue testing the approved version?', options: ['Continue testing', 'Not now'], defaultOption: 'Continue testing',
+        }, new AbortController().signal, 60_000)
+        const rejected = assert.rejects(pending, { name: 'AbortError' })
+        await waitFor(() => !!f.sessions.yields.get('web:author'))
+        const request = f.sessions.yields.get('web:author')!
+        assert.equal(request.ownerOnly, true)
+        assert.equal(f.outbound.length, 0)
+        const response = await f.app.request('/api/sessions/web:author/ask', {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json', 'x-owner': 'yes' }, body: JSON.stringify({ requestId: request.id }),
+        })
+        assert.equal(response.status, 200)
+        await rejected
+        assert.equal(f.facts.length, 0, 'Cancelling this confirmation must not cancel the running agent')
+        f.calls[0].resolve(done())
+        await waitFor(() => f.facts.length === 1)
+        assert.equal(f.facts[0].status, 'completed')
+        const records = await f.sessions.getYieldRecords('web:author')
+        assert.equal(records[0].request.ownerOnly, true)
+        assert.equal(records[0].closed?.reason, 'cancelled')
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: ordinary input uses the request route and preserves paired tool history without decision records`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

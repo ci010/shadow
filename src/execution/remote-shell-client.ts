@@ -10,6 +10,7 @@ export async function executeRemoteShell(
   target: RemoteFilesystemTarget,
   args: unknown,
   timeoutMs: number,
+  completedFailure?: () => void,
 ): Promise<string> {
   target.signal.throwIfAborted()
   const parsed = parseWorkdirProcessArgs(args)
@@ -21,6 +22,7 @@ export async function executeRemoteShell(
   const stdout: string[] = []
   const stderr: string[] = []
   let terminal: ExecutionReceiptV1 | undefined
+  let terminalType: string | undefined
   for await (const event of target.executor.execute({
     version: 1,
     jobId,
@@ -37,16 +39,20 @@ export async function executeRemoteShell(
     if (event.type === 'stdout') stdout.push(event.chunk)
     if (event.type === 'stderr') stderr.push(event.chunk)
     if ('receipt' in event) {
-      if (event.receipt.jobId !== jobId || event.receipt.nodeId !== target.nodeId ||
+      if (event.jobId !== jobId || event.receipt.jobId !== jobId || event.receipt.nodeId !== target.nodeId ||
         (event.type === 'completed') !== (event.receipt.state === 'completed')) {
         return 'Error: remote exec returned an uncorrelated or inconsistent terminal receipt; process state is unknown.'
       }
       terminal = event.receipt
+      terminalType = event.type
     }
   }
   const output = stdout.join('') + (stderr.length ? `\n[stderr]\n${stderr.join('')}` : '')
   const state = terminal?.state
   if (state !== 'completed' || terminal?.exitCode !== 0) {
+    const exitCode = terminal?.exitCode
+    if (terminalType === state && (state === 'completed' || state === 'failed' && terminal?.reason?.code === 'process-exit') &&
+      typeof exitCode === 'number' && Number.isSafeInteger(exitCode) && exitCode > 0 && !terminal?.signal && !target.signal.aborted) completedFailure?.()
     const reason = terminal?.reason?.message ?? 'Remote command did not return a successful terminal receipt'
     const code = terminal?.reason?.code ?? 'remote-execution-incomplete'
     return `Error: remote exec ${state ?? 'incomplete'} [${code}]: ${reason}` +

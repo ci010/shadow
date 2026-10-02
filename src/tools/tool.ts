@@ -6,6 +6,16 @@ export type ToolResult = string | { content: ContentPart[]; isError?: boolean }
 /** Only trusted implementations may attest that a failed operation had no effect. */
 export class ToolNoEffectError extends Error {}
 
+const completedResults = new WeakSet<object>()
+/** A native execution returned an error, not a lost execution. Partial effects are not rolled back. */
+export function completedToolFailure(result: Exclude<ToolResult, string>): ToolResult {
+  completedResults.add(result)
+  return result
+}
+export function isCompletedToolFailure(result: ToolResult): boolean {
+  return typeof result !== 'string' && result.isError === true && completedResults.has(result)
+}
+
 export function toolResultText(result: ToolResult): string {
   return typeof result === 'string' ? result : result.content
     .filter(part => part.type === 'text').map(part => part.text).join('\n')
@@ -13,8 +23,10 @@ export function toolResultText(result: ToolResult): string {
 
 /** Text-only integrations must not silently discard visual tool output. */
 export function requireToolText(result: ToolResult): string {
-  if (typeof result !== 'string') throw new Error('This consumer accepts text only. Invoke the tool directly to deliver its image result to the model.')
-  return result
+  if (typeof result !== 'string' && result.content.some(part => part.type !== 'text')) {
+    throw new Error('This consumer accepts text only. Invoke the tool directly to deliver its image result to the model.')
+  }
+  return toolResultText(result)
 }
 
 /**
@@ -27,10 +39,13 @@ export interface ToolParameters {
     type: string
     description?: string
     enum?: string[]
+    minItems?: number
+    maxItems?: number
     items?: {
       type: string
       properties?: Record<string, { type: string; description?: string }>
       required?: string[]
+      additionalProperties?: boolean
     }
     default?: unknown
   }>
@@ -50,6 +65,8 @@ export interface Tool<Result extends ToolResult = string> {
   readonly parameters: ToolParameters
   /** True (or true for these arguments) means the call only reads state and can run in parallel. */
   readonly readonly?: boolean | ((args: Record<string, unknown>) => boolean)
+  /** Trusted implementation policy, never an MCP hint or model argument. Cleanup must enforce resource ownership itself. */
+  readonly workAdmission?: (args: Record<string, unknown>) => 'cleanup' | undefined
   /** Explicitly opts the tool into capability-backed remote workspace handling. */
   readonly supportsRemoteWorkdir?: boolean
   /** If true, this tool is opt-in only — hidden unless explicitly listed in allowedTools. */

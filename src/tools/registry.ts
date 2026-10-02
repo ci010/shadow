@@ -1,7 +1,7 @@
 import { trace } from '@opentelemetry/api'
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { ToolNoEffectError, toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
+import { ToolNoEffectError, isCompletedToolFailure, toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
 import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
 import type { McpConnection } from '../mcp/client.ts'
@@ -127,7 +127,10 @@ export class Tools {
       const receipt = admission
       admission = undefined
       let text = toolResultText(result)
-      text += receipt?.finish((typeof result !== 'string' && result.isError === true) || /^(Error|Blocked):/.test(text)) ?? ''
+      const failed = typeof result !== 'string' && result.isError !== undefined
+        ? result.isError : /^(Error|Blocked):/.test(text)
+      text += receipt?.finish(failed || context.signal.aborted,
+        !context.signal.aborted && isCompletedToolFailure(result) ? 'returned' : undefined) ?? ''
       const images = typeof result === 'string' ? [] : result.content.filter(part => part.type === 'image_url')
       if (images.length > MAX_TOOL_IMAGES) throw new Error(`A tool result supports at most ${MAX_TOOL_IMAGES} images. Request fewer images.`)
       for (const image of images) imageFromDataUrl(image.image_url.url)

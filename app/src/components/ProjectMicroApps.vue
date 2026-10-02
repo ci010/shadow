@@ -47,11 +47,64 @@
           <form v-if="canWrite && !selected.cleanupPending && selected.status !== 'running' && selected.status !== 'starting'" class="app-approval" @submit.prevent="approve">
             <label v-if="selected.manifest.llm">Model (optional override)<input v-model="model" placeholder="Use Project default" :disabled="busy" /></label>
             <label class="app-confirm"><input v-model="confirmed" type="checkbox" :disabled="busy" />I reviewed this version and authorize its local code and requested model allowance.</label>
+            <p v-if="selected.acceptanceAvailable">After approval, we will ask whether its author should run tests. No reply within 60 seconds continues testing, using agent calls and the approved app allowance. You can choose “Not now”. New versions still need review.</p>
             <button class="app-primary" :disabled="busy || !confirmed">{{ selected.approval ? 'Renew authorization and reset allowance' : 'Approve this version' }}</button>
           </form>
           <button v-if="selected.approval && canWrite" :disabled="busy" @click="act('revoke')">Revoke access and stop</button>
           <p v-if="!canWrite">Project owner access is required to approve or run apps.</p>
+          <button v-if="canWrite && selected.approval && selected.acceptanceAvailable && !selected.acceptance"
+            :disabled="busy || selected.cleanupPending || selected.status === 'running' || selected.status === 'starting'" @click="requestTesting">
+            Ask author to test this version
+          </button>
         </div>
+        <section v-if="selected.acceptance" ref="testingPanel" class="app-acceptance" aria-label="Version-bound runtime testing">
+          <h3 role="status">Runtime testing · {{ microAppTestingStatus[selected.acceptance.status] }}</h3>
+          <p>For this exact version. Host observations record activity, not functional correctness. Results below are the author's assessment; fixture tests do not prove real devices or translation quality.</p>
+          <p v-if="selected.acceptance.decision">Continue selected by {{ selected.acceptance.decision === 'timeout' ? 'the 60-second default' : 'the owner' }}.</p>
+          <p v-if="selected.acceptance.error" class="apps-error" role="alert">{{ selected.acceptance.error }}</p>
+          <p v-if="selected.acceptance.authorTurn">
+            Author started {{ selected.acceptance.authorTurn.startedAt }}<span v-if="selected.acceptance.authorTurn.finishedAt"> · Finished {{ selected.acceptance.authorTurn.finishedAt }} ({{ selected.acceptance.authorTurn.outcome }})</span>.
+            A finished turn is not a passing report.
+          </p>
+          <details v-if="selected.acceptance.work?.length">
+            <summary>Published Work acceptance criteria</summary>
+            <div v-for="work in selected.acceptance.work" :key="work.key">
+              <p><code>{{ work.key }}</code> · revision {{ work.revision }} at publication</p>
+              <ol><li v-for="(criterion, index) in work.acceptance" :key="index">{{ criterion }}</li></ol>
+            </div>
+          </details>
+          <p v-else>No Work acceptance criteria were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.</p>
+          <YieldQuestion v-if="selected.acceptance.status === 'asking' && selected.acceptance.decisionSessionId && selected.acceptance.decisionRequestId"
+            :key="selected.acceptance.id" :api-base="apiBase" :session-id="selected.acceptance.decisionSessionId"
+            :active="active" stage="waiting" :can-answer="canWrite" :expected-request-id="selected.acceptance.decisionRequestId"
+            @request="revealTestingQuestion" />
+          <template v-if="selected.acceptance.report">
+            <article v-for="check in reportChecks" :key="check.key" class="app-test-check">
+              <h4>{{ check.title }} · {{ check.result }} · {{ check.basis }}</h4>
+              <p>{{ check.summary }}</p>
+              <details v-if="check.observations.length || check.evidence.length">
+                <summary>Evidence · {{ check.observations.length }} host observations, {{ check.evidence.length }} tool excerpts</summary>
+                <p v-for="observation in check.observations" :key="observation"><code>{{ observation }}</code></p>
+                <blockquote v-for="source in check.evidence" :key="`${source.physicalId}:${source.id}:${source.quote}`">
+                  <p>{{ source.quote }}</p><cite>{{ source.sessionId }} · {{ source.physicalId }} · {{ source.id }}</cite>
+                </blockquote>
+              </details>
+            </article>
+          </template>
+          <p v-else>No acceptance report yet. Publication or a running process is not a passing result.</p>
+          <details v-if="selected.acceptance.observations.length">
+            <summary>Host observations · {{ selected.acceptance.observations.length }}</summary>
+            <p v-for="observation in selected.acceptance.observations" :key="observation.id">
+              {{ observation.kind }} × {{ observation.count }}<span v-if="observation.stateVersion !== undefined"> · state v{{ observation.stateVersion }}</span>
+              · {{ observation.lastAt }}<br /><code>{{ observation.id }}</code> · run <code>{{ observation.runId }}</code>
+            </p>
+          </details>
+          <p v-if="selected.acceptance.observationsTruncated" role="status">Observation limit reached. Missing observations are not proof that a check passed.</p>
+          <button v-if="canWrite && selected.approval && ['paused', 'blocked', 'incomplete', 'failed', 'interrupted', 'reported'].includes(selected.acceptance.status)"
+            :disabled="busy || selected.cleanupPending || selected.status === 'running' || selected.status === 'starting'" @click="requestTesting">
+            Ask to run tests again
+          </button>
+        </section>
         <div v-if="frameUrl" class="app-frame">
           <div class="app-frame-tools"><span>Isolated app page</span><button @click="frameUrl = ''">Close page</button></div>
           <iframe :src="frameUrl" :title="selected.manifest.name" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" referrerpolicy="no-referrer" />
@@ -67,10 +120,11 @@
   </section>
 </template>
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { microAppIconUrl, microAppRequest, microAppReview, microAppStatus, microAppView, nativeAppIdentity, validAppLaunch, type MicroAppReview, type MicroAppView } from '../microapps.ts'
+import { microAppIconUrl, microAppRequest, microAppReview, microAppStatus, microAppTestingStatus, microAppView, nativeAppIdentity, validAppLaunch, type MicroAppReview, type MicroAppView } from '../microapps.ts'
 import { z } from 'zod'
+import YieldQuestion from './YieldQuestion.vue'
 const props = defineProps<{ apiBase: string; active: boolean; canWrite: boolean }>()
 defineEmits<{ compose: [text: string] }>()
 const route = useRoute(), router = useRouter()
@@ -79,7 +133,19 @@ const apps = ref<MicroAppView[]>([]), selected = ref<MicroAppReview>()
 const loading = ref(false), mutating = ref(false), error = ref(''), confirmed = ref(false), model = ref('')
 const frameUrl = ref(''), reviewing = ref(true)
 const openedNatively = ref(false)
+const testingPanel = ref<HTMLElement>()
 const busy = computed(() => loading.value || mutating.value)
+const reportChecks = computed(() => {
+  const acceptance = selected.value?.acceptance, report = acceptance?.report?.result
+  return [
+    ...(report?.checks ?? []).map(check => ({ ...check, key: check.category, title: check.category })),
+    ...(report?.requirements ?? []).map(check => ({
+      ...check, key: `${check.workKey}:${check.workRevision}:${check.criterion}`,
+      title: acceptance?.work?.find(work => work.key === check.workKey && work.revision === check.workRevision)?.acceptance[check.criterion]
+        ?? `${check.workKey} v${check.workRevision} criterion ${check.criterion + 1}`,
+    })),
+  ]
+})
 let controller: AbortController | undefined
 async function loadSelection(id: string, signal?: AbortSignal) {
   const value = microAppReview.parse(await microAppRequest(props.apiBase, `/${encodeURIComponent(id)}`, undefined, signal))
@@ -123,11 +189,25 @@ async function mutation(operation: (id: string) => Promise<void>) {
 function approve() {
   if (!confirmed.value || !selected.value) return
   const revision = selected.value.revision
-  return mutation(async id => { await microAppRequest(props.apiBase, `/${id}/approve`, { revision, confirm: true, ...(model.value.trim() ? { model: model.value.trim() } : {}) }) })
+  return mutation(async id => {
+    await microAppRequest(props.apiBase, `/${id}/approve`, { revision, confirm: true, ...(model.value.trim() ? { model: model.value.trim() } : {}) })
+    reviewing.value = false
+  })
+}
+async function revealTestingQuestion(request: { id: string } | null) {
+  if (!request || !props.active || !props.canWrite || request.id !== selected.value?.acceptance?.decisionRequestId) return
+  await nextTick()
+  testingPanel.value?.scrollIntoView({ block: 'start' })
+  testingPanel.value?.querySelector<HTMLInputElement>('input[type=radio]')?.focus({ preventScroll: true })
 }
 function act(action: 'stop' | 'revoke') {
   frameUrl.value = ''
   return mutation(async id => { await microAppRequest(props.apiBase, `/${id}/${action}`, {}) })
+}
+function requestTesting() {
+  if (!selected.value) return
+  const revision = selected.value.revision
+  return mutation(async id => { await microAppRequest(props.apiBase, `/${id}/test`, { revision }) })
 }
 function open() {
   return mutation(async id => {
@@ -145,7 +225,23 @@ watch(() => [props.apiBase, props.active, route.query.microApp], () => {
   if (props.active) void refresh()
   else controller?.abort()
 }, { immediate: true })
-onUnmounted(() => controller?.abort())
+const statusPoll = setInterval(() => {
+  if (!props.active || document.visibilityState === 'hidden' || busy.value || !selected.value?.acceptance ||
+    !['asking', 'dispatching', 'notified', 'running', 'testing'].includes(selected.value.acceptance.status)) return
+  const id = selected.value.id, revision = selected.value.revision
+  const request = new AbortController(); controller = request
+  loading.value = true
+  void microAppRequest(props.apiBase, `/${id}/status`, undefined, request.signal).then(value => {
+    if (request.signal.aborted || selected.value?.id !== id || selected.value.revision !== revision) return
+    const updated = microAppView.parse(value)
+    if (updated.revision !== revision) { void refresh(); return }
+    selected.value = { ...selected.value, ...updated }
+    apps.value = apps.value.map(app => app.id === id ? updated : app)
+  }).catch(cause => {
+    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not refresh testing status'
+  }).finally(() => { if (controller === request) loading.value = false })
+}, 2000)
+onUnmounted(() => { controller?.abort(); clearInterval(statusPoll) })
 </script>
 <style scoped>
 .micro-apps { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; color: var(--c-text); overflow: auto; }
@@ -175,6 +271,12 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .apps-list .needs-review { color: var(--c-warn); }
 .app-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; }
 .app-review { padding: 18px; font-size: 13px; }
+.app-acceptance { padding: 18px; border-top: 1px solid var(--c-border); font-size: 13px; overflow-wrap: anywhere; }
+.app-acceptance > p, .app-acceptance > details, .app-acceptance > button { margin-top: 12px; }
+.app-test-check { margin-top: 24px; }
+.app-test-check h4 { margin: 0 0 6px; font-size: 13px; }
+.app-test-check blockquote { margin: 12px 0; padding: 12px; background: var(--c-bg-muted); }
+.app-test-check cite { display: block; margin-top: 8px; font-size: 12px; font-style: normal; color: var(--c-text-secondary); }
 dl { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 14px; margin: 20px 0; line-height: 1.5; }
 dt { color: var(--c-text-secondary); }
 dd { margin: 0; overflow-wrap: anywhere; }

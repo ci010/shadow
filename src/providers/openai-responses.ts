@@ -3,6 +3,7 @@ import type { ToolDefinition } from '../tools/tool.ts'
 import { spanAttributes } from '../otel/tracing.ts'
 import {
   ProviderHttpError,
+  providerTransportFailure,
   TokenLimitExceededError,
   type ChatMessage,
   type LLMResponse,
@@ -401,7 +402,7 @@ export async function openaiResponses(params: {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${params.apiKey}`, ...params.headers },
     body: JSON.stringify(body), signal: params.signal,
-  })
+  }).catch(error => { throw providerTransportFailure(error, 'connect', params.signal) })
   if (!response.ok) {
     let text = ''
     if (response.body) {
@@ -417,12 +418,16 @@ export async function openaiResponses(params: {
     failure(error, response.status)
   }
   let result: unknown
-  if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
-    result = await streamResponse(response, params.signal)
-  } else {
-    let text = ''
-    for await (const chunk of chunks(response, params.signal)) text += chunk
-    result = parseJson(text)
+  try {
+    if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+      result = await streamResponse(response, params.signal)
+    } else {
+      let text = ''
+      for await (const chunk of chunks(response, params.signal)) text += chunk
+      result = parseJson(text)
+    }
+  } catch (error) {
+    throw providerTransportFailure(error, 'response', params.signal)
   }
   params.signal?.throwIfAborted()
   return finalResponse(result, params.model, params.providerName)
