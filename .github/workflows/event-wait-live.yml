@@ -49,7 +49,8 @@ jobs:
           electron: "false"
       - name: Test actual Shadow events and build the backend
         run: |
-          pnpm exec node --import tsx --test src/events/service_test.ts src/events/polling-sources_test.ts
+          pnpm exec node --import tsx --test src/events/service_test.ts src/events/polling-sources_test.ts scripts/event-wait-acceptance_test.ts scripts/event-wait-github-step_test.ts scripts/event-wait-github_test.ts
+          pnpm exec tsc --noEmit --pretty false
           pnpm build
           node scripts/event-wait-github-step.mjs receipt
       - name: Upload the real backend and build receipt
