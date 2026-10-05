@@ -34,6 +34,7 @@ import { BrowserAuth } from '../../gateway/web-auth.ts'
 import { MainDeviceNetwork } from './device-network.ts'
 import { MobileAccess, mobileGatewayConfig } from '../../gateway/mobile-access.ts'
 import { a2aRequestProject } from '../../a2a/config.ts'
+import { FolderError } from '../../folders/registry.ts'
 
 export async function startProjectHost(
   config: Config,
@@ -46,8 +47,15 @@ export async function startProjectHost(
   const hostHome = `${baseHome}.projects`
   const catalog = new ProjectCatalog(hostHome, [baseHome])
   await startup.measure('catalog', () => catalog.init())
+  for (const project of catalog.list()) {
+    if (catalog.isDeleting(project.id)) {
+      try { await catalog.remove(project.id) }
+      catch (error) { console.error(`[projects:${project.id}] Pending deletion could not finish; retry from the project catalog`, error) }
+    }
+  }
   await startup.measure('ownership', async () => {
     for (const project of catalog.list()) {
+      if (catalog.isDeleting(project.id)) continue
       await reserveRemoteSessionWorkdirs(projectPaths(hostHome, project.id).home, catalog, project.id)
     }
   })
@@ -90,6 +98,7 @@ export async function startProjectHost(
   const stores = new Map<string, ProjectConfigStore>()
   const starts = new Map<string, Promise<void>>()
   const failures = new Map<string, string>()
+  const deletions = new Set<string>()
   let stopping = false
   let activeConfig = config
   const copilotAuth = new CopilotAuthenticator()
@@ -152,6 +161,7 @@ export async function startProjectHost(
   cleanup.push(() => providerSetup.dispose())
   const start = (id: string): Promise<void> => {
     if (stopping) return Promise.reject(new Error('Project host is stopping'))
+    if (deletions.has(id) || catalog.isDeleting(id)) return Promise.reject(new FolderError('project_deleting', 'Project deletion is pending.', 409))
     if (runtimes.has(id)) return Promise.resolve()
     const pending = starts.get(id)
     if (pending) return pending
@@ -201,7 +211,8 @@ export async function startProjectHost(
     launchCredential, browserAuth, clientAddresses, authorizeClient: request => {
       if (mobileAccess?.authorizeMain(request)) return true
       const projectId = a2aRequestProject(request)
-      return projectId ? runtimes.get(projectId)?.authorizeA2a?.(request) ?? false : false
+      return projectId && !deletions.has(projectId) && !catalog.isDeleting(projectId)
+        ? runtimes.get(projectId)?.authorizeA2a?.(request) ?? false : false
     },
     launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
   })
@@ -211,12 +222,31 @@ export async function startProjectHost(
   app.route('/host', hostDiagnostics)
   registerProjectGateway(app, {
     catalog, start, clientAddresses,
+    remove: async id => {
+      if (deletions.has(id)) throw new FolderError('project_busy', 'Project deletion is already running.', 409)
+      deletions.add(id)
+      try {
+        await starts.get(id)
+        await catalog.remove(id, async () => {
+          const runtime = runtimes.get(id)
+          const scope = scopes.get(id)
+          // Revoke HTTP and A2A admission before draining the runtime.
+          stores.delete(id)
+          if (runtime && scope) await scope.run(() => runtime.shutdown())
+          runtimes.delete(id)
+          scope?.close()
+          scopes.delete(id)
+          failures.delete(id)
+        })
+      } finally { deletions.delete(id) }
+    },
     lookup: id => {
-      const runtime = runtimes.get(id)
+      const runtime = !deletions.has(id) && runtimes.get(id)
       const scope = scopes.get(id)
       return runtime && scope ? { app: runtime.app, run: callback => scope.run(callback) } : undefined
     },
-    status: id => runtimes.has(id) ? { state: 'ready' } : failures.has(id)
+    status: id => catalog.isDeleting(id) ? { state: 'failed', error: 'Deletion is pending. Retry deleting this project.' }
+      : runtimes.has(id) ? { state: 'ready' } : failures.has(id)
       ? { state: 'failed', error: failures.get(id) } : { state: 'starting' },
   })
   if (process.env.VITE_DEV_URL) devProxyPlugin(process.env.VITE_DEV_URL)(app)
@@ -275,7 +305,9 @@ export async function startProjectHost(
       // Bound disk/watcher pressure while avoiding one slow Project delaying every other start.
       const projects = catalog.list()[Symbol.iterator]()
       const worker = async () => {
-        for (const project of projects) await start(project.id)
+        for (const project of projects) {
+          if (!catalog.isDeleting(project.id)) await start(project.id)
+        }
       }
       await Promise.all(Array.from({ length: Math.min(3, catalog.list().length) }, worker))
     })

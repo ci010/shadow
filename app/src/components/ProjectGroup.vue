@@ -10,7 +10,7 @@
     @manage="(folder, action) => $emit('manage', folder, action)" @automation="$emit('automation', $event)">
     <template #project-name>
       <ProjectCoordinator :api-base="apiBase" :project-id="project.id" :project-name="project.name"
-        :selected="selectedProjectId === project.id && selectedSessionId === ORCHESTRATOR_SESSION_ID"
+        :selected="selectedProjectId === project.id && selectedSessionId === ORCHESTRATOR_SESSION_ID && dashboardSelected !== false"
         :navigation-key="navigationKey" :pending-project-id="pendingCoordinatorProjectId"
         @opening="$emit('coordinator-opening')" @open="$emit('select', $event)" />
     </template>
@@ -28,6 +28,10 @@
         :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }">
         <span class="i-lucide-settings-2 w-3.5 h-3.5" aria-hidden="true" />
       </RouterLink>
+      <button v-if="canManageKnowledge && project.id !== 'default'" class="project-settings project-delete" :aria-label="`Delete ${project.name} project`" title="Delete project" @click="projectDeletion = true">
+        <span class="i-lucide-trash-2 w-3.5 h-3.5" aria-hidden="true" />
+      </button>
+      <ProjectDeleteDialog v-if="projectDeletion" :api-base="apiBase" :project="project" @close="projectDeletion = false" @deleted="$emit('project-deleted', $event)" />
       <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
     </template>
   </FoldersSidebar>
@@ -37,6 +41,7 @@
 import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import FoldersSidebar from './FoldersSidebar.vue'
 import ProjectCoordinator from './ProjectCoordinator.vue'
+import ProjectDeleteDialog from './ProjectDeleteDialog.vue'
 import { ORCHESTRATOR_SESSION_ID } from '../project-coordination.ts'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
@@ -51,15 +56,16 @@ import { createBotSettingsClient } from '../bot-settings.ts'
 import type { SidebarBot } from '../bot-sidebar.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   apiBase: string; project: ProjectRecord; selectedProjectId: string; selectedSessionId: string
   navigationKey: string
   pendingCoordinatorProjectId?: string
+  dashboardSelected?: boolean
   draftFolderId?: string; remoteFolders: boolean
   folderRevision?: number
   selectedAutomationId?: string
-}>()
-const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; 'session-automation': [sessionId: string, jobId?: string]; 'coordinator-opening': [] }>()
+}>(), { dashboardSelected: true })
+const emit = defineEmits<{ select: [id: string]; draft: [folder?: FolderRecord, remote?: boolean]; deleted: [id: string]; 'project-deleted': [id: string]; manage: [folder: FolderRecord, action: 'remove' | 'move']; automation: [id: string]; knowledge: []; 'session-automation': [sessionId: string, jobId?: string]; 'coordinator-opening': [] }>()
 const scope = computed(() => projectBase(props.apiBase, props.project.id))
 const installation = useInstallationContext()
 const canManageKnowledge = computed(() => installation.value.uiScopes.includes('main:admin'))
@@ -75,6 +81,7 @@ const error = ref('')
 const runtimeState = ref<ProjectRuntimeStatus['state']>()
 const retrying = ref(false)
 const deletion = ref<SessionDeletionTarget>()
+const projectDeletion = ref(false)
 watch(() => [sessions.value, loading.value, props.selectedProjectId, props.selectedSessionId, props.selectedAutomationId] as const, () => {
   if (props.selectedProjectId !== props.project.id || !props.selectedSessionId || loading.value) return
   if (!sessions.value.some(session => session.sessionId === props.selectedSessionId)) return
@@ -210,4 +217,5 @@ onUnmounted(() => { disposed = true; stop(); lifetime.abort() })
 .project-settings:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .project-settings:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .retry-runtime { padding: 0; border: 0; background: transparent; color: var(--c-error); }
+.project-delete:hover { color: var(--c-error); }
 </style>

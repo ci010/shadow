@@ -84,6 +84,7 @@ test('production org deep links serve the SPA with root assets without swallowin
       catalog,
       lookup: id => id === 'default' ? { app: orgApp, run: callback => callback() } : undefined,
       start: async () => {},
+      remove: id => catalog.remove(id),
       status: () => ({ state: 'ready' }),
       clientAddresses: new GatewayClientAddressRegistry(),
     })

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdir, stat, symlink } from 'node:fs/promises'
+import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { ProjectCatalog } from './catalog.ts'
@@ -97,5 +97,101 @@ test('future protected Homes and clone reservations resolve existing parent alia
     } finally { release() }
     const released = await catalog.reserveDestination(org.id, join(parent, 'folder'))
     released()
+  })
+})
+
+test('project deletion removes owned Home and metadata, preserves working folders and releases ownership durably', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const project = await catalog.create('Disposable')
+    const paths = projectPaths(catalog.hostHome, project.id)
+    const folder = join(root, 'work')
+    await mkdir(folder)
+    await writeFile(join(folder, 'keep.txt'), 'User files')
+    await catalog.registerFolder(project.id, folder)
+    await mkdir(paths.home, { recursive: true })
+    await writeFile(join(paths.home, 'history.jsonl'), 'Project history')
+    await catalog.reserveRemoteWorkdirs(project.id, [{ version: 1, nodeId: 'child', capabilityId: 'work' }])
+    let stopped = false
+    await catalog.remove(project.id, async () => {
+      stopped = true
+      assert.equal(catalog.isDeleting(project.id), true)
+      assert.equal(await readFile(join(paths.home, 'history.jsonl'), 'utf8'), 'Project history')
+      assert.throws(() => catalog.acquireFolderAccess(project.id), /unavailable/)
+    })
+    assert.equal(stopped, true)
+    assert.equal(catalog.get(project.id), undefined)
+    assert.deepEqual(catalog.remoteClaims(), [])
+    assert.deepEqual(catalog.folders(project.id), [])
+    await assert.rejects(stat(paths.root), { code: 'ENOENT' })
+    assert.equal(await readFile(join(folder, 'keep.txt'), 'utf8'), 'User files')
+    const reloaded = new ProjectCatalog(catalog.hostHome)
+    await reloaded.init()
+    assert.equal(reloaded.get(project.id), undefined)
+    assert.equal((await reloaded.registerFolder('default', folder)).projectId, 'default')
+  })
+})
+
+test('deletion rejects Default, active requests, clones and uncertain remote work before touching Home', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const project = await catalog.create('Busy')
+    await assert.rejects(catalog.remove('default'), /Default/)
+    await assert.rejects(catalog.remove('missing'), /not found/)
+    const release = catalog.acquireFolderAccess(project.id)
+    await assert.rejects(catalog.remove(project.id), /requests/)
+    release()
+    const releaseClone = await catalog.reserveDestination(project.id, join(root, 'clone'))
+    await assert.rejects(catalog.remove(project.id), /clones/)
+    releaseClone()
+    catalog.recordRemoteJob(project.id, 'job', true)
+    await assert.rejects(catalog.remove(project.id), /terminal receipt/)
+    catalog.recordRemoteJob(project.id, 'job', false)
+    const unbind = catalog.configureFolderLifecycle(project.id, {
+      assertIdle: () => { throw new Error('Synthetic active session') }, invalidate() {},
+    })
+    await assert.rejects(catalog.remove(project.id), /active session/)
+    assert.equal(catalog.isDeleting(project.id), false)
+    unbind()
+    await catalog.remove(project.id)
+  })
+})
+
+test('interrupted deletion stays revoked on disk and can finish after restart without resurrecting history', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const project = await catalog.create('Interrupted')
+    const paths = projectPaths(catalog.hostHome, project.id)
+    await mkdir(paths.home, { recursive: true })
+    await writeFile(join(paths.home, 'memory.md'), 'Private project data')
+    await assert.rejects(catalog.remove(project.id, async () => { throw new Error('Synthetic shutdown failure') }), /shutdown failure/)
+    assert.equal(catalog.isDeleting(project.id), true)
+    assert.equal(await readFile(join(paths.home, 'memory.md'), 'utf8'), 'Private project data')
+    await assert.rejects(catalog.rename(project.id, 'Resurrected'), /deletion/)
+    const reloaded = new ProjectCatalog(catalog.hostHome)
+    await reloaded.init()
+    assert.equal(reloaded.isDeleting(project.id), true)
+    await reloaded.remove(project.id)
+    await assert.rejects(stat(paths.root), { code: 'ENOENT' })
+  })
+})
+
+test('project deletion refuses linked storage rather than deleting another directory', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const project = await catalog.create('Linked')
+    const paths = projectPaths(catalog.hostHome, project.id)
+    const target = join(root, 'user-data')
+    await mkdir(target)
+    await mkdir(join(catalog.hostHome, 'projects'))
+    await writeFile(join(target, 'keep.txt'), 'Keep')
+    await symlink(target, paths.root, process.platform === 'win32' ? 'junction' : 'dir')
+    await assert.rejects(catalog.remove(project.id), /linked/)
+    assert.equal(catalog.isDeleting(project.id), false)
+    assert.equal(await readFile(join(target, 'keep.txt'), 'utf8'), 'Keep')
   })
 })

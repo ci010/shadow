@@ -29,6 +29,7 @@
 
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? activeSessionName : 'New conversation'" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
+      :project-navigation-enabled="!embedded"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
@@ -1752,7 +1753,7 @@ async function openProjectWork(key: string) {
     composerError.value = cause instanceof Error ? cause.message : 'Could not open Project work. Retry from the Project entry.'
   }
 }
-defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft })
+defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft, quoteSelection, handleImageContext, handleImageBusy })
 
 // ── History ───────────────────────────────────────────────────────────────────
 

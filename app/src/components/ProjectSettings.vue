@@ -19,6 +19,11 @@
           <p id="home-description" class="settings-help">This project's memory, skills, learning and scratch chats live here. Renaming does not move its Home.</p>
           <button class="btn primary" :disabled="saving || !project || !name.trim()">{{ saving ? 'Saving...' : 'Save name' }}</button>
         </form>
+        <section v-if="section === 'general' && project" class="project-danger">
+          <h2>Delete project</h2>
+          <p class="settings-help">{{ project.id === 'default' ? 'The Default project is required and cannot be deleted.' : 'Permanently delete this project and its Home data. Working folders and their files are kept.' }}</p>
+          <button v-if="available && project.id !== 'default'" type="button" class="btn delete-project" :disabled="saving" @click="deleting = true">Delete project</button>
+        </section>
         <section v-if="config && modelsOpened" v-show="section === 'models'">
           <ModelDefaultsForm :api-base="apiBase" scope="project" :project-id="projectId" />
           <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'providers' } }">Manage shared provider connections</RouterLink>
@@ -37,6 +42,7 @@
           <RouterLink class="settings-related" :to="{ name: 'agents', params: { projectId } }">Project agents and instructions</RouterLink>
         </form>
       </div>
+      <ProjectDeleteDialog v-if="deleting && project" :api-base="hostApiBase" :project="project" @close="deleting = false" @deleted="projectDeleted" />
     </div>
   </div>
 </template>
@@ -47,6 +53,7 @@ import { useRoute } from 'vue-router'
 import ChannelsView from './ChannelsView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
 import LearningRuntimeStatus from './LearningRuntimeStatus.vue'
+import ProjectDeleteDialog from './ProjectDeleteDialog.vue'
 import { createProjectsClient, type ProjectRecord } from '../projects.ts'
 import { createProjectSettingsClient, type ProjectConfig } from '../project-settings.ts'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
@@ -67,6 +74,7 @@ const config = ref<ProjectConfig>()
 const name = ref('')
 const loading = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
 const error = ref('')
 const notice = ref('')
 const learningEnabled = ref(true)
@@ -129,6 +137,10 @@ async function rename() {
     window.dispatchEvent(new CustomEvent('shadow:projects-changed'))
   })
 }
+function projectDeleted(projectId: string) {
+  deleting.value = false
+  window.dispatchEvent(new CustomEvent('shadow:project-deleted', { detail: { projectId } }))
+}
 async function saveLearning() {
   await mutate(async signal => {
     const patch: Record<string, unknown> = {}
@@ -171,6 +183,8 @@ onUnmounted(() => { request?.abort(); mutation?.abort() })
 .settings-related { display: block; margin-top: 16px; }
 .settings-error { color: var(--c-error); font-size: 13px; overflow-wrap: anywhere; }
 .settings-notice { color: var(--c-text-secondary); font-size: 13px; }
+.project-danger { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--c-border); }
+.delete-project { color: var(--c-error); border-color: var(--c-error); }
 a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 @media (max-width: 700px) {
   .project-settings-view { padding: 20px 16px 32px; }

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import UnoCSS from 'unocss/vite'
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -24,7 +25,7 @@ test('rendered Project workbench shows assignment, graph, guarded details and a 
   const writes: { action: string; data?: { definition?: { objective: string }; strategy?: string } }[] = []
   let reportingSessionId = 'web:fixture'
   let reportingWrites = 0
-  let empty = false, unavailable = false
+  let empty = false, unavailable = false, deleteAttempts = 0
   let record = {
     key: 'topic:web:fixture', subject: { kind: 'topic', sessionId: 'web:fixture' }, revision: 1,
     definition: { objective: 'Run both evaluations', acceptance: ['Both have complete results'], boundaries: ['No publication'], evidence: [] },
@@ -44,19 +45,22 @@ test('rendered Project workbench shows assignment, graph, guarded details and a 
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     optimizeDeps: { entries: [] },
-    plugins: [vue(), {
+    plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'work-alignment-fixture',
       resolveId: id => id === '/work-fixture.ts' ? '\0work-fixture' : undefined,
       load: id => id !== '\0work-fixture' ? undefined : `
         import '/src/styles.css';
+        import 'uno.css';
         import { createApp, h, reactive } from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
-        import ProjectWorkbench from '/src/components/ProjectWorkbench.vue';
+        import ProjectWorkbench from '/src/components/ProjectDashboard.vue';
+        import ProjectDeleteDialog from '/src/components/ProjectDeleteDialog.vue';
         import { createProjectLiveState } from '/src/project-live-state.ts';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
         import { createLocalMainAdminContext } from '/src/installation-context.ts';
-        const state = reactive({ visible: true, draft: 'Keep my unsent draft', navigated: '' });
+        const state = reactive({ visible: true, draft: 'Keep my unsent draft', navigated: '', deleting: false, deleted: false });
         window.fixture = state;
+        window.showProjectDelete = () => { state.deleting = true; };
         const installation = reactive(createLocalMainAdminContext(location.origin));
         window.setAdmin = value => { installation.uiScopes = value ? createLocalMainAdminContext(location.origin).uiScopes : ['chat:read']; };
         let observer;
@@ -64,19 +68,32 @@ test('rendered Project workbench shows assignment, graph, guarded details and a 
           observer = value; return { ready: async () => {}, close: () => {} };
         } }) });
         window.invalidateWork = () => observer?.event({ payload: { event: 'invalidate' } });
-        const router = createRouter({ history: createMemoryHistory(), routes: [{ name: 'chat', path: '/', component: { render: () => null } }] });
+        const router = createRouter({ history: createMemoryHistory(), routes: [
+          { name: 'chat', path: '/projects/:projectId/chat/:sessionId?', component: { render: () => null } },
+          { name: 'project-settings', path: '/projects/:projectId/settings/:section?', component: { render: () => null } },
+          { name: 'agents', path: '/projects/:projectId/agents', component: { render: () => null } },
+          { name: 'settings', path: '/settings/:section?', component: { render: () => null } },
+        ] });
+        window.navigateTab = tab => router.push(tab === 'settings'
+          ? { name:'project-settings', params:{projectId:'p',section:'general'} }
+          : { name:'chat', params:{projectId:'p',sessionId:'web:orchestrator'} });
         window.navigateWork = key => router.replace({ query: { work: key } });
-        await router.push('/'); await router.isReady();
-        const app = createApp({ render: () => h(ProjectWorkbench, {
+        await router.push({ name:'chat', params:{projectId:'p',sessionId:'web:orchestrator'} }); await router.isReady();
+        const app = createApp({ render: () => [h(ProjectWorkbench, {
           apiBase: location.origin + '/projects/p', projectId: 'p', projectName: 'Evaluation project', visible: state.visible,
           style: 'height:100vh',
           onNavigate: id => { state.navigated = id; }, onCompose: text => { state.draft += '\\n\\n' + text; },
+          onProjectNavigation: tab => window.navigateTab(tab),
         }, { default: ({ active }) => h('section', { style: 'display:flex;flex:1;flex-direction:column;padding:16px;min-width:0;' }, [
           h('p', 'Coordinator conversation'), h('p', { style: 'flex:1;font-size:14px;' }, 'The evaluations are assigned. The second stage depends on prepared inputs.'),
           h('textarea', { id: 'fixture-composer', value: state.draft, disabled: !active,
             style: 'box-sizing:border-box;width:100%;min-height:100px;background:var(--c-bg-input);color:var(--c-text);',
             onInput: event => { state.draft = event.target.value; } }),
-        ]) }) });
+        ]) }), state.deleting ? h(ProjectDeleteDialog, {
+          apiBase: location.origin, project: { id:'p', name:'Evaluation project', createdAt:'2026-10-05T00:00:00Z' },
+          onClose: () => { state.deleting = false; },
+          onDeleted: () => { state.deleted = true; state.deleting = false; },
+        }) : null] });
         app.provide(Symbol.for('shadow.project-live-state'), live);
         app.use(router); app.use(createInstallationContextProvider(installation)); app.mount('#app');`,
       configureServer(server) {
@@ -91,6 +108,15 @@ test('rendered Project workbench shows assignment, graph, guarded details and a 
             for await (const chunk of request) body += chunk
             const value = JSON.parse(body); empty = !!value.empty; unavailable = !!value.unavailable
             json({})
+          } else if (path === '/api/projects/p' && request.method === 'DELETE') {
+            if (++deleteAttempts === 1) {
+              response.statusCode = 409
+              json({ message: 'Stop active project work before deleting.' })
+            } else json({ deletedProjectId: 'p' })
+          } else if (path === '/api/projects') {
+            json({ projects: [{ id: 'p', name: 'Evaluation project', createdAt: '2026-10-05T00:00:00Z' }] })
+          } else if (path.endsWith('/api/config')) {
+            json({ agent: { model: 'fixture', workspace: 'C:\\synthetic-home', temperature: 0.7 }, learning: {} })
           } else if (path.endsWith('/api/sessions/graph')) {
             json({ sessions: [{ sessionId: 'web:fixture', title: 'Evaluation session' }], nodes: [] })
           } else if (path.endsWith('/api/sessions/stages')) {

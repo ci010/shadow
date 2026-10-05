@@ -213,6 +213,15 @@ test('project header arrow only toggles children while its name opens coordinati
   await click(name)
   assert.equal(requests.length, 1)
   assert.equal(toggle.props['aria-expanded'], true)
+  view.state.dashboardSelected = false
+  await nextTick()
+  assert.equal(name.props['aria-current'], undefined, 'A project document tab is not its Dashboard')
+  const returnToDashboard = click(name)
+  await nextTick()
+  assert.equal(requests.length, 2, 'The project name can return from a document tab to Dashboard')
+  requests[1]!.finish()
+  await returnToDashboard
+  assert.deepEqual(selected, ['web:orchestrator', 'web:orchestrator'])
 })
 
 test('rendered coordinator aborts project/navigation switches and ignores late responses even if transport ignores abort', async t => {

@@ -53,6 +53,21 @@ export async function projectJson(base: string, path: string, init?: RequestInit
 
 export function createProjectsClient(base: string, request: typeof fetch = fetch) {
   return {
+    async remove(id: string, signal?: AbortSignal) {
+      if (id === 'default') throw new Error('The Default project is required and cannot be deleted.')
+      const response = await request(apiUrl(base, `/api/projects/${encodeURIComponent(id)}`), {
+        method: 'DELETE', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
+      })
+      const value: unknown = await response.json()
+      if (!response.ok) {
+        const message = isRecord(value) && typeof value.message === 'string' ? value.message
+          : `Main did not confirm project deletion (HTTP ${response.status}). Refresh the catalog before retrying.`
+        throw new Error(message)
+      }
+      if (!isRecord(value) || value.deletedProjectId !== id) {
+        throw new Error('Main did not confirm deletion of this project. Refresh the catalog before retrying.')
+      }
+    },
     async status(id: string, signal?: AbortSignal) {
       return parseProjectRuntimeStatus(await projectJson(base, `/api/projects/${encodeURIComponent(id)}/status`, { signal }, request))
     },

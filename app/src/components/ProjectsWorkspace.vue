@@ -31,9 +31,11 @@
           :navigation-key="`${route.fullPath}:${visible}`"
           :pending-coordinator-project-id="pendingCoordinatorProjectId" @coordinator-opening="pendingCoordinatorProjectId = project.id"
           :selected-project-id="selectedProjectId" :selected-session-id="selected?.sessionId ?? ''" :selected-automation-id="automation?.id"
+          :dashboard-selected="selected ? dashboardVisibility.get(selected.key) !== false : false"
           :draft-folder-id="selected?.folder?.id" :remote-folders="installation.mode === 'main'"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
           @knowledge="openKnowledge(project.id)"
+          @project-deleted="projectDeleted"
           @deleted="deleted(project.id, $event)" @manage="(folder, action) => manageFolder(project, folder, action)"
           @automation="showAutomation(project.id, $event)" @session-automation="(session, job) => identifyAutomation(project.id, session, job)" />
       </div>
@@ -68,6 +70,7 @@
         :child-session-id="resource.childSessionId"
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
         @project-navigation="tab => projectNavigation(resource, tab)"
+        @dashboard-visible="dashboardVisibility.set(resource.key, $event)"
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" />
     </div>
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
@@ -78,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onDeactivated, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ProjectGroup from './ProjectGroup.vue'
 import ProjectConversation from './ProjectConversation.vue'
@@ -112,6 +115,7 @@ const projects = ref<ProjectRecord[]>([])
 const registry = createConversationResources()
 const resources = shallowRef<ConversationResource[]>([])
 const selected = shallowRef<ConversationResource>()
+const dashboardVisibility = reactive(new Map<string, boolean>())
 const pendingCoordinatorProjectId = ref('')
 const { automation, syncAutomationRoute, showAutomation, openAutomationRun, identifyAutomation } = useAutomationNavigation({
   route, router, selected,
@@ -264,7 +268,14 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
   const stop = watch(() => [current.state.revision, current.state.loading, current.state.error], () => {
     loading.value = current.state.loading && !current.state.value
     error.value = current.state.error
-    if (current.state.value) { projects.value = [...current.state.value]; syncRoute() }
+    if (current.state.value) {
+      const next = current.state.value
+      for (const project of projects.value) {
+        if (!next.some(item => item.id === project.id)) forgetProject(project.id)
+      }
+      projects.value = [...next]
+      syncRoute()
+    }
   }, { immediate: true })
   onCleanup(() => { stop(); current.release(); if (catalog === current) catalog = undefined })
 }, { immediate: true })
@@ -358,6 +369,28 @@ function deleted(projectId: string, sessionId: string) {
   resources.value = [...registry.resources]
   if (selected.value?.projectId === projectId && selected.value.sessionId === sessionId) startDraft(projectId)
 }
+function forgetProject(projectId: string) {
+  for (const resource of registry.resources) {
+    if (resource.projectId === projectId) dashboardVisibility.delete(resource.key)
+  }
+  registry.removeProject(projectId)
+  resources.value = [...registry.resources]
+  if (folderOperation.value?.project.id === projectId) folderOperation.value = undefined
+  if (selected.value?.projectId === projectId) selected.value = undefined
+  if (automation.value?.projectId === projectId) automation.value = undefined
+  if (pendingCoordinatorProjectId.value === projectId) pendingCoordinatorProjectId.value = ''
+  if (route.params.projectId === projectId) void router.replace({ name: 'projects' })
+}
+function projectDeleted(projectId: string) {
+  forgetProject(projectId)
+  projects.value = projects.value.filter(project => project.id !== projectId)
+  notice.value = 'Project deleted. Working folders and their files were kept.'
+  void refresh()
+}
+function onProjectDeleted(event: Event) {
+  const id = (event as CustomEvent<{ projectId?: string }>).detail?.projectId
+  if (id) projectDeleted(id)
+}
 watch(() => [route.fullPath, props.visible], syncRoute)
 watch(() => route.fullPath, () => { closeSidebar(false) })
 watch(() => props.visible, visible => { if (!visible) closeSidebar(false) })
@@ -382,6 +415,7 @@ onMounted(() => {
   measureSidebar()
   window.addEventListener('resize', measureSidebar)
   window.addEventListener('shadow:projects-changed', onCatalogChanged)
+  window.addEventListener('shadow:project-deleted', onProjectDeleted)
   window.addEventListener('keydown', sidebarKeydown)
 })
 onDeactivated(() => { closeSidebar(false) })
@@ -389,6 +423,7 @@ onUnmounted(() => {
   mutation?.abort(); sidebarObserver?.disconnect()
   window.removeEventListener('resize', measureSidebar)
   window.removeEventListener('shadow:projects-changed', onCatalogChanged)
+  window.removeEventListener('shadow:project-deleted', onProjectDeleted)
   window.removeEventListener('keydown', sidebarKeydown)
 })
 </script>

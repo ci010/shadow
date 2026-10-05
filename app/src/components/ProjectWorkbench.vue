@@ -4,9 +4,6 @@
     <header class="workbench-heading">
       <div><h1>{{ projectName }}</h1><p>Work, assignments and decisions</p></div>
       <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? 'Back to work' : 'Apps' }}</button>
-      <button ref="chatTrigger" type="button" :aria-expanded="panel === 'chat'" @click="toggleChat">
-        <span class="i-lucide-messages-square" aria-hidden="true" />Coordinator
-      </button>
       <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; panel = panel === 'github' ? '' : 'github'">GitHub</button>
     </header>
     <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="canWrite" @compose="discussApp" />
@@ -48,7 +45,7 @@
           <div v-if="!data.items.length" class="workbench-empty">
             <span class="i-lucide-workflow empty-work-icon" aria-hidden="true" />
             <h2>No work items yet</h2><p>Conversations can stay conversations. Ask the coordinator to organize work when there is an outcome to track.</p>
-            <button @click="canWrite ? newWork() : toggleChat()">{{ canWrite ? 'Talk to coordinator' : 'View coordinator conversation' }}</button>
+            <button @click="canWrite ? newWork() : emit('coordinator')">{{ canWrite ? 'Talk to coordinator' : 'View coordinator conversation' }}</button>
           </div>
           <div v-else-if="!filtered.length" class="workbench-empty"><h2>No matching work</h2><p>Try another Initiative, session or search.</p><button @click="clearFilters">Clear filters</button></div>
           <div v-else-if="view === 'board'" class="work-board" tabindex="0" aria-label="Work board">
@@ -68,18 +65,15 @@
           <WorkGraph v-else :items="filtered" :selected="selected" :sessions="data.sessions" @select="selectWork" @session="openSession" />
         </template>
       </main>
-      <aside v-show="panel" :id="panelId" class="coordination-panel" :aria-label="panel === 'github' ? 'GitHub integration' : panel === 'chat' ? 'Coordinator conversation' : 'Work details'">
+      <aside v-show="panel" :id="panelId" class="coordination-panel" :aria-label="panel === 'github' ? 'GitHub integration' : 'Work details'">
         <SidebarResizer v-if="visible && wide && panel" edge="left" :model-value="panelWidth" :bounds="resizeBounds"
           label="Resize coordination panel" :controls="panelId" @update:model-value="preferredPanelWidth = $event" />
         <header class="coordination-panel-heading">
-          <h2 ref="panelHeading" tabindex="-1">{{ panel === 'github' ? 'GitHub' : panel === 'chat' ? 'Coordinator' : 'Work details' }}</h2>
+          <h2 ref="panelHeading" tabindex="-1">{{ panel === 'github' ? 'GitHub' : 'Work details' }}</h2>
           <button v-if="selected && panel !== 'work'" @click="panel = 'work'">Task</button>
           <button v-if="panel === 'work' && canWrite" @click="discussSelected">Discuss</button>
           <button type="button" aria-label="Close coordination panel" @click="closePanel"><span class="i-lucide-x" aria-hidden="true" /></button>
         </header>
-        <div v-show="panel === 'chat'" class="coordinator-conversation">
-          <slot :active="visible && panel === 'chat'" />
-        </div>
         <div v-show="panel === 'github'" class="project-work-detail">
           <ProjectGitHub :api-base="apiBase" :project-id="projectId" :active="visible && panel === 'github'"
             :can-write="canWrite" :selected="selected" :works="data?.items ?? []" :sessions="data?.sessions ?? []"
@@ -123,14 +117,14 @@ import SidebarResizer from './SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../sidebar-resize.ts'
 
 const props = defineProps<{ apiBase: string; projectId: string; projectName: string; visible: boolean }>()
-const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string] }>()
+const emit = defineEmits<{ navigate: [sessionId: string]; compose: [text: string]; coordinator: [] }>()
 const live = useProjectLiveState(), installation = useInstallationContext(), route = useRoute(), router = useRouter()
 const lease = shallowRef<ProjectLiveLease>()
 const data = computed(() => lease.value?.work.state.value)
 const error = computed(() => lease.value?.work.state.error)
 const loading = computed(() => lease.value?.work.state.loading)
 const canWrite = computed(() => installation.value.uiScopes.includes('chat:write'))
-const view = ref<'board' | 'graph'>('board'), panel = ref<'chat' | 'work' | 'github' | ''>('')
+const view = ref<'board' | 'graph'>('board'), panel = ref<'work' | 'github' | ''>('')
 const selected = ref(''), editing = ref(false), wide = ref(false)
 const appsVisible = ref(false)
 function toggleApps() {
@@ -166,7 +160,7 @@ const assignedSessions = computed(() => {
   return [...keys].map(sessionId => ({ sessionId,
     title: overview.sessions.find(session => session.sessionId === sessionId)?.title ?? `${sessionId} (unavailable)` }))
 })
-const rootElement = ref<HTMLElement>(), panelHeading = ref<HTMLElement>(), chatTrigger = ref<HTMLButtonElement>()
+const rootElement = ref<HTMLElement>(), panelHeading = ref<HTMLElement>()
 let observer: ResizeObserver | undefined
 const sessionTitle = (id: string | null) => data.value?.sessions.find(session => session.sessionId === id)?.title ?? id ?? 'Unassigned'
 const sessionExists = (id: string | null) => !!id && !!data.value?.sessions.some(session => session.sessionId === id)
@@ -178,30 +172,24 @@ async function selectWork(key: string) {
   panel.value = 'work'
   await nextTick(); panelHeading.value?.focus()
 }
-function toggleChat() {
-  panel.value = appsVisible ? 'chat' : panel.value === 'chat' ? '' : 'chat'
-  appsVisible.value = false
-}
 async function discussGitHub(text: string) {
-  panel.value = 'chat'
   await nextTick()
   emit('compose', text)
 }
 function openSession(id: string) {
-  if (id === coordinatorId) panel.value = 'chat'
+  if (id === coordinatorId) emit('coordinator')
   else emit('navigate', id)
 }
 async function closePanel() {
   panel.value = ''
-  await nextTick(); chatTrigger.value?.focus()
+  await nextTick(); rootElement.value?.querySelector<HTMLButtonElement>('.work-view-switch button')?.focus()
 }
 async function discussSelected() {
-  panel.value = 'chat'
   await nextTick()
   emit('compose', `About work ${selected.value}${selectedItem.value ? ` (${selectedItem.value.title})` : ''}:\n`)
 }
 async function newWork() {
-  panel.value = 'chat'
+  panel.value = ''
   await nextTick()
   emit('compose', 'Help me organize a new work item:\n')
 }
@@ -219,18 +207,15 @@ const removeGuard = router.beforeEach((to, from) => {
   return window.confirm('Leave this item with an unsaved work revision? Switching work items discards the revision.')
 })
 onMounted(() => {
-  let measured = false
   observer = new ResizeObserver(() => {
     const width = rootElement.value?.clientWidth ?? 0
     if (!width) return
     containerWidth.value = width
     wide.value = width >= 1000
-    if (!measured) { measured = true; if (wide.value && !selected.value) panel.value = 'chat' }
   })
   if (rootElement.value) observer.observe(rootElement.value)
 })
 onUnmounted(() => { lease.value?.release(); observer?.disconnect(); removeGuard() })
-defineExpose({ openConversation: () => { appsVisible.value = false; panel.value = 'chat' } })
 </script>
 <style scoped>
 .project-workbench { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: var(--c-text); }
@@ -285,7 +270,6 @@ button > span[class^=i-], h2 > span[class^=i-] { width: 15px; height: 15px; flex
 .coordination-panel { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--c-border); background: var(--c-bg); }
 .coordination-panel-heading { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--c-border-soft); }
 .coordination-panel-heading h2 { flex: 1; margin: 0; font-size: 13px; font-weight: 600; }
-.coordinator-conversation { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .project-work-detail { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; }
 .work-key { margin: 0 0 12px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
 .open-executor { margin-bottom: 10px; }

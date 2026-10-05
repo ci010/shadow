@@ -16,9 +16,22 @@ run with the backend user's permissions.
 Use a Project's **+** menu to open a local folder, clone a repository, or start
 from scratch without selecting a folder. A folder's **+** starts a conversation
 in that folder. A new draft does not create a session until its first message is
-sent. Project coordination opens by selecting the Project name; folder and
-conversation rows open their own views. **Automations** lists scheduled tasks
+sent. Selecting the Project name opens its **Dashboard** as a permanent tab,
+alongside Knowledge, project settings, agents and open files. **Coordinator**
+opens a separate, resizable right-hand panel; switching document tabs keeps its
+conversation and unsent draft. On narrow screens, the panel uses the available
+space until you close it to return to the selected tab. Folder and conversation
+rows open their own views. **Automations** lists scheduled tasks
 that start fresh conversations, with their run histories.
+
+Use the project's trash icon or **Project settings → General → Delete project**
+to delete a non-Default project. Confirm by typing its name. Deletion removes
+its Home (including conversation history, memory, skills, bots, automations and
+settings) and releases folder registrations; actual working folders and their
+files are kept. Stop active work and reconcile uncertain remote jobs first.
+The Default project is required and cannot be deleted. If cleanup is interrupted,
+the project stays unavailable; retry deletion or restart Main to resume cleanup,
+rather than restarting it over partially deleted Home data.
 
 The folder row's **...** menu can remove it or move its membership to another
 Project. Neither action moves or deletes files. Existing conversations and

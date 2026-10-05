@@ -187,3 +187,31 @@ test('runtime recovery uses the owning host catalog entry and rejects invented s
     assert.throws(() => parseProjectRuntimeStatus(result), /invalid project runtime status/)
   }
 })
+
+test('project deletion uses the host, validates the exact identity and reports busy errors without success', async () => {
+  const calls: string[] = []
+  const client = createProjectsClient('http://fixture', async (input, init) => {
+    assert.equal(init?.method, 'DELETE')
+    calls.push(String(input))
+    return Response.json({ deletedProjectId: 'a' })
+  })
+  await client.remove('a')
+  assert.deepEqual(calls, ['http://fixture/api/projects/a'])
+  await assert.rejects(client.remove('default'), /Default/)
+  assert.equal(calls.length, 1)
+  await assert.rejects(createProjectsClient('http://fixture', async () => Response.json({ deletedProjectId: 'b' })).remove('a'), /did not confirm/)
+  await assert.rejects(createProjectsClient('http://fixture', async () =>
+    Response.json({ message: 'Stop active work before deleting.' }, { status: 409 })).remove('a'), /Stop active work/)
+})
+
+test('deleting a project forgets only its mounted conversations and drafts', () => {
+  const registry = createConversationResources()
+  const a = registry.session({ projectId: 'a', sessionId: 'same' })
+  registry.draft('a', folder)
+  const b = registry.session({ projectId: 'b', sessionId: 'same' })
+  const draftB = registry.draft('b')
+  registry.removeProject('a')
+  assert.deepEqual(registry.resources, [b, draftB])
+  assert.equal(registry.session(b), b)
+  assert.throws(() => registry.prepared(a.key, 'late-session'), /unavailable/)
+})

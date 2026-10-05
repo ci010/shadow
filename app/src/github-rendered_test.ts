@@ -42,7 +42,7 @@ test('GitHub workbench imports, confirms exact writes, reconciles uncertainty an
         import '/src/styles.css';
         import { createApp, h, reactive } from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
-        import ProjectWorkbench from '/src/components/ProjectWorkbench.vue';
+        import ProjectWorkbench from '/src/components/ProjectDashboard.vue';
         import { createProjectLiveState } from '/src/project-live-state.ts';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
         import { createLocalMainAdminContext } from '/src/installation-context.ts';

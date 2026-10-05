@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rm } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { writePrivateFile } from '../config/store.ts'
 import type { FolderRecord, RemoteFolderRecord } from '../folders/contracts.ts'
@@ -26,6 +26,7 @@ interface CatalogData {
   retiredRemoteClaims?: RemoteOwnershipClaim[]
   retiredSessions?: Array<{ projectId: string; sessionId: string }>
   pendingRemoteJobs?: Array<{ projectId: string; jobId: string }>
+  deletingProjects?: string[]
 }
 
 interface FolderLifecycle {
@@ -105,7 +106,7 @@ export class ProjectCatalog {
     try {
       const data: unknown = JSON.parse(await readFile(this.filePath, 'utf8'))
       if (!data || typeof data !== 'object' || !('version' in data) || data.version !== 2 ||
-        !onlyFields(data, ['version', 'projects', 'folders', 'remoteClaims', 'retiredFolders', 'retiredRemoteClaims', 'retiredSessions', 'pendingRemoteJobs']) ||
+        !onlyFields(data, ['version', 'projects', 'folders', 'remoteClaims', 'retiredFolders', 'retiredRemoteClaims', 'retiredSessions', 'pendingRemoteJobs', 'deletingProjects']) ||
         !('projects' in data) || !Array.isArray(data.projects) ||
         !('folders' in data) || !Array.isArray(data.folders)) throw new Error('Invalid project catalog')
       const ids = new Set<string>()
@@ -163,6 +164,9 @@ export class ProjectCatalog {
       if ('pendingRemoteJobs' in data && (!Array.isArray(data.pendingRemoteJobs) ||
         data.pendingRemoteJobs.some(record => !record || !onlyFields(record, ['projectId', 'jobId']) || !ids.has(record.projectId) ||
           typeof record.jobId !== 'string' || !record.jobId))) throw new Error('Invalid pending remote jobs')
+      if ('deletingProjects' in data && (!Array.isArray(data.deletingProjects) ||
+        data.deletingProjects.some(id => typeof id !== 'string' || !ids.has(id) || id === DEFAULT_PROJECT_ID) ||
+        new Set(data.deletingProjects).size !== data.deletingProjects.length)) throw new Error('Invalid project deletions')
       this.#data = data as CatalogData
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -204,6 +208,59 @@ export class ProjectCatalog {
     return this.list().find(record => record.id === id)
   }
 
+  isDeleting(id: string): boolean {
+    return this.#current().deletingProjects?.includes(id) ?? false
+  }
+
+  remove(id: string, stop: () => Promise<void> = async () => {}): Promise<void> {
+    return this.#transaction(async () => {
+      if (!this.get(id)) throw new FolderError('project_not_found', 'Project not found.', 404)
+      if (id === DEFAULT_PROJECT_ID) throw new FolderError('default_project_required', 'The Default project is required and cannot be deleted.', 409)
+      if (this.#access.get(id) || [...this.#reservations.values()].some(item => item.projectId === id)) {
+        throw new FolderError('project_busy', 'Wait for project requests and clones to finish, then retry.', 409)
+      }
+      if (this.#current().pendingRemoteJobs?.some(job => job.projectId === id)) {
+        throw new FolderError('project_busy', 'A remote job has no confirmed terminal receipt. Reconcile its execution and cleanup before deleting this project.', 409)
+      }
+      if (!this.isDeleting(id)) this.#lifecycle.get(id)?.assertIdle()
+      const root = projectPaths(this.hostHome, id).root
+      for (const path of [dirname(root), root]) {
+        try {
+          if ((await lstat(path)).isSymbolicLink()) {
+            throw new FolderError('project_home_linked', 'Project storage is linked to another directory. Restore its original location before deleting it.', 409)
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+      }
+      if (this.#access.get(id) || [...this.#reservations.values()].some(item => item.projectId === id) ||
+        this.#current().pendingRemoteJobs?.some(job => job.projectId === id)) {
+        throw new FolderError('project_busy', 'Project work started while checking storage. Stop it before retrying.', 409)
+      }
+      if (!this.isDeleting(id)) this.#lifecycle.get(id)?.assertIdle()
+      // Persist admission revocation before shutdown or disk cleanup; a restart
+      // must finish deletion, never start a runtime over partially deleted data.
+      if (!this.isDeleting(id)) {
+        this.#commit({ ...this.#current(), deletingProjects: [...(this.#current().deletingProjects ?? []), id] })
+      }
+      await stop()
+      await rm(root, { recursive: true, force: true })
+      const current = this.#current()
+      this.#commit({
+        ...current, projects: current.projects.filter(project => project.id !== id),
+        folders: current.folders.filter(folder => folder.projectId !== id),
+        remoteClaims: current.remoteClaims?.filter(claim => claim.projectId !== id),
+        retiredFolders: current.retiredFolders?.filter(folder => folder.projectId !== id),
+        retiredRemoteClaims: current.retiredRemoteClaims?.filter(claim => claim.projectId !== id),
+        retiredSessions: current.retiredSessions?.filter(session => session.projectId !== id),
+        pendingRemoteJobs: current.pendingRemoteJobs?.filter(job => job.projectId !== id),
+        deletingProjects: current.deletingProjects?.filter(projectId => projectId !== id),
+      })
+      this.#lifecycle.delete(id)
+      this.#access.delete(id)
+    })
+  }
+
   create(value: unknown): Promise<ProjectRecord> {
     const displayName = name(value)
     return this.#transaction(() => {
@@ -218,6 +275,7 @@ export class ProjectCatalog {
     return this.#transaction(() => {
       const record = this.get(id)
       if (!record) throw new FolderError('project_not_found', 'Project not found.', 404)
+      if (this.isDeleting(id)) throw new FolderError('project_deleting', 'Project deletion is pending. Retry deleting it.', 409)
       record.name = displayName
       this.#commit({ ...this.#current(), projects: this.list().map(item => item.id === id ? record : item) })
       return { ...record }
@@ -244,6 +302,7 @@ export class ProjectCatalog {
   }
 
   acquireFolderAccess(projectId: string): () => void {
+    if (!this.get(projectId) || this.isDeleting(projectId)) throw new FolderError('project_unavailable', 'Project is unavailable.', 409)
     this.#access.set(projectId, (this.#access.get(projectId) ?? 0) + 1)
     let released = false
     return () => {
@@ -268,6 +327,9 @@ export class ProjectCatalog {
       const current = this.#current()
       if (!this.get(projectId) || targetProjectId !== undefined && !this.get(targetProjectId)) {
         throw new FolderError('project_not_found', 'Project not found.', 404)
+      }
+      if (this.isDeleting(projectId) || targetProjectId !== undefined && this.isDeleting(targetProjectId)) {
+        throw new FolderError('project_deleting', 'Project deletion is pending.', 409)
       }
       if (targetProjectId === projectId) {
         throw new FolderError('same_project', 'Choose a different project.', 409)
@@ -327,6 +389,7 @@ export class ProjectCatalog {
 
   async #assertOwnership(projectId: string, path: string): Promise<void> {
     if (!this.get(projectId)) throw new FolderError('project_not_found', 'Project not found.', 404)
+    if (this.isDeleting(projectId)) throw new FolderError('project_deleting', 'Project deletion is pending.', 409)
     if ([...this.#current().folders.filter(folder => folder.kind !== 'remote'), ...this.#reservations.values()].some(folder => folder.projectId !== projectId && overlaps(folder.path, path))) {
       throw new FolderError('folder_owned_by_another_project', 'This folder overlaps a folder belonging to another project.', 409)
     }
@@ -369,6 +432,7 @@ export class ProjectCatalog {
   reserveRemoteWorkdirs(projectId: string, refs: readonly WorkdirRefV1[]): Promise<void> {
     return this.#transaction(() => {
       if (!this.get(projectId)) throw new FolderError('project_not_found', 'Project not found.', 404)
+      if (this.isDeleting(projectId)) throw new FolderError('project_deleting', 'Project deletion is pending.', 409)
       const claims = this.remoteClaims()
       for (const value of refs) {
         const workdir = remoteRef(value)
@@ -414,6 +478,7 @@ export class ProjectCatalog {
 
   #assertRemoteOwnership(projectId: string, nodeId: string, identity: WorkdirIdentityV1, resolvingClaim = false): void {
     if (!this.get(projectId)) throw new FolderError('project_not_found', 'Project not found.', 404)
+    if (this.isDeleting(projectId)) throw new FolderError('project_deleting', 'Project deletion is pending.', 409)
     const claims = this.remoteClaims(nodeId)
     if (!resolvingClaim && claims.some(claim => !claim.identity)) {
       throw new FolderError('remote_claim_identity_unavailable', 'An existing conversation still reserves a folder on this device. Reconnect and verify its original folder capability before opening another folder.', 409)

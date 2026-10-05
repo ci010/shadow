@@ -14,6 +14,7 @@ export function registerProjectGateway(app: Hono, options: {
   catalog: ProjectCatalog
   lookup: (id: string) => ProjectRouteTarget | undefined
   start: (id: string) => Promise<void>
+  remove: (id: string) => Promise<void>
   status: (id: string) => { state: 'ready' | 'starting' | 'failed'; error?: string }
   clientAddresses: GatewayClientAddressRegistry
 }): void {
@@ -54,17 +55,35 @@ export function registerProjectGateway(app: Hono, options: {
   })
   app.get('/api/projects/:id/status', c => options.catalog.get(c.req.param('id'))
     ? c.json(options.status(c.req.param('id'))) : c.json({ error: 'project_not_found' }, 404))
+  app.delete('/api/projects/:id', async c => {
+    const id = c.req.param('id')
+    try {
+      await options.remove(id)
+      return c.json({ deletedProjectId: id })
+    } catch (error) {
+      if (error instanceof FolderError) return c.json({ error: error.code, message: error.message }, error.status)
+      console.error('[projects] Deletion failed', error)
+      return c.json({ error: 'project_delete_failed', message: 'Deletion did not finish. Retry deleting the project; pending deletion will also resume on Main restart.' }, 500)
+    }
+  })
   app.post('/api/projects/:id/retry', async c => {
     const id = c.req.param('id')
     if (!options.catalog.get(id)) return c.json({ error: 'project_not_found' }, 404)
-    await options.start(id)
-    return c.json(options.status(id))
+    if (options.catalog.isDeleting(id)) return c.json({ error: 'project_deleting', message: 'Retry deleting this project.' }, 409)
+    try {
+      await options.start(id)
+      return c.json(options.status(id))
+    } catch (error) {
+      if (error instanceof FolderError) return c.json({ error: error.code, message: error.message }, error.status)
+      console.error('[projects] Retry startup failed', error)
+      return c.json({ error: 'project_start_failed', message: 'Project could not start. Check host diagnostics and retry.' }, 500)
+    }
   })
   app.all('/projects/:projectId/*', async (c, next) => {
     if ((c.req.method === 'GET' || c.req.method === 'HEAD') && isProjectPagePath(c.req.path)) return next()
     const id = c.req.param('projectId')!
     if (!options.catalog.get(id)) return c.json({ error: 'project_not_found' }, 404)
-    const target = options.lookup(id)
+    const target = options.catalog.isDeleting(id) ? undefined : options.lookup(id)
     if (!target) return c.json(unavailable(id), 503)
     const url = new URL(c.req.url)
     url.pathname = url.pathname.replace(/^\/projects\/[^/]+/, '') || '/'

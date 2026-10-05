@@ -116,7 +116,7 @@ test('Apps owner review, isolated live SDK page, repeat calls, stop and reopen r
         import '/src/styles.css';
         import { createApp, h, reactive } from 'vue';
         import { createRouter, createMemoryHistory } from 'vue-router';
-        import ProjectWorkbench from '/src/components/ProjectWorkbench.vue';
+        import ProjectWorkbench from '/src/components/ProjectDashboard.vue';
         import { createProjectLiveState } from '/src/project-live-state.ts';
         import { createInstallationContextProvider } from '/src/composables/useInstallationContext.ts';
         import { createLocalMainAdminContext } from '/src/installation-context.ts';

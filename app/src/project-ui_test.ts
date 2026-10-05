@@ -59,6 +59,57 @@ function mountScript(t: TestContext, filename: string, props: Record<string, unk
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const config = (model: string) => ({ agent: { model, workspace: 'C:\\synthetic', temperature: .7 }, learning: {} })
 
+test('project deletion confirmation matches the captured name, prevents duplicates and retains failures for retry', async t => {
+  const requests: Array<{ init?: RequestInit; finish: (value: unknown, status?: number) => void }> = []
+  t.mock.method(globalThis, 'fetch', (_input: unknown, init?: RequestInit) => new Promise<Response>(resolve => {
+    requests.push({ init, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
+  }))
+  const deleted: string[] = []
+  const state = mountScript(t, 'ProjectDeleteDialog.vue', {
+    apiBase: 'http://fixture', project: { id: 'a', name: 'Alpha', createdAt: '' }, onDeleted: (id: string) => deleted.push(id),
+  }, undefined, { vue: { ...Vue, onMounted() {} } })
+  state().confirmation = 'alpha'
+  await state().submit()
+  assert.equal(requests.length, 0)
+  state().confirmation = 'Alpha'
+  const pending = state().submit()
+  await state().submit()
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].init?.method, 'DELETE')
+  requests[0].finish({ message: 'Stop active project work first.' }, 409)
+  await pending
+  assert.deepEqual(deleted, [])
+  assert.equal(state().confirmation, 'Alpha')
+  assert.match(state().error, /Stop active/)
+  const retry = state().submit()
+  await nextTick()
+  requests[1].finish({ deletedProjectId: 'a' })
+  await retry
+  assert.deepEqual(deleted, ['a'])
+})
+
+test('file explorer preserves automatic conversation sizing while Dashboard can explicitly start collapsed', t => {
+  const mocks = {
+    vue: { ...Vue, onMounted() {}, onUnmounted() {} },
+    'vue-router': { useRoute: () => reactive({ name: 'chat', params: {}, query: {} }), useRouter: () => ({}) },
+    '../../composables/useInstallationContext.ts': { useInstallationContext: () => ref({ uiScopes: [] }) },
+    '../../composables/useMobileChrome.ts': { useMobileHeader: () => ({ visible: ref(false) }) },
+    '../../composables/useWorkdirGit.ts': {
+      useWorkdirGit: () => ({ status: ref(), loading: ref(false), error: ref(''), offline: ref(false), revision: ref(0), refresh() {} }),
+    },
+  }
+  const props = { apiBase: 'http://fixture', sessionId: 'web:one', contextKey: 'conversation', active: true }
+  const conversation = mountScript(t, 'files/FileWorkbench.vue', props, undefined, mocks)
+  assert.equal(conversation().preference, undefined)
+  conversation().width = 1000
+  assert.equal(conversation().expanded, true, 'Wide conversations keep the existing open explorer default')
+  conversation().width = 700
+  assert.equal(conversation().expanded, false)
+  const dashboard = mountScript(t, 'files/FileWorkbench.vue', { ...props, initialExplorerOpen: false }, undefined, mocks)
+  dashboard().width = 1000
+  assert.equal(dashboard().expanded, false, 'Dashboard alone opts out of automatic explorer expansion')
+})
+
 test('App web search form retains failed edits, clears saved secrets and prevents duplicate saves', async t => {
   const requests: Array<{ url: string; init?: RequestInit; finish: (value: unknown, status?: number) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: unknown, init?: RequestInit) => new Promise<Response>(resolve => {
@@ -537,6 +588,48 @@ test('Knowledge opens in the owning conversation, preserves drafts and cannot na
   await nextTick()
   assert.equal(state().selected, draft, 'Reopen uses the existing conversation, not another draft')
   assert.equal(state().resources.length, 2)
+})
+
+test('project deletion removes its mounted resources and returns to projects without discarding another project', async t => {
+  const route = reactive({
+    name: 'chat', fullPath: '/projects/a/chat', params: { projectId: 'a', sessionId: '' },
+    query: {} as Record<string, string | undefined>,
+  })
+  type Location = { name?: string; params?: { projectId?: string; sessionId?: string }; query?: Record<string, string | undefined> }
+  const navigate = async (location: Location) => {
+    route.name = location.name ?? route.name
+    route.params = { projectId: location.params?.projectId ?? '', sessionId: location.params?.sessionId ?? '' }
+    route.query = location.query ?? {}
+    route.fullPath = JSON.stringify([route.name, route.params, route.query])
+    await nextTick()
+  }
+  let catalog = ['a', 'b']
+  const state = mountScript(t, 'ProjectsWorkspace.vue', { apiBase: 'http://fixture', visible: true }, undefined, {
+    vue: { ...Vue, onMounted: () => {} },
+    'vue-router': { useRoute: () => route, useRouter: () => ({ push: navigate, replace: navigate }) },
+    '../composables/useInstallationContext.ts': { useInstallationContext: () => ref({ mode: 'main', uiScopes: ['main:admin'] }) },
+    '../projects.ts': {
+      ...projectsModule, createProjectsClient: () => ({ list: async () => catalog.map(id => ({ id, name: id, createdAt: '' })) }),
+    },
+  })
+  await state().refresh()
+  const draftA = state().selected
+  state().startDraft('b')
+  await nextTick()
+  const draftB = state().selected
+  state().navigate('a', 'web:one')
+  await nextTick()
+  state().dashboardVisibility.set(draftA.key, false)
+  catalog = ['b']
+  state().projectDeleted('a')
+  await nextTick()
+  assert.equal(route.name, 'projects')
+  assert.equal(state().selected, undefined)
+  assert.deepEqual(state().resources, [draftB])
+  assert.equal(state().dashboardVisibility.has(draftA.key), false)
+  assert.match(state().notice, /Working folders.*kept/)
+  await state().refresh()
+  assert.deepEqual(state().projects.map((project: { id: string }) => project.id), ['b'])
 })
 
 test('run ownership is canonicalized only from a known graph row and reidentified after route metadata changes', async t => {

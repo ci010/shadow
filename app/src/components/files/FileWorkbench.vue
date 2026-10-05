@@ -9,7 +9,7 @@
       </button>
     </Teleport>
     <MobileSheet v-if="mobileLayout" :open="viewsOpen" label="Open views" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
-      <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span class="i-lucide-messages-square" aria-hidden="true" /><span>{{ conversationTitle || 'Conversation' }}</span></button></div>
+      <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || conversationTitle || 'Conversation' }}</span></button></div>
       <div v-if="tabs.diagnosis" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="chooseMobileView(DIAGNOSIS_TAB_KEY)"><span class="i-lucide-activity" aria-hidden="true" /><span>Diagnosis</span></button></div>
       <div v-if="knowledgeEnabled" class="mobile-view-row">
         <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>Knowledge</span></button>
@@ -60,7 +60,7 @@
         <div class="document-tablist" role="tablist" aria-label="Open documents" @wheel="scrollTabs">
           <div class="document-tab conversation-tab fixed-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
             <button :id="tabId('')" role="tab" :aria-selected="tabs.selected === ''" :tabindex="tabs.selected === '' ? 0 : -1" :aria-controls="panelId('')" @click="selectTab('')" @keydown="tabKey($event, '')">
-              <span class="document-icon i-lucide-messages-square" aria-hidden="true" /><span>Conversation</span>
+              <span class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || 'Conversation' }}</span>
             </button>
           </div>
           <div v-if="tabs.diagnosis" class="document-tab diagnosis-tab fixed-tab" :class="{ selected: tabs.selected === DIAGNOSIS_TAB_KEY }" @mousedown="preventMiddleScroll">
@@ -122,7 +122,7 @@
       </div>
       <div class="workbench-content" :class="{ 'draft-document': draft && tabs.selected === '' }">
         <div v-show="tabs.selected === ''" :id="panelId('')" class="conversation-document" role="tabpanel" :aria-labelledby="tabId('')">
-          <slot />
+          <slot :active="active && tabs.selected === ''" />
         </div>
         <div v-if="tabs.diagnosis" v-show="tabs.selected === DIAGNOSIS_TAB_KEY" :id="panelId(DIAGNOSIS_TAB_KEY)" class="diagnosis-document" role="tabpanel" :aria-labelledby="tabId(DIAGNOSIS_TAB_KEY)">
           <slot name="diagnosis" />
@@ -185,7 +185,7 @@ import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, clos
 import type { KnowledgeEntry } from '../../knowledge.ts'
 import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
 const router = useRouter()
 const route = useRoute()
 const installation = useInstallationContext()
@@ -205,7 +205,7 @@ const preferredWidth = ref(220)
 const resizeBounds = computed(() => sidebarWidthBounds(width.value, 180, 360))
 const explorerWidth = computed(() => clampSidebarWidth(preferredWidth.value, resizeBounds.value))
 const wide = computed(() => width.value >= 760)
-const preference = ref<boolean>()
+const preference = ref<boolean | undefined>(props.initialExplorerOpen)
 const remoteExpanded = ref(false)
 const explorerAvailable = computed(() => props.explorerEnabled && !!(props.sessionId || props.folderId))
 const knowledgeSelected = computed(() => props.knowledgeEnabled && (tabs.value.selected === KNOWLEDGE_TAB_KEY || !!knowledgeEntryId(tabs.value.selected)))
@@ -225,7 +225,7 @@ const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ?
   : tabs.value.selected === projectTabKey('settings') ? 'Project settings' : tabs.value.selected === projectTabKey('agents') ? 'Agents'
   : knowledgeEntryId(tabs.value.selected) ? knowledgeLabel(knowledgeEntryId(tabs.value.selected)!)
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
-    ?? props.conversationTitle ?? 'Conversation')
+    ?? props.primaryLabel ?? props.conversationTitle ?? 'Conversation')
 function closeMobileActions() { actionsOpen.value = false }
 function chooseMobileView(key: string) { selectTab(key); viewsOpen.value = false }
 function chooseMobileKnowledge() {
@@ -475,7 +475,7 @@ watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], 
   }
 }, { immediate: true })
 watch(() => [route?.name, route?.params?.projectId, props.active, props.projectId, props.contextKey], () => {
-  if (!props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
+  if (!props.projectNavigationEnabled || !props.active || !props.projectId || route?.params?.projectId !== props.projectId) return
   const tab = route?.name === 'project-settings' ? 'settings' : route?.name === 'agents' ? 'agents' : undefined
   if (tab && installation.value.uiScopes.includes('main:admin')) tabs.value = openProjectTab(tabs.value, tab)
   else if (projectTabFromKey(tabs.value.selected)) selectTab('')
@@ -492,7 +492,7 @@ watch(() => [props.contextKey, tabs.value.selected === DIAGNOSIS_TAB_KEY] as con
 watch(() => [knowledgeSelected.value, knowledgeEntryId(tabs.value.selected)] as const,
   ([active, entryId]) => emit('knowledge-navigation', active, entryId), { immediate: true })
 watch(() => [tabs.value.selected, props.active] as const, ([selected]) => {
-  if (props.active && props.projectId && route?.params?.projectId === props.projectId && !knowledgeSelected.value) {
+  if (props.projectNavigationEnabled && props.active && props.projectId && route?.params?.projectId === props.projectId && !knowledgeSelected.value) {
     emit('project-navigation', projectTabFromKey(selected))
   }
 })

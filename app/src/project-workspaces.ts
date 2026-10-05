@@ -17,6 +17,11 @@ export function createConversationResources() {
   const resources: ConversationResource[] = []
   return {
     resources,
+    removeProject(projectId: string): void {
+      for (let index = resources.length - 1; index >= 0; index--) {
+        if (resources[index].projectId === projectId) resources.splice(index, 1)
+      }
+    },
     session(ref: SessionRef): ConversationResource {
       const existing = resources.find(item => item.projectId === ref.projectId && item.sessionId === ref.sessionId)
       if (existing) return existing

@@ -21,7 +21,7 @@ test('gateway routes canonical Project content by owner and unscoped content to 
     const app = new Hono()
     registerGatewayRoutes(app, [], { launchCredential: 'fixture-token' })
     registerProjectGateway(app, {
-      catalog, lookup: id => targets.get(id), start: async () => {},
+      catalog, lookup: id => targets.get(id), start: async () => {}, remove: id => catalog.remove(id),
       status: id => targets.has(id) ? { state: 'ready' } : { state: 'failed', error: 'Fixture startup failed' },
       clientAddresses: new GatewayClientAddressRegistry(),
     })
@@ -69,7 +69,7 @@ test('Project routing preserves raw JSON, static assets and nested user data byt
     const app = new Hono()
     registerProjectGateway(app, {
       catalog, lookup: () => ({ app: target, run: callback => callback() }),
-      start: async () => {}, status: () => ({ state: 'ready' }),
+      start: async () => {}, remove: id => catalog.remove(id), status: () => ({ state: 'ready' }),
       clientAddresses: new GatewayClientAddressRegistry(),
     })
     for (const prefix of ['/projects/default', '']) {
@@ -88,5 +88,33 @@ test('Project routing preserves raw JSON, static assets and nested user data byt
     assert.deepEqual(await (await app.request('/projects/default/api/sessions')).json(), {
       sessions: [{ projectId: 'default', folderId: 'folder', metadata: JSON.parse(contents) }],
     })
+  })
+})
+
+test('project deletion is authorized, owner-specific, explicit on conflict and removes scoped access', async () => {
+  await withTempWorkspace(async root => {
+    const catalog = new ProjectCatalog(join(root, 'host'))
+    await catalog.init()
+    const project = await catalog.create('Delete me')
+    const app = new Hono()
+    registerGatewayRoutes(app, [], { launchCredential: 'fixture-token' })
+    let stopped = ''
+    registerProjectGateway(app, {
+      catalog, lookup: () => undefined, start: async () => {}, status: () => ({ state: 'failed' }),
+      remove: id => catalog.remove(id, async () => { stopped = id }),
+      clientAddresses: new GatewayClientAddressRegistry(),
+    })
+    const path = `/api/projects/${project.id}`
+    const headers = { authorization: 'Bearer fixture-token' }
+    assert.equal((await app.request(path, { method: 'DELETE' })).status, 401)
+    assert.equal(stopped, '')
+    assert.equal((await app.request('/api/projects/default', { method: 'DELETE', headers })).status, 409)
+    const response = await app.request(path, { method: 'DELETE', headers })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { deletedProjectId: project.id })
+    assert.equal(stopped, project.id)
+    assert.equal((await app.request(path, { method: 'DELETE', headers })).status, 404)
+    assert.equal((await app.request(`/projects/${project.id}/api/sessions`, { headers })).status, 404)
+    assert.equal((await app.request(`/api/projects/${project.id}/retry`, { method: 'POST', headers })).status, 404)
   })
 })

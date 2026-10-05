@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -32,11 +33,13 @@ async function main() {
   const result = (text: string) => wait(() => frame().executeJavaScript(`document.querySelector('output')?.textContent===${JSON.stringify(text)}`), text)
   try {
     await window.loadURL(new URL('__microapps', process.env.MICROAPPS_SMOKE_URL).href)
-    await click('Coordinator')
     await wait(() => execute('!!document.querySelector("textarea")'), 'Coordinator draft')
+    await wait(() => execute('document.querySelector(".project-dashboard-shell").classList.contains("has-coordinator") && document.body.innerText.includes("No work items yet")'), 'Dashboard ready')
     await click('Apps')
     await wait(() => execute('!!document.querySelector(".apps-list button")'), 'Saved app')
     await execute('document.querySelector(".apps-list button").click()')
+    await wait(() => execute('!!document.querySelector(".app-confirm input") && !document.querySelector(".app-confirm input").disabled'), 'Review ready')
+    await execute('document.querySelector("[aria-label=\\"Close coordinator panel\\"]").click()')
     await wait(() => execute('!!document.querySelector(".app-confirm input")'), 'Review details')
     assert.equal(await execute(`${button('Approve this version')}.disabled`), true)
     for (const width of [1440, 390]) {
@@ -51,6 +54,7 @@ async function main() {
       }
     }
     window.setContentSize(1440, 900)
+    await wait(() => execute('!document.querySelector(".app-confirm input").disabled'), 'Review ready after resize')
     await execute('document.querySelector(".app-confirm input").click()')
     await click('Approve this version')
     await wait(() => execute('!!document.querySelector(".app-acceptance .yield-question")'), 'Owner testing question')
@@ -91,15 +95,16 @@ async function main() {
     window.setContentSize(1440, 900)
     await click('Open app')
     await wait(() => execute('!!document.querySelector("iframe")'), 'App iframe')
-    await wait(async () => frame().executeJavaScript('!!document.querySelector("#run")'), 'App loaded')
+    await wait(async () => frame().executeJavaScript('typeof document.querySelector("#run")?.onclick === "function"'), 'App loaded')
     assert.equal(await frame().executeJavaScript('typeof require'), 'undefined')
     assert.equal(await frame().executeJavaScript(`(()=>{try{return !!parent.document.body}catch{return false}})()`), false)
     await frame().executeJavaScript('document.querySelector("#run").click()')
     await result('Result 1')
     assert.equal(new URL(frame().url).hash, '', 'Launch ticket consumed')
+    const reloaded = once(window.webContents, 'did-frame-finish-load')
     await frame().executeJavaScript(`location.reload()`)
-    await delay(200)
-    await wait(async () => frame().executeJavaScript('!!document.querySelector("#run")'), 'Reloaded SDK')
+    await reloaded
+    await wait(async () => frame().executeJavaScript('typeof document.querySelector("#run")?.onclick === "function"'), 'Reloaded SDK')
     await frame().executeJavaScript('document.querySelector("#run").click()')
     await result('Result 2')
     await frame().executeJavaScript('document.querySelector("#run").click()')
