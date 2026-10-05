@@ -29,8 +29,10 @@
         </div>
       </div>
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
-      <div class="file-modal-body" :class="{ 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
+      <div class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat, 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
         <NodeOfflineState v-if="offline" :checking="loading" description="This preview will be available when the owning node reconnects." @retry="loadText" />
+        <FileViewerPreview v-else-if="viewerFormat" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
+          :path="path" :name="entry.name" :active="active" />
         <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || 'Loading…' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
         </div>
@@ -49,7 +51,6 @@
           referrerpolicy="no-referrer"
           :title="entry.name"
         ></iframe>
-        <iframe v-else-if="kind === 'pdf' && active" :key="`pdf:${raw}`" :src="raw" :title="entry.name" class="file-modal-frame"></iframe>
         <div v-else-if="textMode" class="file-modal-text-wrap">
           <p v-if="kind === 'html' && resources.native" class="file-modal-note">HTML source is shown on mobile. Interactive HTML previews and their linked assets require the browser app.</p>
           <p v-if="loaded && encodingWarning" class="file-encoding-warning" role="status">{{ encodingWarning }}</p>
@@ -87,6 +88,8 @@ const downloads = useFileDownload()
 import SelectionMenu from '../SelectionMenu.vue'
 import HoverInfo from '../HoverInfo.vue'
 import FileHighlightText from './FileHighlightText.vue'
+import FileViewerPreview from './FileViewerPreview.vue'
+import { fileViewerFormat } from '../../file-viewer.ts'
 import MemoryEventRecord from './MemoryEventRecord.vue'
 import ImageAnnotationPreview from './ImageAnnotationPreview.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
@@ -122,10 +125,11 @@ const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
 
 const path = computed(() => joinPath(props.dir, props.entry.name))
 const kind = computed(() => fileKind(props.entry.ext))
+const viewerFormat = computed(() => fileViewerFormat(props.entry.ext))
 const isMarkdown = computed(() => ['.md', '.markdown'].includes(props.entry.ext.toLowerCase()))
 const isMemoryEvents = computed(() => isMemoryEventFile(path.value))
 const sourceView = ref(false)
-const textMode = computed(() => kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native)))
+const textMode = computed(() => !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native))))
 const rawSource = computed(() => files.value.rawUrl(props.sessionId, path.value))
 const raw = computed(() => resources.resolve(rawSource.value))
 const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.value))
@@ -206,7 +210,7 @@ async function loadText(): Promise<void> {
   binary.value = false
   loaded.value = false
   highlightError.value = ''
-  if ((!textMode.value && !props.remote) || !props.active || !(props.folderId || props.sessionId)) return
+  if (viewerFormat.value || (!textMode.value && !props.remote) || !props.active || !(props.folderId || props.sessionId)) return
   const controller = new AbortController()
   request = controller
   loading.value = true
@@ -400,6 +404,9 @@ onUnmounted(() => request?.abort())
   padding: 1rem;
   background: var(--c-bg-muted);
 }
+.file-modal-body.viewer-preview { padding: 0; overflow: hidden; height: calc(88vh - 4rem); }
+.fullscreen .file-modal-body.viewer-preview { height: calc(100vh - 4rem); }
+.inline .file-modal-body.viewer-preview { height: auto; padding: 0 0 var(--composer-height, 0px); scroll-padding-bottom: 0; }
 
 .file-modal-media {
   max-width: 100%;

@@ -144,6 +144,24 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     return buildUrl(apiBase, `${root(sessionId)}/raw`, { path })
   }
 
+  async function readBlob(sessionId: string, path: string, signal?: AbortSignal): Promise<Blob> {
+    const deadline = AbortSignal.timeout(30_000)
+    const combined = signal ? AbortSignal.any([signal, deadline]) : deadline
+    try {
+      const response = await fetch(rawUrl(sessionId, path), {
+        signal: combined, credentials: 'same-origin', referrerPolicy: 'no-referrer', redirect: 'error',
+      })
+      if (!response.ok) throw await fileRequestError(response)
+      // Consume the body inside the deadline, not just its response headers.
+      return await response.blob()
+    } catch (error) {
+      if (deadline.aborted && !signal?.aborted) {
+        throw new Error('File request timed out. Check the device connection and retry.')
+      }
+      throw error
+    }
+  }
+
   /**
    * Path-based URL for static serving. Unlike {@link rawUrl}, the file path is
    * part of the URL path (not a query param) so an HTML page's relative asset
@@ -212,5 +230,5 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     return new Error(`Could not load files (${response.status}). Retry when Main is available.`)
   }
 
-  return { listDir, searchPaths, rawUrl, staticUrl, preview }
+  return { listDir, searchPaths, rawUrl, staticUrl, preview, readBlob }
 }

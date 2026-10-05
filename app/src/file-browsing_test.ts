@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import test, { type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { createRenderer, createSSRApp, defineComponent, getCurrentInstance, h, nextTick, reactive, type Component } from 'vue'
+import { createRenderer, createSSRApp, defineComponent, getCurrentInstance, h, nextTick, reactive, ref, type Component } from 'vue'
+import type { PreviewOptions } from '@open-file-viewer/core'
 import { renderToString } from 'vue/server-renderer'
 import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
@@ -15,7 +16,7 @@ import { parseSessionGraph } from './folders-sidebar.ts'
 import * as homeTreeCacheModule from './home-tree-cache.ts'
 
 // Exercise the actual SFC setup/watch lifecycle with a headless Vue renderer.
-function component(name: string): Component {
+function component(name: string, modules: Record<string, unknown> = {}): Component {
   const url = new URL(`./components/files/${name}.vue`, import.meta.url)
   const filename = fileURLToPath(url)
   const { descriptor } = parse(readFileSync(url, 'utf8'), { filename })
@@ -27,7 +28,7 @@ function component(name: string): Component {
   const module = { exports: {} as { default: Component & { render?: () => null } } }
   const require = createRequire(url)
   new Function('require', 'module', 'exports', outputText)((id: string) =>
-    id.endsWith('.vue') ? {} : id.endsWith('/composables/useSessionFiles') ? fileHelpers
+    id in modules ? modules[id] : id.endsWith('.vue') || id.endsWith('.css') ? {} : /\/composables\/useSessionFiles(?:\.ts)?$/.test(id) ? fileHelpers
       : id.endsWith('/workdir-request-error.ts') ? workdirRequestErrors
       : id.endsWith('/git-files.ts') ? gitFiles
       : id.endsWith('/home-tree-cache.ts') ? homeTreeCacheModule : require(id),
@@ -36,7 +37,7 @@ function component(name: string): Component {
   return module.exports.default
 }
 
-function mount(t: TestContext, name: string, initial: Record<string, unknown>, homeCache?: ReturnType<typeof createHomeTreeCache>) {
+function mount(t: TestContext, name: string, initial: Record<string, unknown>, homeCache?: ReturnType<typeof createHomeTreeCache>, modules?: Record<string, unknown>) {
   const props = reactive({ ...initial })
   let instance: any
   const renderer = createRenderer<object, object>({
@@ -44,7 +45,7 @@ function mount(t: TestContext, name: string, initial: Record<string, unknown>, h
     insert() {}, remove() {}, setText() {}, setElementText() {}, patchProp() {},
     parentNode: () => null, nextSibling: () => null,
   })
-  const child = component(name)
+  const child = component(name, modules)
   const app = renderer.createApp(defineComponent({
     setup: () => () => h(child, { ...props, ref: (value: unknown) => { instance = value } }),
   }))
@@ -55,11 +56,12 @@ function mount(t: TestContext, name: string, initial: Record<string, unknown>, h
 }
 
 function requests(t: TestContext) {
-  const pending: { url: URL; signal: AbortSignal; finish: (value: unknown, status?: number) => void }[] = []
+  const pending: { url: URL; signal: AbortSignal; finish: (value: unknown, status?: number) => void; finishBlob: (value: string) => void }[] = []
   t.mock.method(globalThis, 'fetch', (input: string, init: RequestInit) =>
     new Promise<Response>(resolve => pending.push({
       url: new URL(input), signal: init.signal!,
       finish: (value, status = 200) => resolve(Response.json(value, { status })),
+      finishBlob: value => resolve(new Response(value)),
     })))
   return pending
 }
@@ -210,7 +212,7 @@ test('folder children report offline to the explorer, but never from stale proje
   assert.equal(state().loadError, '')
 })
 
-for (const ext of ['.txt', '.png', '.html', '.pdf', '.mp4']) {
+for (const ext of ['.txt', '.png', '.html', '.mp4']) {
   test(`${ext} previews show explicit offline state, recover and reject previous project responses`, async t => {
     const pending = requests(t)
     const { props, state } = mount(t, 'FilePreviewModal', { ...base, remote: true, dir: '', entry: { ...entry, name: `preview${ext}`, ext } })
@@ -235,6 +237,138 @@ for (const ext of ['.txt', '.png', '.html', '.pdf', '.mp4']) {
     assert.equal(state().textContent, '')
   })
 }
+
+function mountViewer(t: TestContext, initial: Record<string, unknown> = {}) {
+  const isDark = ref(false)
+  const viewers: Array<{ options: PreviewOptions; destroyed: boolean }> = []
+  const mounted = mount(t, 'FileViewerPreview', {
+    ...base, path: 'reports/report.docx', name: 'report.docx', ...initial,
+  }, undefined, {
+    '../../composables/useTheme.ts': { useTheme: () => ({ isDark }) },
+    '../../open-file-viewer-sdk.ts': {
+      mountFileViewer(options: PreviewOptions) {
+        const record = { options, destroyed: false }
+        viewers.push(record)
+        return { destroy: () => { record.destroyed = true } }
+      },
+    },
+  })
+  mounted.state().container = {}
+  return { ...mounted, viewers, isDark }
+}
+
+test('Open File Viewer loads scoped bytes lazily, preserves names and destroys inactive previews', async t => {
+  const pending = requests(t)
+  const { props, state, viewers } = mountViewer(t, { active: false, name: 'report #.docx', path: 'reports/report #.docx' })
+  assert.equal(pending.length, 0)
+  props.active = true
+  await nextTick()
+  assert.equal(pending[0]!.url.pathname, '/api/folders/folder-a/raw')
+  assert.equal(pending[0]!.url.searchParams.get('path'), 'reports/report #.docx')
+  pending[0]!.finishBlob('original bytes')
+  await settle()
+  assert.equal(viewers.length, 1)
+  assert(viewers[0]!.options.file instanceof Blob)
+  assert.equal(await viewers[0]!.options.file.text(), 'original bytes')
+  assert.equal(viewers[0]!.options.fileName, 'report #.docx')
+  assert.equal(state().loading, true)
+  viewers[0]!.options.onLoad!({ source: viewers[0]!.options.file, name: 'report #.docx', extension: 'docx', mimeType: '' })
+  assert.equal(state().loading, false)
+  props.active = false
+  await nextTick()
+  assert.equal(viewers[0]!.destroyed, true)
+  assert.equal(pending[0]!.signal.aborted, true)
+  assert.equal(state().loading, false)
+  viewers[0]!.options.onError!(new Error('late parser failure'))
+  assert.equal(state().error, '')
+})
+
+test('Open File Viewer handles offline recovery and discards old project bytes and callbacks', async t => {
+  const pending = requests(t)
+  const { props, state, viewers } = mountViewer(t)
+  pending[0]!.finish(offlineResponse, 503)
+  await settle()
+  assert.equal(state().offline, true)
+  assert.equal(viewers.length, 0)
+  void state().load()
+  pending[1]!.finishBlob('current')
+  await settle()
+  assert.equal(state().offline, false)
+  void state().load()
+  props.apiBase = 'http://fixture/projects/two'
+  await nextTick()
+  pending[3]!.finishBlob('second project')
+  await settle()
+  pending[2]!.finishBlob('stale')
+  viewers[0]!.options.onError!(new Error('old render'))
+  await settle()
+  assert.equal(viewers.length, 2)
+  assert.equal(viewers[0]!.destroyed, true)
+  assert.equal(state().error, '')
+  assert(viewers[1]!.options.file instanceof Blob)
+  assert.equal(await viewers[1]!.options.file.text(), 'second project')
+  props.folderId = 'folder-b'
+  await nextTick()
+  assert.equal(viewers[1]!.destroyed, true)
+  pending[4]!.finish({ error: 'denied' }, 403)
+  await settle()
+  assert.equal(state().offline, false)
+  assert.match(state().error, /denied/)
+})
+
+test('Open File Viewer retries parser failures and changes theme without downloading again', async t => {
+  const pending = requests(t)
+  const { state, viewers, isDark, unmount } = mountViewer(t)
+  pending[0]!.finishBlob('original')
+  await settle()
+  viewers[0]!.options.onError!(new Error('broken archive'))
+  assert.match(state().error, /broken archive/)
+  assert.equal(state().loading, false)
+  void state().load()
+  pending[1]!.finishBlob('original')
+  await settle()
+  assert.equal(state().error, '')
+  isDark.value = true
+  await nextTick()
+  assert.equal(pending.length, 2)
+  assert.equal(viewers[1]!.destroyed, true)
+  assert.equal(viewers[2]!.options.theme, 'dark')
+  assert.equal(viewers[2]!.options.file, viewers[1]!.options.file)
+  viewers[1]!.options.onUnsupported!({ source: '', name: '', extension: '', mimeType: '' })
+  assert.equal(state().error, '')
+  unmount()
+  assert.equal(viewers[2]!.destroyed, true)
+})
+
+test('Open File Viewer keeps archive entry notifications separate from the opened file', async t => {
+  const pending = requests(t)
+  const { state, viewers } = mountViewer(t, { path: 'bundle.zip', name: 'bundle.zip' })
+  pending[0]!.finishBlob('archive')
+  await settle()
+  const notifications = viewers[0]!.options
+  const child = { source: new Blob(['entry']), name: 'unknown.entry', extension: 'entry', mimeType: '' }
+  notifications.onLoad!(child)
+  assert.equal(state().loading, true)
+  notifications.onUnsupported!(child)
+  notifications.onError!(new Error('entry parser'), child)
+  assert.equal(state().error, '')
+  assert(notifications.file instanceof Blob)
+  notifications.onLoad!({ ...child, source: notifications.file, name: 'bundle.zip' })
+  assert.equal(state().loading, false)
+  notifications.onUnsupported!({ ...child, source: notifications.file, name: 'bundle.zip' })
+  assert.match(state().error, /cannot be previewed/)
+})
+
+test('Open File Viewer routes PDF and extra formats without text decoding or remote directory probes', async t => {
+  const pending = requests(t)
+  for (const ext of ['.pdf', '.docx', '.zip', '.eml', '.glb']) {
+    const { state } = mount(t, 'FilePreviewModal', { ...base, remote: true, dir: '', entry: { ...entry, name: `file${ext}`, ext } })
+    assert(state().viewerFormat)
+    assert.equal(state().textMode, false)
+    assert.equal(state().selectionEnabled, false)
+  }
+  assert.equal(pending.length, 0, 'Only the viewer child fetches the protected raw bytes')
+})
 
 test('diff previews recover from offline and discard pending data on a project switch', async t => {
   const restoreGlobals: Array<() => void> = []

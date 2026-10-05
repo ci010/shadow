@@ -8,6 +8,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http'
 import { TLSSocket } from 'node:tls'
 import { SCOPED_BACKEND_PATTERN } from '../src/gateway/route-kind.ts'
 import { parseRuntimeEndpointMessage } from '../desktop/src/control/runtime-endpoint.ts'
+import { pdfViewerAssets } from './pdf-viewer-assets.ts'
 
 // Default backend gateway (the Shadow bot). Override with VITE_API_TARGET if
 // you run the bot on a non-default host/port.
@@ -88,9 +89,11 @@ const routing = desktopBackendRouting()
 
 export default defineConfig({
   base: './',
-  plugins: [routing.plugin, vue(), UnoCSS({
+  plugins: [routing.plugin, pdfViewerAssets(), vue(), UnoCSS({
     configFile: fileURLToPath(new URL('./unocss.config.ts', import.meta.url)),
   })],
+  optimizeDeps: { exclude: ['emf-converter'] },
+  build: { rollupOptions: { external: ['@napi-rs/canvas'] } },
   server: {
     host: process.env.VITE_DEV_HOST ?? '0.0.0.0',
     port: 5273,

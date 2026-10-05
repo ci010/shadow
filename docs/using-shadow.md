@@ -60,6 +60,38 @@ previews and, for supported Git folders, a read-only **Changes** view. Git
 inspection does not stage or commit changes. Files can be quoted into the
 current conversation without sending a new message.
 
+File tabs use [Open File Viewer](https://github.com/xushanpei/open-file-viewer)
+for four groups: PDF/Office (including EPUB/OFD/XPS), Engineering (CAD, 3D,
+drawings and GIS), Archive/Email, and Assets/Data. Image/media and text/code SDK
+plugins and the XMind plugin are not registered; standalone files keep Shadow's
+existing image, media, text, Markdown and HTML views. Common archive entries use
+a small browser-native image/media and bounded plain-source preview instead of
+loading a second syntax-highlighting or image-conversion engine.
+Production builds tree-shake the unregistered SDK plugin JavaScript and its
+unused HEIC, HLS and Prism dependencies. Shared parsers remain where needed:
+for example, Office uses the TIFF decoder for embedded PPTX images, and
+Engineering uses Three.js. Installed transitive packages and the SDK's shared
+stylesheet are not removed by JavaScript tree-shaking.
+The SDK is loaded only when one of these files is opened. Files are read through
+the owning session or registered folder API and passed to the viewer as local
+bytes; no external document conversion service is configured. PDF workers,
+fonts, CMaps and image decoders are bundled locally, including for the desktop renderer.
+Existing text selection/quoting, Markdown, HTML, image annotation and media
+controls remain unchanged; CSV/TSV continue to use the source preview. Viewer
+chrome follows Shadow's theme, square controls, focus treatment and selected
+rows; authored document fonts, colors, diagrams and map tiles are not recolored.
+The extra formats are read-only previews, not editors, and do not support
+Shadow's text quotes or image annotation. Rendering fidelity varies by format;
+some proprietary formats provide only metadata or partial previews. DXF and
+supported engineering formats use the built-in renderer; no optional high-fidelity
+DWG engine or LibreDWG WASM is installed, so DWG may show only metadata. Multi-file
+model references are not integrated. GIS is enabled and uses upstream Leaflet
+stylesheet resources from jsDelivr and OpenStreetMap tiles; these requests expose
+the viewed map area to the tile provider. The viewer displays a notice for GIS.
+Files themselves are still read through the owning Shadow API. Failed
+previews expose a retry action; **Download** always retains the original file.
+Unavailable remote workdirs never fall back to Main's filesystem.
+
 You can send follow-up guidance during an active turn or use **Stop request**
 to cancel the targeted request. Cancellation cannot undo completed side
 effects. For stopped or interrupted work, **Continue** resumes from saved

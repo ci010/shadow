@@ -160,3 +160,61 @@ test('folder fetch cancellation is passed through without retrying another sourc
     { name: 'AbortError' })
   assert.equal(mock.mock.callCount(), 1)
 })
+
+test('viewer bytes use the owning raw endpoint with authorization and without redirects', async t => {
+  const calls: URL[] = []
+  const controller = new AbortController()
+  const payload = new Uint8Array([0, 255, 80, 75, 3, 4])
+  t.mock.method(globalThis, 'fetch', async (input: string, init: RequestInit) => {
+    calls.push(new URL(input))
+    assert.equal(init.credentials, 'same-origin')
+    assert.equal(init.referrerPolicy, 'no-referrer')
+    assert.equal(init.redirect, 'error')
+    assert(init.signal)
+    return new Response(payload, { headers: { 'Content-Type': 'application/octet-stream' } })
+  })
+  for (const folderId of [undefined, 'folder/a']) {
+    const blob = await useSessionFiles('http://localhost/projects/one', folderId)
+      .readBlob('web:session/a', 'reports/a # %.docx', controller.signal)
+    assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), payload)
+  }
+  assert.equal(calls[0]!.pathname, '/projects/one/api/sessions/web%3Asession%2Fa/raw')
+  assert.equal(calls[1]!.pathname, '/projects/one/api/folders/folder%2Fa/raw')
+  assert(calls.every(url => url.searchParams.get('path') === 'reports/a # %.docx'))
+})
+
+test('viewer raw errors retain offline, denied and unavailable workdir semantics without fallback', async t => {
+  const mock = t.mock.method(globalThis, 'fetch', async () => Response.json({
+    error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder',
+  }, { status: 503 }))
+  const files = useSessionFiles('http://localhost', 'remote-folder')
+  await assert.rejects(files.readBlob('ignored', 'report.pdf'), error => error instanceof Error && error.name === 'NodeOfflineError')
+  mock.mock.mockImplementation(async () => Response.json({ error: 'denied' }, { status: 403 }))
+  await assert.rejects(files.readBlob('ignored', 'report.pdf'), /denied/)
+  mock.mock.mockImplementation(async () => Response.json({ error: 'remote_workdir_requires_executor' }, { status: 501 }))
+  await assert.rejects(files.readBlob('ignored', 'report.pdf'), /No local folder was used/)
+  assert.equal(mock.mock.callCount(), 3)
+})
+
+test('viewer byte deadlines and cancellation cover a response body still downloading', async t => {
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal)
+  t.mock.method(globalThis, 'fetch', async (_input: string, init: RequestInit) => ({
+    ok: true,
+    blob: () => new Promise<Blob>((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true })
+    }),
+  }))
+  const files = useSessionFiles('http://localhost')
+  const timedOut = files.readBlob('session', 'large.pdf')
+  await new Promise(resolve => setImmediate(resolve))
+  deadline.abort()
+  await assert.rejects(timedOut, /File request timed out/)
+  const controller = new AbortController()
+  const nextDeadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', () => nextDeadline.signal)
+  const cancelled = files.readBlob('session', 'large.pdf', controller.signal)
+  await new Promise(resolve => setImmediate(resolve))
+  controller.abort()
+  await assert.rejects(cancelled, { name: 'AbortError' })
+})

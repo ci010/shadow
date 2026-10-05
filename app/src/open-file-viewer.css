@@ -1,0 +1,127 @@
+/* Theme the viewer chrome, not the document's authored fonts, colors or geometry. */
+.file-viewer-preview .viewer-container.ofv-root {
+  --ofv-bg: var(--c-bg);
+  --ofv-surface: var(--c-bg-card);
+  --ofv-surface-muted: var(--c-bg-muted);
+  --ofv-text: var(--c-text);
+  --ofv-text-muted: var(--c-text-secondary);
+  --ofv-border: var(--c-border);
+  --ofv-button-hover: var(--c-bg-muted);
+  --ofv-accent: var(--c-blue);
+  --ofv-accent-soft: var(--c-selection-bg);
+  --ofv-highlight: var(--c-selection-bg);
+  --ofv-toolbar-bg: var(--c-bg-card);
+  --ofv-shadow: none;
+  border: 0;
+  border-radius: var(--radius-surface);
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  color-scheme: light;
+}
+.file-viewer-preview .viewer-container.ofv-theme-dark { color-scheme: dark; }
+.file-viewer-preview .ofv-toolbar { min-height: 40px; padding: 4px 12px; gap: 4px; }
+.file-viewer-preview .ofv-toolbar-search { flex: 0 1 260px; }
+.file-viewer-preview .ofv-toolbar-search input {
+  width: 100%;
+  border: 1px solid var(--c-control-border);
+  border-radius: var(--radius-control);
+  background: var(--c-bg-input);
+  font-size: 12px;
+  box-shadow: none;
+}
+.file-viewer-preview .ofv-toolbar-search input:focus {
+  border-color: var(--c-control-border);
+  outline: 2px solid var(--c-blue);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+.file-viewer-preview :is(.ofv-toolbar, .ofv-pdf-page-navigator, .ofv-tabs, .ofv-sheet-window) :is(button, input, select),
+.file-viewer-preview :is(.ofv-archive-sidebar-toggle, .ofv-archive-item, .ofv-email-attachment-item, .ofv-code-action) {
+  border-radius: var(--radius-control);
+  min-height: 32px;
+  font-family: inherit;
+  font-size: 12px;
+  box-shadow: none;
+}
+.file-viewer-preview .ofv-toolbar button:active:not(:disabled) { transform: none; background: var(--c-selection-bg); }
+.file-viewer-preview .ofv-toolbar button:disabled { opacity: .5; }
+.file-viewer-preview :is(button, input, select, a):focus-visible {
+  outline: 2px solid var(--c-blue);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+.file-viewer-preview .ofv-pdf-page-navigator { min-height: 40px; padding: 4px 12px; }
+.file-viewer-preview .ofv-pdf-page-navigator input { border-color: var(--c-control-border); background: var(--c-bg-input); }
+.file-viewer-preview :is(.ofv-pdf-viewer, .ofv-pdf, .ofv-pptx-viewer, .ofv-ppt-binary-viewer) { background: var(--c-bg); }
+.file-viewer-preview :is(.ofv-pdf, .ofv-viewport, .ofv-panel, .ofv-table-scroll, .ofv-archive-tree) {
+  scrollbar-color: var(--c-scrollbar-thumb) transparent;
+}
+.file-viewer-preview .ofv-pdf::-webkit-scrollbar-thumb { background: var(--c-scrollbar-thumb); background-clip: content-box; }
+.file-viewer-preview :is(.ofv-status-chip, .ofv-fallback, .ofv-panel, .ofv-section, .ofv-svg-stage,
+  .ofv-asset-summary, .ofv-data-preview, .ofv-font-preview, .ofv-model-message, .ofv-cad-conversion,
+  .ofv-map-legend, .ofv-gis-summary) {
+  border-radius: var(--radius-surface);
+  box-shadow: none;
+}
+.file-viewer-preview .ofv-status-chip { background: var(--c-bg-card); color: var(--c-text-secondary); font-size: 13px; }
+.file-viewer-preview .ofv-status-error .ofv-status-chip { border-color: var(--c-error); color: var(--c-error); }
+.file-viewer-preview .ofv-fallback a { color: var(--c-blue); }
+.file-viewer-preview .ofv-archive-layout { --ofv-archive-sidebar-expanded: 240px; }
+.file-viewer-preview :is(.ofv-archive-sidebar, .ofv-archive-sidebar-panel) { background: var(--c-bg-soft); }
+.file-viewer-preview .ofv-archive-header { padding: 6px 12px; font-size: 12px; font-weight: 500; }
+.file-viewer-preview .ofv-archive-sidebar-toggle { flex-basis: 32px; width: 32px; }
+.file-viewer-preview .ofv-archive-item { padding: 6px 12px; border: 0; font-size: 13px; }
+.file-viewer-preview .ofv-archive-item.is-active {
+  border: 0;
+  padding-left: 12px;
+  background: var(--c-selection-bg);
+  color: var(--c-blue);
+  font-weight: 500;
+  box-shadow: none;
+}
+.file-viewer-preview .ofv-archive-layout.is-sidebar-collapsed .ofv-archive-item.is-active { padding-left: 0; box-shadow: none; }
+.file-viewer-preview .ofv-tabs button.is-active { border-color: var(--c-selection-border); background: var(--c-selection-bg); color: var(--c-blue); }
+.file-viewer-preview .ofv-email-attachment-item { background: var(--c-bg-soft); }
+.file-viewer-preview .ofv-email-body-iframe { border-radius: var(--radius-surface); box-shadow: none; color-scheme: light; }
+.file-viewer-preview :is(.ofv-docx-document, .ofv-pdf-page-wrapper, .ofv-ppt-binary-slide, .ofv-pptx-slide,
+  .ofv-xps-page, .ofv-ofd-page > svg) { border-radius: var(--radius-surface); box-shadow: none; }
+.file-viewer-preview .ofv-docx-document section.ofv-docx { box-shadow: none; }
+.file-viewer-preview .ofv-map-stage :is(.ofv-map-feature, .ofv-map-point) { filter: none; }
+.file-viewer-preview .ofv-map-legend { background: var(--c-bg-card); color: var(--c-text-secondary); border-color: var(--c-border); }
+.file-viewer-preview .ofv-map-legend strong { color: var(--c-text); }
+.file-viewer-preview .ofv-map-legend strong::before { border-radius: var(--radius-control); box-shadow: none; }
+.file-viewer-preview :is(.leaflet-bar, .leaflet-control, .leaflet-popup-content-wrapper, .leaflet-tooltip) {
+  border-radius: var(--radius-control);
+  background: var(--c-bg-card);
+  color: var(--c-text);
+  box-shadow: none;
+  font-family: inherit;
+}
+.file-viewer-preview .leaflet-bar { border: 1px solid var(--c-control-border); }
+/* Upstream marks the map control's border and shadow important. */
+.file-viewer-preview .ofv-map-stage .leaflet-bar { border-color: var(--c-control-border) !important; box-shadow: none !important; }
+.file-viewer-preview .leaflet-bar a { background: var(--c-bg-card); color: var(--c-text); border-color: var(--c-border); border-radius: var(--radius-control); }
+.file-viewer-preview .leaflet-bar a:hover { background: var(--c-bg-muted); }
+.file-viewer-preview .leaflet-bar a.leaflet-disabled { color: var(--c-text-muted); cursor: not-allowed; }
+.file-viewer-preview .ofv-map-stage :is(.leaflet-control-attribution, .ofv-map-tooltip) {
+  background: var(--c-bg-card);
+  color: var(--c-text);
+  border-radius: var(--radius-control);
+  box-shadow: none;
+  font-size: 12px;
+}
+.file-viewer-preview .leaflet-control-attribution a { color: var(--c-blue); }
+.file-viewer-preview .shadow-archive-source { margin: 0; padding: 16px; color: var(--c-text); font: 13px/1.65 'IBM Plex Mono', ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-viewer-preview .shadow-archive-note { margin: 0; padding: 8px 16px; color: var(--c-text-secondary); font-size: 12px; }
+.file-viewer-preview .shadow-archive-media { display: block; max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
+@media (max-width: 700px), (pointer: coarse) {
+  .file-viewer-preview :is(.ofv-toolbar, .ofv-pdf-page-navigator, .ofv-tabs, .ofv-sheet-window) :is(button, input, select),
+  .file-viewer-preview :is(.ofv-archive-sidebar-toggle, .ofv-archive-item, .ofv-email-attachment-item, .leaflet-bar a) { min-height: 44px; }
+  .file-viewer-preview .ofv-toolbar-icon-button { width: 44px; }
+  .file-viewer-preview .ofv-archive-sidebar-toggle { flex-basis: 44px; width: 44px; }
+  .file-viewer-preview .ofv-toolbar-search { flex-basis: 200px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-viewer-preview :is(.ofv-toolbar button, .ofv-archive-sidebar, .ofv-archive-item) { transition: none; }
+}
