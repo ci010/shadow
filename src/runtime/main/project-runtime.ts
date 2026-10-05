@@ -35,7 +35,8 @@ import { createReplyCommand } from '../../slash-commands/handlers/reply.ts'
 import { createDumpPromptCommand } from '../../slash-commands/handlers/dump-prompt.ts'
 import { createHelpCommand } from '../../slash-commands/handlers/help.ts'
 import { createLearnCommand } from '../../slash-commands/handlers/learn.ts'
-import { triggerReflectorFlush, learningTask } from '../../agent/learning/pipelines.ts'
+import { LearningRuntime } from '../../agent/learning/pipelines.ts'
+import { LearningTools } from '../../agent/learning/tools.ts'
 import { createCompactCommand } from '../../slash-commands/handlers/compact.ts'
 import { createClearCommand } from '../../slash-commands/handlers/clear.ts'
 import { createSessionsCommand } from '../../slash-commands/handlers/sessions.ts'
@@ -380,8 +381,6 @@ export async function createProjectRuntime(
   const importTool = new ImportTool(loadable, workspace, chromeManager, name => skills.getSkillDirectory(name))
   tools.register(new SearchTool(workspace, webSearchTool, vfs))
   tools.register(new InvokeTool(importTool))
-
-  tools.register(new LogTool(workspace))
 
   // Purge stale tool-result temp files from previous runs
   await cleanupTempFiles(workspace)
@@ -800,12 +799,13 @@ export async function createProjectRuntime(
   })
   vfs.mount('v:config', 'Project MCP configuration: mcp.json', mcpConfigVfs.read, undefined, mcpConfigVfs.write)
 
-  const memoryVfs = createMemoryHandler(workspace)
+  const memoryVfs = createMemoryHandler(workspace, project.id)
   vfs.mount(
     'v:memory',
-    'read and write your long-term memory store',
+    'read Project memory; write wiki Markdown files (session records, event logs and internal state are read-only here)',
     memoryVfs.read,
     memoryVfs.list,
+    memoryVfs.write,
   )
 
   const eventsVfs = createEventsHandler(events)
@@ -932,6 +932,10 @@ export async function createProjectRuntime(
       sessions.evaluateAuthoringScenario({ prompt, tools, input, signal, llmOverrides }),
   }
   const changeTool = authoringChangeTool(changeManagement)
+  const learningRuntime = new LearningRuntime(sessions, project.id, skills)
+  const learningTools = new LearningTools(learningRuntime)
+  for (const tool of [learningTools.memory, learningTools.skill, learningTools.soul, learningTools.result]) tools.register(tool)
+  tools.register(new LogTool(workspace, (entry, key, context) => learningTools.appendEvent(entry, key, context)))
   const skillEditing = new SkillEditing({
     projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: canAuthor,
   })
@@ -1001,7 +1005,11 @@ export async function createProjectRuntime(
   }, sessionId => realtime.invalidateSessions(sessionId))
   cronService.setHandler(async (job, signal) => { await cronDispatcher.dispatch(job, signal) })
   cronService.setOnChanged(() => realtime.invalidateSessions())
-  registerAutomationRoutes(app, cronService, sessions, project.id)
+  registerAutomationRoutes(app, cronService, sessions, project.id, sessionId => learningRuntime.ledger.outcome(sessionId), jobId => {
+    const pipeline = jobId === 'learning:reflector' ? 'reflector' : jobId === 'learning:encapsulator' ? 'encapsulator' : 'soulReflector'
+    const status = learning.status().pipelines[pipeline]
+    return [status.lastError, status.paused, status.retryAt ? `Retry after ${status.retryAt}.` : ''].filter(Boolean).join(' ') || undefined
+  })
   registerCronTools(importTool, cronService, sessions, name => !!agentTypes.resolve(name))
   registerEventTools(importTool, events, pollingSources, canAuthor)
   // Clean up event subscriptions linked to one-shot cron jobs when they are
@@ -1011,21 +1019,13 @@ export async function createProjectRuntime(
   })
 
   const learning = new LearningService(bus, scope, {
-    reflector: async (signal, job, accepted) => {
-      signal.throwIfAborted()
-      let sessionId: string | undefined
-      const ran = await triggerReflectorFlush(sessions, signal, async task => {
-        sessionId = await cronDispatcher.dispatch(job, signal, task, accepted)
-        return sessionId
-      })
-      return ran ? sessionId : false
-    },
-    encapsulator: (signal, job, accepted) => cronDispatcher.dispatch(job, signal, learningTask('encapsulator'), accepted),
-    soulReflector: (signal, job, accepted) => cronDispatcher.dispatch(job, signal, learningTask('soulReflector'), accepted),
+    reflector: (signal, job, accepted) => learningRuntime.run('reflector', signal, job, accepted, cronDispatcher),
+    encapsulator: (signal, job, accepted) => learningRuntime.run('encapsulator', signal, job, accepted, cronDispatcher),
+    soulReflector: (signal, job, accepted) => learningRuntime.run('soulReflector', signal, job, accepted, cronDispatcher),
   }, config.learning, cronService, sessionId => {
     const state = sessions.getSessionState(sessionId)
     return !!state && resolveAutomationSession(state)?.config?.source === 'learning'
-  })
+  }, learningRuntime.ledger, { deferStart: true, changed: () => realtime.invalidateSessions() })
   commandDispatcher.register(createLearnCommand(sessions, pipeline => learning.trigger(pipeline)))
   cleanup.push(() => learning.stop())
   app.get('/api/learning', c => c.json(learning.status()))
@@ -1211,6 +1211,8 @@ export async function createProjectRuntime(
     await alignment.recoverDecisions(async reference => (await sessions.getYieldRecords(reference.sessionId, reference.physicalId))
       .find(record => record.request.id === reference.requestId))
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())
+    await learningRuntime.recover()
+    learning.start()
   })
   await ready
   pollingSources.start()

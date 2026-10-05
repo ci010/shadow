@@ -1,7 +1,6 @@
 import type { SessionManager } from '../../sessions/session-manager.ts'
 import type { SlashCommandHandler } from '../index.ts'
 import { LEARNING_AUTOMATIONS } from '../../cron/contracts.ts'
-import { triggerLearningPipeline } from '../../agent/learning/pipelines.ts'
 
 export function createLearnCommand(
   sessions: SessionManager,
@@ -28,7 +27,8 @@ export function createLearnCommand(
         return `Unknown pipeline "${name}". Available: ${VALID_NAMES.join(', ')}`
       }
 
-      const result = trigger ? await trigger(pipeline) : await triggerLearningPipeline(sessions, pipeline)
+      if (!trigger) throw new Error('Project learning service is unavailable. Restart Main before retrying.')
+      const result = await trigger(pipeline)
       return result === false ? `No new activity for ${name}.`
         : `Triggered ${name}.${typeof result === 'string' ? ` Session: ${result}` : ''}`
     },

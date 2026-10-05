@@ -2,10 +2,11 @@ import type { Hono } from 'hono'
 import type { SessionManager } from '../sessions/session-manager.ts'
 import type { CronService } from './service.ts'
 import { cronContextMode } from './service.ts'
-import { resolveAutomationSession, type AutomationSummary, type AutomationRunSummary } from './contracts.ts'
+import { resolveAutomationSession, type AutomationSummary, type AutomationRunSummary, type LearningOutcome } from './contracts.ts'
 
 /** Mounted on the owning project's router; never reads another project's stores. */
-export function registerAutomationRoutes(app: Hono, cron: CronService, sessions: SessionManager, projectId: string): void {
+export function registerAutomationRoutes(app: Hono, cron: CronService, sessions: SessionManager, projectId: string,
+  learningOutcome?: (sessionId: string) => LearningOutcome | undefined, learningNotice?: (jobId: string) => string | undefined): void {
   const records = () => sessions.listSessions().flatMap(row => {
     const state = sessions.getSessionState(row.sessionId)
     if (!state || state.projectId && state.projectId !== projectId) return []
@@ -27,6 +28,7 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
         id: job.id, name: job.name ?? job.task ?? job.id, source: job.source ?? 'cron',
         session: 'fresh', schedule: job.schedule, task: job.task, agentType: job.agentType,
         enabled: job.enabled !== false,
+        ...(job.source === 'learning' ? { notice: learningNotice?.(job.id) } : {}),
       })
     }
     return [...jobs.values()].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
@@ -51,6 +53,8 @@ export function registerAutomationRoutes(app: Hono, cron: CronService, sessions:
           : status === 'completed' || status === 'failed' || status === 'cancelled' ? status
           : status === 'running' || status === 'waiting' || status === 'pending' ? 'running' : 'unknown',
         title: state.description ?? await sessions.getFirstUserMessage(state.sessionId) ?? undefined,
+        ...(automation.config?.source === 'learning' && learningOutcome?.(state.sessionId)
+          ? { learning: learningOutcome(state.sessionId) } : {}),
       }
     }))
     return c.json({ runs, total: all.length, offset })

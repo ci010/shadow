@@ -63,9 +63,9 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
         if (id === '\0sidebar-content') return `import { defineComponent, h } from 'vue';
           export default defineComponent({
             props:['sessionId', 'projectId', 'automationId'], emits:['navigate'],
-            setup(props, {expose, emit}) {
+            setup(props, {expose, emit, slots}) {
               expose({requestSession:id => emit('navigate', id)});
-              return () => h('section', {class:'fixture-content', style:'flex:1;min-height:0'}, [
+              return () => h('section', {class:'fixture-content', style:'flex:1;min-height:0'}, slots.default?.() ?? [
                 h('button', {class:'fixture-content-action'}, props.sessionId || props.automationId || 'Draft'),
               ]);
             },
@@ -79,6 +79,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
           const router = createRouter({ history:createMemoryHistory(), routes:[
             { path:'/:projectId?/:sessionId?', name:'chat', component:{render:() => null} },
             { path:'/settings/:projectId/:section', name:'project-settings', component:{render:() => null} },
+            { path:'/agents/:projectId', name:'agents', component:{render:() => null} },
           ] });
           await router.push('/');
           localStorage.setItem(botSidebarStorageKey(location.origin + '/projects/work/', 'work'), '["bot"]');

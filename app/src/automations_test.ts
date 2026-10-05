@@ -5,10 +5,11 @@ import test, { type TestContext } from 'node:test'
 import { createRenderer, defineComponent, h, nextTick, reactive, type Component, type ComponentPublicInstance } from 'vue'
 import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
-import { AUTOMATION_PAGE_SIZE, fetchAutomations, fetchAutomationRuns } from './automations.ts'
+import { AUTOMATION_PAGE_SIZE, fetchAutomations, fetchAutomationRuns, learningOutcomeLabel } from './automations.ts'
 import { createLiveRefresh } from './live-refresh.ts'
 import type { LiveObserver } from './live-client.ts'
 import { createAutomationCatalog } from './automation-catalog.ts'
+import { createAutomationRunHistory } from './automation-run-history.ts'
 
 const base = 'http://fixture/projects/a'
 const automation = (id = 'cron:weekly') => ({
@@ -22,24 +23,24 @@ const signal = () => new AbortController().signal
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const response = (value: unknown): typeof fetch => async () => Response.json(value)
 
-test('compact toolbar does not grow into the conversation area', () => {
-  const { descriptor } = parse(readFileSync(new URL('./components/AutomationDetail.vue', import.meta.url), 'utf8'))
-  assert.match(descriptor.styles.map(style => style.content).join('\n'), /\.compact\s*\{[^}]*\bflex:\s*0 0 auto\s*;/)
-})
-
-test('run title presentation is clamped without truncating persisted text', async t => {
+test('automation workspace reserves the explorer and toolbar rather than inserting a run header', () => {
   const { descriptor } = parse(readFileSync(new URL('./components/AutomationDetail.vue', import.meta.url), 'utf8'))
   const style = descriptor.styles.map(style => style.content).join('\n')
-  assert.match(style, /\.run-title\s*\{[^}]*-webkit-line-clamp:\s*2\s*;/)
-  assert.match(style, /\.run-title\s*\{[^}]*overflow:\s*hidden\s*;/)
+  assert.match(style, /\.automation-detail\s*\{[^}]*\bflex:\s*1\s*;/)
+  assert.match(style, /\.automation-toolbar\s*\{[^}]*\bflex:\s*0 0 40px\s*;/)
+  assert.doesNotMatch(descriptor.template!.content, /Back to runs|run-pagination|<select/)
+})
+
+test('run titles remain available in tree hover information without expanding rows', async t => {
   const view = mount(t)
   await settle()
   const title = 'Long persisted prompt line\n'.repeat(100)
   view.finish(0, page([{ ...run(), title }]))
   await settle()
-  const rendered = view.nodes().find(node => node.props.class === 'run-title')
-  assert.equal(rendered?.text, title)
-  assert.equal(view.state().runs[0].title, title)
+  const rendered = view.nodes().find(node => node.props['data-session-id'] === run().sessionId)
+  assert.ok(rendered)
+  assert.equal(view.state().history.runs[0].title, title)
+  assert.doesNotMatch(view.text(), /Long persisted prompt line/)
 })
 
 test('automation clients retain org scope, encode IDs and strip non-summary fields', async () => {
@@ -75,6 +76,37 @@ test('automation inventory rejects wrong modes, types, duplicate identities and 
       { id: '..' }, { name: '' }, { schedule: null }, { task: {} }, { agentType: 4 },
     ].map(change => ({ automations: [{ ...automation(), ...change }] })),
   ]) await assert.rejects(fetchAutomations(base, signal(), response(value)), /invalid automation data/)
+})
+
+test('learning outcomes remain distinct from session completion and validate receipt data', async () => {
+  for (const status of ['applied', 'no_change', 'partial', 'blocked', 'draft_only'] as const) {
+    const learning = { status, summary: 'Evidence reviewed.\nThe reason remains conditional.', artifacts: 1, events: 2, evaluated: 1 }
+    const result = await fetchAutomationRuns(base, 'learning:reflector', 0, signal(), response(page([{ ...run(), learning }])))
+    assert.equal(result.runs[0].status, 'completed')
+    assert.deepEqual(result.runs[0].learning, learning)
+    assert(learningOutcomeLabel(learning))
+  }
+  for (const learning of [null, {}, { status: 'success' }, {
+    status: 'applied', summary: 'Invalid count', artifacts: -1, events: 0, evaluated: 0,
+  }]) await assert.rejects(fetchAutomationRuns(base, 'learning:reflector', 0, signal(), response(page([{ ...run(), learning }]))), /invalid automation data/)
+  assert.equal((await fetchAutomationRuns(base, 'learning:reflector', 0, signal(), response(page()))).runs[0].learning, undefined)
+})
+
+test('learning runs show partial outcomes and mark historical completion unverified', async t => {
+  const view = mount(t)
+  await settle()
+  view.finish(0, page([{ ...run(), learning: {
+    status: 'partial', summary: 'One decision saved; remaining evidence unread.', artifacts: 1, events: 1, evaluated: 0,
+  } }, run('legacy')]), { ...automation(), source: 'learning' })
+  await settle()
+  assert.match(view.text(), /Partial/)
+  assert.match(view.text(), /Unverified/)
+  view.props.selectedSessionId = run().sessionId
+  await nextTick()
+  assert.match(view.text(), /One decision saved; remaining evidence unread/)
+  assert.match(view.text(), /Execution: Completed/)
+  assert.match(view.text(), /1 recorded artifact/)
+  assert.doesNotMatch(view.text(), /1 verified artifact/)
 })
 
 test('runs reject malformed dates, counts, scope offsets, duplicate sessions and unknown wire enums', async () => {
@@ -128,11 +160,15 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     requests.push({ url: new URL(String(input)), signal: init.signal!, finish: (value, status = 200) => resolve(Response.json(value, { status })) })
   }))
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document')
-  const visibility = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+  const visibility = Object.assign(new EventTarget(), { visibilityState: 'visible', getElementById: () => null })
   Object.defineProperty(globalThis, 'document', { configurable: true, value: visibility })
+  const resizeDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver')
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: class { observe() {} disconnect() {} } })
   t.after(() => {
     if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor)
     else Reflect.deleteProperty(globalThis, 'document')
+    if (resizeDescriptor) Object.defineProperty(globalThis, 'ResizeObserver', resizeDescriptor)
+    else Reflect.deleteProperty(globalThis, 'ResizeObserver')
   })
   const intervals = new Map<number, () => void>()
   let timerId = 0
@@ -151,7 +187,7 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     },
   }) } as Parameters<typeof createAutomationCatalog>[0], { delayMs: 0 })
   t.after(() => catalog.dispose())
-  const props = reactive({ apiBase: base, automationId: automation().id, active, compact: false, selectedSessionId: '' })
+  const props = reactive({ apiBase: base, automationId: automation().id, active, selectedSessionId: '', enabled: true })
   const opens: string[] = []
   let overviews = 0
   function component(filename: string) {
@@ -168,9 +204,19 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     const module = { exports: {} as { default: Component & { render?: Function } } }
     const require = createRequire(url)
     new Function('require', 'module', 'exports', outputText)((id: string) => {
+      if (id.endsWith('/HoverInfo.vue')) return { default: defineComponent({
+        props: ['text', 'label', 'interactive', 'disabled'],
+        setup: (_props, { slots }) => () => slots.default?.({ triggerProps: {}, close: () => {} }),
+      }) }
+      if (id.endsWith('/TreeRow.vue')) return { default: component('TreeRow.vue') }
       if (id.endsWith('.vue')) return { default: defineComponent({ setup: () => () => null }) }
       if (id === '../live-refresh.ts') return {
         createLiveRefresh: (options: Parameters<typeof createLiveRefresh>[0]) => createLiveRefresh({ ...options, delayMs: 0 }),
+      }
+      if (id === '../automation-run-history.ts') return {
+        ...require(id),
+        createAutomationRunHistory: (base: string, id: string, state: Parameters<typeof createAutomationRunHistory>[2]) =>
+          createAutomationRunHistory(base, id, state, { delayMs: 0 }),
       }
       return require(id)
     }, module, module.exports)
@@ -216,7 +262,15 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }
   t.after(unmount)
-  const state = () => { assert.ok(instance); return Reflect.get(instance.$, 'setupState') }
+  const state = () => {
+    assert.ok(instance)
+    const setup = Reflect.get(instance.$, 'setupState')
+    return new Proxy(setup, { get(target, key) {
+      if (key === 'runs') return target.history.runs
+      if (key === 'error') return target.catalogError || target.history.error
+      return Reflect.get(target, key)
+    } })
+  }
   const finish = (from = 0, runs = page(), item = automation()) => {
     requests[from].finish({ automations: [item] })
     requests[from + 1].finish(runs)
@@ -422,43 +476,35 @@ test('project and job changes clear stale data, abort reads, and ignore late res
   assert.equal(view.state().automation.source, 'learning')
 })
 
-test('pagination and compact transitions retain explicit historical selection without retargeting', async t => {
+test('infinite loading appends runs and keeps out-of-page historical tabs selected', async t => {
   const view = mount(t)
   await settle()
   const first = Array.from({ length: 30 }, (_, index) => run(String(index)))
   view.finish(0, page(first, 31))
   await settle()
-  view.state().nextPage()
+  const original = view.nodes().find(node => node.props['data-session-id'] === first[0].sessionId)
+  view.state().loadMore()
   await nextTick()
   await settle()
   assert.equal(view.requests[2].url.searchParams.get('offset'), '30')
-  assert.equal(view.state().runs.length, 0)
+  assert.equal(view.state().runs.length, 30)
+  assert.equal(view.nodes().find(node => node.props['data-session-id'] === first[0].sessionId), original)
   view.requests[2].finish(page([run('last')], 31, 30))
   await settle()
-  view.props.compact = true
   view.props.selectedSessionId = 'web:historical-outside-page'
   await nextTick()
-  assert.equal(view.state().selectedInPage, false)
-  assert.ok(view.nodes().some(node => node.type === 'select' && node.props['aria-label'] === 'Run'))
-  assert.ok(view.nodes().some(node => node.type === 'option' && node.text === 'Current run' && node.props.value === view.props.selectedSessionId))
-  assert.equal(view.state().offset, 30)
+  assert.equal(view.state().history.nextOffset, 31)
+  assert.equal(view.state().runs.length, 31)
+  assert.ok(view.nodes().some(node => node.props.role === 'tab' && node.props['aria-selected'] === true
+    && view.nodes(node).some(child => child.text === 'Run conversation')))
   assert.equal(view.requests.length, 3, 'Pagination does not reload the catalog')
   assert.deepEqual(view.opens, [])
-  view.state().selectRun({ target: { value: 'web:run-last' } })
+  view.state().openRun('web:run-last')
   assert.deepEqual(view.opens, ['web:run-last'])
-  view.state().selectRun({ target: { value: 'foreign-session' } })
-  assert.equal(view.opens.length, 1)
-  const overview = view.nodes().find(node => node.type === 'button' && view.nodes(node).some(child => child.text.includes('Back to runs')))
-  assert.ok(overview)
-  ;(overview.props.onClick as () => void)()
-  assert.equal(view.overviews(), 1)
-  view.state().previousPage()
-  await nextTick()
-  await settle()
-  view.requests[3].finish(page(first, 31))
-  await settle()
+  assert.equal(view.nodes().some(node => node.props.role === 'tab' && view.nodes(node).some(child => child.text.includes('Configuration'))), false)
+  assert.equal(view.overviews(), 0)
   assert.equal(view.props.selectedSessionId, 'web:historical-outside-page')
-  assert.equal(view.state().offset, 0)
+  assert.equal(view.state().openTabs.length, 1)
 })
 
 test('inactive, document-hidden and unmounted views release all scoped resources', async t => {
@@ -522,39 +568,99 @@ test('upgrade, invalid and missing automation errors are retryable and never bec
   assert.match(view.state().error, /invalid automation data/)
 })
 
-test('configuration controls explain fresh learning checks without conflating dispatch and run outcomes', async t => {
+test('collapsed automation details explain learning checks without becoming a run tab', async t => {
   const view = mount(t)
   await settle()
   view.finish(0, page([{ ...run(), status: 'failed', title: 'Saved conversation title' }]), {
     ...automation(), source: 'learning', enabled: false,
   })
   await settle()
-  assert.match(view.text(), /Dispatch disabled/)
+  assert.match(view.text(), /Dispatch is disabled/)
   assert.match(view.text(), /Failed/)
-  assert.match(view.text(), /Saved conversation title/)
-  assert.doesNotMatch(view.text(), /Review recent work/)
+  assert.match(view.text(), /Review recent work/)
   const runButton = view.nodes().find(node => node.type === 'button' && String(node.props.class).split(' ').includes('automation-run'))
   assert.ok(runButton)
   assert.equal(runButton.props['data-session-id'], run().sessionId)
-  ;(runButton.props.onClick as () => void)()
+  ;(runButton.props.onClick as (event: unknown) => void)({ stopPropagation() {} })
   assert.deepEqual(view.opens, [run().sessionId])
-  const configuration = view.nodes().find(node => node.type === 'button' && node.text === 'Configuration')
-  assert.ok(configuration)
-  ;(configuration.props.onClick as () => void)()
-  await nextTick()
-  assert.equal(configuration.props['aria-pressed'], true)
+  const details = view.nodes().find(node => node.type === 'details' && node.props.class === 'automation-info')
+  assert.ok(details)
+  assert.ok(!details.props.open)
+  assert.equal(view.nodes().some(node => node.props.role === 'tab' && view.nodes(node).some(child => child.text.includes('Configuration'))), false)
   assert.match(view.text(), /Check frequency/)
   assert.match(view.text(), /activity-gated/)
   assert.match(view.text(), /each dispatch starts a separate conversation/)
   assert.match(view.text(), /Review recent work/)
-  assert.match(view.text(), /read-only/)
-  view.props.compact = true
+  assert.match(view.text(), /Read-only/)
   view.props.selectedSessionId = run().sessionId
   await nextTick()
-  view.props.compact = false
   view.props.selectedSessionId = ''
   await nextTick()
-  assert.equal(view.state().section, 'configuration', 'Returning from a run retains the selected configuration section')
+  assert.equal(view.state().openTabs.length, 1, 'Viewing automation information does not close the run tab')
+  assert.match(view.text(), /Select a run to view its conversation/)
   assert.match(view.text(), /Review recent work/)
-  assert.equal(view.requests.length, 2, 'Compact/overview transitions do not reload the catalog or run page')
+  assert.equal(view.requests.length, 2, 'Tab transitions do not reload the catalog or run page')
+})
+
+test('run keyboard navigation wraps only through open runs and closing the last returns to the empty view', async t => {
+  const view = mount(t)
+  await settle()
+  view.finish()
+  await settle()
+  view.props.selectedSessionId = 'web:first'
+  await nextTick()
+  view.props.selectedSessionId = 'web:second'
+  await nextTick()
+  view.state().tabKey({ key: 'ArrowRight', preventDefault() {} }, 'web:second')
+  view.state().tabKey({ key: 'Home', preventDefault() {} }, 'web:second')
+  view.state().tabKey({ key: 'End', preventDefault() {} }, 'web:first')
+  assert.deepEqual(view.opens, ['web:first', 'web:first', 'web:second'])
+  assert.equal(view.overviews(), 0)
+  view.state().closeTab('web:first')
+  view.state().closeTab('web:second')
+  await nextTick()
+  assert.equal(view.overviews(), 1)
+  assert.equal(view.state().openTabs.length, 0)
+})
+
+test('runs load lazily and preserved rows survive refresh failures and collapsed navigation', async t => {
+  const view = mount(t)
+  await settle()
+  assert.ok(view.nodes().some(node => node.props['aria-label'] === 'Loading runs'))
+  view.finish()
+  await settle()
+  const original = view.nodes().find(node => node.props['data-session-id'] === run().sessionId)
+  view.invalidate()
+  await settle()
+  assert.equal(view.nodes().find(node => node.props['data-session-id'] === run().sessionId), original)
+  assert.equal(view.nodes().some(node => node.props['aria-label'] === 'Loading runs'), false)
+  view.requests[2].finish({ automations: [automation()] })
+  view.requests[3].finish({}, 503)
+  await settle()
+  assert.equal(view.nodes().find(node => node.props['data-session-id'] === run().sessionId), original)
+  assert.match(view.text(), /Retry runs/)
+  view.state().expanded = false
+  await nextTick()
+  view.invalidate()
+  await settle()
+  assert.equal(view.requests.length, 5, 'Collapsed run explorer refreshes only the catalog')
+  view.requests[4].finish({ automations: [automation()] })
+  await settle()
+  view.state().expanded = true
+  await nextTick()
+  await settle()
+  assert.equal(view.requests.length, 6)
+  assert.equal(view.nodes().find(node => node.props['data-session-id'] === run().sessionId), original)
+  view.requests[5].finish(page())
+  await settle()
+  view.props.selectedSessionId = run().sessionId
+  await nextTick()
+  view.props.selectedSessionId = 'web:other-historical'
+  await nextTick()
+  assert.equal(view.state().openTabs.length, 2)
+  view.state().closeTab(run().sessionId)
+  await nextTick()
+  assert.deepEqual(view.opens, [], 'Closing an inactive tab must not change the selected conversation')
+  view.state().closeTab('web:other-historical')
+  assert.equal(view.overviews(), 1)
 })

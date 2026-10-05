@@ -12,12 +12,13 @@ import { loadSingleSkill } from '../skills/parse.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { EventService } from '../events/service.ts'
 import type { EventSubscription } from '../events/types.ts'
-import type { VirtualFsHandler, VirtualFsListHandler } from './virtual-fs.ts'
+import type { VirtualFsHandler, VirtualFsListHandler, VirtualFsWriteHandler } from './virtual-fs.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, readdir, readFile, stat } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { isNotFoundError } from '../utils/runtime.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
+import { WriteTool } from '../tools/filesystem.ts'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -461,13 +462,15 @@ async function walkResourceFiles(root: string, signal: AbortSignal, rel = ''): P
  * - a file subpath → the file's contents.
  * - `list` → every memory file with its content, powering glob/grep search.
  *
- * Reads only; the agent still writes memory through the real `memory/` path.
+ * Wiki writes share the filesystem writer; source records and internal state stay read-only here.
  */
-export function createMemoryHandler(workspace: string): {
+export function createMemoryHandler(workspace: string, projectId?: string): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
+  write: VirtualFsWriteHandler
 } {
   const memoryRoot = join(workspace, 'memory')
+  const writer = new WriteTool(workspace, undefined, true)
 
   const read: VirtualFsHandler = async (subpath, context) => {
     if (subpath.includes('..')) return 'Invalid path.'
@@ -505,7 +508,44 @@ export function createMemoryHandler(workspace: string): {
     return entries
   }
 
-  return { read, list }
+  const write: VirtualFsWriteHandler = async (subpath, request, context) => {
+    context.signal.throwIfAborted()
+    if (projectId !== undefined && context.projectId !== projectId) throw new Error('Memory belongs to a different Project.')
+    if (context.remoteWorkdir) throw new Error('Memory writes require a local workdir.')
+    if (context.tools.executionMode === 'call') throw new Error('Memory writes are unavailable in call mode.')
+    const parts = subpath.split('/')
+    if (parts.some(part => !part || part.startsWith('.') || /[<>:"\\|?*\u0000-\u001f\u007f]/.test(part)
+      || /[. ]$/.test(part) || /~\d/.test(part)
+      || /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i.test(part))) {
+      throw new Error('Invalid memory path; use a relative wiki filename under v:memory/.')
+    }
+    if (['sessions', 'events'].includes(parts[0].toLowerCase()) || !/\.md$/i.test(parts.at(-1)!)) {
+      throw new Error('Only wiki Markdown files are writable through v:memory/. Session records and internal state are read-only; use log to append events.')
+    }
+    // Do not follow an alias into another Project, source records, or internal state.
+    let target = resolve(workspace)
+    for (const part of ['memory', ...parts]) {
+      target = join(target, part)
+      try {
+        const info = await lstat(target)
+        if (info.isSymbolicLink() || info.isFile() && info.nlink > 1) throw new Error('Memory writes cannot follow symlinks, junctions or hard links.')
+      } catch (error) {
+        if (!isNotFoundError(error)) throw error
+      }
+    }
+    if (request.match !== undefined) {
+      const text = await readFile(target, { encoding: 'utf8', signal: context.signal })
+      if (!request.match || !text.includes(request.match)) throw new Error('Exact match not found in memory. Reread the file before editing.')
+      const index = text.indexOf(request.match)
+      if (!request.replaceAll && text.indexOf(request.match, index + request.match.length) !== -1) {
+        throw new Error('Memory match is ambiguous; include more context or use flag "g".')
+      }
+    }
+    return writer.execute({ path: target, content: request.content, match: request.match,
+      flag: request.replaceAll ? 'g' : '' }, context)
+  }
+
+  return { read, list, write }
 }
 
 // ── Event subscriptions ──────────────────────────────────────────────────

@@ -281,7 +281,7 @@ export class MemoryStore {
    * (main-agent-only, lazy lookup, grouped by source).
    */
   async readKeywords(maxPerGroup = 40): Promise<string> {
-    const dirs = ['topics', 'identities', 'concepts', 'tools']
+    const dirs = ['decisions', 'topics', 'identities', 'concepts', 'tools']
     const groups: string[] = []
     for (const d of dirs) {
       let names: string[]

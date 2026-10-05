@@ -22,10 +22,48 @@ opens a separate, resizable right-hand panel; switching document tabs keeps its
 conversation and unsent draft. On narrow screens, the panel uses the available
 space until you close it to return to the selected tab. Folder and conversation
 rows open their own views. **Automations** lists scheduled tasks
-that start fresh conversations, with their run histories.
+that start fresh conversations, with their run histories. Selecting an automation
+opens a runs explorer beside a stable tabbed content area. Run summaries load
+only while the explorer is expanded, and scrolling loads additional pages.
+Each selected run opens a conversation tab, and the conversation's file explorer
+stays closed until you open it manually. Schedule, agent, dispatch state and prompt
+are available under the collapsed **Automation details** entry in the runs explorer,
+not a permanent Configuration tab. With no run selected, choose one from the list.
+Run and document tabs share one toolbar; selecting the run tab returns to its
+conversation without opening the file explorer. Refreshing runs preserves the
+loaded rows, including when a refresh fails.
 When the app becomes visible again, this list keeps its last loaded state while
 refreshing. An already-empty section stays hidden unless loading fails; the
 loading placeholder appears only before the first successful load in a Project.
+
+Learning runs show **Applied**, **No change**, **Partial**, **Blocked**, or
+**Draft only** independently of their execution status. Opening a run shows the
+reason and recorded artifact/event/evaluation counts (artifacts are verified for
+Applied results). **Unverified** means an
+older completed run has no learning receipt, not that its effects were checked.
+Retry/paused notices explain when configuration needs attention. Use
+`/learn reflector`, `/learn encapsulator`, or `/learn soul-reflector` to explicitly
+retry a paused batch; existing effects are retained rather than blindly replayed.
+See [learning outcomes and recovery](tools-and-automations.md#learning-outcomes-and-recovery).
+
+There is no standalone **File changes** tab. Filesystem write history remains
+recorded on the backend for future context-specific presentation, including
+learning sessions that update memory. Records persist across restarts and session segments; a
+fork's inherited parent conversation does not attribute the parent's writes to
+the child. Direct writes and writes invoked through script tools are recorded.
+Shell commands and virtual configuration/authoring transactions are not
+filesystem write records.
+If a file is written but saving its history fails, the turn stops with an
+explicit error instead of automatically retrying and applying the write twice.
+
+Older writes do not have complete before/after snapshots: an edit can retain its
+requested replacement snippet, while an overwrite or append can retain only the
+written content. These records identify their scope and never read the
+current file to reconstruct history. Unreadable, oversized, or computationally
+expensive diffs report their limit instead of inventing a diff. Stored previews
+are bounded to 65,536 characters, with a 2,097,152-character input and 100 ms computation
+limit; the history API returns pages of 30 writes. Todo/tool details, memory and
+event-log presentation have not been redesigned as part of removing this tab.
 
 Use the project's trash icon or **Project settings → General → Delete project**
 to delete a non-Default project. Confirm by typing its name. Deletion removes
@@ -50,6 +88,15 @@ conversation, then Project, then App, then built-in defaults. Unset a preference
 to inherit rather than copying the currently resolved value. Provider
 connections belong to **App settings**, while Project defaults belong to
 **Project settings → Models**.
+
+Copilot `model_not_supported` means the requested model was rejected for that
+request, not necessarily that the configuration file has a typo. The diagnostic
+names the actual `model@copilot` and endpoint. Refresh the model list, check the
+exact ID and account access, and inspect any conversation or agent override as
+well as the Project default. Endpoint and reasoning-capability errors are also
+reported explicitly. These failures do not silently switch models or replay the
+generation request; learning pauses until configuration is corrected or retried
+explicitly. A historical failure does not prove the current selection is invalid.
 
 The **Agents** tab previews a role's system prompt and available tools.
 **Simulate channel** changes the preview's channel, not an existing conversation.
@@ -132,6 +179,20 @@ there is not a historical snapshot of every model request; for an export or
 development capture, see [session diagnosis](diagnostics.md). Live updates
 follow the [shared live transport](realtime-protocol.md); saved history remains
 the source of truth after reconnection.
+
+## Writing memory
+
+Local sessions with the `write` tool, including Self reflection runs, can create
+or overwrite Project wiki Markdown files at `v:memory/<group>/<name>.md`.
+Use `match` and `content` for an exact edit after reading the file; ambiguous
+matches require more context or `flag: "g"`. Virtual writes do not support append.
+The destination is Project memory, independent of the session's working folder.
+This does not grant the `write` tool to sessions that lack it.
+
+Through this virtual entry point, `memory/sessions/`, `memory/events/`, hidden
+state and non-Markdown files remain protected; use `log` to append events.
+Remote-workdir and call-mode sessions retain their existing virtual-write
+restrictions. These are entry-point checks, not an OS sandbox for host commands.
 
 ## Requests for input
 

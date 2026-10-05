@@ -121,7 +121,8 @@ export function providerPlugin(
             : undefined,
         })
       } catch (err) {
-        if (err instanceof ProviderHttpError && err.code === 'unsupported_reasoning_effort') {
+        if (err instanceof ProviderHttpError && err.status === 400
+          && (err.code === 'unsupported_reasoning_effort' || err.code === 'model_not_supported' || err.code === 'unsupported_api_for_model')) {
           return c.json({ error: err.code, detail: err.message }, 400)
         }
         return c.json({

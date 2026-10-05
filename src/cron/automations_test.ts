@@ -14,7 +14,8 @@ import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { LearningService } from '../agent/learning/service.ts'
 import { createProjectScope } from '../projects/scope.ts'
 import { createLearnCommand } from '../slash-commands/handlers/learn.ts'
-import { learningTask, triggerReflectorFlush } from '../agent/learning/pipelines.ts'
+import { LearningRunError, LearningRuntime } from '../agent/learning/pipelines.ts'
+import { LearningTools } from '../agent/learning/tools.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { ChatMessage, LLMProvider, LLMResponse } from '../providers/provider.ts'
 import { SessionManager, type SessionManagerDeps } from '../sessions/session-manager.ts'
@@ -38,14 +39,26 @@ async function until(check: () => boolean) {
   const deadline = Date.now() + 5000
   while (!check()) { assert(Date.now() < deadline, 'fixture timed out'); await wait() }
 }
-function fixture(workspace: string, store: SessionStore, settings: { remoteOnline?: boolean } = {}) {
+function fixture(workspace: string, store: SessionStore, settings: {
+  remoteOnline?: boolean; learningReceipt?: boolean; failedLearningWrite?: boolean; providerError?: string
+} = {}) {
   const bus = new Bus()
+  const tools = new Tools(workspace)
   const requests: Array<{ sessionId: string; messages: ChatMessage[]; signal: AbortSignal }> = []
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => ['fixture'],
     async chat(messages, _tools, options) {
-      const request = { sessionId: JSON.parse(String(messages[0].content)).sessionId, messages: structuredClone(messages), signal: options!.signal! }
+      const request = { sessionId: JSON.parse(String(messages[0].content).split('\n')[0]).sessionId, messages: structuredClone(messages), signal: options!.signal! }
       requests.push(request)
+      if (settings.providerError) throw new Error(settings.providerError)
+      if (settings.failedLearningWrite && request.sessionId.startsWith('cron:') && !messages.some(m => m.role === 'tool' && m.name === 'write')) {
+        return { content: '', toolCalls: [{ id: 'failed-write', name: 'write',
+          arguments: { path: 'v:memory/topics/fixture.md', content: 'not persisted' } }] }
+      }
+      if (settings.learningReceipt && request.sessionId.startsWith('cron:') && !messages.some(m => m.role === 'tool' && m.name === 'learning_result')) {
+        return { content: '', toolCalls: [{ id: 'receipt', name: 'learning_result',
+          arguments: { status: 'no_change', summary: 'Reviewed the fixture activity; no reusable signal.' } }] }
+      }
       if (JSON.stringify(messages.at(-1)?.content).includes('hold')) {
         return await new Promise<LLMResponse>((_resolve, reject) => {
           request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true })
@@ -56,13 +69,14 @@ function fixture(workspace: string, store: SessionStore, settings: { remoteOnlin
     },
   }
   const manager = new SessionManager({
-    workspace, store, bus, provider, tools: new Tools(workspace),
+    workspace, store, bus, provider, tools,
     projectId: 'org-a', ownsFolder: (id: string) => id === 'folder-a',
     ownsWorkdir: (ref: { capabilityId: string }) => ref.capabilityId !== 'foreign',
     workdirCapabilityLookup: () => ({ node: settings.remoteOnline === false ? 'offline' : 'online', capability: { kind: 'workdir', online: true } }),
     remoteExecutor: { execute: () => { throw new Error('Unexpected remote tool execution') } },
     agentTypes: { resolve: (name: string) => ['general', 'reader', 'reflector', 'encapsulator', 'soul-reflector'].includes(name)
       ? { name, description: '', prompt: '', source: 'builtin', defaultMode: 'session',
+        ...(settings.learningReceipt && name !== 'general' ? { allowedTools: ['learning_result', ...(settings.failedLearningWrite ? ['write'] : [])] } : {}),
         ...(name === 'reader' ? { allowedTools: ['read'] } : {}) } : undefined },
     handoffManager: { shouldHandoff: () => false },
     context: { buildSystemPrompt: async (ctx: unknown) => JSON.stringify(ctx) },
@@ -81,7 +95,7 @@ function fixture(workspace: string, store: SessionStore, settings: { remoteOnlin
   const app = new Hono()
   registerAutomationRoutes(app, cron, manager, 'org-a')
   sessionsApiPlugin(manager)(app)
-  return { manager, cron, dispatcher, app, requests, events, invalidations, bus }
+  return { manager, cron, dispatcher, app, requests, events, invalidations, bus, tools }
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
@@ -136,13 +150,13 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal(state.automation!.config!.task, 'task-fresh')
           const request = f.requests.find(r => r.sessionId === state.sessionId)!
           assert.equal(JSON.stringify(request.messages).includes('PARENT TRANSCRIPT SENTINEL'), false)
-          assert.deepEqual(JSON.parse(String(request.messages[0].content)).workdir, workdir)
+          assert.deepEqual(JSON.parse(String(request.messages[0].content).split('\n')[0]).workdir, workdir)
           assert.deepEqual((await store.getState(state.sessionId))!.automation, state.automation)
         }
         const peerRequests = f.requests.filter(r => r.sessionId === 'web:peer')
         assert(peerRequests[1].messages.some(m => m.role === 'assistant'))
         assert.equal(JSON.stringify(peerRequests).includes('PARENT TRANSCRIPT SENTINEL'), false)
-        const peerPrompt = JSON.parse(String(peerRequests[0].messages[0].content))
+        const peerPrompt = JSON.parse(String(peerRequests[0].messages[0].content).split('\n')[0])
         assert.equal(peerPrompt.agent.name, 'reader')
         assert.deepEqual(peerPrompt.agent.allowedTools, ['read'])
         assert.equal(peerPrompt.workdir, undefined)
@@ -439,25 +453,22 @@ test('invalid modes and incompatible arguments are rejected before persistence',
   })
 })
 
-test('learning registers once on the common scheduler, gates activity, links manual runs and preserves incremental watermark', async () => {
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) test(`${Store.name}: learning persists verified outcomes, skips empty downstream work and resumes bounded progress`, async () => {
     await withTempWorkspace(async workspace => {
-      const store = new JsonlSessionStore(join(workspace, 'sessions'))
+      const store = new Store(join(workspace, 'sessions'))
       await store.init()
-      const f = fixture(workspace, store)
+      const f = fixture(workspace, store, { learningReceipt: true })
+      const runtime = new LearningRuntime(f.manager, 'org-a')
+      f.tools.register(new LearningTools(runtime).result)
+      const outcomeApp = new Hono()
+      registerAutomationRoutes(outcomeApp, f.cron, f.manager, 'org-a', id => runtime.ledger.outcome(id))
       const scope = createProjectScope('org-a')
       const config = { reflectIntervalMs: 3600000, encapsulateIntervalMs: 3600000, soulIntervalMs: 3600000 }
       const learning = new LearningService(f.bus, scope, {
-        reflector: async (signal, job, accepted) => {
-          let id: string | undefined
-          const ran = await triggerReflectorFlush(f.manager, signal, async task => {
-            id = await f.dispatcher.dispatch(job, signal, task, accepted)
-            return id
-          })
-          return ran ? id : false
-        },
-        encapsulator: (signal, job, accepted) => f.dispatcher.dispatch(job, signal, learningTask('encapsulator'), accepted),
-        soulReflector: (signal, job, accepted) => f.dispatcher.dispatch(job, signal, learningTask('soulReflector'), accepted),
-      }, config, f.cron, id => f.manager.getSessionState(id)?.automation?.config?.source === 'learning')
+        reflector: (signal, job, accepted) => runtime.run('reflector', signal, job, accepted, f.dispatcher),
+        encapsulator: (signal, job, accepted) => runtime.run('encapsulator', signal, job, accepted, f.dispatcher),
+        soulReflector: (signal, job, accepted) => runtime.run('soulReflector', signal, job, accepted, f.dispatcher),
+      }, config, f.cron, id => f.manager.getSessionState(id)?.automation?.config?.source === 'learning', runtime.ledger)
       try {
         await f.manager.start()
         await f.cron.start()
@@ -467,45 +478,82 @@ test('learning registers once on the common scheduler, gates activity, links man
         assert.equal(f.requests.length, 0)
         await f.manager.deliver('web:origin', input('User activity'))
         await until(() => f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
-        const initialCount = (await f.manager.getHistory('web:origin', { offset: 0, pageSize: 0 })).total
+        const initialCount = (await runtime.sources(new AbortController().signal))[0].end
         await f.cron.runNow('learning:reflector')
-        assert.equal(f.requests.length, 2)
-        assert.equal(learning.status().pipelines.reflector.pending, false)
+        assert.equal(f.requests.length, 3)
+        assert.equal(learning.status().pipelines.reflector.pending, true)
         assert.equal(learning.status().pipelines.encapsulator.pending, true)
         assert.equal(learning.status().pipelines.soulReflector.pending, true)
         await f.cron.runNow('learning:encapsulator')
         await f.cron.runNow('learning:soul-reflector')
-        assert.equal(f.requests.length, 4)
+        assert.equal(f.requests.length, 3)
         const learningRuns = f.manager.listSessions().map(row => f.manager.getSessionState(row.sessionId)!)
           .filter(state => state.automation?.config?.source === 'learning')
-        assert.equal(learningRuns.length, 3)
+        assert.equal(learningRuns.length, 1)
         for (const state of learningRuns) {
           assert.match(state.automation!.runId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
           assert.equal(state.sessionId, `cron:${state.automation!.runId}`)
           const listing = await (await f.app.request(`/api/sessions/${encodeURIComponent(state.sessionId)}/files`)).json()
           assert.deepEqual(listing.workdir, { kind: 'local', displayPath: workspace, scope: 'home' })
         }
-        assert.equal(learning.status().pipelines.reflector.pending, false)
+        const result = await (await outcomeApp.request('/api/automations/learning:reflector/runs')).json()
+        assert.equal(result.runs[0].status, 'completed')
+        assert.equal(result.runs[0].learning.status, 'no_change')
+        assert.equal(new LearningRuntime(f.manager, 'org-a').ledger.outcome(learningRuns[0].sessionId)?.status, 'no_change')
         const command = createLearnCommand(f.manager, pipeline => learning.trigger(pipeline))
         const ctx = {} as Parameters<typeof command.execute>[0]
         assert.match(await command.execute(ctx, 'reflector'), /No new activity/)
-        assert.equal(f.requests.length, 4)
+        assert.equal(f.requests.length, 3)
         await f.manager.deliver('web:origin', input('More user activity'))
-        await until(() => f.requests.length === 5 && f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
+        await until(() => f.requests.length === 4 && f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
         assert.match(await command.execute(ctx, 'reflector'), /Session: cron:/)
         await until(() => !learning.status().pipelines.reflector.dispatching)
-        assert.match(JSON.stringify(f.requests.at(-1)!.messages), new RegExp(`starting at index ${initialCount}`))
+        assert.match(JSON.stringify(f.requests.at(-1)!.messages), new RegExp(`index=${initialCount}`))
         learning.update({ ...config, enabled: false })
         assert.equal(f.cron.listJobs().every(job => job.enabled === false), true)
-        assert.match(await command.execute(ctx, 'encapsulator'), /Session: cron:/)
+        assert.match(await command.execute(ctx, 'encapsulator'), /No new activity/)
         await until(() => !learning.status().pipelines.encapsulator.dispatching)
         assert.equal(f.cron.listJobs().length, 3)
         await learning.stop()
         assert.equal(f.cron.listJobs().length, 0)
-      } finally { await learning.stop(); await f.cron.stop(); await f.manager.stop(); scope.close() }
+      } finally { await learning.stop(); await f.cron.stop(); await f.manager.stop(); (store as SessionStore).close?.(); scope.close() }
   })
+})
 
-  test('manual learning returns a live run link on admission, joins an existing run, and remains abortable', async () => {
+for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: completed runs with failed writes remain blocked and original provider errors pause retries`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const settings = { learningReceipt: true, failedLearningWrite: true, providerError: '' }
+      const f = fixture(workspace, store, settings)
+      const runtime = new LearningRuntime(f.manager, 'org-a')
+      f.tools.register(new LearningTools(runtime).result)
+      f.tools.register({ name: 'write', description: 'Fixture write failure', parameters: { type: 'object', properties: {} },
+        async execute() { throw new Error('Synthetic failed memory write') } })
+      try {
+        await f.manager.start()
+        await f.manager.deliver('web:origin', input('Review an explicit user goal'))
+        await until(() => f.manager.getSessionState('web:origin')?.executionStatus === 'completed')
+        await assert.rejects(runtime.run('reflector', new AbortController().signal), /Unresolved learning tool failure/)
+        const batch = runtime.ledger.pending('reflector')!
+        const id = batch.attempts.at(-1)!
+        assert.equal(f.manager.getSessionState(id)?.executionStatus, 'completed')
+        assert.equal(runtime.ledger.outcome(id)?.status, 'blocked')
+        assert.equal(runtime.ledger.cursor(batch.sources[0]), 0)
+        assert.equal(runtime.ledger.eventsFor('encapsulator').length, 0)
+        settings.providerError = 'Copilot 400 model_not_supported'
+        await assert.rejects(runtime.run('reflector', new AbortController().signal), error =>
+          error instanceof LearningRunError && !error.retryable && error.message.includes('model_not_supported'))
+        const failed = runtime.ledger.pending('reflector')!.attempts.at(-1)!
+        assert.match((await f.manager.getExecutionResult(failed))?.error ?? '', /model_not_supported/)
+        assert.match(new LearningRuntime(f.manager, 'org-a').ledger.outcome(failed)?.summary ?? '', /model_not_supported/)
+      } finally { await f.manager.stop(); store.close?.() }
+    })
+  })
+}
+
+test('manual learning returns a live run link on admission, joins an existing run, and remains abortable', async () => {
     await withTempWorkspace(async workspace => {
       const store = new JsonlSessionStore(join(workspace, 'sessions'))
       await store.init()
@@ -533,6 +581,5 @@ test('learning registers once on the common scheduler, gates activity, links man
         assert.equal(f.requests[0].signal.aborted, true)
         assert.equal(f.manager.getSessionState(f.requests[0].sessionId)!.executionStatus, 'cancelled')
       } finally { await learning.stop(); await f.cron.stop(); await f.manager.stop(); scope.close() }
-    })
   })
 })

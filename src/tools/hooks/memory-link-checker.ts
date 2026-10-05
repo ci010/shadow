@@ -21,6 +21,7 @@ import {
   normalize,
   relative,
   resolve,
+  sep,
 } from 'node:path'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import type { ToolExecutionHook } from '../tool.ts'
@@ -118,7 +119,7 @@ async function fileExists(path: string): Promise<boolean> {
 /** Normalise a directory path and ensure it ends with a separator. */
 function normalizeDir(dir: string): string {
   const n = normalize(dir)
-  return n.endsWith('\\') || n.endsWith('/') ? n : n + '\\'
+  return n.endsWith('\\') || n.endsWith('/') ? n : n + sep
 }
 
 /** Whether a resolved absolute path is a `.md` file inside `<workspace>/memory/`. */

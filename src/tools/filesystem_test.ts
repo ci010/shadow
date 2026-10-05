@@ -11,6 +11,7 @@ import { formatWriteResult, MAX_WRITE_RESULT_CHARS } from './write-result.ts'
 import { CapabilityFilesystem } from '../execution/capability-filesystem.ts'
 import type { Executor } from '../execution/executor.ts'
 import { MAX_LINE_DIFF_CHARS } from './line-changes.ts'
+import type { RecordedFileChange } from '../sessions/file-change-contract.ts'
 
 async function fixture(t: TestContext) {
   const scratch = resolve('.tmp')
@@ -171,6 +172,9 @@ test('long lines retain edit boundary text and many replacements have a hard out
 
 test('remote append previews and disk writes use only the capability workdir', async t => {
   const { root, context, tool } = await fixture(t)
+  const changes: RecordedFileChange[] = []
+  context.toolCallId = 'remote-write'
+  context.recordFileChange = async change => { changes.push(change) }
   const child = join(root, 'child')
   await mkdir(child)
   await writeFile(join(root, 'notes.txt'), 'main sentinel')
@@ -200,6 +204,23 @@ test('remote append previews and disk writes use only the capability workdir', a
   assert.equal(overwritten.split('\n')[2], 'Line changes: +2 -1.')
   assert.equal(await readFile(join(child, 'notes.txt'), 'utf8'), 'different\ntext\n')
   assert.equal(await readFile(join(root, 'notes.txt'), 'utf8'), 'main sentinel')
+  assert.equal(changes.length, 2)
+  assert.equal(changes[0].path, 'notes.txt', 'Remote paths stay opaque instead of resolving against Main')
+  assert.ok(changes[0].hunks[0].lines.includes('-remote seam'))
+  assert.ok(changes[0].hunks[0].lines.includes('+remote seam+next'))
+})
+
+test('binary append history reports unavailable prior text without inventing decoded file contents', async t => {
+  const { root, context, tool } = await fixture(t)
+  const changes: RecordedFileChange[] = []
+  context.toolCallId = 'binary-append'
+  context.recordFileChange = async change => { changes.push(change) }
+  await writeFile(join(root, 'binary.dat'), Buffer.from([0xff, 0xfe]))
+  await tool.execute({ path: 'binary.dat', content: 'tail', flag: 'a' }, context)
+  assert.equal(changes.length, 1)
+  assert.match(changes[0].unavailable!, /UTF-8/)
+  assert.equal(changes[0].writtenContent, 'tail')
+  assert.deepEqual(await readFile(join(root, 'binary.dat')), Buffer.from([0xff, 0xfe, ...Buffer.from('tail')]))
 })
 
 test('overwrites compare the complete previous file including duplicate and unchanged regions', async t => {

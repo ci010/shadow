@@ -14,6 +14,14 @@ export interface AutomationSummary {
   task?: string
   agentType?: string
   enabled: boolean
+  notice?: string
+}
+export interface LearningOutcome {
+  status: 'applied' | 'no_change' | 'partial' | 'blocked' | 'draft_only'
+  summary: string
+  artifacts: number
+  events: number
+  evaluated: number
 }
 
 export interface AutomationRunSummary {
@@ -22,6 +30,7 @@ export interface AutomationRunSummary {
   startedAt: string
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'
   title?: string
+  learning?: LearningOutcome
 }
 
 export interface AutomationRunsPage {
@@ -45,6 +54,19 @@ const identifier = (value: unknown): value is string => typeof value === 'string
   && value !== '.' && value !== '..' && !/[\u0000-\u001f\u007f]/.test(value)
 const optionalText = (value: unknown) => value === undefined || typeof value === 'string'
 const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+
+export function learningOutcomeLabel(outcome: LearningOutcome): string {
+  return { applied: 'Applied', no_change: 'No change', partial: 'Partial', blocked: 'Blocked', draft_only: 'Draft only' }[outcome.status]
+}
+
+function learningOutcome(value: unknown): LearningOutcome | undefined {
+  if (value === undefined) return undefined
+  if (!record(value) || !['applied', 'no_change', 'partial', 'blocked', 'draft_only'].includes(String(value.status))
+    || typeof value.summary !== 'string' || !value.summary.trim() || value.summary.length > 8000
+    || !count(value.artifacts) || !count(value.events) || !count(value.evaluated)) throw invalid()
+  return { status: value.status as LearningOutcome['status'], summary: value.summary,
+    artifacts: value.artifacts, events: value.events, evaluated: value.evaluated }
+}
 
 function timestamp(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value)) return false
@@ -89,12 +111,13 @@ export async function fetchAutomations(
       if (!record(item) || !identifier(item.id) || ids.has(item.id) || typeof item.name !== 'string' || !item.name.trim()
         || (item.source !== 'cron' && item.source !== 'learning') || item.session !== 'fresh'
         || typeof item.schedule !== 'string' || !item.schedule.trim() || typeof item.enabled !== 'boolean'
-        || !optionalText(item.task) || !optionalText(item.agentType)) throw invalid()
+        || !optionalText(item.task) || !optionalText(item.agentType) || !optionalText(item.notice)) throw invalid()
       ids.add(item.id)
       return {
         id: item.id, name: item.name, source: item.source, session: 'fresh', schedule: item.schedule,
         enabled: item.enabled, ...(item.task !== undefined ? { task: item.task as string } : {}),
         ...(item.agentType !== undefined ? { agentType: item.agentType as string } : {}),
+        ...(item.notice !== undefined ? { notice: item.notice as string } : {}),
       }
     })
   }, request)
@@ -121,6 +144,7 @@ export async function fetchAutomationRuns(
         id: item.id, sessionId: item.sessionId, startedAt: item.startedAt,
         status: item.status as AutomationRunSummary['status'],
         ...(item.title !== undefined ? { title: item.title as string } : {}),
+        ...(item.learning !== undefined ? { learning: learningOutcome(item.learning) } : {}),
       }
     })
     runs.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))

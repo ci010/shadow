@@ -1,7 +1,7 @@
 import { trace } from '@opentelemetry/api'
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { ToolNoEffectError, isCompletedToolFailure, toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
+import { ToolNoEffectError, ToolOutcomeUnknownError, isCompletedToolFailure, toolResultText, type Tool as TypedTool, type ToolDefinition, type ToolExecutionHook, type ToolResult } from './tool.ts'
 import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
 import type { McpConnection } from '../mcp/client.ts'
@@ -153,7 +153,7 @@ export class Tools {
     } catch (err) {
       admission?.finish(true, !context.signal?.aborted && err instanceof ToolNoEffectError ? 'none' : undefined)
       // An interrupted invocation has no result to persist or send to the model.
-      if (context.signal?.aborted) throw err
+      if (context.signal?.aborted || err instanceof ToolOutcomeUnknownError) throw err
       // handle abort
       if (err instanceof Error && err.name === 'AbortError') {
         return `Tool execution aborted: ${name}`

@@ -38,6 +38,8 @@ export interface ExecutionContext extends MessageContext {
   toolCallId?: string
   /** Provider-facing tool name; nested script invocations are separate admissions. */
   toolCallName?: string
+  /** Persist observed writes immediately, including nested script calls that outlive cancellation. */
+  recordFileChange?: (change: import('../sessions/file-change-contract.ts').RecordedFileChange) => Promise<void>
   /** Resolved default shell for exec in this context, after global/session overrides. */
   defaultExecShell?: ExecShell
   /** LLM model override for this session. */

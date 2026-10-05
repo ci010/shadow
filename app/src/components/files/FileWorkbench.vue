@@ -32,7 +32,7 @@
       <div class="mobile-workbench-actions">
         <slot name="actions" />
         <button v-if="explorerAvailable && !knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />Browse files</button>
-        <button v-if="tabs.selected && tabs.selected !== DIAGNOSIS_TAB_KEY" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />Close current document</button>
+        <button v-if="!isPermanentDocumentTab(tabs.selected)" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />Close current document</button>
         <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">Close all documents</button>
         <slot name="mobile-actions" :close="closeMobileActions" />
       </div>
@@ -51,14 +51,15 @@
         :label="knowledgeSelected ? 'Resize Knowledge navigation' : 'Resize files'" :controls="`${id}-explorer`" @update:model-value="preferredWidth = $event" />
     </aside>
     <div class="workbench-editor">
-      <div v-show="!mobileLayout" class="document-toolbar">
+      <Teleport :to="documentToolbarTarget || 'body'" :disabled="!documentToolbarTarget">
+      <div v-show="!mobileLayout" class="document-toolbar" :class="{ 'shared-toolbar': documentToolbarTarget }">
         <HoverInfo v-if="explorerAvailable || knowledgeSelected" :text="knowledgeSelected ? 'Toggle Knowledge navigation (Ctrl+Shift+E)' : 'Toggle files (Ctrl+Shift+E)'" v-slot="{ triggerProps }">
         <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" :aria-label="knowledgeSelected ? 'Toggle Knowledge navigation' : 'Toggle files'" aria-keyshortcuts="Control+Shift+E" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
           <span class="i-lucide-panel-left" aria-hidden="true" />
         </button>
         </HoverInfo>
         <div class="document-tablist" role="tablist" aria-label="Open documents" @wheel="scrollTabs">
-          <div class="document-tab conversation-tab fixed-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
+          <div v-if="!hidePrimaryTab" class="document-tab conversation-tab fixed-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
             <button :id="tabId('')" role="tab" :aria-selected="tabs.selected === ''" :tabindex="tabs.selected === '' ? 0 : -1" :aria-controls="panelId('')" @click="selectTab('')" @keydown="tabKey($event, '')">
               <span class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || 'Conversation' }}</span>
             </button>
@@ -120,8 +121,9 @@
         </div>
         <slot name="actions" />
       </div>
+      </Teleport>
       <div class="workbench-content" :class="{ 'draft-document': draft && tabs.selected === '' }">
-        <div v-show="tabs.selected === ''" :id="panelId('')" class="conversation-document" role="tabpanel" :aria-labelledby="tabId('')">
+        <div v-show="tabs.selected === ''" :id="panelId('')" class="conversation-document" role="tabpanel" :aria-labelledby="hidePrimaryTab ? conversationTabId : tabId('')">
           <slot :active="active && tabs.selected === ''" />
         </div>
         <div v-if="tabs.diagnosis" v-show="tabs.selected === DIAGNOSIS_TAB_KEY" :id="panelId(DIAGNOSIS_TAB_KEY)" class="diagnosis-document" role="tabpanel" :aria-labelledby="tabId(DIAGNOSIS_TAB_KEY)">
@@ -170,6 +172,8 @@ import { useRoute, useRouter } from 'vue-router'
 import FileTree from './FileTree.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
 import FileDiffPreview from './FileDiffPreview.vue'
+import { isPermanentDocumentTab } from '../../file-workbench.ts'
+import { useAutomationDocumentTabs } from '../../composables/useAutomationDocumentTabs.ts'
 import { fileIcon } from '../../file-icons.ts'
 import HoverInfo from '../HoverInfo.vue'
 import KnowledgeView from '../KnowledgeView.vue'
@@ -185,10 +189,11 @@ import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, clos
 import type { KnowledgeEntry } from '../../knowledge.ts'
 import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; diagnosisEnabled?: boolean; diagnosisRequest?: boolean; documentToolbarTarget?: string; hidePrimaryTab?: boolean; conversationTabId?: string }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
 const router = useRouter()
 const route = useRoute()
 const installation = useInstallationContext()
+const automationTabs = useAutomationDocumentTabs()
 const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
@@ -252,13 +257,22 @@ const menuElement = ref<HTMLElement>()
 const menuPosition = ref({ left: '0px', top: '0px' })
 let observer: ResizeObserver | undefined
 let composing = false
-const tabId = (path: string) => `${id}-tab-${encodeURIComponent(path)}`
+const tabId = (path: string) => !path && props.hidePrimaryTab && props.conversationTabId
+  ? props.conversationTabId : `${id}-tab-${encodeURIComponent(path)}`
 const panelId = (path: string) => `${id}-panel-${encodeURIComponent(path)}`
 function selectTab(path: string) {
   if (tabs.value.selected === path) return
   tabs.value = { ...tabs.value, selected: path }
 }
-defineExpose({ showConversation: () => selectTab(''), openLinkedFile })
+defineExpose({
+  showConversation: () => selectTab(''),
+  showRunConversation: () => {
+    selectTab('')
+    preference.value = false
+    remoteExpanded.value = false
+  },
+  openLinkedFile,
+})
 function openLinkedFile(file: OpenFile) {
   openFile(file)
   revealVersion.value++
@@ -289,7 +303,7 @@ function dismissTabMenu(restoreFocus = false) {
   if (restoreFocus && key !== undefined) document.getElementById(tabId(key))?.focus({ preventScroll: true })
 }
 async function openTabMenu(event: MouseEvent | KeyboardEvent, key: string) {
-  if (!props.active || !props.keyboardActive || !key || key === DIAGNOSIS_TAB_KEY || !documentTabKeys(tabs.value).includes(key)) return
+  if (!props.active || !props.keyboardActive || isPermanentDocumentTab(key) || !documentTabKeys(tabs.value).includes(key)) return
   const anchor = document.getElementById(tabId(key))?.getBoundingClientRect()
   if (!anchor) return
   const x = event instanceof MouseEvent && event.button === 2 ? event.clientX : anchor.left
@@ -336,7 +350,7 @@ function preventMiddleScroll(event: MouseEvent) {
 function middleClickTab(event: MouseEvent, path: string) {
   if (event.button !== 1) return
   event.preventDefault()
-  if (path && path !== DIAGNOSIS_TAB_KEY) closeFile(path, tabs.value.selected === path)
+  if (!isPermanentDocumentTab(path)) closeFile(path, tabs.value.selected === path)
 }
 function scrollTabs(event: WheelEvent) {
   const strip = documentTabs.value
@@ -347,12 +361,12 @@ function scrollTabs(event: WheelEvent) {
   strip.scrollLeft = next
 }
 function tabKey(event: KeyboardEvent, path: string) {
-  if (path && path !== DIAGNOSIS_TAB_KEY && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+  if (!isPermanentDocumentTab(path) && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
     event.preventDefault()
     void openTabMenu(event, path)
     return
   }
-  if (event.key === 'Delete' && path && path !== DIAGNOSIS_TAB_KEY) { event.preventDefault(); closeFile(path); return }
+  if (event.key === 'Delete' && !isPermanentDocumentTab(path)) { event.preventDefault(); closeFile(path); return }
   const next = nextDocumentTab(documentTabKeys(tabs.value), path, event.key)
   if (next === undefined) return
   event.preventDefault()
@@ -487,6 +501,15 @@ watch(() => [props.diagnosisRequest, props.contextKey, props.diagnosisEnabled], 
   else if (props.diagnosisRequest === false && tabs.value.selected === DIAGNOSIS_TAB_KEY) selectTab('')
 }, { immediate: true })
 watch(() => tabs.value.selected === '', value => emit('conversation-visible', value), { immediate: true, flush: 'sync' })
+watch(() => [props.active, props.hidePrimaryTab, tabs.value.selected] as const, ([active, hidden, key]) => {
+  if (active && hidden) {
+    automationTabs?.selectDocument(props.sessionId, key)
+    void nextTick(() => {
+      const tab = document.getElementById(tabId(key))
+      if (tab?.getClientRects().length) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    })
+  }
+}, { immediate: true, flush: 'sync' })
 watch(() => [props.contextKey, tabs.value.selected === DIAGNOSIS_TAB_KEY] as const,
   ([, value]) => emit('diagnosis-visible', value), { immediate: true, flush: 'sync' })
 watch(() => [knowledgeSelected.value, knowledgeEntryId(tabs.value.selected)] as const,
@@ -544,6 +567,8 @@ onUnmounted(() => {
 .workbench-content.draft-document { justify-content: safe center; overflow-y: auto; padding: 40px 0 80px; box-sizing: border-box; }
 .draft-document > .conversation-document { flex: 0 0 auto; overflow: visible; }
 .document-toolbar { display: flex; align-items: stretch; flex: 0 0 var(--document-toolbar-height, 40px); min-width: 0; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); }
+.document-toolbar.shared-toolbar { flex: 1; min-width: max-content; border-bottom: 0; }
+.shared-toolbar .document-tablist, .shared-toolbar .document-tabs { flex: 0 0 auto; overflow: visible; }
 .document-tablist { display: flex; flex: 1; min-width: 0; }
 .document-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
 .fixed-tab { flex: 0 1 auto; }

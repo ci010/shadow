@@ -25,6 +25,7 @@ export interface AutomationSummary {
   task?: string
   agentType?: string
   enabled: boolean
+  notice?: string
 }
 export interface AutomationRunSummary {
   id: string
@@ -32,6 +33,14 @@ export interface AutomationRunSummary {
   startedAt: string
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'
   title?: string
+  learning?: LearningOutcome
+}
+export interface LearningOutcome {
+  status: 'applied' | 'no_change' | 'partial' | 'blocked' | 'draft_only'
+  summary: string
+  artifacts: number
+  events: number
+  evaluated: number
 }
 export const LEARNING_AUTOMATIONS = {
   reflector: { id: 'learning:reflector', name: 'Self reflection', agentType: 'reflector' },

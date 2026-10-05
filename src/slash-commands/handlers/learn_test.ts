@@ -43,31 +43,23 @@ test('learning command normalizes names and adapts trigger outcomes', async () =
   assert.equal(started.length, 0)
 })
 
-test('learning command delegates default pipeline execution and formats its result', async () => {
+test('learning command cannot bypass the durable learning service', async () => {
   await withTempWorkspace(async workspace => {
     const { sessions } = fakeSessions(workspace, [
       { sessionId: 'web:fixture', segmentIndex: 0, total: 3 },
     ])
     const command = createLearnCommand(sessions)
-    assert.equal(await command.execute(ctx, 'reflector'), 'Triggered reflector.')
-    assert.equal(await command.execute(ctx, 'reflector'), 'No new activity for reflector.')
-    assert.equal(await command.execute(ctx, 'encapsulator'), 'Triggered encapsulator. Session: spawned')
-    assert.equal(await command.execute(ctx, 'soul-reflector'), 'Triggered soul-reflector. Session: spawned')
+    for (const pipeline of ['reflector', 'encapsulator', 'soul-reflector']) {
+      await assert.rejects(command.execute(ctx, pipeline), /unavailable/)
+    }
   })
 })
 
-test('learning command reports rejected or unavailable starts instead of success', async (t) => {
+test('learning command reports rejected triggers instead of success', async () => {
   await withTempWorkspace(async (workspace) => {
     const { sessions } = fakeSessions(workspace, [
       { sessionId: 'web:fixture', segmentIndex: 0, total: 3 },
     ])
-    const command = createLearnCommand(sessions)
-    const start = t.mock.method(sessions, 'startSession', async () => { throw new Error('Session manager stopped') })
-    await assert.rejects(command.execute(ctx, 'reflector'), /Session manager stopped/)
-    start.mock.mockImplementation(async () => null)
-    await assert.rejects(command.execute(ctx, 'reflector'), /not accepted/)
-    await assert.rejects(command.execute(ctx, 'encapsulator'), /not accepted/)
-    await assert.rejects(command.execute(ctx, 'soul-reflector'), /not accepted/)
     const injected = createLearnCommand(sessions, async () => { throw new Error('Learning stopped') })
     await assert.rejects(injected.execute(ctx, 'reflector'), /Learning stopped/)
   })

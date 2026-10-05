@@ -265,7 +265,8 @@ The [Main host](../src/runtime/main/) resolves the configured
         bots.v1.json                  private bot-instance configuration
       workspace\                      Default's active Home
         .sessions\                    JSONL and/or SQLite history
-        memory\                       includes learning watermark
+        memory\                       wiki, decisions, events; legacy watermark
+        .learning\state.v1.json        learning batches, outcomes and retries
         skills\ / agents\ / SOUL.md    project-owned learned content
         .events\ / .cron\ / .otel.db    Project-owned state
     <project-id>\
@@ -947,8 +948,8 @@ that should be checked into the repository.
 | Legacy conventions | `memory/sessions/<safe-id>.conventions.md`, `memory/projects/<initiative>/conventions.md`, `memory/agent.conventions.md`; preserved historical files, not injected as current rules |
 | Personal preferences | Identified user profiles under `memory/identities/`; model-driven memory/learning retains sources and corrections |
 | Daily knowledge events | `memory/events/YYYY-MM-DD.jsonl`; structured `when/who/what/why/challenge/refs/origin` material |
-| Keyword/wiki index | Markdown names in `memory/topics`, `identities`, `concepts`, and `tools`; bodies read on demand |
-| Learning watermark | `memory/.reflect-watermark.json`; identifies transcript increments already scheduled for reflection |
+| Keyword/wiki index | Markdown names in `memory/decisions`, `topics`, `identities`, `concepts`, and `tools`; bodies read on demand |
+| Learning progress and outcomes | Project `.learning/state.v1.json`; bounded source cursors, pending batches, verified receipts, event consumption and retry state; legacy `memory/.reflect-watermark.json` is imported without replay |
 | Personality/identity | Project-shared `SOUL.md` and identity-manager files; distinct from user authentication |
 
 Project conventions have no Session or Initiative scope. Work owns task
@@ -974,20 +975,42 @@ made by shell commands, MCP tools, other applications, or all descendants.
 Each project's `LearningService` registers in-process activity aggregation
 and managed fresh jobs on its existing `CronService`:
 
-- **Reflector**, default 30 minutes after activity aggregation: compare session
-  history with a watermark and ask a specialized agent to process increments.
-- **Encapsulator**, default 2-hour poll of reflector completions: derive reusable
-  skills/tools/agent definitions from recurring work.
-- **Soul reflector**, default 12-hour poll of reflector completions: refine
-  personality/identity material.
+- **Reflector**, default 30-minute poll: process pinned physical-segment ranges
+  (at most eight ranges of 100 messages per batch). Select useful conditional
+  goals, reasoning, facts or procedures instead of building a wiki for every
+  entity. `learning_memory` stores evidence, stated/inferred interpretation,
+  applicability, exceptions and revalidation triggers in `memory/decisions`.
+  Later evidence can support, correct or retire a decision.
+- **Encapsulator**, default 2-hour poll: consume exact unconsumed events from
+  verified reflection batches, including earlier dates. `learned_skill` uses
+  the shared Skill edit store, checks revisions and verifies immediate discovery
+  of lesson-only skills. Executable packages, bundled skills and admin/core
+  capabilities are not automatically installed.
+- **Soul reflector**, default 12-hour poll: conservatively review the same
+  durable events, with a separate consumption cursor. `learning_soul` requires
+  two distinct source sessions and retention of the user-notification clause.
 
-`/learn` can trigger pipelines manually. These are model-driven file updates,
-not training the underlying model. The watermark advances after the reflector
-execution succeeds, not when its run is merely admitted. Failed or cancelled
-runs leave that increment eligible for retry; successful execution is still not
-a transactional proof that all knowledge writes are correct.
-Memory-link and working-set hooks assist the process but do not
-provide a complete audit or correctness guarantee.
+`LearningRuntime` binds each batch to its actual run. The Project-local journal
+is independent of the JSONL/SQLite session-store selection; both persist the
+execution receipt used for recovery. `learning_result` proposes an explicit
+`applied`, `no_change`, `partial`, `blocked` or `draft_only` outcome. Only successful
+session completion plus verified artifacts/events and an applied/no-change
+receipt acknowledges input. Historical runs have no fabricated receipt.
+Failures retain their batch and effects; event keys are idempotent within the
+batch. No-op reflections do not start downstream model calls.
+
+`/learn` explicitly retries a paused pipeline. Configuration/authentication
+errors pause automatic retries; transient failures back off (one minute,
+doubling) and pause after three attempts. Retry state and unconsumed batches
+survive restart. Valid legacy watermarks are retained, not reset to reprocess
+private history. Corrupt progress is surfaced rather than silently discarded.
+
+These are model-driven external-memory updates, not weight training. Verified
+persistence/discovery is not proof of semantic truth or improved performance.
+Memory guidance asks future sessions to identify useful or contradicted
+decisions; reflection records evidence-backed evaluations rather than treating
+repeated summaries as reinforcement. See
+[learning outcomes](tools-and-automations.md#learning-outcomes-and-recovery).
 
 ## Model providers
 
@@ -1494,8 +1517,12 @@ unpaged reads retain the recent-message default.
 `v:tools/<name>` identifies a virtual catalog source for the internal lazy
 loader, not an ordinary filesystem directory. Models
 select it through `search({ space: "grep:v:tools/<name>", query })` or invoke a known
-tool ID. `v:memory` writes are mapped to Home's memory directory
-by path helpers.
+tool ID. The Project-bound `v:memory` write handler maps wiki Markdown writes
+to Home's memory directory and reuses the filesystem writer and its write-history
+recording. Existing tool filtering and local/non-call restrictions still apply.
+This entry point rejects session records, event logs, internal state, traversal
+and linked destinations; event appends use `log`. It is not a host filesystem
+sandbox or a revision-based concurrent-edit protocol.
 
 ### Skills
 
@@ -2768,7 +2795,7 @@ from the host or other sessions**.
 | Data | Persistence/lifetime |
 | --- | --- |
 | Session state and logs | `.sessions`: JSONL files/state or SQLite `sessions.db` |
-| Memory and learning | Markdown/JSONL under `memory`, plus watermark and Soul/identity files |
+| Memory and learning | Markdown/JSONL under `memory`, `.learning` progress/outcomes and Soul/identity files |
 | Agent types and skills | Workspace `agents` and `skills`; shipped definitions are application assets |
 | Initiative context | Project-local SQLite work records and bounded prompt summaries; folder ownership lives in the host catalog |
 | Project catalog/config | Sibling host `projects.v2.json`; per-project `config/project.json` and `config/bots.v1.json` |
@@ -2912,7 +2939,7 @@ baked into the image.
 | `src/runtime` | CLI/process roles, bootstrap schemas, readiness/control, Main/Child composition |
 | `src/runtime/main` | Main host service graph, project runtime factories, registration and lifecycle |
 | `src/agent` | Message router, identity, memory, prompts, background-task management |
-| `src/agent/learning` | Learning service, reflection watermark and pipeline dispatch |
+| `src/agent/learning` | Selective decision memory, batch journal, verified outcomes and pipeline dispatch |
 | `src/sessions` | Session/task/call execution, state/history stores, locality, session APIs |
 | `src/sessions/handoff` | Context-threshold decisions and continuation synthesis |
 | `src/providers` | Provider contracts, adapters, aggregation, model registry/auth APIs |

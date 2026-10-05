@@ -166,6 +166,52 @@ test('unsupported_api_for_model HTTP 400 is not retried against another endpoint
   assert.equal(f.auth.hasValidApiKey(), true)
 })
 
+for (const model of [astra.id, dual.id]) {
+  for (const code of ['model_not_supported', 'unsupported_api_for_model']) {
+    test(`${model}: ${code} names the rejected model, refreshes metadata next time and never substitutes or retries`, async t => {
+      const f = fixture(t)
+      f.reply(Response.json({ error: { code, message: 'private upstream body with unrelated reference 401' } }, { status: 400 }))
+      await assert.rejects(f.provider.chat([{ role: 'user', content: 'hi' }], [], { model }), error => {
+        assert(error instanceof ProviderHttpError)
+        assert.equal(error.status, 400)
+        assert.equal(error.code, code)
+        assert(error.message.includes(`${model}@copilot`))
+        assert(error.message.includes(model === astra.id ? '/responses' : '/chat/completions'))
+        assert.match(error.message, /Project settings > Models/)
+        assert.match(error.message, /not automatically replayed/)
+        assert.doesNotMatch(error.message, /private upstream body|synthetic-test-key/)
+        return true
+      })
+      assert.equal(f.posts.length, 1)
+      assert.equal(f.posts[0].body.model, model)
+      assert.equal(f.reads(), 1)
+      assert(f.auth.hasValidApiKey(), 'model rejection must not discard valid authentication')
+      f.metadata({ data: [{ id: 'replacement-from-catalog', supported_endpoints: ['/chat/completions'] }] })
+      assert.deepEqual(await f.provider.listModels(), ['replacement-from-catalog'])
+      assert.equal(f.reads(), 2, 'the next lookup must not use the metadata rejected by the server')
+      assert.equal(f.posts.length, 1)
+    })
+  }
+}
+
+test('gateway exposes model rejection as HTTP 400 with its actionable provider error, not a generic 500', async t => {
+  const f = fixture(t)
+  const app = new Hono()
+  providerPlugin(new AggregatedProvider(new Map([['copilot', f.provider]]), 'copilot'))(app)
+  for (const code of ['model_not_supported', 'unsupported_api_for_model']) {
+    f.reply(Response.json({ error: { code } }, { status: 400 }))
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: `${astra.id}@copilot`, messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    assert.equal(response.status, 400)
+    const body = await response.json()
+    assert.equal(body.error, code)
+    assert(body.detail.includes(`${astra.id}@copilot`))
+  }
+  assert.equal(f.posts.length, 2)
+})
+
 test('Responses reasoning effort uses declared support and does not silently lower an unsupported choice', async (t) => {
   const f = fixture(t, { data: [{ ...astra, capabilities: { supports: { reasoning_effort: ['high'] } } }] })
   await assert.rejects(f.provider.chat([{ role: 'user', content: 'hi' }], [], { model: astra.id, reasoningEffort: 'max' }), /does not support reasoning effort/)

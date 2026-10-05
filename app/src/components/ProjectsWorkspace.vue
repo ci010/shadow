@@ -51,10 +51,10 @@
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
-      <AutomationDetail v-if="automation" :key="`${automation.projectId}:${automation.id}`"
-        :api-base="projectBase(apiBase, automation.projectId)" :automation-id="automation.id" :active="visible"
-        :compact="!!selected?.sessionId" :selected-session-id="selected?.sessionId"
-        @open="openAutomationRun" @overview="showAutomation(automation.projectId, automation.id)" />
+      <AutomationDetail :enabled="!!automation"
+        :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
+        :selected-session-id="selected?.sessionId"
+        @open="openAutomationRun" @overview="automation && showAutomation(automation.projectId, automation.id)" v-slot="{ toolbarTarget, conversationRequest, conversationTabId }">
       <section v-if="!selected && !automation" class="project-empty">
         <h1>Where would you like to work?</h1>
         <p>Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.</p>
@@ -67,11 +67,15 @@
         :api-base="projectBase(apiBase, resource.projectId)" :project-id="resource.projectId"
         :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
         :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
+        :automation-run="!!automation && selected?.key === resource.key"
+        :document-toolbar-target="automation && selected?.key === resource.key ? toolbarTarget : undefined"
+        :conversation-request="conversationRequest" :conversation-tab-id="conversationTabId"
         :child-session-id="resource.childSessionId"
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
         @project-navigation="tab => projectNavigation(resource, tab)"
         @dashboard-visible="dashboardVisibility.set(resource.key, $event)"
         @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" />
+      </AutomationDetail>
     </div>
     <FolderOwnershipDialog v-if="folderOperation" :key="`${folderOperation.project.id}:${folderOperation.folder.id}:${folderOperation.action}`"
       :api-base="apiBase" :project="folderOperation.project" :projects="projects"

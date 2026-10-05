@@ -1,4 +1,5 @@
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
+import { isUtf8 } from 'node:buffer'
 import { appendFile, mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import type { ExecutionContext } from './context.ts'
 import { isNotFoundError, isWindows } from '../utils/runtime.ts'
@@ -12,6 +13,7 @@ import { executeRemoteFilesystemText, RemoteFilesystemError } from '../execution
 import { formatWriteResult, MAX_WRITE_REGIONS, type ReplacementResult } from './write-result.ts'
 import { countLineChanges, MAX_LINE_DIFF_CHARS } from './line-changes.ts'
 import { isVirtualPath, type VirtualFs } from '../vfs/virtual-fs.ts'
+import { recordFileWrite } from './file-change.ts'
 
 export { ReadTool } from './read.ts'
 
@@ -304,8 +306,11 @@ export class WriteTool implements Tool {
     if (match !== undefined) {
       // ── Edit mode: find and replace ──
       let existing: string
+      let observedBefore: string | undefined
       try {
-        existing = await readFile(filePath, { encoding: 'utf8', signal: context.signal })
+        const bytes = await readFile(filePath, { signal: context.signal })
+        existing = bytes.toString('utf8')
+        if (isUtf8(bytes)) observedBefore = existing
       } catch (error) {
         if (!isNotFoundError(error)) throw error
         return `Error: file not found: ${filePath}`
@@ -318,6 +323,8 @@ export class WriteTool implements Tool {
       }
       context.signal.throwIfAborted()
       await writeFile(filePath, updated.content)
+      await recordFileWrite(context, { path: filePath, mode: 'edit', before: observedBefore, after: updated.content,
+        unavailable: 'Previous file could not be represented as UTF-8 text.' })
       context.signal.throwIfAborted()
       return formatWriteResult({
         path: filePath, mode: 'edit', content: updated.content, writtenBytes: Buffer.byteLength(updated.content),
@@ -329,8 +336,11 @@ export class WriteTool implements Tool {
     if (flags.includes('a')) {
       // ── Append mode ──
       let existing = ''
+      let observedBefore: string | undefined = ''
       try {
-        existing = await readFile(filePath, { encoding: 'utf8', signal: context.signal })
+        const bytes = await readFile(filePath, { signal: context.signal })
+        existing = bytes.toString('utf8')
+        observedBefore = isUtf8(bytes) ? existing : undefined
       } catch (error) {
         if (!isNotFoundError(error)) throw error
       }
@@ -338,6 +348,8 @@ export class WriteTool implements Tool {
       await mkdir(dirname(filePath), { recursive: true })
       context.signal.throwIfAborted()
       await appendFile(filePath, content)
+      await recordFileWrite(context, { path: filePath, mode: 'append', before: observedBefore,
+        after: observedBefore === undefined ? content : existing + content, unavailable: 'Previous file could not be represented as UTF-8 text.' })
       context.signal.throwIfAborted()
       return formatWriteResult({
         path: filePath, mode: 'append', content: existing + content, appendStart: existing.length,
@@ -352,6 +364,7 @@ export class WriteTool implements Tool {
     await mkdir(dirname(filePath), { recursive: true })
     context.signal.throwIfAborted()
     await writeFile(filePath, content)
+    await recordFileWrite(context, { path: filePath, mode: 'write', before: before.content, after: content, unavailable: before.unavailable })
     context.signal.throwIfAborted()
     return formatWriteResult({
       path: filePath, mode: 'write', content, writtenBytes: Buffer.byteLength(content),
@@ -419,8 +432,10 @@ export class WriteTool implements Tool {
       FILESYSTEM_WRITE_OPERATION,
       { path, content: nextContent, mode },
     )
-    context.signal.throwIfAborted()
     const resultingContent = mode === 'append' && existing !== undefined ? existing + content : nextContent
+    await recordFileWrite(context, { path, mode: edit ? 'edit' : mode === 'append' ? 'append' : 'write',
+      before: existing, after: resultingContent, unavailable: observationUnavailable })
+    context.signal.throwIfAborted()
     return formatWriteResult({
       path, mode: edit ? 'edit' : mode === 'append' ? 'append' : 'write',
       content: resultingContent,

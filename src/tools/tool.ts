@@ -5,6 +5,8 @@ export type ToolResult = string | { content: ContentPart[]; isError?: boolean }
 
 /** Only trusted implementations may attest that a failed operation had no effect. */
 export class ToolNoEffectError extends Error {}
+/** Missing effect evidence must stop the turn, not invite an automatic model retry. */
+export class ToolOutcomeUnknownError extends Error {}
 
 const completedResults = new WeakSet<object>()
 /** A native execution returned an error, not a lost execution. Partial effects are not rolled back. */

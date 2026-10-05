@@ -30,6 +30,8 @@
     <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? activeSessionName : 'New conversation'" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :project-navigation-enabled="!embedded"
+      :initial-explorer-open="automationRun ? false : undefined"
+      :document-toolbar-target="documentToolbarTarget" :hide-primary-tab="automationRun" :conversation-tab-id="conversationTabId"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
@@ -575,6 +577,10 @@ const props = withDefaults(defineProps<{
   keyboardActive?: boolean
   visible?: boolean
   knowledgeRequest?: KnowledgeTabRequest
+  automationRun?: boolean
+  documentToolbarTarget?: string
+  conversationRequest?: number
+  conversationTabId?: string
 }>(), { embedded: false, enableChildPane: false, keyboardActive: true, visible: true })
 const activated = ref(true)
 const paneActive = computed(() => props.visible && activated.value)
@@ -1212,6 +1218,9 @@ const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation
 // ── Text selection state ──────────────────────────────────────────────────────
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
+watch(() => [props.automationRun, props.visible, props.conversationRequest] as const, ([run, visible]) => {
+  if (run && visible) void nextTick(() => workbench.value?.showRunConversation())
+}, { immediate: true })
 
 function buildUrl(path: string, params?: Record<string, string>): string {
   const url = apiUrl(props.apiBase, path)

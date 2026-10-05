@@ -1890,6 +1890,13 @@ ${JSON.stringify(request)}`,
     return this.decisionRecords.read(sessionId, physicalId)
   }
 
+  async getFileChanges(sessionId: string, offset: number, limit: number, signal: AbortSignal) {
+    const state = this.getSessionState(sessionId)
+    if (!state) return null
+    const { readSessionFileChanges } = await import('./file-changes.ts')
+    return readSessionFileChanges(this.store, state, offset, limit, signal)
+  }
+
   assertInitiativeAccess(initiativeId: string): void {
     parseInitiativeId({ initiativeId })
     if (this.deps.hasInitiative && !this.deps.hasInitiative(initiativeId)) {
@@ -2159,6 +2166,18 @@ ${JSON.stringify(request)}`,
       sessionId,
       lastActivityAt: this.getSessionState(sessionId)?.lastActivityAt,
     }))
+  }
+
+  /** Last persisted execution receipt, shared by the JSONL and SQLite stores. */
+  @Span('session.getExecutionResult')
+  async getExecutionResult(sessionId: string): Promise<SessionTurnFact | undefined> {
+    const state = this.getSessionState(sessionId)
+    if (!state) return undefined
+    let result: SessionTurnFact | undefined
+    for await (const record of this.store.readSessionLog(SessionManager.currentPhysicalId(state))) {
+      if (record.execution_receipt) result = record.execution_receipt as SessionTurnFact
+    }
+    return result
   }
 
   /**

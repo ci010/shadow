@@ -28,6 +28,7 @@ export const KNOWLEDGE_TAB_KEY = '\0knowledge'
 export const knowledgeEntryTabKey = (id: string) => `\0knowledge-entry:${id}`
 export const knowledgeEntryId = (key: string) => key.startsWith('\0knowledge-entry:') ? key.slice('\0knowledge-entry:'.length) : undefined
 export const DIAGNOSIS_TAB_KEY = '\0diagnosis'
+export const isPermanentDocumentTab = (key: string) => !key || key === DIAGNOSIS_TAB_KEY
 export type ProjectTab = 'settings' | 'agents'
 export const projectTabKey = (tab: ProjectTab) => `\0project:${tab}`
 export const projectTabFromKey = (key: string): ProjectTab | undefined =>
@@ -195,7 +196,7 @@ export function canCloseAllDocuments(state: FileTabs, context: DocumentShortcutC
 }
 
 export function selectedFileToClose(state: FileTabs, context: DocumentShortcutContext): string | undefined {
-  if (canHandleDocumentShortcut(context) && state.selected && state.selected !== DIAGNOSIS_TAB_KEY && documentTabKeys(state).includes(state.selected)) {
+  if (canHandleDocumentShortcut(context) && !isPermanentDocumentTab(state.selected) && documentTabKeys(state).includes(state.selected)) {
     return state.selected
   }
 }

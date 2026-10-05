@@ -311,6 +311,8 @@ Compacted-history navigation, unlinked execution traces, and the conversation su
 
 Work realignment events keep their agent-facing instructions and JSON in the shared tool payload renderer, mounted only when expanded: (12px) monospace, secondary text on a muted surface, token-based corners, and wrapping identifiers. Event metadata uses the same chevron disclosure as other trace details, not the browser's default marker. Preserve event content and behavior; these are read-only records, not adoption controls.
 
+Automation runs prioritize their conversations and opened documents. Keep read-only automation metadata behind the collapsed Automation details disclosure in the runs explorer, not a permanent Configuration tab. Do not add a standalone File changes workbench: retain write history as data for future context-specific detail views, without turning every write into another navigation surface.
+
 The composer is `calc(100% - 40px)` wide, capped at (860px), changing to `calc(100% - 24px)` on narrow viewports. It owns a measured trailing history allowance through `--composer-height`. Preserve stable scrollbar gutters and the scroll container's own geometry; do not use the prose measure as the workbench's outer width.
 
 The composer toolbar keeps its send/stop action beside the model and attachment controls. When the submit area has at most (320px) available, visually hide the shortcut/status hint rather than wrapping the toolbar; keep its live status available to assistive technology. Use the available pane space, not the window width, so sidebars and long model labels do not push the action onto a second row.

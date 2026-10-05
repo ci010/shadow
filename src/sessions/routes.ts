@@ -306,6 +306,17 @@ export function sessionsApiPlugin(
       return c.json({ sessions: enrichedSessions, nodes })
     })
 
+    app.get('/api/sessions/:key/file-changes', async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const query = z.object({
+        offset: z.coerce.number().int().nonnegative().safe().default(0),
+        limit: z.coerce.number().int().min(1).max(30).default(30),
+      }).safeParse({ offset: c.req.query('offset'), limit: c.req.query('limit') })
+      if (!query.success) return c.json({ error: 'invalid_file_changes_query', message: 'Use a nonnegative offset and a limit between 1 and 30.' }, 400)
+      const page = await sessions.getFileChanges(c.req.param('key'), query.data.offset, query.data.limit, c.req.raw.signal)
+      return page ? c.json(page) : c.json({ error: 'session_not_found' }, 404)
+    })
+
     app.get('/api/sessions/:key/details', async (c) => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       const key = c.req.param('key')

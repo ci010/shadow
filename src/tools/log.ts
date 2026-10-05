@@ -19,7 +19,7 @@ export class LogTool implements Tool {
       who: {
         type: 'string',
         description:
-          'Entity name — the actor (person, agent, system). Should match a wiki item name.',
+          'Actor (person, agent, system). A separate wiki page is not required.',
       },
       what: {
         type: 'string',
@@ -46,11 +46,15 @@ export class LogTool implements Tool {
           'The session this event belongs to (origin/provenance). ' +
           'Defaults to the current session.',
       },
+      key: { type: 'string', description: 'For learning batches: stable event key, reused on retries (e.g. source message index plus decision name).' },
     },
     required: ['who', 'what'],
   }
 
-  constructor(private workspace: string) {}
+  constructor(private workspace: string, private learningEvent?: (
+    entry: { who: string; what: string; why?: string; challenge?: string; refs?: string[]; origin?: string },
+    key: unknown, context: ExecutionContext,
+  ) => string | undefined) {}
 
   getChatTextDisplay(args: Record<string, unknown>): string {
     return `📋 ${String(args.who ?? '')} — ${String(args.what ?? '')}`
@@ -70,6 +74,10 @@ export class LogTool implements Tool {
     const origin = args.session != null
       ? String(args.session)
       : context?.sessionId
+    if (context && this.learningEvent) {
+      const result = this.learningEvent({ who, what, why, challenge, refs, origin }, args.key, context)
+      if (result !== undefined) return result
+    }
 
     const now = new Date()
     const entry: Record<string, unknown> = {

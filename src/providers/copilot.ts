@@ -77,12 +77,26 @@ function validModelInfo(value: unknown): value is ModelInfo {
     (model.reasoningEfforts === undefined || stringList(model.reasoningEfforts))
 }
 
+function copilotModelError(
+  code: 'model_not_supported' | 'unsupported_api_for_model' | 'unsupported_reasoning_effort',
+  model: string,
+  detail: string,
+): ProviderHttpError {
+  return new ProviderHttpError(400,
+    `[copilot] ${code}: model ${JSON.stringify(`${model}@copilot`)}. ${detail} ` +
+    'Refresh the Copilot model list and check Project settings > Models and any session or agent model override. ' +
+    'The model was not substituted and the request was not automatically replayed.',
+    code,
+  )
+}
+
 export function copilotModelEndpoint(model: ModelInfo | undefined): '/chat/completions' | '/responses' {
   // Older caches and servers omitted capabilities; retain their chat protocol.
   if (model?.supportedEndpoints === undefined) return '/chat/completions'
   if (model.supportedEndpoints.includes('/chat/completions')) return '/chat/completions'
   if (model.supportedEndpoints.includes('/responses')) return '/responses'
-  throw new Error(`[copilot] Model "${model.id}" does not advertise a supported HTTP chat or Responses API.`)
+  throw copilotModelError('unsupported_api_for_model', model.id,
+    'This model does not advertise a supported HTTP chat or Responses API.')
 }
 
 export const COPILOT_VERIFICATION_URI = 'https://github.com/login/device'
@@ -483,7 +497,8 @@ export class CopilotProvider implements LLMProvider {
     const effort = options.thinking?.type === 'disabled' ? 'none' : options.reasoningEffort
     if ((endpoint === '/responses' || effort === 'none') && effort && info?.reasoningEfforts &&
       !info.reasoningEfforts.includes(effort)) {
-      throw new Error(`[copilot] Model "${model}" does not support reasoning effort "${effort}".`)
+      throw copilotModelError('unsupported_reasoning_effort', model,
+        `This model does not support reasoning effort "${effort}". Choose a supported effort or model.`)
     }
     if (info?.vision === false && messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === 'image_url'))) {
       throw new Error(`[copilot] Model "${model}" does not accept image input. Choose a vision-capable model; images were not discarded.`)
@@ -520,6 +535,14 @@ export class CopilotProvider implements LLMProvider {
           )
           this.auth.clearApiKey()
           continue
+        }
+        if (err instanceof ProviderHttpError && err.status === 400
+          && (err.code === 'model_not_supported' || err.code === 'unsupported_api_for_model')) {
+          this._modelsCache = null
+          this._modelsCacheTime = 0
+          throw copilotModelError(err.code, model, err.code === 'model_not_supported'
+            ? `Copilot rejected this model at ${endpoint}. Check the exact model ID and this account's model access; this is not proof of a configuration typo.`
+            : `Copilot rejected ${endpoint} for this model. Its advertised endpoint capabilities may have changed.`)
         }
         throw err
       }

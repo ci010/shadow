@@ -53,6 +53,11 @@ const available = {
   active: true, keyboardActive: true, visible: true, explorerEnabled: true,
   overlayOpen: false, composing: false,
 }
+test('file writes do not add a permanent document to the conversation workbench', () => {
+  const state = withDiagnosisTab(openFileTab({ files: [], selected: '' }, file('memory.md')), true)
+  assert.deepEqual(documentTabKeys(state), ['', DIAGNOSIS_TAB_KEY, 'memory.md'])
+  assert.deepEqual(documentTabKeys(closeAllFileTabs(state)), ['', DIAGNOSIS_TAB_KEY])
+})
 test('Alt+Left and Alt+Right use browser history only for unhandled, nonrepeating keys', () => {
   const back = { ...tabKey, key: 'ArrowLeft', altKey: true, ctrlKey: false }
   assert.equal(knowledgeHistoryDirection(back), -1)

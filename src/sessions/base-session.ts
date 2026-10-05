@@ -424,10 +424,13 @@ export abstract class BaseSession {
         // Serialize writes to keep the JSONL log and state file ordered.
         let writes = Promise.resolve()
         const executions = group.calls.map(async tc => {
+          const fileChangePhysicalId = this.physicalSessionId
+          const context: ExecutionContext = {
+            ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
+            recordFileChange: file_change => this.store.appendRawEvents(fileChangePhysicalId, [{ file_change }]),
+          }
           const result = await activeSpan('agent.tool',
-            () => this.tools.execute(tc.name, tc.arguments, {
-              ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
-            }),
+            () => this.tools.execute(tc.name, tc.arguments, context),
             { attributes: { ...traceAttributes, 'tool.call_id': tc.id, 'tool.name': tc.name } },
             span.context,
           )

@@ -1,5 +1,72 @@
 # Tools, skills, MCP, and automations
 
+## Learning outcomes and recovery
+
+Learning aims to improve future decisions, not accumulate a transcript-shaped
+wiki. A useful memory records **when / goal / why / guidance / exceptions /
+evidence / revalidate when**. Inferred motivations remain hypotheses, not facts
+about a person's identity. Easily recomputed environment facts and temporary
+task state usually stay in source history. No durable change is a valid result.
+
+The learning roles use `learning_memory` to read a revision and save a scoped
+decision. Existing general sessions retain normal `write` access to wiki memory;
+there is no new approval step. Repeated evidence can support, correct or retire
+a decision. Retired decisions are retained as historical evidence but must not
+guide new actions. Source identities are checked against the assigned batch;
+the model still owns the semantic interpretation.
+
+`learned_skill` writes lesson-only `SKILL.md` packages to the actual shared
+Project skill space, using revision checks and the existing registry. It does
+not grant executable tools, override bundled skills, install agents or make an
+admin/core skill. Those changes use the established authoring route; a local
+draft must be reported as **Draft only**, not as an installed skill.
+
+Before ending, learning agents submit `learning_result`:
+
+| Outcome | Meaning |
+| --- | --- |
+| Applied | Recorded effects persisted and passed artifact/event checks |
+| No change | Assigned evidence was reviewed and nothing justified retention |
+| Partial | Some effects exist but the batch is incomplete |
+| Blocked | A prerequisite failed or a required receipt was absent |
+| Draft only | A proposal is not yet usable shared knowledge |
+
+Only Applied/No change plus completed execution advances progress. This is
+separate from the normal session status; a completed conversation can still be
+blocked as learning. Persistence checks do not prove that a learned claim is true.
+Source review and semantic quality remain model-driven; later sessions should
+identify useful decisions and counterexamples for the next reflection pass.
+Receipt checks include direct Markdown writes and persisted tool failures, not
+only writes through `learning_memory`. An unresolved write or source-read error
+cannot be hidden by reporting No change. Reflector direct writes need a
+provenance-bearing `log` event before Applied; the structured memory tool creates
+that event automatically. Changed artifacts pause for reconciliation rather than
+automatically overwriting another editor's change.
+
+The narrow lesson/Soul tool contracts do not make ordinary filesystem access
+an OS sandbox. Session tool permissions and existing authoring boundaries still
+apply. Soul changes are described in the saved outcome; this is not a separate
+push notification or an implicit approval from the user.
+
+The Project `.learning/state.v1.json` journal stores pending bounded ranges,
+events, receipts and retries. JSONL and SQLite session stores use the same
+journal. Existing `memory/.reflect-watermark.json` progress is imported without
+replaying already-consumed history or relabelling old runs. Historical missed
+writes and run-local skill drafts are not automatically replayed or installed.
+
+Encapsulation and Soul reflection consume explicit unconsumed event batches,
+not a guessed daily filename. Their cursors are independent. A reflection with
+no new events does not start these downstream model calls. Stable log keys
+avoid duplicating an event when a retained batch is retried; already-persisted
+effects are listed in recovery tasks.
+
+Nonretryable model/configuration/authentication errors pause automatic runs.
+Transient failures use increasing delays and pause after three attempts.
+Configuration updates or `/learn <reflector|encapsulator|soul-reflector>` explicitly
+resume paused work. Disabling learning stops active dispatch; it does not delete
+pending source history or journal data. The current backend must load the new
+code for these semantics to apply; old runs are never rewritten as successful.
+
 ## Shell and interrupted model requests
 
 `exec` uses the Runtime's declared default shell, normally `cmd` on Windows
