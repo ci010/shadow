@@ -5,7 +5,7 @@ import { extractFile, listPackage } from '@electron/asar'
 import { desktopTarget, type DesktopTarget } from './desktop-target.ts'
 
 const sourceInputs = [
-  'src', 'scripts', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service', 'desktop/aria2',
+  'src', 'scripts', 'integrations/a2a', 'app/src', 'app/public', 'desktop/src', 'desktop/assets', 'desktop/service', 'desktop/aria2',
   'build.ts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.pnpmfile.cjs',
   '.gitattributes', '.github/workflows/release-check.yml',
   'tsconfig.json', 'tsconfig.build.json', 'app/package.json', 'app/tsconfig.json',
@@ -36,7 +36,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function tree(directory: string): Promise<Map<string, Buffer>> {
+async function tree(directory: string, excluded: ReadonlySet<string> = new Set()): Promise<Map<string, Buffer>> {
   const result = new Map<string, Buffer>()
   const boundary = await realpath(directory)
   async function visit(path: string, ancestors: Set<string>): Promise<void> {
@@ -49,7 +49,9 @@ async function tree(directory: string): Promise<Map<string, Buffer>> {
     if (info.isDirectory()) {
       if (ancestors.has(actual)) throw new Error(`Cyclic release input: ${path}`)
       const next = new Set(ancestors).add(actual)
-      for (const name of (await readdir(path)).sort()) await visit(join(path, name), next)
+      for (const name of (await readdir(path)).sort()) {
+        if (!excluded.has(name)) await visit(join(path, name), next)
+      }
     } else if (info.isFile()) {
       result.set(relative(directory, path).split(sep).join('/'), await readFile(path))
     } else {
@@ -70,7 +72,7 @@ export async function sourceFingerprint(root: string): Promise<string> {
     const path = resolve(root, input)
     if (!await exists(path)) continue
     if ((await stat(path)).isDirectory()) {
-      for (const [name, bytes] of await tree(path)) {
+      for (const [name, bytes] of await tree(path, input === 'integrations/a2a' ? new Set(['node_modules', 'dist']) : undefined)) {
         // The pinned downloaded wrapper is an output, not source.
         if (input === 'desktop/service' && name === 'ShadowService.exe') continue
         if (input === 'desktop/aria2' && ['aria2c', 'aria2c.exe', 'COPYING', 'LICENSE.OpenSSL',
@@ -104,6 +106,8 @@ export async function createReleaseManifest(
         && name !== (target.platform === 'win32' ? 'aria2c.exe' : 'aria2c')) continue
       if (prefix === 'resources/backend' && !name.startsWith('dist/') && !name.startsWith('node_modules/') && name !== 'package.json') continue
       if (prefix === 'resources/backend' && name.startsWith('dist/') && name.endsWith('.map')) continue
+      // electron-builder removes Git directory placeholders from extraResources.
+      if (prefix === 'resources/backend' && name.startsWith('node_modules/') && name.endsWith('/.gitkeep')) continue
       if (prefix === 'asar/dist' && !/\.(?:js|cjs)$/.test(name)) continue
       files[`${prefix}/${name}`] = hash(bytes)
     }

@@ -106,6 +106,7 @@ folder boundaries, see the
 | `pnpm typecheck` | Typecheck backend, scripts, integrations, desktop, and Vue app |
 | `pnpm test` / `pnpm test:desktop` | Run backend/frontend-logic tests / desktop tests |
 | `pnpm desktop:dev` / `pnpm desktop` | Develop Electron / build and verify a native package |
+| `pnpm release` | Build current source natively over SSH and deploy to your Mac; see [internal releases](docs/release.md#internal-mac-dogfood-releases) |
 
 For a focused test, run
 `pnpm exec node --import tsx --test src/sessions/locality_test.ts`.

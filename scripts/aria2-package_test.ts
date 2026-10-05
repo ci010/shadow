@@ -2,11 +2,31 @@ import assert from 'node:assert/strict'
 import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { verifyAria2Package } from './aria2-package.ts'
+import { prepareAria2Signing, verifyAria2Package } from './aria2-package.ts'
 import { desktopTarget } from './desktop-target.ts'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 
 const requirements = ['COPYING', 'LICENSE.OpenSSL', 'BUILD.md', 'build-aria2-native.sh', 'aria2-1.37.0-source.tar.gz']
+
+test('macOS downloader signing is verified before release inventory and failures propagate', async () => {
+  await withTempWorkspace(async root => {
+    const calls: Array<[string, string[]]> = []
+    const run = async (command: string, args: string[]) => { calls.push([command, args]) }
+    await prepareAria2Signing(root, desktopTarget('win32', 'x64'), run)
+    await prepareAria2Signing(root, desktopTarget('linux', 'x64'), run)
+    assert.deepEqual(calls, [])
+    const binary = join(root, 'desktop', 'aria2', 'aria2c')
+    await prepareAria2Signing(root, desktopTarget('darwin', 'arm64'), run)
+    assert.deepEqual(calls, [
+      ['/usr/bin/codesign', ['--sign', '-', '--force', '--timestamp', '--options', 'runtime',
+        '--entitlements', join(root, 'desktop', 'assets', 'entitlements.mac.plist'), binary]],
+      ['/usr/bin/codesign', ['--verify', '--strict', binary]],
+    ])
+    await assert.rejects(prepareAria2Signing(root, desktopTarget('darwin', 'x64'), async () => {
+      throw new Error('Native signing failed')
+    }), /Native signing failed/)
+  })
+})
 
 test('packaging validates native executable format, pinned version and bundled source', async () => {
   await withTempWorkspace(async root => {

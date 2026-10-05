@@ -12,6 +12,23 @@ export function aria2Executable(target: DesktopTarget): string {
   return target.platform === 'win32' ? 'aria2c.exe' : 'aria2c'
 }
 
+export async function prepareAria2Signing(
+  root: string,
+  target: DesktopTarget,
+  run: (command: string, args: string[]) => Promise<void> = async (command, args) => {
+    await execFileAsync(command, args, { timeout: 30_000 })
+  },
+): Promise<void> {
+  if (target.platform !== 'darwin') return
+  const binary = join(root, 'desktop', 'aria2', aria2Executable(target))
+  // Match electron-builder's ad-hoc signing before recording the byte inventory.
+  await run('/usr/bin/codesign', [
+    '--sign', '-', '--force', '--timestamp', '--options', 'runtime',
+    '--entitlements', join(root, 'desktop', 'assets', 'entitlements.mac.plist'), binary,
+  ])
+  await run('/usr/bin/codesign', ['--verify', '--strict', binary])
+}
+
 export async function verifyAria2Package(
   root: string,
   target: DesktopTarget = desktopTarget(),

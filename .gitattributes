@@ -1,1 +1,2 @@
 scripts/build-aria2-native.sh text eol=lf
+desktop/assets/*.plist text eol=lf

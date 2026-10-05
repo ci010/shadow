@@ -1,5 +1,78 @@
 # Desktop release verification
 
+## Internal Mac dogfood releases
+
+`pnpm release` means **build the current working source and deploy it to your
+Mac**, not publish a GitHub Release. It does not need a tag, commit, push, Actions
+run, or public distribution. Uncommitted and untracked source files are included
+in an isolated, fingerprinted snapshot; local configurations, credentials,
+runtime workspaces, dependencies and previous build outputs are excluded.
+
+Copy `.shadow-release.example.json` to the ignored `.shadow-release.json` and
+set the SSH target, an unused release directory below that user's home, and
+absolute native Node/pnpm/PATH locations. An optional `identityFile` selects an
+existing private key by its **local path**; never copy the key into the project.
+Otherwise the command uses normal SSH configuration/agent authentication.
+Configuration inside the repository must be Git-ignored, untracked, and outside
+the copied source directories; the command rejects unsafe configuration locations
+before reading them. A configuration file outside the repository is also supported.
+The target's SSH host key must already be trusted; the command does not bypass
+host-key checking or prompt for a password.
+
+```sh
+pnpm release
+pnpm release --config <path-to-local-config>
+```
+
+The first implementation targets Apple Silicon macOS. The Mac needs the pinned
+Node/pnpm toolchain, Git, Xcode command-line tools, Homebrew's `autoconf`,
+`automake`, `libtool`, `pkg-config`, and `gettext` (including gettext's bin
+directory on the configured PATH). Log into its graphical desktop as the SSH
+user. It installs the snapshot's frozen npm dependencies and builds the pinned
+aria2 source in a private cache; it does not install OS packages, services or
+login items. Only source/build files cross SSH, never a local provider config.
+
+**Quit Shadow on the Mac before releasing.** The command refuses a running
+managed app, including its remaining helpers/backend, both before the build and
+before deployment. It never force-quits a process or interrupts running tasks.
+Builds execute natively on the Mac with the existing `pnpm desktop` gates plus
+the execution/session-recovery regressions. Windows is only the initiating host;
+GitHub is not the deployment controller.
+
+Each successful build lives at `<remoteRoot>/releases/<release-id>/Shadow.app`.
+A `current` symlink and `~/Applications/Shadow.app` provide a stable entry.
+An existing unmanaged application at that entry is never overwritten. This
+dogfood target is a **Main**, with a dedicated `<remoteRoot>/profile-main` desktop
+profile. Its owner-only `desktop-deployment.v1.json` lives beside each signed
+bundle, not inside it, so opening the stable app from Finder also selects the
+same profile. An explicit desktop profile override still takes precedence.
+The existing default profile (including any Child test configuration), data
+directories, credentials and pairings are neither copied nor reset. The first
+launch preselects Main and opens its normal setup; later releases preserve its
+configuration. An unexpected Child role in the dedicated Main profile fails
+explicitly rather than being silently changed.
+
+Before promotion, the freshly launched application's private parent IPC must
+report its exact PID, executable, build ID, source fingerprint, loaded renderer
+and runtime readiness. First launch reports `setup-required`, not a connected
+node. Main's local runtime readiness does **not** certify external providers,
+Child connections or an end-to-end tool invocation.
+
+Build failures leave the current app untouched. Failed startup is an explicit
+failure: earlier versions are retained, but the command does **not** restart an
+older binary against potentially migrated data, restore user data, or kill the
+failed app. Quit that app and inspect its `application.log` before recovery.
+Applications can migrate data on startup, so retaining old binaries is not a
+data rollback guarantee. An interrupted release lock is not automatically
+removed; verify the recorded process is gone before manually clearing it.
+
+Build logs and source snapshots are retained under `<remoteRoot>/builds/`;
+deployment identity/status under `releases/<release-id>/release.json`; startup
+failure evidence under `failure.json`. The initiating machine retains its
+source archive and receipt under `.tmp/mac-release/`. There is no automatic
+pruning yet. Packages remain ad-hoc signed and unnotarized; this is an internal
+deployment path, not a public installer or a Gatekeeper bypass.
+
 The release pipeline builds natively for the following targets. Each package
 contains Electron, the Vue assets, the backend and its production dependencies.
 Only Windows includes the pinned WinSW service host.
@@ -112,6 +185,9 @@ this does not disable the renderer's sandbox/context isolation. These are
 test artifacts, not Gatekeeper-approved public releases. Trusted distribution
 requires a separate Developer ID/notarization setup; do not bypass OS security
 warnings as part of build verification.
+Keep the entitlement plist files LF-terminated when transferring a Windows
+checkout to a Mac. Git attributes enforce this: macOS `codesign` may reject CRLF
+entitlements even when `plutil -lint` accepts the same file.
 
 On Linux, extract the entire tarball and run its `shadow` executable as a regular
 desktop user, keeping the adjacent resources/libraries intact. The archive needs
@@ -174,6 +250,12 @@ are required on Windows and forbidden in macOS/Linux package inventories.
 the actual packaged files, including ASAR contents. Missing, extra, modified or
 stale files fail verification. This is a consistency check, not a code-signing
 or supply-chain attestation.
+The input inventory omits dependency `.gitkeep` placeholders that Electron's
+packager removes; verification still rejects unexpected files in the package.
+Only the target OS's aria2 executable is included, even if another platform's
+binary is present in the source staging directory. On macOS the downloader is
+ad-hoc signed and verified before its hash is recorded, using the same signing
+options as the application packager; packaging must preserve those bytes.
 
 The packaged smoke relocates the entire application outside the repository,
 rechecks its manifest, and runs its copied executable in Node mode with

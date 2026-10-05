@@ -1,0 +1,7 @@
+{
+  "host": "your-user@your-mac",
+  "remoteRoot": "/Users/your-user/.shadow-releases",
+  "remoteNode": "/opt/homebrew/bin/node",
+  "remotePnpm": "/opt/homebrew/bin/pnpm",
+  "remotePath": "/opt/homebrew/bin:/opt/homebrew/opt/gettext/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+}

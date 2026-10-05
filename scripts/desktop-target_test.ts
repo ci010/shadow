@@ -59,6 +59,9 @@ test('packaging configuration keeps WinSW Windows-only and uses shared portable 
   const entitlements = await readFile(new URL('../desktop/assets/entitlements.mac.plist', import.meta.url), 'utf8')
   assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/)
   assert.match(entitlements, /com\.apple\.security\.cs\.disable-library-validation/)
+  assert.doesNotMatch(entitlements, /\r/, 'macOS codesign requires LF entitlements even in a Windows checkout')
+  const attributes = await readFile(new URL('../.gitattributes', import.meta.url), 'utf8')
+  assert.match(attributes, /^desktop\/assets\/\*\.plist text eol=lf$/m)
   assert.equal(desktop.build.mac.notarize, false)
   assert.equal(desktop.build.linux.target, 'tar.gz')
   assert.equal(desktop.build.linux.executableName, 'shadow')
@@ -66,6 +69,13 @@ test('packaging configuration keeps WinSW Windows-only and uses shared portable 
   assert(desktop.build.extraResources.some((item: { from: string; to: string }) =>
     item.from === 'aria2' && item.to === 'aria2'))
   assert(desktop.build.win.extraResources.some((item: { from: string }) => item.from === 'service'))
+  const aria2 = desktop.build.extraResources.find((item: { from: string }) => item.from === 'aria2')
+  assert(!aria2.filter.includes('aria2c') && !aria2.filter.includes('aria2c.exe'))
+  for (const platform of ['win', 'mac', 'linux']) {
+    const binary = platform === 'win' ? 'aria2/aria2c.exe' : 'aria2/aria2c'
+    assert(desktop.build[platform].extraResources.some((item: { from: string; to: string }) =>
+      item.from === binary && item.to === binary))
+  }
   assert.equal(desktop.build.mac.icon, 'assets/icon.png')
   assert.equal(desktop.build.linux.icon, 'assets/icon.png')
   assert.deepEqual(await readFile(new URL('../desktop/assets/icon.png', import.meta.url)),

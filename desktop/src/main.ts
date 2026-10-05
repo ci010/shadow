@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import {
@@ -75,11 +76,14 @@ import { DesktopMicroApps } from './micro-apps.js'
 import { createMicroAppWindow } from './micro-app-window.js'
 import { parseMicroAppArguments, type MicroAppIdentity } from './micro-app-contract.js'
 import { installMicroAppIpc } from './micro-app-ipc.js'
+import { desktopReleaseReadiness } from './release-readiness.js'
+import { readManagedDeploymentProfile, type ManagedDeploymentProfile } from './deployment-profile.js'
 
 export { secureWebPreferences } from './window-controls.js'
 
 let mainWindow: BrowserWindow | null = null
 let mainTray: Tray | null = null
+let managedDeployment: ManagedDeploymentProfile | undefined
 let openTaskApp: ((identity: MicroAppIdentity) => Promise<void>) | undefined
 const pendingTaskApps: MicroAppIdentity[] = []
 
@@ -354,6 +358,11 @@ async function start(): Promise<void> {
     ),
     new FileChildBootstrap(configPath, childPairingCommand),
   )
+  if (managedDeployment) {
+    const state = await coordinator.load()
+    if (state.mode === null) await coordinator.dispatch({ type: 'select-role', mode: 'main' })
+    else if (state.mode !== 'main') throw new Error('Managed Main profile contains a different role; existing configuration was not changed')
+  }
   registerRuntimeHostQuitLifecycle(app, {
     stop: async () => {
       try {
@@ -426,13 +435,22 @@ async function start(): Promise<void> {
   else await mainWindow.loadFile(target.filePath)
   if (initialApp) requestTaskApp(initialApp)
   for (const identity of pendingTaskApps.splice(0)) requestTaskApp(identity)
+  if (app.isPackaged && process.env.SHADOW_DESKTOP_RELEASE_IPC === '1' && process.connected) {
+    const manifest: unknown = JSON.parse(await readFile(join(process.resourcesPath, 'release-manifest.v1.json'), 'utf8'))
+    const readiness = await desktopReleaseReadiness(manifest,
+      { pid: process.pid, executablePath: process.execPath }, await coordinator.load(), () => coordinator.ensureRuntime())
+    process.send?.(readiness)
+  }
 }
 
 if (!process.env.SHADOW_DESKTOP_DISABLE_AUTO_START) {
+  const profileOverride = app.commandLine.getSwitchValue('user-data-dir') || process.env.SHADOW_DESKTOP_USER_DATA
+  managedDeployment = profileOverride ? undefined
+    : readManagedDeploymentProfile(process.resourcesPath, app.isPackaged, process.platform)
   const profilePath = resolveDesktopUserDataPath(
     app.getAppPath(),
     app.isPackaged,
-    app.commandLine.getSwitchValue('user-data-dir') || process.env.SHADOW_DESKTOP_USER_DATA,
+    profileOverride || managedDeployment?.userDataPath,
   )
   if (profilePath) {
     mkdirSync(profilePath, { recursive: true })

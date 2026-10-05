@@ -46,7 +46,7 @@
       {
         "from": "aria2",
         "to": "aria2",
-        "filter": ["aria2c", "aria2c.exe", "COPYING", "LICENSE.OpenSSL", "aria2-1.37.0-source.tar.gz", "BUILD.md", "build-aria2-native.sh"]
+        "filter": ["COPYING", "LICENSE.OpenSSL", "aria2-1.37.0-source.tar.gz", "BUILD.md", "build-aria2-native.sh"]
       },
       {
         "from": "../app/dist",
@@ -57,7 +57,8 @@
       "target": "nsis",
       "icon": "assets/icon.ico",
       "extraResources": [
-        { "from": "service", "to": "service", "filter": ["**/*"] }
+        { "from": "service", "to": "service", "filter": ["**/*"] },
+        { "from": "aria2/aria2c.exe", "to": "aria2/aria2c.exe" }
       ]
     },
     "mac": {
@@ -67,13 +68,19 @@
       "identity": "-",
       "entitlements": "assets/entitlements.mac.plist",
       "entitlementsInherit": "assets/entitlements.mac.plist",
-      "notarize": false
+      "notarize": false,
+      "extraResources": [
+        { "from": "aria2/aria2c", "to": "aria2/aria2c" }
+      ]
     },
     "linux": {
       "target": "tar.gz",
       "icon": "assets/icon.png",
       "category": "Utility",
-      "executableName": "shadow"
+      "executableName": "shadow",
+      "extraResources": [
+        { "from": "aria2/aria2c", "to": "aria2/aria2c" }
+      ]
     },
     "nsis": {
       "oneClick": false,

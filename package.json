@@ -29,6 +29,7 @@
     "test:release": "node --import tsx --test scripts/*_test.ts src/runtime/service-mode_test.ts src/runtime/runtime-cli_test.ts app/src/vite_test.ts && pnpm test:desktop",
     "typecheck": "tsc --noEmit && pnpm --filter @shadow/a2a-bridge typecheck && pnpm --filter @shadow/desktop typecheck && pnpm --filter @shadow/app typecheck",
     "desktop": "node --import tsx scripts/desktop.ts build",
+    "release": "node --import tsx scripts/release-mac.ts",
     "desktop:package": "node --import tsx scripts/desktop.ts package",
     "release:prepare": "node --import tsx scripts/prepared-build.ts prepare",
     "release:verify-prepared": "node --import tsx scripts/prepared-build.ts verify",

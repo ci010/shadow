@@ -87,6 +87,20 @@ test('release verification rejects tampered or extra packaged resources', async 
   })
 })
 
+test('release inventory omits dependency Git placeholders removed by packaging but still rejects extras', async () => {
+  await withTempWorkspace(async root => {
+    const packaged = await fixture(root)
+    const placeholder = 'node_modules/undici/lib/llhttp/.gitkeep'
+    await file(root, `desktop/backend/${placeholder}`, '')
+    const manifest = await createReleaseManifest(root, await sourceFingerprint(root), windows)
+    assert.equal(Object.hasOwn(manifest.files, `resources/backend/${placeholder}`), false)
+    await file(packaged, 'resources/release-manifest.v1.json', JSON.stringify(manifest))
+    await verifyReleaseManifest(packaged, root, windows)
+    await file(packaged, `resources/backend/${placeholder}`, '')
+    await assert.rejects(verifyReleaseManifest(packaged, root, windows), /inventory/)
+  })
+})
+
 test('release snapshot rejects source edits during build and unsafe manifest paths', async () => {
   await withTempWorkspace(async root => {
     await fixture(root)
