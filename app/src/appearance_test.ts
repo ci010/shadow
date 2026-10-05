@@ -48,6 +48,13 @@ test('scrollbar thumbs contrast against light and dark application surfaces', ()
   assert.match(styles, /::-webkit-scrollbar-thumb\s*\{[^}]*background: var\(--c-scrollbar-thumb\);/)
 })
 
+test('native scrollbar styling is only a fallback and document tabs inherit shared geometry', async () => {
+  assert.match(styles, /@supports not selector\(::-webkit-scrollbar\)\s*\{\s*\*\s*\{\s*scrollbar-width: thin;\s*scrollbar-color: var\(--c-scrollbar-thumb\) transparent;/)
+  assert.match(styles, /::-webkit-scrollbar-thumb\s*\{[^}]*border-radius: var\(--radius-sm\);/)
+  const workbench = await readFile(new URL('./components/files/FileWorkbench.vue', import.meta.url), 'utf8')
+  assert.doesNotMatch(workbench, /scrollbar-(?:width|color)\s*:/)
+})
+
 test('file source content remains intrinsic-height with composer-sized trailing scroll space', async () => {
   const preview = await readFile(new URL('./components/files/FilePreviewModal.vue', import.meta.url), 'utf8')
   assert.match(preview, /\.inline \.file-modal-text-wrap\s*\{\s*align-self: flex-start;/)

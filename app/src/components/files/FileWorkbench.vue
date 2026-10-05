@@ -545,7 +545,7 @@ onUnmounted(() => {
 .draft-document > .conversation-document { flex: 0 0 auto; overflow: visible; }
 .document-toolbar { display: flex; align-items: stretch; flex: 0 0 var(--document-toolbar-height, 40px); min-width: 0; border-bottom: 1px solid var(--c-border); background: var(--c-bg-card); }
 .document-tablist { display: flex; flex: 1; min-width: 0; }
-.document-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.document-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
 .fixed-tab { flex: 0 1 auto; }
 .fixed-tab [role="tab"] { min-height: 40px; }
 .fixed-tab [role="tab"] > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

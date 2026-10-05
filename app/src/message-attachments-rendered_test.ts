@@ -49,7 +49,7 @@ test('chat images open an accessible viewer while media playback and authenticat
   await mkdir(resolve(output, '..'), { recursive: true })
   await writeFile(output, '<html>Generated review report</html>')
   const server = await createServer({
-    configFile: false, root: resolve(root, 'app'), logLevel: 'error',
+    configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-attachments',
       resolveId: id => id === '/media-fixture.ts' ? '\0media-fixture' : undefined,

@@ -80,6 +80,21 @@ async function main() {
       const execution=document.querySelector('.execution-card').getBoundingClientRect();
       Math.abs(response.right - event.right) < 2 && Math.abs(event.right - execution.right) < 2; }`), 'All trace rows share the same edge')
     assert.equal(await execute(`getComputedStyle(document.querySelector('.system-event .prose h2')).fontSize`), '13px')
+    const workEvent = '[data-event-id="work:fixture"]'
+    assert.equal(await execute(`document.querySelector('${workEvent}').open`), false)
+    assert.equal(await execute(`!!document.querySelector('${workEvent} .event-payload')`), false, 'Collapsed work events do not mount raw payloads')
+    await execute(`document.querySelector('${workEvent} > summary').click()`)
+    await wait(`!!document.querySelector('${workEvent} .event-payload')`)
+    assert.equal(await execute(`document.querySelector('${workEvent} .payload-source').textContent`),
+      await execute(`window.__conversationFixture.messages.at(-1).content`), 'Event instructions and JSON remain exact plain text')
+    assert.equal(await execute(`!!document.querySelector('${workEvent} .prose')`), false, 'Agent-facing work events are not styled as chat prose')
+    assert.equal(await execute(`document.querySelector('${workEvent} .event-metadata').open`), false)
+    assert.ok(await execute(`document.querySelector('${workEvent} .event-metadata .trace-chevron')`), 'Metadata uses the shared disclosure affordance')
+    await execute(`document.querySelector('${workEvent} .event-metadata > summary').click()`)
+    await wait(`document.querySelector('${workEvent} .event-metadata').open`)
+    assert.match(await execute(`document.querySelector('${workEvent} .event-metadata dl').textContent`), /work:fixture/)
+    assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0, 'Work event expansion never navigates or adopts work')
+    await execute(`document.querySelector('${workEvent} .event-metadata > summary').click()`)
     assert.equal(await execute(`document.querySelector('.yield-decision').closest('.response-disclosure')`), null)
     assert.equal(await execute(`document.querySelector('.tool-activity').closest('.response-disclosure')`), null)
     await execute(`document.querySelector('.response-disclosure > summary').focus()`)
@@ -140,6 +155,27 @@ async function main() {
           message.width >= body.width * .8 && message.right <= body.right + 1; }`), 'Expanded background text uses the available mobile rail')
         assert.equal(await execute(`document.querySelector('.execution-card').scrollWidth > document.querySelector('.execution-card').clientWidth`), false)
         assert.equal(await execute(`document.querySelector('.system-event').scrollWidth > document.querySelector('.system-event').clientWidth`), false)
+        const work = await execute(`(() => {
+          const event = document.querySelector('${workEvent}');
+          const payload = event.querySelector('.event-payload');
+          const style = getComputedStyle(payload);
+          const source = getComputedStyle(payload.querySelector('.payload-source'));
+          const theme = getComputedStyle(document.documentElement);
+          return {font:source.fontSize,weight:source.fontWeight,family:source.fontFamily,
+            background:style.backgroundColor,color:style.color,radius:style.borderRadius,
+            muted:theme.getPropertyValue('--c-bg-muted').trim(),secondary:theme.getPropertyValue('--c-text-secondary').trim(),
+            overflow:event.scrollWidth > event.clientWidth || payload.scrollWidth > payload.clientWidth,
+            nestedHeader:getComputedStyle(event.querySelector('.event-metadata > summary')).minHeight};
+        })()`)
+        assert.equal(work.font, '12px')
+        assert.equal(work.weight, '400')
+        assert.match(work.family, /monospace/)
+        assert.equal(work.radius, '0px')
+        assert.equal(work.overflow, false, 'Long work/session IDs wrap within the event rail')
+        const rgb = (hex: string) => `rgb(${hex.slice(1).match(/../g)!.map(part => parseInt(part, 16)).join(', ')})`
+        assert.equal(work.background, rgb(work.muted))
+        assert.equal(work.color, rgb(work.secondary))
+        assert.equal(work.nestedHeader, width === 390 ? '44px' : '40px')
         const colors = await execute(`(() => {
           const root = getComputedStyle(document.documentElement);
           const token = name => { const el = document.createElement('span'); el.style.color = root.getPropertyValue(name); document.body.append(el); const value = getComputedStyle(el).color; el.remove(); return value };
@@ -173,6 +209,11 @@ async function main() {
         assert.equal(colors.stages.completed, colors.success)
         assert.equal(colors.stages.failed, colors.error)
         await screenshot(`conversation-${width}-${dark ? 'dark' : 'light'}`)
+        if (process.env.CONVERSATION_SCREENSHOTS) {
+          await execute(`document.querySelector('${workEvent}').scrollIntoView({block:'center'})`)
+          await frame()
+          await screenshot(`work-event-${width}-${dark ? 'dark' : 'light'}`)
+        }
       }
     }
     await execute(`window.__conversationFixture.messages[8].content = JSON.stringify({requestId:'budget',option:'Only investigate for now',custom:true,answeredBy:'user',answeredAt:'2026-09-21T10:00:00Z'})`)

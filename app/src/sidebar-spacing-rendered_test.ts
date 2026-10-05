@@ -35,7 +35,7 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
   let failFolders = false
   const pendingFolders: (() => void)[] = []
   const server = await createServer({
-    configFile: false, root: resolve(root, 'app'), logLevel: 'error',
+    configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-sidebar-spacing',
       enforce: 'pre',

@@ -1,11 +1,11 @@
 <template>
-  <section v-if="jobs.length || loading || error" class="automations-sidebar" aria-label="Automations" :aria-busy="loading">
+  <section v-if="jobs.length || initialLoading || error" class="automations-sidebar" aria-label="Automations" :aria-busy="loading">
     <h3 v-if="!rail">Automations</h3>
     <div v-if="error" class="automations-error" role="alert">
       <p v-if="!rail">{{ error }}</p>
       <button type="button" class="text-action" aria-label="Retry automations" @click="refresh">Retry</button>
     </div>
-    <p v-if="loading && !jobs.length && !error && !rail" class="automations-note" role="status">Loading automations…</p>
+    <p v-if="initialLoading && !error && !rail" class="automations-note" role="status">Loading automations…</p>
     <HoverInfo v-for="job in jobs" :key="job.id" :text="`${job.name} · Fresh context per run`"><template #default="{ triggerProps }">
       <button type="button" class="automation-entry" v-bind="triggerProps" :class="{ selected: selectedId === job.id, 'is-rail': rail }"
         :aria-label="`Open automation ${job.name}`" :aria-current="selectedId === job.id ? 'page' : undefined"
@@ -20,6 +20,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'
 import { useAutomationCatalog } from '../composables/useAutomationCatalog.ts'
@@ -31,7 +32,8 @@ const props = defineProps<{
   groups: Array<{ id: string; sessions: SidebarSession[] }>; stages: Record<string, string>
 }>()
 defineEmits<{ select: [id: string] }>()
-const { jobs, error, loading, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
+const { jobs, error, loading, loaded, refresh } = useAutomationCatalog(() => props.apiBase, () => props.active)
+const initialLoading = computed(() => loading.value && !loaded.value)
 function working(id: string) {
   return prominentWorkingStage(props.groups.find(group => group.id === id)?.sessions.map(session => props.stages[session.sessionId]) ?? [])
 }

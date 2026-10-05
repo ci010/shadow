@@ -376,7 +376,7 @@ async function assertScrollbar(dark: boolean): Promise<void> {
   const expected = dark ? 'rgb(119, 119, 130)' : 'rgb(124, 135, 151)'
   assert.equal(result.token.toLowerCase(), dark ? '#777782' : '#7c8797')
   assert.equal(result.thumb, expected, 'The actual file scroller uses the dedicated visible thumb token')
-  assert.ok(result.native.startsWith(expected), 'Native scrollbar-color also uses the visible thumb token')
+  assert.equal(result.native, 'auto', 'Native scrollbar-color must not override the custom thumb geometry')
   const luminance = (value: string) => {
     const channels = value.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(channel => {
       const normalized = channel / 255

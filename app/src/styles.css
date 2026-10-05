@@ -198,8 +198,14 @@
 
 * {
   box-sizing: border-box;
-  scrollbar-width: thin;
-  scrollbar-color: var(--c-scrollbar-thumb) transparent;
+}
+
+/* Non-auto standard properties override custom scrollbar geometry in Chromium. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--c-scrollbar-thumb) transparent;
+  }
 }
 
 *, *::before, *::after {

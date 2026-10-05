@@ -16,7 +16,7 @@
       </div>
     </details>
   </article>
-  <details v-else class="system-event" :class="{ 'event-failed': presentation.failed }" :open="presentation.completion" :data-event-id="meta.attrs['event-id']">
+  <details v-else class="system-event" :class="{ 'event-failed': presentation.failed }" :open="presentation.completion" :data-event-id="meta.attrs['event-id']" @toggle.self="toggle">
     <summary class="event-header trace-header" @click="$emit('interact')">
       <span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />
       <span class="event-icon" :class="presentation.completion ? 'i-lucide-git-pull-request' : 'i-lucide-radio'" aria-hidden="true" />
@@ -25,24 +25,31 @@
       <MessageTimestamp :timestamp="timestamp" />
     </summary>
     <div class="event-body trace-guide">
-      <slot />
+      <ToolPayload v-if="rawContent && expanded" class="event-payload" :source="rawContent" />
+      <slot v-else-if="!rawContent" />
       <button v-if="source" type="button" class="event-inspect" @click="$emit('inspect', source.sessionId)">View {{ source.mode === 'session' ? 'conversation' : 'execution' }} <span class="i-lucide-arrow-up-right event-icon" aria-hidden="true" /></button>
       <details class="event-metadata">
-        <summary @click="$emit('interact')">Event details</summary>
-        <dl><template v-for="(value, key) in meta.attrs" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
+        <summary class="trace-header" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />Event details</summary>
+        <dl class="trace-guide"><template v-for="(value, key) in meta.attrs" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
       </details>
     </div>
   </details>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { eventPresentation, type ChatEventMeta } from '../chat-events.ts'
 import type { SidebarSession } from '../folders-sidebar.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
-const props = defineProps<{ meta: ChatEventMeta; timestamp?: string; source?: SidebarSession; selected?: boolean }>()
+import ToolPayload from './ToolPayload.vue'
+const props = defineProps<{ meta: ChatEventMeta; content?: string; timestamp?: string; source?: SidebarSession; selected?: boolean }>()
 defineEmits<{ inspect: [id: string]; interact: [] }>()
 const presentation = computed(() => eventPresentation(props.meta))
+const rawContent = computed(() => props.meta.type === 'work-realignment' ? props.content : undefined)
+const expanded = ref(false)
+function toggle(event: Event) {
+  if (event.currentTarget instanceof HTMLDetailsElement) expanded.value = event.currentTarget.open
+}
 </script>
 
 <style scoped>
@@ -53,6 +60,7 @@ const presentation = computed(() => eventPresentation(props.meta))
 .event-icon { display: inline-block; flex: 0 0 16px; width: 16px; height: 16px; }
 .event-source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .event-body { min-width: 0; padding-bottom: 8px; color: var(--c-text); overflow-wrap: anywhere; }
+.event-payload { margin: 4px 0 8px; padding: 10px 12px; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace; background: var(--c-bg-muted); border-radius: var(--radius-control); color: var(--c-text-secondary); }
 .event-body :deep(.prose) { font-size: 13px; line-height: 1.5; }
 .event-body :deep(.prose > :first-child) { margin-top: 0; }
 .event-body :deep(.prose > :last-child) { margin-bottom: 0; }

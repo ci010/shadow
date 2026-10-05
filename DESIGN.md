@@ -309,7 +309,11 @@ Desktop conversation rows form a centered column of `calc(100cqw - 112px)` with 
 
 Compacted-history navigation, unlinked execution traces, and the conversation summary share that same capped rail. Use transparent secondary navigation, (12px) disclosure labels, (40px) minimum rows, and (44px) touch targets on coarse pointers. Expanded execution lists and summary Markdown share a one-pixel neutral guide; execution titles wrap in quiet full-width rows rather than filled primary buttons. Summaries remain collapsed and render Markdown only when opened, with no nested vertical scroller. Initiative title, goal, scope, and non-goals live in the session-title details popover (or mobile sheet), not in a second heading row; Project coordination guidance follows the same rule.
 
+Work realignment events keep their agent-facing instructions and JSON in the shared tool payload renderer, mounted only when expanded: (12px) monospace, secondary text on a muted surface, token-based corners, and wrapping identifiers. Event metadata uses the same chevron disclosure as other trace details, not the browser's default marker. Preserve event content and behavior; these are read-only records, not adoption controls.
+
 The composer is `calc(100% - 40px)` wide, capped at (860px), changing to `calc(100% - 24px)` on narrow viewports. It owns a measured trailing history allowance through `--composer-height`. Preserve stable scrollbar gutters and the scroll container's own geometry; do not use the prose measure as the workbench's outer width.
+
+The composer toolbar keeps its send/stop action beside the model and attachment controls. When the submit area has at most (320px) available, visually hide the shortcut/status hint rather than wrapping the toolbar; keep its live status available to assistive technology. Use the available pane space, not the window width, so sidebars and long model labels do not push the action onto a second row.
 
 ### Phone navigation and composition
 
@@ -338,6 +342,8 @@ Overlays retain structural depth: `ComposerPopover.vue` uses `0 12px 36px var(--
 ## Shapes
 
 All six radius tokens (`--radius-sm`, `--radius-control`, `--radius-surface`, `--radius-overlay`, `--radius-pill`, `--radius-circle`) resolve to (0px). UnoCSS rounded utilities map into this square vocabulary. Buttons, composer send control, chips, cards, inputs, and overlays remain square; the token names do not authorize rounded pills.
+
+Custom scrollbar thumbs follow `--radius-sm`, with a six-pixel width and height. Keep native `scrollbar-width` and `scrollbar-color` styling limited to browsers without `::-webkit-scrollbar` support; non-auto values override custom thumb geometry in Chromium/Electron. The native fallback cannot control corner radius.
 
 The circular activity spinner and its small animated center are explicit animation geometry, not a general component-radius exception. The cursor highlight is another existing decorative exception. Preserve those targeted shapes without weakening the UI corner rule.
 

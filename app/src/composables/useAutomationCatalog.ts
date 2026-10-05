@@ -18,13 +18,16 @@ export function useAutomationCatalog(base: () => string, active: () => boolean) 
   const visible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
   const enabled = computed(() => active() && activated.value && visible.value)
   const state = shallowRef<ReturnType<typeof catalog.acquire>['state']>()
+  const retained = shallowRef<ReturnType<typeof catalog.acquire>['state']>()
+  const displayed = computed(() => state.value?.loaded ? state.value : retained.value ?? state.value)
   let refresh = () => {}
   let identity = ''
   watch(() => [base(), enabled.value] as const, ([scope, enabled], _previous, onCleanup) => {
-    if (identity !== scope) { identity = scope; state.value = undefined }
+    if (identity !== scope) { identity = scope; state.value = undefined; retained.value = undefined }
     refresh = () => {}
     if (!enabled) return
     const lease = catalog.acquire(scope)
+    if (state.value?.loaded) retained.value = state.value
     state.value = lease.state
     refresh = lease.refresh
     onCleanup(lease.release)
@@ -39,9 +42,9 @@ export function useAutomationCatalog(base: () => string, active: () => boolean) 
   })
   return {
     enabled,
-    jobs: computed(() => state.value?.jobs ?? []),
+    jobs: computed(() => displayed.value?.jobs ?? []),
     loading: computed(() => state.value?.loading ?? enabled.value),
-    loaded: computed(() => state.value?.loaded ?? false),
+    loaded: computed(() => displayed.value?.loaded ?? false),
     error: computed(() => state.value?.error ?? ''),
     revision: computed(() => state.value?.revision ?? 0),
     refresh: () => refresh(),

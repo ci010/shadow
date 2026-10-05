@@ -1,6 +1,25 @@
 import { parseMediaFromContent } from '../../src/utils/media-parse.ts'
+import { conversationFilePath } from './conversation-file-link.ts'
+import type { OpenFile } from './file-workbench.ts'
+import type { SessionDetails } from './session-details.ts'
 
 export type AttachmentKind = 'image' | 'video' | 'audio' | 'file'
+
+/** Map local attachment paths to the existing workdir browser; remote display paths are not roots. */
+export function attachmentFile(path: string, workdir?: SessionDetails['workdir']): OpenFile | undefined {
+  if (workdir?.kind !== 'local' || workdir.available === false || !workdir.displayPath
+    || !path || /[\u0000-\u001f\u007f]/.test(path)) return undefined
+  const root = workdir.displayPath.replace(/\\/g, '/').replace(/\/+$/, '')
+  const windows = /^[a-z]:\//i.test(`${root}/`) || root.startsWith('//')
+  let relative = path.replace(/\\/g, '/')
+  if (/^(?:[a-z]:\/|\/)/i.test(relative)) {
+    const prefix = `${root}/`
+    if (!(windows ? relative.toLowerCase().startsWith(prefix.toLowerCase()) : relative.startsWith(prefix))) return undefined
+    relative = relative.slice(prefix.length)
+  }
+  // MEDIA contains raw filenames, not URLs: preserve literal %, #, and ? characters.
+  return conversationFilePath(relative)
+}
 
 export function attachmentName(path: string): string {
   if (/^data:image\//i.test(path)) return 'Image'

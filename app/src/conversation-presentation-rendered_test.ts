@@ -119,6 +119,10 @@ test('conversation presentation and compacted history render across themes and v
             { role:'assistant', event:'tool_call', content:'', toolCallId:'delegate',
               toolCall:{name:'subagent',arguments:{mode:'task',description:'Compile and finish native helper'}} },
             { role:'tool', event:'tool_result', toolCallId:'delegate', content:'Task completed.' },
+            { role:'user', isSystemEvent:true, eventMeta:{type:'work-realignment',source:'work-contract',
+              attrs:{type:'work-realignment','event-id':'work:fixture',source:'work-contract'}},
+              content:'Work work:fixture changed. Read its current context and assignment; stop obsolete actions. Only its current executor may adopt and resume. No permission or acceptance is implied.\\n' +
+                JSON.stringify({key:'work:fixture',revision:1,assignee:'web:chat-' + 'long-session-id-'.repeat(8)}) },
           ];
           Object.assign(window, { __conversationFixture:state, __showConversation:() => { state.messages = samples; state.loadingHistory = false } });
           window.__showCompaction = () => {
@@ -159,7 +163,7 @@ test('conversation presentation and compacted history render across themes and v
                   sessionId:'web:peer',stage:'completed',blocked:false,arguments:'{"mode":"task"}',receipt:'Task completed.'}]])},
                 ioAfter:new Map(), expandedThinking:new Set(),
                 toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, 11, 12]))),
-                inspectExecution:nav.inspectExecution, sourceForEvent:() => ({...sessions[0],mode:'task'}),
+                inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({...sessions[0],mode:'task'}) : undefined,
                 eventSourceSession:meta => meta.attrs['source-session-id'], clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
                 viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },
                 goBackToCurrentSegment(){ state.viewingPhysicalId = null },

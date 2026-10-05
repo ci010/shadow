@@ -26,6 +26,12 @@ test('conversation links open scoped previews and reveal nested files without na
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const { descriptor } = parse(await readFile(resolve(root, 'app', 'src', 'components', 'ChatTab.vue'), 'utf8'))
   const script = descriptor.scriptSetup!.content
+  const attachments = [...descriptor.template!.content.matchAll(/<MessageAttachments\b[\s\S]*?\/>/g)]
+  assert.equal(attachments.length, 2, 'History and streaming attachments share the tab-opening action')
+  for (const [template] of attachments) {
+    assert.match(template, /:workdir="currentWorkdir"/)
+    assert.match(template, /@open="workbench\?\.openLinkedFile\(\$event\)"/)
+  }
   const start = script.indexOf('function openConversationLink(')
   const end = script.indexOf('const marked =', start)
   assert.ok(start >= 0 && end > start)
@@ -33,6 +39,7 @@ test('conversation links open scoped previews and reveal nested files without na
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText
   const requests: string[] = []
+  const mediaRequests: string[] = []
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
@@ -45,6 +52,8 @@ test('conversation links open scoped previews and reveal nested files without na
           import { marked } from 'marked';
           import DOMPurify from 'dompurify';
           import Workbench from '/src/components/files/FileWorkbench.vue';
+          import Attachments from '/src/components/MessageAttachments.vue';
+          import { messageAttachments } from '/src/message-attachments.ts';
           import { conversationFileLink } from '/src/conversation-file-link.ts';
           import { conversationLinkSession } from '/src/project-coordination.ts';
           import { imagePreviewFromEvent } from '/src/image-viewer.ts';
@@ -56,10 +65,16 @@ test('conversation links open scoped previews and reveal nested files without na
             const openImagePreview = () => { throw new Error('Unexpected image preview') };
             ${handler}
             const markdown = '[Daily report](reports/daily/REPORT.md)\\n\\n[Unlisted report](unlisted.md)\\n\\n[Missing](missing.md)\\n\\n[External](https://example.invalid/report.md)';
+            const attachments = messageAttachments('MEDIA:reports/daily/REPORT.md\\nMEDIA:C:\\\\synthetic\\\\owner\\\\review notes\\\\自我介绍.md');
             return () => h(Workbench, {ref:workbench, apiBase:props.apiBase, sessionId:activeSessionId.value,
               contextKey:'fixture', active:true, style:'height:100vh'}, {
-              default:() => h('article', {class:'fixture-message', onClick:openConversationLink,
-                innerHTML:DOMPurify.sanitize(marked.parse(markdown))}),
+              default:() => [
+                h('article', {class:'fixture-message', onClick:openConversationLink,
+                  innerHTML:DOMPurify.sanitize(marked.parse(markdown))}),
+                h(Attachments, {paths:attachments.paths, apiBase:props.apiBase, sessionId:activeSessionId.value,
+                  workdir:{kind:'local',displayPath:'C:\\\\synthetic\\\\owner'},
+                  onOpen:file => workbench.value.openLinkedFile(file)}),
+              ],
             });
           }}).mount('#app');`
       },
@@ -69,6 +84,17 @@ test('conversation links open scoped previews and reveal nested files without na
           if (url.pathname === '/__file-links') {
             response.setHeader('Content-Type', 'text/html')
             response.end('<html><body style="margin:0"><div id="app"></div><script type="module" src="/file-links.ts"></script></body></html>')
+            return
+          }
+          if (url.pathname === '/projects/fixture/api/media') {
+            mediaRequests.push(url.search)
+            if (request.headers['x-fixture-renderer'] !== 'allowed') {
+              response.statusCode = 401
+              response.end('unauthorized')
+            } else {
+              response.setHeader('Content-Type', 'application/octet-stream')
+              response.end('Attachment download')
+            }
             return
           }
           if (!url.pathname.startsWith('/projects/fixture/api/sessions/')) return next()
@@ -108,7 +134,7 @@ test('conversation links open scoped previews and reveal nested files without na
   assert.ok(url)
   await build({ entryPoints: [resolve(root, 'desktop', 'tests', 'fixtures', 'conversation-file-link-smoke.ts')],
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs', target: 'node24', external: ['electron'], logLevel: 'silent' })
-  const env: NodeJS.ProcessEnv = { FILE_LINK_URL: url }
+  const env: NodeJS.ProcessEnv = { FILE_LINK_URL: url, FILE_LINK_SCREENSHOTS: process.env.FILE_LINK_SCREENSHOTS }
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
@@ -123,5 +149,9 @@ test('conversation links open scoped previews and reveal nested files without na
   assert.equal(code, 0, log)
   assert.match(log, /FILE_LINK_SMOKE_OK/)
   assert.ok(requests.some(url => url.includes('/preview?path=reports%2Fdaily%2FREPORT.md')))
+  assert.ok(requests.some(url => new URL(url, 'http://fixture').searchParams.get('path') === 'review notes/自我介绍.md'))
+  assert.deepEqual(mediaRequests.map(query => Object.fromEntries(new URLSearchParams(query))), [
+    { chatId: 'chat-fixture', path: 'reports/daily/REPORT.md', download: '1' },
+  ])
   assert.ok(requests.every(url => url.startsWith('/projects/fixture/api/sessions/web%3Achat-fixture/')))
 })

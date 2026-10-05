@@ -23,6 +23,9 @@ conversation and unsent draft. On narrow screens, the panel uses the available
 space until you close it to return to the selected tab. Folder and conversation
 rows open their own views. **Automations** lists scheduled tasks
 that start fresh conversations, with their run histories.
+When the app becomes visible again, this list keeps its last loaded state while
+refreshing. An already-empty section stays hidden unless loading fails; the
+loading placeholder appears only before the first successful load in a Project.
 
 Use the project's trash icon or **Project settings → General → Delete project**
 to delete a non-Default project. Confirm by typing its name. Deletion removes
@@ -109,6 +112,13 @@ the viewed map area to the tile provider. The viewer displays a notice for GIS.
 Files themselves are still read through the owning Shadow API. Failed
 previews expose a retry action; **Download** always retains the original file.
 Unavailable remote workdirs never fall back to Main's filesystem.
+
+In a local web conversation, click the title or body of a file attachment card
+(including agent `MEDIA:` output) to open the workdir file in a tab. Opening the
+same file again selects its existing tab; **Download** remains a separate action.
+Images retain their image viewer, and audio/video retain playback controls.
+External URLs, private uploads outside the workdir, and remote attachments remain
+on their existing media/download path rather than being treated as local files.
 
 You can send follow-up guidance during an active turn or use **Stop request**
 to cancel the targeted request. Cancellation cannot undo completed side

@@ -136,7 +136,7 @@
             <!-- System event (not a user message) -->
             <ConversationEvent v-else-if="msg.role === 'user' && msg.isSystemEvent && msg.eventMeta"
               :data-msg-idx="idx"
-              :meta="msg.eventMeta" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
+              :meta="msg.eventMeta" :content="msg.content" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
               :selected="childSessionId === eventSourceSession(msg.eventMeta)"
               @inspect="inspectExecution" @interact="clearSelection">
               <div v-if="msg.content" class="prose" v-html="renderMarkdown(msg.content)" />
@@ -186,7 +186,7 @@
               >
                 <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Retry</button>
               </div>
-              <MessageAttachments :paths="msg.attachmentBody.paths" :api-base="apiBase" :session-id="activeSessionId" @preview="openImagePreview" />
+              <MessageAttachments :paths="msg.attachmentBody.paths"               :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
               <div class="chat-footer">
               <div v-if="msg.usage" class="usage-info">
                 <span class="usage-badge">{{ msg.usage.promptTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.prompt.toLocaleString() }})</span> prompt</span>
@@ -219,7 +219,7 @@
             <div class="chat-content">
               <span>{{ streamContent }}</span>
             </div>
-            <MessageAttachments :paths="streamMedia" :api-base="apiBase" :session-id="activeSessionId" @preview="openImagePreview" />
+            <MessageAttachments :paths="streamMedia" :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
             <div class="chat-footer"><MessageTimestamp :timestamp="streamTimestamp" /></div>
           </div>
           </ResponseDisclosure>
@@ -2621,9 +2621,9 @@ function resendLastMessage() {
 .composer-input { display: flex; min-width: 0; }
 .composer-input textarea { display: block; box-sizing: border-box; width: 100%; min-width: 0; min-height: 78px; max-height: min(240px, 28dvh); overflow-y: auto; resize: none; padding: 3px 4px 10px; border: 0; outline: 0; background: transparent; color: var(--c-text); font: inherit; font-size: 14px; line-height: 1.6; }
 .composer-input textarea::placeholder { color: var(--c-text-secondary); }
-.composer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 4px; min-width: 0; }
+.composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; min-width: 0; }
 .composer-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: calc(100% - 42px); }
-.composer-send { margin-left: auto; flex-shrink: 0; }
+.composer-send { flex-shrink: 0; }
 .composer-box.attachment-drop-target { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .composer-send:disabled { opacity: .35; cursor: not-allowed; }
@@ -2656,8 +2656,11 @@ function resendLastMessage() {
 .context-action:hover { background: var(--c-bg-muted); }
 .context-action:disabled { opacity: .5; cursor: not-allowed; }
 .composer-error { margin: 8px 4px; color: var(--c-error); font-size: 12px; overflow-wrap: anywhere; }
-.composer-submit { display: flex; align-items: center; gap: 10px; margin-left: auto; min-width: 0; max-width: 100%; }
-.composer-hint { min-width: 0; text-align: right; color: var(--c-text-secondary); font-size: 11px; line-height: 1.4; }
+.composer-submit { display: flex; flex: 1; align-items: center; justify-content: flex-end; gap: 10px; margin-left: auto; min-width: 32px; max-width: 100%; container: composer-submit / inline-size; }
+.composer-hint { min-width: 0; white-space: nowrap; text-align: right; color: var(--c-text-secondary); font-size: 11px; line-height: 1.4; }
+@container composer-submit (max-width: 320px) {
+  .composer-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+}
 .mobile-sessions-toggle { display: none; }
 .mobile-sidebar-backdrop { display: none; }
 @media (max-width: 700px) {
