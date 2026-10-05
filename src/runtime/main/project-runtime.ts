@@ -76,6 +76,7 @@ import { WorkingSetHook } from '../../tools/hooks/working-set.ts'
 import { SqlTool } from '../../tools/sql.ts'
 import { ProjectConventions } from '../../projects/conventions.ts'
 import { MessageTool } from '../../tools/message.ts'
+import { channelTools } from '../../tools/channel.ts'
 import { CancelTool } from '../../tools/cancel.ts'
 import { PlanWriteTool } from '../../tools/plan-write.ts'
 import { ProcessManager } from '../../execution/processes/manager.ts'
@@ -1043,6 +1044,7 @@ export async function createProjectRuntime(
   })
   cleanup.push(() => channels.stopAll())
   await startup.measure('channels', () => channels.init())
+  for (const tool of channelTools(channels)) importTool.registerBuiltin(tool.name, tool)
   const folders = new FolderService({
     registry: folderRegistry,
     remoteExecutor,

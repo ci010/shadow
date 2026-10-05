@@ -17,6 +17,7 @@ import { channelConfigured, channelSetupStatus, ChannelSetupError, isChannelId }
 import type { BotInstance, BotInstanceStore } from './bot-store.ts'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import type { RealtimePublisher } from '../realtime/hub.ts'
+import type { ChannelOperationContext, ChannelOperationRequest } from './operations.ts'
 
 type ChannelFactory = (id: ChannelId, config: Config, instance?: BotInstance) => BaseChannel
 export interface ChannelManagerOptions {
@@ -295,6 +296,52 @@ export class ChannelManager {
   private availableChannel(name: string, address?: ChannelAddress): BaseChannel | undefined {
     const key = this.resolveKey(name, address)
     return key ? this.availableByKey(key) : undefined
+  }
+
+  private operationChannel(context: ChannelOperationContext): BaseChannel {
+    context.signal.throwIfAborted()
+    if (context.remoteWorkdir) throw new ChannelAdmissionError('Channel operations do not support remote workdirs', 403)
+    if (!this.options || context.projectId !== this.projectId || this.closing || this.scope?.closed) {
+      throw new ChannelAdmissionError('Channel operations require the owning active Project', 403)
+    }
+    const address = context.channelAddress
+    if (!address || address.projectId !== this.projectId || address.platform !== context.channel
+      || address.conversationId !== context.chatId || channelSessionId(address) !== context.sessionId) {
+      throw new ChannelAdmissionError('Channel operations require the current bot conversation', 403)
+    }
+    if (context.inputSource !== 'user' || !context.senderId?.trim()) {
+      throw new ChannelAdmissionError('Channel operations require an authenticated channel user', 403)
+    }
+    const channel = this.availableChannel(context.channel, address)
+    if (!channel) throw new ChannelAdmissionError('The source bot connection is unavailable', 503)
+    if (!channel.isAllowed(context.senderId)) throw new ChannelAdmissionError('Sender is not authorized', 403)
+    return channel
+  }
+
+  getOperations(context: ChannelOperationContext) {
+    const channel = this.operationChannel(context)
+    return {
+      platform: channel.name, conversationId: context.chatId,
+      operations: channel.executeOperation ? [...(channel.operationNames ?? [])] : [],
+      authorization: 'Availability is not permission. Each invocation checks the current bot, conversation, sender and platform permissions.',
+    }
+  }
+
+  async executeOperation(request: ChannelOperationRequest, context: ChannelOperationContext): Promise<unknown> {
+    const channel = this.operationChannel(context)
+    if (!channel.executeOperation || !channel.operationNames?.includes(request.name)) {
+      throw new ChannelAdmissionError(`Operation "${request.name}" is not implemented for ${channel.name}`, 403)
+    }
+    const verify = channel.connectionGuard?.()
+    const run = () => channel.executeOperation!(request, {
+      chatId: context.chatId, senderId: context.senderId, platformMessageId: context.platformMessageId, signal: context.signal,
+    })
+    const result = await (channel.withConnection ? channel.withConnection(run) : run())
+    verify?.()
+    if (this.operationChannel(context) !== channel) {
+      throw new ChannelAdmissionError('The source bot connection has changed', 503)
+    }
+    return result
   }
 
   isTrustedConversation(name: string, chatId: string, address?: ChannelAddress): boolean {

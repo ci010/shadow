@@ -10,6 +10,8 @@ import { AbstractChannel } from './base.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import { parseYieldRequest, type YieldRequest } from '../sessions/yield-contract.ts'
 import { discordPermissions, discordRecord, DiscordPermission as Permission, isDiscordId } from './discord-permissions.ts'
+import { DISCORD_READ_OPERATIONS, discordHistoryArguments, discordMessageArguments, type ChannelOperationRequest, type ChannelOperationTarget } from './operations.ts'
+import { DISCORD_CONTENT_NOTICE, discordReadHistory, discordReadMessage } from './discord-operations.ts'
 
 const DISCORD_API = 'https://discord.com/api/v10'
 const NO_MENTIONS = { parse: [], replied_user: false }
@@ -37,6 +39,7 @@ export interface DiscordChannelOptions {
  */
 export class DiscordChannel extends AbstractChannel {
   readonly name = 'discord'
+  readonly operationNames = DISCORD_READ_OPERATIONS
   private token: string
   private ws: WebSocket | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -340,17 +343,104 @@ export class DiscordChannel extends AbstractChannel {
     const res = await this.request(`${DISCORD_API}${path}`, {
       ...init,
       headers: { Authorization: `Bot ${this.token}`, 'Content-Type': 'application/json' },
-      signal: controller.signal,
+      signal: init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal,
     })
     if (!res.ok) {
       await res.body?.cancel()
       throw new Error(`Discord request failed: status=${res.status}`)
     }
-    const data: unknown = res.status === 204 ? null : await res.json()
+    let data: unknown
+    try {
+      data = res.status === 204 ? null : await res.json()
+    } catch {
+      init.signal?.throwIfAborted()
+      this.assertConnection()
+      throw new Error('Invalid Discord JSON response')
+    }
+    init.signal?.throwIfAborted()
+    this.assertConnection()
     if (this.stopping || controller !== this.controller || controller.signal.aborted) {
       throw new Error('Discord channel is disconnected')
     }
     return data
+  }
+
+  private async guildAccess(channel: Record<string, unknown>, signal?: AbortSignal) {
+    const guildId = channel.guild_id
+    if (!isDiscordId(guildId)) throw new Error('Invalid Discord guild')
+    let botId = this.botUserId
+    if (!isDiscordId(botId)) {
+      const user = discordRecord(await this.api('/users/@me', { signal }))
+      if (!isDiscordId(user.id) || user.bot !== true) throw new Error('Invalid Discord bot identity')
+      botId = user.id
+    }
+    const [guildData, roles, memberData] = await Promise.all([
+      this.api(`/guilds/${guildId}`, { signal }),
+      this.api(`/guilds/${guildId}/roles`, { signal }),
+      this.api(`/guilds/${guildId}/members/${botId}`, { signal }),
+    ])
+    const guild = discordRecord(guildData), member = discordRecord(memberData)
+    if (guild.id !== guildId || discordRecord(member.user).id !== botId) throw new Error('Invalid Discord guild membership')
+    let permissionChannel = channel
+    if (channel.type === 10 || channel.type === 11 || channel.type === 12) {
+      if (!isDiscordId(channel.parent_id)) throw new Error('Invalid Discord thread parent')
+      permissionChannel = discordRecord(await this.api(`/channels/${channel.parent_id}`, { signal }))
+      if (permissionChannel.id !== channel.parent_id || permissionChannel.guild_id !== guildId) {
+        throw new Error('Invalid Discord thread parent')
+      }
+    }
+    const permissions = discordPermissions(guildId, botId, guild.owner_id, roles, member, permissionChannel.permission_overwrites)
+    return { guildId, guild, roles, member, permissionChannel, permissions }
+  }
+
+  private async assertReadAccess(target: ChannelOperationTarget): Promise<void> {
+    target.signal.throwIfAborted()
+    this.assertConnection()
+    if (this.stopping || !isDiscordId(target.chatId) || !isDiscordId(target.senderId) || !this.isAllowed(target.senderId)) {
+      throw new Error('Discord read access is unavailable for the current sender or conversation.')
+    }
+    const channel = discordRecord(await this.api(`/channels/${target.chatId}`, { signal: target.signal }))
+    if (channel.id !== target.chatId) throw new Error('Invalid Discord conversation response')
+    if (channel.type === 1 && !channel.guild_id) {
+      if (!Array.isArray(channel.recipients) || channel.recipients.length !== 1
+        || discordRecord(channel.recipients[0]).id !== target.senderId
+        || discordRecord(channel.recipients[0]).bot === true) {
+        throw new Error('Discord DM does not belong to the current sender.')
+      }
+      return
+    }
+    if (typeof channel.type !== 'number' || ![0, 5, 10, 11].includes(channel.type)) {
+      throw new Error('Discord reads support guild text, announcements, public threads and direct messages; private threads and other conversation types are not implemented.')
+    }
+    const access = await this.guildAccess(channel, target.signal)
+    const required = Permission.view | Permission.readHistory
+    if ((access.permissions & required) !== required) throw new Error('Discord bot lacks View Channel or Read Message History permission.')
+    const member = discordRecord(await this.api(`/guilds/${access.guildId}/members/${target.senderId}`, { signal: target.signal }))
+    const user = discordRecord(member.user)
+    if (user.id !== target.senderId || user.bot === true) throw new Error('Invalid Discord sender membership')
+    const permissions = discordPermissions(access.guildId, target.senderId, access.guild.owner_id,
+      access.roles, member, access.permissionChannel.permission_overwrites)
+    if ((permissions & required) !== required) throw new Error('Discord sender lacks View Channel or Read Message History permission.')
+  }
+
+  async executeOperation(request: ChannelOperationRequest, target: ChannelOperationTarget): Promise<unknown> {
+    if (request.name !== 'discord_history' && request.name !== 'discord_message_get') {
+      throw new Error('Operation is not implemented for Discord.')
+    }
+    const operation: ChannelOperationRequest = request.name === 'discord_history'
+      ? { name: request.name, args: discordHistoryArguments.parse(request.args) }
+      : { name: request.name, args: discordMessageArguments.parse(request.args) }
+    await this.assertReadAccess(target)
+    if (operation.name === 'discord_history') {
+      const input = operation.args
+      const limit = input.limit ?? 20
+      const query = new URLSearchParams({ limit: String(limit), ...(input.before ? { before: input.before } : {}) })
+      const data = await this.api(`/channels/${target.chatId}/messages?${query}`, { signal: target.signal })
+      return discordReadHistory(data, target.chatId, limit, input.before)
+    }
+    const input = operation.args
+    const data = await this.api(`/channels/${target.chatId}/messages/${input.messageId}`, { signal: target.signal })
+    return { platform: 'discord', message: discordReadMessage(data, target.chatId, input.messageId), contentNotice: DISCORD_CONTENT_NOTICE }
   }
 
   override async getCapabilities(chatId: string): Promise<ChannelCapabilities> {
@@ -389,28 +479,9 @@ export class DiscordChannel extends AbstractChannel {
       let permissions = 0n
       let writable = channel.type === 1 && !channel.guild_id
       if (channel.guild_id) {
-        if (!isDiscordId(channel.guild_id)) return unavailable
-        let botId = this.botUserId
-        if (!isDiscordId(botId)) {
-          const user = discordRecord(await this.api('/users/@me'))
-          if (!isDiscordId(user.id) || user.bot !== true) return unavailable
-          botId = user.id
-        }
-        const guildId = channel.guild_id
-        const [guildData, roles, memberData] = await Promise.all([
-          this.api(`/guilds/${guildId}`),
-          this.api(`/guilds/${guildId}/roles`),
-          this.api(`/guilds/${guildId}/members/${botId}`),
-        ])
-        const guild = discordRecord(guildData), member = discordRecord(memberData)
-        if (guild.id !== guildId || discordRecord(member.user).id !== botId) return unavailable
-        let permissionChannel = channel
-        if (thread) {
-          if (!isDiscordId(channel.parent_id)) return unavailable
-          permissionChannel = discordRecord(await this.api(`/channels/${channel.parent_id}`))
-          if (permissionChannel.id !== channel.parent_id || permissionChannel.guild_id !== guildId) return unavailable
-        }
-        permissions = discordPermissions(guildId, botId, guild.owner_id, roles, member, permissionChannel.permission_overwrites)
+        const access = await this.guildAccess(channel)
+        const member = access.member
+        permissions = access.permissions
         const has = (bits: bigint) => (permissions & bits) === bits
         if (member.communication_disabled_until != null
           && (typeof member.communication_disabled_until !== 'string'

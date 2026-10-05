@@ -8,6 +8,7 @@ import { unavailableCapabilities, type ChannelCapabilities } from './capabilitie
 import type { YieldRequest } from '../sessions/yield-contract.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
+import type { ChannelOperation, ChannelOperationRequest, ChannelOperationTarget } from './operations.ts'
 
 export interface ChannelDecision {
   channelAddress?: ChannelAddress
@@ -50,6 +51,8 @@ export interface BaseChannel {
 
   setStatusListener?(listener: (state: ChannelState) => void): void
   getCapabilities?(chatId: string): ChannelCapabilities | Promise<ChannelCapabilities>
+  readonly operationNames?: readonly ChannelOperation[]
+  executeOperation?(request: ChannelOperationRequest, target: ChannelOperationTarget): Promise<unknown>
   setDecisionHandler?(handler: ChannelDecisionHandler): void
   presentDecision?(chatId: string, request: YieldRequest, content: string): Promise<void>
   presentDecisionText?(chatId: string, content: string, replyTo?: string): Promise<void>

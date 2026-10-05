@@ -3,6 +3,7 @@ export const DiscordPermission = {
   view: 1n << 10n,
   send: 1n << 11n,
   attach: 1n << 15n,
+  readHistory: 1n << 16n,
   createPublicThreads: 1n << 35n,
   sendInThreads: 1n << 38n,
 }

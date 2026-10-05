@@ -2030,6 +2030,25 @@ instead of leaving an apparently delivered question waiting forever. These chann
 decisions bypass the ordinary progressive response buffer. Parent-directed requests
 and authenticated application-side decisions retain their existing authorization.
 Raw platform messaging/history/moderation APIs are not added to base tools.
+Project composition registers `channel_operations`, `discord_history`,
+`discord_message_get`, `feishu_history` and `feishu_message_get` as lazy dynamic
+tools. `ChannelManager` binds them to the
+current admitted channel user and exact Project/bot/platform conversation, with
+live sender admission and connection-generation checks; loading a tool is not
+authorization. Discord reads re-resolve both bot and requesting member View
+Channel/Read Message History permissions, including parent-thread overwrites,
+or validate the current DM recipient. Private threads remain unsupported.
+An explicitly platform-bound thread child may read its own thread regardless
+of parent lineage. Internal virtual tasks/calls never inherit a channel binding.
+Feishu reads verify native sender/chat proof and current group membership;
+an explicitly bound root message is resolved to its real thread ID and reads
+cannot widen to the parent chat. Authorization uses app scopes and bot visibility,
+not the human's OAuth/history visibility. QQ advertises no platform read
+operations rather than substituting local session history.
+Read results are bounded external data, not new session inputs;
+Message Content intent can still limit visible fields. Web/peer/event/internal-virtual
+and remote-workdir contexts do not inherit a channel read capability. See
+[channel platform reads](tools-and-automations.md#channel-platform-reads).
 
 These changes do not select an execution node. A new external-channel root without
 an explicit workdir uses Main's `<workspace>/<safeSessionId>` managed directory;

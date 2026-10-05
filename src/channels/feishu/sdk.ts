@@ -7,6 +7,8 @@
  * Covers only the features used by FeishuChannel:
  *  - Tenant-access-token management (auto-refresh)
  *  - im.message.create
+ *  - im.message.list / get (native chat/topic history and message reads)
+ *  - im.chat.get / im.chatMembers.get (chat metadata and membership)
  *  - im.message.resource.get  (file / image download)
  *  - im.messageReaction.create
  *  - EventDispatcher (decrypt + dispatch)
@@ -118,12 +120,13 @@ class TokenManager {
   private _cache: TokenInfo | null = null
   private _inflight: Promise<string> | null = null
 
-  constructor(appId: string, appSecret: string) {
+  constructor(appId: string, appSecret: string, private readonly signal?: AbortSignal) {
     this.appId = appId
     this.appSecret = appSecret
   }
 
   async getTenantAccessToken(): Promise<string> {
+    this.signal?.throwIfAborted()
     if (
       this._cache &&
       Date.now() < this._cache.expiresAt - TOKEN_REFRESH_BUFFER_MS
@@ -144,6 +147,7 @@ class TokenManager {
   private async _fetch(): Promise<string> {
     const resp = await fetch(TOKEN_URL, {
       method: 'POST',
+      signal: this.signal,
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ app_id: this.appId, app_secret: this.appSecret }),
     })
@@ -161,6 +165,7 @@ class TokenManager {
         `[feishu_sdk] token error code=${json.code} msg=${json.msg}`,
       )
     }
+    this.signal?.throwIfAborted()
     this._cache = {
       token: json.tenant_access_token,
       expiresAt: Date.now() + json.expire * 1000,
@@ -246,9 +251,12 @@ async function apiRequest<T = unknown>(
     params?: Record<string, string>
     body?: unknown
     binary?: boolean
+    signal?: AbortSignal
   } = {},
 ): Promise<T> {
-  const token = await tokenManager.getTenantAccessToken()
+  opts.signal?.throwIfAborted()
+  const token = await awaitApiToken(tokenManager.getTenantAccessToken(), opts.signal)
+  opts.signal?.throwIfAborted()
 
   let url = `${FEISHU_BASE}${path}`
   if (opts.params && Object.keys(opts.params).length > 0) {
@@ -265,7 +273,7 @@ async function apiRequest<T = unknown>(
     reqBody = JSON.stringify(opts.body)
   }
 
-  const resp = await fetch(url, { method, headers, body: reqBody })
+  const resp = await fetch(url, { method, headers, body: reqBody, signal: opts.signal })
   if (!resp.ok) {
     const { bodyText, apiCode, apiMsg, requestId } = await parseApiError(resp)
     throw new FeishuApiError({
@@ -282,7 +290,19 @@ async function apiRequest<T = unknown>(
     const buf = await resp.arrayBuffer()
     return new Uint8Array(buf) as unknown as T
   }
-  return (await resp.json()) as T
+  const result = (await resp.json()) as T
+  opts.signal?.throwIfAborted()
+  return result
+}
+
+function awaitApiToken(token: Promise<string>, signal?: AbortSignal): Promise<string> {
+  if (!signal) return token
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    token.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -358,19 +378,27 @@ class Client {
   private _tokens: TokenManager
 
   constructor(
-    opts: { appId: string; appSecret: string; disableTokenCache?: boolean },
+    opts: { appId: string; appSecret: string; disableTokenCache?: boolean; signal?: AbortSignal },
   ) {
-    this._tokens = new TokenManager(opts.appId, opts.appSecret)
+    this._tokens = new TokenManager(opts.appId, opts.appSecret, opts.signal)
   }
 
   /** `client.im.message.create(…)` */
   readonly im = {
     chat: {
-      get: (req: { path: { chat_id: string } }): Promise<ApiResp & {
+      get: (req: { path: { chat_id: string }; signal?: AbortSignal }): Promise<ApiResp & {
         data?: { chat_mode?: string; chat_status?: string; chat_post_permission?: string }
-      }> => apiRequest(this._tokens, 'GET', `/open-apis/im/v1/chats/${encodeURIComponent(req.path.chat_id)}`),
+      }> => apiRequest(this._tokens, 'GET', `/open-apis/im/v1/chats/${encodeURIComponent(req.path.chat_id)}`, { signal: req.signal }),
+    },
+    chatMembers: {
+      get: (req: { path: { chat_id: string }; params: { member_id_type: 'open_id'; page_size: string; page_token?: string }; signal?: AbortSignal }): Promise<unknown> =>
+        apiRequest(this._tokens, 'GET', `/open-apis/im/v1/chats/${encodeURIComponent(req.path.chat_id)}/members`, { params: req.params, signal: req.signal }),
     },
     message: {
+      list: (req: { params: { container_id_type: 'chat' | 'thread'; container_id: string; sort_type: 'ByCreateTimeDesc'; page_size: string; page_token?: string }; signal?: AbortSignal }): Promise<unknown> =>
+        apiRequest(this._tokens, 'GET', '/open-apis/im/v1/messages', { params: req.params, signal: req.signal }),
+      get: (req: { path: { message_id: string }; signal?: AbortSignal }): Promise<unknown> =>
+        apiRequest(this._tokens, 'GET', `/open-apis/im/v1/messages/${encodeURIComponent(req.path.message_id)}`, { params: { user_id_type: 'open_id' }, signal: req.signal }),
       create: (req: {
         params: { receive_id_type: string }
         data: { receive_id: string; msg_type: string; content: string }

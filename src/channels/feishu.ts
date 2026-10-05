@@ -33,6 +33,8 @@ import { resolveSessionLocations } from '../sessions/locality.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import { FeishuWorkerTransport, type FeishuTransport, type FeishuTransportOptions, type FeishuCardHandler, type FeishuCardResponse } from './feishu-transport.ts'
+import { FEISHU_READ_OPERATIONS, type ChannelOperationRequest, type ChannelOperationTarget } from './operations.ts'
+import { executeFeishuRead } from './feishu-operations.ts'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -263,6 +265,7 @@ function buildCardElements(content: string): FeishuCardElement[] {
 
 export class FeishuChannel extends AbstractChannel {
   readonly name = 'feishu'
+  readonly operationNames = FEISHU_READ_OPERATIONS
 
   private appId: string
   private appSecret: string
@@ -394,6 +397,7 @@ export class FeishuChannel extends AbstractChannel {
       appId: this.appId,
       appSecret: this.appSecret,
       disableTokenCache: false,
+      signal: this.controller.signal,
     })
 
     this._wsClient = this.transportFactory({
@@ -446,6 +450,44 @@ export class FeishuChannel extends AbstractChannel {
     await transport?.stop()
     this.reportState('disconnected')
     console.info('[feishu] Bot stopped')
+  }
+
+  // ── Platform reads ────────────────────────────────────────────────────────
+
+  async executeOperation(request: ChannelOperationRequest, target: ChannelOperationTarget): Promise<unknown> {
+    if (request.name !== 'feishu_history' && request.name !== 'feishu_message_get') throw new Error('Operation is not implemented for Feishu.')
+    const client = this._client
+    if (!client || !this._running || !this.isAllowed(target.senderId)) throw new Error('Feishu read connection or sender is unavailable.')
+    const signal = AbortSignal.any([target.signal, this.controller.signal, AbortSignal.timeout(60_000)])
+    const call = async (operation: () => Promise<unknown>) => {
+      signal.throwIfAborted()
+      this.assertConnection()
+      try {
+        const result = await operation()
+        signal.throwIfAborted()
+        this.assertConnection()
+        if (this._client !== client) throw new Error('Feishu connection has changed.')
+        return result
+      } catch (error) {
+        signal.throwIfAborted()
+        this.assertConnection()
+        if (error instanceof FeishuApiError) {
+          const code = typeof error.apiCode === 'number' && Number.isSafeInteger(error.apiCode) ? error.apiCode : 'unknown'
+          throw new Error(`Feishu read failed: HTTP ${error.status}, code=${code}. Check app scopes and bot membership.`)
+        }
+        throw new Error('Feishu read request failed.')
+      }
+    }
+    return executeFeishuRead(request, target, {
+      getMessage: id => call(() => client.im.message.get({ path: { message_id: id }, signal })),
+      getChat: id => call(() => client.im.chat.get({ path: { chat_id: id }, signal })),
+      getMembers: (id, token) => call(() => client.im.chatMembers.get({
+        path: { chat_id: id }, params: { member_id_type: 'open_id', page_size: '100', ...(token ? { page_token: token } : {}) }, signal,
+      })),
+      getHistory: (type, id, limit, token) => call(() => client.im.message.list({
+        params: { container_id_type: type, container_id: id, sort_type: 'ByCreateTimeDesc', page_size: String(limit), ...(token ? { page_token: token } : {}) }, signal,
+      })),
+    }, root => this._topicParent(root), id => this.conversations.get(id))
   }
 
   // ── Send ──────────────────────────────────────────────────────────────────

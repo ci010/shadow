@@ -57,6 +57,97 @@ fail rather than silently searching Main's filesystem. See
 [tool layers](architecture.md#tools-skills-and-mcp) for their scope and
 remote-workdir limitations.
 
+## Channel platform reads
+
+Channel API operations are dynamic tools, not additions to the base tool list.
+Read `v:tools/channel_operations`, `v:tools/discord_history` or
+`v:tools/discord_message_get`, `v:tools/feishu_history` or
+`v:tools/feishu_message_get` for contracts, then use `invoke_tool`.
+
+```js
+invoke_tool({ name: "channel_operations", args: {} })
+invoke_tool({ name: "discord_history", args: { limit: 20 } })
+invoke_tool({ name: "discord_history", args: { limit: 20, before: "<nextBefore>" } })
+invoke_tool({ name: "discord_message_get", args: { messageId: "<native Discord message ID>" } })
+invoke_tool({ name: "feishu_history", args: { limit: 20 } })
+invoke_tool({ name: "feishu_history", args: { pageToken: "<nextPageToken>" } })
+invoke_tool({ name: "feishu_message_get", args: { messageId: "<native Feishu message ID>" } })
+```
+
+The runtime binds every operation to the current Project, bot instance and
+conversation. Arguments cannot override the bot, target, sender or credentials.
+These operations require an authenticated channel-user turn in the matching
+platform-bound conversation. A native thread's session may have a parent or
+child lineage and still read its own bound thread. Parenthood is neither a
+denial nor an authorization grant. Internal `virtual:*` tasks/calls do not
+inherit their spawner's channel binding; no new platform thread is created by
+these tools. Web conversations, peer/event inputs and remote workdirs also do
+not inherit a bot read grant. Migrated legacy bot
+conversations still require their explicit bot address; platform-only fallback
+does not authorize reads.
+
+Discovery lists implemented operations, not permissions. Loading a contract
+does not connect another bot or grant access. Every call rechecks the live source
+connection and sender allowlist. Discord additionally resolves fresh permissions
+for both the bot and requesting guild member, including channel/parent-thread
+overwrites; both need View Channel and Read Message History. A DM must belong to
+the current sender. Disconnect, reconfiguration, cancellation or stale connection
+generation prevents an in-flight response from being returned.
+
+Discord supports reads in guild text/announcement channels, public threads and
+DMs; private threads and other conversation types are explicitly unsupported.
+`channel_operations` returns no platform read operations for QQ;
+its adapter does not emulate other platforms with Shadow session history. The
+Project-wide tool catalog can still describe Discord tools while the current
+platform cannot execute them.
+
+History is newest-first, defaults to 20 messages and is limited to 100 per call.
+Use a non-null `nextBefore` to request the next older page. Results preserve
+native IDs, authors, timestamps, text, attachment metadata and text embeds.
+Large results use the existing file-backed tool-output truncation; request
+smaller pages for inline JSON or read the returned full-output file reference.
+Empty text is marked `empty_or_unavailable`: it does not prove an empty message,
+because Discord Message Content intent can restrict API response fields.
+Omitted text is marked `unavailable`; omitted text, attachments or embeds are
+returned as `null`, not asserted to be empty.
+Returned platform messages are external data, not replayed user instructions;
+no session is created or awakened and attachments are not downloaded. API
+errors, permission failures and rate limits are explicit failures, not empty
+history or automatic retries. Normal responses still use the existing outbound
+channel pipeline; these tools do not send, edit or moderate platform messages.
+
+Feishu has its own native history APIs and pagination: `feishu_history` defaults
+to 20 messages, has a maximum page size of 50, fixes newest-first ordering and
+returns an opaque `nextPageToken`. The current `oc_` chat selects a chat container.
+An explicitly bound `om_` topic root is resolved through its persisted same-bot
+parent chat and the root message's actual `omt_` thread ID; reads use the thread
+container, not the parent chat. Single-message and merged-forward responses are
+validated against the same chat/topic binding. Ordinary reply ancestry or a
+completion redirect does not establish a topic binding.
+
+Feishu additionally verifies the current native message's sender and destination,
+and rechecks current group membership with the members API. Invalid or cycling
+member cursors fail; verification has a 100-page budget and explicitly rejects
+reads if membership cannot be established within it. A known direct chat instead
+uses the native sender/chat proof and the platform's bot access checks.
+Native thread input cannot widen to parent-chat history when its topic is unbound.
+
+Unlike Discord, these calls use the Feishu app's `tenant_access_token`, not the
+human's OAuth token. Membership is not proof of the human's historical visibility.
+The API enforces app scopes, bot membership and bot topic visibility. History
+requires `im:message`, `im:message:readonly` or the legacy
+`im:message.history:readonly`; group reads additionally require
+`im:message.group_msg`. Membership verification needs a supported chat/member
+read scope such as `im:chat.members:read`. Missing scopes and invisible topics
+fail explicitly, without falling back to a wider container or local history.
+Message bodies retain Feishu's serialized content and native metadata rather
+than claiming Discord-style text/attachment semantics. See the official
+[history](https://open.feishu.cn/document/server-docs/im-v1/message/list),
+[message](https://open.feishu.cn/document/server-docs/im-v1/message/get) and
+[member](https://open.feishu.cn/document/server-docs/group/chat-member/get) APIs.
+
+## Filesystem search and reading
+
 For filesystem content, prefer explicit root and filter fields:
 
 ```js
