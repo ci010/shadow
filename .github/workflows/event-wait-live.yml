@@ -1,0 +1,90 @@
+name: Shadow event wait acceptance
+run-name: Shadow event wait ${{ inputs.phase }} ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: CI builds Shadow; CD verifies that build and waits for URL processing
+        type: choice
+        options: [ci, cd]
+        required: true
+      request_id:
+        description: Unique acceptance request UUID shared by exactly one CI/CD pair
+        type: string
+        required: true
+      ci_run_id:
+        description: Successful CI run ID for the CD phase
+        type: string
+        default: ""
+      url_timeout_seconds:
+        description: Deadline from third-step URL printing
+        type: string
+        default: "60"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: event-wait-${{ inputs.request_id }}-${{ inputs.phase }}
+  cancel-in-progress: false
+
+env:
+  EVENT_WAIT_REQUEST_ID: ${{ inputs.request_id }}
+  EVENT_WAIT_CI_RUN_ID: ${{ inputs.ci_run_id }}
+  EVENT_WAIT_URL_TIMEOUT_SECONDS: ${{ inputs.url_timeout_seconds }}
+
+jobs:
+  ci:
+    if: inputs.phase == 'ci'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-build
+        with:
+          electron: "false"
+      - name: Test actual Shadow events and build the backend
+        run: |
+          pnpm exec node --import tsx --test src/events/service_test.ts src/events/polling-sources_test.ts scripts/event-wait-acceptance_test.ts scripts/event-wait-github-step_test.ts scripts/event-wait-github_test.ts
+          pnpm exec tsc --noEmit --pretty false
+          pnpm build
+          node scripts/event-wait-github-step.mjs receipt
+      - name: Upload the real backend and build receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-event-wait-${{ inputs.request_id }}
+          path: |
+            dist
+            build-receipt.json
+          if-no-files-found: error
+          retention-days: 1
+
+  cd:
+    if: inputs.phase == 'cd'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      deployments: write
+    steps:
+      - name: Checkout the exact acceptance revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch and verify the successful CI build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$EVENT_WAIT_CI_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "shadow-event-wait-$EVENT_WAIT_REQUEST_ID" --dir ci-build
+          node scripts/event-wait-github-step.mjs verify ci-build
+      - name: Print URL and require processing before the deadline
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/event-wait-github-step.mjs wait
