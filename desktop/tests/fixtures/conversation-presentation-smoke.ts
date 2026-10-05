@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { app, BrowserWindow } from 'electron'
+import { verifyConversationEvents } from './conversation-events-smoke.ts'
 
 app.setPath('userData', join(process.cwd(), 'profile'))
 app.on('window-all-closed', () => {})
@@ -28,6 +29,12 @@ async function main() {
   try {
     await window.loadURL(new URL('__conversation', process.env.CONVERSATION_SMOKE_URL).href)
     await wait(`!!document.querySelector('.conversation-skeleton')`)
+    if (process.env.CONVERSATION_EVENTS_ONLY) {
+      await verifyConversationEvents(window, wait, frame, screenshot)
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
     assert.equal(await execute(`document.querySelector('.conversation-skeleton').getAttribute('role')`), 'status')
     assert.equal(await execute(`document.querySelector('.skeleton-thread').getAttribute('aria-hidden')`), 'true')
     // Simulate document visibility without focusing the hidden test window.
@@ -417,6 +424,8 @@ async function main() {
     await execute(`document.querySelector('.session-heading .composer-control').click()`)
     await wait(`!!document.querySelector('.session-details')`)
     assert.equal(await execute(`!!document.querySelector('.details-topic')`), false, 'Ordinary sessions have no empty Initiative section')
+    await execute(`document.querySelector('.composer-popover').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}))`)
+    await verifyConversationEvents(window, wait, frame, screenshot)
     assert.deepEqual(errors, [])
     console.log('CONVERSATION_SMOKE_OK')
   } finally { window.destroy() }

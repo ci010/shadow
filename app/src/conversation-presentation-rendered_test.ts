@@ -7,7 +7,7 @@ import { mkdir, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
@@ -18,10 +18,14 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('conversation presentation and compacted history render across themes and viewport sizes', {
+const renderedOptions = {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
-}, async t => {
+}
+test('conversation presentation and compacted history render across themes and viewport sizes', renderedOptions, t => renderConversation(t))
+test('system events preserve hierarchy, navigation and metadata across themes and viewport sizes', renderedOptions, t => renderConversation(t, true))
+
+async function renderConversation(t: TestContext, eventsOnly = false) {
   const directory = resolve(root, '.test-artifacts', `conversation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
@@ -91,7 +95,7 @@ test('conversation presentation and compacted history render across themes and v
             activePanel:'conversation', route:{name:'chat'}, viewingPhysicalId:null, activeSessionId:'web:owner',
             streaming:false, streamContent:'', isDirectChat:true, requestBusy:false, currentRecovery:null,
             embedded:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
-            compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[],
+            compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[], childSessionId:null,
             headingTopic:{ title:'Daily preliminary review', goal:'Preserve independently verifiable review results.',
               scope:'Review the current theme and brand kit.\\nDocument changes since the previous review.',
               nonGoals:'Do not publish or change the source materials.' } });
@@ -125,6 +129,35 @@ test('conversation presentation and compacted history render across themes and v
                 JSON.stringify({key:'work:fixture',revision:1,assignee:'web:chat-' + 'long-session-id-'.repeat(8)}) },
           ];
           Object.assign(window, { __conversationFixture:state, __showConversation:() => { state.messages = samples; state.loadingHistory = false } });
+          window.__showEvents = () => {
+            Object.assign(state, { compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[],
+              viewingPhysicalId:null, decisionRecords:[], navigation:[], childSessionId:null, embedded:false });
+            state.messages = [
+              {role:'user',isSystemEvent:true,timestamp:'2026-09-16T12:34:05Z',
+                eventMeta:{type:'agent-start',source:'cron',attrs:{type:'agent-start',source:'cron','event-id':'start:fixture',
+                  'source-session-id':'web:peer','source-label':'Encapsulate recurring complexity into a skill, tool/CLI, or dedicated agent.'}},
+                content:'Encapsulate: read the event log and referenced wiki items.\\n\\nPreserve recurring complexity as a skill, tool/CLI, or dedicated agent.'},
+              {role:'user',isSystemEvent:true,timestamp:'2026-09-16T12:35:05Z',
+                eventMeta:{type:'subagent-complete',source:'subagent',attrs:{type:'subagent-complete',mode:'task',
+                  'event-id':'complete:fixture','source-session-id':'web:peer','source-label':'Review recurring complexity'}},
+                content:'The execution completed. Its learning outcome still requires a verified receipt.'},
+              {role:'user',isSystemEvent:true,timestamp:'2026-09-16T12:36:05Z',
+                eventMeta:{type:'subagent-failed',source:'subagent',attrs:{type:'subagent-failed',mode:'call',
+                  'event-id':'failed:fixture','source-session-id':'web:peer','source-label':'Verify the referenced wiki items'}},
+                content:'The execution failed. No verified learning outcome is available.'},
+              {role:'user',isSystemEvent:true,
+                eventMeta:{type:'subagent-cancelled',source:'subagent',attrs:{type:'subagent-cancelled',mode:'task','event-id':'cancelled:fixture'}},
+                content:'The execution was cancelled before it finished.'},
+              {role:'user',isSystemEvent:true,
+                eventMeta:{type:'subagent-complete',source:'legacy worker',attrs:{type:'subagent-complete','event-id':'legacy:fixture'}},
+                content:'This historical completion has no linked execution.'},
+              {role:'user',isSystemEvent:true,
+                eventMeta:{type:'external-notification',source:'external-' + 'long-source-'.repeat(20),
+                  attrs:{title:'External notification / ' + 'LongTitle'.repeat(24),'event-id':'external:fixture',
+                    ['long-metadata-key-'.repeat(8)]:'unbroken-identifier-'.repeat(40)}},
+                content:'Reference: ' + 'LongReference'.repeat(40)},
+            ];
+          };
           window.__showCompaction = () => {
             state.compactionFixture = true; state.previousPhysicalId = 'previous-segment'; state.streaming = false;
             state.decisionRecords = []; state.decisionRecordError = ''; state.embedded = false; state.navigation = [];
@@ -163,7 +196,9 @@ test('conversation presentation and compacted history render across themes and v
                   sessionId:'web:peer',stage:'completed',blocked:false,arguments:'{"mode":"task"}',receipt:'Task completed.'}]])},
                 ioAfter:new Map(), expandedThinking:new Set(),
                 toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, 11, 12]))),
-                inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({...sessions[0],mode:'task'}) : undefined,
+                inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({
+                  ...sessions[0],mode:'task',label:meta.attrs['source-label'] || sessions[0].label,
+                }) : undefined,
                 eventSourceSession:meta => meta.attrs['source-session-id'], clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
                 viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },
                 goBackToCurrentSegment(){ state.viewingPhysicalId = null },
@@ -222,6 +257,7 @@ test('conversation presentation and compacted history render across themes and v
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
   const env: NodeJS.ProcessEnv = { CONVERSATION_SMOKE_URL: server.resolvedUrls.local[0] }
+  if (eventsOnly) env.CONVERSATION_EVENTS_ONLY = '1'
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'CONVERSATION_SCREENSHOTS']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
@@ -237,4 +273,4 @@ test('conversation presentation and compacted history render across themes and v
   const [code] = await once(child, 'close')
   assert.equal(code, 0, output)
   assert.match(output, /CONVERSATION_SMOKE_OK/)
-})
+}
