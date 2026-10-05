@@ -6,7 +6,7 @@ import { FolderError } from '../folders/registry.ts'
 import { projectWorkOverviewSchema, type ProjectWorkOverview, type ProjectWorkItem } from './work-overview.ts'
 
 export const humanWorkActionSchema = z.object({
-  action: z.enum(['create', 'update', 'apply_proposal', 'assign', 'manage', 'progress', 'dependencies', 'transition', 'settle', 'request_checkpoint']),
+  action: z.enum(['create', 'update', 'apply_proposal', 'assign', 'manage', 'progress', 'dependencies', 'transition', 'settle', 'request_checkpoint', 'policy']),
   key: z.string().optional(), revision: z.number().int().positive().optional(), data: z.unknown().optional(),
 }).strict()
 

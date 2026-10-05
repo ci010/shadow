@@ -32,6 +32,8 @@ import type { ManagedProcessStatus } from '../execution/processes/manager.ts'
 import { managedSessionWorkdirRef, resolveSessionLocations } from './locality.ts'
 import { parseTopicMetadata } from './topic-contract.ts'
 import { physicalSessionId } from './session-identity.ts'
+import { InitiativeStore } from '../initiatives/store.ts'
+import { WorkAlignment } from './work-alignment.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const question = { kind: 'decision', question: 'Choose a path', options: ['A', 'B', 'C'], default_option: 'A', brief: decisionBrief }
@@ -534,17 +536,26 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: native admission replay is idempotent and task failures report once`, async () => {
+  test(`${Store.name}: native admission replay is idempotent and task failures report once`, async t => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
       await store.init()
       const f = fixture(workspace, store)
+      const work = new InitiativeStore(workspace)
+      const alignment = new WorkAlignment(work, {
+        state: id => f.sessions.getSessionState(id), evidence: async () => {},
+        changed: async () => {}, fresh: async () => {}, successor: async () => undefined,
+      })
+      f.sessions.alignment = alignment
+      const admissions = t.mock.method(alignment, 'prepareDelegation')
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:root')
         const context = { ...sourceContext(workspace, f), toolCallId: 'same-tool', toolCallName: 'subagent' }
         const args = { mode: 'task', description: 'Fail once', task: 'Failure' }
         const [first, second] = await Promise.all([f.subagent.execute(args, context), f.subagent.execute(args, context)])
+        assert.equal(admissions.mock.callCount(), 1)
+        admissions.mock.mockImplementation(() => { throw new Error('Work binding changed after admission') })
         assert.deepEqual(JSON.parse(first), JSON.parse(second))
         const child = JSON.parse(first).sessionId
         ;(await f.next(child)).reject(new Error('Synthetic failure'))
@@ -552,10 +563,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.match(JSON.stringify(parent.messages), /Synthetic failure/)
         await waitFor(() => f.sessions.getSessionState(child)?.completionReported === true)
         assert.equal(JSON.parse(await f.subagent.execute(args, context)).sessionId, child)
+        assert.equal(admissions.mock.callCount(), 1, 'A persisted admission is returned without revalidating or rerunning its old Work request')
         assert.equal(f.sessions.listSessions().length, 2)
         assert.equal(f.reports.length, 1)
         parent.resolve(done())
-      } finally { await f.sessions.stop(); store.close?.() }
+      } finally { await f.sessions.stop(); work.close(); store.close?.() }
     })
   })
 

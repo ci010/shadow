@@ -6,6 +6,7 @@ import type { YieldPolicy } from './yield-contract.ts'
 import type { ExecutionMode } from './execution-mode.ts'
 import type { AutomationSessionRef } from '../cron/contracts.ts'
 import type { TopicMetadata } from './topic-contract.ts'
+import type { WorkPolicy } from './work-policy.ts'
 
 export type ExecutionStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
 
@@ -80,6 +81,8 @@ export interface SessionParent {
 }
 
 export interface SessionState {
+  /** Execution enforcement, independent of Work tool availability. Absent on legacy records. */
+  workPolicy?: WorkPolicy
   /** User-selected display name, independent of identity and topic instructions. */
   name?: string
   sessionKind?: 'topic' | 'orchestrator'

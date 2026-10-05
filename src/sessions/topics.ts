@@ -6,6 +6,7 @@ import { localFolderWorkdirRef } from './locality.ts'
 import { absoluteDirectoryPath, type FolderRegistry } from '../folders/registry.ts'
 import type { InputSource } from './input.ts'
 import { parseSessionName } from './session-name.ts'
+import { workBindingSchema } from './work-policy.ts'
 
 export const ORCHESTRATOR_SESSION_ID = 'web:orchestrator'
 const briefFields = {
@@ -19,6 +20,7 @@ const createRequest = z.object({
   agentType: z.string().trim().min(1).max(100).default('general'),
   initiativeId: z.string().trim().min(1).max(600).optional(),
   initialMessage: z.string().trim().min(1).max(32_000).optional(),
+  work: workBindingSchema.optional(),
 }).strict()
 const discoveryRequest = z.object({
   query: z.string().trim().max(500).default(''),
@@ -51,7 +53,7 @@ export interface TopicSummary {
 export interface TopicServiceOptions {
   projectId: string
   sessions: Pick<SessionManager, 'getSessionState' | 'buildSession' | 'assertFolderAccess' |
-    'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver'>
+    'assertInitiativeAccess' | 'updateConversationMetadata' | 'deliver' | 'alignment'>
   listStates: () => Promise<SessionState[]>
   firstMessage?: (sessionId: string) => Promise<string | null>
   folders: Pick<FolderRegistry, 'register' | 'requireAvailable' | 'acquireAccess'>
@@ -167,6 +169,10 @@ export class TopicService {
         if (parsed.initiativeId) this.options.sessions.assertInitiativeAccess(parsed.initiativeId)
         const folder = parsed.folderId ? await this.options.folders.requireAvailable(parsed.folderId, signal) : undefined
         signal?.throwIfAborted()
+        const alignment = this.options.sessions.alignment
+        if (parsed.work && (!createdBySessionId || !alignment)) throw new TopicError('Managed creation requires a Project session controller and Work service.')
+        const workPolicy = createdBySessionId && alignment
+          ? alignment.prepareDelegation(createdBySessionId, parsed.work, 'session') : { mode: 'optional' as const }
         const { title, description } = parsed
         await this.options.sessions.buildSession(sessionId, undefined, {
           name: title,
@@ -175,7 +181,9 @@ export class TopicService {
           folderId: folder?.id,
           workdir: folder ? folder.kind === 'remote' ? folder.workdir : localFolderWorkdirRef(folder.id) : undefined,
           description,
+          workPolicy,
         })
+        if (parsed.work) await alignment!.bindDelegation(sessionId, createdBySessionId!, parsed.work, signal)
         this.options.changed(sessionId)
         if (parsed.initialMessage) {
           const inputId = randomUUID()
@@ -234,6 +242,12 @@ export class TopicService {
     const state = this.options.sessions.getSessionState(sessionId)
     if (!state || state.topicRequestHash !== hash) throw new TopicError('requestId is already used by another session creation request.', 409)
     this.options.sessions.assertFolderAccess(sessionId)
+    if (state.workPolicy?.mode === 'required') {
+      const alignment = this.options.sessions.alignment
+      if (!alignment || state.workPolicy.keys.some(key => alignment.store.workAuthority(alignment.get(key).subject).executor !== sessionId)) {
+        throw new TopicError('Managed session creation is incomplete: inspect and finish its Work assignment before sending a kickoff. Initial messages are not replayed.', 409)
+      }
+    }
     return { ...topicSummary(this.options.projectId, state), initialMessageStatus: hasInitialMessage ? 'not_replayed' as const : 'not_requested' as const }
   }
 }

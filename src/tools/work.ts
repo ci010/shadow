@@ -5,7 +5,7 @@ import type { WorkAlignment } from '../sessions/work-alignment.ts'
 import { workRecordSchema, type WorkRecord } from '../initiatives/work-contract.ts'
 
 const request = z.object({
-  action: z.enum(['context', 'list', 'tree', 'create', 'update', 'propose', 'assign', 'manage', 'progress', 'dependencies', 'adopt', 'checkpoint', 'transition', 'settle', 'select']),
+  action: z.enum(['context', 'list', 'tree', 'create', 'update', 'propose', 'assign', 'manage', 'progress', 'dependencies', 'adopt', 'checkpoint', 'transition', 'settle', 'select', 'policy']),
   key: z.string().min(1).max(600).optional(), revision: z.number().int().positive().optional(),
   data: z.unknown().optional(),
 }).strict()
@@ -31,7 +31,7 @@ export function workReceipt(record: WorkRecord, context: Pick<ReturnType<WorkAli
 export class WorkTool implements Tool {
   readonly name = 'work'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Manage work definitions, assignments, dependencies and progress. context returns full state; data.includeSchema=true adds action schemas (automatic when no work exists). Mutations return compact receipts; use context with key for full definitions. Create only for execution/tracking, not ordinary conversation. Blocked progress defaults to a step wait, not a whole-work stop; use pause for a stop. Record missing in-scope requirements with adopt data.acceptance for your own agent interpretation; this appends acceptance and adopts the new revision without changing boundaries. Human-confirmed changes need update + owner requestQuote or reviewed proposals. Only the assigned executor adopts and reports progress; completion is not acceptance.'
+  readonly description = 'Optional work tracking and managed delegation. Ordinary sessions execute directly without create/adopt/progress. Required mode is bound by the host on delegation or explicit policy opt-in, independently of tool availability. policy data={mode,sessionId?} changes enforcement; enabling requires an assigned key+revision, disabling requires controller authority and settled terminal work. context returns state and policy; data.includeSchema=true adds schemas. Mutations return compact receipts. Complete tracked work with progress data.result={summary,sources:[{id:toolCallId,quote:exactToolOutput}]}; the host verifies recorded results and resolves segment IDs. Full result.evidence remains supported. Blocked progress defaults to a step wait; pause stops work. adopt data.acceptance may append in-scope criteria to your own interpretation; human-confirmed changes need update+owner requestQuote or reviewed proposals. Only the assigned durable executor adopts and reports progress; completion is not human acceptance.'
   readonly parameters: ToolParameters = {
     type: 'object', properties: {
       action: { type: 'string', enum: request.shape.action.options },

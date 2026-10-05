@@ -36,6 +36,7 @@ import { GitHubService } from '../projects/github/service.ts'
 import { GitHubStore } from '../projects/github/store.ts'
 import { VirtualFs } from '../vfs/virtual-fs.ts'
 import { ReadTool } from '../tools/read.ts'
+import { WriteTool } from '../tools/filesystem.ts'
 import { acceptanceWorkApproval } from '../../scripts/microapp-a2a.ts'
 import { BrowserSetupTool } from '../tools/browser-setup.ts'
 import { InvokeTool } from '../tools/invoke-tool.ts'
@@ -47,6 +48,8 @@ import { CommandHandlerManager } from '../tools/shell-commands/command-handler.t
 import { defaultManagedShell } from '../execution/processes/shells.ts'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { MicroApps } from '../microapps/service.ts'
+import { TopicService } from './topics.ts'
+import { FolderRegistry } from '../folders/registry.ts'
 
 const id = 'web:worker', key = 'topic:web:worker'
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
@@ -61,7 +64,7 @@ async function waitFor(predicate: () => boolean) {
   while (!predicate()) { assert(Date.now() < deadline, 'Work integration timed out'); await delay(2) }
 }
 
-async function fixture(workspace: string, store: SessionStore) {
+async function fixture(workspace: string, store: SessionStore, managed = true) {
   const calls: { messages: ChatMessage[]; resolve: (value: LLMResponse) => void }[] = []
   const provider: LLMProvider = {
     name: 'fixture', listModels: () => ['fixture'],
@@ -93,7 +96,15 @@ async function fixture(workspace: string, store: SessionStore) {
   let notifications = false
   const alignment = new WorkAlignment(initiatives, {
     state: target => sessions.getSessionState(target), evidence: source => sessions.validateWorkEvidence(source),
-    changed: async (record, previous) => { if (notifications) await sessions.notifyWorkChange(record, previous) },
+    setPolicy: (target, policy, validate) => sessions.setWorkPolicy(target, policy, validate),
+    resolveEvidence: (target, sources, signal) => sessions.resolveToolEvidence(target, sources, signal),
+    changed: async (record, previous) => {
+      const executor = initiatives.workAuthority(record.subject).executor
+      if (managed && executor && sessions.getSessionState(executor)?.workPolicy?.mode === 'optional') {
+        await sessions.setWorkPolicy(executor, { mode: 'required', keys: [record.key], controllerSessionId: executor }, () => {})
+      }
+      if (notifications) await sessions.notifyWorkChange(record, previous)
+    },
     fresh: (target, record) => sessions.requestWorkContext(target, record),
     successor: async () => { throw new Error('Successor is not used by this fixture.') },
   })
@@ -135,6 +146,232 @@ async function fixture(workspace: string, store: SessionStore) {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: ordinary file requests need no Work while optional tracking stays available`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    const f = await fixture(workspace, store, false)
+    f.tools.register(new WriteTool(workspace))
+    f.tools.register(new ReadTool(workspace))
+    try {
+      await f.send('Save a short introduction to profile.md and read it back.')
+      await waitFor(() => f.calls.length === 1)
+      assert.equal(f.sessions.getSessionState(id)?.workPolicy?.mode, 'optional')
+      assert.match(String(f.calls[0].messages[0].content), /Work mode: optional/)
+      assert.doesNotMatch(String(f.calls[0].messages[0].content), /Current work contracts|Recent tool receipt IDs|Before exec/)
+      f.calls[0].resolve(call('write', { path: 'profile.md', content: '# Profile\nAn ordinary introduction.\n' }))
+      await waitFor(() => f.calls.length === 2)
+      f.calls[1].resolve(call('read', { path: 'profile.md' }))
+      await waitFor(() => f.calls.length === 3)
+      assert.match(String(f.calls[2].messages.at(-1)?.content), /An ordinary introduction/)
+      f.calls[2].resolve(done())
+      await waitFor(f.quiet)
+      assert.deepEqual(f.initiatives.workRecords(), [])
+      assert.deepEqual(f.initiatives.workEffects(), [])
+      assert.equal((await store.getState(id))?.workPolicy?.mode, 'optional')
+      const policyResponse = await f.post({ action: 'policy', data: { mode: 'optional' } })
+      assert.equal(policyResponse.status, 200)
+      assert.equal((await policyResponse.json()).policy.mode, 'optional')
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: interrupted managed creation stays bound and never admits its kickoff`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    const f = await fixture(workspace, store, false)
+    const folders = new FolderRegistry(workspace)
+    await folders.init()
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const root = await f.alignment.execute({ kind: 'session', sessionId: id }, 'create', undefined, undefined,
+        { title: 'Paused during admission', assignee: null, definition, reason: 'Fixture' }) as WorkRecord
+      const build = f.sessions.buildSession.bind(f.sessions)
+      f.sessions.buildSession = async (...args) => {
+        await build(...args)
+        await f.alignment.execute({ kind: 'session', sessionId: id }, 'update', root.key, 1,
+          { definition: root.definition, change: 'pause', reason: 'Concurrent controller stop', paused: true })
+      }
+      const topics = new TopicService({
+        projectId: '11111111-1111-4111-8111-111111111111', sessions: f.sessions, folders,
+        listStates: async () => Object.values(await store.listAllStates()),
+        resolveAgent: () => ({ defaultMode: 'session' }), changed: () => {},
+      })
+      const request = { requestId: crypto.randomUUID(), title: 'Never start', work: { key: root.key, revision: 1 },
+        initialMessage: 'Must not run under a stale binding.' }
+      await assert.rejects(topics.create(request, id), /revision changed|paused/)
+      const target = `web:chat-${request.requestId}`
+      assert.equal((await store.getState(target))?.workPolicy?.mode, 'required')
+      assert.equal(f.alignment.get(root.key).workflow?.assignee, null)
+      assert.equal(f.calls.length, 0)
+      await assert.rejects(topics.create(request, id), /incomplete/)
+      assert.equal(f.calls.length, 0, 'A retry must not silently admit the failed kickoff')
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: peer binding precedes kickoff, keeps its coordinator optional and propagates to tasks`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    const f = await fixture(workspace, store, false)
+    const folders = new FolderRegistry(workspace)
+    await folders.init()
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const root = await f.alignment.execute({ kind: 'session', sessionId: id }, 'create', undefined, undefined,
+        { title: 'Managed document', assignee: null, definition, reason: 'Explicit delegation' }) as WorkRecord
+      const topics = new TopicService({
+        projectId: '11111111-1111-4111-8111-111111111111', sessions: f.sessions, folders,
+        listStates: async () => Object.values(await store.listAllStates()),
+        resolveAgent: () => ({ defaultMode: 'session' }), changed: () => {},
+      })
+      f.enableNotifications()
+      const request = { requestId: crypto.randomUUID(), title: 'Document worker', work: { key: root.key, revision: 1 },
+        initialMessage: 'Write the assigned document.' }
+      const peer = await topics.create(request, id)
+      await waitFor(() => f.calls.length === 1)
+      assert.equal(f.alignment.required(id), false)
+      assert.equal(f.alignment.required(peer.sessionId), true)
+      assert.equal(f.alignment.get(root.key).workflow?.assignee, peer.sessionId)
+      assert.match(String(f.calls[0].messages[0].content), /Current work contracts/)
+      assert.equal((await store.getState(peer.sessionId))?.workPolicy?.mode, 'required')
+      const retry = await topics.create(request, id)
+      assert.equal(retry.initialMessageStatus, 'not_replayed')
+      assert.equal(f.calls.length, 1, 'Assignment notifications must not start a second turn before kickoff')
+      f.calls[0].resolve(call('fixture_write', {}))
+      await waitFor(() => f.calls.length === 2)
+      assert.equal(f.writes(), 0)
+      assert.match(JSON.stringify(f.calls[1].messages), /not adopted|basis changed/)
+      f.calls[1].resolve(call('work', { action: 'adopt', key: root.key, revision: 1, data: adoption }))
+      await waitFor(() => f.calls.length === 3)
+      f.calls[2].resolve(call('fixture_write', {}))
+      await waitFor(() => f.calls.length === 4)
+      assert.equal(f.writes(), 1)
+      f.calls[3].resolve(done())
+      const active = f.sessions.getActiveSession(peer.sessionId)
+      await waitFor(() => !!active && 'quiescent' in active && active.quiescent)
+      await assert.rejects(f.alignment.execute({ kind: 'session', sessionId: peer.sessionId }, 'policy', undefined, undefined,
+        { mode: 'optional' }), /controller/)
+      await assert.rejects(topics.create({ title: 'Escaping peer', initialMessage: 'Do work' }, peer.sessionId), /descendant Work/)
+      await f.sessions.buildSession('virtual:managed-task', { id: peer.sessionId }, {
+        mode: 'task', parentSessionId: peer.sessionId, agentType: 'general',
+      })
+      assert.equal(f.alignment.required('virtual:managed-task'), true)
+      assert.deepEqual((await store.getState('virtual:managed-task'))?.workPolicy, f.sessions.getSessionState(peer.sessionId)?.workPolicy)
+      await assert.rejects(f.sessions.buildSession('virtual:escaped-task', { id: peer.sessionId }, {
+        mode: 'task', parentSessionId: peer.sessionId, workPolicy: { mode: 'optional' },
+      }), /cannot remove inherited/)
+      await assert.rejects(f.sessions.buildSession('web:escaped-fork', { id: peer.sessionId, index: 0 }), /cannot escape/)
+      await f.send('Do a separate small task directly.')
+      await waitFor(() => f.calls.length === 5)
+      assert.match(String(f.calls[4].messages[0].content), /Work mode: optional/)
+      f.calls[4].resolve(call('fixture_write', {}))
+      await waitFor(() => f.calls.length === 6)
+      assert.equal(f.writes(), 2)
+      f.calls[5].resolve(done())
+      await waitFor(f.quiet)
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: Work completes from an actual file read without looking up physical IDs`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store)
+    f.tools.register(new WriteTool(workspace))
+    f.tools.register(new ReadTool(workspace))
+    try {
+      await f.sessions.prepareCommandSession(id)
+      const actor = { kind: 'session' as const, sessionId: id }
+      const work = await f.alignment.execute(actor, 'create', undefined, undefined,
+        { title: 'Short document', definition, reason: 'Synthetic file request' }) as WorkRecord
+      await f.alignment.execute(actor, 'adopt', work.key, work.revision, adoption)
+      const sequence = f.alignment.get(work.key).sequence
+      await f.send('Write a concise introduction to profile.md, read it back, and finish.')
+      await waitFor(() => f.calls.length === 1)
+      f.calls[0].resolve(call('write', { path: 'profile.md', content: '# Profile\nA concise introduction.\n' }, 'write-profile'))
+      await waitFor(() => f.calls.length === 2)
+      assert.match(String(f.calls[1].messages.find(message => message.tool_call_id === 'write-profile')?.content), /Success: write/)
+      f.calls[1].resolve(call('read', { path: 'profile.md' }, 'read-profile'))
+      await waitFor(() => f.calls.length === 3)
+      const prompt = String(f.calls[2].messages.find(message => message.role === 'system')?.content)
+      assert.match(prompt, /# Recent tool receipt IDs/)
+      assert(prompt.includes('{"id":"read-profile","tool":"read"}'))
+      assert.equal(f.calls[2].messages.find(message => message.tool_call_id === 'read-profile')?.content,
+        '# Profile\nA concise introduction.\n', 'The model-visible index does not rewrite native tool output')
+      f.calls[2].resolve(call('work', { action: 'progress', key: work.key, revision: work.revision,
+        data: { expectedSequence: sequence, status: 'done',
+          result: { summary: 'The document was saved and read back.', sources: [{ id: 'read-profile', quote: 'A concise introduction.' }] } },
+      }, 'complete-profile'))
+      await waitFor(() => f.calls.length === 4)
+      const receipt = JSON.parse(String(f.calls[3].messages.find(message => message.tool_call_id === 'complete-profile')?.content))
+      const evidence = [{ sessionId: id, physicalId: physicalSessionId(f.sessions.getSessionState(id)!),
+        kind: 'tool', id: 'read-profile', quote: 'A concise introduction.' }]
+      assert.equal(receipt.workflow.status, 'done')
+      assert.equal(receipt.sequence, sequence + 1)
+      assert.deepEqual(receipt.workflow.result.evidence, evidence)
+      assert.equal(Object.hasOwn(receipt.workflow.result, 'sources'), false)
+      assert.deepEqual(f.initiatives.workEffects(), [])
+      f.calls[3].resolve(done())
+      await waitFor(f.quiet)
+      const stored = []
+      for await (const event of store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!))) stored.push(event)
+      assert.equal(stored.find(event => event.role === 'tool' && event.tool_call_id === 'read-profile')?.content,
+        '# Profile\nA concise introduction.\n', 'Persisted evidence quotes remain unchanged')
+      const reopened = new InitiativeStore(workspace)
+      try {
+        const restored = reopened.workRecords().find(record => record.key === work.key)!
+        assert.deepEqual(restored.workflow?.result, receipt.workflow.result)
+        assert.equal(restored.workflow?.status, 'done')
+      } finally { reopened.close() }
+      for (const source of evidence) await f.sessions.validateWorkEvidence({ ...source, kind: 'tool' })
+    } finally { await f.close(); store.close?.() }
+  }))
+
+  test(`${Store.name}: Work rejects invalid short sources atomically and preserves full evidence support`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions'))
+    await store.init()
+    const f = await fixture(workspace, store)
+    try {
+      await f.sessions.prepareCommandSession(id)
+      await f.sessions.prepareCommandSession('web:peer')
+      const physicalId = physicalSessionId(f.sessions.getSessionState(id)!)
+      await store.appendRawEvents(physicalId, [
+        { role: 'tool', tool_call_id: 'own-read', content: 'Read back the saved document.' },
+        { role: 'assistant', tool_call_id: 'not-a-receipt', content: 'Invented success' },
+      ])
+      await store.appendRawEvents(physicalSessionId(f.sessions.getSessionState('web:peer')!),
+        [{ role: 'tool', tool_call_id: 'peer-read', content: 'Private peer receipt' }])
+      const actor = { kind: 'session' as const, sessionId: id }
+      const work = await f.alignment.execute(actor, 'create', undefined, undefined,
+        { title: 'Evidence validation', definition, reason: 'Synthetic request' }) as WorkRecord
+      await f.alignment.execute(actor, 'adopt', work.key, 1, adoption)
+      const before = f.alignment.get(work.key)
+      const source = { id: 'own-read', quote: 'saved document' }
+      const full = { sessionId: id, physicalId, kind: 'tool' as const, ...source }
+      const progress = (result: object, signal?: AbortSignal) => f.alignment.execute(actor, 'progress', work.key, 1,
+        { expectedSequence: before.sequence, status: 'done', result: { summary: 'Verified', ...result } }, signal)
+      for (const [result, pattern] of [
+        [{ evidence: [] }, /result.sources/],
+        [{ sources: [] }, /at least 1/],
+        [{ sources: [{ id: 'missing', quote: 'saved' }] }, /No tool receipt/],
+        [{ sources: [{ id: 'functions.read', quote: 'saved' }] }, /No tool receipt/],
+        [{ sources: [{ id: 'peer-read', quote: 'Private peer receipt' }] }, /own segments/],
+        [{ sources: [{ id: 'not-a-receipt', quote: 'Invented success' }] }, /No tool receipt/],
+        [{ sources: [{ ...source, quote: 'Fabricated success' }] }, /Excerpt does not match/],
+        [{ sources: [{ ...source, sessionId: 'web:peer' }] }, /Unrecognized key/],
+        [{ sources: Array(9).fill(source) }, /at most 8/],
+        [{ sources: Array(8).fill(source), evidence: [full] }, /at most 8 combined/],
+        [{ sources: [source], evidence: [{ ...full, physicalId: 'guessed-chat-id' }] }, /segment does not belong/],
+      ] as const) {
+        await assert.rejects(progress(result), pattern)
+        assert.deepEqual(f.alignment.get(work.key), before, 'Failed completion must not mutate Work')
+      }
+      await assert.rejects(progress({ sources: [source] }, AbortSignal.abort()), { name: 'AbortError' })
+      await assert.rejects(f.alignment.execute({ kind: 'user' }, 'progress', work.key, 1,
+        { expectedSequence: before.sequence, status: 'done', result: { summary: 'Reviewed', sources: [source] } }), /humans must supply full/)
+      await assert.rejects(f.alignment.execute({ kind: 'session', sessionId: 'web:peer' }, 'progress', work.key, 1,
+        { expectedSequence: before.sequence, status: 'done', result: { summary: 'Reviewed', sources: [source] } }), /assigned executor/)
+      assert.deepEqual(f.alignment.get(work.key), before)
+      const completed = await progress({ evidence: [full], sources: [{ ...source, quote: 'Read back' }] }) as WorkRecord
+      assert.deepEqual(completed.workflow?.result?.evidence, [full, { ...full, quote: 'Read back' }])
+      assert.equal(completed.workflow?.status, 'done')
+    } finally { await f.close(); store.close?.() }
+  }))
+
   test(`${Store.name}: caller refinements version acceptance and reach publication without owner impersonation`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions'))
     await store.init()

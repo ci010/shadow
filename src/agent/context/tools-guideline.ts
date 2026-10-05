@@ -8,17 +8,24 @@ export function toolsGuideline(ctx: SessionPromptContext): string {
   const modes = !coordinator && isToolAllowed(ctx.agent, 'subagent')
     ? allowedSubagentModes(mode, !!ctx.parentSessionId) : []
   const sections: string[] = []
-  if (mode === 'session' && isToolAllowed(ctx.agent, 'work')) {
+  if (mode === 'session' && isToolAllowed(ctx.agent, 'work') && !ctx.workRequired) {
+    sections.push(`### Optional Work
+
+Ordinary requests execute directly: do not create/adopt/report Work just to use tools.
+Use Work for explicit tracking or managed delegation. Create unassigned Work, then bind its key+revision with session create \`work\` before kickoff.
+You may coordinate constrained peers without constraining yourself. Explicit self opt-in: \`work policy\`, key+revision, data.mode=required. Permissions and approvals remain unchanged.`)
+  }
+  if (mode === 'session' && isToolAllowed(ctx.agent, 'work') && ctx.workRequired) {
     sections.push(`### Work alignment
 
-- \`work context/list/tree\`: schemas/discovery/Initiative. Create/select and adopt before effects, including Skill tools; not conversation, reads or Skill activation. Clear requests need no interview.
-- Reuse assignments; metadata is not scope. Completion needs acceptance evidence, not tool success.
-- Outcomes/boundaries are not phases. \`adopt\` data.acceptance versions missing in-scope criteria in your own agent interpretation. Human-confirmed changes need \`update\` + current owner \`requestQuote\` or reviewed proposals.
-- \`blockedScope=step\` allows independent authorized work, not the blocked step. Whole-work blockers, pause, dependencies and unknown effects still fence execution; progress grants no access.
-- Infer again after update/adopt/select; old/unadopted calls stay fenced. Selection narrows scope, not isolation.
-- Review custom answers before adoption; text is not approval.
-- To replace entrenched assumptions: checkpoint inventory/retired premises, transition, end turn. Fresh keeps history/queued input; successor creates an idle peer. Neither cancels effects nor transfers assignments.
-- Revalidate history and late results; settle unknown effects before retrying.`)
+- \`work context/list/tree\`: definitions. Adopt bound Work before effects; reads and Skill activation remain available.
+- Reuse assignments. Completion evidence: \`result.sources:[{id,quote}]\`.
+- Outcomes are not phases. \`adopt\` data.acceptance appends in-scope criteria to your own interpretation; protected changes need \`update\` + owner \`requestQuote\` or reviewed proposals.
+- \`blockedScope=step\`: only independent authorized work may continue. Pause, whole-work blockers, dependencies and unknown effects still fence execution.
+- Policy/update/adopt/select require a fresh parent inference, not infer(). Selection never drops bindings.
+- Custom answers are not approval.
+- To reset assumptions: checkpoint, transition, end turn. Fresh retains history/input; successor is an idle peer. Neither cancels effects nor transfers assignments.
+- Revalidate old results; settle unknown effects before retrying.`)
   }
 
   if (isToolAllowed(ctx.agent, 'sql')) {
@@ -77,7 +84,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
       '### Delegation',
       '',
       '- **`subagent`** — `agent_type` selects expertise/tool constraints; independently choose `mode` for lifecycle, context, communication and return behavior.',
-      '- Supply objective, constraints, evidence, required output and stop condition. Modes never widen role permissions or isolate filesystem side effects.',
+      '- Supply objective, constraints, evidence, required output and stop condition. Required Work is inherited; optional `work:{key,revision}` binds adopted owner Work without constraining the owner. Modes never widen permissions.',
     ]
     if (modes.includes('task')) {
       lines.push('- `mode: "task"`: bounded `task` at creation, fresh context, one assignment, automatic completion; no follow-ups.')
@@ -101,7 +108,7 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
     sections.push(`### Peer conversations
 
 - Reuse peers: discover \`grep:v:sessions\`; \`v:sessions/<id>/brief\` gives metadata and conversation URL, not work scope.
-- \`session action=create\` needs \`title\`; optional description is metadata, initialMessage is the request. No work or assignment is created.
+- \`session action=create\`: title; description is metadata, initialMessage is the request. \`work:{key,revision}\` binds unassigned Work before kickoff; required creators use descendant Work.
 - Retry with the same \`requestId\`; kickoff is not replayed. \`initialMessageStatus\`: \`accepted\`, \`not_requested\`, \`not_replayed\`. Admission is not completion.
 - \`work assign\` sets responsibility; directories and creator provenance are not ownership. Metadata never revises work.
 - Read \`v:project/folders\` for registered resources; never resolve remote display paths on Main.

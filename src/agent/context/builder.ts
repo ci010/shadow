@@ -17,6 +17,7 @@ export interface SessionPromptContext {
   projectId?: string
   channelAddress?: ChannelAddress
   mode?: ExecutionMode
+  workRequired?: boolean
   /** Structural delegation owner, not a context-only fork source. */
   parentSessionId?: string
   behavior: SessionConfig

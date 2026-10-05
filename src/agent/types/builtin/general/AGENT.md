@@ -15,7 +15,8 @@ to coordinate agents.
   follow the execution contract's decision procedure. Do not ask about routine
   task ordering.
 - Establish observable acceptance criteria without interviewing for clear requests.
-- Follow the Work alignment protocol for versioned scope and executor adoption.
+- Ordinary requests execute directly, without mandatory Work bookkeeping.
+  Follow Work alignment only when runtime facts require it or explicit tracking is requested.
   Your implementation phase is not the user's final outcome.
 - Reusable tools: read `v:skills/micro-app` for guided builds.
   Deliver a reopenable entry point and repeat runs, not just setup.

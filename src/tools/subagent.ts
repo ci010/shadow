@@ -9,6 +9,7 @@ import { isExecutionMode } from '../sessions/execution-mode.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import { parseInitiativeId } from '../sessions/initiative-metadata.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
+import { workBindingSchema } from '../sessions/work-policy.ts'
 
 /** Role restrictions intersect execution mode and structural delegation scope. */
 export class SubagentTool implements Tool {
@@ -49,6 +50,7 @@ export class SubagentTool implements Tool {
           'Map of tool name → extra args array. Example: { "chrome-devtools": ["--remote-debugging-port=9223"] }. ' +
           'Use empty array for no extra args: { "cron": [] }.',
       },
+      work: { type: 'object', description: 'Optional {key:string,revision:integer}: exact Work assigned to and adopted by the durable owner. Constrains this execution, not the owner; required parent constraints always inherit.' },
     },
     required: ['description', 'task'],
   }
@@ -77,6 +79,7 @@ export class SubagentTool implements Tool {
       return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
     }
     if (typeof args.agent_type === 'string' && args.agent_type.startsWith('a2a:')) {
+      if (this.sessions.alignment?.required(ctx.sessionId)) throw new Error('Remote A2A execution does not enforce local Work bindings; managed delegation is unavailable.')
       if (!this.remote) throw new Error('A2A is not configured in this Project.')
       if (args.mode !== undefined && args.mode !== 'task') throw new Error('Remote agents support asynchronous task mode only.')
       if (Object.keys(args).some(key => !['agent_type', 'task', 'description', 'mode'].includes(key))) {
@@ -87,6 +90,8 @@ export class SubagentTool implements Tool {
       return this.remote.start(args.agent_type, args.task, ctx)
     }
     const parentState = this.sessions.getSessionState(ctx.sessionId)
+    const work = args.work === undefined ? undefined : workBindingSchema.parse(args.work)
+    if (work && !this.sessions.alignment) throw new Error('Work policy service is unavailable.')
     const initiativeId = parseInitiativeId({
       initiativeId: args.initiative_id,
       initiativeName: args.initiative_name,
@@ -131,6 +136,7 @@ export class SubagentTool implements Tool {
       throw new Error('Subagent source bot address does not match its session context')
     }
 
+    const workPolicy = this.sessions.alignment?.prepareDelegation(ctx.sessionId, work, mode)
     console.info(`[subagent] Spawning ${typeName} subagent: ${description.slice(0, 100)}`)
 
     const sessionId = `virtual:${typeName}-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
@@ -148,6 +154,7 @@ export class SubagentTool implements Tool {
       {
         agentType: typeName,
         mode,
+        workPolicy,
         executionKey,
         parentToolCallId: ctx.toolCallName === 'subagent' ? ctx.toolCallId : undefined,
         parentSessionId,

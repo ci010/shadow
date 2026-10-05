@@ -138,9 +138,9 @@ test('runtime Work facts distinguish absent contracts and the current authentica
   const f = fixture(workspace)
   try {
     const ownerContext = { ...f.context(), inputSource: 'user' as const, admin: true, isGroup: false, workUserInput: 'Append one requirement.' }
-    assert.match(f.alignment.prompt(worker, ownerContext), /No Work is registered[\s\S]*Before exec[\s\S]*owner-directed additive/)
+    assert.match(f.alignment.prompt(worker, ownerContext), /Work mode: optional[\s\S]*Ordinary requests execute directly/)
     const restrictedTools = new SessionTools(f.base, workspace, ['read'])
-    assert.equal(f.alignment.prompt(peer, { ...f.context(peer), tools: restrictedTools }), '',
+    assert.doesNotMatch(f.alignment.prompt(peer, { ...f.context(peer), tools: restrictedTools }), /Before exec|must create/,
       'Do not instruct roles without Work access to create work')
     await f.apply(); await f.adopt()
     for (const input of [
@@ -383,7 +383,7 @@ test('runtime effect hints are bounded, scoped and never invent a missing result
     assert.match(prompt, /Unresolved Work effects \(5; showing 3\)/)
     assert.equal(ids.filter(id => prompt.includes(id)).length, 3)
     assert.doesNotMatch(prompt, /"resultSource":/)
-    assert.equal(f.alignment.prompt(peer), '')
+    assert.doesNotMatch(f.alignment.prompt(peer), /Unresolved Work effects/)
     assert.throws(() => f.alignment.assertCurrent(f.alignment.snapshot(worker), worker), /unknown outcome/)
     const large = '\0'.repeat(511) + 'x'
     for (const id of ids) f.store.workEvent(workKey(change().subject), worker, 'tool_result', {
@@ -591,7 +591,7 @@ test('registry fences old inference, same-batch adoption, nested tools, and rest
   f.base.register({ name: 'nested_fixture', description: '', parameters: { type: 'object', properties: {} },
     async execute(_, context) { return context.tools.execute('write_fixture', {}, context) } })
   try {
-    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /Untracked execution/)
+    assert.equal(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), 'written')
     await f.apply()
     const clarification = { name: 'ask', description: '', parameters: { type: 'object' as const, properties: {} }, async execute() { return 'clarification' } }
     assert.equal(f.alignment.before(clarification, { action: 'ask' }, f.context()), undefined, 'Asking for clarification does not require adopting an unclear goal')
@@ -606,9 +606,9 @@ test('registry fences old inference, same-batch adoption, nested tools, and rest
     await f.apply(change(1), true)
     await f.adopt(undefined, 2)
     assert.match(requireToolText(await f.tools.execute('nested_fixture', {}, old)), /basis changed/)
-    assert.equal(writes, 1)
-    assert.equal(await f.tools.execute('write_fixture', {}, f.context()), 'written')
     assert.equal(writes, 2)
+    assert.equal(await f.tools.execute('write_fixture', {}, f.context()), 'written')
+    assert.equal(writes, 3)
   } finally { f.store.close() }
 }))
 
@@ -626,7 +626,7 @@ test('reading and activating a Skill does not require a work item or adoption', 
     assert.equal(read.readonly({ path: 'v:skills/audio-cpp/SKILL.md' }), true)
     assert.equal(await f.tools.execute('read', { path: 'v:skills/audio-cpp' }, f.context()), 'Skill instructions and tools registered.')
     assert.equal(activations, 1)
-    assert.match(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), /Untracked execution/)
+    assert.equal(requireToolText(await f.tools.execute('write_fixture', {}, f.context())), 'written')
     await f.apply()
     assert.equal(await f.tools.execute('read', { path: 'v:skills/audio-cpp' }, f.context()), 'Skill instructions and tools registered.')
     assert.equal(activations, 2)

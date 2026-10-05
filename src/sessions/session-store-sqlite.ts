@@ -18,6 +18,7 @@ import { validateOwnership, OwnershipValidationError } from '../projects/ownersh
 import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
 import { parsePhysicalIdVersion } from './session-identity.ts'
 import { parseSessionName, SessionNameError } from './session-name.ts'
+import { parseWorkPolicy, WorkPolicyError } from './work-policy.ts'
 
 const MAX_RETRIES = 3
 const BASE_DELAY_MS = 50
@@ -34,6 +35,7 @@ interface SessionPrototypeV1 {
 }
 
 const SESSION_METADATA_KEYS = new Set<keyof SessionMetadata>([
+  'workPolicy',
   'name',
   'physicalIdVersion',
   'sessionKind',
@@ -93,6 +95,7 @@ function parseMetadata(value: unknown): SessionMetadata | null {
   if (!isRecord(value)) return null
 
   const metadata: SessionMetadata = { ownershipVersion: 2, ...parseTopicSessionFields(value) }
+  if (value.workPolicy !== undefined) metadata.workPolicy = parseWorkPolicy(value.workPolicy)
   if (value.name !== undefined) metadata.name = parseSessionName(value.name)
   if (value.decisionOwnerSessionId !== undefined) metadata.decisionOwnerSessionId = parseDecisionOwner(value.decisionOwnerSessionId)
   if (value.physicalIdVersion !== undefined) metadata.physicalIdVersion = parsePhysicalIdVersion(value.physicalIdVersion)
@@ -327,7 +330,7 @@ export class SqliteSessionStore implements SessionStore {
           throw new OwnershipValidationError('Unsupported session prototype version or metadata')
         }
       } catch (error) {
-        if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
+        if (error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
         throw new OwnershipValidationError('Invalid session prototype metadata')
       }
     }
@@ -360,6 +363,7 @@ export class SqliteSessionStore implements SessionStore {
       version: PROTOTYPE_VERSION,
       metadata: {
         ...this.prototypeMetadataExtras.get(sessionKey),
+        workPolicy: parseWorkPolicy(state.workPolicy),
         name: state.name === undefined ? undefined : parseSessionName(state.name),
         decisionOwnerSessionId: parseDecisionOwner(state.decisionOwnerSessionId),
         ...parseTopicSessionFields(state),

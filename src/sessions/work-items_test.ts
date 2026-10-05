@@ -71,6 +71,39 @@ test('work migration retains identities, history, ownership, acceptance and dura
   } finally { store.close() }
 }))
 
+test('short completion lookup never commits after cancellation or a concurrent Work change', async () => withTempWorkspace(async home => {
+  const f = setup(home)
+  try {
+    for (const mode of ['cancel', 'changed', 'effect', 'unavailable'] as const) {
+      const work = await f.create(mode)
+      await f.alignment.execute(actor('owner'), 'adopt', work.key, 1, adopt)
+      const before = f.alignment.get(work.key)
+      const controller = new AbortController()
+      const alignment = new WorkAlignment(f.store, {
+        state: id => f.states.get(id), evidence: async () => {},
+        resolveEvidence: mode === 'unavailable' ? undefined : async (_id, sources, signal) => {
+          assert.equal(signal, controller.signal)
+          if (mode === 'cancel') controller.abort()
+          else if (mode === 'effect') f.store.startWorkEffect(randomUUID(), 'owner', 'write', [{ key: work.key, revision: 1 }])
+          else await f.manage('owner', work.key, 'progress', { status: 'in_progress' })
+          return sources.map(source => ({ sessionId: 'owner', physicalId: 'fixture.0', kind: 'tool', ...source }))
+        },
+        changed: async () => {}, fresh: async () => {}, successor: async () => undefined,
+      })
+      await assert.rejects(alignment.execute(actor('owner'), 'progress', work.key, 1,
+        { expectedSequence: before.sequence, status: 'done',
+          result: { summary: 'Verified', sources: [{ id: 'read', quote: 'saved' }] } }, controller.signal),
+      mode === 'cancel' ? /abort/i : mode === 'changed' ? /changed|conflict/i : mode === 'effect' ? /unresolved effects/ : /lookup is unavailable/)
+      const after = f.alignment.get(work.key)
+      if (mode === 'changed') {
+        assert.equal(after.workflow?.status, 'in_progress')
+        assert.equal(after.sequence, before.sequence + 1)
+      } else assert.deepEqual(after, before)
+      assert.equal(after.workflow?.result, undefined)
+    }
+  } finally { f.store.close() }
+}))
+
 test('one work item survives release and reassignment; stale generations and takeover are rejected', async () => withTempWorkspace(async home => {
   const f = setup(home)
   try {

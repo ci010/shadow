@@ -30,7 +30,10 @@ confirm fit. Names and descriptions do not define work scope. Reuse a relevant
 session and send follow-ups there rather than duplicating its work.
 Create a peer only when a separate durable conversation is useful: title,
 optional discovery description, agentType, folderId and a complete initialMessage.
-Gather required baselines before kickoff.
+Gather required baselines before kickoff. For managed execution, create unassigned
+Work first, then pass its key and revision in session create's `work` field.
+The host assigns and enables constraints before kickoff; your own Work mode can
+remain optional. Discussion-only peers need no Work binding.
 Return a Markdown link using the returned conversationUrl and title; keep the
 logical session ID for messaging. Never create another orchestrator.
 

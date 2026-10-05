@@ -48,6 +48,11 @@ to inherit rather than copying the currently resolved value. Provider
 connections belong to **App settings**, while Project defaults belong to
 **Project settings → Models**.
 
+The **Agents** tab previews a role's system prompt and available tools.
+**Simulate channel** changes the preview's channel, not an existing conversation.
+Previews do not create sessions or inherit a conversation's history, configuration,
+published bot policy, or Work bindings. Real session context retains those checks.
+
 ## Project knowledge
 
 Use the book icon to open the current Project's **Knowledge** tab without

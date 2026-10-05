@@ -62,6 +62,7 @@ import { CallTools } from './call-tools.ts'
 import { prepareSessionRecovery, SessionResumeError } from './recovery.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { WorkAlignment } from './work-alignment.ts'
+import { parseWorkPolicy, type WorkPolicy } from './work-policy.ts'
 import type { WorkRecord } from '../initiatives/work-contract.ts'
 import type { ToolBridgeFactory } from '../script-runtime/bridge.ts'
 import {
@@ -1126,6 +1127,9 @@ ${JSON.stringify(request)}`,
       }
       const completion = input.source.kind === 'event' ? this.completionEvents.get(input.source.eventId) : undefined
       const trustedCompletion = completion?.sourceId === sourceSessionId && completion?.targetId === sessionId
+      if (sourceSessionId && !trustedCompletion && input.kind === 'message' && input.policy !== 'silent') {
+        this.alignment?.assertDelegatedInput(sourceSessionId, sessionId)
+      }
       if (sourceSessionId && this.sessionStates[sourceSessionId]?.mode === 'call') {
         this.blockCall(sourceSessionId, 'Leaf calls cannot deliver messages or deferred events.')
       }
@@ -1370,6 +1374,7 @@ ${JSON.stringify(request)}`,
       topic?: TopicMetadata
       createdBySessionId?: string
       topicRequestHash?: string
+      workPolicy?: WorkPolicy
     },
   ): Promise<void> {
     const release = this.acquireFolderAccess()
@@ -1394,6 +1399,9 @@ ${JSON.stringify(request)}`,
       this.assertFolderAccess(topicFields.createdBySessionId)
     }
     const automation = parseAutomationSessionRef(stateFields?.automation)
+    if (automation?.config?.originSessionId && this.alignment?.required(automation.config.originSessionId)) {
+      throw new Error('Fresh automation cannot preserve required Work bindings. Schedule an existing managed session instead.')
+    }
     const initiativeId = parseInitiativeId({
       initiativeId: stateFields?.initiativeId ?? (parent ? this.sessionStates[parent.id]?.initiativeId : undefined),
     })
@@ -1440,6 +1448,21 @@ ${JSON.stringify(request)}`,
     if (mode === 'call' && (!ownerId || stateFields?.reportTo !== undefined)) {
       throw new Error('Calls require a permitted structural owner and cannot use report_to.')
     }
+    let workPolicy = parseWorkPolicy(stateFields?.workPolicy) ?? { mode: 'optional' as const }
+    const inheritedPolicy = ownerId ? this.alignment?.policy(ownerId) : undefined
+    if (inheritedPolicy?.mode === 'required') {
+      const suppliedKeys = workPolicy.mode === 'required' ? workPolicy.keys : []
+      if (stateFields?.workPolicy && inheritedPolicy.keys.some(key => !suppliedKeys.includes(key))) {
+        throw new Error('Temporary executions cannot remove inherited Work constraints.')
+      }
+      workPolicy = workPolicy.mode === 'required' ? workPolicy : inheritedPolicy
+    }
+    if (parent?.index !== undefined && this.alignment?.required(parent.id) && workPolicy.mode !== 'required') {
+      throw new Error('A context fork cannot escape Work constraints; create a managed peer instead.')
+    }
+    if (topicFields.createdBySessionId && this.alignment?.required(topicFields.createdBySessionId) && workPolicy.mode !== 'required') {
+      throw new Error('Managed creators cannot create unconstrained peers.')
+    }
 
     const ts = new Date().toISOString()
     const physicalSessionId = newPhysicalSessionId(sessionId, 0, 2)
@@ -1478,6 +1501,7 @@ ${JSON.stringify(request)}`,
       ...topicFields,
       sessionKind: topicFields.sessionKind,
       mode: stateFields?.mode ?? agent.defaultMode ?? 'session',
+      workPolicy,
       automation,
       automationVersion: 1,
       executionStatus: 'pending',
@@ -1661,6 +1685,26 @@ ${JSON.stringify(request)}`,
   }
 
   // ── Session config ─────────────────────────────────────────────────
+
+  async setWorkPolicy(sessionId: string, policy: WorkPolicy, validate: () => void): Promise<void> {
+    await this.withStateCreation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      if (!state || state.mode !== 'session' || this.stopped || this.deleting.has(sessionId)) throw new Error('Work policy requires an available durable session.')
+      this.assertFolderAccess(sessionId)
+      validate()
+      if (this.ownedCreations.get(sessionId)?.size || Object.values(this.sessionStates).some(child =>
+        delegationOwner(child) === sessionId && !['completed', 'failed', 'cancelled'].includes(child.executionStatus ?? 'pending'))) {
+        throw new Error('Settle owned executions before changing Work policy.')
+      }
+      const parsed = parseWorkPolicy(policy)!
+      // Tighten admission before yielding to storage; relaxation only follows durable success.
+      if (parsed.mode === 'required') state.workPolicy = parsed
+      await this.store.saveState(sessionId, { ...state, workPolicy: parsed })
+      state.workPolicy = parsed
+      this.invalidateSystemPrompts()
+      this.deps.bus.emit('session.changed', { sessionId })
+    })
+  }
 
   async updateConversationMetadata(sessionId: string, metadata: { title: string; description?: string }): Promise<void> {
     const name = parseSessionName(metadata.title)
@@ -1960,6 +2004,10 @@ ${JSON.stringify(request)}`,
     const authority = this.alignment.store.workAuthority(record.subject)
     for (const executor of new Set([authority.executor, previous?.workflow?.assignee])) {
       if (!executor || !this.getSessionState(executor)) continue
+      const state = this.getSessionState(executor)!
+      if (!this.alignment.required(executor)) continue
+      if (!previous?.workflow?.assignee && state.workPolicy?.mode === 'required'
+        && state.topicRequestHash && state.executionStatus === 'pending' && !state.lastActivityAt) continue
       if (record.changedBy === executor && record.adoption?.sessionId === executor
         && record.adoption.revision === record.revision) continue
       this.assertFolderAccess(executor)
@@ -2240,11 +2288,11 @@ ${JSON.stringify(request)}`,
     } else {
       channel = opts.channel ?? 'heartbeat'
       chatId = opts.chatId ?? 'heartbeat'
-      sessionId = `${channel}:${chatId}`
+      sessionId = `virtual:agent-preview:${[opts.agentType ?? 'general', channel, chatId].map(encodeURIComponent).join(':')}`
     }
 
-    const active = this.getActiveSession(sessionId)
-    const conversationPolicy = this.deps.conversationPolicies?.resolve(sessionId)
+    const active = opts.sessionId ? this.getActiveSession(sessionId) : undefined
+    const conversationPolicy = opts.sessionId ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
     if (active && !opts.preview) {
       return {
         source: 'active-history',
@@ -2260,7 +2308,7 @@ ${JSON.stringify(request)}`,
       }
     }
 
-    const state = this.sessionStates[sessionId]
+    const state = opts.sessionId ? this.sessionStates[sessionId] : undefined
     const behavior = state?.config ?? {}
     const agentTypeName = opts.agentType ?? state?.agentType ?? 'general'
     const agentType = this.deps.agentTypes.resolve(agentTypeName)
@@ -2280,6 +2328,7 @@ ${JSON.stringify(request)}`,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       agent: agentType,
       mode: state?.mode ?? agentType.defaultMode,
+      workRequired: opts.sessionId ? this.alignment?.required(sessionId) ?? false : false,
       parentSessionId: delegationOwner(state),
       initiativeId: state?.initiativeId,
       contextResetAt: state?.contextResetAt,
@@ -2291,12 +2340,12 @@ ${JSON.stringify(request)}`,
       agentTypeName,
       state?.sessionKind,
     )
-    const tools = this.getToolDefinitions(sessionId, {
+    const tools = this.getToolDefinitions(opts.sessionId, {
       allowedTools,
       blockedTools,
     })
 
-    const decisions = await this.decisionValidityPrompt(sessionId)
+    const decisions = opts.sessionId ? await this.decisionValidityPrompt(sessionId) : ''
     return { source: 'preview', systemPrompt: decisions ? `${systemPrompt}\n\n${decisions}` : systemPrompt,
       sections: decisions ? [...sections, { name: 'decision-validity', content: decisions, characters: decisions.length }] : sections, tools }
   }
@@ -2433,6 +2482,7 @@ ${JSON.stringify(request)}`,
       sessionId,
       segmentIndex: 0,
       mode: 'session',
+      workPolicy: { mode: 'optional' },
       parentSessionId: null,
       executionStatus: 'pending',
       automationVersion: 1,
@@ -2473,6 +2523,7 @@ ${JSON.stringify(request)}`,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
       agent: resolvedAgentType,
       mode: state.mode,
+      workRequired: this.alignment?.required(sessionId) ?? false,
       parentSessionId: delegationOwner(state),
       initiativeId: state.initiativeId,
       contextResetAt: state.contextResetAt,

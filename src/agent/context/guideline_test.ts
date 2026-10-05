@@ -160,6 +160,20 @@ test('general root direct guideline stays within its character budget', async ()
   assert(prompt.length <= 12500, `guideline grew to ${prompt.length} characters`)
 })
 
+test('ordinary and managed sessions receive different Work instructions without losing coordination tools', async () => {
+  const general = (await getBuiltinAgentTypes()).find(agent => agent.name === 'general')!
+  const provider = guidelineProvider()
+  const ordinary = (await provider.getPromptSection({ ...makeContext(general, false), workRequired: false }))!
+  assert.match(ordinary, /Ordinary requests execute directly/)
+  assert.doesNotMatch(ordinary, /### Work alignment|Adopt bound Work before effects/)
+  assert.match(ordinary, /coordinate constrained peers without constraining yourself/)
+  const managed = (await provider.getPromptSection({ ...makeContext(general, false), workRequired: true }))!
+  assert.match(managed, /Adopt bound Work before effects/)
+  assert.doesNotMatch(managed, /### Optional Work/)
+  const length = managed.replace(/\r\n/g, '\n').length
+  assert(length <= 12500, `managed guideline grew to ${length} characters`)
+})
+
 test('coordinator static prompt stays compact without generic worker manuals', async () => {
   const agent = (await getBuiltinAgentTypes()).find(agent => agent.name === 'orchestrator')!
   const prompt = (await guidelineProvider().getPromptSection(makeContext(agent, false)))!.replace(/\r\n/g, '\n')

@@ -198,6 +198,54 @@ reports no change and never replays the callback, including while delivery is
 pending. Callback failures remain visible in the execution output; continuation
 is not a delivery retry command.
 
+## Optional tracking and managed Work
+
+New ordinary sessions default to `workPolicy.mode: "optional"`. They execute
+requests directly, without mandatory `context/create/adopt/progress` calls.
+Work remains available for explicit tracking and coordination; having the tool
+does not enable enforcement. A coordinator can remain optional while managing
+required peers. Mode does not grant filesystem, device or publication access.
+
+For a managed durable peer, first create unassigned Work (`assignee: null`),
+then call `session` with `action: "create"` and
+`work: {key, revision}` alongside the usual title and optional initialMessage.
+The creator must control that exact unassigned Work. The host persists required
+bindings, assigns the Work, and only then admits the kickoff. These are ordered,
+fail-closed operations, not a cross-store transaction: an interrupted creation
+may leave an idle bound session awaiting assignment, never an unbound executor.
+Retries do not replay initial messages; incomplete assignments are explicit errors.
+The child adopts the supplied definition, not a new task of its own choosing.
+
+Temporary `subagent` task/call executions inherit required owner bindings.
+An optional owner can supply `work: {key, revision}` to constrain just that
+execution, using Work already assigned to and adopted by the durable owner.
+Temporary executions do not become independent Work assignees. Nested calls
+cannot remove inherited constraints.
+
+Required sessions may create managed peers only with descendant Work. Bound
+items and their ancestor constraints remain in the execution snapshot regardless
+of `select`; ancestor pause, dependencies and unknown effects still apply.
+Actionable messages may go to the controller or a recipient with compatible
+bindings, not an unconstrained peer. Remote A2A delegation and fresh automation
+do not yet preserve these bindings and are rejected in required mode; use local
+managed executions or schedule an existing managed session. This is a Work
+protocol boundary, not an OS sandbox or semantic proof that every action fits
+the natural-language task.
+
+Explicit self opt-in uses `work action=policy`, the assigned `key` and `revision`,
+and `data: {mode: "required"}`. The Work manager becomes the policy controller.
+Only that controller or an authenticated human can change externally imposed
+policy. `data: {mode: "optional", sessionId?}` removes enforcement only after
+bound Work is done/cancelled, effects are settled and owned executions have
+finished. A fresh inference is required after policy changes. Tracking records
+and evidence are never deleted by disabling enforcement.
+
+Policy is validated and persisted in both JSONL and SQLite session state.
+Old sessions without policy retain enforcement for their existing assigned Work;
+untracked old sessions are optional. Explicit optional state is distinguishable
+from legacy absence. Compaction and restart retain policy; context forks and
+successors cannot silently drop required bindings. Invalid policy fails closed.
+
 ## Work evidence and uncertain effects
 
 `adopt` requires `understanding` and a nonempty `next` list. Omitted `stop` and

@@ -13,6 +13,7 @@ import { validateOwnership, OwnershipValidationError } from '../projects/ownersh
 import { normalizeInitiativeMetadata, InitiativeMetadataError } from './initiative-metadata.ts'
 import { parseTopicSessionFields, TopicMetadataError } from './topic-contract.ts'
 import { parsePhysicalIdVersion, SessionIdentityError } from './session-identity.ts'
+import { parseWorkPolicy, WorkPolicyError } from './work-policy.ts'
 import { parseContextResetAt, ContextResetMetadataError, parseDecisionOwner, DecisionOwnerMetadataError } from './session-store.ts'
 
 /**
@@ -44,11 +45,12 @@ export class JsonlSessionStore implements SessionStore {
       parsePhysicalIdVersion(state.physicalIdVersion)
       parseContextResetAt(state.contextResetAt)
       parseDecisionOwner(state.decisionOwnerSessionId)
+      if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
       if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
       Object.assign(state, parseTopicSessionFields(state))
       return state
     } catch (error) {
-      if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
+      if (error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError || error instanceof DecisionOwnerMetadataError) throw error
       return null
     }
   }
@@ -60,6 +62,7 @@ export class JsonlSessionStore implements SessionStore {
     parsePhysicalIdVersion(state.physicalIdVersion)
     parseContextResetAt(state.contextResetAt)
     parseDecisionOwner(state.decisionOwnerSessionId)
+    state = { ...state, workPolicy: parseWorkPolicy(state.workPolicy) }
     state = { ...state, ...parseTopicSessionFields(state) }
     const contents = JSON.stringify(state, null, 2)
     await this.queueStateWrite(sessionKey, async () => {
@@ -111,6 +114,7 @@ export class JsonlSessionStore implements SessionStore {
           if (parsed.name !== undefined) parsed.name = parseSessionName(parsed.name)
           parsePhysicalIdVersion(parsed.physicalIdVersion)
           parseContextResetAt(parsed.contextResetAt)
+          parseWorkPolicy(parsed.workPolicy)
           Object.assign(parsed, parseTopicSessionFields(parsed))
           results.push({
             sessionId: parsed.sessionId,
@@ -120,7 +124,7 @@ export class JsonlSessionStore implements SessionStore {
             folderId: typeof parsed.folderId === 'string' ? parsed.folderId : undefined,
             ...parseTopicSessionFields(parsed),
           })
-        } catch (error) { if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
+        } catch (error) { if (error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     return results
@@ -139,10 +143,11 @@ export class JsonlSessionStore implements SessionStore {
           if (state.name !== undefined) state.name = parseSessionName(state.name)
           parsePhysicalIdVersion(state.physicalIdVersion)
           parseContextResetAt(state.contextResetAt)
+          if (state.workPolicy !== undefined) state.workPolicy = parseWorkPolicy(state.workPolicy)
           if (state.automation !== undefined) state.automation = parseAutomationSessionRef(state.automation)
           Object.assign(state, parseTopicSessionFields(state))
           result[state.sessionId] = state
-        } catch (error) { if (error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
+        } catch (error) { if (error instanceof WorkPolicyError || error instanceof SessionNameError || error instanceof OwnershipValidationError || error instanceof InitiativeMetadataError || error instanceof TopicMetadataError || error instanceof SessionIdentityError || error instanceof ContextResetMetadataError) throw error }
       }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     return result

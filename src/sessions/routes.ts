@@ -379,7 +379,12 @@ export function sessionsApiPlugin(
       try {
         const body = humanWorkActionSchema.parse(await c.req.json())
         const visible = sessions.alignment.records(id)
-        if (body.action === 'create') {
+        if (body.action === 'policy') {
+          const data = z.object({ mode: z.enum(['optional', 'required']), sessionId: z.string().optional() }).strict().parse(body.data)
+          if (data.sessionId !== undefined && data.sessionId !== id) return c.json({ error: 'forbidden' }, 403)
+          if (data.mode === 'required' && !visible.some(record => record.key === body.key)) return c.json({ error: 'forbidden' }, 403)
+          body.data = { ...data, sessionId: id }
+        } else if (body.action === 'create') {
           const data = z.object({ title: z.string(), parentKey: z.string().optional(), definition: z.unknown(), reason: z.string() }).strict().parse(body.data)
           if (data.parentKey && !visible.some(record => record.key === data.parentKey)) return c.json({ error: 'forbidden' }, 403)
           body.data = { ...data, assignee: id }

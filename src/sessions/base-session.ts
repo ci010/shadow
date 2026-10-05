@@ -224,7 +224,14 @@ export abstract class BaseSession {
         ? { ...this.responseContext, responseId: `${turnId}:${i}` } : undefined
       const workGuard = this.tools.getWorkGuard()
       executionContext = { ...executionContext, workStamps: workGuard?.snapshot(this.id) }
-      const workPrompt = workGuard?.prompt(this.id, executionContext)
+      let workPrompt = workGuard?.prompt(this.id, executionContext)
+      if (workPrompt && this.tools.has('work') && workGuard?.required?.(this.id) !== false) {
+        const receipts = this.messages.filter(message => message.role === 'tool' && message.tool_call_id && message.name !== 'work')
+          .slice(-8).map(message => ({ id: message.tool_call_id, tool: message.name }))
+        if (receipts.length) workPrompt += '\n# Recent tool receipt IDs\n' +
+          'For work progress result.sources, copy an id below, not a tool name. Quote exact text from the original tool result, not this index. A reference alone does not prove acceptance.\n' +
+          JSON.stringify(receipts)
+      }
       const workMessages: ChatMessage[] = workPrompt
         ? this.messages[0]?.role === 'system' ? this.messages.map((message, index) => index === 0
           ? { ...message, content: withCurrentWork(String(message.content ?? ''), workPrompt) } : message)

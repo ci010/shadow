@@ -650,9 +650,11 @@ export async function createProjectRuntime(
   })
   tools.register(new SessionTool(topics))
   initiatives.recoverWorkEffects()
-  const alignment = new WorkAlignment(initiatives, {
+  const alignment: WorkAlignment = new WorkAlignment(initiatives, {
     state: id => sessions.getSessionState(id),
+    setPolicy: (id, policy, validate) => sessions.setWorkPolicy(id, policy, validate),
     evidence: source => sessions.validateWorkEvidence(source),
+    resolveEvidence: (id, sources, signal) => sessions.resolveToolEvidence(id, sources, signal),
     changed: async (record, previous) => {
       realtime.invalidateSessions()
       await sessions.notifyWorkChange(record, previous)
@@ -665,13 +667,24 @@ export async function createProjectRuntime(
         const current = alignment.get(record.key)
         if (current.transition?.id !== record.transition!.id) throw new Error('Successor transition was superseded.')
         if (initiatives.workEffects().some(effect => effect.sessionId === id)) throw new Error('Unresolved effects prevent successor creation.')
-        const topic = await topics.create({
-          requestId: record.transition!.id, title: `Realigned: ${source.name ?? source.topic?.title ?? 'work'}`.slice(0, 120),
+        const successorId = `web:chat-${record.transition!.id}`
+        const existing = sessions.getSessionState(successorId)
+        const policy = alignment.policy(id)
+        if (existing) {
+          if (existing.createdBySessionId !== id || existing.workPolicy?.mode !== 'required'
+            || !existing.workPolicy.keys.includes(record.key)) throw new Error('Successor identity has a different Work binding.')
+          return successorId
+        }
+        await sessions.buildSession(successorId, undefined, {
+          name: `Realigned: ${source.name ?? source.topic?.title ?? 'work'}`.slice(0, 120),
           description: `Prepared to receive ${record.key}; no assignment or permission has transferred.`,
           folderId: source.folderId, agentType: source.agentType ?? 'general', initiativeId: source.initiativeId,
-        }, id)
+          workdir: source.workdir, mode: 'session', parentSessionId: null, createdBySessionId: id,
+          workPolicy: { mode: 'required', keys: [record.key],
+            controllerSessionId: policy.mode === 'required' ? policy.controllerSessionId : id },
+        })
         realtime.invalidateSessions()
-        return topic.sessionId
+        return successorId
       }
       const active = sessions.getActiveSession(id)
       if (active) {

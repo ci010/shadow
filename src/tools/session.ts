@@ -5,7 +5,7 @@ import type { TopicService } from '../sessions/topics.ts'
 export class SessionTool implements Tool {
   readonly name = 'session'
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Create or name durable peer conversations and register local folders. Metadata is for discovery, not a work definition. Creation never creates work or transfers assignments; put requests in initialMessage and manage work with work.'
+  readonly description = 'Create or name durable peer conversations and register folders. Ordinary peers default to optional Work. To create a managed executor, supply work:{key,revision} for existing unassigned Work you control; the host binds enforcement and assigns it before initialMessage. Required creators must use descendant Work. Metadata never defines scope or transfers existing assignments.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -18,6 +18,7 @@ export class SessionTool implements Tool {
       agentType: { type: 'string', description: 'Create only: agent template name, default general. Never orchestrator.' },
       initiativeId: { type: 'string', description: 'Create only: root Work key for an Initiative view (or a legacy Initiative ID), optional; not an assignment.' },
       initialMessage: { type: 'string', description: 'Create only: optional kickoff request, with the necessary context and source references.' },
+      work: { type: 'object', description: 'Create only: {key:string,revision:integer}, exact unassigned Work controlled by this session. Enable managed execution before kickoff.' },
       path: { type: 'string', description: 'register_folder only: absolute existing directory on Main. This does not move data or change this chat workdir.' },
     },
     required: ['action'],
