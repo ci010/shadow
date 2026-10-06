@@ -26,6 +26,7 @@ import { toolResultText, type ToolDefinition, type ToolResult } from '../tools/t
 import { parseMediaFromContent } from '../utils/media-parse.ts'
 import { activeSpan, Span, spanAttributes, uspan } from '../otel/tracing.ts'
 import { physicalSessionId } from './session-identity.ts'
+import { readSessionFileChange } from './file-changes.ts'
 import { groupTools } from '../utils/tools-group.ts'
 import { errDetail, errMsg } from '../utils/truncate.ts'
 import type { SessionStore } from './session-manager.ts'
@@ -436,6 +437,7 @@ export abstract class BaseSession {
           const context: ExecutionContext = {
             ...executionContext, toolCallId: tc.id, toolCallName: tc.name,
             recordFileChange: file_change => this.store.appendRawEvents(fileChangePhysicalId, [{ file_change }]),
+            readFileChange: (id, signal) => readSessionFileChange(this.store, this.state, id, signal),
           }
           const result = await activeSpan('agent.tool',
             () => this.tools.execute(tc.name, tc.arguments, context),

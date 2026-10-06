@@ -35,7 +35,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "write",
-      "description": "Write or edit a file. With \`match\`: find and replace. Creates directories as needed.",
+      "description": "Write or edit a file. With \`match\`: find and replace. Creates directories as needed. Returns a short receipt; use view_edit with the returned edit ID for the recorded patch.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -99,6 +99,26 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
       }
     },
     "optIn": true
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "view_edit",
+      "description": "View the recorded patch for a write receipt edit ID in this session. Returns plain unified hunks, not the current file. No changes and unavailable diffs are reported explicitly.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "edit_id": {
+            "type": "string",
+            "description": "The edit ID returned by write."
+          }
+        },
+        "required": [
+          "edit_id"
+        ],
+        "additionalProperties": false
+      }
+    }
   },
   {
     "type": "function",
@@ -674,14 +694,8 @@ exports[`tools — tool surface per agent type > a2a-text 1`] = `
 exports[`tools — tool surface per agent type > encapsulator 1`] = `
 read
 write
-exec
-work
+view_edit
 search
-continuation
-session
-ask
-reply
-sql
 `;
 
 exports[`tools — tool surface per agent type > explore 1`] = `
@@ -696,6 +710,7 @@ reply
 exports[`tools — tool surface per agent type > general 1`] = `
 read
 write
+view_edit
 exec
 work
 search
@@ -713,6 +728,7 @@ sql
 exports[`tools — tool surface per agent type > general-legacy 1`] = `
 read
 write
+view_edit
 exec
 work
 search
@@ -750,12 +766,9 @@ reply
 exports[`tools — tool surface per agent type > reflector 1`] = `
 read
 write
-exec
-work
+view_edit
 search
 log
-ask
-reply
 `;
 
 exports[`tools — tool surface per agent type > soul-reflector 1`] = `
@@ -774,6 +787,7 @@ sql
 exports[`tools — tool surface per agent type > sub 1`] = `
 read
 write
+view_edit
 exec
 work
 search

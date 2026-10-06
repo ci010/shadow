@@ -44,6 +44,8 @@ export interface ExecutionContext extends MessageContext {
   recordFileChange?: (change: import('../sessions/file-change-contract.ts').RecordedFileChange) => Promise<void>
   /** Resolved default shell for exec in this context, after global/session overrides. */
   defaultExecShell?: ExecShell
+  /** Read only this logical session's own recorded edits, across its physical segments. */
+  readFileChange?: (id: string, signal: AbortSignal) => Promise<import('../sessions/file-change-contract.ts').RecordedFileChange | undefined>
   /** LLM model override for this session. */
   model?: string
   /** LLM temperature override for this session. */

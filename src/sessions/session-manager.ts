@@ -1,6 +1,7 @@
 import { trace } from '@opentelemetry/api'
 import { parseSessionName } from './session-name.ts'
 import { parseResponseContext } from './response-context.ts'
+import { readSessionFileChanges } from './file-changes.ts'
 import { mkdir } from 'node:fs/promises'
 import { isCommandReceipt, type CommandReceipt } from '../slash-commands/receipt.ts'
 import { parseAutomationSessionRef, resolveAutomationSession, type AutomationSessionRef } from '../cron/contracts.ts'
@@ -1891,11 +1892,10 @@ ${JSON.stringify(request)}`,
     return this.decisionRecords.read(sessionId, physicalId)
   }
 
-  async getFileChanges(sessionId: string, offset: number, limit: number, signal: AbortSignal) {
+  async getFileChanges(sessionId: string, offset: number, limit: number, signal: AbortSignal, toolCallId?: string) {
     const state = this.getSessionState(sessionId)
     if (!state) return null
-    const { readSessionFileChanges } = await import('./file-changes.ts')
-    return readSessionFileChanges(this.store, state, offset, limit, signal)
+    return readSessionFileChanges(this.store, state, offset, limit, signal, toolCallId)
   }
 
   assertInitiativeAccess(initiativeId: string): void {

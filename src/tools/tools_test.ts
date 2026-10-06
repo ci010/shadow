@@ -6,6 +6,7 @@ import { Bus } from '../bus/bus.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { ReadTool } from './read.ts'
 import { WriteTool } from './filesystem.ts'
+import { ViewEditTool } from './view-edit.ts'
 import { PlanWriteTool } from './plan-write.ts'
 import { ExecTool } from './shell.ts'
 import { SearchTool } from './search.ts'
@@ -80,6 +81,7 @@ function buildBaseTools(): Tools {
   tools.register(new ReadTool(WORKSPACE))
   tools.register(new WriteTool(WORKSPACE))
   tools.register(new PlanWriteTool(WORKSPACE))
+  tools.register(new ViewEditTool())
   tools.register(
     new ExecTool(
       WORKSPACE,

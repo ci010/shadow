@@ -22,24 +22,22 @@ async function fixture(t: TestContext) {
     channel: 'test', chatId: 'chat', senderId: 'user', messageId: 'turn',
     sessionId: 'test:write', physicalSessionId: 'test-write-0', cwd: root,
     signal: new AbortController().signal, tools: new SessionTools(new Tools(root), root),
+    toolCallId: 'write', recordFileChange: async () => {},
   }
   return { root, context, tool: new WriteTool(root) }
 }
 
-test('full writes report UTF-8 size, real line labels and bounded head/tail excerpts', async t => {
+test('full writes return compact receipts without echoing file content', async t => {
   const { root, context, tool } = await fixture(t)
   const content = Array.from({ length: 50 }, (_, i) => `row ${i + 1}`).join('\n') + '\n'
   const result = await tool.execute({ path: 'nested/file.txt', content }, context)
   assert.equal(await readFile(join(root, 'nested', 'file.txt'), 'utf8'), content)
-  assert.match(result, /Success: write/)
-  assert.match(result, /result lines: 50/)
-  assert.match(result, /L1: row 1/)
-  assert.match(result, /L50: row 50/)
-  assert.match(result, /lines 4-47 omitted/)
-  assert.match(result, /not a post-write read-back/)
-  assert.equal(result.split('\n')[2], 'Line changes: +50 -0.')
+  assert.match(result, /^OK write \+50 -0 edit=\S+$/)
+  assert.doesNotMatch(result, /row|L1:|@@/)
+  assert.ok(result.length < 100)
   const unicode = '\u4f60\u597d\n'
-  assert.match(await tool.execute({ path: 'unicode.txt', content: unicode }, context), /UTF-8 bytes written: 7/)
+  assert.match(await tool.execute({ path: 'unicode.txt', content: unicode }, context), /^OK write \+1 -0/)
+  assert.equal(await readFile(join(root, 'unicode.txt'), 'utf8'), unicode)
 })
 
 test('explicit UTF-8 BOM writes preserve exact bytes across edits without changing default encoding', async t => {
@@ -65,17 +63,14 @@ test('Windows PowerShell helper round-trips non-ASCII JSON using the explicit BO
     { encoding: 'utf8', windowsHide: true, timeout: 10000 })
   assert.deepEqual(JSON.parse(stdout), { text: '\u4e2d\u6587\u3068\u65e5\u672c\u8a9e' })
 })
-test('exact edits show final-file boundaries and adjacent unchanged lines', async t => {
+test('exact edits report counts and match strategy without echoing source', async t => {
   const { root, context, tool } = await fixture(t)
   await writeFile(join(root, 'edit.txt'), 'one\ntwo\nold\nfour\nfive\n')
   const result = await tool.execute({ path: 'edit.txt', match: 'old', content: 'new\nsecond' }, context)
   assert.equal(await readFile(join(root, 'edit.txt'), 'utf8'), 'one\ntwo\nnew\nsecond\nfour\nfive\n')
   assert.match(result, /Replacements: 1; match: exact/)
-  assert.match(result, /Written range: L3-L4/)
-  assert.match(result, /L2: two/)
-  assert.match(result, /L4: second/)
-  assert.match(result, /L5: four/)
-  assert.equal(result.split('\n')[2], 'Line changes: +2 -1.')
+  assert.doesNotMatch(result, /one|two|second|four|L\d:/)
+  assert.match(result, /^OK edit \+2 -1 edit=/)
 })
 
 test('global replacements use literal replacement text and final offsets', () => {
@@ -97,25 +92,20 @@ test('fuzzy matching and CRLF normalization are disclosed without changing fallb
   assert.match(fuzzy, /match: line-trimmed/)
   assert.match(fuzzy, /fuzzy fallback replaces one region only/)
   assert.match(fuzzy, /CRLF line endings were normalized/)
-  assert.match(fuzzy, /Written range: L2-L2/)
-  assert.equal(fuzzy.split('\n')[2], 'Line changes: +1 -1.')
+  assert.match(fuzzy, /^OK edit \+1 -1 edit=/)
   assert.equal(await readFile(join(root, 'fuzzy.txt'), 'utf8'), 'before\nnew\n  old  \nafter\n')
 })
 
-test('append previews show the joining line with and without a trailing newline', async t => {
+test('append receipts count the joining line without returning its content', async t => {
   const { root, context, tool } = await fixture(t)
   await writeFile(join(root, 'append.txt'), 'before\nseam')
   const result = await tool.execute({ path: 'append.txt', content: '+next\nlast\n', flag: 'a' }, context)
-  assert.match(result, /Appended range: L2-L3/)
-  assert.match(result, /L2: seam\+next/)
-  assert.match(result, /L3: last/)
-  assert.equal(result.split('\n')[2], 'Line changes: +2 -1.')
+  assert.doesNotMatch(result, /seam|next|last|L\d:/)
+  assert.match(result, /^OK append \+2 -1 edit=/)
   assert.equal(await readFile(join(root, 'append.txt'), 'utf8'), 'before\nseam+next\nlast\n')
   const next = await tool.execute({ path: 'append.txt', content: 'tail', flag: 'a' }, context)
-  assert.match(next, /Appended range: L4-L4/)
-  assert.match(next, /L3: last/)
-  assert.match(next, /L4: tail/)
-  assert.equal(next.split('\n')[2], 'Line changes: +1 -0.')
+  assert.match(next, /^OK append \+1 -0 edit=/)
+  assert.equal(await readFile(join(root, 'append.txt'), 'utf8'), 'before\nseam+next\nlast\ntail')
 })
 
 test('deletion, no-op and empty writes do not invent content', async t => {
@@ -123,13 +113,11 @@ test('deletion, no-op and empty writes do not invent content', async t => {
   await writeFile(join(root, 'empty.txt'), 'old')
   const unchanged = await tool.execute({ path: 'empty.txt', match: 'old', content: 'old' }, context)
   assert.match(unchanged, /Content unchanged/)
-  assert.equal(unchanged.split('\n')[2], 'Line changes: +0 -0.')
+  assert.match(unchanged, /^OK edit \+0 -0/)
   const deleted = await tool.execute({ path: 'empty.txt', match: 'old', content: '' }, context)
-  assert.match(deleted, /Empty replacement at L1/)
-  assert.match(deleted, /\(File is empty\.\)/)
-  assert.equal(deleted.split('\n')[2], 'Line changes: +0 -1.')
+  assert.match(deleted, /^OK edit \+0 -1/)
   assert.equal(await readFile(join(root, 'empty.txt'), 'utf8'), '')
-  assert.match(await tool.execute({ path: 'empty.txt', content: '', flag: 'a' }, context), /No text appended/)
+  assert.match(await tool.execute({ path: 'empty.txt', content: '', flag: 'a' }, context), /Content unchanged/)
 })
 
 test('no-match, I/O failures, workspace restrictions and aborts never return success', async t => {
@@ -143,30 +131,23 @@ test('no-match, I/O failures, workspace restrictions and aborts never return suc
   assert.equal(await readFile(join(root, 'safe.txt'), 'utf8'), 'unchanged')
 })
 
-test('long lines retain edit boundary text and many replacements have a hard output cap', () => {
+test('long lines and many replacements never leak source content into receipts', () => {
   const edit = applyReplacementDetailed('x'.repeat(5000) + 'old' + 'y'.repeat(5000), 'old', 'BOUNDARY')
   assert.ok(edit)
-  const result = formatWriteResult({ path: 'long.txt', mode: 'edit', content: edit.content, edit, writtenBytes: edit.content.length })
-  assert.match(result, /BOUNDARY/)
-  assert.match(result, /UTF-16 columns/)
+  const result = formatWriteResult({ mode: 'edit', edit, lineChanges: { unavailable: 'Previous file text was not observed.' } })
+  assert.doesNotMatch(result, /BOUNDARY|UTF-16 columns/)
   assert.ok(result.length <= MAX_WRITE_RESULT_CHARS)
-  assert.equal(result.split('\n')[2], 'Line changes: unavailable.')
+  assert.match(result, /Diff unavailable/)
   assert.match(result, /Previous file text was not observed/)
-  const longFile = 'HEAD' + 'x'.repeat(10000) + 'TAIL'
-  const full = formatWriteResult({ path: 'single-line.txt', mode: 'write', content: longFile, writtenBytes: longFile.length })
-  assert.match(full, /HEAD/)
-  assert.match(full, /TAIL/)
   const many = applyReplacementDetailed('old\n'.repeat(10000), 'old', 'value'.repeat(100), true)
   assert.ok(many)
   const bounded = formatWriteResult({
-    path: 'many\nlines.txt', mode: 'edit', content: many.content, edit: many, writtenBytes: many.content.length,
+    mode: 'edit', edit: many,
     lineChanges: { added: 10000, removed: 10000 },
   })
-  assert.match(bounded.split('\n')[0], /^Success: edit many\\nlines.txt$/)
-  assert.match(bounded.split('\n')[1], /^UTF-8 bytes written:/)
-  assert.equal(bounded.split('\n')[2], 'Line changes: +10000 -10000.')
+  assert.equal(bounded.split('\n')[0], 'OK edit +10000 -10000')
   assert.match(bounded, /Replacements: 10000/)
-  assert.match(bounded, /Showing first 4 of 10000/)
+  assert.doesNotMatch(bounded, /value|old/)
   assert.ok(bounded.length <= MAX_WRITE_RESULT_CHARS)
 })
 
@@ -194,20 +175,20 @@ test('remote append previews and disk writes use only the capability workdir', a
   const result = await tool.execute({ path: 'notes.txt', content: '+next', flag: 'a' }, {
     ...context, remoteWorkdir: { executor, nodeId: 'child', capabilityId: 'child-root' },
   })
-  assert.match(result, /L1: remote seam\+next/)
-  assert.equal(result.split('\n')[2], 'Line changes: +1 -1.')
+  assert.doesNotMatch(result, /remote seam/)
+  assert.match(result, /^OK append \+1 -1/)
   assert.equal(await readFile(join(child, 'notes.txt'), 'utf8'), 'remote seam+next')
   assert.equal(await readFile(join(root, 'notes.txt'), 'utf8'), 'main sentinel')
   const overwritten = await tool.execute({ path: 'notes.txt', content: 'different\ntext\n' }, {
     ...context, remoteWorkdir: { executor, nodeId: 'child', capabilityId: 'child-root' },
   })
-  assert.equal(overwritten.split('\n')[2], 'Line changes: +2 -1.')
+  assert.match(overwritten, /^OK write \+2 -1/)
   assert.equal(await readFile(join(child, 'notes.txt'), 'utf8'), 'different\ntext\n')
   assert.equal(await readFile(join(root, 'notes.txt'), 'utf8'), 'main sentinel')
   assert.equal(changes.length, 2)
   assert.equal(changes[0].path, 'notes.txt', 'Remote paths stay opaque instead of resolving against Main')
-  assert.ok(changes[0].hunks[0].lines.includes('-remote seam'))
-  assert.ok(changes[0].hunks[0].lines.includes('+remote seam+next'))
+  assert.ok(changes[0].patch.includes('-remote seam'))
+  assert.ok(changes[0].patch.includes('+remote seam+next'))
 })
 
 test('binary append history reports unavailable prior text without inventing decoded file contents', async t => {
@@ -229,12 +210,12 @@ test('overwrites compare the complete previous file including duplicate and unch
   const content = 'keep\nnew\nkeep\nnew\nlast\n'
   await writeFile(join(root, 'overwrite.txt'), before)
   const result = await tool.execute({ path: 'overwrite.txt', content }, context)
-  assert.equal(result.split('\n')[2], 'Line changes: +2 -2.')
+  assert.match(result, /^OK write \+2 -2/)
   assert.equal(await readFile(join(root, 'overwrite.txt'), 'utf8'), content)
   const noOp = await tool.execute({ path: 'overwrite.txt', content }, context)
-  assert.equal(noOp.split('\n')[2], 'Line changes: +0 -0.')
+  assert.match(noOp, /^OK write \+0 -0/)
   const deleted = await tool.execute({ path: 'overwrite.txt', content: '' }, context)
-  assert.equal(deleted.split('\n')[2], 'Line changes: +0 -5.')
+  assert.match(deleted, /^OK write \+0 -5/)
 })
 
 test('global replacement counts include regions beyond the preview cap and no double counting per line', async t => {
@@ -242,24 +223,23 @@ test('global replacement counts include regions beyond the preview cap and no do
   await writeFile(join(root, 'global.txt'), 'old old\nkeep\n'.repeat(6))
   const result = await tool.execute({ path: 'global.txt', match: 'old', content: 'new', flag: 'g' }, context)
   assert.match(result, /Replacements: 12/)
-  assert.match(result, /Showing first 4 of 12/)
-  assert.equal(result.split('\n')[2], 'Line changes: +6 -6.')
+  assert.match(result, /^OK edit \+6 -6/)
 })
 
 test('newline normalization alone is not a line change while indentation remains meaningful', async t => {
   const { root, context, tool } = await fixture(t)
   await writeFile(join(root, 'crlf.txt'), 'one\r\ntwo\r\n')
   const edit = await tool.execute({ path: 'crlf.txt', match: 'one', content: 'one' }, context)
-  assert.equal(edit.split('\n')[2], 'Line changes: +0 -0.')
+  assert.match(edit, /^OK edit \+0 -0/)
   await writeFile(join(root, 'crlf.txt'), 'one\r\ntwo\r\n')
   const overwrite = await tool.execute({ path: 'crlf.txt', content: 'one\ntwo\n' }, context)
-  assert.equal(overwrite.split('\n')[2], 'Line changes: +0 -0.')
+  assert.match(overwrite, /^OK write \+0 -0/)
   await writeFile(join(root, 'indent.txt'), '    first\n      second\nlast\n')
   const fuzzy = await tool.execute({
     path: 'indent.txt', match: 'first\n  second', content: 'first\n  changed',
   }, context)
   assert.match(fuzzy, /match: line-trimmed/)
-  assert.equal(fuzzy.split('\n')[2], 'Line changes: +2 -2.')
+  assert.match(fuzzy, /^OK edit \+2 -2/)
 })
 
 test('full writes still succeed when previous content is too large or not UTF-8 text', async t => {
@@ -267,9 +247,8 @@ test('full writes still succeed when previous content is too large or not UTF-8 
   for (const before of ['x'.repeat(MAX_LINE_DIFF_CHARS + 1), Buffer.from([0xff])]) {
     await writeFile(join(root, 'unavailable.txt'), before)
     const result = await tool.execute({ path: 'unavailable.txt', content: 'new' }, context)
-    assert.match(result, /^Success: write/)
-    assert.equal(result.split('\n')[2], 'Line changes: unavailable.')
-    assert.match(result, /Line changes unavailable: Previous file/)
+    assert.match(result, /^OK write edit=/)
+    assert.match(result, /Diff unavailable: Previous file/)
     assert.equal(await readFile(join(root, 'unavailable.txt'), 'utf8'), 'new')
   }
 })
@@ -292,8 +271,8 @@ test('read-forbidden local overwrite retains write-only permission semantics', a
     `--allow-fs-write=${root}`,
     '--experimental-transform-types', '--input-type=module', '--eval', script,
   ], { cwd: resolve('.') })
-  assert.match(stdout, /^Success: write/)
-  assert.equal(stdout.split('\n')[2], 'Line changes: unavailable.')
+  assert.match(stdout, /^OK write/)
+  assert.match(stdout, /Diff unavailable/)
   assert.match(stdout, /Reading the previous file was not permitted/)
   assert.equal(await readFile(join(root, 'write-only.txt'), 'utf8'), 'after')
 })

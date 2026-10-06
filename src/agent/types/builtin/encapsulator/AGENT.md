@@ -1,6 +1,6 @@
 ---
 description: Turn evidenced reusable decisions into discoverable lesson skills
-allowedTools: [read, search, write, learning_memory, learned_skill, learning_result]
+allowedTools: [read, search, write, view_edit, learning_memory, learned_skill, learning_result]
 defaultMode: task
 soul: false
 root: true

@@ -1,6 +1,6 @@
 ---
 description: Learn conditional goals and decision principles from new evidence, selectively
-allowedTools: [read, search, write, log, learning_memory, learning_result]
+allowedTools: [read, search, write, view_edit, log, learning_memory, learning_result]
 defaultMode: task
 soul: false
 root: true

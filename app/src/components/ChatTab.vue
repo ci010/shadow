@@ -144,6 +144,7 @@
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :api-base="apiBase" :data-msg-idx="idx" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!"
+              :api-base="apiBase" :session-id="activeSessionId"
               :running="streaming && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
               @interact="clearSelection" />
             <template v-else-if="msg.event === 'tool_call' || msg.event === 'tool_result'" />

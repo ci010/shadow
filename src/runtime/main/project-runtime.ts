@@ -68,6 +68,7 @@ import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
 import { registerEventTools } from '../../tools/event-source.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
+import { ViewEditTool } from '../../tools/view-edit.ts'
 import type { LoadableEntry } from '../../tools/load-tool.ts'
 import { InvokeTool } from '../../tools/invoke-tool.ts'
 import { ImportTool } from '../../tools/load-tool.ts'
@@ -269,6 +270,7 @@ export async function createProjectRuntime(
     ),
   )
   tools.register(new PlanWriteTool(workspace))
+  tools.register(new ViewEditTool())
 
   // ── Execution hooks ───────────────────────────────────────────────
   tools.addHook(new MemoryLinkCheckHook(workspace))

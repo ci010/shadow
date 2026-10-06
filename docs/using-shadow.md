@@ -49,8 +49,13 @@ Retry/paused notices explain when configuration needs attention. Use
 retry a paused batch; existing effects are retained rather than blindly replayed.
 See [learning outcomes and recovery](tools-and-automations.md#learning-outcomes-and-recovery).
 
-There is no standalone **File changes** tab. Filesystem write history remains
-recorded on the backend for future context-specific presentation, including
+There is no standalone **File changes** tab. Expand a successful **Write**,
+**Edit**, or **Append** tool call in the conversation to see its recorded
+single-column file diff, with source syntax highlighting, line numbers and
+added/removed lines. **Details** retains the original arguments and result.
+The preview loads only when expanded and is matched by tool-call ID, not
+reconstructed from the current file or Git working tree.
+Filesystem write history remains recorded on the backend, including
 learning sessions that update memory. Records persist across restarts and session segments; a
 fork's inherited parent conversation does not attribute the parent's writes to
 the child. Direct writes and writes invoked through script tools are recorded.
@@ -59,14 +64,25 @@ filesystem write records.
 If a file is written but saving its history fails, the turn stops with an
 explicit error instead of automatically retrying and applying the write twice.
 
-Older writes do not have complete before/after snapshots: an edit can retain its
-requested replacement snippet, while an overwrite or append can retain only the
-written content. These records identify their scope and never read the
-current file to reconstruct history. Unreadable, oversized, or computationally
-expensive diffs report their limit instead of inventing a diff. Stored previews
-are bounded to 65,536 characters, with a 2,097,152-character input and 100 ms computation
-limit; the history API returns pages of 30 writes. Todo/tool details, memory and
-event-log presentation have not been redesigned as part of removing this tab.
+Each `file_change` event stores a compact, headerless unified `patch` string in
+the existing JSONL session log or SQLite `session_logs` table. Structured hunks
+are parsed only for display, not stored alongside the patch. There is no separate
+diff store and no reconstruction or compatibility reader for older hunk records.
+The patch compares observed pre-write text with submitted write text, not a
+post-write read-back; CRLF-only differences are ignored.
+
+The model receives a short receipt such as `OK edit +2 -1 edit=<id>`, plus match
+counts and any no-op, fuzzy-match, newline-normalization or unavailable-diff
+notices. Source excerpts are not echoed. `view_edit({ "edit_id": "<id>" })`
+returns only that edit's saved patch, on demand, from the current session's own
+segments. It cannot select another session. Empty patches report no content
+changes; unavailable or missing details report an explicit error.
+
+Unreadable, oversized, or computationally expensive diffs report their limit
+instead of inventing a diff; a bounded written-content fallback may be shown in
+the UI. Stored patches are bounded to 65,536 characters, with a
+2,097,152-character input and 100 ms computation limit; the history API returns
+pages of 30 writes. Diff persistence failures after a write stop automatic retries.
 
 Use the project's trash icon or **Project settings → General → Delete project**
 to delete a non-Default project. Confirm by typing its name. Deletion removes

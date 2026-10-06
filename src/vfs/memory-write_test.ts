@@ -42,18 +42,18 @@ test('ordinary and reflection sessions write Project wiki memory through the sam
   const { home, cwd, vfs, tool, context, changes } = await fixture(t)
   const path = 'v:memory/topics/example.md'
   const content = '# Example\n\nA remembered fact.\n'
-  assert.match(await tool.execute({ path, content }, context), /Success: write/)
+  assert.match(await tool.execute({ path, content }, context), /^OK write/)
   assert.equal(await readFile(join(home, 'memory', 'topics', 'example.md'), 'utf8'), content)
   await assert.rejects(readFile(join(cwd, 'memory', 'topics', 'example.md')), { code: 'ENOENT' })
   assert.equal(await new ReadTool(home, vfs).execute({ path }, context), content)
   assert.equal((await vfs.list('v:memory/topics', context))?.[0]?.path, path)
   const reflection = { ...context, sessionId: 'cron:reflection', physicalSessionId: 'reflection-0' }
-  assert.match(await tool.execute({ path, match: 'remembered', content: 'corrected' }, reflection), /Success: edit/)
+  assert.match(await tool.execute({ path, match: 'remembered', content: 'corrected' }, reflection), /^OK edit/)
   assert.equal(await readFile(join(home, 'memory', 'topics', 'example.md'), 'utf8'), content.replace('remembered', 'corrected'))
   assert.equal(changes.length, 2, 'Virtual writes retain existing observed write history')
   assert.equal(changes[1].sessionId, reflection.sessionId)
   assert.equal(changes[1].path, join(home, 'memory', 'topics', 'example.md'))
-  assert.ok(changes[1].hunks.length)
+  assert.ok(changes[1].patch.length)
 })
 
 test('memory exact edits reject missing or ambiguous matches and preserve literal replacement text', async t => {
@@ -132,6 +132,6 @@ test('memory-link diagnostics still run for successful virtual writes', async t 
   const result = requireToolText(await tools.execute('write', {
     path: 'v:memory/topics/example.md', content: '# Example\n[Missing](missing.md)\n',
   }, context))
-  assert.match(result, /Success: write/)
+  assert.match(result, /^OK write/)
   assert.match(result, /dead link/i)
 })

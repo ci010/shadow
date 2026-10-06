@@ -313,9 +313,10 @@ export function sessionsApiPlugin(
       const query = z.object({
         offset: z.coerce.number().int().nonnegative().safe().default(0),
         limit: z.coerce.number().int().min(1).max(30).default(30),
-      }).safeParse({ offset: c.req.query('offset'), limit: c.req.query('limit') })
-      if (!query.success) return c.json({ error: 'invalid_file_changes_query', message: 'Use a nonnegative offset and a limit between 1 and 30.' }, 400)
-      const page = await sessions.getFileChanges(c.req.param('key'), query.data.offset, query.data.limit, c.req.raw.signal)
+        toolCallId: z.string().min(1).max(4096).optional(),
+      }).safeParse({ offset: c.req.query('offset'), limit: c.req.query('limit'), toolCallId: c.req.query('toolCallId') })
+      if (!query.success) return c.json({ error: 'invalid_file_changes_query', message: 'Use a nonnegative offset, a limit between 1 and 30, and a nonempty toolCallId of at most 4096 characters when filtering.' }, 400)
+      const page = await sessions.getFileChanges(c.req.param('key'), query.data.offset, query.data.limit, c.req.raw.signal, query.data.toolCallId)
       return page ? c.json(page) : c.json({ error: 'session_not_found' }, 404)
     })
 

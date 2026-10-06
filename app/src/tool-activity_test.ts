@@ -20,7 +20,7 @@ test('tool payloads highlight valid JSON without treating plain output or malfor
 test('actual backend write reports feed operation counts into tool activity', () => {
   const content = 'same\nnew\nextra\n'
   const report = formatWriteResult({
-    path: 'a.ts', mode: 'write', content, writtenBytes: Buffer.byteLength(content),
+    mode: 'write',
     lineChanges: countLineChanges('same\nold\n', content),
   })
   const batch = groupToolActivity([call('write', { path: 'a.ts', content }), result(report)]).get(0)!
@@ -30,6 +30,8 @@ test('actual backend write reports feed operation counts into tool activity', ()
 
 test('line counts only come from valid success metadata, never arguments or preview text', () => {
   assert.deepEqual(parseLineChanges(success(12, 3).content), { added: 12, removed: 3 })
+  assert.deepEqual(parseLineChanges('OK edit +12 -3 edit=fixture\nReplacements: 1; match: exact.'), { added: 12, removed: 3 })
+  assert.equal(parseLineChanges('OK write edit=fixture\nDiff unavailable: Size limit'), undefined)
   for (const content of ['Error: write failed', 'Success: edit a.ts\nL1: Line changes: +1 -2.', 'Success: edit a.ts\nUTF-8 bytes written: 3; result lines: 1.\nLine changes: unavailable.', success(1, 2).content.replace('+1', '+9007199254740992')]) {
     assert.equal(parseLineChanges(content), undefined)
   }
@@ -97,6 +99,17 @@ test('a mismatched tool result cannot contribute counts to a pending file edit',
   ]).get(0)!
   assert.equal(batch.entries.length, 2)
   assert.equal(batch.entries[0].result, undefined)
+  assert.equal(batch.entries[0].toolCallId, 'pending')
   assert.equal(batch.changes, undefined)
   assert.equal(batch.files, 0)
+})
+
+test('successful dynamic edits retain the outer tool-call identity for historical preview lookup', () => {
+  const batch = groupToolActivity([
+    { ...call('invoke_tool', { name: 'write', args: { path: 'file.ts', match: 'old', content: 'new' } }), toolCallId: 'edit-1' },
+    { ...success(1, 1), toolCallId: 'edit-1' },
+  ]).get(0)!
+  assert.equal(batch.entries[0].toolCallId, 'edit-1')
+  assert.equal(batch.entries[0].file, 'file.ts')
+  assert.equal(batch.files, 1)
 })

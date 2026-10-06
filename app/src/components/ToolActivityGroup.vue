@@ -24,16 +24,22 @@
           <span v-if="entry.summary && !entry.file" class="tool-args-summary">{{ entry.summary }}</span>
         </summary>
         <div v-if="groupOpen && expanded.has(entry.index)" class="tool-entry-content">
-          <div v-if="entry.arguments" class="tool-arguments">
-            <span class="activity-detail-label">Arguments</span>
-            <ToolPayload class="tool-call-detail" :source="entry.arguments" />
-          </div>
-          <details v-if="entry.result !== undefined" class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
-            <summary class="tool-result-header">Result</summary>
-            <ToolPayload v-if="!closedResults.has(entry.index)" class="tool-result-content" :source="entry.result || '(Empty result)'" :images="entry.images" />
-          </details>
-          <p v-if="entry.usage" class="activity-usage">{{ entry.usage.promptTokens.toLocaleString() }} prompt · {{ entry.usage.completionTokens.toLocaleString() }} completion · {{ entry.usage.totalTokens.toLocaleString() }} total tokens</p>
-          <p v-if="entry.result === undefined" class="activity-status">{{ running ? 'Waiting for result…' : 'No result recorded' }}</p>
+          <ToolFileDiffPreview v-if="entry.file && entry.toolCallId && apiBase !== undefined && sessionId"
+            :api-base="apiBase" :session-id="sessionId" :tool-call-id="entry.toolCallId" :path="entry.path" />
+          <p v-else-if="entry.file" class="activity-status">No historical file diff is available for this tool call.</p>
+          <component :is="entry.file ? 'details' : 'div'" class="tool-entry-details">
+            <summary v-if="entry.file" class="tool-details-header">Details</summary>
+            <div v-if="entry.arguments" class="tool-arguments">
+              <span class="activity-detail-label">Arguments</span>
+              <ToolPayload class="tool-call-detail" :source="entry.arguments" />
+            </div>
+            <details v-if="entry.result !== undefined" class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
+              <summary class="tool-result-header">Result</summary>
+              <ToolPayload v-if="!closedResults.has(entry.index)" class="tool-result-content" :source="entry.result || '(Empty result)'" :images="entry.images" />
+            </details>
+            <p v-if="entry.usage" class="activity-usage">{{ entry.usage.promptTokens.toLocaleString() }} prompt · {{ entry.usage.completionTokens.toLocaleString() }} completion · {{ entry.usage.totalTokens.toLocaleString() }} total tokens</p>
+            <p v-if="entry.result === undefined" class="activity-status">{{ running ? 'Waiting for result…' : 'No result recorded' }}</p>
+          </component>
         </div>
       </details>
     </div>
@@ -46,7 +52,8 @@ import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
 import { matchedFileIcon } from '../file-icons.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
 import ToolPayload from './ToolPayload.vue'
-defineProps<{ batch: ToolActivityBatch; running?: boolean }>()
+import ToolFileDiffPreview from './ToolFileDiffPreview.vue'
+defineProps<{ batch: ToolActivityBatch; running?: boolean; apiBase?: string; sessionId?: string }>()
 const emit = defineEmits<{ interact: [] }>()
 const groupOpen = ref(false)
 const expanded = reactive(new Set<number>())
@@ -95,6 +102,9 @@ summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .activity-status { flex-shrink: 0; }
 .activity-failed { flex-shrink: 0; color: var(--c-error); font-size: 12px; }
 .tool-entry-content { padding: 4px 8px 12px 28px; }
+.tool-details-header { width: fit-content; padding: 4px 0; font-size: 12px; color: var(--c-text-muted); }
+.tool-details-header::before { content: '+'; display: inline-block; width: 16px; }
+.tool-entry-details[open] > .tool-details-header::before { content: '-'; }
 .activity-detail-label, .tool-result-header { color: var(--c-text-secondary); font-size: 12px; line-height: 24px; }
 .tool-call-detail, .tool-result-content { margin: 4px 0 8px; padding: 10px 12px; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace; background: var(--c-bg-muted); border-radius: var(--radius-control); color: var(--c-text-secondary); }
 @container (max-width: 480px) {

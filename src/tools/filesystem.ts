@@ -223,7 +223,7 @@ export class WriteTool implements Tool {
   readonly name = 'write'
   readonly supportsRemoteWorkdir = true
   readonly description =
-    'Write or edit a file. With `match`: find and replace. Creates directories as needed.'
+    'Write or edit a file. With `match`: find and replace. Creates directories as needed. Returns a short receipt; use view_edit with the returned edit ID for the recorded patch.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -323,11 +323,11 @@ export class WriteTool implements Tool {
       }
       context.signal.throwIfAborted()
       await writeFile(filePath, updated.content)
-      await recordFileWrite(context, { path: filePath, mode: 'edit', before: observedBefore, after: updated.content,
+      const change = await recordFileWrite(context, { path: filePath, mode: 'edit', before: observedBefore, after: updated.content,
         unavailable: 'Previous file could not be represented as UTF-8 text.' })
       context.signal.throwIfAborted()
       return formatWriteResult({
-        path: filePath, mode: 'edit', content: updated.content, writtenBytes: Buffer.byteLength(updated.content),
+        mode: 'edit', change,
         edit: updated, unchanged: existing === updated.content, normalizedNewlines: existing.includes('\r\n'), global: replaceAll,
         lineChanges: countLineChanges(existing, updated.content),
       })
@@ -348,12 +348,11 @@ export class WriteTool implements Tool {
       await mkdir(dirname(filePath), { recursive: true })
       context.signal.throwIfAborted()
       await appendFile(filePath, content)
-      await recordFileWrite(context, { path: filePath, mode: 'append', before: observedBefore,
+      const change = await recordFileWrite(context, { path: filePath, mode: 'append', before: observedBefore,
         after: observedBefore === undefined ? content : existing + content, unavailable: 'Previous file could not be represented as UTF-8 text.' })
       context.signal.throwIfAborted()
       return formatWriteResult({
-        path: filePath, mode: 'append', content: existing + content, appendStart: existing.length,
-        writtenBytes: Buffer.byteLength(content),
+        mode: 'append', change, unchanged: content === '',
         lineChanges: countLineChanges(existing, existing + content),
       })
     }
@@ -364,10 +363,10 @@ export class WriteTool implements Tool {
     await mkdir(dirname(filePath), { recursive: true })
     context.signal.throwIfAborted()
     await writeFile(filePath, content)
-    await recordFileWrite(context, { path: filePath, mode: 'write', before: before.content, after: content, unavailable: before.unavailable })
+    const change = await recordFileWrite(context, { path: filePath, mode: 'write', before: before.content, after: content, unavailable: before.unavailable })
     context.signal.throwIfAborted()
     return formatWriteResult({
-      path: filePath, mode: 'write', content, writtenBytes: Buffer.byteLength(content),
+      mode: 'write', change, unchanged: before.content === content,
       lineChanges: before.content !== undefined
         ? countLineChanges(before.content, content)
         : { unavailable: before.unavailable },
@@ -433,18 +432,15 @@ export class WriteTool implements Tool {
       { path, content: nextContent, mode },
     )
     const resultingContent = mode === 'append' && existing !== undefined ? existing + content : nextContent
-    await recordFileWrite(context, { path, mode: edit ? 'edit' : mode === 'append' ? 'append' : 'write',
+    const change = await recordFileWrite(context, { path, mode: edit ? 'edit' : mode === 'append' ? 'append' : 'write',
       before: existing, after: resultingContent, unavailable: observationUnavailable })
     context.signal.throwIfAborted()
     return formatWriteResult({
-      path, mode: edit ? 'edit' : mode === 'append' ? 'append' : 'write',
-      content: resultingContent,
+      mode: edit ? 'edit' : mode === 'append' ? 'append' : 'write', change,
       lineChanges: existing !== undefined
         ? countLineChanges(existing, resultingContent)
         : { unavailable: observationUnavailable ?? 'Previous remote file text was not observed.' },
-      writtenBytes: Buffer.byteLength(nextContent), edit,
-      appendStart: mode === 'append' && existing !== undefined ? existing.length : undefined,
-      boundaryUnavailable, unchanged: edit ? existing === nextContent : undefined,
+      edit, unchanged: existing === resultingContent,
       normalizedNewlines: edit ? existing?.includes('\r\n') : undefined, global: flags.includes('g'),
     })
   }

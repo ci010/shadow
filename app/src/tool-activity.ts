@@ -17,6 +17,7 @@ export interface LineChanges {
 
 export interface ToolActivity {
   index: number
+  toolCallId?: string
   name: string
   title: string
   summary: string
@@ -70,6 +71,12 @@ export function resolveToolCall(message: ToolActivityMessage): ReturnType<typeof
 }
 
 export function parseLineChanges(result: string): LineChanges | undefined {
+  const receipt = /^OK (?:write|edit|append) \+(\d+) -(\d+)(?: edit=[^\s]+)?$/.exec(result.split('\n', 1)[0])
+  if (receipt) {
+    const added = Number(receipt[1]), removed = Number(receipt[2])
+    if (Number.isSafeInteger(added) && Number.isSafeInteger(removed)) return { added, removed }
+    return
+  }
   const lines = result.split('\n', 3)
   if (!/^Success: (?:write|edit|append) /.test(lines[0])
     || !/^UTF-8 bytes written: \d+; /.test(lines[1] ?? '')) return
@@ -97,9 +104,9 @@ function activity(message: ToolActivityMessage, index: number, result?: ToolActi
     : typeof args.pattern === 'string' ? args.pattern
     : Object.entries(args).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(', ')
   const text = result?.content
-  const success = write && text !== undefined && /^Success: (?:write|edit|append) /.test(text)
+  const success = write && text !== undefined && /^(?:Success: (?:write|edit|append) |OK (?:write|edit|append)(?: |$))/.test(text)
   return {
-    index, name, title, summary, arguments: call.raw, result: text, usage: result?.usage, images: result?.media,
+    index, toolCallId: message.toolCallId, name, title, summary, arguments: call.raw, result: text, usage: result?.usage, images: result?.media,
     icon: write ? 'write' : read ? 'read' : search ? 'search' : exec ? 'exec' : 'tool',
     path: (write || read) && path ? path : undefined,
     file: success && path ? path : undefined,
