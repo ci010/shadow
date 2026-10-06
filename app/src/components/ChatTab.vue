@@ -42,6 +42,7 @@
     <template #actions><slot name="pane-actions" /></template>
     <template #mobile-actions="{ close }">
       <template v-if="activeSessionId">
+        <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">Search conversation</button>
         <button @click="close(); showMobileSessionDetails()">Session details</button>
         <button v-if="installation.uiScopes.includes('chat:write')" @click="close(); renameMobileSession()">Rename session</button>
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">Back to owning execution</button>
@@ -82,12 +83,21 @@
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
             @next="viewNextSegment" @current="goBackToCurrentSegment" />
+          <button class="conversation-find" type="button" aria-label="Search conversation" aria-keyshortcuts="Control+F Meta+F"
+            title="Search conversation (Ctrl+F / Cmd+F)" @click="conversationSearch?.show()">
+            <span class="i-lucide-search w-4 h-4" aria-hidden="true" />
+          </button>
         </div>
         <AutomationConversationInfo v-if="automationConversation" :conversation="automationConversation" />
+        <ConversationSearch ref="conversationSearch" :container="messagesContainer"
+          :active="paneActive && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'"
+          :keyboard-active="keyboardActive" :context-key="fileContextKey" :live-entries="liveSearchEntries"
+          :load-entries="loadSearchEntries" :reveal-match="revealSearchMatch"
+          @update:open="searchVisibilityChanged" @query-change="clearSearchHighlights" />
 
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history" :aria-busy="loadingHistory">
-        <div ref="messagesContainer" class="chat-messages" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
+        <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <div class="chat-message-list">
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
             :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
@@ -117,6 +127,7 @@
               :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
+          <div class="chat-message-entry" :data-search-message-idx="idx">
             <CommandResult v-if="msg.commandReceipt" :receipt="msg.commandReceipt">
               <div class="prose" v-html="renderMarkdown(msg.content)" />
             </CommandResult>
@@ -205,6 +216,7 @@
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
+          </div>
           </template>
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
             <button type="button" @click="refreshDecisionRecords">Retry decision history</button>
@@ -216,10 +228,10 @@
           </details>
           <p v-if="ioError" class="composer-error" role="alert">Capture requests: {{ ioError }}</p>
           <!-- Streaming response -->
-          <ResponseDisclosure v-if="streaming && (streamContent || streamMedia.length)" :context="streamResponseContext" :timestamp="streamTimestamp"
+          <ResponseDisclosure v-if="streaming && !viewingPhysicalId && (streamContent || streamMedia.length)" :context="streamResponseContext" :timestamp="streamTimestamp"
             :open="expandedResponses.has(streamResponseContext?.responseId ?? '')"
             @update:open="setResponseExpanded(streamResponseContext, $event)" @interact="clearSelection">
-          <div class="chat-bubble chat-assistant" role="article" aria-label="Assistant message">
+          <div class="chat-bubble chat-assistant" :data-search-message-idx="displayMessages.length" role="article" aria-label="Assistant message">
             <div class="chat-content selectable-text">
               <span>{{ streamContent }}</span>
             </div>
@@ -529,6 +541,8 @@ import { buildMediaUrl } from '../media-url.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
 import { conversationLinkSession, isDirectConversation } from '../project-coordination.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
+import ConversationSearch from './ConversationSearch.vue'
+import { loadConversationSearchHistory, searchRange, searchTextBlocks, setConversationHighlights, textMatches, type ConversationSearchEntry, type ConversationSearchMatch } from '../conversation-search.ts'
 
 const route = useRoute()
 const mobile = useMobileChrome()
@@ -1963,6 +1977,177 @@ async function goBackToCurrentSegment(): Promise<void> {
   await loadCurrentSession()
 }
 
+const conversationSearch = ref<InstanceType<typeof ConversationSearch>>()
+const searchOpen = ref(false)
+interface SearchSegment {
+  id: string | null
+  previousId: string | null
+  messages: ChatMsg[]
+  decisions: YieldDecisionRecord[]
+}
+let searchSegments: SearchSegment[] = []
+let searchTarget: { match: ConversationSearchMatch; query: string } | undefined
+let searchObserver: MutationObserver | undefined
+let searchFrame: number | undefined
+function clearSearchHighlights() {
+  searchTarget = undefined
+  setConversationHighlights(paneId)
+}
+function searchVisibilityChanged(value: boolean) {
+  searchOpen.value = value
+  clearSearchHighlights()
+  if (!value) searchSegments = []
+}
+function searchEntries(segment: SearchSegment): ConversationSearchEntry[] {
+  const displayed = segment.messages.map(msg => ({ ...msg, attachmentBody: messageAttachments(msg.content, msg.media) }))
+  const executions = inlineExecutionMessages(displayed, allSessions.value, activeSessionId.value, sessionStages.value, false)
+  const actions = inlineMessageActions(displayed, allSessions.value)
+  const decisions = inlineYieldDecisions(displayed, null, segment.decisions)
+  return displayed.flatMap((msg, messageIndex) => {
+    if (msg.event === 'tool_call' || msg.event === 'tool_result' || decisions.entries.has(messageIndex)) return []
+    const content = executions.entries.has(messageIndex) ? executions.entries.get(messageIndex)!.output ?? ''
+      : actions.entries.get(messageIndex)?.content ?? msg.attachmentBody.text
+    const document = new DOMParser().parseFromString(renderMarkdown(content), 'text/html')
+    return [{ segmentId: segment.id, messageIndex, blocks: searchTextBlocks(document.body).map(block => block.text) }]
+  })
+}
+const currentSearchEntries = computed(() => {
+  if (!searchOpen.value || viewingPhysicalId.value) return undefined
+  return searchEntries({ id: null, previousId: previousPhysicalId.value, messages: messages.value, decisions: decisionRecords.value })
+})
+const liveSearchEntries = computed(() => {
+  const entries = currentSearchEntries.value
+  if (!entries) return undefined
+  return streaming.value && streamContent.value
+    ? [...entries, { segmentId: null, messageIndex: messages.value.length, blocks: [streamContent.value] }] : entries
+})
+async function loadSearchEntries(signal: AbortSignal): Promise<ConversationSearchEntry[]> {
+  const history = await loadConversationSearchHistory(props.apiBase, activeSessionId.value, signal)
+  signal.throwIfAborted()
+  const segments = history.map(segment => {
+    if (!segment.data.messages.every(isSearchHistoryMessage)) throw new Error('Invalid messages in conversation search history. Reopen the conversation and retry.')
+    return {
+      id: segment.id, previousId: segment.previousId,
+      messages: mergeCommandResults(collapseHistory(segment.data.messages), segment.data.commandResults),
+      decisions: parseDecisionRecords(segment.data.decisionRecords ?? []),
+    }
+  })
+  if (!viewingPhysicalId.value && !loadingHistory.value) {
+    const current = segments.at(-1)!
+    current.messages = [...messages.value]
+    current.decisions = decisionRecords.value
+  }
+  searchSegments = segments
+  return segments.flatMap(searchEntries)
+}
+function isSearchHistoryMessage(value: unknown): value is RawMessage {
+  if (!isRecord(value) || typeof value.role !== 'string'
+    || !(value.content === null || typeof value.content === 'string'
+      || Array.isArray(value.content) && value.content.every(part => isRecord(part) && typeof part.type === 'string'
+        && (part.text === undefined || typeof part.text === 'string')
+        && (part.image_url === undefined || isRecord(part.image_url) && (part.image_url.url === undefined || typeof part.image_url.url === 'string'))))) return false
+  if (['timestamp', 'name', 'tool_call_id'].some(key => value[key] !== undefined && typeof value[key] !== 'string')) return false
+  if (['reasoning_content', 'reasoning_text'].some(key => value[key] != null && typeof value[key] !== 'string')) return false
+  if (value.tool_calls !== undefined && !(Array.isArray(value.tool_calls) && value.tool_calls.every(call =>
+    isRecord(call) && typeof call.id === 'string' && typeof call.type === 'string' && isRecord(call.function)
+    && typeof call.function.name === 'string' && typeof call.function.arguments === 'string'))) return false
+  const usage = value.usage
+  return usage === undefined || isRecord(usage)
+    && ['promptTokens', 'completionTokens', 'totalTokens'].every(key => typeof usage[key] === 'number')
+}
+async function revealSearchMatch(match: ConversationSearchMatch, query: string, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
+  browseHistory()
+  const segment = searchSegments.find(item => item.id === match.entry.segmentId)
+  if (!segment) throw new Error('This search result is no longer available. Retry search.')
+  if (viewingPhysicalId.value !== segment.id) {
+    historyRequest?.abort()
+    historyRequest = undefined
+    loadingHistory.value = false
+    if (segment.id === null) {
+      await loadCurrentSession()
+      signal.throwIfAborted()
+      if (composerError.value) throw new Error(composerError.value)
+    } else {
+      messages.value = [...segment.messages]
+      decisionRecords.value = segment.decisions
+      decisionRecordError.value = ''
+      viewingPhysicalId.value = segment.id
+      previousPhysicalId.value = segment.previousId
+      const newer = searchSegments.slice(searchSegments.indexOf(segment) + 1)
+      physicalIdStack.value = newer.reverse().map(item => item.id ?? '')
+    }
+  }
+  await nextTick()
+  signal.throwIfAborted()
+  const wrapper = messagesContainer.value?.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex}"]`)
+  if (!wrapper) throw new Error('This message changed while searching. Retry search.')
+  const response = segment.messages[match.entry.messageIndex]?.responseContext
+  if (response && isBackgroundResponse(response)) setResponseExpanded(response, true)
+  for (let parent = wrapper.parentElement; parent && parent !== messagesContainer.value; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true
+  }
+  for (const details of wrapper.querySelectorAll('details')) details.open = true
+  // Lazy disclosure bodies mount after the native toggle event, not on the same Vue tick.
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
+  await nextTick()
+  signal.throwIfAborted()
+  const blocks = visibleSearchBlocks(wrapper)
+  const expected = match.entry.blocks[match.blockIndex]
+  const block = blocks[match.blockIndex]?.text === expected ? blocks[match.blockIndex] : blocks.find(item => item.text === expected)
+  const range = block && searchRange(block, match.start, match.end)
+  if (!range || !range.getClientRects().length) throw new Error('The matching message text is not visible. Expand the message or retry search.')
+  clearSearchHighlights()
+  paintSearchHighlights(query, range)
+  searchTarget = { match, query }
+  const container = messagesContainer.value!
+  const rect = range.getBoundingClientRect()
+  const bounds = container.getBoundingClientRect()
+  const available = container.clientHeight - dockHeight.value
+  container.scrollTop += rect.top - bounds.top - Math.max(16, (available - rect.height) / 2)
+  const scroller = range.startContainer.parentElement?.closest<HTMLElement>('pre, table')
+  if (scroller) scroller.scrollLeft += rect.left - scroller.getBoundingClientRect().left - 16
+}
+function visibleSearchBlocks(root: HTMLElement) {
+  return Array.from(root.querySelectorAll<HTMLElement>('.prose, .chat-content'))
+    .filter(element => !element.closest('.thinking-block') && !element.parentElement?.closest('.prose, .chat-content'))
+    .flatMap(searchTextBlocks)
+}
+function paintSearchHighlights(query: string, active: Range) {
+  const ranges = visibleSearchBlocks(messagesContainer.value!).flatMap(block => textMatches(block.text, query).flatMap(hit => {
+    const range = searchRange(block, hit.start, hit.end)
+    return range?.getClientRects().length ? [range] : []
+  }))
+  setConversationHighlights(paneId, ranges, active)
+}
+watch([messagesContainer, searchOpen], ([container, open]) => {
+  searchObserver?.disconnect()
+  if (searchFrame !== undefined) cancelAnimationFrame(searchFrame)
+  searchFrame = undefined
+  if (!container || !open) return
+  searchObserver = new MutationObserver(() => {
+    if (!searchTarget || searchFrame !== undefined) return
+    searchFrame = requestAnimationFrame(() => {
+      searchFrame = undefined
+      if (!searchTarget) return
+      const { match, query } = searchTarget
+      const wrapper = container.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex}"]`)
+      const block = wrapper && visibleSearchBlocks(wrapper)[match.blockIndex]
+      const range = block && searchRange(block, match.start, match.end)
+      const hit = range && textMatches(range.toString(), query)[0]
+      if (range && hit?.start === 0 && hit.end === range.toString().length && range.getClientRects().length) paintSearchHighlights(query, range)
+      else clearSearchHighlights()
+    })
+  })
+  searchObserver.observe(container, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['open', 'style', 'class'] })
+}, { flush: 'post' })
+watch(viewingPhysicalId, clearSearchHighlights)
+onUnmounted(() => {
+  searchObserver?.disconnect()
+  if (searchFrame !== undefined) cancelAnimationFrame(searchFrame)
+  clearSearchHighlights()
+})
+
 // ── Send message ──────────────────────────────────────────────────────────────
 
 function handleKeyDown(e: KeyboardEvent): void {
@@ -2388,7 +2573,7 @@ function trackHistoryScroll(): void {
 
 function scrollToBottom(): void {
   nextTick(() => {
-    if (historyBrowsing || !props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
+    if (searchOpen.value || historyBrowsing || !props.visible || !conversationDocumentVisible.value || activePanel.value !== 'conversation') return
     const el = messagesContainer.value
     if (el) el.scrollTop = el.scrollHeight
   })
@@ -2616,7 +2801,7 @@ watch(composerDock, element => {
     const container = messagesContainer.value
     const followBottom = container && container.scrollHeight - container.scrollTop - container.clientHeight < 32
     dockHeight.value = element.getBoundingClientRect().height
-    if (followBottom) void nextTick(() => { if (container && !historyBrowsing) container.scrollTop = container.scrollHeight })
+    if (followBottom) void nextTick(() => { if (container && !historyBrowsing && !searchOpen.value) container.scrollTop = container.scrollHeight })
   })
   dockObserver.observe(element)
 }, { flush: 'post' })
@@ -2691,6 +2876,10 @@ function resendLastMessage() {
 .draft-heading .draft-scratch { margin-top: 14px; }
 .draft-io { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; }
 .chat-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; container-type: inline-size; }
+.chat-message-entry { display: contents; }
+.conversation-find { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); cursor: pointer; }
+.conversation-find:hover { background: var(--c-bg-muted); color: var(--c-text); }
+.conversation-find:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .chat-messages { position: relative; flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; padding-block: 12px calc(var(--composer-height, 0px) + 16px); scroll-padding-bottom: calc(var(--composer-height, 0px) + 16px); overflow-wrap: anywhere; overscroll-behavior: contain; }
 .session-status-row { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 0 8px; width: calc(100% - 40px); max-width: 860px; min-width: 0; margin: 0 auto; }
 .chat-working { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; box-sizing: border-box; min-width: 0; max-width: min(240px, 100%); min-height: 32px; margin: 8px 0 0 auto; padding: 5px 10px; border: 1px solid var(--c-chat-border); border-radius: var(--radius-control); background: var(--c-chat-action-bg); color: var(--c-text-secondary); }
@@ -2910,7 +3099,13 @@ function resendLastMessage() {
   max-width: var(--conversation-item-max-width);
   align-self: flex-start;
 }
+.chat-message-entry > :deep(:is(.chat-assistant, .system-event, .response-disclosure, .compaction-summary, .tool-activity, .execution-card, .message-action, .history-disclosure)) {
+  min-width: 0;
+  max-width: var(--conversation-item-max-width);
+  align-self: flex-start;
+}
 .chat-message-list > :deep(.response-disclosure .chat-assistant) { max-width: 100%; }
+.chat-message-entry > :deep(.response-disclosure .chat-assistant) { max-width: 100%; }
 
 .system-event, .compaction-summary, .execution-card {
   width: 100%;

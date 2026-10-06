@@ -140,6 +140,18 @@ on their content only; Markdown (`prose`), source blocks (`pre`) and definition
 values (`dd`) already opt in. Nested controls stay non-selectable; use
 `select-none` for non-content previews such as clickable file thumbnails.
 
+Press **Ctrl+F** (**Cmd+F** on macOS), or use the conversation's search button,
+to search message text across the entire conversation, including earlier
+history segments. **Enter** / **Shift+Enter** moves between matches; **Esc**
+closes search and restores keyboard focus. Matches are literal and
+case-insensitive. Selecting an older match opens its segment and expands the
+matching message; use segment navigation to return to the current conversation.
+In a split view, the shortcut searches only the active conversation pane.
+The search includes user/assistant message bodies, conversation summaries and
+command output, not reasoning, tool arguments/results, attached file contents,
+other conversations or diagnosis/file tabs. History loading failures are shown
+with a retry action rather than presenting partial results as a complete search.
+
 The Files explorer uses the conversation's effective workdir; Project
 coordination and local learning runs browse the Project Home instead. A remote
 workdir does not fall back to Main's filesystem. File tabs support source
