@@ -35,6 +35,41 @@ async function main() {
       console.log('CONVERSATION_SMOKE_OK')
       return
     }
+    if (process.env.CONVERSATION_NAVIGATION_ONLY) {
+      await execute(`window.__showConversation(); window.__conversationFixture.embedded = true;
+        window.__conversationFixture.enableChildPane = true;
+        window.__conversationFixture.messages[1].sessionSource.intent = 'progress'`)
+      await wait(`!!document.querySelector('.message-recipient') && document.querySelector('.chat-session-source strong').textContent === 'Session progress'`)
+      for (const width of [1100, 390]) {
+        window.setContentSize(width, 844)
+        await frame()
+        await execute(`window.__conversationFixture.navigation = []; document.querySelector('.message-action-details summary').click()`)
+        await wait(`document.querySelector('.message-action-details').open`)
+        assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0, 'Expanding tool details does not navigate')
+        await execute(`document.querySelector('.message-action-details summary').click(); document.querySelector('.message-recipient').click()`)
+        await execute(`document.querySelector('.chat-session-source').focus()`)
+        window.webContents.debugger.attach('1.3')
+        await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+        await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r',
+        })
+        await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
+        })
+        await wait(`window.__conversationFixture.navigation.length === 2`)
+        window.webContents.debugger.detach()
+        assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation))`), [
+          { event: 'navigate', id: 'web:peer' }, { event: 'navigate', id: 'web:peer' },
+        ], 'Coordinator recipient and progress source links reach workspace navigation')
+        assert.equal(await execute(`window.__conversationFixture.activeSessionId`), 'web:owner', 'Navigation does not reset the cached coordinator')
+      }
+      await execute(`window.__conversationFixture.enableChildPane = false; document.querySelector('.chat-session-source').click()`)
+      assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation.at(-1)))`),
+        { event: 'child-navigation', id: 'web:peer' }, 'An actual child pane still forwards inspection to its workspace')
+      assert.deepEqual(errors, [])
+      console.log('CONVERSATION_SMOKE_OK')
+      return
+    }
     assert.equal(await execute(`document.querySelector('.conversation-skeleton').getAttribute('role')`), 'status')
     assert.equal(await execute(`document.querySelector('.skeleton-thread').getAttribute('aria-hidden')`), 'true')
     // Simulate document visibility without focusing the hidden test window.

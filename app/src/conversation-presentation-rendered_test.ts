@@ -23,9 +23,10 @@ const renderedOptions = {
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }
 test('conversation presentation and compacted history render across themes and viewport sizes', renderedOptions, t => renderConversation(t))
-test('system events preserve hierarchy, navigation and metadata across themes and viewport sizes', renderedOptions, t => renderConversation(t, true))
+test('system events preserve hierarchy, navigation and metadata across themes and viewport sizes', renderedOptions, t => renderConversation(t, 'events'))
+test('coordinator progress and outgoing message links navigate from the embedded primary pane', renderedOptions, t => renderConversation(t, 'coordinator-navigation'))
 
-async function renderConversation(t: TestContext, eventsOnly = false) {
+async function renderConversation(t: TestContext, scenario: 'presentation' | 'events' | 'coordinator-navigation' = 'presentation') {
   const directory = resolve(root, '.test-artifacts', `conversation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
@@ -94,7 +95,7 @@ async function renderConversation(t: TestContext, eventsOnly = false) {
           const state = reactive({ loadingHistory:true, messages:[], visible:true, conversationDocumentVisible:true,
             activePanel:'conversation', route:{name:'chat'}, viewingPhysicalId:null, activeSessionId:'web:owner',
             streaming:false, streamContent:'', isDirectChat:true, requestBusy:false, currentRecovery:null,
-            embedded:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
+            embedded:false, enableChildPane:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
             compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[], childSessionId:null,
             headingTopic:{ title:'Daily preliminary review', goal:'Preserve independently verifiable review results.',
               scope:'Review the current theme and brand kit.\\nDocument changes since the previous review.',
@@ -184,7 +185,8 @@ async function renderConversation(t: TestContext, eventsOnly = false) {
               const messageActions = computed(() => inlineMessageActions(state.messages, sessions));
               const yieldDecisions = computed(() => inlineYieldDecisions(state.messages, null, state.decisionRecords));
               const nav = useConversationNavigation({
-                props:{ managed:true, get embedded() { return state.embedded }, projectId:'fixture' },
+                props:{ managed:true, get embedded() { return state.embedded }, get enableChildPane() { return state.enableChildPane },
+                  sessionId:'web:owner', projectId:'fixture' },
                 router:{replace(){}}, emit:(event, id) => state.navigation.push({event,id}),
                 sessions:() => sessions, reset(){}, refresh(){}, mounted:() => true, newDraft(){},
               });
@@ -257,7 +259,8 @@ async function renderConversation(t: TestContext, eventsOnly = false) {
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
   const env: NodeJS.ProcessEnv = { CONVERSATION_SMOKE_URL: server.resolvedUrls.local[0] }
-  if (eventsOnly) env.CONVERSATION_EVENTS_ONLY = '1'
+  if (scenario === 'events') env.CONVERSATION_EVENTS_ONLY = '1'
+  if (scenario === 'coordinator-navigation') env.CONVERSATION_NAVIGATION_ONLY = '1'
   for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'CONVERSATION_SCREENSHOTS']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }

@@ -16,6 +16,8 @@ function fixture(initial: Parameters<typeof useConversationNavigation>[0]['props
     } },
     { sessionId: 'trace', parentSessionId: 'opaque-run', mode: 'task' },
     { sessionId: 'web:chat-append' },
+    { sessionId: 'web:orchestrator', mode: 'session' },
+    { sessionId: 'coordinator-review', parentSessionId: 'web:orchestrator', mode: 'task' },
   ], nodes: [] })
   const navigation = useConversationNavigation({
     props, sessions: () => sessions,
@@ -73,6 +75,27 @@ test('inspecting the selected execution toggles its child pane without changing 
   view.props.childSessionId = 'trace'
   view.navigation.requestSession('trace')
   assert.deepEqual(view.events.at(-1), ['open-child', { primaryId: 'opaque-run', childId: 'trace' }], 'Sidebar navigation does not toggle')
+})
+
+test('embedded coordinator primary navigates peer messages and retains execution pane ownership', () => {
+  const view = fixture({ embedded: true, managed: true, sessionId: 'web:orchestrator', enableChildPane: true })
+  view.navigation.inspectExecution('web:chat-append')
+  view.navigation.inspectExecution('coordinator-review')
+  assert.deepEqual(view.events, [
+    ['navigate', 'web:chat-append'],
+    ['open-child', { primaryId: 'web:orchestrator', childId: 'coordinator-review' }],
+  ])
+  view.props.childSessionId = 'coordinator-review'
+  view.navigation.inspectExecution('coordinator-review')
+  assert.deepEqual(view.events.at(-1), ['close-child', undefined])
+  view.props.childSessionId = undefined
+  view.navigation.inspectExecution('web:missing-from-graph')
+  assert.deepEqual(view.events.at(-1), ['navigate', 'web:missing-from-graph'])
+  view.navigation.inspectExecution('web:orchestrator')
+  assert.equal(view.events.length, 4, 'Inspecting the current coordinator is a no-op')
+  assert.equal(view.navigation.activeSessionId.value, 'web:orchestrator')
+  assert.deepEqual(view.effects, [], 'Managed navigation never resets the coordinator')
+  assert.deepEqual(view.routes, [])
 })
 
 test('unmanaged child navigation restores the owning run and embedded inspection never changes the primary', () => {

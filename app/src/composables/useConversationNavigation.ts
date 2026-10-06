@@ -57,7 +57,7 @@ export function useConversationNavigation(options: {
     else selectSession(sessionId)
   }
   function inspectExecution(sessionId: string): void {
-    if (props.embedded) emit('child-navigation', sessionId)
+    if (props.embedded && !props.enableChildPane) emit('child-navigation', sessionId)
     else if (props.enableChildPane && props.childSessionId === sessionId) emit('close-child')
     else requestSession(sessionId)
   }

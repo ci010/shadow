@@ -124,6 +124,12 @@ the Project Home, not a session's remote workdir.
 
 ## Conversation and files
 
+In the coordinator conversation, click the source session in a **Session
+progress** message or the recipient in a **Message to** card to open that
+conversation. Owned task/call executions open in the child pane; independent
+sessions open as the selected conversation. Expanding message or tool details
+does not navigate.
+
 The Files explorer uses the conversation's effective workdir; Project
 coordination and local learning runs browse the Project Home instead. A remote
 workdir does not fall back to Main's filesystem. File tabs support source
