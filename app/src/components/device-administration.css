@@ -67,7 +67,7 @@ summary { cursor: pointer; }
 .invitation-values dt, .pending-device dt { color: var(--c-text-secondary); font-size: 0.75rem; }
 .invitation-values dd { justify-content: flex-start; }
 code, .fingerprint { font-family: var(--font-mono, 'IBM Plex Mono', ui-monospace, monospace); overflow-wrap: anywhere; word-break: break-word; }
-.fingerprint { margin-top: 0.25rem; padding: 0.5rem; background: var(--c-bg-soft); user-select: all; }
+.fingerprint { margin-top: 0.25rem; padding: 0.5rem; background: var(--c-bg-soft); -webkit-user-select: all; user-select: all; }
 .pending-device { margin-top: 1rem; }
 .pending-device p, .pending-device dl { margin-top: 0.5rem; }
 .approval-progress { margin-top: 1rem; }

@@ -130,6 +130,16 @@ conversation. Owned task/call executions open in the child pane; independent
 sessions open as the selected conversation. Expanding message or tool details
 does not navigate.
 
+Text selection is opt-in across the web and desktop UI. Message bodies
+(including streaming responses and expanded reasoning), tool arguments/results,
+source and diff previews, knowledge/document content, and diagnostic details
+remain selectable for copying. Navigation, buttons, tabs and disclosure headers
+are not selectable. Text inputs and editable content retain normal selection
+and editing. New reading surfaces should use the shared `selectable-text` class
+on their content only; Markdown (`prose`), source blocks (`pre`) and definition
+values (`dd`) already opt in. Nested controls stay non-selectable; use
+`select-none` for non-content previews such as clickable file thumbnails.
+
 The Files explorer uses the conversation's effective workdir; Project
 coordination and local learning runs browse the Project Home instead. A remote
 workdir does not fall back to Main's filesystem. File tabs support source

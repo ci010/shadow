@@ -78,7 +78,7 @@ dl { margin: 24px 0; }
 dl > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; padding: 8px 0; }
 dt { color: var(--c-text-muted); font-size: 13px; }
 dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
-.fingerprint { font-family: var(--font-mono, monospace); user-select: all; }
+.fingerprint { font-family: var(--font-mono, monospace); -webkit-user-select: all; user-select: all; }
 .status-error { color: var(--c-error); }
 .scope-note { color: var(--c-text-muted); }
 summary { cursor: pointer; font-size: 13px; }

@@ -27,7 +27,7 @@
         <span class="file-tile-badge html">&#127760;</span>
       </template>
       <template v-else-if="kind === 'text'">
-        <pre v-if="textPreview" class="file-tile-text">{{ textPreview }}</pre>
+        <pre v-if="textPreview" class="file-tile-text select-none">{{ textPreview }}</pre>
         <span v-else class="file-tile-glyph">{{ glyph }}</span>
       </template>
       <template v-else>

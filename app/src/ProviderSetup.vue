@@ -201,7 +201,7 @@ button:disabled { opacity: .55; cursor: not-allowed; } button:focus-visible, inp
 input, select { min-width: 0; padding: 10px; border: 1px solid var(--c-border); border-radius: var(--radius-control); background: var(--c-bg); color: var(--c-text); font: inherit; }
 .help { font-size: 12px; }.notice { padding: 12px; border: 1px solid var(--c-border); border-radius: var(--radius-surface); line-height: 1.5; }.error { border-color: var(--c-error); color: var(--c-error); }
 .device-panel { display: grid; gap: 14px; padding: 20px; background: var(--c-bg-soft); border: 1px solid var(--c-border); border-radius: var(--radius-surface); }.device-panel span { font-size: 13px; color: var(--c-text-secondary); }
-.device-code { align-items: center; justify-content: space-between; }.device-code code { user-select: text; font: 700 26px monospace; letter-spacing: .08em; }
+.device-code { align-items: center; justify-content: space-between; }.device-code code { -webkit-user-select: text; user-select: text; font: 700 26px monospace; letter-spacing: .08em; }
 .footer-actions { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--c-border); justify-content: space-between; }
 @media (max-width: 680px) { .provider-setup { padding: 20px; margin: 12px auto; } }
 </style>

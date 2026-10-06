@@ -5,19 +5,19 @@
       <strong>Decision</strong>
       <span class="decision-status">{{ decisionStatusLabel(decision.status) }}</span>
     </header>
-    <p class="decision-question">{{ decision.question }}</p>
+    <p class="decision-question selectable-text">{{ decision.question }}</p>
     <p v-if="decision.reportingSessionId" class="decision-note">Reporting responsibility: {{ decision.reportingSessionId }} · not answer authority</p>
     <DecisionBrief v-if="decision.brief" :brief="decision.brief" @inspect="emit('inspect', $event)" />
     <p v-else class="decision-note">This older record has no structured brief. Do not infer missing evidence or user constraints.</p>
     <p v-if="decision.invalidated" class="decision-warning" role="alert">Basis changed: {{ decision.invalidated.reason }}. Any saved answer is historical, not approval for a changed scope.</p>
-    <ol v-if="decision.options.length" class="decision-options">
+    <ol v-if="decision.options.length" class="decision-options selectable-text">
       <li v-for="option in decision.options" :key="option" :class="{ chosen: decision.answer?.option === option && !decision.answer.custom }">
         {{ option }}
         <span v-if="decision.answer?.option === option && !decision.answer.custom" class="decision-option-note">Selected</span>
         <span v-else-if="option === decision.defaultOption" class="decision-option-note">Timeout default</span>
       </li>
     </ol>
-    <div v-if="decision.answer" class="decision-answer">
+    <div v-if="decision.answer" class="decision-answer selectable-text">
       <strong>{{ decision.answer.custom ? 'Custom response' : 'Recorded response' }}</strong>
       <p>{{ decision.answer.option }}</p>
       <MessageAttachments v-if="decision.answer.media?.length && apiBase !== undefined && (sessionId || decision.reference?.sessionId)"

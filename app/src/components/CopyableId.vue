@@ -1,6 +1,6 @@
 <template>
   <div class="copyable-id">
-    <span class="copy-value">{{ value }}</span>
+    <span class="copy-value selectable-text">{{ value }}</span>
     <button type="button" :aria-label="copied ? `${label} copied` : `Copy ${label}`" :disabled="busy" @click="copy">
       <span :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />
     </button>

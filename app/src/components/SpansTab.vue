@@ -119,7 +119,7 @@
         </div>
 
         <div v-if="!selectedSpan" class="mt-4 text-sm text-ink/50">Select a span to inspect details.</div>
-        <div v-else class="detail-card mono mt-4">
+        <div v-else class="detail-card mono mt-4 selectable-text">
           <div class="detail-row">
             <span>Name</span>
             <strong>{{ selectedSpan.name }}</strong>

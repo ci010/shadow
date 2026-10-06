@@ -33,7 +33,7 @@
       <p class="mt-2 text-sm text-ink/60">Click a log entry to inspect full payload.</p>
 
       <div v-if="!selectedLog" class="mt-4 text-sm text-ink/50">Select a log entry to inspect details.</div>
-      <div v-else class="detail-card mono mt-4">
+      <div v-else class="detail-card mono mt-4 selectable-text">
         <!-- Severity badge + timestamp row -->
         <div class="flex items-center gap-2">
           <span class="severity-badge" :class="severityClass">{{ severityLabel }}</span>

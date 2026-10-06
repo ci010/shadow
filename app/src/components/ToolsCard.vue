@@ -32,8 +32,8 @@
             </div>
             <span v-if="!expanded.has(t.name)" class="tool-def-desc">{{ t.description }}</span>
             <template v-if="expanded.has(t.name)">
-              <p class="tool-def-desc-full">{{ t.description }}</p>
-              <div v-if="t.parameters?.properties" class="tool-def-params">
+              <p class="tool-def-desc-full selectable-text">{{ t.description }}</p>
+              <div v-if="t.parameters?.properties" class="tool-def-params selectable-text">
                 <div v-for="(prop, key) in t.parameters.properties" :key="key" class="tool-def-param">
                   <span class="tool-def-param-name">{{ key }}<span v-if="t.parameters.required?.includes(String(key))" class="tool-def-required">*</span></span>
                   <span v-if="prop.type" class="tool-def-param-type">{{ prop.type }}</span>

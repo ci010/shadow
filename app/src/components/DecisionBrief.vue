@@ -1,5 +1,5 @@
 <template>
-  <section class="decision-brief" :class="{ 'basis-graph': graph }" aria-label="Decision brief and basis">
+  <section class="decision-brief selectable-text" :class="{ 'basis-graph': graph }" aria-label="Decision brief and basis">
     <div class="basis-node"><strong>Original goal</strong><p>{{ brief.goal }}</p></div>
     <details class="basis-evidence" :open="graph">
       <summary>Evidence, assumptions and proposals</summary>

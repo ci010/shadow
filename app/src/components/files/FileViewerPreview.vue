@@ -7,7 +7,7 @@
       <button class="viewer-retry" type="button" @click="load">Retry preview</button>
     </div>
     <p v-else-if="loading" class="viewer-loading" role="status">Loading file preview...</p>
-    <div v-show="!error && !offline" ref="container" class="viewer-container" />
+    <div v-show="!error && !offline" ref="container" class="viewer-container selectable-text" />
   </div>
 </template>
 

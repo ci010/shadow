@@ -60,7 +60,7 @@
           <div v-else-if="isMemoryEvents && !sourceView" ref="selectionRoot" class="file-memory-events" role="list" aria-label="Memory events">
             <MemoryEventRecord v-for="record in memoryRecords" :key="record.start" :record="record" />
           </div>
-          <article v-else-if="isMarkdown && !sourceView" ref="selectionRoot" class="file-markdown" aria-label="Markdown preview">
+          <article v-else-if="isMarkdown && !sourceView" ref="selectionRoot" class="file-markdown selectable-text" aria-label="Markdown preview">
             <div v-for="(block, index) in renderedMarkdown" :key="index" class="file-source-block"
               :data-source-start="block.start" :data-source-end="block.end" :data-source-provenance="block.provenance" v-html="block.html" />
           </article>

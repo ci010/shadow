@@ -220,7 +220,7 @@
             :open="expandedResponses.has(streamResponseContext?.responseId ?? '')"
             @update:open="setResponseExpanded(streamResponseContext, $event)" @interact="clearSelection">
           <div class="chat-bubble chat-assistant" role="article" aria-label="Assistant message">
-            <div class="chat-content">
+            <div class="chat-content selectable-text">
               <span>{{ streamContent }}</span>
             </div>
             <MessageAttachments :paths="streamMedia" :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />

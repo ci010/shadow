@@ -3,7 +3,7 @@
     <div v-if="node.type === 'row' || node.type === 'column'" class="io-layout" :class="{ 'io-row': node.type === 'row' }">
       <IoNodes :nodes="node.children || []" :streams="streams" :disabled="disabled" @event="emit('event', $event)" />
     </div>
-    <p v-else-if="node.type === 'text'" class="io-text">{{ node.text }}</p>
+    <p v-else-if="node.type === 'text'" class="io-text selectable-text">{{ node.text }}</p>
     <button v-else-if="node.type === 'button'" class="btn" :disabled="disabled" type="button" @click="send(node, true)">{{ node.text || node.id }}</button>
     <label v-else-if="node.type === 'input'" class="io-field">
       <span>{{ node.text || node.id }}</span>
@@ -17,7 +17,7 @@
         <option v-for="option in node.options || []" :key="option" :value="option">{{ option }}</option>
       </select>
     </label>
-    <div v-else-if="node.type === 'table'" class="io-table" role="region" :aria-label="node.text || node.id" tabindex="0">
+    <div v-else-if="node.type === 'table'" class="io-table selectable-text" role="region" :aria-label="node.text || node.id" tabindex="0">
       <table><caption v-if="node.text">{{ node.text }}</caption><tbody><tr v-for="(row, index) in node.rows || []" :key="index"><td v-for="(cell, column) in row" :key="column">{{ cell }}</td></tr></tbody></table>
     </div>
     <IoCanvas v-else-if="node.type === 'canvas'" :node="node" />

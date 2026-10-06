@@ -1,5 +1,5 @@
 <template>
-  <article class="memory-record" role="listitem" :data-source-line="record.start">
+  <article class="memory-record selectable-text" role="listitem" :data-source-line="record.start">
     <template v-if="record.kind === 'event'">
       <header class="memory-record-meta">
         <strong>{{ record.event.who }}</strong>

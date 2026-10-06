@@ -7,7 +7,7 @@
       </header>
       <div class="yield-body">
         <DecisionBrief v-if="decisionRequest?.brief" :brief="decisionRequest.brief" @inspect="emit('inspect', $event)" />
-        <section v-if="decisionRequest?.workProposal" class="work-proposal" aria-label="Exact proposed work change">
+        <section v-if="decisionRequest?.workProposal" class="work-proposal selectable-text" aria-label="Exact proposed work change">
           <h3>Proposed work · v{{ decisionRequest.workProposal.baseRevision }}</h3>
           <p>Change type: {{ decisionRequest.workProposal.change }} · New execution: {{ decisionRequest.workProposal.paused ? 'paused' : 'not paused' }}</p>
           <p>{{ decisionRequest.workProposal.definition.objective }}</p>
@@ -18,7 +18,7 @@
         </section>
         <p v-if="decisionRequest?.reportingSessionId" class="yield-status">Reporting responsibility: {{ decisionRequest.reportingSessionId }}. Answer authority is unchanged.</p>
         <fieldset :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">
-          <legend>{{ request.question }}</legend>
+          <legend class="selectable-text">{{ request.question }}</legend>
           <div v-if="decisionRequest" class="yield-options">
             <label v-for="(option, index) in decisionRequest.options" :key="option" class="yield-option" :class="{ selected: !customMode && selected === option }">
               <input class="yield-sr-only" type="radio" :name="id" :value="option" :aria-keyshortcuts="optionLetter(index)"

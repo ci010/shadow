@@ -20,7 +20,7 @@
         <p v-else class="pairing-expired" role="status">This code has expired. Generate a new code to continue.</p>
         <p v-if="!expired" class="pairing-expiry">Expires in {{ remaining }}. Each code can be used once.</p>
         <p class="pairing-label">Browser address</p>
-        <a class="browser-address" :href="offer.url" @click.prevent="openBrowser">{{ offer.url }}</a>
+        <a class="browser-address selectable-text" :href="offer.url" @click.prevent="openBrowser">{{ offer.url }}</a>
       </template>
       <p v-if="error" class="pairing-error" role="alert">{{ error }}</p>
       <p v-if="copied" class="pairing-copied" role="status">Pairing code copied.</p>
@@ -160,7 +160,7 @@ h2 { margin: 0; font-size: 18px; font-weight: 600; }
 .close-button { display: grid; place-items: center; min-width: 36px; min-height: 36px; }
 p { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 label, .pairing-label { display: block; margin: 20px 0 8px; font-size: 12px; color: var(--c-text-secondary); }
-.pairing-code { display: block; padding: 14px 12px; border: 1px solid var(--c-border); background: var(--c-bg-muted); font: 600 19px/1.6 var(--font-mono, monospace); text-align: center; overflow-wrap: anywhere; user-select: all; }
+.pairing-code { display: block; padding: 14px 12px; border: 1px solid var(--c-border); background: var(--c-bg-muted); font: 600 19px/1.6 var(--font-mono, monospace); text-align: center; overflow-wrap: anywhere; -webkit-user-select: all; user-select: all; }
 .pairing-expiry, .pairing-note { color: var(--c-text-secondary); }
 .pairing-expiry { margin: 8px 0 0; }
 .browser-address { display: block; color: var(--c-blue); font-size: 13px; overflow-wrap: anywhere; }

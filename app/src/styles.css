@@ -200,6 +200,23 @@
   box-sizing: border-box;
 }
 
+/* App chrome is not a document. Opt content into selection, not whole panels. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+:where(.selectable-text, .prose, pre, dd, input, textarea, [contenteditable]:not([contenteditable="false"])) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Controls stay non-selectable even inside a reading surface. */
+:where(button, summary, select, [role="button"], [role="tab"], [role="menuitem"], .select-none) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 /* Non-auto standard properties override custom scrollbar geometry in Chromium. */
 @supports not selector(::-webkit-scrollbar) {
   * {

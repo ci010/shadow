@@ -473,7 +473,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 @media (prefers-reduced-motion: reduce) { .setup-content { animation: none; } }
 .child-form > .field-label { margin-top: 18px; }
-.pairing-fingerprint { overflow-wrap: anywhere; user-select: all; }
+.pairing-fingerprint { overflow-wrap: anywhere; -webkit-user-select: all; user-select: all; }
 .child-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; margin-top: 18px; }
 .consent-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; font-size: 13px; line-height: 1.5; }
 .consent-row input { flex-shrink: 0; margin-top: 4px; }
