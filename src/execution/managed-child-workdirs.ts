@@ -97,7 +97,7 @@ export class ManagedChildWorkdirs {
         return handlers.find(handler => handler.handles(request.operation))!.execute(request, signal)
       },
     }, {
-      handles: operation => operation === WORKDIR_PROCESS_EXECUTE_OPERATION,
+      handles: operation => operation === WORKDIR_PROCESS_EXECUTE_OPERATION || operation === 'workdir.process.execute-once',
       prepareProcess: async (request, signal) =>
         new CapabilityShell(await this.#bindings(request, signal)).prepareProcess(request, signal),
     }]

@@ -60,8 +60,13 @@
           <FolderSessionList :sessions="group.sessions" :depth="1" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
         </div>
       </section>
-      <section v-if="chatGroups.chats.length || sessionsLoading || sessionsError" class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
-        <h3 :id="domId('legacy-chats-heading')" :class="{ 'rail-visually-hidden': isRail }">Chats</h3>
+      <section class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
+        <div class="chats-heading">
+          <h3 :id="domId('legacy-chats-heading')" :class="{ 'rail-visually-hidden': isRail }">Chats</h3>
+          <HoverInfo text="Start from scratch"><template #default="{ triggerProps }">
+            <button type="button" class="folder-action-button chat-add" v-bind="triggerProps" :aria-label="projectName ? `New chat in ${projectName}` : 'New chat'" @click="startScratchDraft"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
+          </template></HoverInfo>
+        </div>
         <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading conversations…</span></p>
         <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">Retry conversations</button></div>
         <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Conversations unavailable. Retry conversations" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
@@ -293,6 +298,10 @@ function startFolderDraft(folder: FolderRecord) {
   expandedFolders.add(folder.id)
   emit('draft', folder)
 }
+function startScratchDraft() {
+  selectedFolderId.value = ''
+  emit('scratch')
+}
 async function showMenu(anchor: HTMLElement) {
   menuAnchor = anchor
   const rect = anchor.getBoundingClientRect()
@@ -327,7 +336,7 @@ function runAction(id: typeof FOLDER_ACTIONS[number]['id'] | 'remove' | 'move') 
   closeMenu(true)
   if (id === 'remove' || id === 'move') {
     if (menuFolder.value) emit('manage', menuFolder.value, id)
-  } else if (id === 'scratch') { selectedFolderId.value = ''; emit('scratch') }
+  } else if (id === 'scratch') startScratchDraft()
   else if (id === 'remote') { selectedFolderId.value = ''; emit('remote') }
   else dialogMode.value = id
 }
@@ -388,7 +397,7 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .folders-scroll:empty { padding-block: 0; }
 .folder-add { opacity: 0; }
 .folder-folder-row:hover .folder-add, .folder-folder-row:focus-within .folder-add { opacity: 1; }
-.legacy-chats { margin-top: var(--sidebar-section-gap); }
+.legacy-chats { display: flow-root; margin-top: var(--sidebar-section-gap); }
 .legacy-chats:first-child { margin-top: 0; }
 .bot-connection { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-inline-start: 6px; flex-shrink: 0; color: var(--c-text-secondary); }
 .bot-connection > span:not(.working-wave) { width: 13px; height: 13px; }
@@ -404,7 +413,8 @@ onUnmounted(() => { deactivate(); window.removeEventListener('resize', closeOnRe
 .bot-info-details { display: grid; gap: 12px; margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--c-border-soft); }
 .bot-info-details dt { color: var(--c-text-muted); font-size: 12px; }
 .bot-info-details dd { margin: 2px 0 0; color: var(--c-text); font-size: 13px; }
-.legacy-chats h3 { margin: 0 0 var(--sidebar-heading-gap); padding-inline: calc(var(--sidebar-row-inset) + var(--sidebar-disclosure) + var(--sidebar-heading-gap)) var(--sidebar-row-inset); font-size: 12px; line-height: 20px; font-weight: 500; color: var(--c-text-secondary); }
+.chats-heading { display: flex; align-items: center; justify-content: flex-end; gap: var(--sidebar-heading-gap); min-height: var(--sidebar-row-height); margin-bottom: var(--sidebar-heading-gap); padding-inline: var(--sidebar-row-inset); }
+.chats-heading h3 { flex: 1; min-width: 0; margin: 0; padding-inline-start: calc(var(--sidebar-disclosure) + var(--sidebar-heading-gap)); font-size: 12px; line-height: 20px; font-weight: 500; color: var(--c-text-secondary); }
 .sidebar-note { margin: 8px 12px 16px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; }
 .sidebar-error { margin: 12px; color: var(--c-error); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .sidebar-error p { margin: 0 0 4px; }
@@ -427,6 +437,8 @@ button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
 .is-rail .folders-scroll { padding: 0 8px 16px; }
 .is-rail .folder-group { margin-bottom: 8px; }
 .is-rail .legacy-chats { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--c-border); }
+.is-rail .chats-heading { justify-content: center; padding-inline: 0; }
+.is-rail .chat-add { width: 44px; min-height: 44px; flex-basis: 44px; }
 .folder-initial { text-align: center; font-size: 16px; line-height: 20px; font-weight: 600; }
 .rail-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rail-note { display: grid; place-items: center; min-height: 36px; margin: 4px 0 8px; }

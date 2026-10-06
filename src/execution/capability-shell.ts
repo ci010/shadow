@@ -60,7 +60,7 @@ export class CapabilityShell implements LocalProcessOperationHandler {
   }
 
   handles(operation: string): boolean {
-    return operation === WORKDIR_PROCESS_EXECUTE_OPERATION
+    return operation === WORKDIR_PROCESS_EXECUTE_OPERATION || operation === 'workdir.process.execute-once'
   }
 
   async prepareProcess(request: JobRequestV1, signal: AbortSignal): Promise<ProcessExecuteArgsV1> {

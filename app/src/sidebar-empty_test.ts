@@ -33,12 +33,15 @@ const render = (props: Record<string, unknown> = {}) => renderToString(createSSR
   ...props,
 }))
 
-test('empty sidebar keeps project actions without empty conversation hints or headings', async () => {
+test('empty sidebar keeps a direct scratch-chat action without empty conversation hints', async () => {
   const html = await render()
   assert.match(html, /Example/)
   assert.match(html, /aria-label="New work in Example"/)
   assert.doesNotMatch(html, /No conversations yet|No unassociated conversations|Open a folder to keep/)
-  assert.doesNotMatch(html, /class="legacy-chats"/)
+  assert.match(html, /class="legacy-chats"/)
+  assert.match(html, /Chats<\/h3>/)
+  assert.match(html, /aria-label="New chat in Example"/)
+  assert.match(html, /i-lucide-plus/)
   assert.doesNotMatch(html, /class="folder-conversations"/)
 })
 
@@ -50,4 +53,10 @@ test('sidebar still announces loading and exposes actionable conversation errors
   assert.match(failed, /Synthetic session service unavailable/)
   assert.match(failed, /role="alert"/)
   assert.match(failed, /Retry conversations/)
+})
+
+test('standalone empty sidebar also exposes an accessible scratch-chat action', async () => {
+  const html = await render({ grouped: false, projectName: undefined })
+  assert.match(html, /aria-label="New chat"/)
+  assert.match(html, /Chats<\/h3>/)
 })

@@ -1,21 +1,6 @@
 <template>
   <header class="session-heading">
-    <MobileSheet v-if="mobileLayout" :open="editing" label="Rename session" @update:open="cancelRename"><div ref="mobileRenameTarget" /></MobileSheet>
-    <Teleport :to="mobileRenameTarget || 'body'" :disabled="!mobileLayout || !mobileRenameTarget">
-    <form v-if="editing" class="session-rename" aria-label="Rename session" :aria-busy="saving" @submit.prevent="saveName" @keydown.esc.prevent.stop="cancelRename">
-      <label class="rename-field">
-        <span>Session name</span>
-        <input ref="nameInput" v-model="draftName" :maxlength="SESSION_NAME_MAX_LENGTH" :disabled="saving"
-          required aria-label="Session name" :aria-invalid="!!renameError" autocomplete="off">
-      </label>
-      <div class="rename-actions">
-        <button class="btn btn-sm" type="submit" :disabled="saving || !draftName.trim()">{{ saving ? 'Saving...' : 'Save' }}</button>
-        <button class="btn btn-sm" type="button" :disabled="saving" @click="cancelRename">Cancel</button>
-      </div>
-      <p v-if="renameError" class="details-error" role="alert">{{ renameError }}</p>
-    </form>
-    </Teleport>
-    <ComposerPopover v-if="!editing" ref="detailsPopover" label="Session details" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="520" @opened="loadDetails">
+    <ComposerPopover ref="detailsPopover" label="Session details" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="520" @opened="loadDetails" @closed="stopRename">
       <template #trigger>
         <span class="heading-name">{{ name }}</span>
         <span class="heading-separator" aria-hidden="true">&middot;</span>
@@ -36,9 +21,30 @@
               <dt>Device</dt><dd>{{ details.workdir.nodeName || details.workdir.nodeId || 'Remote device' }}</dd>
               <dt>Workspace</dt><dd>{{ details.workdir.displayName || 'Remote workspace' }}<template v-if="details.workdir.available === false"> (unavailable)</template></dd>
             </template>
-            <dt>Path</dt><dd>{{ details?.workdir.displayPath ?? (details?.workdir.kind === 'remote' ? 'Not advertised by this device' : 'Unavailable') }}</dd>
-            <dt>Session name</dt><dd>{{ name }}</dd>
-            <dt>Session ID</dt><dd class="detail-id">{{ sessionId }}</dd>
+            <dt>Path</dt>
+            <dd>
+              <CopyableId v-if="details?.workdir.displayPath" class="detail-copy" :value="details.workdir.displayPath" label="Path" wrap />
+              <span v-else>{{ details?.workdir.kind === 'remote' ? 'Not advertised by this device' : 'Unavailable' }}</span>
+            </dd>
+            <dt>Session name</dt>
+            <dd class="detail-name" :class="{ 'is-editing': editing }">
+              <form v-if="editing" class="session-rename" aria-label="Rename session" :aria-busy="saving"
+                @submit.prevent="saveName" @keydown.stop="renameKeydown">
+                <input ref="nameInput" v-model="draftName" class="rename-input" :maxlength="SESSION_NAME_MAX_LENGTH" :disabled="saving"
+                  required aria-label="Session name" :aria-invalid="!!renameError" autocomplete="off">
+                <div class="rename-actions">
+                  <button class="btn btn-sm primary" type="submit" :disabled="saving || !draftName.trim()">{{ saving ? 'Saving...' : 'Save' }}</button>
+                  <button class="btn btn-sm" type="button" :disabled="saving" @click="cancelRename">Cancel</button>
+                </div>
+                <p v-if="renameError" class="details-error" role="alert">{{ renameError }}</p>
+              </form>
+              <template v-else>
+                <span>{{ name }}</span>
+                <button v-if="canRename" ref="renameButton" type="button" class="rename-button" :disabled="!active"
+                  aria-label="Rename session" title="Rename session" @click="startRename"><span class="i-lucide-pencil w-3.5 h-3.5" aria-hidden="true" /></button>
+              </template>
+            </dd>
+            <dt>Session ID</dt><dd class="detail-id"><CopyableId class="detail-copy" :value="sessionId" label="Session ID" wrap /></dd>
           </dl>
           <div class="details-usage">
             <dl>
@@ -61,8 +67,6 @@
         </div>
       </template>
     </ComposerPopover>
-    <button v-if="canRename && !editing" ref="renameButton" type="button" class="rename-button" aria-label="Rename session"
-      title="Rename session" @click="startRename"><span class="i-lucide-pencil w-3.5 h-3.5" aria-hidden="true" /></button>
   </header>
 </template>
 
@@ -71,7 +75,7 @@ import { apiUrl } from '../api-url.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from '../../../src/sessions/session-name.ts'
 import ComposerPopover from './ComposerPopover.vue'
-import MobileSheet from './MobileSheet.vue'
+import CopyableId from './CopyableId.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { chatContextName } from '../chat-draft.ts'
 import { contextPercent, formatTokenCount, parseSessionDetails, type SessionDetails } from '../session-details.ts'
@@ -81,7 +85,6 @@ const props = defineProps<{ apiBase: string; sessionId: string; name: string; pr
 const emit = defineEmits<{ workdir: [workdir: SessionDetails['workdir']]; renamed: [name: string] }>()
 const mobile = useMobileChrome()
 const mobileLayout = computed(() => !!mobile?.enabled.value)
-const mobileRenameTarget = ref<HTMLElement>()
 const detailsPopover = ref<InstanceType<typeof ComposerPopover>>()
 defineExpose({ showDetails: () => detailsPopover.value?.show(), startRename })
 const details = ref<SessionDetails | null>(null)
@@ -100,10 +103,11 @@ const renameButton = ref<HTMLButtonElement>()
 let renameRequest: AbortController | undefined
 
 async function startRename() {
-  if (!props.canRename || !props.active) return
+  if (!props.canRename || !props.active || saving.value) return
   draftName.value = sessionName.value
   renameError.value = ''
   editing.value = true
+  await detailsPopover.value?.show()
   await nextTick()
   nameInput.value?.focus()
   nameInput.value?.select()
@@ -112,7 +116,15 @@ function cancelRename() {
   if (saving.value) return
   editing.value = false
   renameError.value = ''
-  if (!mobileLayout.value) void nextTick(() => renameButton.value?.focus())
+  void restoreRenameFocus()
+}
+async function restoreRenameFocus() {
+  const sessionId = props.sessionId
+  await nextTick()
+  if (props.active && props.sessionId === sessionId && !editing.value) renameButton.value?.focus({ preventScroll: true })
+}
+function renameKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') { event.preventDefault(); cancelRename() }
 }
 async function saveName() {
   if (saving.value || !editing.value || !props.canRename || !props.active) return
@@ -137,7 +149,7 @@ async function saveName() {
     if (details.value) details.value = { ...details.value, name: nextName }
     emit('renamed', nextName)
     editing.value = false
-    if (!mobileLayout.value) void nextTick(() => renameButton.value?.focus())
+    void restoreRenameFocus()
     void loadDetails()
   } catch (cause) {
     if (!controller.signal.aborted) renameError.value = cause instanceof Error ? cause.message : 'Could not save the session name. Retry.'
@@ -202,14 +214,14 @@ onUnmounted(() => { cancel(); stopRename() })
 
 <style scoped>
 .session-heading { display: flex; flex: 0 0 auto; align-items: center; min-width: 0; min-height: 52px; padding: 4px 16px; color: var(--c-text); }
-.session-rename { display: flex; flex: 1; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; padding: 6px 0; }
-.rename-field { display: flex; flex: 1 1 180px; min-width: 0; flex-direction: column; gap: 4px; font-size: 12px; }
-.rename-field input { width: 100%; box-sizing: border-box; min-width: 0; padding: 6px 8px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 14px; }
-.rename-actions { display: flex; gap: 6px; }
-.session-rename .details-error { flex-basis: 100%; margin: 0; font-size: 12px; }
-.rename-button { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
+.session-rename { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rename-input { width: 100%; box-sizing: border-box; min-width: 0; min-height: 32px; padding: 6px 8px; border: 1px solid var(--c-control-border); border-radius: var(--radius-control); background: var(--c-bg-input); color: var(--c-text); font: inherit; font-size: 14px; }
+.rename-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.session-rename .details-error { margin: 0; font-size: 12px; }
+.rename-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .rename-button:hover { background: var(--c-bg-muted); color: var(--c-text); }
-.rename-button:focus-visible, .rename-field input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.rename-button:focus-visible, .rename-input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.rename-button:disabled { opacity: .5; cursor: not-allowed; }
 .session-heading :deep(.composer-control) { min-height: 36px; gap: 10px; max-width: 100%; padding: 7px 8px; text-align: left; }
 .heading-name { min-width: 0; max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text); font-size: 14px; font-weight: 600; }
 .heading-folder { min-width: min(80px, 25vw); max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-secondary); font-size: 13px; }
@@ -219,6 +231,10 @@ onUnmounted(() => { cancel(); stopRename() })
 .session-details dl { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 12px 10px; margin: 0; }
 .session-details dt, .context-heading { color: var(--c-text-secondary); }
 .session-details dd { margin: 0; min-width: 0; color: var(--c-text); overflow-wrap: anywhere; user-select: text; cursor: text; }
+.detail-name { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.detail-name > span { min-width: 0; }
+.detail-name.is-editing { grid-template-columns: minmax(0, 1fr); }
+.detail-copy :deep(.copy-value) { padding-block: 0; }
 .details-topic { margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--c-border); }
 .details-topic h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; }
 .details-topic-title { margin: 0 0 12px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
@@ -237,6 +253,10 @@ progress::-webkit-progress-value { background: var(--c-blue); border-radius: var
 progress::-moz-progress-bar { background: var(--c-blue); border-radius: var(--radius-pill); }
 .details-note { margin: 8px 0; }
 .details-error { color: var(--c-error); overflow-wrap: anywhere; }
+@media (max-width: 700px), (pointer: coarse) {
+  .rename-button { width: 44px; height: 44px; }
+  .rename-input { min-height: 44px; font-size: 16px; }
+}
 @media (max-width: 700px) {
   .session-heading { padding: 4px 8px; }
   .session-heading :deep(.composer-control) { gap: 7px; }

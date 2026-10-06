@@ -21,14 +21,19 @@ async function main() {
   try {
     await window.loadURL(new URL('__sidebar', process.env.SIDEBAR_SMOKE_URL).href)
     await wait(`document.querySelectorAll('.automation-entry').length === 3 && !!document.querySelector('.bot-toggle')`)
+    assert.equal(await execute(`!!document.querySelector('.project-delete, [title="Delete project"]')`), false, 'Project deletion is not a sidebar action')
     await execute(`document.querySelector('.folder-toggle').click()`)
     await wait(`document.querySelectorAll('.folder-conversations .session-select').length === 2`)
     for (const width of [1100, 390]) {
       window.setContentSize(width, 844)
+      await wait(`Math.abs(innerWidth - ${width}) <= 2`)
+      await wait(width === 390 ? `!!document.querySelector('.projects-toggle')` : `!document.querySelector('.projects-toggle')`)
       await frame()
       if (width === 390) await execute(`document.querySelector('.projects-toggle').click()`)
+      await wait(`document.querySelector('.projects-sidebar').getClientRects().length > 0`)
       for (const theme of ['dark', 'light']) {
         await execute(`document.documentElement.classList.toggle('dark', ${theme === 'dark'})`)
+        await frame()
         const selection = await execute(`(() => {
           const entry = document.querySelector('[data-project-id="work"] .coordinator-entry');
           const before = entry.getBoundingClientRect();
@@ -59,11 +64,15 @@ async function main() {
             heights:rows.map(el => el.getBoundingClientRect().height),
             projectHeight:rect(work + ' .folders-header').height,
             firstProjectGap:rect('.folders-header').top - rect('.projects-heading').bottom,
-            emptyHeight:rect('[data-project-id="empty"] .folders-scroll').height,
+            emptyHeadingHeight:rect('[data-project-id="empty"] .chats-heading').height,
+            chatActionSize:rect(work + ' .chat-add').width,
+            chatActionRight:rect(work + ' .chat-add').right,
+            folderActionRight:rect(work + ' .folder-actions').right,
             projectGap:rect(work).top - rect('[data-project-id="empty"]').bottom,
             headingGap:rect(work + ' .folder-folder-row').top - rect(work + ' .folders-header').bottom,
             folderGap:rect('.folder-group + .folder-group').top - rect('.folder-group').bottom,
-            botGap:rect('.bot-conversations').top - rect('.folder-group + .folder-group').bottom,
+            chatsGap:rect(work + ' .legacy-chats').top - rect('.folder-group + .folder-group').bottom,
+            botGap:rect('.bot-conversations').top - rect(work + ' .legacy-chats').bottom,
             sectionGap:rect('.automations-sidebar').top - lastTree.getBoundingClientRect().bottom,
             sectionHeadingGap:rect('.automation-entry').top - rect('.automations-sidebar h3').bottom,
             iconXs:[rect('.folder-folder .tree-icon').x, rect('.bot-toggle .tree-icon').x, rect('.automation-icon').x],
@@ -79,10 +88,13 @@ async function main() {
         assert(layout.heights.every((height: number) => height === (width === 390 ? 44 : 32)), JSON.stringify(layout))
         assert.equal(layout.projectHeight, width === 390 ? 44 : 36)
         assert.equal(layout.firstProjectGap, 0)
-        assert.equal(layout.emptyHeight, 0)
+        assert.equal(layout.emptyHeadingHeight, width === 390 ? 44 : 32)
+        assert.equal(layout.chatActionSize, width === 390 ? 44 : 28)
+        assert.equal(layout.chatActionRight, layout.folderActionRight, 'Chat creation aligns with the trailing folder controls')
         assert.equal(layout.projectGap, 12)
         assert.equal(layout.headingGap, 4)
         assert.equal(layout.folderGap, 0)
+        assert.equal(layout.chatsGap, 16)
         assert.equal(layout.botGap, 0)
         assert.equal(layout.sectionGap, 16)
         assert.equal(layout.sectionHeadingGap, 4)
@@ -109,6 +121,22 @@ async function main() {
       await wait(`!document.querySelector('.folder-conversations')`)
       await execute(`document.querySelector('.folder-toggle').click()`)
       await wait(`!!document.querySelector('.folder-conversations')`)
+      await execute(`document.querySelector('[data-project-id="work"] .chat-add').click()`)
+      await wait(`document.querySelector('.fixture-content:not([style*="display: none"]) .fixture-content-action')?.textContent === 'Draft'`)
+      const draft = await execute(`(() => {
+        const content = document.querySelector('.fixture-content:not([style*="display: none"])');
+        const route = window.__sidebarFixture.router.currentRoute.value;
+        return {project:content.dataset.fixtureProject, folder:content.dataset.fixtureFolder,
+          remote:content.dataset.fixtureRemote, projectId:route.params.projectId, sessionId:route.params.sessionId,
+          menu:!!document.querySelector('.folder-menu')};
+      })()`)
+      assert.equal(draft.project, 'work')
+      assert.equal(draft.folder, undefined)
+      assert.equal(draft.remote, 'false')
+      assert.equal(draft.projectId, 'work')
+      assert.equal(draft.sessionId || '', '')
+      assert.equal(draft.menu, false, 'Chat creation opens the scratch draft directly, without a menu')
+      if (width === 390) assert.equal(await execute(`document.querySelector('.projects-sidebar').getClientRects().length`), 0)
     }
     window.setContentSize(1100, 844)
     await frame()
@@ -144,7 +172,10 @@ async function main() {
     await open()
     await execute(`document.querySelector('[aria-label="New work in Workspace"]').click()`)
     await wait(`!!document.querySelector('.folder-menu')`)
-    await execute(`document.querySelector('.folder-menu button').focus(); document.querySelector('.folder-menu button').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}))`)
+    await execute(`document.querySelector('.folder-menu button').focus()`)
+    await wait(`document.activeElement.closest('.folder-menu')`)
+    await frame()
+    await execute(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}))`)
     await wait(`!document.querySelector('.folder-menu')`)
     assert.equal(await execute(`document.querySelector('.projects-sidebar').getClientRects().length > 0`), true, 'Escape dismisses nested menus before navigation')
     await execute(`document.querySelector('.projects-backdrop').click()`)
@@ -166,11 +197,11 @@ async function main() {
     await wait(`document.querySelector('.fixture-content:not([style*="display: none"]) .fixture-content-action').textContent === 'web:chat-two' && document.querySelector('.projects-sidebar').getClientRects().length === 0`)
     await open()
     await execute(`document.querySelector('.automation-entry').click()`)
-    await wait(`document.querySelector('.fixture-content-action').textContent === 'Encapsulation' && document.querySelector('.projects-sidebar').getClientRects().length === 0`)
+    await wait(`document.querySelector('.fixture-automation-action')?.textContent === 'Encapsulation' && document.querySelector('.projects-sidebar').getClientRects().length === 0`)
     await open()
-    await execute(`{ const control = document.querySelector('.fixture-content:not([style*="display: none"]) .fixture-content-action'); control.focus(); control.dispatchEvent(new FocusEvent('focusin', {bubbles:true})); }`)
+    await execute(`{ const control = document.querySelector('.fixture-automation-action'); control.focus(); control.dispatchEvent(new FocusEvent('focusin', {bubbles:true})); }`)
     await wait(`document.querySelector('.projects-sidebar').getClientRects().length === 0`)
-    assert.equal(await execute(`document.activeElement === document.querySelector('.fixture-content:not([style*="display: none"]) .fixture-content-action')`), true, 'Tabbing into content closes navigation without stealing focus')
+    assert.equal(await execute(`document.activeElement === document.querySelector('.fixture-automation-action')`), true, 'Tabbing into content closes navigation without stealing focus')
     await open()
     await execute(`window.__sidebarFixture.setVisible(false)`)
     await wait(`document.querySelector('.projects-sidebar').getClientRects().length === 0`)
@@ -209,6 +240,10 @@ async function main() {
     assert.equal(await execute(`document.querySelector('[role="status"]').textContent`), 'Loading folders…')
     await execute(`fetch('/__folders/release')`)
     await wait(`document.querySelectorAll('.folder-folder').length === 2 && !document.querySelector('.folder-loading-icon')`)
+    await execute(`document.querySelector('.folder-add').click()`)
+    await wait(`!!document.querySelector('.folder-folder-row.selected')`)
+    await execute(`document.querySelector('.chat-add').click()`)
+    await wait(`!document.querySelector('.folder-folder-row.selected')`)
     const positions = () => execute(`JSON.stringify([...document.querySelectorAll('.folders-header, .folder-folder-row, .folder-folder .tree-icon, .folder-folder .tree-label')]
       .map(el => {const r = el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}}))`)
     for (const width of [1100, 390]) {
@@ -246,8 +281,29 @@ async function main() {
     await execute(`fetch('/__folders/release')`)
     await execute(`document.querySelector('.sidebar-error button').click()`)
     await wait(`!document.querySelector('.sidebar-error') && !document.querySelector('.folder-loading-icon')`)
+    window.setContentSize(1100, 844)
+    await wait(`innerWidth > 700`)
+    await execute(`window.__folderFixture.group(false)`)
+    await wait(`!!document.querySelector('[aria-label="Collapse folders"]')`)
+    await execute(`document.querySelector('[aria-label="Collapse folders"]').click()`)
+    await wait(`!!document.querySelector('.folders-sidebar.is-rail')`)
+    const railAction = await execute(`(() => {
+      const button = document.querySelector('.chat-add');
+      button.focus();
+      const rect = button.getBoundingClientRect();
+      return {width:rect.width, height:rect.height, focused:document.activeElement === button,
+        label:button.getAttribute('aria-label')};
+    })()`)
+    assert.equal(railAction.width, 44)
+    assert.equal(railAction.height, 44)
+    assert.equal(railAction.focused, true, 'The scratch chat action remains keyboard reachable in the rail')
+    assert.equal(railAction.label, 'New chat in Workspace')
     console.log('SIDEBAR_SPACING_OK')
-  } finally { window.destroy(); app.quit() }
+  } finally {
+    if (window.webContents.debugger.isAttached()) window.webContents.debugger.detach()
+    window.destroy()
+    app.quit()
+  }
 }
 
 main().catch(error => { console.error(error); app.exit(1) })

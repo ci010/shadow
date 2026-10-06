@@ -35,6 +35,8 @@ export interface SessionRecovery {
   reason: 'stopped' | 'interrupted' | 'failed'
   /** Audience of the unfinished turn; absent on older recoveries. */
   userInvolved?: boolean
+  /** Unfinished persisted calls; continuing may replay tools without durable reconciliation. */
+  pendingToolCalls?: number
 }
 
 export function parseSessionRecovery(value: unknown): SessionRecovery | undefined {
@@ -47,8 +49,12 @@ export function parseSessionRecovery(value: unknown): SessionRecovery | undefine
   if ('userInvolved' in value && typeof userInvolved !== 'boolean') {
     throw new TypeError('Invalid session recovery metadata')
   }
+  const pendingToolCalls = 'pendingToolCalls' in value ? value.pendingToolCalls : undefined
+  if (pendingToolCalls !== undefined && (typeof pendingToolCalls !== 'number'
+    || !Number.isSafeInteger(pendingToolCalls) || pendingToolCalls < 0)) throw new TypeError('Invalid session recovery metadata')
   return { id: value.id, reason: value.reason,
-    ...(typeof userInvolved === 'boolean' ? { userInvolved } : {}) }
+    ...(typeof userInvolved === 'boolean' ? { userInvolved } : {}),
+    ...(typeof pendingToolCalls === 'number' ? { pendingToolCalls } : {}) }
 }
 
 // ── Shared types ────────────────────────────────────────────────────────────

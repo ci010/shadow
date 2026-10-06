@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import { withTempWorkspace } from '../src/testing/workspace.ts'
 import { buildBackend } from './backend-build.ts'
@@ -54,5 +55,55 @@ test('backend build rejects compilation failures instead of copying success-shap
     await assert.rejects(buildBackend(root))
     await assert.rejects(readFile(join(root, 'dist/src/index.js')), { code: 'ENOENT' })
     await assert.rejects(readFile(join(root, 'dist/src/SKILL.md')), { code: 'ENOENT' })
+  })
+})
+
+test('built file-change route reads saved patches with native Node, without reconstructing legacy writes', async () => {
+  await withTempWorkspace(async root => {
+    const repository = fileURLToPath(new URL('..', import.meta.url))
+    const output = join(root, 'dist', 'src')
+    await writeFile(join(root, 'package.json'), '{"type":"module"}')
+    execFileSync(process.execPath, [
+      fileURLToPath(import.meta.resolve('typescript/bin/tsc')),
+      '-p', join(repository, 'tsconfig.build.json'), '--outDir', output,
+    ], { cwd: repository, stdio: 'pipe' })
+    const managerUrl = pathToFileURL(join(output, 'sessions', 'session-manager.js')).href
+    const routesUrl = pathToFileURL(join(output, 'sessions', 'routes.js')).href
+    const change = {
+      version: 1, id: 'edit-fixture', sessionId: 'web:patch-fixture', toolCallId: 'saved-write',
+      path: 'notes.md', mode: 'edit',
+      patch: '@@ -1,1 +1,1 @@\n-Old content\n+Written content\n',
+    }
+    const result = execFileSync(process.execPath, ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import { Hono } from 'hono';
+      import { SessionManager } from ${JSON.stringify(managerUrl)};
+      import { sessionsApiPlugin } from ${JSON.stringify(routesUrl)};
+      const change = ${JSON.stringify(change)};
+      const { sessionId } = change;
+      const manager = {
+        getSessionState: id => id === sessionId ? { sessionId, segmentIndex: 0 } : null,
+        store: { async *readSessionLog(id) {
+          assert.equal(id, 'web_patch-fixture-0');
+          yield { role: 'assistant', tool_calls: [{ id: 'old-write',
+            function: { name: 'write', arguments: JSON.stringify({ path: 'notes.md', content: 'Written content' }) } }] };
+          yield { role: 'tool', tool_call_id: 'old-write', content: 'Success: write notes.md' };
+          yield { file_change: change };
+        } },
+        getFileChanges: SessionManager.prototype.getFileChanges,
+      };
+      const app = new Hono();
+      sessionsApiPlugin(manager)(app);
+      const response = await app.request('/api/sessions/web%3Apatch-fixture/file-changes?toolCallId=saved-write');
+      assert.equal(response.status, 200, await response.clone().text());
+      const page = await response.json();
+      assert.equal(page.total, 1);
+      assert.deepEqual(page.changes, [change]);
+      const legacy = await app.request('/api/sessions/web%3Apatch-fixture/file-changes?toolCallId=old-write');
+      assert.equal(legacy.status, 200);
+      assert.deepEqual(await legacy.json(), { changes: [], total: 0, offset: 0 });
+      console.log('BUILT_FILE_DIFF_OK');
+    `], { cwd: root, encoding: 'utf8', stdio: 'pipe' })
+    assert.match(result, /BUILT_FILE_DIFF_OK/)
   })
 })

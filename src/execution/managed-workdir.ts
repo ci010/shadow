@@ -5,6 +5,7 @@ export const MANAGED_SESSION_OPERATION = 'workdir.session.allocate'
 export const MANAGED_WORKDIR_PREFIX = 'managed-v1:'
 export const MANAGED_WORKDIR_PERMISSIONS = [
   'filesystem.read', 'filesystem.write', 'workdir.process.execute', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
+  'workdir.process.execute-once', 'workdir.process.reconcile',
 ]
 
 export function projectExecutionKey(projectId: string, kind: string, value: string): string {

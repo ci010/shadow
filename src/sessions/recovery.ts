@@ -31,6 +31,7 @@ export async function prepareSessionRecovery(store: SessionStore, state: Session
   let lastRole: string | undefined
   let finalResponse = false
   let userInvolved = false
+  const pending = new Set<string>()
   for await (const record of store.readSessionLog(physicalId)) {
     if (!['user', 'assistant', 'tool'].includes(String(record.role))) continue
     lastRole = String(record.role)
@@ -44,6 +45,10 @@ export async function prepareSessionRecovery(store: SessionStore, state: Session
       userInvolved = parseResponseContext(record.responseContext)?.userInvolved ?? false
     }
     const calls = Array.isArray(record.tool_calls) ? record.tool_calls : []
+    if (lastRole === 'assistant' || lastRole === 'user') pending.clear()
+    if (lastRole === 'assistant') {
+      for (const call of calls) if (call && typeof call === 'object' && 'id' in call && typeof call.id === 'string') pending.add(call.id)
+    } else if (lastRole === 'tool' && typeof record.tool_call_id === 'string') pending.delete(record.tool_call_id)
     finalResponse = lastRole === 'assistant' && calls.length === 0
   }
   if (!lastRole || finalResponse || state.executionStatus === 'completed') {
@@ -59,8 +64,12 @@ export async function prepareSessionRecovery(store: SessionStore, state: Session
       id: crypto.randomUUID(),
       reason: state.executionStatus === 'cancelled' ? 'stopped' : state.executionStatus === 'failed' ? 'failed' : 'interrupted',
       userInvolved,
+      pendingToolCalls: pending.size,
     }
     if (state.executionStatus !== 'failed') state.executionStatus = 'cancelled'
+    await store.saveState(state.sessionId, state)
+  } else if (prior.pendingToolCalls !== pending.size) {
+    state.recovery = { ...prior, pendingToolCalls: pending.size }
     await store.saveState(state.sessionId, state)
   }
 }

@@ -1,9 +1,10 @@
 import type { ExecutionReceiptV1 } from './contracts.ts'
 import type { RemoteFilesystemTarget } from './remote-filesystem-client.ts'
+import { DURABLE_SHELL_OPERATION, isUnknownShellReceipt, RECONCILE_SHELL_OPERATION } from './shell-journal.ts'
+import { ToolOutcomeUnknownError } from '../tools/tool.ts'
 import {
   MAX_REMOTE_SHELL_TIMEOUT_MS,
   parseWorkdirProcessArgs,
-  WORKDIR_PROCESS_EXECUTE_OPERATION,
 } from './capability-shell.ts'
 
 export async function executeRemoteShell(
@@ -26,12 +27,12 @@ export async function executeRemoteShell(
   for await (const event of target.executor.execute({
     version: 1,
     jobId,
-    idempotencyKey: jobId,
+    idempotencyKey: target.executionKey ?? jobId,
     sessionId: target.sessionId,
-    turnId: target.turnId,
+    turnId: target.executionKey ?? target.turnId,
     nodeId: target.nodeId,
     capabilityId: target.capabilityId,
-    operation: WORKDIR_PROCESS_EXECUTE_OPERATION,
+    operation: target.recovering ? RECONCILE_SHELL_OPERATION : DURABLE_SHELL_OPERATION,
     args: parsed,
     createdAt: createdAt.toISOString(),
     deadlineAt: new Date(createdAt.getTime() + timeoutMs).toISOString(),
@@ -41,7 +42,7 @@ export async function executeRemoteShell(
     if ('receipt' in event) {
       if (event.jobId !== jobId || event.receipt.jobId !== jobId || event.receipt.nodeId !== target.nodeId ||
         (event.type === 'completed') !== (event.receipt.state === 'completed')) {
-        return 'Error: remote exec returned an uncorrelated or inconsistent terminal receipt; process state is unknown.'
+        throw new ToolOutcomeUnknownError('Remote exec returned an uncorrelated or inconsistent receipt. Execution outcome is unknown; no command was re-executed.')
       }
       terminal = event.receipt
       terminalType = event.type
@@ -49,6 +50,12 @@ export async function executeRemoteShell(
   }
   const output = stdout.join('') + (stderr.length ? `\n[stderr]\n${stderr.join('')}` : '')
   const state = terminal?.state
+  if (!terminal || isUnknownShellReceipt(terminal)) {
+    throw new ToolOutcomeUnknownError(
+      `Remote execution outcome is unknown: ${terminal?.reason?.message ?? 'No terminal receipt was received'}. ` +
+      'Continue checks the original Child execution record; it does not re-execute this command. Partial side effects may remain.',
+    )
+  }
   if (state !== 'completed' || terminal?.exitCode !== 0) {
     const exitCode = terminal?.exitCode
     if (terminalType === state && (state === 'completed' || state === 'failed' && terminal?.reason?.code === 'process-exit') &&
@@ -57,7 +64,6 @@ export async function executeRemoteShell(
     const code = terminal?.reason?.code ?? 'remote-execution-incomplete'
     return `Error: remote exec ${state ?? 'incomplete'} [${code}]: ${reason}` +
       (terminal?.exitCode !== undefined ? ` (exit code ${terminal.exitCode})` : '') +
-      (code === 'remote-node-unavailable' ? '; remote process state is unknown until the Child reconnects.' : '') +
       (output ? `\n${output}` : '')
   }
   return output || '(no output, exit code 0)'

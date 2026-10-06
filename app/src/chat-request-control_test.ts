@@ -103,6 +103,7 @@ test('restored activity captures snapshot identity and a delayed Stop cannot abo
     getSessionState: (id: string) => id === sessionId ? { sessionId } : undefined,
     listSessions: async () => [{ sessionId }],
     yields: { get: () => null },
+    inputs: { get: () => null },
     getActiveSession: () => ({
       phase: 'llm',
       get activeRequestId() { return activeRequestId },
@@ -259,6 +260,18 @@ test('Continue is prominent above the composer, gated by persisted recovery rath
   assert(source.indexOf('class="resume-bar"') < source.indexOf('class="composer-box"'))
   assert.match(source, /currentRecovery = computed\(\(\) => activeSessionId\.value \? sessionRecoveries\.value\[activeSessionId\.value\] : undefined\)/)
   assert.equal((source.match(/await resumeChatRequest\(/g) ?? []).length, 1)
-  assert.match(source, /Resume unfinished tool calls or send their saved results, without adding a message/)
+  assert.match(source, /Continue without adding a message\. Remote shell calls only check the Child's saved execution record/)
+  assert.match(source, /type="checkbox" :checked="acknowledgedRecoveryId === currentRecovery\.id"/)
+  assert.match(source, /acknowledgedRecoveryId !== currentRecovery\.id/)
   assert.match(source, /sessionRecoveries\.value\[sessionId\]\?\.id === priorRecoveryId/)
+})
+
+test('acknowledged continuation sends explicit replay consent without replaying a draft', async () => {
+  const f = fixture()
+  const continuing = resumeChatRequest('http://main', 'web:chat-one', 'recovery-one', f.control, f.request, true)
+  assert.deepEqual(JSON.parse(String(f.calls[0]!.init?.body)), { recoveryId: 'recovery-one', acknowledgeToolReplay: true })
+  f.calls[0]!.resolve(Response.json({
+    sessionId: 'web:chat-one', recoveryId: 'recovery-one', requestId: 'continued-input', status: 'accepted',
+  }, { status: 202 }))
+  await continuing
 })

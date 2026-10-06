@@ -35,7 +35,6 @@
           :draft-folder-id="selected?.folder?.id" :remote-folders="installation.mode === 'main'"
           @select="selectSession(project.id, $event)" @draft="(folder, remote) => startDraft(project.id, folder, remote)"
           @knowledge="openKnowledge(project.id)"
-          @project-deleted="projectDeleted"
           @deleted="deleted(project.id, $event)" @manage="(folder, action) => manageFolder(project, folder, action)"
           @automation="showAutomation(project.id, $event)" @session-automation="(session, job) => identifyAutomation(project.id, session, job)" />
       </div>

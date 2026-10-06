@@ -12,6 +12,7 @@
 | [Project conventions](project-conventions.md) | Project SQL, attributable rule changes, Work queries, decisions and personal memory boundaries |
 | [GitHub collaboration](github.md) | Project Issue/PR links, confirmed writes, cached evidence, explicit follow-up and uncertain outcome recovery |
 | [Session diagnosis](diagnostics.md) | Read-only export/API/CLI and development-only prompt capture |
+| [Live event-wait acceptance](event-wait-acceptance.md) | Real-model simulated and real GitHub CI/CD runs, mid-run URL deadline, observed wait strategies and integration limits |
 | [Desktop release verification](release.md) | Native Windows/macOS/Linux build gates, Actions artifacts, package identity and installation acceptance boundaries |
 | [Mobile client](mobile.md) | Capacitor client architecture, HTTPS gateway, pairing/revocation, native release and operational boundaries |
 | [Two-device Electron pairing](desktop-pairing.md) | Trusted-LAN/VPN Main/Child setup, fingerprint approval, remote-work verification, reconnect and test boundaries |
@@ -73,6 +74,13 @@ checkpoint within that document. Old Deno commands, test counts, package layouts
 and file ownership locks are preserved as history; use the current README and
 manifests for operation. Do not replace Deno with Node mechanically in an old
 proposal: that would invent a historical implementation that did not exist.
+
+## Proposed designs
+
+- [Discord integration and memory-domain authorization](discord-agent-integration-plan.md):
+  proposed end-to-end plan for channel-specific Agents, UI/chat configuration,
+  enforced memory domains, learning provenance, migration, and acceptance.
+  **Not implemented by this document.**
 
 ## Design history
 

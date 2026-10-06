@@ -84,8 +84,8 @@ the UI. Stored patches are bounded to 65,536 characters, with a
 2,097,152-character input and 100 ms computation limit; the history API returns
 pages of 30 writes. Diff persistence failures after a write stop automatic retries.
 
-Use the project's trash icon or **Project settings → General → Delete project**
-to delete a non-Default project. Confirm by typing its name. Deletion removes
+Use **Project settings → General → Delete project** to delete a non-Default
+project. Confirm by typing its name. Deletion removes
 its Home (including conversation history, memory, skills, bots, automations and
 settings) and releases folder registrations; actual working folders and their
 files are kept. Stop active work and reconcile uncertain remote jobs first.
@@ -143,6 +143,22 @@ Section links scroll to the matching heading; web links open separately.
 Missing catalog targets show **Unresolved reference** rather than navigating
 away from Shadow. Other unsupported local links show a message with guidance
 to refresh or check **Link health**.
+
+For requests about memory, Wiki or knowledge, agents first read the built-in
+`v:skills/project-knowledge` Skill. The shared system prompt carries only this
+loading cue; the Skill owns storage aliases, operation rules, safe imports,
+references and coordinator delegation.
+
+**Wiki is a category within the Project memory store, not a separate service.**
+Agents read/list it through `read` on `v:memory/`, or use `search` with
+`space: "glob"` / `space: "grep"` and `path: "v:memory"`. There is no `v:wiki`
+mount or dedicated Wiki tool. Authorized local workers create/update shared
+Wiki Markdown at paths such as `v:memory/topics/xmcl-ops.md`; the Knowledge UI
+classifies those files as **Wiki**. Session memory, events, conventions and
+internal state are different categories, not destinations for a Wiki import.
+Saying "Wiki, not Memory" selects the shared knowledge category without changing
+its canonical storage path. The coordinator can read/search it and delegate
+edits; the alias does not grant new tool or workdir permissions.
 
 **Link health** scans Project knowledge for broken references; missing,
 unavailable, and out-of-catalog targets have different meanings. **Preview
@@ -237,7 +253,11 @@ On mobile, Enter keeps its native newline behavior; use the send button or
 Ctrl/Cmd+Enter with a hardware keyboard.
 Cancellation cannot undo completed side
 effects. For stopped or interrupted work, **Continue** resumes from saved
-history; a tool call without a saved result might run again after a crash.
+history. Unfinished tools require acknowledgement because they may run again
+and repeat side effects. Remote shell calls are different: Continue only
+reconciles the Child's durable execution record. A missing or unavailable
+receipt stays unknown and pauses the turn; it does not rerun that command.
+Inspect partial effects before issuing a new execution request.
 Unsent image edits and attachment selections are local draft state, not a
 server-side backup.
 

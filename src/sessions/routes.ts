@@ -356,10 +356,13 @@ export function sessionsApiPlugin(
       if (!sessions.getSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
-      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'recoveryId')
-        || typeof body.recoveryId !== 'string' || !body.recoveryId) return c.json({ error: 'invalid_request' }, 400)
+      if (!isConfigObject(body) || Object.keys(body).some(key => !['recoveryId', 'acknowledgeToolReplay'].includes(key))
+        || typeof body.recoveryId !== 'string' || !body.recoveryId
+        || (body.acknowledgeToolReplay !== undefined && typeof body.acknowledgeToolReplay !== 'boolean')) {
+        return c.json({ error: 'invalid_request' }, 400)
+      }
       try {
-        const receipt = await sessions.resumeSession(key, body.recoveryId)
+        const receipt = await sessions.resumeSession(key, body.recoveryId, body.acknowledgeToolReplay === true)
         return c.json({ sessionId: key, recoveryId: body.recoveryId, requestId: receipt.inputId, status: 'accepted' }, 202)
       } catch (error) {
         if (error instanceof SessionIdentityError) return c.json({ error: 'history_conflict', message: error.message }, 409)

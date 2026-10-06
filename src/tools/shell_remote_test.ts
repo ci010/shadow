@@ -1,4 +1,4 @@
-import { ToolNoEffectError, isCompletedToolFailure, requireToolText } from './tool.ts'
+import { ToolNoEffectError, ToolOutcomeUnknownError, isCompletedToolFailure, requireToolText } from './tool.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ExecutionContext } from './context.ts'
@@ -53,7 +53,7 @@ test('Node-only exec rejects remote workdirs without dispatch or a local shell f
 test('ExecTool remote path sends only capability-relative cwd and does not inherit Main shell or environment', async () => {
   const { tool, context, requests } = fixture()
   assert.equal(await tool.execute({ script: 'pwd', cwd: 'nested', args: ['one'] }, context), '(no output, exit code 0)')
-  assert.equal(requests[0]?.operation, 'workdir.process.execute')
+  assert.equal(requests[0]?.operation, 'workdir.process.execute-once')
   assert.equal(requests[0]?.capabilityId, 'opaque')
   assert.deepEqual(requests[0]?.args, { script: 'pwd', cwd: 'nested', args: ['one'] })
   assert.equal(requests[0]?.turnId, 'turn')
@@ -87,7 +87,7 @@ test('remote helper never treats a missing or nonzero terminal receipt as succes
     },
   }
   const target = { ...context.remoteWorkdir!, executor, sessionId: 'session', turnId: 'turn', signal: context.signal }
-  assert.match(await executeRemoteShell(target, { script: 'echo no' }, 1000), /^Error: remote exec incomplete/)
+  await assert.rejects(executeRemoteShell(target, { script: 'echo no' }, 1000), ToolOutcomeUnknownError)
   for (const receipt of [
     { exitCode: 7 }, { jobId: 'wrong-job' }, { nodeId: 'wrong-child' }, { state: 'failed' as const },
   ]) {
@@ -97,7 +97,8 @@ test('remote helper never treats a missing or nonzero terminal receipt as succes
         receipt: { version: 1, jobId: request.jobId, nodeId: request.nodeId, state: 'completed', exitCode: 0, finishedAt: new Date().toISOString(), ...receipt },
       }
     }
-    assert.match(await executeRemoteShell(target, { script: 'echo no' }, 1000), /^Error:/)
+    if ('exitCode' in receipt) assert.match(await executeRemoteShell(target, { script: 'echo no' }, 1000), /^Error:/)
+    else await assert.rejects(executeRemoteShell(target, { script: 'echo no' }, 1000), ToolOutcomeUnknownError)
   }
   const controller = new AbortController()
   controller.abort()
@@ -135,6 +136,10 @@ test('only correlated normal remote process failures carry completion evidence',
           ...(variant === 'signal' ? { signal: 'SIGTERM' } : {}),
           reason: { code: variant === 'unavailable' ? 'remote-node-unavailable' : 'process-exit', message: 'Failed', retryable: false } },
       }
+    }
+    if (['missing', 'foreign', 'unavailable'].includes(variant)) {
+      await assert.rejects(tool.execute({ script: 'fixture' }, context), ToolOutcomeUnknownError)
+      continue
     }
     const result = await tool.execute({ script: 'fixture' }, context)
     assert.match(requireToolText(result), /^Error:/)

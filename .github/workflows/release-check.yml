@@ -109,6 +109,8 @@ jobs:
           target: desktop
       - name: Native Windows release tests
         run: pnpm test:release
+      - name: Native process crash and recovery regressions
+        run: pnpm exec node --import tsx --test src/execution/processes/guardian_test.ts src/execution/shell-journal_test.ts src/sessions/session-recovery_test.ts
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -187,6 +189,8 @@ jobs:
       - name: Native macOS release tests
         if: runner.os == 'macOS'
         run: pnpm test:release
+      - name: Native process crash and recovery regressions
+        run: pnpm exec node --import tsx --test src/execution/processes/guardian_test.ts src/execution/shell-journal_test.ts src/sessions/session-recovery_test.ts
       - name: Native Linux release tests
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum pnpm test:release

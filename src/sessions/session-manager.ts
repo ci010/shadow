@@ -1117,6 +1117,9 @@ ${JSON.stringify(request)}`,
       if (resume && (state?.mode !== 'session' || state.recovery?.id !== resume.recoveryId)) {
         throw new SessionResumeError('This recovery is no longer current. Refresh the conversation.')
       }
+      if (resume && (state?.recovery?.pendingToolCalls ?? 0) > 0 && resume.acknowledgeToolReplay !== true) {
+        throw new SessionResumeError('Confirm that unfinished tools may run again and repeat side effects. Remote shells only reconcile saved execution records.')
+      }
       const ownerId = delegationOwner(state)
       const sourceSessionId = input.source.kind === 'session' ? input.source.sessionId
         : input.source.kind === 'event' ? input.source.origin?.sessionId : undefined
@@ -1336,10 +1339,10 @@ ${JSON.stringify(request)}`,
     return this.sessionStates[sessionId]?.mode === 'session' ? this.sessionStates[sessionId]?.recovery : undefined
   }
 
-  resumeSession(sessionId: string, recoveryId: string): Promise<DeliveryReceipt> {
+  resumeSession(sessionId: string, recoveryId: string, acknowledgeToolReplay = false): Promise<DeliveryReceipt> {
     const id = crypto.randomUUID()
     return this.deliver(sessionId, {
-      id, kind: 'control', command: { type: 'resume', recoveryId }, timestamp: new Date().toISOString(),
+      id, kind: 'control', command: { type: 'resume', recoveryId, acknowledgeToolReplay }, timestamp: new Date().toISOString(),
       source: { kind: 'event', eventId: id, type: 'session-resume', source: 'user' },
       replyTo: sessionReplyAddress(sessionId),
     })

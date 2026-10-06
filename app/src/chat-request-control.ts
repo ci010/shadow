@@ -103,13 +103,15 @@ export type ChatRequestControl = ReturnType<typeof createChatRequestControl>
 /** Explicit continuation has no prompt/media fallback and cannot replay a draft. */
 export async function resumeChatRequest(
   apiBase: string, sessionId: string, recoveryId: string, control: ChatRequestControl, request: typeof fetch = fetch,
+  acknowledgeToolReplay = false,
 ): Promise<void> {
   control.submitting(sessionId)
   let rejected = false
   try {
     const response = await request(apiUrl(apiBase, `/api/sessions/${encodeURIComponent(sessionId)}/resume`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recoveryId }), signal: AbortSignal.timeout(15000),
+      body: JSON.stringify({ recoveryId, ...(acknowledgeToolReplay ? { acknowledgeToolReplay: true } : {}) }),
+      signal: AbortSignal.timeout(15000),
     })
     rejected = !response.ok
     const result: unknown = await response.json()

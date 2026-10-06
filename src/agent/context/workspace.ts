@@ -1,7 +1,6 @@
 import type { SystemPromptProvider } from './builder.ts'
 import { join } from 'node:path'
 import type { VirtualFs } from '../../vfs/virtual-fs.ts'
-import { isToolAllowed } from '../../utils/tool-allow.ts'
 import {
   managedSessionWorkdirRef,
   resolveSessionLocations,
@@ -51,7 +50,7 @@ export function workspaceProvider(
           `**Session uploads**: \`${join(locations.sessionDataDir, 'uploads')}\` (not the registered folder).`,
           ...(!coordinator ? [
             'The shared `.tmp/` name resolves from the Project data directory, not the working directory, for scratch/ephemeral data.',
-            '`write("notes.md")` writes into the working directory; `write("v:memory/today.md")` into Project memory.',
+            '`write("notes.md")` writes into the working directory.',
           ] : []),
         )
       } else if (!locations.workdir.available) {
@@ -90,7 +89,7 @@ export function workspaceProvider(
           'Virtual resources:',
           '',
           ...prefixes.map((p) => `- \`${p.prefix}/\` — ${coordinator && p.prefix.replace(/\/$/, '') === 'v:memory'
-            ? 'read relevant Project memory' : p.description}`),
+            ? 'read Project Wiki and memory' : p.description}`),
         )
       }
 
@@ -103,22 +102,11 @@ export function workspaceProvider(
 
       lines.push(
         '',
-        '## Memory',
+        '## Project knowledge',
         '',
-        'Use `v:memory/` for relevant historical context, not as a substitute for current evidence.',
+        'For requests about Project memory, Wiki, knowledge or remembering facts, read `v:skills/project-knowledge` before inspecting, editing or delegating knowledge work; it explains aliases, storage and the operation rules without granting permissions.',
         '',
       )
-
-      if (!coordinator && isToolAllowed(ctx.agent, 'write')) {
-        lines.push(
-          '- Files survive restarts; mental notes do not. Write what you need to remember under `v:memory/`, including explicit "remember this" requests.',
-          '- Write wiki Markdown files with content or exact match/content edits. Session records, event logs and internal state are not wiki files; append events through `log`.',
-          '- Stable personal preferences belong in the identified user profile with source/context and corrections, not Project rules. Temporary reply instructions stay in conversation; preserve applicable ones through compaction, not as session conventions.',
-          '- Record mistakes to avoid repeating them; save lessons in memory or update/create relevant skills.',
-          '- Memory is a knowledge graph: reference files with markdown links, not bare code spans. Fix write-validation issues reported in tool results.',
-          '',
-        )
-      }
       return lines.join('\n')
     },
   }

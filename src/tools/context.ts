@@ -38,14 +38,16 @@ export interface ExecutionContext extends MessageContext {
   signal: AbortSignal
   /** Provider tool invocation ID, used for idempotent subagent admission. */
   toolCallId?: string
+  /** Only the unfinished saved batch; remote shells reconcile instead of re-executing. */
+  recoveringToolCall?: boolean
   /** Provider-facing tool name; nested script invocations are separate admissions. */
   toolCallName?: string
   /** Persist observed writes immediately, including nested script calls that outlive cancellation. */
   recordFileChange?: (change: import('../sessions/file-change-contract.ts').RecordedFileChange) => Promise<void>
-  /** Resolved default shell for exec in this context, after global/session overrides. */
-  defaultExecShell?: ExecShell
   /** Read only this logical session's own recorded edits, across its physical segments. */
   readFileChange?: (id: string, signal: AbortSignal) => Promise<import('../sessions/file-change-contract.ts').RecordedFileChange | undefined>
+  /** Resolved default shell for exec in this context, after global/session overrides. */
+  defaultExecShell?: ExecShell
   /** LLM model override for this session. */
   model?: string
   /** LLM temperature override for this session. */

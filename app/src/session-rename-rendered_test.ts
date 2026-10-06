@@ -15,7 +15,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('rendered session rename supports keyboard save/cancel, focus, failures and narrow screens', {
+test('rendered session details supports inline identity actions, copying and keyboard rename', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -24,6 +24,8 @@ test('rendered session rename supports keyboard save/cancel, focus, failures and
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   let name = 'Original conversation'
   let writes = 0
+  const longName = 'Review / ' + 'LongSessionName'.repeat(25)
+  const longPath = 'C:\\synthetic\\' + 'nested-folder\\'.repeat(15) + 'review'
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error',
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
@@ -32,15 +34,22 @@ test('rendered session rename supports keyboard save/cancel, focus, failures and
       load(id) {
         if (id !== '\0rename-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, ref } from 'vue';
+          import { createApp, h, reactive, ref } from 'vue';
           import Heading from '/src/components/SessionHeading.vue';
-          const name = ref('Original conversation');
-          createApp({ render: () => h('main', [
-            h(Heading, { apiBase: location.origin, sessionId: 'web:fixture', name: name.value,
-              projectName: 'Synthetic project', physicalId: null, revision: 0, active: true,
-              canRename: true, onRenamed: value => { name.value = value } }),
-            h('p', { id: 'saved-name' }, name.value)
-          ]) }).mount('#app');`
+          import { provideMobileChrome } from '/src/composables/useMobileChrome.ts';
+          const state = reactive({name:'Original conversation',sessionId:'web:fixture',canRename:true,revision:0});
+          window.__headingFixture = state;
+          createApp({ setup() {
+            provideMobileChrome();
+            const heading = ref();
+            window.__startHeadingRename = () => heading.value.startRename();
+            return () => h('main', [
+            h(Heading, { ref:heading, apiBase: location.origin, sessionId: state.sessionId, name: state.name,
+              projectName: 'Synthetic project', physicalId: null, revision: state.revision, active: true,
+              canRename: state.canRename, onRenamed: value => { state.name = value } }),
+            h('p', { id: 'saved-name' }, state.name)
+          ]);
+          } }).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use(async (request, response, next) => {
@@ -49,8 +58,14 @@ test('rendered session rename supports keyboard save/cancel, focus, failures and
           if (path === '/__rename') {
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="app"></div><script type="module" src="/rename-fixture.ts"></script></body></html>')
-          } else if (path === '/api/sessions/web%3Afixture/details') {
-            json({ sessionId: 'web:fixture', name, workdir: { kind: 'local', displayPath: 'C:\\synthetic' },
+          } else if (/^\/api\/sessions\/[^/]+\/details$/.test(path)) {
+            const sessionId = decodeURIComponent(path.split('/')[3])
+            const remote = sessionId.startsWith('web:remote')
+            json({ sessionId, name: sessionId === 'web:long' ? longName : name,
+              workdir: remote
+                ? { kind: 'remote', displayPath: sessionId === 'web:remote-missing' ? null : 'Z:\\remote\\review',
+                  nodeName: 'Synthetic device', displayName: 'Review workspace' }
+                : { kind: 'local', displayPath: sessionId === 'web:missing' ? null : sessionId === 'web:long' ? longPath : 'C:\\synthetic' },
               usage: null, usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
           } else if (path === '/api/sessions/web%3Afixture/name' && request.method === 'PATCH') {
             writes++
@@ -76,7 +91,7 @@ test('rendered session rename supports keyboard save/cancel, focus, failures and
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
   const env: NodeJS.ProcessEnv = { RENAME_SMOKE_URL: url }
-  for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) {
+  for (const key of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'RENAME_SCREENSHOTS']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
   for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) env[key] = directory

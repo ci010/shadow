@@ -297,10 +297,15 @@
           <div v-if="currentRecovery && !requestBusy" class="resume-bar" role="status">
             <div>
               <strong>{{ currentRecovery.reason === 'stopped' ? 'Request stopped' : currentRecovery.reason === 'failed' ? 'Request failed' : 'Request interrupted' }}</strong>
-              <p>Resume unfinished tool calls or send their saved results, without adding a message. After a restart, calls without saved results may run again.</p>
+              <p>Continue without adding a message. Remote shell calls only check the Child's saved execution record; a missing result stays unknown.</p>
+              <label v-if="currentRecovery.pendingToolCalls" class="resume-confirm">
+                <input type="checkbox" :checked="acknowledgedRecoveryId === currentRecovery.id"
+                  @change="acknowledgeRecovery($event, currentRecovery.id)" />
+                I understand other unfinished tools may run again and repeat side effects.
+              </label>
             </div>
             <button class="resume-button" aria-label="Resume interrupted request"
-              :disabled="!installation.uiScopes.includes('chat:write') || savingSettings || pickingContext"
+              :disabled="!installation.uiScopes.includes('chat:write') || savingSettings || pickingContext || !!currentRecovery.pendingToolCalls && acknowledgedRecoveryId !== currentRecovery.id"
               @click="resumeCurrentRequest()">
               <span class="i-lucide-play w-4 h-4" aria-hidden="true" /> Continue
             </button>
@@ -775,6 +780,10 @@ async function stopCurrentRequest(): Promise<void> {
   await control?.stop()
   void refreshSessionActivity()
 }
+const acknowledgedRecoveryId = ref('')
+function acknowledgeRecovery(event: Event, recoveryId: string): void {
+  if (event.target instanceof HTMLInputElement) acknowledgedRecoveryId.value = event.target.checked ? recoveryId : ''
+}
 async function resumeCurrentRequest(): Promise<void> {
   const sessionId = activeSessionId.value
   const recovery = currentRecovery.value
@@ -788,7 +797,7 @@ async function resumeCurrentRequest(): Promise<void> {
   try {
     if (!eventStream) throw new Error('Live updates are unavailable. Retry before continuing the request.')
     await eventStream.ready()
-    await resumeChatRequest(props.apiBase, sessionId, recovery.id, control)
+    await resumeChatRequest(props.apiBase, sessionId, recovery.id, control, undefined, acknowledgedRecoveryId.value === recovery.id)
     if (control.state.requestId && finishedRequests.has(control.state.requestId)) control.finish()
     if (sessionRecoveries.value[sessionId]?.id === recovery.id) delete sessionRecoveries.value[sessionId]
     if (generation === sessionSelectionGeneration) {
@@ -2914,6 +2923,8 @@ function resendLastMessage() {
 .composer-stop:disabled { opacity: .65; cursor: not-allowed; }
 .resume-bar { display: flex; align-items: center; gap: 16px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--c-border-hover); border-radius: var(--radius-surface); background: var(--c-bg); color: var(--c-text); }
 .resume-bar p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; }
+.resume-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; font-size: 12px; line-height: 1.5; }
+.resume-confirm input { flex-shrink: 0; margin-top: 3px; accent-color: var(--c-primary-bg); }
 .resume-button { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; min-height: 36px; padding: 8px 12px; border: 0; border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .resume-button:disabled { opacity: .5; cursor: not-allowed; }
 .resume-button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

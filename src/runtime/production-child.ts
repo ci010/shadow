@@ -13,6 +13,7 @@ import { createPlatformDeviceKeyStore } from '../cluster/protected-device-key-st
 import type { CapabilityDescriptorV1 } from '../cluster/contracts.ts'
 import type { NodeWebSocketFactory } from '../cluster/websocket-node-transport.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
+import { JournaledShellExecutor, ShellJournal } from '../execution/shell-journal.ts'
 import type { ChildBootstrapConfigV1 } from './bootstrap-config.ts'
 import { ChildMainConnector } from './child-main-connector.ts'
 import {
@@ -82,12 +83,14 @@ export async function startProductionChildRuntime(
     },
     ...workdirs.capabilities,
   ]
-  const executor = new LocalExecutor(
+  const journal = new ShellJournal(join(paths.dataDir, 'shell-executions-v1', pairingScope))
+  const executor = new JournaledShellExecutor(new LocalExecutor(
     processManager,
     config.localNodeId,
     workdirs.operationHandlers,
     ['process-execute'],
-  )
+    request => journal.processResultPath(request),
+  ), journal)
   const validateCredential = async (signal: AbortSignal): Promise<void> => {
     await resolveDeviceCredentialForConnect(
       credentialProvider,

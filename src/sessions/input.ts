@@ -69,7 +69,7 @@ export interface SessionControlInput extends InputEnvelope {
   kind: 'control'
   command:
     | { type: 'retry'; fallbackContent?: string; media?: string[] }
-    | { type: 'resume'; recoveryId: string }
+    | { type: 'resume'; recoveryId: string; acknowledgeToolReplay?: boolean }
     | { type: 'cancel' }
     | { type: 'compact' }
 }

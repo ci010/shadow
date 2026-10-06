@@ -8,6 +8,8 @@ export interface RemoteFilesystemTarget {
   readonly sessionId: string
   readonly turnId: string
   readonly signal: AbortSignal
+  readonly executionKey?: string
+  readonly recovering?: boolean
 }
 
 export class RemoteFilesystemError extends Error {

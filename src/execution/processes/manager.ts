@@ -15,6 +15,7 @@ import {
 import { isWindows } from '../../utils/runtime.ts'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { spawnGuardedProcess, type GuardianResult, type ProcessSupervision } from './guardian.ts'
 
 /**
  * Final exit status of a managed process.
@@ -23,6 +24,7 @@ export interface ManagedProcessStatus {
   success: boolean
   code: number
   signal: NodeJS.Signals | null
+  guardian?: GuardianResult
 }
 
 /**
@@ -52,6 +54,7 @@ export interface ManagedProcess {
   /** Set once the process has exited. */
   exitedAt?: Date
   exitCode?: number
+  terminate?: () => Promise<ManagedProcessStatus>
 }
 
 /**
@@ -74,7 +77,7 @@ export class ProcessManager {
     env?: Record<string, string>,
     shell: ManagedShell = defaultManagedShell(),
     args: string[] = [],
-    options: { isolated?: boolean; signal?: AbortSignal } = {},
+    options: { isolated?: boolean; signal?: AbortSignal; supervision?: ProcessSupervision } = {},
   ): Promise<ManagedProcess> {
     options.signal?.throwIfAborted()
     // Auto-escalate from cmd to sh when MSYS2 tools are detected.
@@ -109,6 +112,23 @@ export class ProcessManager {
     // SystemRoot/PATHEXT, …) – breaking even built-in lookups like
     // `chcp.com` in System32. Merge to preserve the full environment.
     const spawnEnv = env ? { ...sysEnv, ...env } : undefined
+
+    if (options.supervision) {
+      const guarded = await spawnGuardedProcess({
+        ...options.supervision, command: resolvedShell.command, args: shellArgs, cwd,
+        env: spawnEnv ?? sysEnv, windowsVerbatimArguments: useVerbatimArgs,
+      }, options.signal)
+      const managed: ManagedProcess = {
+        ...guarded, isolated: true, command: script, cwd, shell, startedAt: new Date(),
+      }
+      managed.exitPromise = guarded.exitPromise.then(status => {
+        managed.exitedAt = new Date()
+        managed.exitCode = status.code
+        return status
+      })
+      this.processes.set(managed.pid, managed)
+      return managed
+    }
 
     const spawnOpts: SpawnOptions = {
       cwd,
@@ -186,7 +206,7 @@ export class ProcessManager {
   }
 
   async terminate(managed: ManagedProcess): Promise<ManagedProcessStatus> {
-    const status = await terminateProcessTree(managed.process, managed.exitPromise, managed.isolated)
+    const status = await (managed.terminate?.() ?? terminateProcessTree(managed.process, managed.exitPromise, managed.isolated))
     this.remove(managed.pid)
     return status
   }

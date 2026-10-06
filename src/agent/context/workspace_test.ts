@@ -123,22 +123,22 @@ test('workspace owns upload guidance across local, remote and unavailable workdi
   }
 })
 
-test('compact memory guidance preserves write-role gating and persistence conventions', async () => {
-  const provider = workspaceProvider(resolve('.test-data', 'prompt-memory'), new VirtualFs())
-  for (const allowedTools of [['read', 'search'], ['read', 'search', 'write']]) {
-    const prompt = (await provider.getPromptSection(context({
-      agent: { ...agent, allowedTools },
-    })))!
-    assert.match(prompt, /Use `v:memory\/` for relevant historical context, not as a substitute for current evidence/)
-    assert.doesNotMatch(prompt, /Read\/search `v:/)
-    if (allowedTools.includes('write')) {
-      assert.match(prompt, /Files survive restarts; mental notes do not/)
-      assert.match(prompt, /including explicit "remember this" requests/)
-      assert.match(prompt, /Record mistakes.*save lessons in memory or update\/create relevant skills/)
-      assert.match(prompt, /markdown links, not bare code spans/)
-      assert.match(prompt, /Fix write-validation issues reported in tool results/)
-    } else {
-      assert.doesNotMatch(prompt, /Write what you need to remember|Record mistakes|Fix write-validation/)
+test('knowledge requests direct every role to the Skill without inlining its manual or granting access', async () => {
+  const fs = new VirtualFs()
+  fs.mount('v:memory', 'Project memory', () => '')
+  const provider = workspaceProvider(resolve('.test-data', 'wiki-alias'), fs)
+  for (const name of ['orchestrator', 'general', 'sub']) {
+    for (const allowedTools of [['read', 'search'], ['read', 'search', 'write']]) {
+      const builder = new ContextBuilder(resolve('.test-data', 'wiki-alias'))
+      builder.register(provider)
+      const prompt = await builder.buildSystemPrompt(context({
+        agent: { ...agent, name, allowedTools },
+      }))
+      assert.match(prompt, /Project memory, Wiki, knowledge or remembering facts, read `v:skills\/project-knowledge` before inspecting, editing or delegating knowledge work/)
+      assert.match(prompt, /without granting permissions/)
+      assert.equal(prompt.match(/v:skills\/project-knowledge/g)?.length, 1)
+      assert.doesNotMatch(prompt, /canonical tool path|v:wiki|Session memory under|Files survive restarts|Write Wiki Markdown|Record mistakes|write-validation/)
+      if (name === 'orchestrator') assert.match(prompt, /read Project Wiki and memory/)
     }
   }
 })
@@ -156,7 +156,7 @@ test('coordinator workspace retains read context without worker resources or wri
   assert.match(prompt, /Virtual resources:/)
   assert.doesNotMatch(prompt, /read\/search relevant Project memory|use `read`\/`search`/)
   for (const path of ['v:project', 'v:sessions', 'v:memory']) assert(prompt.includes(path))
-  assert.doesNotMatch(prompt, /v:tools|v:bg|v:skills|v:config|v:events|write\(|read, search, and write|Write what you need|scratch\/ephemeral/)
+  assert.doesNotMatch(prompt, /v:tools|v:bg|v:skills\/(?!project-knowledge)|v:config|v:events|write\(|read, search, and write|Write what you need|scratch\/ephemeral/)
   const ordinary = (await provider.getPromptSection(context()))!
   assert.match(ordinary, /v:tools|v:config/)
   assert.match(ordinary, /write\("notes.md"\)/)

@@ -130,16 +130,9 @@ test('remote shell uses Child root and preserves stderr and nonzero receipts', a
   })
 })
 
-test('remote shell timeout and cancellation await owned process cleanup and keep partial output', async (t) => {
-  const killedGroups: number[] = []
-  const kill = process.kill.bind(process)
-  t.mock.method(process, 'kill', (pid: number, signal?: NodeJS.Signals | number) => {
-    if (pid < 0 && signal === 'SIGKILL') killedGroups.push(pid)
-    return kill(pid, signal)
-  })
+test('remote shell timeout and cancellation await owned process cleanup and keep partial output', async () => {
   await withTempWorkspace(async root => {
     for (const mode of ['deadline', 'cancel'] as const) {
-      killedGroups.length = 0
       const fixture = setup(root)
       const controller = new AbortController()
       const pending = executeRemoteShell({
@@ -148,7 +141,7 @@ test('remote shell timeout and cancellation await owned process cleanup and keep
         script: process.platform === 'win32'
           ? 'echo before-wait & ping -n 30 127.0.0.1 > nul'
           : 'echo before-wait; sleep 30',
-      }, mode === 'deadline' ? 1200 : 10_000)
+      }, mode === 'deadline' ? 5000 : 10_000)
       await until(() => fixture.manager.list().some(p => p.stdoutChunks.length > 0))
       const owned = fixture.manager.list()[0]!
       if (mode === 'cancel') controller.abort()
@@ -158,7 +151,7 @@ test('remote shell timeout and cancellation await owned process cleanup and keep
       assert.notEqual(owned.exitedAt, undefined)
       assert.equal(fixture.manager.list().length, 0)
       assert.equal(fixture.events.filter(event => 'receipt' in event).length, 1)
-      if (process.platform !== 'win32') assert.deepEqual(killedGroups, [-owned.pid])
+      assert.equal((await owned.exitPromise).guardian?.reason, mode === 'deadline' ? 'deadline-expired' : 'cancelled')
     }
   })
 })

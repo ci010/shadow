@@ -15,7 +15,7 @@ import {
 import type { CommandHandlerManager } from './shell-commands/command-handler.ts'
 import { bindScriptTools } from '../script-runtime/bridge.ts'
 import { ScriptExecutionError, startScript, type ScriptRun } from '../script-runtime/runtime.ts'
-import { ToolNoEffectError, completedToolFailure, requireToolText, type Tool, type ToolParameters, type ToolResult } from './tool.ts'
+import { ToolNoEffectError, ToolOutcomeUnknownError, completedToolFailure, requireToolText, type Tool, type ToolParameters, type ToolResult } from './tool.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { backgroundExecutionId, type BackgroundTaskManager } from '../agent/background-task.ts'
 import { loadDotEnv } from '../utils/env.ts'
@@ -25,6 +25,7 @@ import type { LocalProcessExecutor } from '../execution/executor.ts'
 import { LocalExecutor } from '../execution/local-executor.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
 import { executeRemoteShell } from '../execution/remote-shell-client.ts'
+import { createHash } from 'node:crypto'
 
 async function waitForExit<T>(
   exit: Promise<T>,
@@ -268,6 +269,10 @@ export class ExecTool implements Tool<ToolResult> {
           ...context.remoteWorkdir,
           sessionId: context.sessionId,
           turnId: context.messageId ?? context.sessionId,
+          ...(context.toolCallId ? { executionKey: createHash('sha256').update(JSON.stringify([
+            'remote-shell-v1', context.physicalSessionId ?? context.sessionId, context.toolCallId,
+          ])).digest('hex') } : {}),
+          recovering: context.recoveringToolCall,
           signal: context.signal,
         }, {
           script: args.script,
@@ -279,6 +284,7 @@ export class ExecTool implements Tool<ToolResult> {
         return completed ? completedToolFailure({ isError: true, content: [{ type: 'text', text: output }] }) : output
       } catch (error) {
         context.signal.throwIfAborted()
+        if (error instanceof ToolOutcomeUnknownError) throw error
         return `Error: ${errMsg(error)}`
       }
     }

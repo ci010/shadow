@@ -171,7 +171,7 @@ export abstract class BaseSession {
     if (this.state.mode === 'session' && fact.status !== 'completed'
       && this.messages.some(message => message.role !== 'system')) {
       this.state.recovery = { id: fact.turnId, reason: fact.status === 'cancelled' ? 'stopped' : 'failed',
-        userInvolved: this.responseContext?.userInvolved ?? false }
+        userInvolved: this.responseContext?.userInvolved ?? false, pendingToolCalls: pendingToolCalls(this.messages).length }
     } else delete this.state.recovery
     await this.store.saveState(this.id, this.state)
     if (this.state.mode && this.state.mode !== 'session') {
@@ -219,7 +219,7 @@ export abstract class BaseSession {
           throw new Error(`Saved tool call ${call.id} has invalid arguments`)
         }
         return { id: call.id, name: call.function.name, arguments: args as Record<string, unknown> }
-      }), executionContext, llm, signal)
+      }), { ...executionContext, recoveringToolCall: true }, llm, signal)
     }
 
     for (let i = 0; budget.remaining > 0; i++) {
@@ -590,7 +590,9 @@ export abstract class BaseSession {
         // them. Close their pairs before appending the newly admitted context.
         await this.persistMessages(llm, ...pendingToolCalls(this.messages).map(call => ({
           role: 'tool' as const,
-          content: 'Tool execution cancelled.',
+          content: remoteWorkdir
+            ? 'Tool outcome unknown. A new message superseded recovery without re-executing this call; partial side effects may remain.'
+            : 'Tool execution cancelled.',
           tool_call_id: call.id,
           name: call.function.name,
         })))

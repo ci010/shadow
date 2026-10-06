@@ -1,20 +1,23 @@
 import { isManagedWorkdir, managedProjectScope, MANAGED_SESSION_CAPABILITY, projectExecutionKey } from '../execution/managed-workdir.ts'
 import type { CancelReceiptV1, ExecutionReceiptV1, JobEventV1, JobRequestV1, JobStatusV1 } from '../execution/contracts.ts'
 import type { Executor } from '../execution/executor.ts'
+import { isUnknownShellReceipt } from '../execution/shell-journal.ts'
 
 /** One shared device transport, with disjoint execution identities and cancellation authority. */
 export class ProjectExecutor implements Executor {
   #jobs = new Map<string, string>()
   #pending = new Set<string>()
+  #executionKeys = new Map<string, string>()
   get hasPendingJobs(): boolean { return this.#pending.size > 0 }
   constructor(readonly projectId: string, private readonly executor: Executor,
     private readonly authorize?: (request: JobRequestV1) => void,
     private readonly recordJob?: (jobId: string, pending: boolean) => void) {}
 
   #settle(jobId: string, receipt: ExecutionReceiptV1): void {
-    if (['remote-node-unavailable', 'process-cleanup-failed'].includes(receipt.reason?.code ?? '')) return
+    if (isUnknownShellReceipt(receipt)) return
     this.recordJob?.(jobId, false)
     this.#pending.delete(jobId)
+    this.#executionKeys.delete(jobId)
   }
 
   #key(kind: string, value: string): string {
@@ -27,6 +30,12 @@ export class ProjectExecutor implements Executor {
     const jobId = this.#key('job', request.jobId)
     this.#jobs.set(request.jobId, jobId)
     this.#pending.add(request.jobId)
+    const executionKey = JSON.stringify([
+      request.idempotencyKey, request.nodeId, request.capabilityId, request.sessionId, request.turnId,
+    ])
+    if (request.operation === 'workdir.process.execute-once' || request.operation === 'workdir.process.reconcile') {
+      this.#executionKeys.set(request.jobId, executionKey)
+    }
     const scoped = {
       ...request, jobId,
       sessionId: this.#key('session', request.sessionId),
@@ -37,7 +46,13 @@ export class ProjectExecutor implements Executor {
     }
     for await (const event of this.executor.execute(scoped, signal)) {
       if (event.jobId !== jobId) throw new Error('Project executor received an unowned job event')
-      if ('receipt' in event) this.#settle(request.jobId, event.receipt)
+      if ('receipt' in event) {
+        if (request.operation === 'workdir.process.reconcile') {
+          for (const [id, key] of this.#executionKeys) {
+            if (key === executionKey) this.#settle(id, event.receipt)
+          }
+        } else this.#settle(request.jobId, event.receipt)
+      }
       yield { ...event, jobId: request.jobId, ...('receipt' in event ? { receipt: { ...event.receipt, jobId: request.jobId } } : {}) }
     }
   }

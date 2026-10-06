@@ -4,6 +4,7 @@ import type {
   ProcessManager,
 } from './processes/manager.ts'
 import { terminateProcessTree } from './processes/manager.ts'
+import type { ProcessSupervision } from './processes/guardian.ts'
 import { decodeChunks } from '../utils/decode-chunks.ts'
 import {
   type CancelReceiptV1,
@@ -62,7 +63,7 @@ const TERMINAL_STATES = new Set<JobStateV1>([
 const MAX_WORKDIR_PROCESS_OUTPUT_BYTES = 128 * 1024
 
 async function terminateWorkdirProcess(managed: ManagedProcess): Promise<ManagedProcessStatus> {
-  return await terminateProcessTree(managed.process, managed.exitPromise, true)
+  return await (managed.terminate?.() ?? terminateProcessTree(managed.process, managed.exitPromise, true))
 }
 
 function now(): string {
@@ -128,9 +129,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     private localNodeId = 'local',
     private operationHandlers: readonly (LocalJobOperationHandler | LocalProcessOperationHandler)[] = [],
     private processCapabilityIds?: readonly string[],
+    private processResultPath?: (request: JobRequestV1) => string | undefined,
   ) {}
 
-  async startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal }): Promise<ManagedProcess> {
+  async startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal; supervision?: ProcessSupervision }): Promise<ManagedProcess> {
     const parsed = parseProcessArgs(args)
     if (!parsed) {
       throw new TypeError('Invalid ProcessExecuteArgsV1')
@@ -399,7 +401,12 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       controller.signal.throwIfAborted()
       const args = await handler.prepareProcess(record.request, controller.signal)
       controller.signal.throwIfAborted()
-      const process = await this.startProcess(args, { isolated: true, signal: controller.signal })
+      const process = await this.startProcess(args, {
+        isolated: true, signal: controller.signal, supervision: {
+          deadlineAt: Math.min(Date.parse(record.request.deadlineAt), Date.now() + remainingMs),
+          resultPath: this.processResultPath?.(record.request),
+        },
+      })
       record.process = process
       const terminate = () => cleanup ??= terminateWorkdirProcess(process)
       const interrupted = Promise.withResolvers<ManagedProcessStatus>()
@@ -421,7 +428,7 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       await terminate()
       cleaned = true
       const tooLarge = this.emitBoundedProcessOutput(record, process)
-      if (tooLarge && !record.cancelRequested && !record.timedOut) {
+      if ((tooLarge || status.guardian?.reason === 'output-limit') && !record.cancelRequested && !record.timedOut) {
         this.finish(record, 'failed', 'failed', {
           code: 'process-output-too-large',
           message: 'Remote shell output exceeded 128 KiB; output is truncated',
@@ -495,7 +502,13 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     record: JobRecord,
     status: ManagedProcessStatus,
   ): void {
-    if (record.timedOut) {
+    if (status.guardian?.reason === 'supervisor-failed' || status.guardian?.reason === 'cleanup-failed') {
+      this.finish(record, 'failed', 'failed', {
+        code: status.guardian.reason,
+        message: status.guardian.error ?? 'Process ownership could not be confirmed; execution outcome is unknown',
+        retryable: false,
+      }, status)
+    } else if (record.timedOut || status.guardian?.reason === 'deadline-expired') {
       this.finish(record, 'expired', 'expired', {
         code: 'deadline-expired',
         message: 'Job exceeded its deadline',

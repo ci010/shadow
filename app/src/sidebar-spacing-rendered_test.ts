@@ -62,12 +62,15 @@ test('sidebar preserves spacing and navigation across pinned, hidden and tempora
           app.mount('#app');`
         if (id === '\0sidebar-content') return `import { defineComponent, h } from 'vue';
           export default defineComponent({
-            props:['sessionId', 'projectId', 'automationId'], emits:['navigate'],
+            props:['sessionId', 'projectId', 'automationId', 'initialFolder', 'openRemote', 'enabled'], emits:['navigate'],
             setup(props, {expose, emit, slots}) {
               expose({requestSession:id => emit('navigate', id)});
-              return () => h('section', {class:'fixture-content', style:'flex:1;min-height:0'}, slots.default?.() ?? [
-                h('button', {class:'fixture-content-action'}, props.sessionId || props.automationId || 'Draft'),
-              ]);
+              return () => h('section', {class:slots.default ? 'fixture-detail' : 'fixture-content', style:'flex:1;min-height:0',
+                'data-fixture-project':props.projectId, 'data-fixture-folder':props.initialFolder?.id,
+                'data-fixture-remote':String(!!props.openRemote)}, slots.default ? [
+                  slots.default({toolbarTarget:undefined, conversationRequest:undefined, conversationTabId:undefined}),
+                  props.enabled ? h('button', {class:'fixture-automation-action'}, props.automationId) : null,
+                ] : [h('button', {class:'fixture-content-action'}, props.sessionId || 'Draft')]);
             },
           });`
         if (id !== '\0sidebar-fixture') return

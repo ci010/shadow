@@ -19,6 +19,7 @@ import type { SessionMessageInput, SessionTurnFact } from './input.ts'
 import type { SessionState, SessionStore, StoredMessage } from './session-store.ts'
 import { isBackgroundResponse } from './response-context.ts'
 import { ProviderTransportError } from '../providers/provider.ts'
+import { ToolOutcomeUnknownError } from '../tools/tool.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (): LLMResponse => ({ content: 'Finished', toolCalls: [] })
@@ -82,6 +83,51 @@ async function seed(store: SessionStore, id: string, state: Partial<SessionState
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: unknown tool effects pause inference and Continue only reconciles the saved call`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const id = 'web:chat-unknown-effect'
+      let starts = 0
+      let checks = 0
+      let known = false
+      f.tools.register({
+        name: 'fixture_remote', description: '', parameters: { type: 'object', properties: {} },
+        execute: async (_args, context) => {
+          if (context.recoveringToolCall) checks++
+          else starts++
+          if (!known) throw new ToolOutcomeUnknownError('Remote result is unknown')
+          return 'Durable original result'
+        },
+      })
+      try {
+        await f.sessions.start()
+        await f.sessions.deliver(id, input('original'))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: null, toolCalls: [{ id: 'remote-call', name: 'fixture_remote', arguments: {} }] })
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        assert.equal(f.calls.length, 1, 'The model must not receive an error result and automatically retry')
+        const recovery = f.sessions.getSessionRecovery(id)!
+        assert.equal(recovery.pendingToolCalls, 1)
+        await post(f.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })
+        await waitFor(() => !!f.sessions.getSessionRecovery(id))
+        assert.equal(f.calls.length, 1)
+        assert.equal(starts, 1)
+        assert.equal(checks, 1)
+        assert.equal(f.toolResults.length, 0)
+        known = true
+        await post(f.app, id, 'resume', { recoveryId: f.sessions.getSessionRecovery(id)!.id, acknowledgeToolReplay: true })
+        await waitFor(() => f.calls.length === 2)
+        assert.equal(starts, 1)
+        assert.equal(checks, 2)
+        assert.equal(f.calls[1].messages.filter(message => message.tool_call_id === 'remote-call').length, 1)
+        f.calls[1].resolve(done())
+        await waitFor(() => f.facts.length === 3)
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: a failed model response requires explicit resume and does not repeat committed tools`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))
@@ -294,10 +340,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.equal((await post(restored.app, 'web:chat-legacy', 'resume', { recoveryId: recovery.id })).status, 409)
           assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id, content: 'Forbidden replay' })).status, 400)
           restored.failPreparation(true)
-          assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id })).status, 500)
+          assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id })).status, 409)
+          assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })).status, 500)
           assert.deepEqual(restored.sessions.getSessionRecovery(id), recovery)
           restored.failPreparation(false)
-          assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
+          assert.equal((await post(restored.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })).status, 202)
           await waitFor(() => restored.calls.length === 1)
           assert.match(String(restored.calls[0].messages[0].content), /Answer the user's request normally/)
           assert.deepEqual(restored.calls[0].messages.filter(message => message.role === 'tool').map(message => message.tool_call_id), ['known', 'unknown'])
@@ -370,7 +417,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(records.filter(record => record.role === 'tool').map(record => [record.tool_call_id, record.content]),
           [['first', 'Committed receipt after cancellation']])
         const recovery = f.sessions.getSessionRecovery(id)!
-        assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 202)
+        assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })).status, 202)
         await waitFor(() => f.calls.length === 2)
         assert.deepEqual(executed, ['first', 'second'])
         assert.deepEqual(f.calls[1].messages.filter(message => message.role === 'tool').map(message => [message.tool_call_id, message.content]),
@@ -407,7 +454,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const records = await Array.fromAsync(store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!)))
         assert.equal(records.filter(record => record.role === 'tool').length, 0, 'Cancellation must not fabricate a tool result')
         const recovery = f.sessions.getSessionRecovery(id)!
-        await post(f.app, id, 'resume', { recoveryId: recovery.id })
+        assert.equal(recovery.pendingToolCalls, 1)
+        assert.equal((await post(f.app, id, 'resume', { recoveryId: recovery.id })).status, 409)
+        assert.deepEqual(executions, ['original-call'])
+        await post(f.app, id, 'resume', { recoveryId: recovery.id, acknowledgeToolReplay: true })
         await waitFor(() => f.calls.length === 2)
         assert.deepEqual(executions, ['original-call', 'original-call'])
         assert.deepEqual(f.calls[1].messages.map(message => message.role), ['system', 'user', 'assistant', 'tool'])

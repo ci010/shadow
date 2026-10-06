@@ -6,6 +6,7 @@ import type {
 } from './contracts.ts'
 import type { ManagedProcess } from './processes/manager.ts'
 import type { ManagedShell } from './processes/shells.ts'
+import type { ProcessSupervision } from './processes/guardian.ts'
 
 export interface ProcessExecuteArgsV1 {
   script: string
@@ -16,7 +17,7 @@ export interface ProcessExecuteArgsV1 {
 }
 
 export interface LocalProcessExecutor {
-  startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal }): Promise<ManagedProcess>
+  startProcess(args: ProcessExecuteArgsV1, options?: { isolated?: boolean; signal?: AbortSignal; supervision?: ProcessSupervision }): Promise<ManagedProcess>
 }
 
 export interface Executor {
