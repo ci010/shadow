@@ -1,22 +1,21 @@
 <template>
-  <details class="tool-group tool-activity" @toggle.self="groupOpen = isOpen($event)">
-    <summary class="tool-activity-summary trace-header" @click="emit('interact')">
+  <details v-disclosure-motion class="tool-group tool-activity" @toggle.self="groupOpen = isOpen($event)">
+    <summary class="tool-activity-summary trace-header" :title="summaryTitle" @click="emit('interact')">
       <span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />
-      <span class="activity-title">{{ batch.entries[0].title }}<span v-if="batch.entries.length > 1"> and {{ batch.entries.length - 1 }} other tool {{ batch.entries.length === 2 ? 'call' : 'calls' }}</span></span>
+      <span v-if="batch.files" class="activity-icon i-lucide-file-diff" aria-hidden="true" />
+      <span class="activity-title">{{ summaryTitle }}</span>
       <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
+      <span v-else-if="batch.files" class="activity-status">Line counts unavailable</span>
       <span v-if="batch.entries.some(entry => entry.failed)" class="activity-failed">Failed</span>
       <span v-if="running" class="activity-status">Running</span>
     </summary>
     <div class="activity-list trace-guide">
-      <div v-if="batch.files" class="activity-files">
-        <span class="activity-icon i-lucide-file-diff" aria-hidden="true" />
-        <span>{{ batch.files }} {{ batch.files === 1 ? 'file' : 'files' }} edited</span>
-        <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
-        <span v-else class="activity-status">Line counts unavailable</span>
-      </div>
-      <details v-for="entry in batch.entries" :key="entry.index" class="tool-entry" @toggle.self="setExpanded(entry.index, $event)">
+      <details v-for="entry in batch.entries" :key="entry.index" v-disclosure-motion class="tool-entry" @toggle.self="setExpanded(entry.index, $event)">
         <summary class="tool-call-header" :title="entry.summary || entry.title" @click="emit('interact')">
-          <span class="tool-icon activity-icon" :class="entry.path ? (matchedFileIcon(entry.path) ?? icons[entry.icon]) : icons[entry.icon]" aria-hidden="true" />
+          <span class="tool-disclosure-icon" aria-hidden="true">
+            <span class="tool-icon activity-icon" :class="entry.path ? (matchedFileIcon(entry.path) ?? icons[entry.icon]) : icons[entry.icon]" />
+            <span class="activity-chevron i-lucide-chevron-right" />
+          </span>
           <span class="tool-name">{{ entry.title }}</span>
           <LineChangeCounts v-if="entry.changes" :changes="entry.changes" />
           <span v-else-if="entry.failed" class="activity-failed">Failed</span>
@@ -27,15 +26,15 @@
           <ToolFileDiffPreview v-if="entry.file && entry.toolCallId && apiBase !== undefined && sessionId"
             :api-base="apiBase" :session-id="sessionId" :tool-call-id="entry.toolCallId" :path="entry.path" />
           <p v-else-if="entry.file" class="activity-status">No historical file diff is available for this tool call.</p>
-          <component :is="entry.file ? 'details' : 'div'" class="tool-entry-details">
-            <summary v-if="entry.file" class="tool-details-header">Details</summary>
+          <component :is="entry.file ? 'details' : 'div'" v-disclosure-motion class="tool-entry-details">
+            <summary v-if="entry.file" class="tool-details-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />Details</summary>
             <div v-if="entry.arguments" class="tool-arguments">
               <span class="activity-detail-label">Arguments</span>
-              <ToolPayload class="tool-call-detail" :source="entry.arguments" />
+              <ToolPayload boxed class="tool-call-detail" :source="entry.arguments" />
             </div>
-            <details v-if="entry.result !== undefined" class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
-              <summary class="tool-result-header">Result</summary>
-              <ToolPayload v-if="!closedResults.has(entry.index)" class="tool-result-content" :source="entry.result || '(Empty result)'" :images="entry.images" />
+            <details v-if="entry.result !== undefined" v-disclosure-motion class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
+              <summary class="tool-result-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />Result</summary>
+              <ToolPayload v-if="!closedResults.has(entry.index)" boxed class="tool-result-content" :source="entry.result || '(Empty result)'" :images="entry.images" :file-path="entry.readPath" :line-numbers="entry.lineNumbers" :search-result="entry.grep" />
             </details>
             <p v-if="entry.usage" class="activity-usage">{{ entry.usage.promptTokens.toLocaleString() }} prompt · {{ entry.usage.completionTokens.toLocaleString() }} completion · {{ entry.usage.totalTokens.toLocaleString() }} total tokens</p>
             <p v-if="entry.result === undefined" class="activity-status">{{ running ? 'Waiting for result…' : 'No result recorded' }}</p>
@@ -47,14 +46,21 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
 import { matchedFileIcon } from '../file-icons.ts'
+import { vDisclosureMotion } from '../disclosure-motion.ts'
 import LineChangeCounts from './LineChangeCounts.vue'
 import ToolPayload from './ToolPayload.vue'
 import ToolFileDiffPreview from './ToolFileDiffPreview.vue'
-defineProps<{ batch: ToolActivityBatch; running?: boolean; apiBase?: string; sessionId?: string }>()
+const props = defineProps<{ batch: ToolActivityBatch; running?: boolean; apiBase?: string; sessionId?: string }>()
 const emit = defineEmits<{ interact: [] }>()
+const summaryTitle = computed(() => {
+  const { entries, files } = props.batch
+  const title = files ? `${files} ${files === 1 ? 'file' : 'files'} edited` : entries[0].title
+  const others = files ? entries.filter(entry => !entry.file).length : entries.length - 1
+  return others ? `${title} and ${others} other tool ${others === 1 ? 'call' : 'calls'}` : title
+})
 const groupOpen = ref(false)
 const expanded = reactive(new Set<number>())
 const closedResults = reactive(new Set<number>())
@@ -82,20 +88,28 @@ const icons: Record<ToolActivity['icon'], string> = {
 .tool-activity { container-type: inline-size; width: 100%; min-width: 0; border-radius: var(--radius-surface); color: var(--c-text-secondary); font-size: 13px; }
 summary { list-style: none; cursor: pointer; }
 summary::-webkit-details-marker { display: none; }
-.tool-activity-summary, .tool-call-header, .activity-files { display: flex; align-items: center; gap: 8px; line-height: 20px; }
-.tool-call-header, .activity-files { min-height: 32px; }
+.tool-activity-summary, .tool-call-header { display: flex; align-items: center; gap: 8px; line-height: 20px; }
+.tool-call-header { min-height: 32px; }
 .tool-activity-summary { padding: 4px 8px; }
 .activity-title, .tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-title { flex: 0 1 auto; }
-.activity-chevron { display: block; flex: 0 0 16px; width: 16px; height: 16px; }
-.tool-activity[open] > summary .activity-chevron { transform: rotate(90deg); }
+.activity-chevron { display: block; flex: 0 0 16px; width: 16px; height: 16px; transition: transform 200ms cubic-bezier(.22, 1, .36, 1); }
+details[data-expanded="true"] > summary > .activity-chevron { transform: rotate(90deg); }
+.tool-disclosure-icon { position: relative; flex: 0 0 16px; width: 16px; height: 16px; }
+.tool-disclosure-icon > span { position: absolute; inset: 0; pointer-events: none; }
+.tool-disclosure-icon > .tool-icon { transition: opacity 140ms ease-out; }
+.tool-disclosure-icon > .activity-chevron { opacity: 0; transition: opacity 140ms ease-out, transform 200ms cubic-bezier(.22, 1, .36, 1); }
+.tool-call-header:is(:hover, :focus-visible) > .tool-disclosure-icon > .tool-icon,
+.tool-entry[data-expanded="true"] > summary > .tool-disclosure-icon > .tool-icon { opacity: 0; }
+.tool-call-header:is(:hover, :focus-visible) > .tool-disclosure-icon > .activity-chevron,
+.tool-entry[data-expanded="true"] > summary > .tool-disclosure-icon > .activity-chevron { opacity: 1; }
+.tool-entry[data-expanded="true"] > summary > .tool-disclosure-icon > .activity-chevron { transform: rotate(90deg); }
 .activity-list { margin-bottom: 8px; }
 .tool-call-header { padding: 4px; border-radius: var(--radius-control); }
 .tool-call-header:hover, summary:focus-visible { background: var(--c-bg-muted); color: var(--c-text); }
 summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .tool-activity-summary:hover { color: var(--c-text); }
 .activity-icon { display: block; flex: 0 0 16px; width: 16px; height: 16px; }
-.activity-files { padding: 4px; }
 .tool-args-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: var(--c-text-muted); }
 .tool-name { flex: 0 1 auto; }
 .activity-status, .activity-usage { color: var(--c-text-muted); font-size: 12px; }
@@ -103,14 +117,15 @@ summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .activity-failed { flex-shrink: 0; color: var(--c-error); font-size: 12px; }
 .tool-entry-content { padding: 4px 8px 12px 28px; }
 .tool-details-header { width: fit-content; padding: 4px 0; font-size: 12px; color: var(--c-text-muted); }
-.tool-details-header::before { content: '+'; display: inline-block; width: 16px; }
-.tool-entry-details[open] > .tool-details-header::before { content: '-'; }
+.tool-details-header, .tool-result-header { display: flex; align-items: center; gap: 4px; }
 .activity-detail-label, .tool-result-header { color: var(--c-text-secondary); font-size: 12px; line-height: 24px; }
-.tool-call-detail, .tool-result-content { margin: 4px 0 8px; padding: 10px 12px; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 'IBM Plex Mono', ui-monospace, monospace; background: var(--c-bg-muted); border-radius: var(--radius-control); color: var(--c-text-secondary); }
 @container (max-width: 480px) {
   .tool-activity-summary { flex-wrap: wrap; column-gap: 6px; row-gap: 0; }
   .activity-title { flex: 1; }
   .tool-entry-content { padding-left: 8px; }
   .tool-args-summary { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-chevron, .tool-disclosure-icon > .tool-icon, .tool-disclosure-icon > .activity-chevron { transition: none; }
 }
 </style>

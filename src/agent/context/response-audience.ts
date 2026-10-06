@@ -18,7 +18,8 @@ Preserve necessary context and failures; do not repeat routine coordination, ack
 or tool receipts. If the result was already incorporated and changes no outcome, risk,
 blocker or required action, return no user-facing text instead of another acknowledgement.
 Do not imply the user just asked this question.`
-    : `User input has been admitted to this turn. Answer the user's request normally, even if
+    : `This response continues a user request admitted in this turn or an unfinished prior turn.
+Answer the user's request normally, even if
 other sessions or events also contributed context. Do not force a short background summary.`}`
   return messages[0]?.role === 'system'
     ? messages.map((message, index) => index === 0

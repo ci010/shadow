@@ -76,10 +76,16 @@ The source is the runtime input that began the turn: `user`, `session`, or
 `failed`/`cancelled` trigger status. This is a small display projection, not the
 full input, a reply address, or an authorization grant.
 
-`userInvolved` records whether user input was actually admitted to the inference
-that produced this response. Merely queued or silent input does not count;
+`userInvolved` records whether the response serves admitted user input, including
+an unfinished user request continued after an event interrupts its tool loop.
+Merely queued or silent input does not count;
 user steering affects subsequent output without rewriting earlier responses.
 An event's historical user origin does not count as present user participation.
+An interrupted user request retains its audience without changing the event/session
+source, delivery policy, or authority. A final assistant response without tool calls
+ends that continuity; later independent background responses remain folded.
+History reads repair older lost audience flags across unfinished tool loops before
+truncation or pagination, without rewriting JSONL/SQLite records or response IDs.
 Continue reuses the unfinished request's audience: an interrupted user request
 remains user-involved, including after restart, while continuing background work
 does not turn it into a user request. Older recovery records without audience

@@ -17,6 +17,24 @@ test('tool payloads highlight valid JSON without treating plain output or malfor
   }
 })
 
+test('read results carry file grammars and numbering, including imported and legacy calls', () => {
+  const entries = groupToolActivity([
+    call('read', { path: 'src\\main.ts', flag: 'n' }), result('158  const value = true'),
+    call('invoke_tool', { name: 'read_file', args: { path: 'main.py' } }), result('print("hello")'),
+    { event: 'tool_call', content: 'view({"path":"App.vue"})' }, result('<template />'),
+    call('read', { path: 'failed.ts' }), result('Error: missing'),
+    call('read', { path: 'v:memory/list.md', flag: 'l' }), result('list'),
+    call('write', { path: 'out.ts' }), result('OK write +1 -0'),
+    call('search', { space: 'grep:*.ts', query: 'needle' }), result('No matches found'),
+    call('search', { space: 'web', query: 'needle' }), result('web'),
+  ]).get(0)!.entries
+  assert.deepEqual(entries.map(entry => entry.readPath), ['src\\main.ts', 'main.py', 'App.vue', undefined, undefined, undefined, undefined, undefined])
+  assert.equal(entries[0].lineNumbers, true)
+  assert.equal(entries[1].lineNumbers, false)
+  assert.equal(entries[6].grep, true)
+  assert.equal(entries[7].grep, false)
+})
+
 test('actual backend write reports feed operation counts into tool activity', () => {
   const content = 'same\nnew\nextra\n'
   const report = formatWriteResult({

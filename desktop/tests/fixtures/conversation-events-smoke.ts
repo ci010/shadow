@@ -9,7 +9,7 @@ export async function verifyConversationEvents(
 ) {
   const execute = (code: string) => window.webContents.executeJavaScript(code)
   await execute(`window.__showEvents()`)
-  await wait(`document.querySelectorAll('.system-event').length === 6`)
+  await wait(`document.querySelectorAll('.system-event').length === 9`)
   const startEvent = '[data-event-id="start:fixture"]'
   const completeEvent = '[data-event-id="complete:fixture"]'
   const failedEvent = '[data-event-id="failed:fixture"]'
@@ -20,6 +20,25 @@ export async function verifyConversationEvents(
   assert.equal(await execute(`document.querySelector('[data-event-id="legacy:fixture"]').open`), true)
   assert.equal(await execute(`document.querySelector('[data-event-id="legacy:fixture"] .event-inspect')`), null,
     'Old completion records without a source remain readable without a fake execution link')
+  const ownBackground = '[data-event-id="own-background:fixture"]'
+  const ownCompletion = '[data-event-id="own-completion:fixture"]'
+  const peerBackground = '[data-event-id="peer-background:fixture"]'
+  for (const selector of [ownBackground, ownCompletion]) {
+    assert.equal(await execute(`document.querySelector('${selector} .event-inspect, ${selector} .event-inspect-header')`), null,
+      'Events from the displayed session must not offer navigation back to themselves')
+    await execute(`document.querySelector('${selector}').open = true`)
+  }
+  assert.match(await execute(`document.querySelector('${ownBackground} .event-body').textContent`), /no output, exit code 0/)
+  assert.match(await execute(`document.querySelector('${ownCompletion} .event-body').textContent`), /Own completion remains readable/)
+  await execute(`document.querySelector('${ownBackground} .event-metadata').open = true`)
+  assert.match(await execute(`document.querySelector('${ownBackground} .event-fields').textContent`), /source-session-id.*web:owner/)
+  assert.equal(await execute(`window.__conversationFixture.navigation.length`), 0)
+  await execute(`document.querySelector('${peerBackground}').open = true`)
+  assert.match(await execute(`document.querySelector('${peerBackground} .event-inspect').textContent`), /View conversation/)
+  await execute(`document.querySelector('${peerBackground} .event-inspect').click()`)
+  await wait(`window.__conversationFixture.navigation.length === 1`)
+  assert.deepEqual(await execute(`JSON.parse(JSON.stringify(window.__conversationFixture.navigation[0]))`), { event:'navigate', id:'web:peer' })
+  await execute(`window.__conversationFixture.navigation = []`)
   await execute(`document.querySelector('${startEvent} > summary').focus()`)
   window.webContents.debugger.attach('1.3')
   await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })

@@ -1,6 +1,6 @@
 import { trace } from '@opentelemetry/api'
 import { parseSessionName } from './session-name.ts'
-import { parseResponseContext } from './response-context.ts'
+import { parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 import { readSessionFileChanges } from './file-changes.ts'
 import { mkdir } from 'node:fs/promises'
 import { isCommandReceipt, type CommandReceipt } from '../slash-commands/receipt.ts'
@@ -2217,7 +2217,7 @@ ${JSON.stringify(request)}`,
       // Full logical chain (with active session fast path)
       const sess = this.getActiveSession(sessionId)
       if (sess) {
-        messages = truncatePreservingToolPairs(sess.history, maxMessages)
+        messages = sess.history
       } else {
         const state = this.sessionStates[sessionId]
         if (!state) return { messages: [], total: 0 }
@@ -2232,8 +2232,7 @@ ${JSON.stringify(request)}`,
           undefined,
           forkInfo,
         )
-        const sanitized = sanitizeToolPairs(raw)
-        messages = truncatePreservingToolPairs(sanitized, maxMessages)
+        messages = sanitizeToolPairs(raw)
       }
     }
 
@@ -2357,6 +2356,8 @@ ${JSON.stringify(request)}`,
       initiativeId: state?.initiativeId,
       contextResetAt: state?.contextResetAt,
       ...sessionPromptLocality(state),
+    messages = reconcileResponseContinuity(messages).messages
+    if (!physicalId && !shallow) messages = truncatePreservingToolPairs(messages, maxMessages)
     }
 
     const { systemPrompt, sections } = await this.deps.context.buildSystemPromptDetails(promptCtx)

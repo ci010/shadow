@@ -150,7 +150,7 @@
             <template v-else-if="msg.event === 'tool_call' || msg.event === 'tool_result'" />
             <!-- System event (not a user message) -->
             <ConversationEvent v-else-if="msg.role === 'user' && msg.isSystemEvent && msg.eventMeta"
-              :data-msg-idx="idx"
+              :data-msg-idx="idx" :current-session-id="activeSessionId"
               :meta="msg.eventMeta" :content="msg.content" :timestamp="msg.timestamp" :source="sourceForEvent(msg.eventMeta)"
               :selected="childSessionId === eventSourceSession(msg.eventMeta)"
               @inspect="inspectExecution" @interact="clearSelection">

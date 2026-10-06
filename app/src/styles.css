@@ -390,6 +390,19 @@ input:not([type]), textarea {
 .trace-chevron { flex: 0 0 16px; width: 16px; height: 16px; }
 [open] > .trace-header > .trace-chevron { transform: rotate(90deg); }
 
+:where(.trace-header, .tool-call-header, .tool-details-header, .tool-result-header,
+  .event-header, .event-disclosure, .event-inspect, .compaction-summary-header,
+  .history-disclosure > summary, .history-execution, .thinking-header) {
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  :where(.trace-header, .tool-call-header, .tool-details-header, .tool-result-header,
+    .event-header, .event-disclosure, .event-inspect, .compaction-summary-header,
+    .history-disclosure > summary, .history-execution, .thinking-header) {
+    transition: none;
+  }
+}
+
 @media (max-width: 700px), (pointer: coarse) {
   :where(.btn) {
     min-height: 44px;

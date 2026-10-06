@@ -47,11 +47,13 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
             compactionSummary: '# Earlier context\\n\\nRetained synthetic summary.',
             tools: [{ name: 'read', description: 'Read project resources', parameters: { properties: { path: { type: 'string' } } } }]
           }) }).mount('#app');`
-        if (id === '\0tool-details-fixture') return `import { createApp, h, reactive } from 'vue';
+        if (id === '\0tool-details-fixture') return `import 'uno.css'; import { createApp, h, reactive } from 'vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
+          import ExecutionMessage from '/src/components/ExecutionMessage.vue';
+          import { groupToolActivity } from '/src/tool-activity.ts';
           import '/src/styles.css';
           const batch = reactive({ end: 4, files: 0, incomplete: false, entries: [
-            { index: 0, name: 'read', title: 'Read fixture', summary: '', icon: 'read', path:'fixture.json', failed: false,
+            { index: 0, name: 'read', title: 'Read fixture', summary: '', icon: 'read', path:'fixture.json', readPath:'fixture.json', failed: false,
               arguments: '{\\n  "path": "fixture.json",\\n  "count": 42\\n}',
               result: '{"ok":true,"html":"<img src=x onerror=alert(1)>"}' },
             { index: 1, name: 'message', title: 'Send fixture', summary: '', icon: 'tool', failed: false,
@@ -59,10 +61,26 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
             { index: 2, name: 'write', title: 'Edit server.py', summary: '', icon: 'write', path:'src/server.py', failed: true,
               arguments: '{"path":"src/server.py"}', result: 'Error: permission denied' },
             { index: 3, name: 'write', title: 'Edit mystery.xyz', summary: '', icon: 'write', path:'src/mystery.xyz', failed: false,
-              arguments: '{"path":"src/mystery.xyz"}' }
+              arguments: '{"path":"src/mystery.xyz"}' },
+            { ...groupToolActivity([
+                { event: 'tool_call', content: '', toolCall: { name: 'invoke_tool', arguments: { name: 'view', args: { path: 'profile.ts', flag: 'n' } } } },
+                { event: 'tool_result', content: '158  const value = "' + 'long-value-'.repeat(30) + '";\\n159  // end' }
+              ]).get(0).entries[0], index: 4 },
+            { index: 5, name: 'search', title: 'Search files', summary: '', icon: 'search', grep: true, failed: false,
+              arguments: '{"space":"grep","query":"outputs"}',
+              result: 'Found 2 matches\\nC:\\\\project\\\\profile.ts:\\n  Line 158:     for (const [file, checksum] of Object.entries(proc.outputs)) {\\n  Line 159:       console.log("<script>");' }
           ] });
           window.updateToolResult = source => { batch.entries[0].result = source; };
-          createApp({ render: () => h(ToolActivityGroup, { batch }) }).mount('#app');`
+          const execution = reactive({ mode: 'task', label: 'Review directory-output design', agentType: 'explore',
+            sessionId: 'synthetic-child', stage: 'completed', blocked: false,
+            arguments: JSON.stringify({ mode: 'task', task: 'Read-only review. ' + 'LongPath'.repeat(60), html: '<img src=x>' }, null, 2),
+            receipt: '{"status":"running","message":"Task started."}' });
+          window.updateExecutionReceipt = value => { execution.receipt = value; };
+          window.executionInspections = 0;
+          createApp({ render: () => h('main', [
+            h(ToolActivityGroup, { batch }),
+            h(ExecutionMessage, { execution, onInspect: () => window.executionInspections++ })
+          ]) }).mount('#app');`
         if (id !== '\0trace-fixture') return
         return `import { createApp, h } from 'vue';
           import Diagnosis from '/src/components/SessionDiagnosis.vue';
@@ -137,7 +155,7 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
       },
     }],
     server: { host: '127.0.0.1', port: 0, hmr: false },
-    optimizeDeps: { include: ['vue'], entries: [] },
+    optimizeDeps: { noDiscovery: true, include: ['vue'], entries: [] },
     cacheDir: resolve(directory, 'vite-cache'),
   })
   t.after(() => server.close())
@@ -152,7 +170,7 @@ test('rendered diagnosis: cold-load context layout, timing, metadata and lazy sy
     target: 'node24', external: ['electron'], logLevel: 'silent',
   })
   const env: NodeJS.ProcessEnv = { TRACE_SMOKE_URL: url }
-  for (const name of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']) if (process.env[name] !== undefined) env[name] = process.env[name]
+  for (const name of ['SystemRoot', 'WINDIR', 'PATH', 'Path', 'ComSpec', 'PATHEXT', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'TOOL_ACTIVITY_SCREENSHOTS']) if (process.env[name] !== undefined) env[name] = process.env[name]
   for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) env[name] = directory
   const child = spawn(desktopRequire('electron') as string, [resolve(directory, 'main.cjs')], { cwd: directory, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''

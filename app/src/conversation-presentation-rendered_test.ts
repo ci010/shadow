@@ -157,6 +157,18 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
                   attrs:{title:'External notification / ' + 'LongTitle'.repeat(24),'event-id':'external:fixture',
                     ['long-metadata-key-'.repeat(8)]:'unbroken-identifier-'.repeat(40)}},
                 content:'Reference: ' + 'LongReference'.repeat(40)},
+              {role:'user',isSystemEvent:true,
+                eventMeta:{type:'exec-complete',source:'exec',attrs:{title:'exec: pnpm lint',
+                  'event-id':'own-background:fixture','source-session-id':'web:owner'}},
+                content:'(no output, exit code 0)'},
+              {role:'user',isSystemEvent:true,
+                eventMeta:{type:'subagent-complete',source:'subagent',attrs:{type:'subagent-complete',
+                  'event-id':'own-completion:fixture','source-session-id':'web:owner'}},
+                content:'Own completion remains readable.'},
+              {role:'user',isSystemEvent:true,
+                eventMeta:{type:'exec-complete',source:'exec',attrs:{title:'exec: pnpm lint',
+                  'event-id':'peer-background:fixture','source-session-id':'web:peer'}},
+                content:'Peer background task finished.'},
             ];
           };
           window.__showCompaction = () => {
@@ -199,7 +211,9 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
                 ioAfter:new Map(), expandedThinking:new Set(),
                 toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, 11, 12]))),
                 inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({
-                  ...sessions[0],mode:'task',label:meta.attrs['source-label'] || sessions[0].label,
+                  ...sessions[0],sessionId:meta.attrs['source-session-id'],
+                  mode:meta.type === 'exec-complete' || meta.attrs['source-session-id'] === 'web:owner' ? 'session' : 'task',
+                  label:meta.attrs['source-label'] || sessions[0].label,
                 }) : undefined,
                 eventSourceSession:meta => meta.attrs['source-session-id'], clearSelection(){}, openImagePreview(){}, refreshDecisionRecords(){}, sessionMessageTitle,
                 viewPreviousSegment(){ state.viewingPhysicalId = state.previousPhysicalId },

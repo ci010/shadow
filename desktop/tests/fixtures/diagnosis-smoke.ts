@@ -1087,11 +1087,11 @@ async function main(): Promise<void> {
   await waitFor(`Boolean(document.querySelector(${JSON.stringify(childTreeSelector)}))`)
   await waitFor(`document.querySelector('.tool-activity-summary .lines-added')?.textContent === '+7'`)
   assert.equal(await evaluate(`document.querySelector('.tool-activity-summary .lines-removed').textContent`), '-3')
-  assert.equal(await evaluate(`document.querySelector('.tool-activity-summary').textContent.includes('4 other tool calls')`), true)
+  assert.equal(await evaluate(`document.querySelector('.tool-activity-summary .activity-title').textContent`), '2 files edited and 2 other tool calls')
   assert.equal(await evaluate(`document.querySelector('.tool-activity').open`), false)
   await click('.tool-activity-summary')
   await waitFor(`document.querySelector('.tool-activity').open`)
-  assert.equal(await evaluate(`document.querySelector('.activity-files').textContent.includes('2 files edited')`), true)
+  assert.equal(await evaluate(`document.querySelector('.activity-files')`), null)
   assert.equal(await evaluate(`document.querySelectorAll('.tool-entry').length`), 5)
   const assertToolAlignment = async () => {
     const offsets = await evaluate<number[]>(`Array.from(document.querySelectorAll('.tool-call-header'), row => {

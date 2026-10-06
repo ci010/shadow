@@ -1,5 +1,5 @@
 <template>
-  <article v-if="source && presentation.completion" class="system-event" :class="eventClasses" :data-event-id="meta.attrs['event-id']">
+  <article v-if="source && !isCurrentSource && presentation.completion" class="system-event" :class="eventClasses" :data-event-id="meta.attrs['event-id']">
     <button type="button" class="event-inspect-header event-header" :aria-pressed="!!selected"
       :aria-label="`Inspect execution: ${source.label || source.sessionId}`" @click="$emit('inspect', source.sessionId)">
       <span class="event-symbol event-icon i-lucide-git-branch" aria-hidden="true" />
@@ -33,7 +33,7 @@
         <ToolPayload v-if="rawContent && expanded" class="event-payload" :source="rawContent" />
         <slot v-else-if="!rawContent" />
       </div>
-      <button v-if="source" type="button" class="event-inspect" @click="$emit('inspect', source.sessionId)">View {{ source.mode === 'session' ? 'conversation' : 'execution' }} <span class="i-lucide-arrow-up-right event-icon" aria-hidden="true" /></button>
+      <button v-if="source && !isCurrentSource" type="button" class="event-inspect" @click="$emit('inspect', source.sessionId)">View {{ source.mode === 'session' ? 'conversation' : 'execution' }} <span class="i-lucide-arrow-up-right event-icon" aria-hidden="true" /></button>
     </div>
     <details class="event-metadata">
       <summary class="event-disclosure" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />Event details</summary>
@@ -48,13 +48,14 @@ import { eventPresentation, type ChatEventMeta } from '../chat-events.ts'
 import type { SidebarSession } from '../folders-sidebar.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import ToolPayload from './ToolPayload.vue'
-const props = defineProps<{ meta: ChatEventMeta; content?: string; timestamp?: string; source?: SidebarSession; selected?: boolean }>()
+const props = defineProps<{ meta: ChatEventMeta; content?: string; timestamp?: string; source?: SidebarSession; selected?: boolean; currentSessionId?: string }>()
 defineEmits<{ inspect: [id: string]; interact: [] }>()
 const presentation = computed(() => eventPresentation(props.meta))
+const isCurrentSource = computed(() => !!props.source && props.source.sessionId === props.currentSessionId)
 const eventClasses = computed(() => ({
   'event-failed': presentation.value.failed,
   'event-completed': presentation.value.completion && props.meta.type === 'subagent-complete',
-  'event-selected': !!props.source && presentation.value.completion && !!props.selected,
+  'event-selected': !!props.source && !isCurrentSource.value && presentation.value.completion && !!props.selected,
 }))
 const rawContent = computed(() => props.meta.type === 'work-realignment' ? props.content : undefined)
 const expanded = ref(false)

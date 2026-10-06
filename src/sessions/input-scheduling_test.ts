@@ -17,7 +17,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
-import { isBackgroundResponse } from './response-context.ts'
+import { createResponseContext, isBackgroundResponse } from './response-context.ts'
 import { channelMessageInput, type SessionInput, type SessionMessageInput, type SessionTurnFact } from './input.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { Session } from './session.ts'
@@ -364,6 +364,81 @@ test('event steering cannot remove user involvement from the current turn', asyn
     assert.equal(f.outboundMessages.at(-1)?.responseContext?.userInvolved, true)
   } finally { tool.resolve('cleanup'); await f.close() }
 })
+
+for (const afterTools of [false, true]) {
+  test(`event interruption ${afterTools ? 'after tools' : 'before the first response'} preserves the unfinished user audience`, async () => {
+    const f = await fixture()
+    f.tools.register({ name: 'fixture_read', description: '', parameters: { type: 'object', properties: {} },
+      execute: async () => 'Source' })
+    try {
+      f.session.dispatch(userInput('fix'), llm)
+      await waitFor(() => f.calls.length === 1)
+      if (afterTools) {
+        f.calls[0].resolve({ content: null, toolCalls: [{ id: 'read', name: 'fixture_read', arguments: {} }] })
+        await waitFor(() => f.calls.length === 2)
+      }
+      const interrupted = f.calls.at(-1)!
+      f.session.dispatch(input('subagent-complete', 'steering'), llm)
+      await waitFor(() => f.calls.length === (afterTools ? 3 : 2))
+      assert(interrupted.signal.aborted)
+      assert.match(String(f.calls.at(-1)!.messages[0].content), /Answer the user's request normally/)
+      f.calls.at(-1)!.resolve(done('Fix completed for the user'))
+      await waitFor(() => f.facts.length === 2 && f.session.phase === 'idle')
+      const response = f.outboundMessages.at(-1)!
+      assert.equal(response.responseContext?.source.kind, 'event')
+      assert.equal(response.responseContext?.userInvolved, true)
+      assert.equal(f.facts.at(-1)?.source.kind, 'event')
+      const stored = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(f.state)))
+      assert.deepEqual(stored.at(-1)?.responseContext, response.responseContext)
+
+      f.session.dispatch(input('independent-event'), llm)
+      await waitFor(() => f.calls.length === (afterTools ? 4 : 3))
+      assert.match(String(f.calls.at(-1)!.messages[0].content), /no user input admitted/)
+      f.calls.at(-1)!.resolve(done('Background coordination'))
+      await waitFor(() => f.facts.length === 3)
+      assert(isBackgroundResponse(f.outboundMessages.at(-1)?.responseContext))
+    } finally { await f.close() }
+  })
+}
+
+for (const storage of ['jsonl', 'sqlite'] as const) {
+  test(`${storage}: history repairs lost user audience before pagination and restores it on the next event`, async () => {
+    const f = await fixture({ storage, manager: true })
+    const foreground = createResponseContext('user-turn', userInput('fix').source, 'session', 'web')!
+    const background = createResponseContext('event-turn', input('completed').source, 'session', 'web')!
+    const tool_calls: ChatMessage['tool_calls'] = [{
+      id: 'read', type: 'function', function: { name: 'read', arguments: '{}' },
+    }]
+    const records = [
+      { role: 'assistant' as const, content: null, tool_calls, responseContext: foreground },
+      { role: 'tool' as const, content: 'Source', tool_call_id: 'read', name: 'read' },
+      { role: 'assistant' as const, content: null, tool_calls: [{ ...tool_calls[0], id: 'check' }], responseContext: background },
+      { role: 'tool' as const, content: 'Checked', tool_call_id: 'check', name: 'read' },
+    ].map(message => ({ ...message, timestamp: '2026-01-01T00:00:00Z' }))
+    const physicalId = SessionManager.currentPhysicalId(f.state)
+    try {
+      await f.store.appendMessages(physicalId, records)
+      for (const query of [{}, { shallow: true }, { physicalId }, { offset: 2, pageSize: 1 }, { maxMessages: 2 }]) {
+        const history = await f.manager.getHistory(f.state.sessionId, query)
+        const restored = history.messages.find(message => message.responseContext?.turnId === 'event-turn')
+        assert.equal(restored?.responseContext?.userInvolved, true)
+        assert.deepEqual(restored?.responseContext?.source, background.source)
+      }
+      const persisted = await Array.fromAsync(f.store.readSessionLog(physicalId))
+      assert.equal(persisted.length, records.length)
+      assert.deepEqual(persisted[2].responseContext, background)
+
+      await f.manager.deliver(f.state.sessionId, input('next-completion'), llm)
+      await waitFor(() => f.calls.length === 1)
+      assert.match(String(f.calls[0].messages[0].content), /Answer the user's request normally/)
+      f.calls[0].resolve(done('User-facing final result'))
+      await waitFor(() => f.facts.length === 1)
+      assert.equal(f.outboundMessages.at(-1)?.responseContext?.userInvolved, true)
+      const live = await f.manager.getHistory(f.state.sessionId, { offset: -1, pageSize: 1 })
+      assert.deepEqual(live.messages[0].responseContext, f.outboundMessages.at(-1)?.responseContext)
+    } finally { await f.close() }
+  })
+}
 
 for (const ephemeral of [false, true]) {
   test(`${ephemeral ? 'ephemeral' : 'persistent'} session publishes intermediate phase transitions without polling`, async () => {

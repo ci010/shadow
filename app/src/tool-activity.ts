@@ -27,6 +27,9 @@ export interface ToolActivity {
   images?: string[]
   usage?: ToolActivityMessage['usage']
   path?: string
+  readPath?: string
+  lineNumbers?: boolean
+  grep?: boolean
   file?: string
   changes?: LineChanges
   failed: boolean
@@ -105,13 +108,17 @@ function activity(message: ToolActivityMessage, index: number, result?: ToolActi
     : Object.entries(args).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(', ')
   const text = result?.content
   const success = write && text !== undefined && /^(?:Success: (?:write|edit|append) |OK (?:write|edit|append)(?: |$))/.test(text)
+  const failed = text !== undefined && /^(?:Error:|ERROR\b|Failed\b)/i.test(text.trimStart())
   return {
     index, toolCallId: message.toolCallId, name, title, summary, arguments: call.raw, result: text, usage: result?.usage, images: result?.media,
     icon: write ? 'write' : read ? 'read' : search ? 'search' : exec ? 'exec' : 'tool',
     path: (write || read) && path ? path : undefined,
+    readPath: read && path && !failed && !(typeof args.flag === 'string' && args.flag.includes('l')) ? path : undefined,
+    lineNumbers: read && typeof args.flag === 'string' && args.flag.includes('n'),
+    grep: /^(grep|rg)$/.test(name) || name === 'search' && typeof args.space === 'string' && /^grep(?::|$)/.test(args.space),
     file: success && path ? path : undefined,
     changes: success ? parseLineChanges(text) : undefined,
-    failed: text !== undefined && /^(?:Error:|ERROR\b|Failed\b)/i.test(text.trimStart()),
+    failed,
   }
 }
 

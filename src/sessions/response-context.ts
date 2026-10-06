@@ -36,6 +36,24 @@ export function isBackgroundResponse(context: ResponseContext | undefined): bool
   return !!context && !context.userInvolved && context.source.kind !== 'user'
 }
 
+/** Restore audience continuity across interrupted tool loops without rewriting stored records. */
+export function reconcileResponseContinuity(messages: ChatMessage[]): {
+  messages: ChatMessage[]
+  unfinishedUserResponse: boolean
+} {
+  let unfinishedUserResponse = false
+  const normalized = messages.map(message => {
+    if (message.role !== 'assistant') return message
+    const context = message.responseContext
+    const responseContext = context && unfinishedUserResponse && !context.userInvolved
+      ? { ...context, userInvolved: true }
+      : context
+    unfinishedUserResponse = !!responseContext?.userInvolved && !!message.tool_calls?.length
+    return responseContext === context ? message : { ...message, responseContext }
+  })
+  return { messages: normalized, unfinishedUserResponse }
+}
+
 /** Recover the audience of an unfinished turn from its most recent persisted input or response. */
 export function continuedUserInvolvement(messages: ChatMessage[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {

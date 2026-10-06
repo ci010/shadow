@@ -44,7 +44,7 @@ test('expanded official write tools render historical unified file diffs across 
           import { createApp, computed, h, reactive } from 'vue';
           import ToolActivityGroup from '/src/components/ToolActivityGroup.vue';
           import { groupToolActivity } from '/src/tool-activity.ts';
-          const state = reactive({ id:'edit', sessionId:${JSON.stringify(sessionId)} });
+          const state = reactive({ id:'edit', sessionId:${JSON.stringify(sessionId)}, extra:'' });
           window.__diffFixture = state;
           const listeners = new Map(['selectionchange','pointerup','pointercancel'].map(type => [type,new Set()]));
           const add = document.addEventListener.bind(document), remove = document.removeEventListener.bind(document);
@@ -54,7 +54,17 @@ test('expanded official write tools render historical unified file diffs across 
           const calls = () => [
             { event:'tool_call', content:'', toolCallId:state.id, toolCall:{name:'write',arguments:{path:${JSON.stringify(path)},match:'requested old',content:'requested new'}} },
             { event:'tool_result', toolCallId:state.id, content:state.id === 'failed' ? 'Error: write denied'
-              : 'OK edit +2 -2 edit=${edit.id}' },
+              : state.id === 'legacy' ? 'OK edit' : 'OK edit +2 -2 edit=${edit.id}' },
+            ...(state.extra ? [
+              { event:'tool_call', content:'', toolCallId:'repeat', toolCall:{name:'write',arguments:{path:${JSON.stringify(path)},content:'Repeated edit'}} },
+              { event:'tool_result', toolCallId:'repeat', content:'OK edit +1 -0' },
+              { event:'tool_call', content:'', toolCallId:'second', toolCall:{name:'write',arguments:{path:'src/second.ts',content:'Second file'}} },
+              { event:'tool_result', toolCallId:'second', content:'OK write +1 -0' },
+            ] : []),
+            ...(state.extra === 'mixed' ? [
+              { event:'tool_call', content:'', toolCallId:'check', toolCall:{name:'exec',arguments:{command:'check'}} },
+              { event:'tool_result', toolCallId:'check', content:'Passed' },
+            ] : []),
           ];
           createApp({ setup() {
             const batch = computed(() => groupToolActivity(calls()).get(0));

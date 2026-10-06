@@ -6,7 +6,7 @@
 import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { highlightFile, type FileHighlightToken } from '../../file-highlighting.ts'
 
-const props = defineProps<{ source: string; path: string; active: boolean }>()
+const props = defineProps<{ source: string; path: string; active: boolean; lineNumbers?: boolean }>()
 const emit = defineEmits<{ error: [message: string] }>()
 const root = ref<HTMLElement>()
 const tokens = shallowRef<FileHighlightToken[]>([{ text: props.source }])
@@ -35,7 +35,7 @@ async function retry(): Promise<void> {
   emit('error', '')
   if (!props.active) return
   try {
-    const result = await highlightFile(props.source, props.path)
+    const result = await highlightFile(props.source, props.path, { lineNumbers: props.lineNumbers })
     if (current !== generation || !props.active) return
     pending = result
     applyPending()
@@ -43,7 +43,7 @@ async function retry(): Promise<void> {
     if (current === generation && props.active) emit('error', 'Syntax highlighting is unavailable. Plain text is still available.')
   }
 }
-watch(() => [props.source, props.path], () => {
+watch(() => [props.source, props.path, props.lineNumbers], () => {
   tokens.value = [{ text: props.source }]
   void retry()
 }, { immediate: true })

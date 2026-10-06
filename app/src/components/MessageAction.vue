@@ -19,8 +19,8 @@
     <details class="message-action-details" @toggle.self="detailsOpen = ($event.currentTarget as HTMLDetailsElement).open">
       <summary @click="emit('interact')">Tool details</summary>
       <template v-if="detailsOpen">
-        <ToolPayload class="message-action-payload" :source="message.arguments" />
-        <ToolPayload v-if="message.result !== undefined" class="message-action-payload" :source="message.result || '(Empty result)'" />
+        <ToolPayload boxed class="message-action-payload" :source="message.arguments" />
+        <ToolPayload v-if="message.result !== undefined" boxed class="message-action-payload" :source="message.result || '(Empty result)'" />
         <p v-if="message.usage">{{ message.usage.promptTokens.toLocaleString() }} prompt · {{ message.usage.completionTokens.toLocaleString() }} completion · {{ message.usage.totalTokens.toLocaleString() }} total tokens</p>
       </template>
     </details>
@@ -58,5 +58,4 @@ const status = computed(() => ({
 .message-action-note, .message-action-details { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .failed { color: var(--c-error); }
 summary { width: fit-content; cursor: pointer; }
-.message-action-payload { margin: 8px 0; padding: 10px; max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--c-bg-muted); border-radius: var(--radius-control); }
 </style>

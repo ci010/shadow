@@ -10,11 +10,15 @@
     </button>
     <div class="execution-trace">
       <div v-if="execution.output || execution.partialWork" class="execution-output trace-guide"><slot /><p v-if="execution.partialWork" class="execution-partial">{{ execution.partialWork }}</p></div>
-      <details class="execution-details">
+      <details v-disclosure-motion class="execution-details" @toggle.self="detailsOpen = ($event.currentTarget as HTMLDetailsElement).open">
         <summary class="trace-header" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />Tool details</summary>
-        <div class="trace-guide">
-          <pre>{{ execution.arguments }}</pre>
-          <pre v-if="execution.receipt !== undefined">{{ execution.receipt || '(Empty result)' }}</pre>
+        <div v-if="detailsOpen" class="trace-guide">
+          <span class="execution-detail-label">Arguments</span>
+          <ToolPayload boxed class="execution-arguments" :source="execution.arguments" />
+          <template v-if="execution.receipt !== undefined">
+            <span class="execution-detail-label">Result</span>
+            <ToolPayload boxed class="execution-result" :source="execution.receipt || '(Empty result)'" />
+          </template>
         </div>
       </details>
     </div>
@@ -22,10 +26,14 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { InlineExecution } from '../execution-messages.ts'
+import { vDisclosureMotion } from '../disclosure-motion.ts'
 import SessionActivity from './SessionActivity.vue'
+import ToolPayload from './ToolPayload.vue'
 const props = defineProps<{ execution: InlineExecution; selected?: boolean }>()
 const emit = defineEmits<{ inspect: [id: string]; interact: [] }>()
+const detailsOpen = ref(false)
 function inspect() {
   if (props.execution.sessionId) emit('inspect', props.execution.sessionId)
 }
@@ -48,6 +56,9 @@ function inspect() {
 .execution-details { font-size: 12px; color: var(--c-text-secondary); }
 .execution-details summary { cursor: pointer; }
 .execution-details summary:hover { color: var(--c-text); }
-.execution-details pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.execution-detail-label { font-size: 12px; line-height: 24px; }
+.execution-details .trace-chevron { transition: transform 200ms cubic-bezier(.22, 1, .36, 1); }
+.execution-details[data-expanded="false"] > summary > .trace-chevron { transform: rotate(0deg); }
 @media (max-width: 700px) { .execution-inspect { flex-wrap: wrap; } .execution-copy { flex-basis: calc(100% - 40px); } }
+@media (prefers-reduced-motion: reduce) { .execution-details .trace-chevron { transition: none; } }
 </style>

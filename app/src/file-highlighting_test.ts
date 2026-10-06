@@ -51,6 +51,19 @@ test('token spans preserve CRLF, CR, tabs, duplicate text, empty lines, long lin
   assert.throws(() => preserveHighlightSource('text', [{ content: 'changed', offset: 0 }]), /do not match/)
 })
 
+test('numbered reads highlight code without feeding line-number prefixes into its grammar', async () => {
+  const source = '157  /* comment\r\n158    still a comment */\r\n159  const value = "<script>";\r\n160  \r\n\n[truncated: read more]'
+  const tokens = await highlightFile(source, 'main.ts', { lineNumbers: true, tokenizeTimeLimit: 0 })
+  assert.equal(tokens.map(token => token.text).join(''), source)
+  for (const prefix of ['157  ', '158  ', '159  ', '160  ']) {
+    assert.deepEqual(tokens.find(token => token.text === prefix), { text: prefix })
+  }
+  assert.ok(tokens.some(token => token.text.includes('const') && token.light && token.dark))
+  for (const plain of ['', '\n', ' 9  \r\n10  \treturn True\n', '42  123  literal number']) {
+    assert.equal((await highlightFile(plain, 'file.py', { lineNumbers: true })).map(token => token.text).join(''), plain)
+  }
+})
+
 function mountHighlighter(t: TestContext) {
   const pending: { source: string; finish: (tokens: FileHighlightToken[]) => void; fail: () => void }[] = []
   const url = new URL('./components/files/FileHighlightText.vue', import.meta.url)

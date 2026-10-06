@@ -98,8 +98,29 @@ export function preserveHighlightSource(source: string, tokens: readonly {
 export async function highlightFile(
   source: string,
   path: string,
-  options: { tokenizeTimeLimit?: number } = {},
+  options: { tokenizeTimeLimit?: number; lineNumbers?: boolean } = {},
 ): Promise<FileHighlightToken[]> {
+  if (options.lineNumbers) {
+    const lines = source.split('\n')
+    const prefixes = lines.map(line => /^ *\d+ {2}/.exec(line)?.[0] ?? '')
+    const code = lines.map((line, index) => line.slice(prefixes[index].length)).join('\n')
+    const highlighted = await highlightFile(code, path, { ...options, lineNumbers: false })
+    const result: FileHighlightToken[] = []
+    let line = 0
+    if (prefixes[0]) result.push({ text: prefixes[0] })
+    for (const token of highlighted) {
+      const parts = token.text.split('\n')
+      for (let index = 0; index < parts.length; index++) {
+        if (index) {
+          result.push({ text: '\n' })
+          line++
+          if (prefixes[line]) result.push({ text: prefixes[line] })
+        }
+        if (parts[index]) result.push({ ...token, text: parts[index] })
+      }
+    }
+    return result
+  }
   const language = fileLanguage(path)
   if (language === 'text' || !source) return [{ text: source }]
   const engine = await sharedHighlighter()

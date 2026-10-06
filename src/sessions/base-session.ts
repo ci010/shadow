@@ -4,7 +4,7 @@ import { withCurrentWork } from '../agent/context/builder.ts'
 import { withResponseAudience } from '../agent/context/response-audience.ts'
 import { InferenceBudget, withExecutionBudget } from '../agent/context/execution-budget.ts'
 import { createNodeInference } from '../script-runtime/infer.ts'
-import { continuedUserInvolvement, createResponseContext, type ResponseContext } from './response-context.ts'
+import { continuedUserInvolvement, createResponseContext, reconcileResponseContinuity, type ResponseContext } from './response-context.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
@@ -515,7 +515,13 @@ export abstract class BaseSession {
       senderId: msg.senderId,
       senderName,
       sessionId: this.id,
+    const continuity = reconcileResponseContinuity(this.messages)
+    this.messages = continuity.messages
       messageId: msg.messageId,
+    if (input.kind === 'message' && !silent && this.responseContext
+      && (this.state.recovery?.userInvolved || continuity.unfinishedUserResponse)) {
+      this.responseContext = { ...this.responseContext, userInvolved: true }
+    }
       isGroup,
       admin: msg.admin ?? false,
       physicalSessionId: this.physicalSessionId,

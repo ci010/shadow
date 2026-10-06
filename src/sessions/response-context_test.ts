@@ -8,7 +8,7 @@ import type { SessionStore } from './session-store.ts'
 import { withResponseAudience } from '../agent/context/response-audience.ts'
 import type { ChatMessage } from '../providers/provider.ts'
 import type { InputSource } from './input.ts'
-import { continuedUserInvolvement, createResponseContext, isBackgroundResponse, parseResponseContext } from './response-context.ts'
+import { continuedUserInvolvement, createResponseContext, isBackgroundResponse, parseResponseContext, reconcileResponseContinuity } from './response-context.ts'
 
 const user: InputSource = { kind: 'user', sender: { channel: 'web', chatId: 'owner', senderId: 'owner', messageId: 'input' } }
 const event: InputSource = { kind: 'event', eventId: 'event', type: 'subagent-failed', source: 'worker',
@@ -52,6 +52,39 @@ test('response context is a small runtime projection, not historical user involv
   assert(!isBackgroundResponse(createResponseContext('turn', user, 'session', 'web')))
   assert(!isBackgroundResponse(undefined))
   assert.deepEqual(parseResponseContext(context), context)
+})
+
+test('unfinished user tool loops retain their audience across event turns, ending at the final answer', () => {
+  const foreground = createResponseContext('user-turn', user, 'session', 'web')!
+  const background = createResponseContext('event-turn', event, 'session', 'web')!
+  const tool_calls: ChatMessage['tool_calls'] = [{
+    id: 'read', type: 'function', function: { name: 'read', arguments: '{"path":"fixture.ts"}' },
+  }]
+  const messages: ChatMessage[] = [
+    { role: 'assistant', content: null, tool_calls, responseContext: foreground },
+    { role: 'tool', content: 'Source', tool_call_id: 'read' },
+    { role: 'user', content: '<event type="subagent-complete" />' },
+    { role: 'assistant', content: 'Continue fixing', tool_calls, responseContext: background },
+    { role: 'tool', content: 'Fixed', tool_call_id: 'read' },
+    { role: 'assistant', content: 'User-facing result', responseContext: { ...background, responseId: 'event-turn:1' } },
+    { role: 'assistant', content: 'Independent background acknowledgement',
+      responseContext: createResponseContext('later', event, 'session', 'web') },
+  ]
+  const original = structuredClone(messages)
+  const repaired = reconcileResponseContinuity(messages)
+  assert.deepEqual(messages, original)
+  assert.deepEqual(repaired.messages.filter(message => message.role === 'assistant')
+    .map(message => isBackgroundResponse(message.responseContext)), [false, false, false, true])
+  assert.equal(repaired.messages[3].responseContext?.source, background.source)
+  assert.equal(repaired.messages[5].responseContext?.responseId, 'event-turn:1')
+  assert.equal(repaired.unfinishedUserResponse, false)
+  assert(reconcileResponseContinuity(messages.slice(0, 5)).unfinishedUserResponse)
+  assert.deepEqual(reconcileResponseContinuity(repaired.messages), repaired)
+  assert.deepEqual(reconcileResponseContinuity(messages.slice(2)).messages, messages.slice(2))
+  assert.equal(reconcileResponseContinuity([
+    { role: 'assistant', content: 'Already answered', responseContext: foreground },
+    messages[3],
+  ]).messages[1].responseContext?.userInvolved, false)
 })
 
 test('continuation finds the unfinished input audience without mistaking old user turns for current ones', () => {

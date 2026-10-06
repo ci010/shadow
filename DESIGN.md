@@ -451,6 +451,18 @@ layouts, targets grow to (44px); the controls remain above the conversation.
 
 `ToolActivityGroup.vue` keeps running status and ordinary trace/payload information neutral; actual failures remain red. Global fade/slide helpers use (.3s ease), while existing local animations have their own durations. Do not introduce a new system-wide animation scale or claim every animation already has reduced-motion handling.
 
+Successful file-edit batches show their distinct file count and aggregate line changes in the outer clickable disclosure header. Mixed batches also name the number of other tool calls; repeated edits to one file do not inflate the file count. Expanded content starts with individual tool entries, not a duplicate, noninteractive file summary.
+
+Individual tool calls use one fixed (16px) icon slot: the tool/file icon at rest, a right chevron on hover or keyboard focus, and a down chevron while expanded. Icons crossfade over (140ms) without shifting the label; reduced motion disables the crossfade. The whole native summary remains the click/touch/keyboard target.
+
+Tool disclosures retain native keyboard semantics and lazy payload mounting, with (220ms) expansion, (160ms) collapse and (200ms) chevron rotation. Interrupted toggles reverse from the current height; reduced-motion preferences disable these transitions. Read results use the file grammar and dual-theme syntax colors, preserving numbered source and original line breaks. Read and grep code never soft-wrap; long lines scroll horizontally. Recognized local and virtual grep results separate file paths, line-number gutters and highlighted matches, retaining pagination and coverage warnings. Unrecognized results remain verbatim rather than partially parsed; the backend search format is unchanged.
+
+Regular tool calls, task/call Tool details and outgoing-message Tool details use the shared `ToolPayload` boxed variant: muted background, (10px 12px) padding, (12px / 1.6) monospace and a (300px) scroll limit. Task/call arguments and receipts appear in separate labeled boxes, mounted only while expanded; valid JSON uses the same dual-theme highlighting as other tool payloads.
+
+Events originating from the displayed session retain their content and metadata but omit self-navigation controls, including the View conversation button on background-task results. Events from other sessions keep their conversation/execution navigation.
+
+Chat trace/disclosure headers and history rows ease hover background and text-color changes over (140ms), in both directions. Reduced-motion preferences disable these hover transitions; focus outlines remain immediate.
+
 Diagnosis USER, SESSION, ASSISTANT, TOOL, and CONTEXT badges are neutral text labels, not a role-color legend. Routine log trace/debug/info levels remain neutral; warn and error use their corresponding semantic colors. Background-task running indicators are neutral. Bot connectivity uses success green only for connected state and amber for restart-required state; connecting and running remain neutral.
 
 The ten examples in `.impeccable/design.json` are dependency-free visual excerpts from these existing patterns, not replacement Vue implementations. They inherit live theme variables; interactive controls include hover/focus styles, while static cards do not acquire fake interaction.
