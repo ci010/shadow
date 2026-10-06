@@ -17,6 +17,7 @@ export interface ScriptOptions {
   entry: 'run' | 'script'
   policy: { kind: 'restricted'; imports: readonly string[]; mode?: 'live' | 'test' | 'probe' } | { kind: 'host' }
   callModule?: (name: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>
+  infer?: (input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>
   toolNames?: readonly string[]
   timeoutMs?: number | null
   memoryLimitBytes?: number
@@ -135,6 +136,8 @@ export function startScript(options: ScriptOptions): ScriptRun {
   const maxCalls = boundedInteger(options.maxCalls ?? (host ? Number.MAX_SAFE_INTEGER : 32),
     'maxCalls', 0, host ? Number.MAX_SAFE_INTEGER : 128)
   const toolNames = (options.toolNames ?? []).map(name => ToolNameSchema.parse(name))
+  if (options.infer && (!host || options.entry !== 'script')) throw new Error('infer is available only in host Node exec scripts.')
+  if (toolNames.includes('infer')) throw new Error('infer is a Node capability, not a tool name.')
   if (toolNames.length > 1024 || new Set(toolNames).size !== toolNames.length) throw new Error('Invalid script tool names.')
   if (typeof options.code !== 'string') throw new Error('Script source must be text.')
   checkTextSize(options.code, 'source')
@@ -158,7 +161,7 @@ export function startScript(options: ScriptOptions): ScriptRun {
   if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1'
   const packet: ParentPacket = {
     type: 'start', code: options.code, args, policy, entry: options.entry, filename,
-    toolNames, maxCalls, envKeys: Object.keys(env),
+    toolNames, inferEnabled: !!options.infer, maxCalls, envKeys: Object.keys(env),
   }
   let child: ChildProcess | undefined
   let cancel = () => {}
@@ -172,6 +175,7 @@ export function startScript(options: ScriptOptions): ScriptRun {
     let failure: Error | undefined
     let value: unknown
     let calls = 0
+    let toolCalls = 0
     let outputBytes = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     let termination = Promise.resolve()
@@ -278,7 +282,7 @@ export function startScript(options: ScriptOptions): ScriptRun {
             && message.code === 'guest_failed' && !message.failure ? message.diagnostic : undefined
           const detail = host ? message.message ?? message.failure?.message
             : diagnostic ? `Script guest_failed: ${diagnostic}` : undefined
-          const Failure = host && calls === 0 ? ScriptExecutionError : Error
+          const Failure = host && toolCalls === 0 ? ScriptExecutionError : Error
           finish(new Failure(detail ?? (message.failure
             ? callFailureMessage(message.failure) : `Script ${message.code}.`)))
         } else {
@@ -286,6 +290,17 @@ export function startScript(options: ScriptOptions): ScriptRun {
             finish(new Error('Script module call limit or sequence violated.'))
             return
           }
+          if (message.type === 'infer') {
+            if (!host || options.entry !== 'script' || !options.infer) {
+              finish(new Error('Script infer call denied.'))
+              return
+            }
+            const input = decodeJson(message.json, 'infer input', true) as Record<string, unknown>
+            launchCall((_name, input, signal) => options.infer!(input, signal),
+              controller.signal, 'infer', input, message.id, state, host)
+            return
+          }
+          toolCalls++
           const allowed = policy.kind === 'restricted'
             ? policy.imports.includes(`@shadow/${message.name}`) : toolNames.includes(message.name)
           if (!allowed || !options.callModule) {

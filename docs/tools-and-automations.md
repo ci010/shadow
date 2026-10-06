@@ -89,8 +89,10 @@ partial changes and must not be blindly replayed.
 Native execution can distinguish a normally completed error from a lost outcome.
 Normal local process exits, acknowledged remote `process-exit` failures, and
 inline Node error replies without tool-bridge calls record `returned_error`
-instead of freezing the Work. This preserves the failure and any partial changes;
-it does not attest no effects or authorize retry. Cancellation, signal exits,
+instead of freezing the Work. This preserves the failure and any partial changes.
+An acknowledged infer-only script error also follows this completed-error path,
+without claiming its model request was free or safe to retry.
+It does not attest no effects or authorize retry. Cancellation, signal exits,
 missing/mismatched remote receipts, cleanup failures and unmarked tool errors
 remain uncertain and require reconciliation. Completion evidence is native
 in-memory metadata, never an output string, model argument or MCP annotation.
@@ -98,6 +100,46 @@ Scripts must propagate native failures rather than force `exit 0`; in PowerShell
 check `$LASTEXITCODE` after each native command in a sequence. The shell's actual
 exit status is authoritative: arbitrary scripts can mask a child command's error,
 and the tool cannot reconstruct that status from output text.
+
+For an opt-in Node-only execution surface, set `tools.exec.nodeOnly: true` in
+the Project configuration before starting its backend (restart to apply).
+`exec` then advertises only inline TypeScript;
+omitting `shell` selects Node even if a session or `defaultShell` prefers an
+OS shell. Explicit non-Node requests fail before execution, including nested
+tool-bridge requests. Runtime discovery and tool guidance match that policy.
+Remote workdirs reject this mode rather than falling back to Main or an OS shell.
+Other tools and the normal background/cancellation lifecycle are unchanged;
+the default configuration still offers detected OS shells.
+
+Use native `node:child_process` `execFile`/`spawn` with a program and argument
+array (`shell: false`) for external programs. `exec`/`execSync`, shell binaries
+and Windows `.cmd`/`.bat` wrappers reintroduce shell parsing; use actual
+executables or a Node CLI entrypoint instead. Node-only is **not an OS sandbox**:
+privileged Node imports can still launch arbitrary programs. Avoiding indirect
+shell launch is a scripting policy, not a claim of OS-level enforcement.
+
+Node `exec` also exposes `await infer({instructions, input, schema, model?,
+maxTokens?, reasoningEffort?})`. This is a separate host RPC, never a registered
+tool, `invoke_tool` target, or application capability. Other script runtimes do
+not receive it. It works independently of the Project's Node-only shell flag.
+The host sends only explicit input/instructions/schema to the configured
+provider with no tools or conversation history, then validates the returned
+JSON. Invalid output and provider errors reject without an automatic repair
+call; validation does not establish truth, test coverage or permission.
+
+Parent-loop and nested `infer` requests share the turn's 100-request allowance;
+infer reserves one remaining request for the parent. Each exec allows 8 attempts,
+2 concurrent, with a 120-second inference deadline and existing cancellation.
+Default output is 2048 tokens (32–4096, also capped by the parent's output
+limit); request JSON is capped at 64 KiB, schema at 16 KiB, and output JSON at
+64 KiB. Model/effort inherit the resolved parent settings unless explicitly
+selected. OTel `script.infer` spans persist session/turn/outer-exec identity and
+returned usage, including invalid model outputs. History-only assistant token
+totals exclude these spans; do not equate one exec with one model request.
+Provider transport policy and other runtime model consumers remain separate;
+an evaluation's outbound proxy enforces its cross-turn, all-consumer cap.
+See [Node scripting](../src/skills/builtin/node-scripting/SKILL.md) for composition
+guidance. Each exec still starts a disposable worker, not a persistent REPL.
 
 Recognized model connection/response failures include their phase and a bounded
 transport code. An interrupted response is discarded, including partial tool
@@ -381,6 +423,21 @@ The context's requested schema includes `evidenceSchema`. Evidence entries are r
 Decision brief. Use real recorded input/tool-call IDs and exact excerpts;
 definitions may omit evidence, but completion and agent settlement still enforce
 their required evidence checks.
+
+For `work progress`, prefer `data.result: {summary, sources: [{id, quote}]}`
+when citing your own recorded tool results. `id` is the tool-call ID and `quote`
+is an exact excerpt, not a paraphrase. The host resolves the canonical session
+and physical segment, including earlier segments of the same session; no
+history search or guessed `physicalId` is needed. Runtime Work context displays
+up to eight recent non-Work tool receipt IDs for copying; tool names such as
+`functions.read` are not IDs. This inference-only index does not rewrite native
+tool output, persisted history or script-facing return values. Missing, foreign-session or
+ambiguous tool IDs and mismatched excerpts are rejected without changing Work.
+Full `result.evidence` references remain supported, including alongside
+`sources`, with at most eight entries combined. Short sources require a session
+actor; human API callers use full references. Persistence and receipts retain
+only canonical evidence, not the lookup inputs. This convenience does not
+replace acceptance checks, adoption, assignment, dependency or effect fences.
 
 A trusted native tool can explicitly attest to a failed operation with no
 effect. For example, audio.cpp rejects malformed loader catalogs before saving

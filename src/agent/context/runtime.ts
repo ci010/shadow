@@ -119,8 +119,8 @@ export function runtimeIdentityProvider(
       const platform = `${getOs()} ${getArch()}`
       const remote = ctx.workdir && ctx.workdir.nodeId !== LOCAL_NODE_ID ? ctx.workdir : undefined
       const coordinator = ctx.agent.name === 'orchestrator'
-      const defaultShell = ctx.defaultExecShell ?? defaultManagedShell()
-      const detectedShells = remote || coordinator ? [] : await availableExecShells()
+      const defaultShell = ctx.execNodeOnly ? 'node' : ctx.defaultExecShell ?? defaultManagedShell()
+      const detectedShells = remote || coordinator || ctx.execNodeOnly ? [] : await availableExecShells()
       const delegationModes = !coordinator && isToolAllowed(ctx.agent, 'subagent')
         ? allowedSubagentModes(ctx.mode ?? ctx.agent.defaultMode, !!ctx.parentSessionId)
         : []
@@ -140,9 +140,13 @@ export function runtimeIdentityProvider(
         ...(coordinator ? [`- **Platform**: ${platform}`] : remote ? [
           `- **Main Host Platform**: ${platform} (not the execution target)`,
           `- **Execution Target**: remote node \`${remote.nodeId}\`, workdir capability \`${remote.capabilityId}\`.`,
+          ...(ctx.execNodeOnly ? [
+            '- Node-only exec is unavailable on remote workdirs. Do not fall back to an OS shell or Main filesystem.',
+          ] : [
           '- The Child chooses its default OS shell. Omit shell unless its availability on the Child is known; Main shell detection does not apply.',
           '- Remote exec is bounded foreground OS-shell execution only: use a positive timeout_ms. Inline Node/TypeScript, background jobs and call-mode remote exec are unsupported.',
           '- The Child resolves cwd from the workdir capability. Use relative paths; never use Main paths or display-path snapshots as remote cwd. Paired devices execute supported operations without per-operation approval; shell execution is not an OS sandbox.',
+          ]),
         ] : [
           `- **Platform**: ${platform}`,
           `- **Default Exec Shell**: ${defaultShell}`,
@@ -154,6 +158,10 @@ export function runtimeIdentityProvider(
             return `  - ${details.join(' | ')}`
           }),
           '  - node | inline TypeScript runtime',
+          ...(ctx.execNodeOnly ? [
+            '- Only Node exec is enabled, including tool-bridge calls; session shell preferences cannot enable other shells.',
+            '- Run external programs with node:child_process execFile/spawn and argument arrays (shell:false). Do not invoke OS shells or exec/execSync; Node retains host privileges, so this tool policy is not an OS sandbox.',
+          ] : []),
         ]),
       ]
 

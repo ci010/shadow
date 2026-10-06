@@ -1,4 +1,4 @@
-import { isCompletedToolFailure, requireToolText, type ToolResult } from './tool.ts'
+import { ToolNoEffectError, isCompletedToolFailure, requireToolText, type ToolResult } from './tool.ts'
 import assert, {
   deepEqual as assertEquals,
   match as assertMatch,
@@ -124,6 +124,7 @@ function execTool(
   executor: LocalProcessExecutor,
   backgroundTasks = new RecordingBackgroundTasks(),
   commandHandler = new CommandHandlerManager(),
+  nodeOnly = false,
 ): ExecTool {
   return new ExecTool(
     workspace,
@@ -133,8 +134,86 @@ function execTool(
     defaultManagedShell(),
     backgroundTasks as unknown as BackgroundTaskManager,
     executor,
+    nodeOnly,
   )
 }
+
+test('Node-only exec narrows discovery and rejects other shells before any dispatch', async () => {
+  const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
+  const tool = execTool(sandbox, executor, undefined, undefined, true)
+  assert.deepEqual(tool.parameters.properties.shell.enum, ['node'])
+  assert.equal(tool.parameters.properties.shell.default, 'node')
+  assert.doesNotMatch(JSON.stringify(tool.parameters), /PowerShell|powershell|pwsh|normally cmd/)
+  for (const shell of ['cmd', 'sh', 'bash', 'git-bash', 'powershell', 'pwsh', 'invalid', null, 1]) {
+    await assert.rejects(tool.execute({ shell, script: 'must not run', timeout_ms: 0 }, context(sandbox)),
+      error => error instanceof ToolNoEffectError && /Only shell=node/.test(error.message))
+  }
+  assert.equal(executor.calls.length, 0)
+  assert.equal(execTool(sandbox, executor).parameters.properties.shell.enum, undefined, 'Default surface is unchanged')
+})
+
+test('Node-only exec defaults to Node despite session preference and directly runs executable arguments', async () => {
+  const workspace = await createTempWorkspace()
+  const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
+  const tool = execTool(workspace, executor, undefined, undefined, true)
+  const ctx = { ...callContext(workspace, tool), defaultExecShell: 'powershell' as const }
+  const argument = '中文 "quotes" & | ; $HOME %PATH%'
+  try {
+    await writeFile(join(workspace, 'program with spaces.cjs'),
+      'console.log(JSON.stringify({args:process.argv.slice(2),cwd:process.cwd()}))')
+    const response = await tool.execute({ script: `
+      import { execFile } from 'node:child_process'
+      import { promisify } from 'node:util'
+      const result = await promisify(execFile)(process.execPath,
+        ['program with spaces.cjs', ${JSON.stringify(argument)}], { encoding: 'utf8', shell: false })
+      console.log(result.stdout)
+    ` }, ctx)
+    const result = JSON.parse(requireToolText(response))
+    assert.equal(result.ok, true, requireToolText(response))
+    assert.deepEqual(JSON.parse(result.stdout), { args: [argument], cwd: workspace })
+    assert.equal(executor.calls.length, 0)
+    assert.deepEqual(ctx.tools.getDefinitions().find(tool => tool.function.name === 'exec')?.function.parameters.properties.shell.enum, ['node'])
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+  }
+})
+
+test('Node-only bridge cannot enable an OS shell through nested exec', async () => {
+  const executor = new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null })))
+  const tool = execTool(sandbox, executor, undefined, undefined, true)
+  const response = await tool.execute({ script: `
+    const rejected = await exec({ shell: 'powershell', script: 'must not run' })
+    console.log(JSON.stringify(rejected))
+  ` }, callContext(sandbox, tool))
+  const result = JSON.parse(requireToolText(response))
+  assert.equal(result.ok, true, requireToolText(response))
+  assert.match(result.stdout, /Only shell=node/)
+  assert.equal(executor.calls.length, 0)
+})
+
+test('Node-only native executable failures retain output and failed status', async () => {
+  const tool = execTool(sandbox, new RecordingExecutor(managedProcess(Promise.resolve({ success: true, code: 0, signal: null }))),
+    undefined, undefined, true)
+  const response = await tool.execute({ script: `
+    import { execFile } from 'node:child_process'
+    import { promisify } from 'node:util'
+    try {
+      await promisify(execFile)(process.execPath,
+        ['-e', 'console.log("before-failure");console.error("native-failure");process.exit(7)'],
+        { encoding: 'utf8', shell: false })
+    } catch (error) {
+      console.log(error.stdout)
+      console.error(error.stderr)
+      throw error
+    }
+  ` }, callContext(sandbox, tool))
+  assert.equal(isCompletedToolFailure(response), true)
+  const result = JSON.parse(requireToolText(response))
+  assert.equal(result.ok, false)
+  assert.match(result.stdout, /before-failure/)
+  assert.match(result.stderr, /native-failure/)
+  assert.match(result.error, /Command failed/)
+})
 
 test('ExecTool command interception retains project and exact bot identity without spawning', async () => {
   const handler = new CommandHandlerManager()

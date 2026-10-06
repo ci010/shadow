@@ -140,6 +140,7 @@ export interface SessionManagerDeps {
   context: ContextBuilder
   quickModel?: string
   defaultExecShell?: ExecShell
+  execNodeOnly?: boolean
   honoApp?: Hono
   backgroundTasks: BackgroundTaskManager
   agentTypes: AgentTypesManager
@@ -2345,6 +2346,7 @@ ${JSON.stringify(request)}`,
       channelAddress: channelAddressFromSessionId(sessionId),
       sessionId,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
+      execNodeOnly: this.deps.execNodeOnly,
       agent: agentType,
       mode: state?.mode ?? agentType.defaultMode,
       workRequired: opts.sessionId ? this.alignment?.required(sessionId) ?? false : false,
@@ -2540,6 +2542,7 @@ ${JSON.stringify(request)}`,
       isGroup: msg.isGroup,
       admin: conversationPolicy ? false : msg.admin,
       defaultExecShell: behavior.defaultShell ?? this.deps.defaultExecShell,
+      execNodeOnly: this.deps.execNodeOnly,
       agent: resolvedAgentType,
       mode: state.mode,
       workRequired: this.alignment?.required(sessionId) ?? false,

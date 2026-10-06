@@ -38,11 +38,13 @@ User preferences: profiles. Reply style: conversation. Task limits: Work. Old co
   if (!coordinator && isToolAllowed(ctx.agent, 'exec')) {
     sections.push(`### Shell
 
-- **\`exec\`** — Run a script using a detected shell from Runtime, or \`shell: "node"\` for inline TypeScript.
+${ctx.execNodeOnly
+    ? '- **`exec`** — Inline TypeScript only; omit `shell` or select `node`. Use Node APIs for files and `execFile/spawn` with argument arrays and `shell:false` for external programs; do not start OS shells.'
+    : '- **`exec`** — Run a script using a detected shell from Runtime, or `shell: "node"` for inline TypeScript.'}
 ${mode === 'call'
     ? '- Follow the local foreground-only limits in Execution Contract; `timeout_ms` defaults to 120000.'
     : '- Provide `timeout_ms` when you expect output; use `timeout_ms: 0` for background execution. On timeout, the process keeps running and appears in `v:bg`.'}
-- With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.`)
+- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.`)
   }
 
   if (mode !== 'call' && isToolAllowed(ctx.agent, 'ask')) {

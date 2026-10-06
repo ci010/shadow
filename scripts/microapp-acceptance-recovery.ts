@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { Dirent } from 'node:fs'
 import { lstat, mkdir, open, opendir, readFile, realpath } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { writePrivateFile } from '../src/config/store.ts'
@@ -24,6 +25,29 @@ async function isPythonEnvironment(directory: string) {
   }
 }
 
+async function readOwnedFile(directory: string, path: string): Promise<Buffer> {
+  const before = await lstat(path)
+  if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_FILE_BYTES
+    || !within(directory, await realpath(path))) throw new Error('Recovery source is not a bounded owned regular file')
+  const file = await open(path, 'r')
+  try {
+    const current = await file.stat()
+    if (current.ino !== before.ino || current.dev !== before.dev) throw new Error('Recovery source changed before reading')
+    const buffer = Buffer.alloc(before.size + 1)
+    let size = 0
+    while (size < buffer.length) {
+      const read = await file.read(buffer, size, buffer.length - size, null)
+      if (!read.bytesRead) break
+      size += read.bytesRead
+    }
+    const after = await file.stat()
+    if (size !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+      throw new Error('Recovery source changed during snapshot; runtime data retained')
+    }
+    return buffer.subarray(0, size)
+  } finally { await file.close() }
+}
+
 export async function exportAcceptanceRecovery(home: string, output: string, publications: AppRecord[], secrets: readonly string[] = []) {
   const owner = await realpath(home)
   if (publications.length > 20) throw new Error('Recovery publication limit exceeded')
@@ -45,13 +69,53 @@ export async function exportAcceptanceRecovery(home: string, output: string, pub
     scopes.set(directory, [...(scopes.get(directory) ?? []), state.sessionId])
   }
   const summaries = []
-  let entries = 0, bytes = 0, fileCount = 0
+  let entries = 0, bytes = 0, fileCount = 0, metadataBytes = 0
   for (const [directory, sessions] of scopes) {
     const files: Record<string, { sha256: string; base64: string }> = {}
     const excluded: Array<{ path: string; reason: string }> = []
+    const installedFiles = new Set<string>()
     async function walk(folder: string): Promise<void> {
+      const children: Dirent[] = []
       for await (const entry of await opendir(folder)) {
         if (++entries > 8192) throw new Error('Recovery directory-entry limit exceeded; runtime data retained')
+        children.push(entry)
+      }
+      // Wheel targets have no pyvenv.cfg. Exclude only recorded files, not adjacent author source.
+      for (const entry of children) {
+        if (!entry.isDirectory() || !entry.name.endsWith('.dist-info') || entry.name.startsWith('.') || privateName.test(entry.name)) continue
+        const metadata = join(folder, entry.name)
+        const markers = ['WHEEL', 'METADATA', 'RECORD']
+        const regular = await Promise.all(markers.map(async name => {
+          try { return (await lstat(join(metadata, name))).isFile() }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+            throw error
+          }
+        }))
+        if (regular.some(value => !value)) continue
+        const contents: string[] = []
+        for (const name of markers) {
+          const content = await readOwnedFile(directory, join(metadata, name))
+          metadataBytes += content.length
+          if (metadataBytes > MAX_BUNDLE_BYTES) throw new Error('Recovery Python metadata byte limit exceeded; runtime data retained')
+          contents.push(new TextDecoder('utf-8', { fatal: true }).decode(content))
+        }
+        if (!/^Wheel-Version: 1\.\d+\r?$/m.test(contents[0])
+          || !/^Metadata-Version: \d+\.\d+\r?$/m.test(contents[1]) || !/^Name: \S+/m.test(contents[1])) {
+          throw new Error('Recovery Python distribution metadata is invalid; runtime data retained')
+        }
+        for (const line of contents[2].split(/\r?\n/)) {
+          if (!line) continue
+          const record = /^(?:"((?:[^"]|"")*)"|([^",]+)),(?:"[^"]*"|[^",]*),(?:"\d*"|\d*)$/.exec(line)
+          if (!record) throw new Error('Recovery Python RECORD is invalid; runtime data retained')
+          const name = (record[1] ?? record[2]).replaceAll('""', '"')
+          if (!name || name.includes('\\') || name.includes(':') || name.includes('\0')
+            || name.split('/').some(part => !part || part === '.' || part === '..')) continue
+          const path = resolve(folder, ...name.split('/'))
+          if (within(folder, path)) installedFiles.add(path)
+        }
+      }
+      for (const entry of children) {
         const path = join(folder, entry.name), name = relative(directory, path).split(sep).join('/')
         if (entry.name.startsWith('.') || privateName.test(entry.name)
           || entry.isDirectory() && excludedDirectories.has(entry.name.toLowerCase())) {
@@ -66,31 +130,14 @@ export async function exportAcceptanceRecovery(home: string, output: string, pub
           }
           await walk(path); continue
         }
+        if (entry.isFile() && installedFiles.has(path)) {
+          excluded.push({ path: name, reason: 'installed Python dependency listed in distribution RECORD' }); continue
+        }
         if (!entry.isFile() || !sourceExtension.test(entry.name)) {
           excluded.push({ path: name, reason: 'outside source export policy' }); continue
         }
         if (++fileCount > 256) throw new Error('Recovery source-file limit exceeded; runtime data retained')
-        const before = await lstat(path)
-        if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_FILE_BYTES
-          || !within(directory, await realpath(path))) throw new Error('Recovery source is not a bounded owned regular file')
-        const file = await open(path, 'r')
-        let content: Buffer
-        try {
-          const current = await file.stat()
-          if (current.ino !== before.ino || current.dev !== before.dev) throw new Error('Recovery source changed before reading')
-          const buffer = Buffer.alloc(before.size + 1)
-          let size = 0
-          while (size < buffer.length) {
-            const read = await file.read(buffer, size, buffer.length - size, null)
-            if (!read.bytesRead) break
-            size += read.bytesRead
-          }
-          const after = await file.stat()
-          if (size !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
-            throw new Error('Recovery source changed during snapshot; runtime data retained')
-          }
-          content = buffer.subarray(0, size)
-        } finally { await file.close() }
+        const content = await readOwnedFile(directory, path)
         if (secrets.some(secret => secret && content.includes(Buffer.from(secret)))) throw new Error('Recovery source contains a runtime credential; export refused')
         bytes += content.length
         if (bytes > MAX_BUNDLE_BYTES) throw new Error('Recovery source byte limit exceeded; runtime data retained')

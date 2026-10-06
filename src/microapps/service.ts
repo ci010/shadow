@@ -38,6 +38,21 @@ const mediaTypes: Record<string, string> = {
 }
 const bearer = (request: Request) => /^Bearer ([A-Za-z0-9_-]+)$/.exec(request.headers.get('authorization') ?? '')?.[1] ?? ''
 const matches = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
+function backendRequestHeaders(request: Request, token: string): Headers {
+  const excluded = new Set([
+    'authorization', 'cookie', 'cookie2', 'host', 'origin', 'referer', 'forwarded',
+    'connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding',
+    'upgrade', 'content-length', 'expect',
+    ...(request.headers.get('connection') ?? '').toLowerCase().split(',').map(name => name.trim()),
+  ])
+  const headers = new Headers()
+  for (const [name, value] of request.headers) {
+    if (!excluded.has(name) && !/^(proxy-|sec-|x-forwarded-)/.test(name)) headers.set(name, value)
+  }
+  headers.set('Authorization', `Bearer ${token}`)
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream')
+  return headers
+}
 function sourceText(base64: string): string | undefined {
   const bytes = Buffer.from(base64, 'base64')
   if (bytes.includes(0)) return undefined
@@ -444,7 +459,7 @@ export class MicroApps {
       try {
         const response = await fetch(`${run.backend.origin}${path}${new URL(c.req.url).search}`, {
           method: c.req.method, redirect: 'error',
-          headers: { Authorization: `Bearer ${run.token}`, 'Content-Type': c.req.header('content-type') ?? 'application/octet-stream' },
+          headers: backendRequestHeaders(c.req.raw, run.token),
           ...(body.length ? { body: Buffer.from(body) } : {}),
           signal,
         })

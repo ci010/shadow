@@ -126,6 +126,7 @@ whereas basis describes what was exercised. Invalid tool-source references name
 their evidence item and provide an `evidence` lookup request, rather than requiring
 the author to discover physical session metadata through decision tools.
 
+For runtime startup, cite both `started` and `sdk_connected`.
 For runtime state, cite `state_saved` and a later `state_read` of the same version
 on another run. Reopen requires `stopped` then a later `sdk_connected` on another
 run, not a full Shadow restart. Recovery requires a model/backend failure or
@@ -272,6 +273,17 @@ the startup error. It does not expose raw output, module names, tokens or payloa
 This helps distinguish author-directory success from packaged-runtime failure;
 it is not automatic dependency installation or a substitute for app health checks.
 
+SDK `request('/backend/...', options)` preserves the query string, body and
+application request headers, including custom headers such as `X-Language`.
+The host supplies the backend's `Authorization` rather than forwarding the
+browser access credential. Cookies, `Host`, `Origin`, `Referer`, HTTP framing,
+hop-by-hop and `Connection`-nominated headers, `Proxy-*`, `Sec-*`, `Forwarded`
+and `X-Forwarded-*` are not forwarded. The host HTTP client generates its own
+transport headers for the buffered body. This policy is discoverable through
+`capabilities.backend.requestHeaders`; it is not an unrestricted HTTP proxy.
+Test metadata and binary uploads through the SDK and host, not only by calling
+backend functions directly.
+
 Node backend startup installs a host-owned `fetch` dispatcher. It uses standard
 HTTP(S) proxy environment configuration, otherwise the Windows static system
 proxy, preserving Windows wildcard and `<local>` bypasses. Loopback traffic is
@@ -345,6 +357,16 @@ as required by A2A. Model credentials stay in the controller process; the child
 gets only a loopback model proxy credential limited to the selected model and
 at most 100 attempts. `--max-calls <1-100>` can lower that cap for a focused
 recovery or interaction probe; the effective cap is recorded in the run artifacts.
+`--node-only` sets `tools.exec.nodeOnly` in the isolated Project configuration, without
+changing the normal installation or the product request. Both `prompt.json`
+and `isolation.json` record the choice. Other tools remain available; external
+programs should be launched directly from Node, not through OS-shell wrappers.
+This tests a tool surface and scripting policy, not an OS sandbox.
+Background learning is disabled in the isolated **Project** configuration.
+Before any inference, the controller verifies the running learning service is
+disabled and records `learning.json`; setting only the shared runtime field
+does not disable Project-owned learning. Historical runs without this check may
+contain background reflection calls and must separate them from author/app usage.
 A passing narrow probe is not evidence of complete app acceptance.
 The harness requires an existing standard Copilot provider login.
 It makes live model calls and can incur charges.
@@ -392,6 +414,12 @@ credential-named files and generated dependency/test-data directories are exclud
 Python environments are also recognized by a regular `pyvenv.cfg`, regardless of
 their directory name, and excluded before traversing installed packages. Linked
 markers are not followed and do not hide otherwise recoverable source.
+For extracted wheels and Python target installs without `pyvenv.cfg`, regular
+`WHEEL`, `METADATA` and `RECORD` distribution markers identify installed files.
+Only paths listed in a well-formed `RECORD` within that install root are excluded;
+unlisted source beside or inside packages is preserved. A directory named `site`
+is not excluded by name alone. Metadata reads are bounded to 4 MiB per file and
+16 MiB overall; malformed metadata fails recovery and retains the runtime.
 The source scan is capped at 8192 entries, 256 files, 4 MiB per file and 16 MiB
 total. Known runtime credentials reject export. Source hashes are checked before
 runtime deletion. Failed shutdown/export preserves the runtime directory and

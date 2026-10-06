@@ -78,7 +78,7 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
   const parse = vm.runInContext('JSON.parse', context) as (text: string) => unknown
   const modules = new Map<string, Promise<vm.SyntheticModule>>()
   const loads = new Map<vm.Module, Promise<void>>()
-  const call = async (name: string, input: unknown = {}): Promise<unknown> => {
+  const call = async (name: string, input: unknown = {}, inference = false): Promise<unknown> => {
     if (failed || completed) throw new Error('Execution ended.')
     if (++calls > packet.maxCalls) {
       fail('capability_limit')
@@ -94,11 +94,12 @@ async function execute(packet: Extract<ParentPacket, { type: 'start' }>): Promis
     const id = calls
     process.channel?.ref()
     const result = new Promise<string>((resolve, reject) => pending.set(id, { resolve, reject }))
-    send({ type: 'call', id, name, json })
+    send(inference ? { type: 'infer', id, json } : { type: 'call', id, name, json })
     return parse(await result)
   }
   if (host) {
     const globals: Record<string, unknown> = {
+      ...(packet.inferEnabled ? { infer: (input: unknown) => call('infer', input, true) } : {}),
       pipe: async (value: unknown, ...fns: Array<(value: unknown) => unknown>) => {
         let result = await value
         for (const fn of fns) result = await fn(result)

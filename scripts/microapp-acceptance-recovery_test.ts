@@ -86,6 +86,73 @@ test('a linked environment marker does not hide ordinary source from recovery', 
   assert.ok(report.scopes[0].excluded.some(entry => entry.path === 'source/pyvenv.cfg' && entry.reason === 'link not followed'))
 }))
 
+test('recovery excludes RECORD-listed Python target dependencies but preserves adjacent and unlisted application source', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  for (const relative of ['dev/site', 'dev/runtime/site']) {
+    const target = join(f.directory, ...relative.split('/')), metadata = join(target, 'fixture-1.0.dist-info')
+    await mkdir(metadata, { recursive: true })
+    await mkdir(join(target, 'fixture'))
+    await writeFile(join(metadata, 'WHEEL'), 'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n')
+    await writeFile(join(metadata, 'METADATA'), 'Metadata-Version: 2.1\nName: fixture\nVersion: 1.0\n')
+    const records: string[] = []
+    for (let index = 0; index < 257; index++) {
+      const name = `fixture/dependency-${index}.py`
+      await writeFile(join(target, ...name.split('/')), 'generated dependency')
+      records.push(`${name},,`)
+    }
+    await writeFile(join(target, 'fixture', 'data,name.py'), 'generated dependency')
+    await writeFile(join(target, 'standalone.py'), 'generated dependency')
+    records.push('"fixture/data,name.py",,', 'standalone.py,,', '../outside.py,,',
+      'fixture-1.0.dist-info/WHEEL,,', 'fixture-1.0.dist-info/METADATA,,', 'fixture-1.0.dist-info/RECORD,,')
+    await writeFile(join(metadata, 'RECORD'), records.join('\n'))
+    await writeFile(join(target, 'custom.py'), 'print("owned source beside dependencies")')
+    await writeFile(join(target, 'fixture', 'custom.py'), 'print("unlisted source inside a package")')
+  }
+  await writeFile(join(f.directory, 'dev', 'outside.py'), 'print("not owned by RECORD")')
+  const report = await exportAcceptanceRecovery(home, f.output, [f.publication])
+  assert.equal(report.files, 8)
+  const scope = JSON.parse(await readFile(join(f.output, ...report.scopes[0].archive.split('/')), 'utf8'))
+  assert.ok(scope.files['dev/site/custom.py'])
+  assert.ok(scope.files['dev/site/fixture/custom.py'])
+  assert.ok(scope.files['dev/runtime/site/custom.py'])
+  assert.ok(scope.files['dev/runtime/site/fixture/custom.py'])
+  assert.ok(scope.files['dev/outside.py'])
+  assert.ok(!JSON.stringify(scope.files).includes('generated dependency'))
+  assert.ok(report.scopes[0].excluded.some(entry => entry.path === 'dev/site/standalone.py' && /RECORD/.test(entry.reason)))
+  assert.equal(scope.candidates[0].sourceRevision, f.publication.revision)
+}))
+
+test('unverified or linked Python distribution markers do not hide source and source limits still apply', async () => withTempWorkspace(async home => {
+  const f = await fixture(home), target = join(f.directory, 'site'), metadata = join(target, 'fixture.dist-info')
+  await mkdir(metadata, { recursive: true })
+  await writeFile(join(metadata, 'RECORD'), 'helper.py,,')
+  await symlink(f.app, join(metadata, 'WHEEL'), process.platform === 'win32' ? 'junction' : 'dir')
+  await writeFile(join(metadata, 'METADATA'), 'Metadata-Version: 2.1\nName: fixture\nVersion: 1.0\n')
+  await writeFile(join(target, 'helper.py'), 'print("owned source")')
+  const report = await exportAcceptanceRecovery(home, f.output, [f.publication])
+  assert.equal(report.files, 4)
+  const scope = JSON.parse(await readFile(join(f.output, ...report.scopes[0].archive.split('/')), 'utf8'))
+  assert.ok(scope.files['site/helper.py'])
+  for (let index = 0; index < 257; index++) await writeFile(join(target, `owned-${index}.py`), 'owned source')
+  await assert.rejects(exportAcceptanceRecovery(home, f.output, [f.publication]), /source-file limit/)
+  assert.equal(await readFile(join(target, 'helper.py'), 'utf8'), 'print("owned source")')
+}))
+
+test('malformed or oversized Python dependency metadata retains the runtime instead of hiding source', async () => withTempWorkspace(async home => {
+  const f = await fixture(home), metadata = join(f.directory, 'target', 'fixture.dist-info')
+  await mkdir(metadata, { recursive: true })
+  await writeFile(join(metadata, 'METADATA'), 'Metadata-Version: 2.1\nName: fixture\nVersion: 1.0\n')
+  await writeFile(join(metadata, 'RECORD'), 'helper.py,,')
+  await writeFile(join(metadata, 'WHEEL'), 'invalid marker')
+  await assert.rejects(exportAcceptanceRecovery(home, f.output, [f.publication]), /distribution metadata is invalid/)
+  await writeFile(join(metadata, 'WHEEL'), 'Wheel-Version: 1.0\n')
+  await writeFile(join(metadata, 'RECORD'), 'invalid,extra,CSV,columns')
+  await assert.rejects(exportAcceptanceRecovery(home, f.output, [f.publication]), /RECORD is invalid/)
+  await writeFile(join(metadata, 'RECORD'), Buffer.alloc(4 * 1024 * 1024 + 1))
+  await assert.rejects(exportAcceptanceRecovery(home, f.output, [f.publication]), /bounded owned regular file/)
+  assert.equal(await readFile(join(f.app, 'index.html'), 'utf8'), 'published version')
+}))
+
 test('recovery skips external directory links and rejects oversized source rather than deleting it', async () => withTempWorkspace(async home => {
   const f = await fixture(home), outside = join(home, 'outside')
   await mkdir(outside)

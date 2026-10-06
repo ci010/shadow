@@ -175,6 +175,7 @@ export const AgentSchema = z.object({
 // ── Tool configs ────────────────────────────────────────────────────────────
 
 export const ExecToolSchema = z.object({
+  nodeOnly: z.boolean().optional(),
   defaultShell: z.enum([
     'cmd',
     'sh',

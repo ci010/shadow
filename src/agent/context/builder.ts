@@ -31,6 +31,7 @@ export interface SessionPromptContext {
   isGroup?: boolean
   admin?: boolean
   defaultExecShell?: ExecShell
+  execNodeOnly?: boolean
   /** Resolved agent type definition (from agent-types registry) */
   agent: AgentTypeDefinition
   /** Stable Initiative ID for shared work context (from SessionState). */

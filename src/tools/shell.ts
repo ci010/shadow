@@ -105,8 +105,8 @@ function parseExecShell(
 export class ExecTool implements Tool<ToolResult> {
   readonly name = 'exec'
   readonly supportsRemoteWorkdir = true
-  readonly description =
-    'Run a command or script. Use `shell: "node"` for inline TypeScript with tool access.'
+  readonly description: string =
+    'Run a command or script. Use `shell: "node"` for inline TypeScript with tool access and infer() for bounded semantic computation; see node-scripting.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -148,9 +148,24 @@ export class ExecTool implements Tool<ToolResult> {
     private defaultShell: ExecShell = defaultManagedShell(),
     private backgroundTasks: BackgroundTaskManager,
     localExecutor?: LocalProcessExecutor,
+    private readonly nodeOnly = false,
   ) {
     this.workspace = resolve(workspace)
     this.localExecutor = localExecutor ?? new LocalExecutor(processManager)
+    if (nodeOnly) {
+      this.description = 'Run inline TypeScript with Node.js imports, session tools and infer() for bounded semantic computation; see node-scripting. Only the Node runtime is available.'
+      this.parameters = {
+        ...this.parameters,
+        properties: {
+          ...this.parameters.properties,
+          script: {
+            type: 'string',
+            description: 'Inline TypeScript source. Run external programs with node:child_process execFile/spawn and an argument array (shell:false). Preserve nonzero exits and output; do not hide failures.',
+          },
+          shell: { type: 'string', enum: ['node'], default: 'node', description: 'Only node is available; omission also selects node.' },
+        },
+      }
+    }
   }
 
   private formatManagedProcessOutput(
@@ -217,7 +232,7 @@ export class ExecTool implements Tool<ToolResult> {
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
-    const shell = parseExecShell(args.shell, this.defaultShell) ??
+    const shell = parseExecShell(args.shell, this.nodeOnly ? 'node' : this.defaultShell) ??
       this.defaultShell
     const script = String(args.script)
     return `💻 [${shell}] ${script}`
@@ -230,8 +245,10 @@ export class ExecTool implements Tool<ToolResult> {
     context.signal.throwIfAborted()
     const script = typeof args.script === 'string' ? args.script : ''
     if (!script.trim()) throw new ToolNoEffectError('`script` is required')
-    const shell = parseExecShell(args.shell, context.defaultExecShell ?? this.defaultShell)
+    const shell = parseExecShell(args.shell, this.nodeOnly ? 'node' : context.defaultExecShell ?? this.defaultShell)
+    if (this.nodeOnly && shell !== 'node') throw new ToolNoEffectError('Only shell=node is enabled. Use inline TypeScript and execFile/spawn with a program and argument array, without an OS shell.')
     if (!shell) throw new ToolNoEffectError('Invalid `shell`. Supported values include `cmd`, `sh`, `bash`, `git-bash`, `powershell`, `pwsh`, and `node`')
+    if (this.nodeOnly && context.remoteWorkdir) throw new ToolNoEffectError('Node-only exec is not supported on remote workdirs; no OS-shell or Main filesystem fallback is allowed.')
     const request = { ...args, script, shell }
     const foreground = context.tools?.executionMode === 'call'
     if (context.remoteWorkdir) {
@@ -462,7 +479,7 @@ export class ExecTool implements Tool<ToolResult> {
     try {
       context.signal.throwIfAborted()
       if (timeoutMs !== 0) context.signal.addEventListener('abort', abort, { once: true })
-      binding = bindScriptTools({ ...context, signal: controller.signal })
+      binding = bindScriptTools({ ...context, signal: controller.signal }, { infer: true })
       const env = { ...process.env, ...await loadDotEnv(this.workspace) }
       context.signal.throwIfAborted()
       run = startScript({
@@ -484,6 +501,7 @@ export class ExecTool implements Tool<ToolResult> {
           return pending
         },
         toolNames: binding.names,
+        infer: binding.infer,
         timeoutMs: foreground ? timeoutMs : null,
         env,
       })

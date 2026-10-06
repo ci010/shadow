@@ -16,6 +16,20 @@ test('explicit model and effort selections survive loading', () => {
   assert.equal(config.agent.reasoningEffort, 'high')
 })
 
+test('Node-only execution is an explicit boolean opt-in and preserves other configuration', () => {
+  assert.equal(ConfigSchema.parse({}).tools.exec, undefined)
+  assert.equal(ConfigSchema.parse({ tools: { exec: {} } }).tools.exec?.nodeOnly, undefined)
+  for (const nodeOnly of [true, false]) {
+    const exec = ConfigSchema.parse({ tools: { exec: { nodeOnly, defaultShell: 'powershell', timeoutMs: 1234 } } }).tools.exec
+    assert.equal(exec?.nodeOnly, nodeOnly)
+    assert.equal(exec?.defaultShell, 'powershell')
+    assert.equal(exec?.timeoutMs, 1234)
+  }
+  for (const nodeOnly of ['true', 1, null]) {
+    assert.equal(ConfigSchema.safeParse({ tools: { exec: { nodeOnly } } }).success, false)
+  }
+})
+
 test('legacy voice configuration is rejected rather than silently ignored', () => {
   assert.equal(ConfigSchema.safeParse({ voice: { sttUrl: 'http://localhost:8000' } }).success, false)
 })

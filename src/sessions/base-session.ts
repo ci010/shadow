@@ -2,7 +2,8 @@ import type { ExecutionContext } from '../tools/context.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { withCurrentWork } from '../agent/context/builder.ts'
 import { withResponseAudience } from '../agent/context/response-audience.ts'
-import { SESSION_ITERATION_LIMIT, withExecutionBudget } from '../agent/context/execution-budget.ts'
+import { InferenceBudget, withExecutionBudget } from '../agent/context/execution-budget.ts'
+import { createNodeInference } from '../script-runtime/infer.ts'
 import { continuedUserInvolvement, createResponseContext, type ResponseContext } from './response-context.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
@@ -202,6 +203,12 @@ export abstract class BaseSession {
     const reasoningEffort = executionContext.reasoningEffort ??
       llm.reasoningEffort
     executionContext = { ...executionContext, model, temperature, maxTokens, thinking, reasoningEffort }
+    const budget = new InferenceBudget()
+    executionContext.infer = createNodeInference({
+      provider: this.provider, budget,
+      llm: { model, temperature, maxTokens, thinking, reasoningEffort },
+      projectId: executionContext.projectId, turnId,
+    })
 
     const pending = pendingToolCalls(this.messages)
     if (pending.length) {
@@ -214,7 +221,7 @@ export abstract class BaseSession {
       }), executionContext, llm, signal)
     }
 
-    for (let i = 0; i < SESSION_ITERATION_LIMIT; i++) {
+    for (let i = 0; budget.remaining > 0; i++) {
       const toolDefs = this.tools.getDefinitions()
       signal.throwIfAborted()
 
@@ -237,7 +244,7 @@ export abstract class BaseSession {
           ? { ...message, content: withCurrentWork(String(message.content ?? ''), workPrompt) } : message)
           : [{ role: 'system', content: workPrompt }, ...this.messages]
         : this.messages
-      const inferenceMessages = withExecutionBudget(withResponseAudience(workMessages, responseContext), SESSION_ITERATION_LIMIT - i, 'turn')
+      const inferenceMessages = withExecutionBudget(withResponseAudience(workMessages, responseContext), budget.remaining, 'turn')
 
       const traceAttributes = {
         sessionId: this.id,
@@ -260,6 +267,7 @@ export abstract class BaseSession {
             provider: this.provider.name,
           }, inferenceMessages, toolDefs, { model, maxTokens, temperature, thinking, reasoningEffort })
           if (captureId) chatSpan.setAttribute('prompt.capture.request_id', captureId)
+          budget.take()
           const response = await this.provider.chat(inferenceMessages, toolDefs, {
             model,
             maxTokens,

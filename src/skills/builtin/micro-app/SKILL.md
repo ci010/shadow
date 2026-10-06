@@ -45,7 +45,8 @@ observations, including blocked/failed items**. A partly exercised feature may
 be blocked with runtime evidence; a wholly untested feature uses `not_tested`.
 Schema rejections locate the affected check/requirement field. Correct that
 field without deleting unrelated citations or changing results to evade validation.
-For runtime passes, cite both ends of the host observation pair: `state_saved`
+For runtime passes, startup needs both `started` and `sdk_connected`.
+Cite both ends of the other host observation pairs: `state_saved`
 then a later same-version `state_read` on another run for state; `stopped` then
 a later `sdk_connected` on another run for reopen; a model/backend failure or
 cancellation followed by completion of that same kind for recovery. A `started`
@@ -331,6 +332,13 @@ The service must bind **127.0.0.1** on `SHADOW_APP_PORT`, respond successfully t
 
 Frontend `request('/backend/synthesize', {method:'POST',headers:{'Content-Type':'application/json'},body:...})`
 forwards to the service's `/synthesize` with app authentication.
+Application headers, including custom headers such as `X-Language`, are
+forwarded along with the query string and body. The host replaces `Authorization`;
+it does not forward browser cookies, `Host`, `Origin`, `Referer`, framing or
+hop-by-hop headers (including fields named by `Connection`), `Proxy-*`, `Sec-*`,
+`Forwarded` or `X-Forwarded-*`. These are reserved, not application parameters.
+Check `capabilities.backend.requestHeaders` and exercise the actual SDK/backend
+route: directly invoking a worker does not test this transport boundary.
 It returns a Response on success; non-2xx responses throw `AppRequestError` with
 `status` and `code`. Catch those failures rather than expecting a failed Response.
 Use `.json()` or `.blob()` as appropriate. `status()` also reports capabilities.

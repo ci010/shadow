@@ -49,6 +49,7 @@ export const ParentPacketSchema = z.discriminatedUnion('type', [
     entry: z.enum(['run', 'script']),
     filename: z.string().max(4096),
     toolNames: z.array(ToolNameSchema).max(1024),
+    inferEnabled: z.boolean().default(false),
     maxCalls: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
     envKeys: z.array(z.string()),
   }).strict(),
@@ -60,6 +61,7 @@ export type ParentPacket = z.infer<typeof ParentPacketSchema>
 export const ChildPacketSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('result'), json: text }).strict(),
   z.object({ type: z.literal('call'), id, name: ToolNameSchema, json: text }).strict(),
+  z.object({ type: z.literal('infer'), id, json: text }).strict(),
   z.object({
     type: z.literal('error'),
     code: z.enum(['import_denied', 'invalid_json', 'guest_failed', 'invalid_entry', 'protocol_error', 'capability_limit', 'capability_failed']),

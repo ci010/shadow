@@ -11,7 +11,7 @@ import { CommandHandlerManager } from './shell-commands/command-handler.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { executeRemoteShell } from '../execution/remote-shell-client.ts'
 
-function fixture() {
+function fixture(nodeOnly = false) {
   const requests: JobRequestV1[] = []
   const executor: Executor = {
     async *execute(request) {
@@ -30,6 +30,7 @@ function fixture() {
     { spawn: () => assert.fail('Must not spawn on Main') } as unknown as ProcessManager,
     'node', { runPromiseTask: () => assert.fail('No remote background task') } as unknown as BackgroundTaskManager,
     { startProcess: async () => assert.fail('Must not invoke Main executor') },
+    nodeOnly,
   )
   const context = {
     sessionId: 'session', messageId: 'turn', cwd: 'C:\\Main\\never-resolve',
@@ -39,6 +40,15 @@ function fixture() {
   } as unknown as ExecutionContext
   return { tool, context, requests }
 }
+
+test('Node-only exec rejects remote workdirs without dispatch or a local shell fallback', async () => {
+  const { tool, context, requests } = fixture(true)
+  for (const shell of [undefined, 'node', 'powershell']) {
+    await assert.rejects(tool.execute({ script: 'must not run', shell }, context),
+      error => error instanceof ToolNoEffectError && /Node-only exec|Only shell=node/.test(error.message))
+  }
+  assert.equal(requests.length, 0)
+})
 
 test('ExecTool remote path sends only capability-relative cwd and does not inherit Main shell or environment', async () => {
   const { tool, context, requests } = fixture()

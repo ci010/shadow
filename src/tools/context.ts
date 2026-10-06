@@ -8,6 +8,8 @@ import type { ExecShell } from './shell.ts'
 export interface ExecutionContext extends MessageContext {
   projectId?: string
   evalBridge?: ToolBridgeFactory
+  /** Host-only semantic capability, shared with this turn's inference budget. */
+  infer?: import('../script-runtime/infer.ts').NodeInference
   inputSource?: 'user' | 'session' | 'event'
   /** Only a newly admitted, authenticated owner's direct message; never reconstructed on Retry/Continue. */
   workUserInput?: string

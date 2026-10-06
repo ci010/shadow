@@ -339,6 +339,8 @@ export async function createProjectRuntime(
       processManager,
       execConfig?.defaultShell,
       backgroundTasks,
+      undefined,
+      execConfig?.nodeOnly,
     ),
   )
 
@@ -485,6 +487,7 @@ export async function createProjectRuntime(
     context,
     quickModel,
     defaultExecShell: execConfig?.defaultShell,
+    execNodeOnly: execConfig?.nodeOnly,
     honoApp: app,
     backgroundTasks,
     agentTypes,

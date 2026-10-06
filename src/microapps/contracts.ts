@@ -35,6 +35,11 @@ export const microAppCapabilities = {
   },
   backend: { runtimes: ['node', 'python'], automaticDependencyInstall: false,
     healthDeadlineMs: 15_000, maxTransferBytes: 16 * 1024 * 1024, timeoutMs: 180_000, osSandbox: false,
+    requestHeaders: {
+      forwarded: 'application headers, including custom headers such as X-Language',
+      excluded: 'browser credentials/context, host/framing, hop-by-hop and Connection-nominated headers, proxy-*, sec-*, forwarded and x-forwarded-*',
+      authentication: 'host replaces Authorization with the app runtime credential',
+    },
     nodeFetchProxy: 'standard-env-or-windows-static-with-bypass',
     proxyCredentialsForwarded: false, automaticProxyScriptsSupported: false },
   sdk: { requestErrors: 'AppRequestError with status and code; non-2xx throws' },

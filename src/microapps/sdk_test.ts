@@ -48,3 +48,19 @@ test('SDK HTTP failures preserve status and code, including connection, malforme
     })
   }
 })
+
+test('SDK request preserves custom application headers and binary uploads while replacing caller authorization', async () => {
+  const body = new Uint8Array([82, 73, 70, 70, 0, 255])
+  const client = await sdk(async (path, options) => {
+    const headers = new Headers(options.headers)
+    assert.equal(path, '/backend/recognize')
+    assert.equal(headers.get('x-language'), 'ja')
+    assert.equal(headers.get('content-type'), 'audio/wav')
+    assert.equal(headers.get('authorization'), 'Bearer synthetic-app-token')
+    assert.equal(options.body, body)
+    assert.equal(options.credentials, 'omit')
+    return Response.json({ text: 'fixture' })
+  })
+  await client.request('/backend/recognize', { method: 'POST',
+    headers: { 'X-Language': 'ja', 'Content-Type': 'audio/wav', Authorization: 'untrusted override' }, body })
+})

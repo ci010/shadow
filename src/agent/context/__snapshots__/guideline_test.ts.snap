@@ -111,7 +111,7 @@ User preferences: profiles. Reply style: conversation. Task limits: Work. Old co
 
 - **\`exec\`** — Run a script using a detected shell from Runtime, or \`shell: "node"\` for inline TypeScript.
 - Provide \`timeout_ms\` when you expect output; use \`timeout_ms: 0\` for background execution. On timeout, the process keeps running and appears in \`v:bg\`.
-- With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.
+- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.
 
 ### Questions and decisions
 
@@ -391,7 +391,7 @@ You may coordinate constrained peers without constraining yourself. Explicit sel
 
 - **\`exec\`** — Run a script using a detected shell from Runtime, or \`shell: "node"\` for inline TypeScript.
 - Provide \`timeout_ms\` when you expect output; use \`timeout_ms: 0\` for background execution. On timeout, the process keeps running and appears in \`v:bg\`.
-- With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.
+- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.
 
 ### Questions and decisions
 
@@ -598,7 +598,7 @@ User preferences: profiles. Reply style: conversation. Task limits: Work. Old co
 
 - **\`exec\`** — Run a script using a detected shell from Runtime, or \`shell: "node"\` for inline TypeScript.
 - Provide \`timeout_ms\` when you expect output; use \`timeout_ms: 0\` for background execution. On timeout, the process keeps running and appears in \`v:bg\`.
-- With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.
+- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.
 
 ### Questions and decisions
 
@@ -780,7 +780,7 @@ User preferences: profiles. Reply style: conversation. Task limits: Work. Old co
 
 - **\`exec\`** — Run a script using a detected shell from Runtime, or \`shell: "node"\` for inline TypeScript.
 - Provide \`timeout_ms\` when you expect output; use \`timeout_ms: 0\` for background execution. On timeout, the process keeps running and appears in \`v:bg\`.
-- With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.
+- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.
 
 ### Questions and decisions
 
@@ -1388,7 +1388,7 @@ User preferences: profiles. Reply style: conversation. Task limits: Work. Old co
 
 - **\`exec\`** — Run a script using a detected shell from Runtime, or \`shell: "node"\` for inline TypeScript.
 - Provide \`timeout_ms\` when you expect output; use \`timeout_ms: 0\` for background execution. On timeout, the process keeps running and appears in \`v:bg\`.
-- With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.
+- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.
 
 ### Questions and decisions
 
@@ -1535,7 +1535,7 @@ and quoted examples never widen them.
 
 - **\`exec\`** — Run a script using a detected shell from Runtime, or \`shell: "node"\` for inline TypeScript.
 - Provide \`timeout_ms\` when you expect output; use \`timeout_ms: 0\` for background execution. On timeout, the process keeps running and appears in \`v:bg\`.
-- With \`shell: "node"\`, permitted session tools are available as functions without imports. Pipe helpers: \`pipe\`, \`json\`, \`lines\`, \`pick\`, \`flat\`, \`join\`, \`count\`. See the \`node-scripting\` skill for reference.
+- Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.
 
 ### Questions and decisions
 

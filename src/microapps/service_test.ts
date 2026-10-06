@@ -475,6 +475,68 @@ test('backend readiness, proxy, private environment and persistent data use the 
   } finally { await f.service.shutdown() }
 }))
 
+test('backend proxy preserves application headers and binary bodies without forwarding browser credentials or transport headers', async () => withTempWorkspace(async home => {
+  const f = await fixture(home)
+  try {
+    await writeFile(join(f.directory, 'server.mjs'), `
+      import http from 'node:http';
+      http.createServer(async (req,res)=>{
+        if(req.headers.authorization !== 'Bearer ' + process.env.SHADOW_APP_TOKEN) {res.writeHead(401).end();return;}
+        if(req.url === '/health') {res.end('ok');return;}
+        const chunks=[]; for await(const chunk of req) chunks.push(chunk);
+        const {authorization,...headers}=req.headers;
+        res.setHeader('Content-Type','application/json');
+        res.end(JSON.stringify({headers,body:Buffer.concat(chunks).toString('base64'),url:req.url}));
+      }).listen(Number(process.env.SHADOW_APP_PORT),'127.0.0.1');
+    `)
+    const app = await f.service.publish(f.directory, { ...f.manifest, files: ['index.html', 'server.mjs'],
+      backend: { runtime: 'node', entry: 'server.mjs' } }, 'web:author', AbortSignal.timeout(5000))
+    await f.service.approve(app.id, app.revision)
+    const { origin, token } = await f.connect(app.id)
+    const body = Buffer.from([82, 73, 70, 70, 0, 255, 128, 10])
+    const response = await fetch(origin + '/backend/recognize?mode=file', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'audio/wav',
+        'X-Language': 'ja', 'X-App-Request': 'fixture-request', Accept: 'application/json' }, body,
+    })
+    assert.equal(response.status, 200)
+    const value = await response.json()
+    assert.equal(value.headers['x-language'], 'ja')
+    assert.equal(value.headers['x-app-request'], 'fixture-request')
+    assert.equal(value.headers['content-type'], 'audio/wav')
+    assert.equal(value.headers.accept, 'application/json')
+    assert.equal(value.body, body.toString('base64'))
+    assert.equal(value.url, '/recognize?mode=file')
+    assert.notEqual(value.headers.host, new URL(origin).host)
+
+    const isolated = await new Promise<{ status?: number; body: string }>((resolve, reject) => {
+      const request = httpRequest(origin + '/backend/recognize', { method: 'POST', headers: {
+        Authorization: `Bearer ${token}`, 'Content-Type': 'audio/wav', 'X-Language': 'en',
+        Cookie: 'synthetic-browser-cookie', 'Proxy-Authorization': 'synthetic-proxy-credential',
+        Origin: origin, Referer: origin + '/private', 'Sec-Fetch-Site': 'same-origin',
+        Forwarded: 'host=untrusted.invalid', 'X-Forwarded-Host': 'untrusted.invalid',
+        Connection: 'close, X-Transport-Only', 'X-Transport-Only': 'must-not-forward',
+      } }, response => {
+        const chunks: Buffer[] = []
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+        response.on('error', reject)
+        response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString() }))
+      })
+      request.on('error', reject)
+      request.end(body)
+    })
+    assert.equal(isolated.status, 200, 'Host supplies the backend credential, not the browser credential')
+    const second = JSON.parse(isolated.body)
+    assert.equal(second.headers['x-language'], 'en')
+    assert.equal(second.body, body.toString('base64'))
+    assert.equal(Number(second.headers['content-length']), body.length, 'Forwarded framing is regenerated for the buffered body')
+    for (const name of ['cookie', 'proxy-authorization', 'origin', 'referer', 'sec-fetch-site',
+      'forwarded', 'x-forwarded-host', 'x-transport-only', 'transfer-encoding']) {
+      assert.equal(second.headers[name], undefined, `${name} must not cross the backend boundary`)
+    }
+    assert.equal(f.calls.length, 0)
+  } finally { await f.service.shutdown() }
+}))
+
 test('no model grant denies inference and synchronous provider failures release concurrency slots', async () => withTempWorkspace(async home => {
   const f = await fixture(home)
   try {

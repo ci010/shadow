@@ -193,6 +193,40 @@ test('remote execution prompt does not advertise Main shell detection or inline 
   assert.match(local, /node \| inline TypeScript/)
 })
 
+test('Node-only runtime and tool guidance agree without advertising detected OS shells', async () => {
+  const ctx: SessionPromptContext = {
+    behavior: {}, channel: 'web', chatId: 'node-only', sessionId: 'web:node-only',
+    defaultExecShell: 'powershell', execNodeOnly: true,
+    agent: { name: 'general', description: '', prompt: '', defaultMode: 'session', source: 'builtin' },
+  }
+  const runtime = identityProvider({
+    identity: new IdentityManager('.'), getSkillsSummary: () => '', getAgentTypesSummary: () => '',
+  })
+  const prompt = (await runtime.getPromptSection(ctx))!
+  assert.match(prompt, /Default Exec Shell\*\*: node/)
+  assert.match(prompt, /node \| inline TypeScript runtime/)
+  assert.match(prompt, /Only Node exec is enabled, including tool-bridge calls/)
+  assert.match(prompt, /not an OS sandbox/)
+  assert.doesNotMatch(prompt, /  - (cmd|sh|bash|git-bash|powershell|pwsh)\b/)
+  const guideline = (await guidelineProvider().getPromptSection(ctx))!
+  assert.match(guideline, /Inline TypeScript only/)
+  assert.doesNotMatch(guideline, /using a detected shell/)
+  assert.match(guideline, /infer\(\).*semantic judgments/)
+  assert.match(guideline, /budgets, errors and direct-only boundaries/)
+  assert.match(guideline, /Read `node-scripting` first/)
+  const ordinary = (await guidelineProvider().getPromptSection({ ...ctx, execNodeOnly: false }))!
+  assert.match(ordinary, /`infer\(\)` handles semantic judgments/)
+  const noExec = (await guidelineProvider().getPromptSection({
+    ...ctx, agent: { ...ctx.agent, allowedTools: ['read'] },
+  }))!
+  assert.doesNotMatch(noExec, /`infer\(\)` handles semantic judgments/)
+  const remote = (await runtime.getPromptSection({
+    ...ctx, workdir: { version: 1, nodeId: 'child', capabilityId: 'opaque' },
+  }))!
+  assert.match(remote, /Node-only exec is unavailable on remote workdirs/)
+  assert.doesNotMatch(remote, /Child chooses its default OS shell|Available Exec Shells/)
+})
+
 test('runtime identity uses explicit input source and target session, not sender prefixes or reply address', async (t) => {
   const identity = new IdentityManager('.')
   const lookup = t.mock.method(identity, 'lookupByAccount', async () => ({ personContext: 'Fixture user profile' }))

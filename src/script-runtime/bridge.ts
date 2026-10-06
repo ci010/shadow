@@ -12,6 +12,7 @@ export interface ToolBridgeFactory {
 
 export interface ScriptToolBindingOptions {
   dynamic?: boolean
+  infer?: boolean
 }
 
 export interface ScriptToolBinding {
@@ -19,6 +20,7 @@ export interface ScriptToolBinding {
   /** Available base-tool globals, not a ceiling on declared controlled imports. */
   names: string[]
   call(name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>
+  infer?: (input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>
   /** Abort and revoke immediately; project shutdown separately drains accepted calls. */
   cleanup(): Promise<void>
 }
@@ -31,9 +33,27 @@ function createToolBinding(
   if (!context.tools || !context.sessionId?.trim()) throw new Error('Script tools require a bound session')
   const controller = new AbortController()
   const signal = AbortSignal.any([context.signal, controller.signal])
+  let inferenceCalls = 0
+  let activeInferences = 0
   return {
     signal,
     names: context.tools.names(),
+    ...(options.infer && context.infer ? {
+      async infer(input: Record<string, unknown>, callSignal: AbortSignal) {
+        const combined = AbortSignal.any([signal, callSignal, AbortSignal.timeout(120_000)])
+        combined.throwIfAborted()
+        if (!context.toolCallId || context.toolCallName !== 'exec' || context.remoteWorkdir) {
+          throw new Error('infer requires a local Node exec invocation.')
+        }
+        if (inferenceCalls >= 8 || activeInferences >= 2) throw new Error('infer limit: 8 calls per exec, at most 2 concurrent.')
+        inferenceCalls++
+        activeInferences++
+        const origin = { sessionId: context.sessionId, physicalSessionId: context.physicalSessionId,
+          inputId: context.messageId, outerToolCallId: context.toolCallId }
+        try { return await run(() => context.infer!(input, combined, origin)) }
+        finally { activeInferences-- }
+      },
+    } : {}),
     call(name, input, callSignal) {
       const pending = (async () => {
         signal.throwIfAborted()

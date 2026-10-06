@@ -211,7 +211,7 @@ export function acceptanceRuntimeEnv(directory: string, inherited: NodeJS.Proces
   return env
 }
 
-export async function runAcceptance(output: string, prompt: string, testBoundaries?: string, maxCalls = 100, runtimeRoot?: string) {
+export async function runAcceptance(output: string, prompt: string, testBoundaries?: string, maxCalls = 100, runtimeRoot?: string, nodeOnly = false) {
   if (process.env.SHADOW_MICROAPP_LIVE !== '1') throw new Error('Set SHADOW_MICROAPP_LIVE=1 to authorize a live, potentially billable model test')
   maxCalls = acceptanceCallBudget(String(maxCalls))
   const directory = acceptanceRuntimeDirectory(output, runtimeRoot)
@@ -329,7 +329,9 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
     }
     writePrivateFile(join(directory, 'runtime.config.json'), JSON.stringify(config))
     await mkdir(dirname(project.configPath), { recursive: true })
-    writePrivateFile(project.configPath, JSON.stringify({ voice: { enabled: false }, a2a: { server: {
+    writePrivateFile(project.configPath, JSON.stringify({
+      ...(nodeOnly ? { tools: { exec: { nodeOnly: true } } } : {}),
+      learning: { enabled: false }, voice: { enabled: false }, a2a: { server: {
       url: `${base}/projects/default/a2a`, agentType: 'app-acceptance', callers: { tester: 'SHADOW_TEST_CALLER' }, timeoutMs: 1_800_000,
     } } }))
     const general = await readFile(join(root, 'src', 'agent', 'types', 'builtin', 'general', 'AGENT.md'), 'utf8')
@@ -356,15 +358,17 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
         delay(30_000, undefined, { ref: false }).then(() => { throw new Error('Runtime readiness timed out') }),
       ])
       assert.deepEqual(await owner(''), { apps: state === 'starting' ? [] : (await owner('')).apps })
+      const learning = z.object({ enabled: z.literal(false) }).passthrough().parse(await ownerRequest('/learning'))
+      await artifact('learning.json', learning)
     }
     await launch()
     state = 'running'
     await artifact('isolation.json', { sourceRoot: root, directory, runtimePid: child!.pid,
       controllerPid: process.pid, runtimePort: port, modelProxyPort: proxyPort,
-      testBoundaries: testBoundaries ?? null, maxCalls })
+      testBoundaries: testBoundaries ?? null, maxCalls, nodeOnly })
     console.log(JSON.stringify({ state: 'isolated-runtime-ready', runtimePid: child!.pid,
       runtimePort: port, modelProxyPort: proxyPort }))
-    await artifact('prompt.json', { prompt, model, directory, maxCalls, startedAt: new Date().toISOString(),
+    await artifact('prompt.json', { prompt, model, directory, maxCalls, nodeOnly, startedAt: new Date().toISOString(),
       isolation: 'Fresh Project/Home/workdir/profile/ports; no copied memories, sessions or app code; model-only proxy; standard provider login stays in parent process.' })
     timeline = new AcceptanceTimeline()
     await artifact('timeline.json', timeline.snapshot())
@@ -532,11 +536,12 @@ export async function runAcceptance(output: string, prompt: string, testBoundari
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const { values } = parseArgs({ options: {
     runtime: { type: 'string' }, output: { type: 'string' }, prompt: { type: 'string' },
-    'test-boundaries': { type: 'string' }, 'max-calls': { type: 'string' }, 'runtime-root': { type: 'string' }, help: { type: 'boolean' },
+    'test-boundaries': { type: 'string' }, 'max-calls': { type: 'string' }, 'runtime-root': { type: 'string' },
+    'node-only': { type: 'boolean' }, help: { type: 'boolean' },
   } })
   if (values.runtime) await runtimeChild(resolve(values.runtime))
   else if (values.output) await runAcceptance(resolve(values.output), await loadAcceptancePrompt(values.prompt),
     values['test-boundaries'] ? await loadAcceptancePrompt(values['test-boundaries']) : undefined,
-    acceptanceCallBudget(values['max-calls']), values['runtime-root'])
-  else console.log('Live opt-in: SHADOW_MICROAPP_LIVE=1 node --import tsx scripts\\microapp-a2a.ts --output <fresh-artifact-directory> [--runtime-root <fresh-short-project-local-directory>] [--prompt <UTF-8-file>] [--test-boundaries <UTF-8-file>] [--max-calls <1-100>]\nUses the standard Copilot provider login. See docs/microapps.md for isolated operator review controls.')
+    acceptanceCallBudget(values['max-calls']), values['runtime-root'], values['node-only'])
+  else console.log('Live opt-in: SHADOW_MICROAPP_LIVE=1 node --import tsx scripts\\microapp-a2a.ts --output <fresh-artifact-directory> [--runtime-root <fresh-short-project-local-directory>] [--prompt <UTF-8-file>] [--test-boundaries <UTF-8-file>] [--max-calls <1-100>] [--node-only]\nUses the standard Copilot provider login. See docs/microapps.md for isolated operator review controls.')
 }
