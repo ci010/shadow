@@ -56,10 +56,11 @@
               <p v-if="detail.entry.description">{{ detail.entry.description }}</p>
               <div class="preview-controls">
                 <button type="button" :aria-pressed="raw" @click="raw = !raw">{{ raw ? 'Show preview' : 'Show source' }}</button>
-                <span class="muted">Follow linked entries using References below.</span>
+                <span class="muted">Follow links in the preview or use References below.</span>
               </div>
+              <p v-if="linkError" role="alert" class="error">{{ linkError }}</p>
               <pre v-if="raw || detail.entry.path.endsWith('.jsonl')" class="source">{{ detail.content }}</pre>
-              <div v-else class="prose max-w-none knowledge-preview" v-html="preview" />
+              <div v-else ref="previewElement" class="prose max-w-none knowledge-preview" @click="followPreviewLink" v-html="preview" />
             </template>
             <template v-else-if="!detailLoading && !detailError">
               <h2>Unresolved reference</h2><code>{{ selectedId }}</code>
@@ -90,11 +91,10 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 import { createKnowledgeClient, filterKnowledge, knowledgeRelations, type KnowledgeCatalog, type KnowledgeDetail, type KnowledgeEntry, type KnowledgeKind } from '../knowledge.ts'
+import { renderKnowledgeMarkdown } from '../knowledge-markdown.ts'
 import KnowledgeGraph from './KnowledgeGraph.vue'
 import KnowledgeDeleteDialog from './KnowledgeDeleteDialog.vue'
 import KnowledgeMaintenance from './KnowledgeMaintenance.vue'
@@ -102,10 +102,14 @@ import KnowledgeMaintenance from './KnowledgeMaintenance.vue'
 const props = withDefaults(defineProps<{ apiBase: string; projectId: string; entryId?: string; active?: boolean; sidebarTarget?: string }>(), { active: true })
 const emit = defineEmits<{ select: [id: string]; home: []; catalog: [entries: KnowledgeEntry[]] }>()
 const router = useRouter()
+const route = useRoute()
 const context = useInstallationContext()
 const canManage = computed(() => context.value.uiScopes.includes('main:admin'))
 const selectedId = ref(props.entryId ?? '')
 const scroll = ref<HTMLDivElement>()
+const previewElement = ref<HTMLDivElement>()
+const linkError = ref('')
+let pendingAnchor: { id: string; fragment: string } | undefined
 const scrollPositions = new Map<string, number>()
 const catalog = ref<KnowledgeCatalog>({ entries: [], links: [] })
 const detail = ref<KnowledgeDetail>()
@@ -126,7 +130,28 @@ let detailRequest: AbortController | undefined
 const detailCache = new Map<string, KnowledgeDetail>()
 function restoreScroll(id: string) {
   void nextTick(() => {
-    if (selectedId.value === id && scroll.value) scroll.value.scrollTop = scrollPositions.get(id) ?? 0
+    if (selectedId.value !== id || !scroll.value) return
+    if (pendingAnchor?.id === id) {
+      if (detail.value?.entry.id !== id || !previewElement.value) return
+      const fragment = pendingAnchor.fragment
+      pendingAnchor = undefined
+      let name: string
+      try { name = decodeURIComponent(fragment) }
+      catch (cause) {
+        if (!(cause instanceof URIError)) throw cause
+        linkError.value = 'This link has an invalid section address.'
+        return
+      }
+      const target = [...previewElement.value.querySelectorAll<HTMLElement>('[id]')].find(node => node.id === name)
+      if (target) {
+        target.scrollIntoView({ block: 'start' })
+        target.tabIndex = -1
+        target.focus({ preventScroll: true })
+      } else if (!fragment) previewElement.value.scrollTop = 0
+      else linkError.value = `Section "#${name}" was not found in this entry.`
+      return
+    }
+    scroll.value.scrollTop = scrollPositions.get(id) ?? 0
   })
 }
 const tabs = [
@@ -137,13 +162,33 @@ const entriesById = computed(() => new Map(catalog.value.entries.map(item => [it
 const filtered = computed(() => filterKnowledge(catalog.value, kind.value, query.value))
 const graphIds = computed(() => focusGraph.value && selectedId.value ? [selectedId.value] : filtered.value.map(item => item.id))
 const relations = computed(() => knowledgeRelations(catalog.value, selectedId.value))
-const preview = computed(() => DOMPurify.sanitize(marked.parse(detail.value?.content ?? '', { async: false }), {
-  ALLOWED_TAGS: ['p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a'],
-  ALLOWED_ATTR: [],
-}))
+const preview = computed(() => renderKnowledgeMarkdown(detail.value?.content ?? '', relations.value.outgoing,
+  (id, fragment) => router.resolve({
+    name: 'chat', params: { projectId: props.projectId },
+    query: { panel: 'knowledge', entry: id }, hash: fragment ? `#${fragment}` : '',
+  }).href))
 const title = (id: string) => entriesById.value.get(id)?.title ?? id
 const count = (category: KnowledgeKind | 'all') => category === 'all' ? catalog.value.entries.length : catalog.value.entries.filter(item => item.kind === category).length
 function select(id: string) { selectedId.value = id; emit('select', id) }
+
+function followPreviewLink(event: MouseEvent) {
+  if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+  const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href]') : null
+  if (!anchor || !previewElement.value?.contains(anchor)) return
+  const { knowledgeId, knowledgeFragment, knowledgeError } = anchor.dataset
+  if (knowledgeId === undefined && knowledgeFragment === undefined && knowledgeError === undefined) return
+  event.preventDefault()
+  linkError.value = ''
+  if (knowledgeError !== undefined) {
+    linkError.value = `Cannot open "${knowledgeError}" from this preview. Refresh Knowledge or use Link health to check the reference.`
+    return
+  }
+  const id = knowledgeId ?? selectedId.value
+  pendingAnchor = knowledgeFragment ? { id, fragment: knowledgeFragment } : undefined
+  if (!knowledgeId) pendingAnchor = { id, fragment: knowledgeFragment ?? '' }
+  if (id !== selectedId.value) select(id)
+  else restoreScroll(id)
+}
 
 async function loadDetail() {
   detailRequest?.abort()
@@ -201,6 +246,8 @@ async function deleted(id: string) {
 watch(selectedId, (id, previous) => {
   if (scroll.value) scrollPositions.set(previous, scroll.value.scrollTop)
   notice.value = ''
+  linkError.value = ''
+  if (pendingAnchor?.id !== id) pendingAnchor = undefined
   void loadDetail()
   restoreScroll(id)
 })
@@ -214,6 +261,8 @@ watch(() => [props.apiBase, canManage.value, props.active] as const, ([base, all
     catalog.value = { entries: [], links: [] }
     query.value = ''
     notice.value = ''
+    linkError.value = ''
+    pendingAnchor = undefined
   }
   if (active) void refresh()
   else {
@@ -221,6 +270,13 @@ watch(() => [props.apiBase, canManage.value, props.active] as const, ([base, all
     detailRequest?.abort()
     loading.value = false
     detailLoading.value = false
+  }
+}, { immediate: true })
+watch(() => [props.entryId, route.query.entry, route.hash] as const, ([id, entry, hash]) => {
+  if (id && entry === id && hash) {
+    pendingAnchor = { id, fragment: hash.slice(1) }
+    raw.value = false
+    restoreScroll(id)
   }
 }, { immediate: true })
 onUnmounted(() => { catalogRequest?.abort(); detailRequest?.abort() })
@@ -264,6 +320,7 @@ code { font-size: 12px; overflow-wrap: anywhere; }
 .source { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; max-height: 60vh; overflow: auto; }
 .knowledge-preview { max-height: 60vh; overflow: auto; }
 .knowledge-preview :deep(pre) { white-space: pre-wrap; }
+.knowledge-preview :deep(a[href]:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: 2px; }
 .relations { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; border-top: 1px solid var(--c-border); margin-top: 20px; }
 .relations section { min-width: 0; }
 .relations button { display: grid; gap: 4px; width: 100%; margin-bottom: 6px; text-align: left; overflow-wrap: anywhere; }

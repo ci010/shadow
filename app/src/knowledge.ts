@@ -27,8 +27,12 @@ export function parseKnowledgeCatalog(value: unknown): KnowledgeCatalog {
   if (ids.size !== entries.length) throw invalid()
   const links = value.links.map((link): KnowledgeLink => {
     if (!isRecord(link) || typeof link.source !== 'string' || !ids.has(link.source)
-      || typeof link.target !== 'string' || !link.target || typeof link.label !== 'string') throw invalid()
-    return { source: link.source, target: link.target, label: link.label }
+      || typeof link.target !== 'string' || !link.target || typeof link.label !== 'string'
+      || (link.href !== undefined && (typeof link.href !== 'string' || !link.href))) throw invalid()
+    return {
+      source: link.source, target: link.target, label: link.label,
+      ...(typeof link.href === 'string' ? { href: link.href } : {}),
+    }
   })
   return { entries, links }
 }

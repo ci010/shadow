@@ -35,12 +35,16 @@ test('graph preserves direction, cross-category neighbors, isolates and dangling
 
 test('knowledge wire validation rejects duplicates, builtin deletion and invalid graph sources', () => {
   assert.deepEqual(parseKnowledgeCatalog(catalog), catalog)
+  const withHref = { ...catalog, links: [{ ...catalog.links[0]!, href: '../concepts/node.md#runtime' }] }
+  assert.deepEqual(parseKnowledgeCatalog(withHref), withHref)
   for (const value of [
     { ...catalog, entries: [memory, memory] },
     { ...catalog, entries: [{ ...skill, deletable: true }] },
     { entries: [memory], links: [{ source: 'unknown', target: memory.id, label: 'bad' }] },
     { entries: [{ ...memory, kind: 'file' }], links: [] },
     { entries: [{ ...memory, revision: '' }], links: [] },
+    { ...catalog, links: [{ ...catalog.links[0], href: 123 }] },
+    { ...catalog, links: [{ ...catalog.links[0], href: '' }] },
   ]) assert.throws(() => parseKnowledgeCatalog(value), /invalid knowledge/)
 })
 

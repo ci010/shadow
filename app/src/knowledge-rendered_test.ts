@@ -50,7 +50,9 @@ function mount(t: TestContext, filename: string, initial: Record<string, unknown
       back: () => history.push(-1), forward: () => history.push(1), go: (direction: number) => history.push(direction),
     }) }
     if (id.endsWith('useInstallationContext.ts')) return { useInstallationContext: () => scope }
-    if (id === 'dompurify') return { default: { sanitize: (value: string) => value } }
+    if (id.endsWith('/knowledge-markdown.ts')) return {
+      renderKnowledgeMarkdown: (content: string) => require('marked').marked.parse(content),
+    }
     if (id.endsWith('/useWorkdirGit.ts')) return { useWorkdirGit: () => ({
       status: Vue.ref(), loading: Vue.ref(false), error: Vue.ref(''), offline: Vue.ref(false), revision: Vue.ref(0), refresh() {},
     }) }

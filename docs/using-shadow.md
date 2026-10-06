@@ -137,6 +137,13 @@ semantic inference. Built-in skills are read-only. Deleting an entry removes
 only that file, not its incoming references or already-loaded instructions.
 Agent learning can later recreate deleted knowledge.
 
+Markdown links in the preview open linked knowledge entries in the same
+Project, including relative paths and `v:memory/` / `v:skills/` aliases.
+Section links scroll to the matching heading; web links open separately.
+Missing catalog targets show **Unresolved reference** rather than navigating
+away from Shadow. Other unsupported local links show a message with guidance
+to refresh or check **Link health**.
+
 **Link health** scans Project knowledge for broken references; missing,
 unavailable, and out-of-catalog targets have different meanings. **Preview
 Wiki repair** and **Confirm repair** act on one eligible Wiki file after

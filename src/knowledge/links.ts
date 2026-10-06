@@ -218,16 +218,21 @@ export function extractLinks(
   skillIds: ReadonlyMap<string, string>,
   related?: string,
 ): KnowledgeLink[] {
-  const references = detail.entry.path.endsWith('.jsonl')
+  const isMarkdown = !detail.entry.path.endsWith('.jsonl')
+  const references = !isMarkdown
     ? jsonlReferences(detail.content)
     : markdownReferences(detail.content)
+  const markdownCount = isMarkdown ? references.length : 0
   for (const name of related?.split(',').map(value => value.trim()).filter(Boolean) ?? []) {
     references.push({ target: `v:skills/${name}`, label: 'related' })
   }
   const links: KnowledgeLink[] = []
-  for (const ref of references) {
+  for (const [index, ref] of references.entries()) {
     const target = canonicalReference(ref.target, detail.entry.id, workspace, skillIds)
-    if (target) links.push({ source: detail.entry.id, target, label: ref.label })
+    if (target) links.push({
+      source: detail.entry.id, target, label: ref.label,
+      ...(index < markdownCount ? { href: ref.target } : {}),
+    })
   }
   return links
 }

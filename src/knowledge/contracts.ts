@@ -15,6 +15,8 @@ export interface KnowledgeLink {
   source: string
   target: string
   label: string
+  /** Original destination for Markdown preview navigation; resolved on Main. */
+  href?: string
 }
 
 export interface KnowledgeCatalog {

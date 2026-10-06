@@ -69,10 +69,30 @@ test('graph resolves markdown, event refs, skill aliases and learned related nam
     'memory/sessions/one.md', 'memory/custom/missing.md', 'memory/custom/topic.md',
     'skills/learned/SKILL.md', 'memory/custom/missing.md',
   ])
+  assert.deepEqual(catalog.links.filter(link => link.source === 'memory/custom/topic.md').map(link => link.href), [
+    '../sessions/one.md#history', 'memory/custom/missing.md', 'v:memory/custom/topic.md',
+    'v:skills/learned', '../custom/missing.md',
+  ])
   assert.ok(catalog.links.some(link => link.source === 'skills/learned/SKILL.md'
     && link.target === 'builtin:skills/cron' && link.label === 'related'))
   assert.ok(catalog.links.some(link => link.target === 'skills/absent/SKILL.md'))
   assert.ok(catalog.links.some(link => link.target === 'memory/missing.md' && link.label === 'refs'))
+})
+
+test('catalog preserves Markdown destinations rather than matching preview links by label', async t => {
+  const f = await fixture(t)
+  await f.put('memory/topics/index.md', [
+    '[Read](../custom/a%20b.md#first)',
+    '[Read](v:memory/custom/a%20b.md#second)',
+    '[Entity](../custom/a&amp;b.md)',
+    '[Reference][read]', '[read]: ../custom/a%20b.md#third',
+  ].join('\n'))
+  assert.deepEqual(f.service.catalog().links.map(({ target, href }) => ({ target, href })), [
+    { target: 'memory/custom/a b.md', href: '../custom/a%20b.md#first' },
+    { target: 'memory/custom/a b.md', href: 'v:memory/custom/a%20b.md#second' },
+    { target: 'memory/custom/a&b.md', href: '../custom/a&b.md' },
+    { target: 'memory/custom/a b.md', href: '../custom/a%20b.md#third' },
+  ])
 })
 
 test('delete persists just the selected file, preserves incoming links, rejects stale content, and deletes whole daily logs', async t => {
