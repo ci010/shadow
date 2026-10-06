@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import test, { type TestContext } from 'node:test'
-import { createRenderer, defineComponent, h, nextTick, reactive, type Component, type ComponentPublicInstance } from 'vue'
+import { createRenderer, defineComponent, h, inject, nextTick, reactive, type Component, type ComponentPublicInstance } from 'vue'
 import { compileScript, compileTemplate, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import { AUTOMATION_PAGE_SIZE, fetchAutomations, fetchAutomationRuns, learningOutcomeLabel } from './automations.ts'
@@ -10,6 +10,7 @@ import { createLiveRefresh } from './live-refresh.ts'
 import type { LiveObserver } from './live-client.ts'
 import { createAutomationCatalog } from './automation-catalog.ts'
 import { createAutomationRunHistory } from './automation-run-history.ts'
+import * as automationConversationModule from './composables/useAutomationConversation.ts'
 
 const base = 'http://fixture/projects/a'
 const automation = (id = 'cron:weekly') => ({
@@ -23,22 +24,21 @@ const signal = () => new AbortController().signal
 const settle = () => new Promise(resolve => setTimeout(resolve, 10))
 const response = (value: unknown): typeof fetch => async () => Response.json(value)
 
-test('automation workspace reserves the explorer and toolbar rather than inserting a run header', () => {
+test('automation workspace delegates to the ordinary conversation without a runs explorer or tab strip', () => {
   const { descriptor } = parse(readFileSync(new URL('./components/AutomationDetail.vue', import.meta.url), 'utf8'))
   const style = descriptor.styles.map(style => style.content).join('\n')
   assert.match(style, /\.automation-detail\s*\{[^}]*\bflex:\s*1\s*;/)
-  assert.match(style, /\.automation-toolbar\s*\{[^}]*\bflex:\s*0 0 40px\s*;/)
-  assert.doesNotMatch(descriptor.template!.content, /Back to runs|run-pagination|<select/)
+  assert.match(descriptor.template!.content, /<slot\s*\/>/)
+  assert.doesNotMatch(descriptor.template!.content, /automation-explorer|automation-toolbar|role="tab"|<aside/)
 })
 
-test('run titles remain available in tree hover information without expanding rows', async t => {
+test('run titles remain available as data without introducing a run list', async t => {
   const view = mount(t)
   await settle()
   const title = 'Long persisted prompt line\n'.repeat(100)
   view.finish(0, page([{ ...run(), title }]))
   await settle()
-  const rendered = view.nodes().find(node => node.props['data-session-id'] === run().sessionId)
-  assert.ok(rendered)
+  assert.equal(view.props.selectedSessionId, run().sessionId)
   assert.equal(view.state().history.runs[0].title, title)
   assert.doesNotMatch(view.text(), /Long persisted prompt line/)
 })
@@ -92,7 +92,7 @@ test('learning outcomes remain distinct from session completion and validate rec
   assert.equal((await fetchAutomationRuns(base, 'learning:reflector', 0, signal(), response(page()))).runs[0].learning, undefined)
 })
 
-test('learning runs show partial outcomes and mark historical completion unverified', async t => {
+test('learning conversations show partial outcomes and keep legacy completion unverified', async t => {
   const view = mount(t)
   await settle()
   view.finish(0, page([{ ...run(), learning: {
@@ -100,13 +100,13 @@ test('learning runs show partial outcomes and mark historical completion unverif
   } }, run('legacy')]), { ...automation(), source: 'learning' })
   await settle()
   assert.match(view.text(), /Partial/)
-  assert.match(view.text(), /Unverified/)
-  view.props.selectedSessionId = run().sessionId
-  await nextTick()
   assert.match(view.text(), /One decision saved; remaining evidence unread/)
   assert.match(view.text(), /Execution: Completed/)
   assert.match(view.text(), /1 recorded artifact/)
   assert.doesNotMatch(view.text(), /1 verified artifact/)
+  view.props.selectedSessionId = run('legacy').sessionId
+  await nextTick()
+  assert.match(view.text(), /No verified learning receipt/)
 })
 
 test('runs reject malformed dates, counts, scope offsets, duplicate sessions and unknown wire enums', async () => {
@@ -189,7 +189,6 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   t.after(() => catalog.dispose())
   const props = reactive({ apiBase: base, automationId: automation().id, active, selectedSessionId: '', enabled: true })
   const opens: string[] = []
-  let overviews = 0
   function component(filename: string) {
     const url = new URL(`./components/${filename}`, import.meta.url)
     const { descriptor } = parse(readFileSync(url, 'utf8'))
@@ -209,6 +208,8 @@ function mount(t: TestContext, active = true, withSidebar = false) {
         setup: (_props, { slots }) => () => slots.default?.({ triggerProps: {}, close: () => {} }),
       }) }
       if (id.endsWith('/TreeRow.vue')) return { default: component('TreeRow.vue') }
+      if (id.endsWith('/AutomationConversationInfo.vue')) return { default: component('AutomationConversationInfo.vue') }
+      if (id === '../composables/useAutomationConversation.ts') return automationConversationModule
       if (id.endsWith('.vue')) return { default: defineComponent({ setup: () => () => null }) }
       if (id === '../live-refresh.ts') return {
         createLiveRefresh: (options: Parameters<typeof createLiveRefresh>[0]) => createLiveRefresh({ ...options, delayMs: 0 }),
@@ -229,6 +230,13 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     return module.exports.default
   }
   const detail = component('AutomationDetail.vue')
+  const info = component('AutomationConversationInfo.vue')
+  const conversation = defineComponent({
+    setup() {
+      const context = inject(automationConversationModule.automationConversationKey)!
+      return () => context.sessionId.value ? h(info, { conversation: context }) : null
+    },
+  })
   const sidebar = withSidebar ? component('AutomationSidebar.vue') : undefined
   const sidebarProps = reactive({ apiBase: base, active, groups: [], stages: {} })
   interface TreeNode { type: string; text: string; style: Record<string, string>; props: Record<string, unknown>; children: TreeNode[]; parent: TreeNode | null }
@@ -253,8 +261,11 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   const app = renderer.createApp(defineComponent({
     setup: () => () => [
       ...(sidebar ? [h(sidebar, sidebarProps)] : []),
-      h(detail, { ...props, onOpen: (id: string) => opens.push(id), onOverview: () => overviews++,
-        ref: (value: ComponentPublicInstance | null) => { instance = value } }),
+      h(detail, { ...props, onOpen: (id: string, replace: boolean) => {
+        if (!replace) opens.push(id)
+        props.selectedSessionId = id
+      }, ref: (value: ComponentPublicInstance | null) => { instance = value } },
+      { default: () => h(conversation) }),
     ],
   }))
   app.provide(Symbol.for('shadow.automation-catalog'), catalog)
@@ -267,7 +278,7 @@ function mount(t: TestContext, active = true, withSidebar = false) {
     const setup = Reflect.get(instance.$, 'setupState')
     return new Proxy(setup, { get(target, key) {
       if (key === 'runs') return target.history.runs
-      if (key === 'error') return target.catalogError || target.history.error
+      if (key === 'error') return target.error || target.historyError
       return Reflect.get(target, key)
     } })
   }
@@ -279,7 +290,7 @@ function mount(t: TestContext, active = true, withSidebar = false) {
   const setVisible = (value: boolean) => { visibility.visibilityState = value ? 'visible' : 'hidden'; visibility.dispatchEvent(new Event('visibilitychange')) }
   const nodes = (parent = root): TreeNode[] => [parent, ...parent.children.flatMap(child => nodes(child))]
   const text = () => nodes().map(node => node.text).join(' ')
-  return { props, sidebarProps, requests, subscriptions, state, invalidate, unmount, finish, intervals, setVisible, opens, nodes, text, overviews: () => overviews }
+  return { props, sidebarProps, requests, subscriptions, state, invalidate, unmount, finish, intervals, setVisible, opens, nodes, text }
 }
 
 test('concurrent sidebar and detail share one catalog request, subscription and polling timer', async t => {
@@ -432,11 +443,13 @@ test('component uses shared sessions, coalesces invalidations and renders author
   assert.equal(view.requests.length, 2, 'one paired snapshot in flight')
   view.finish(0, page([{ ...run(), status: 'unknown' }]))
   await settle()
-  assert.equal(view.state().statusLabel(view.state().runs[0].status), 'Status unknown')
-  assert.match(view.text(), /Status unknown/)
+  assert.equal(view.state().runs[0].status, 'unknown')
+  assert.equal(view.props.selectedSessionId, '', 'Default selection waits for the coalesced refresh to finish')
   assert.equal(view.requests.length, 4, 'one coalesced follow-up')
-  view.finish(2)
+  view.finish(2, page([{ ...run(), status: 'unknown' }]))
   await settle()
+  assert.equal(view.state().position.run.status, 'unknown')
+  assert.match(view.text(), /Status unknown/)
   assert.equal(view.requests.length, 4)
   assert.equal(view.intervals.size, 1)
   view.intervals.values().next().value!()
@@ -476,35 +489,31 @@ test('project and job changes clear stale data, abort reads, and ignore late res
   assert.equal(view.state().automation.source, 'learning')
 })
 
-test('infinite loading appends runs and keeps out-of-page historical tabs selected', async t => {
+test('history navigation appends pages while keeping the selected independent conversation', async t => {
   const view = mount(t)
+  view.props.selectedSessionId = 'web:run-29'
   await settle()
   const first = Array.from({ length: 30 }, (_, index) => run(String(index)))
   view.finish(0, page(first, 31))
   await settle()
-  const original = view.nodes().find(node => node.props['data-session-id'] === first[0].sessionId)
-  view.state().loadMore()
+  view.state().navigation.previous()
   await nextTick()
   await settle()
   assert.equal(view.requests[2].url.searchParams.get('offset'), '30')
   assert.equal(view.state().runs.length, 30)
-  assert.equal(view.nodes().find(node => node.props['data-session-id'] === first[0].sessionId), original)
+  assert.equal(view.props.selectedSessionId, 'web:run-29')
   view.requests[2].finish(page([run('last')], 31, 30))
   await settle()
+  assert.equal(view.props.selectedSessionId, 'web:run-last')
   view.props.selectedSessionId = 'web:historical-outside-page'
   await nextTick()
   assert.equal(view.state().history.nextOffset, 31)
   assert.equal(view.state().runs.length, 31)
-  assert.ok(view.nodes().some(node => node.props.role === 'tab' && node.props['aria-selected'] === true
-    && view.nodes(node).some(child => child.text === 'Run conversation')))
+  assert.match(view.state().historyError, /no longer in the automation history/)
   assert.equal(view.requests.length, 3, 'Pagination does not reload the catalog')
-  assert.deepEqual(view.opens, [])
-  view.state().openRun('web:run-last')
   assert.deepEqual(view.opens, ['web:run-last'])
-  assert.equal(view.nodes().some(node => node.props.role === 'tab' && view.nodes(node).some(child => child.text.includes('Configuration'))), false)
-  assert.equal(view.overviews(), 0)
   assert.equal(view.props.selectedSessionId, 'web:historical-outside-page')
-  assert.equal(view.state().openTabs.length, 1)
+  assert.equal(view.nodes().some(node => node.props.role === 'tab'), false)
 })
 
 test('inactive, document-hidden and unmounted views release all scoped resources', async t => {
@@ -554,6 +563,8 @@ test('upgrade, invalid and missing automation errors are retryable and never bec
   await settle()
   assert.equal(view.state().error, '')
   assert.deepEqual(view.state().runs, [])
+  view.props.selectedSessionId = ''
+  await nextTick()
   view.invalidate()
   await settle()
   view.requests[4].finish({ automations: [] })
@@ -568,7 +579,7 @@ test('upgrade, invalid and missing automation errors are retryable and never bec
   assert.match(view.state().error, /invalid automation data/)
 })
 
-test('collapsed automation details explain learning checks without becoming a run tab', async t => {
+test('collapsed conversation metadata explains learning checks without adding a configuration tab', async t => {
   const view = mount(t)
   await settle()
   view.finish(0, page([{ ...run(), status: 'failed', title: 'Saved conversation title' }]), {
@@ -578,11 +589,8 @@ test('collapsed automation details explain learning checks without becoming a ru
   assert.match(view.text(), /Dispatch is disabled/)
   assert.match(view.text(), /Failed/)
   assert.match(view.text(), /Review recent work/)
-  const runButton = view.nodes().find(node => node.type === 'button' && String(node.props.class).split(' ').includes('automation-run'))
-  assert.ok(runButton)
-  assert.equal(runButton.props['data-session-id'], run().sessionId)
-  ;(runButton.props.onClick as (event: unknown) => void)({ stopPropagation() {} })
-  assert.deepEqual(view.opens, [run().sessionId])
+  assert.equal(view.props.selectedSessionId, run().sessionId)
+  assert.deepEqual(view.opens, [])
   const details = view.nodes().find(node => node.type === 'details' && node.props.class === 'automation-info')
   assert.ok(details)
   assert.ok(!details.props.open)
@@ -591,76 +599,63 @@ test('collapsed automation details explain learning checks without becoming a ru
   assert.match(view.text(), /activity-gated/)
   assert.match(view.text(), /each dispatch starts a separate conversation/)
   assert.match(view.text(), /Review recent work/)
-  assert.match(view.text(), /Read-only/)
-  view.props.selectedSessionId = run().sessionId
-  await nextTick()
-  view.props.selectedSessionId = ''
-  await nextTick()
-  assert.equal(view.state().openTabs.length, 1, 'Viewing automation information does not close the run tab')
-  assert.match(view.text(), /Select a run to view its conversation/)
+  assert.equal(view.requests.length, 2, 'Conversation metadata reuses the same catalog and history')
+})
+
+test('an automation with no runs keeps its read-only details without creating a draft', async t => {
+  const view = mount(t)
+  await settle()
+  view.finish(0, page([]))
+  await settle()
+  assert.equal(view.props.selectedSessionId, '')
+  assert.deepEqual(view.opens, [])
+  assert.match(view.text(), /No saved runs yet/)
   assert.match(view.text(), /Review recent work/)
-  assert.equal(view.requests.length, 2, 'Tab transitions do not reload the catalog or run page')
+  assert.ok(view.nodes().some(node => node.type === 'details' && node.props.class === 'automation-info'))
 })
 
-test('run keyboard navigation wraps only through open runs and closing the last returns to the empty view', async t => {
+test('previous, next and current select sessions without accumulating open run tabs', async t => {
   const view = mount(t)
   await settle()
-  view.finish()
+  view.finish(0, page([run('first'), run('second'), run('third')]))
   await settle()
-  view.props.selectedSessionId = 'web:first'
+  assert.equal(view.props.selectedSessionId, 'web:run-first')
+  view.state().navigation.previous()
   await nextTick()
-  view.props.selectedSessionId = 'web:second'
+  view.state().navigation.previous()
   await nextTick()
-  view.state().tabKey({ key: 'ArrowRight', preventDefault() {} }, 'web:second')
-  view.state().tabKey({ key: 'Home', preventDefault() {} }, 'web:second')
-  view.state().tabKey({ key: 'End', preventDefault() {} }, 'web:first')
-  assert.deepEqual(view.opens, ['web:first', 'web:first', 'web:second'])
-  assert.equal(view.overviews(), 0)
-  view.state().closeTab('web:first')
-  view.state().closeTab('web:second')
+  view.state().navigation.next()
   await nextTick()
-  assert.equal(view.overviews(), 1)
-  assert.equal(view.state().openTabs.length, 0)
+  view.state().navigation.current()
+  await nextTick()
+  assert.deepEqual(view.opens, ['web:run-second', 'web:run-third', 'web:run-second', 'web:run-first'])
+  assert.equal(view.state().position.historical, false)
+  assert.equal(view.nodes().some(node => node.props.role === 'tab'), false)
 })
 
-test('runs load lazily and preserved rows survive refresh failures and collapsed navigation', async t => {
+test('history refresh failures preserve the selected conversation and expose retry inline', async t => {
   const view = mount(t)
   await settle()
-  assert.ok(view.nodes().some(node => node.props['aria-label'] === 'Loading runs'))
+  assert.match(view.text(), /Loading conversation/)
   view.finish()
   await settle()
-  const original = view.nodes().find(node => node.props['data-session-id'] === run().sessionId)
+  const original = view.state().history.runs
   view.invalidate()
   await settle()
-  assert.equal(view.nodes().find(node => node.props['data-session-id'] === run().sessionId), original)
-  assert.equal(view.nodes().some(node => node.props['aria-label'] === 'Loading runs'), false)
+  assert.equal(view.state().history.runs, original)
+  assert.equal(view.props.selectedSessionId, run().sessionId)
   view.requests[2].finish({ automations: [automation()] })
   view.requests[3].finish({}, 503)
   await settle()
-  assert.equal(view.nodes().find(node => node.props['data-session-id'] === run().sessionId), original)
-  assert.match(view.text(), /Retry runs/)
-  view.state().expanded = false
-  await nextTick()
-  view.invalidate()
+  assert.equal(view.state().history.runs, original)
+  assert.match(view.text(), /Retry history/)
+  const retry = view.nodes().find(node => node.type === 'button' && node.text === 'Retry history')
+  assert.ok(retry)
+  ;(retry.props.onClick as () => void)()
   await settle()
-  assert.equal(view.requests.length, 5, 'Collapsed run explorer refreshes only the catalog')
-  view.requests[4].finish({ automations: [automation()] })
+  assert.equal(view.requests.length, 5, 'Retrying history does not refetch the catalog')
+  view.requests[4].finish(page())
   await settle()
-  view.state().expanded = true
-  await nextTick()
-  await settle()
-  assert.equal(view.requests.length, 6)
-  assert.equal(view.nodes().find(node => node.props['data-session-id'] === run().sessionId), original)
-  view.requests[5].finish(page())
-  await settle()
-  view.props.selectedSessionId = run().sessionId
-  await nextTick()
-  view.props.selectedSessionId = 'web:other-historical'
-  await nextTick()
-  assert.equal(view.state().openTabs.length, 2)
-  view.state().closeTab(run().sessionId)
-  await nextTick()
-  assert.deepEqual(view.opens, [], 'Closing an inactive tab must not change the selected conversation')
-  view.state().closeTab('web:other-historical')
-  assert.equal(view.overviews(), 1)
+  assert.equal(view.state().historyError, '')
+  assert.equal(view.props.selectedSessionId, run().sessionId)
 })

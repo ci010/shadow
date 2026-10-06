@@ -22,7 +22,6 @@
       :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => $emit('knowledge-navigation', active, entryId)"
       @project-navigation="$emit('project-navigation', $event)"
       :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :visible="visible" :child-session-id="childSessionId" :automation-run="automationRun"
-      :document-toolbar-target="documentToolbarTarget" :conversation-request="conversationRequest" :conversation-tab-id="conversationTabId"
       @navigate="(id, child) => $emit('navigate', id, child)" @prepared="$emit('prepared', $event)" />
   </div>
 </template>
@@ -43,9 +42,6 @@ const props = defineProps<{
   initialFolder?: FolderRecord; openRemote?: boolean; visible: boolean; childSessionId?: string
   knowledgeRequest?: KnowledgeTabRequest
   automationRun?: boolean
-  documentToolbarTarget?: string
-  conversationRequest?: number
-  conversationTabId?: string
 }>()
 const emit = defineEmits<{ navigate: [id: string, child?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab]; 'dashboard-visible': [visible: boolean] }>()
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()

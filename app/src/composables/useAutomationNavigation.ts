@@ -25,11 +25,12 @@ export function useAutomationNavigation(options: {
     options.closeSidebar()
     void router.push(automationChatLocation(projectId, id))
   }
-  function openAutomationRun(sessionId: string) {
+  function openAutomationRun(sessionId: string, replace = false) {
     const owner = automation.value
     if (!owner) return
     options.openSession({ projectId: owner.projectId, sessionId })
-    void router.push(automationChatLocation(owner.projectId, owner.id, sessionId))
+    const location = automationChatLocation(owner.projectId, owner.id, sessionId)
+    void (replace ? router.replace(location) : router.push(location))
   }
   function identifyAutomation(projectId: string, sessionId: string, jobId?: string) {
     if (selected.value?.projectId !== projectId || selected.value.sessionId !== sessionId) return

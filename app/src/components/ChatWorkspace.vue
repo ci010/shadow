@@ -5,7 +5,6 @@
         :knowledge-request="knowledgeRequest" @knowledge-navigation="(active, entryId) => emit('knowledge-navigation', active, entryId)"
         @project-navigation="emit('project-navigation', $event)"
         :project-id="projectId" :project-name="projectName" :managed="managed" :session-id="sessionId" :initial-folder="initialFolder" :open-remote="openRemote" :automation-run="automationRun"
-        :document-toolbar-target="documentToolbarTarget" :conversation-request="conversationRequest" :conversation-tab-id="conversationTabId"
         :visible="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name)) && (!childId || wide || route.name !== 'chat')" :keyboard-active="keyboardActive && visible && (!childId || wide || route.name !== 'chat') && activePane === 'primary'"
         @open-child="openChild" @close-child="closeChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
     </div>
@@ -34,7 +33,7 @@ import { childConversationTarget, childWidthBounds, clampChildWidth, SPLIT_HANDL
 import type { FolderRecord } from '../folders-client.ts'
 import type { KnowledgeTabRequest, ProjectTab } from '../file-workbench.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean; documentToolbarTarget?: string; conversationRequest?: number; conversationTabId?: string }>(), { visible: true, embedded: false, keyboardActive: true })
+const props = withDefaults(defineProps<{ apiBase: string; projectId?: string; projectName?: string; managed?: boolean; embedded?: boolean; keyboardActive?: boolean; sessionId?: string; initialFolder?: FolderRecord; openRemote?: boolean; visible?: boolean; childSessionId?: string; knowledgeRequest?: KnowledgeTabRequest; automationRun?: boolean }>(), { visible: true, embedded: false, keyboardActive: true })
 const emit = defineEmits<{ navigate: [id: string, childId?: string]; prepared: [id: string]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab] }>()
 const route = useRoute()
 const router = useRouter()

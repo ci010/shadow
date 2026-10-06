@@ -546,6 +546,11 @@ read the selected contract, then call it via `invoke_tool`. `cron_add` takes
 | `existing` (default) | Append to the target/current durable conversation, preserving its agent and workdir |
 | `fresh` | Start an independent context per run, grouped under **Automations** |
 
+Selecting an Automation opens its latest run in the normal conversation layout.
+Previous, Next and Current use the same history navigation as compacted chats;
+they switch between independent run conversations, without combining their
+agent contexts or introducing a separate runs tab.
+
 An existing job's target must be in the same Project and accessible to its
 creator. A fresh job retains its Project and workdir reference, not the
 conversation transcript; an unavailable remote workdir never falls back to

@@ -23,15 +23,18 @@ conversation and unsent draft. On narrow screens, the panel uses the available
 space until you close it to return to the selected tab. Folder and conversation
 rows open their own views. **Automations** lists scheduled tasks
 that start fresh conversations, with their run histories. Selecting an automation
-opens a runs explorer beside a stable tabbed content area. Run summaries load
-only while the explorer is expanded, and scrolling loads additional pages.
-Each selected run opens a conversation tab, and the conversation's file explorer
-stays closed until you open it manually. Schedule, agent, dispatch state and prompt
-are available under the collapsed **Automation details** entry in the runs explorer,
-not a permanent Configuration tab. With no run selected, choose one from the list.
-Run and document tabs share one toolbar; selecting the run tab returns to its
-conversation without opening the file explorer. Refreshing runs preserves the
-loaded rows, including when a refresh fails.
+opens its latest run directly in the ordinary conversation workbench, with the
+same Conversation and document tabs and file-explorer behavior as other chats.
+Use the conversation's **Previous**, **Next**, and **Current** history controls
+to browse earlier runs, just like compacted conversation segments. Older pages
+load when needed; a deep link to an older run keeps that conversation selected.
+The current view follows new runs, while browsing history keeps the selected run
+in place. Each run retains its own session ID and independent context; this
+navigation does not merge transcripts or change scheduled execution.
+Schedule, agent, dispatch state and prompt are available under the collapsed
+**Automation details** disclosure in the conversation, not a separate runs
+explorer or Configuration tab. An automation without runs shows an empty state.
+Refreshing history retains the selected conversation when a refresh fails.
 When the app becomes visible again, this list keeps its last loaded state while
 refreshing. An already-empty section stays hidden unless loading fails; the
 loading placeholder appears only before the first successful load in a Project.

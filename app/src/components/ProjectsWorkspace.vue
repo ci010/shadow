@@ -54,7 +54,7 @@
       <AutomationDetail :enabled="!!automation"
         :api-base="automation ? projectBase(apiBase, automation.projectId) : apiBase" :automation-id="automation?.id ?? ''" :active="visible"
         :selected-session-id="selected?.sessionId"
-        @open="openAutomationRun" @overview="automation && showAutomation(automation.projectId, automation.id)" v-slot="{ toolbarTarget, conversationRequest, conversationTabId }">
+        @open="openAutomationRun">
       <section v-if="!selected && !automation" class="project-empty">
         <h1>Where would you like to work?</h1>
         <p>Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.</p>
@@ -68,8 +68,6 @@
         :project-name="projects.find(item => item.id === resource.projectId)?.name ?? resource.projectId"
         :session-id="resource.sessionId" :initial-folder="resource.folder" :open-remote="resource.openRemote"
         :automation-run="!!automation && selected?.key === resource.key"
-        :document-toolbar-target="automation && selected?.key === resource.key ? toolbarTarget : undefined"
-        :conversation-request="conversationRequest" :conversation-tab-id="conversationTabId"
         :child-session-id="resource.childSessionId"
         :knowledge-request="resource.knowledgeRequest" @knowledge-navigation="(active, entryId) => knowledgeNavigation(resource, active, entryId)"
         @project-navigation="tab => projectNavigation(resource, tab)"

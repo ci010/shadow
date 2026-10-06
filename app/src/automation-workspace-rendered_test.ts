@@ -15,7 +15,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = desktopRequire('esbuild') as typeof import('esbuild')
 
-test('automation workspace keeps slow loading stable, lazily appends runs and opens real conversation tabs without files', {
+test('automations open ordinary conversations and navigate run history without a runs explorer or run tabs', {
   timeout: 90_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
@@ -34,6 +34,7 @@ test('automation workspace keeps slow loading stable, lazily appends runs and op
   let hold = true
   let holdHistory = true
   let failRuns = false
+  let emptyRuns = false
   const pending: (() => void)[] = []
   const pendingHistory: (() => void)[] = []
   let server: Awaited<ReturnType<typeof createServer>> | undefined
@@ -91,14 +92,15 @@ test('automation workspace keeps slow loading stable, lazily appends runs and op
           if (path === '/__automations') {
             response.setHeader('Content-Type', 'text/html')
             response.end('<!doctype html><html class="dark"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="app" style="height:100dvh;display:flex"></div><script type="module" src="/automations-fixture.ts"></script></body></html>')
-          } else if (path === '/__fixture/stats') json({ changes: changeRequests.length })
+          } else if (path === '/__fixture/stats') json({ changes: changeRequests.length, offsets })
           else if (path === '/__fixture/hold') { hold = true; json({ ok: true }) }
           else if (path === '/__fixture/release' || path === '/__fixture/fail') {
             hold = false
             failRuns = path.endsWith('/fail')
             pending.splice(0).forEach(send => send())
             json({ ok: true })
-          } else if (path === '/__fixture/history') {
+          } else if (path === '/__fixture/empty') { emptyRuns = true; json({ ok: true }) }
+          else if (path === '/__fixture/history') {
             holdHistory = false
             pendingHistory.splice(0).forEach(send => send())
             json({ ok: true })
@@ -110,7 +112,7 @@ test('automation workspace keeps slow loading stable, lazily appends runs and op
           } else if (path.endsWith('/runs')) {
             const offset = Number(url.searchParams.get('offset'))
             offsets.push(offset)
-            const send = () => json(failRuns ? { error: 'Synthetic unavailable history' } : { runs: runs.slice(offset, offset + 30), total: runs.length, offset }, failRuns ? 503 : 200)
+            const send = () => json(failRuns ? { error: 'Synthetic unavailable history' } : { runs: emptyRuns ? [] : runs.slice(offset, offset + 30), total: emptyRuns ? 0 : runs.length, offset }, failRuns ? 503 : 200)
             if (hold) pending.push(send)
             else send()
           } else if (path === '/api/sessions/graph') json({ sessions: [...runs.map(run => ({
@@ -130,8 +132,10 @@ test('automation workspace keeps slow loading stable, lazily appends runs and op
             changeRequests.push(path)
             json({ error: 'Write history has no standalone UI consumer' }, 500)
           } else if (/\/api\/sessions\/[^/]+$/.test(path)) {
-            const send = () => json({ currentPhysicalId: 'segment', previousPhysicalId: null, messages: [
-              { role: 'user', content: 'Synthetic run input' }, { role: 'assistant', content: 'Synthetic run result' },
+            const sessionId = decodeURIComponent(path.split('/').at(-1)!)
+            const segment = sessionId === 'compact:run-1'
+            const send = () => json({ currentPhysicalId: 'segment', previousPhysicalId: !segment && sessionId === 'cron:run-1' ? 'compact:run-1' : null, messages: [
+              { role: 'user', content: `Synthetic run input ${sessionId}` }, { role: 'assistant', content: `Synthetic run result ${sessionId}` },
             ] })
             if (holdHistory) pendingHistory.push(send)
             else send()
@@ -139,7 +143,7 @@ test('automation workspace keeps slow loading stable, lazily appends runs and op
           else if (path.endsWith('/work')) json({ records: [], effects: [] })
           else if (path.endsWith('/files') || path.endsWith('/git/status')) {
             if (!path.includes('web%3Aordinary')) fileRequests.push(path)
-            json(path.endsWith('/files') ? { path: '', entries: [] } : { available: false, reason: 'not_repository' })
+            json(path.endsWith('/files') ? { path: '', entries: [] } : { available: false, reason: 'not_repository', entries: [] })
           } else if (path.endsWith('/api/slash-commands')) json({ commands: [] })
           else if (path.endsWith('/background-tasks')) json({ total: 0, tasks: [] })
           else if (path.endsWith('/publication-requests')) json({ request: null, requests: [] })
@@ -177,7 +181,8 @@ test('automation workspace keeps slow loading stable, lazily appends runs and op
   assert.equal(code, 0, output)
   assert.match(output, /AUTOMATION_WORKSPACE_OK/)
   assert.ok(offsets.includes(30))
-  assert.deepEqual(fileRequests, [], 'Run conversations must not eagerly fetch files or git status')
+  assert.ok(offsets.includes(60), 'Deep links can resolve runs beyond the first two pages')
+  assert.ok(fileRequests.length > 0, 'Run conversations use the ordinary file explorer defaults')
   assert.deepEqual(changeRequests, [], 'Removing the changes UI must also remove its requests')
   assert.deepEqual(unexpected, [])
 })

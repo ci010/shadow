@@ -27,11 +27,9 @@
       @draft="createNewWebChat"
     />
 
-    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? activeSessionName : 'New conversation'" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
+    <FileWorkbench ref="workbench" :api-base="apiBase" :session-id="activeSessionId" :conversation-title="activeSessionId ? conversationTitle : 'New conversation'" :folder-id="!activeSessionId ? draft.folder?.id : undefined"
       :project-id="projectId" :knowledge-request="knowledgeRequest" :knowledge-enabled="!embedded && installation.uiScopes.includes('main:admin')"
       :project-navigation-enabled="!embedded"
-      :initial-explorer-open="automationRun ? false : undefined"
-      :document-toolbar-target="documentToolbarTarget" :hide-primary-tab="automationRun" :conversation-tab-id="conversationTabId"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
@@ -73,7 +71,7 @@
         <p v-else class="draft-scratch">From scratch &middot; No folder selected</p>
       </div>
       <template v-else>
-        <div v-show="!mobileLayout || previousPhysicalId || viewingPhysicalId" class="conversation-heading-row">
+        <div v-show="!mobileLayout || previousPhysicalId || viewingPhysicalId || automationConversation" class="conversation-heading-row">
           <button v-if="embedded && executionParent" class="btn btn-sm" aria-label="Back to owning execution" @click="inspectExecution(executionParent.sessionId)">
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
@@ -81,10 +79,11 @@
             :name="activeSessionName" :project-name="projectName" :topic="activeSession?.topic" :physical-id="viewingPhysicalId" :revision="detailsRevision"
             :can-rename="installation.uiScopes.includes('chat:write')" @renamed="loadSessionList()"
             :active="visible && route.name === 'chat' && !!activeSession" @workdir="currentWorkdir = $event" />
-          <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId" :has-previous="!!previousPhysicalId"
-            :historical="!!viewingPhysicalId" :busy="loadingHistory" @previous="viewPreviousSegment"
+          <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
+            :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
             @next="viewNextSegment" @current="goBackToCurrentSegment" />
         </div>
+        <AutomationConversationInfo v-if="automationConversation" :conversation="automationConversation" />
 
         <!-- Messages -->
         <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history" :aria-busy="loadingHistory">
@@ -246,9 +245,9 @@
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible }">
         <div class="session-status-row">
           <SessionWorkStatus v-if="activeSessionId && activeSessionId !== 'web:orchestrator' && !isExecution && !viewingPhysicalId"
-            :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
+            :key="`work-status:${activeSessionId}`" :api-base="apiBase" :session-id="activeSessionId" :revision="workRevision"
             :active="paneActive && composerVisible && route.name === 'chat'" @open="openProjectWork" />
-          <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="activeSessionId"
+          <SessionWorkControls v-if="activeSessionId && !isCall && !viewingPhysicalId" :key="`work-controls:${activeSessionId}`"
             :api-base="apiBase" :session-id="activeSessionId" :can-write="installation.uiScopes.includes('chat:write')" :active="paneActive && composerVisible && route.name === 'chat'"
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
           <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
@@ -491,6 +490,8 @@ import { activeSubagentsByOwner, executionStages, isOneShot, ownedExecutions } f
 import FoldersSidebar from './FoldersSidebar.vue'
 import { apiUrl, hostBase } from '../api-url.ts'
 import { automationChatLocation } from '../automations.ts'
+import { useAutomationConversation } from '../composables/useAutomationConversation.ts'
+import AutomationConversationInfo from './AutomationConversationInfo.vue'
 import { provideModelSelection, useModelSelection } from '../model-selection.ts'
 import { isRecord, type SidebarSession } from '../folders-sidebar.ts'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
@@ -591,9 +592,6 @@ const props = withDefaults(defineProps<{
   visible?: boolean
   knowledgeRequest?: KnowledgeTabRequest
   automationRun?: boolean
-  documentToolbarTarget?: string
-  conversationRequest?: number
-  conversationTabId?: string
 }>(), { embedded: false, enableChildPane: false, keyboardActive: true, visible: true })
 const activated = ref(true)
 const paneActive = computed(() => props.visible && activated.value)
@@ -1242,8 +1240,13 @@ const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation
 // ── Text selection state ──────────────────────────────────────────────────────
 const selectionMenu = ref<InstanceType<typeof SelectionMenu>>()
 const workbench = ref<InstanceType<typeof FileWorkbench>>()
-watch(() => [props.automationRun, props.visible, props.conversationRequest] as const, ([run, visible]) => {
-  if (run && visible) void nextTick(() => workbench.value?.showRunConversation())
+const automationConversation = useAutomationConversation(() => activeSessionId.value, () => !!props.automationRun)
+const conversationTitle = computed(() => automationConversation.value?.automation.value?.name || activeSessionName.value)
+watch(() => [props.automationRun, props.visible] as const, ([run, visible]) => {
+  if (run && visible) {
+    void nextTick(() => workbench.value?.showConversation())
+    if (viewingPhysicalId.value) void loadCurrentSession()
+  }
 }, { immediate: true })
 
 function buildUrl(path: string, params?: Record<string, string>): string {
@@ -1909,14 +1912,16 @@ async function loadReadonlySession(background = false): Promise<void> {
 // ── Segment navigation ───────────────────────────────────────────────────────
 
 async function viewPreviousSegment(): Promise<void> {
-  if (!previousPhysicalId.value || loadingHistory.value) return
-  await loadHistoricalSegment(previousPhysicalId.value, 'previous')
+  if (loadingHistory.value) return
+  if (previousPhysicalId.value) await loadHistoricalSegment(previousPhysicalId.value, 'previous')
+  else automationConversation.value?.previous()
 }
 
 async function viewNextSegment(): Promise<void> {
-  if (!viewingPhysicalId.value || loadingHistory.value) return
+  if (loadingHistory.value) return
+  if (!viewingPhysicalId.value) { automationConversation.value?.next(); return }
   const next = physicalIdStack.value.at(-1)
-  if (!next) { await goBackToCurrentSegment(); return }
+  if (!next) { await loadCurrentSession(); return }
   await loadHistoricalSegment(next, 'next')
 }
 
@@ -1954,6 +1959,7 @@ async function loadHistoricalSegment(physId: string, direction: 'previous' | 'ne
 
 async function goBackToCurrentSegment(): Promise<void> {
   if (loadingHistory.value) return
+  if (automationConversation.value?.historical.value) { automationConversation.value.current(); return }
   await loadCurrentSession()
 }
 
