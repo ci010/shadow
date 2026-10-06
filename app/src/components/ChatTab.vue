@@ -114,6 +114,7 @@
             <p class="decision-history-note">Unlinked decision history · {{ yieldDecisions.unlinked.length }}. The original ask could not be located in this view.</p>
             <YieldDecision v-for="[index, decision] in yieldDecisions.unlinked"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
+              :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
           </div>
           <template v-for="(msg, idx) in displayMessages" :key="`${activeSessionId}:${viewingPhysicalId ?? ''}:${msg.responseContext?.responseId ?? idx}`">
@@ -130,6 +131,7 @@
               <div class="prose" v-html="renderMarkdown(messageActions.entries.get(idx)!.content)" />
             </MessageAction>
             <YieldDecision v-else-if="yieldDecisions.entries.has(idx)" :decision="yieldDecisions.entries.get(idx)!"
+              :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :api-base="apiBase" :data-msg-idx="idx" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <ToolActivityGroup v-else-if="toolActivity.has(idx)" :batch="toolActivity.get(idx)!"
               :running="streaming && !streamContent && toolActivity.get(idx)!.end === displayMessages.length"
@@ -201,6 +203,7 @@
             </ResponseDisclosure>
             <YieldDecision v-for="[index, decision] in yieldDecisions.after.get(idx)"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
+              :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
               :data-msg-idx="index" :can-manage="installation.uiScopes.includes('chat:write')" @updated="refreshDecisionRecords" @inspect="inspectExecution" @interact="clearSelection" />
             <IoRequestCard v-for="run in ioAfter.get(idx)" :key="run.id" :run="run" :base="apiBase" />
           </template>
@@ -259,10 +262,11 @@
             <WorkingWave v-if="!isWaitingStage(sessionStage)" />
           </div>
         </div>
-        <YieldQuestion v-if="!isCall" :api-base="apiBase" :session-id="activeSessionId"
+        <YieldQuestion v-if="!isCall" ref="yieldQuestion" :api-base="apiBase" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
           :stage="sessionStage" :can-answer="installation.uiScopes.includes('chat:write')" @cancelled="handleYieldCancelled"
-          @request="handleYieldRequest" @inspect="inspectExecution" />
+          :use-composer="isDirectChat && !viewingPhysicalId" :composer-id="domId('message-input')" :composer-busy="submittingMessage"
+          @request="handleYieldRequest" @inspect="inspectExecution" @custom="focusQuestionComposer" />
         <CredentialRequest v-if="activeSessionId === 'web:orchestrator'" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && route.name === 'chat'"
@@ -292,12 +296,16 @@
           <div v-if="canResend" class="resend-bar">
             <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Resend last message</button>
           </div>
-          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget }"
+          <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend }"
             @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
+          <p v-if="answeringQuestion" :id="domId('reply-context')" class="composer-reply-context">
+            <span class="i-lucide-message-circle-reply w-4 h-4" aria-hidden="true" />
+            <span><strong>Your answer</strong> · {{ activeAsk?.question }}</span>
+          </p>
           <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
             :selection-start="composerSelection.start" :selection-end="composerSelection.end"
-            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
+            :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
             @complete="completeSlashCommand" />
           <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
           <div v-if="pendingAttachments.length" class="composer-context composer-attachments" aria-label="Attached files">
@@ -321,9 +329,11 @@
           <div class="composer-input">
             <textarea
               ref="chatInput"
+              :id="domId('message-input')"
               v-model="inputText"
-              :placeholder="mobileLayout ? 'Message...' : remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
-              aria-label="Message"
+              :placeholder="answeringQuestion ? mobileLayout ? 'Type your answer...' : 'Type your answer here; images and files are welcome...' : mobileLayout ? 'Message...' : remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
+              :aria-label="answeringQuestion ? 'Your answer to the pending question' : 'Message'"
+              :aria-describedby="answeringQuestion ? domId('reply-context') : undefined"
               role="combobox"
               aria-autocomplete="list"
               aria-haspopup="listbox"
@@ -366,7 +376,7 @@
                     <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
                       :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
                       :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
-                    <button v-if="requestBusy" class="context-action" :disabled="!canSend" @click="close(); sendMessage()">Send guidance to running agent</button>
+                    <button v-if="requestBusy && !answeringQuestion" class="context-action" :disabled="!canSend" @click="close(); sendMessage()">Send guidance to running agent</button>
                   </div>
                 </template>
               </ComposerPopover>
@@ -376,7 +386,7 @@
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
-            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending message...' : awaitingCall ? 'Call running · Enter to send guidance' : requestBusy ? 'Enter to send guidance · Shift+Enter for a new line' : imageEditsBusy.size ? 'Preparing marked image...' : attachmentDropTarget ? 'Drop files to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : 'Enter to send · Shift+Enter for a new line' }}</span>
+            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending...' : queueModifier ? 'Ctrl+Enter to add to queue' : answeringQuestion ? 'Enter to answer · Shift+Enter for a new line' : imageEditsBusy.size ? 'Preparing marked image...' : attachmentDropTarget ? 'Drop files to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : requestBusy ? 'Enter for guidance · Ctrl+Enter to queue' : 'Enter to send · Ctrl+Enter to queue' }}</span>
             <button
               v-if="requestBusy"
               class="composer-send composer-stop"
@@ -389,14 +399,15 @@
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
             <button
-              v-else
+              v-if="showComposerSend"
               class="composer-send"
+              :class="{ 'composer-queue': queueModifier }"
               :disabled="!canSend"
-              aria-label="Send message"
-              :title="submissionBusy ? 'Sending message...' : 'Send message'"
-              @click="sendMessage()"
+              :aria-label="queueModifier ? 'Add to queue' : answeringQuestion ? 'Send answer' : 'Send message'"
+              :title="submissionBusy ? 'Sending...' : queueModifier ? 'Add to queue (Ctrl+Enter)' : answeringQuestion ? 'Send answer (Enter)' : 'Send message (Enter); Ctrl+Enter to add to queue; Shift+Enter for a new line'"
+              @click="sendMessage(undefined, { queue: queueModifier || $event.ctrlKey })"
             >
-              <span class="i-lucide-arrow-up w-5 h-5" aria-hidden="true" />
+              <span :class="queueModifier ? 'i-lucide-list-plus' : answeringQuestion ? 'i-lucide-message-circle-reply' : 'i-lucide-arrow-up'" class="w-5 h-5" aria-hidden="true" />
             </button>
             </div>
           </div>
@@ -454,6 +465,7 @@ import SessionActivity from './SessionActivity.vue'
 import SegmentNavigation from './SegmentNavigation.vue'
 import WorkingWave from './WorkingWave.vue'
 import YieldQuestion from './YieldQuestion.vue'
+import { composerSubmitIntent } from '../composer-submit.ts'
 import SessionWorkControls from './SessionWorkControls.vue'
 import SessionWorkStatus from './SessionWorkStatus.vue'
 import { ensureProjectOrchestrator } from '../projects.ts'
@@ -461,7 +473,8 @@ import CollaborationMessage from './CollaborationMessage.vue'
 import YieldDecision from './YieldDecision.vue'
 import { inlineYieldDecisions, parseDecisionRecords } from '../yield-history.ts'
 import type { YieldRequest, YieldDecisionRecord } from '../../../src/sessions/yield-contract.ts'
-import { isInputRequest, type AskRequest } from '../yield-requests.ts'
+import { isInputRequest, MAX_YIELD_CUSTOM_TEXT_LENGTH, type AskRequest } from '../yield-requests.ts'
+import { MAX_ANSWER_ATTACHMENTS } from '../../../src/sessions/answer-media.ts'
 import CredentialRequest from './CredentialRequest.vue'
 import PublicationRequest from './PublicationRequest.vue'
 import AuthoringProbeRequest from './AuthoringProbeRequest.vue'
@@ -670,7 +683,7 @@ const requestControls = shallowReactive(new Map<string, ChatRequestControl>())
 const draftRequest = shallowRef<ChatRequestControl>()
 const currentRequest = computed(() => activeSessionId.value ? requestControls.get(activeSessionId.value) : draftRequest.value)
 const submissionBusy = computed(() => preparingSend.value || submittingMessage.value
-  || currentRequest.value?.state.phase === 'preparing' || currentRequest.value?.state.phase === 'submitting')
+  || currentRequest.value?.state.phase === 'preparing' || currentRequest.value?.state.phase === 'submitting' || !!yieldQuestion.value?.busy)
 const fileContextKey = computed(() => JSON.stringify([props.apiBase, activeSessionId.value || (draftRemote.value ? `remote:${draftRemote.value.nodeId}:${draftRemote.value.capabilityId}` : `folder:${draft.value.folder?.id ?? 'scratch'}`)]))
 let sessionSelectionGeneration = 0
 const isDirectChat = computed(() => {
@@ -697,6 +710,15 @@ onMounted(autoResize)
 const slashMenu = ref<InstanceType<typeof SlashCommandMenu>>()
 const composerFocused = ref(false)
 const composerComposing = ref(false)
+const queueModifier = ref(false)
+const yieldQuestion = ref<InstanceType<typeof YieldQuestion>>()
+const activeAsk = shallowRef<AskRequest | null>(null)
+const answeringQuestion = computed(() => isDirectChat.value && !viewingPhysicalId.value && sessionStage.value === 'waiting'
+  && activeAsk.value?.sessionId === activeSessionId.value && activeAsk.value.recipient.kind === 'user')
+async function focusQuestionComposer() {
+  await nextTick()
+  chatInput.value?.focus({ preventScroll: true })
+}
 const composerSelection = reactive({ start: 0, end: 0 })
 function updateComposerSelection() {
   composerSelection.start = chatInput.value?.selectionStart ?? 0
@@ -729,6 +751,7 @@ const sessionWorking = computed(() => isWorkingStage(sessionStage.value))
 const awaitingCall = computed(() => sessionStage.value === 'waiting-for-call')
 const requestBusy = computed(() => preparingSend.value || streaming.value || sessionWorking.value || sessionStage.value === 'pending'
   || !!currentRequest.value && currentRequest.value.state.phase !== 'finished')
+const showComposerSend = computed(() => !requestBusy.value || canSend.value || queueModifier.value || answeringQuestion.value)
 async function stopCurrentRequest(): Promise<void> {
   if (!installation.value.uiScopes.includes('chat:write') || !requestBusy.value) return
   let control = currentRequest.value
@@ -1138,6 +1161,7 @@ const yieldDecisions = computed(() => inlineYieldDecisions(
 function handleYieldRequest(value: AskRequest | null) {
   const request = value && !isInputRequest(value) ? value : null
   if (disposed) return
+  activeAsk.value = value
   const previous = pendingYield.value
   pendingYield.value = request
   if (request?.sessionId === activeSessionId.value && request.origin && !viewingPhysicalId.value) {
@@ -1696,6 +1720,7 @@ async function sessionsDeleted(ids: string[]): Promise<void> {
 
 function resetConversation(): void {
   deletion.value = undefined
+  activeAsk.value = null
   deferActiveHistory = false
   modelOverride.value = undefined
   currentWorkdir.value = undefined
@@ -1936,10 +1961,43 @@ async function goBackToCurrentSegment(): Promise<void> {
 
 function handleKeyDown(e: KeyboardEvent): void {
   if (slashMenu.value?.handleKeyDown(e)) return
-  if (mobileLayout.value && !e.ctrlKey && !e.metaKey) return
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+  const intent = composerSubmitIntent(e, mobileLayout.value)
+  if (intent) {
     e.preventDefault()
-    void sendMessage()
+    void sendMessage(undefined, { queue: intent === 'queue' })
+  }
+}
+
+async function sendQuestionAnswer(question: AskRequest, text: string, attachments: PendingChatAttachment[]): Promise<void> {
+  const sessionId = activeSessionId.value
+  const generation = sessionSelectionGeneration
+  const controller = new AbortController()
+  const submittedText = inputText.value
+  if (text.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) { composerError.value = `Keep your answer within ${MAX_YIELD_CUSTOM_TEXT_LENGTH} characters, then send it again.`; return }
+  if (attachments.length > MAX_ANSWER_ATTACHMENTS) { composerError.value = `Attach up to ${MAX_ANSWER_ATTACHMENTS} files, then send your answer again.`; return }
+  submittingMessage.value = true
+  sendRequest = controller
+  composerError.value = ''
+  try {
+    const uploaded = await uploadChatAttachments(props.apiBase, sessionId.replace('web:', ''), attachments, controller.signal)
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    const content = composeImageReferenceMessage(text, uploaded) || 'See attached files.'
+    if (content.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) throw new Error(`Your answer and image references exceed ${MAX_YIELD_CUSTOM_TEXT_LENGTH} characters. Shorten the answer and retry.`)
+    if (!yieldQuestion.value) throw new Error('The question is unavailable. Reload it before sending your answer.')
+    if (!await yieldQuestion.value.submitCustom(question.id, content, uploaded.map(item => item.path))) return
+    if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
+    composerDraft.clearSent(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId), submittedText)
+    clearPendingAttachments()
+    contextItems.value = []
+    if (chatInput.value) chatInput.value.style.height = 'auto'
+    refreshDirectHistory()
+    void refreshSessionActivity()
+  } catch (error) {
+    if (!controller.signal.aborted && generation === sessionSelectionGeneration) {
+      composerError.value = error instanceof Error ? error.message : 'Could not send your answer. Check the connection and retry.'
+    }
+  } finally {
+    if (sendRequest === controller) { sendRequest = undefined; submittingMessage.value = false }
   }
 }
 
@@ -2072,6 +2130,7 @@ function resetStreamPresentation() {
 }
 
 async function sendMessage(overrideContent?: string, opts?: {
+  queue?: boolean
   parentSessionId?: string
   retry?: boolean
   retryContent?: string
@@ -2103,6 +2162,10 @@ async function sendMessage(overrideContent?: string, opts?: {
   if ((!content && !retry && attachments.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping
     || !installation.value.uiScopes.includes('chat:write') || retry && requestBusy.value
     || pickingContext.value || savingSettings.value || imageEditsBusy.value.size > 0) return
+  if (!retry && !opts?.queue && answeringQuestion.value && activeAsk.value) {
+    await sendQuestionAnswer(activeAsk.value, content, attachments)
+    return
+  }
   const followUp = requestBusy.value
   historyBrowsing = false
   historyLeftBottom = false
@@ -2164,6 +2227,7 @@ async function sendMessage(overrideContent?: string, opts?: {
       senderId: 'admin',
       stream: false,
     }
+    if (opts?.queue && !retry) payload.delivery = 'queue'
     if (retry) {
       payload.retry = true
       // Fallback content used only if the original request never reached the backend.
@@ -2453,6 +2517,12 @@ function handleTypingFocus(e: KeyboardEvent): void {
 }
 
 document.addEventListener('keydown', handleTypingFocus)
+function updateQueueModifier(event: KeyboardEvent) { queueModifier.value = event.ctrlKey }
+function clearQueueModifier() { queueModifier.value = false }
+document.addEventListener('keydown', updateQueueModifier)
+document.addEventListener('keyup', updateQueueModifier)
+window.addEventListener('blur', clearQueueModifier)
+watch(paneActive, active => { if (!active) clearQueueModifier() })
 const onGlobalConfigChanged = (event: Event) => {
   const projectId = (event as CustomEvent<{ projectId?: string }>).detail?.projectId
   if (!projectId || projectId === props.projectId) detailsRevision.value++
@@ -2467,6 +2537,9 @@ onUnmounted(() => {
   if (!(currentRequest.value?.state.phase === 'submitting' && currentRequest.value.state.stopping)) sendRequest?.abort()
   historyRequest?.abort()
   document.removeEventListener('keydown', handleTypingFocus)
+  document.removeEventListener('keydown', updateQueueModifier)
+  document.removeEventListener('keyup', updateQueueModifier)
+  window.removeEventListener('blur', clearQueueModifier)
   window.removeEventListener('shadow:config-changed', onGlobalConfigChanged)
   disconnectEventStream()
   clearPendingAttachments()
@@ -2637,6 +2710,11 @@ function resendLastMessage() {
 .composer-send { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-control); background: var(--c-primary-bg); color: var(--c-text-on-primary); cursor: pointer; }
 .composer-send:disabled { opacity: .35; cursor: not-allowed; }
 .composer-send:hover:not(:disabled) { background: var(--c-primary-bg-hover); }
+.composer-queue { background: var(--c-bg-muted); color: var(--c-text); border: 1px solid var(--c-border-hover); }
+.composer-queue:hover:not(:disabled) { background: var(--c-selection-bg); }
+.composer-reply-context { display: flex; align-items: flex-start; gap: 8px; margin: 0 4px 10px; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.composer-reply-context > span:first-child { flex-shrink: 0; margin-top: 1px; }
+.composer-reply-context strong { color: var(--c-text); }
 .composer-stop:disabled { opacity: .65; cursor: not-allowed; }
 .resume-bar { display: flex; align-items: center; gap: 16px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid var(--c-border-hover); border-radius: var(--radius-surface); background: var(--c-bg); color: var(--c-text); }
 .resume-bar p { margin: 4px 0 0; font-size: 12px; line-height: 1.45; }
@@ -2808,9 +2886,11 @@ function resendLastMessage() {
 .mobile-history summary { min-height: 44px; box-sizing: border-box; padding: 12px 10px; font-size: 14px; cursor: pointer; }
 .mobile-history summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .mobile-chat .composer-box { position: relative; padding: 8px 52px; }
+.mobile-chat .composer-dual-actions .composer-input { margin-inline-end: 54px; }
 .mobile-chat .composer-input textarea { min-height: 44px; max-height: min(200px, 28dvh); padding: 10px 0; font-size: 16px; line-height: 1.5; }
 .mobile-chat .composer-toolbar { position: absolute; bottom: 8px; left: 8px; right: 8px; margin: 0; pointer-events: none; }
-.mobile-chat .composer-controls, .mobile-chat .composer-submit { pointer-events: auto; flex: 0 0 44px; max-width: 44px; }
+.mobile-chat .composer-controls { pointer-events: auto; flex: 0 0 44px; max-width: 44px; }
+.mobile-chat .composer-submit { pointer-events: auto; flex: 0 0 auto; max-width: none; }
 .mobile-chat .composer-send, .mobile-chat .composer-controls :deep(> .composer-control) { width: 44px; height: 44px; min-height: 44px; padding: 0; justify-content: center; }
 .mobile-chat .composer-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .mobile-chat .composer-context { margin-inline: -44px; }

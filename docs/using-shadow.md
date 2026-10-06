@@ -168,7 +168,14 @@ External URLs, private uploads outside the workdir, and remote attachments remai
 on their existing media/download path rather than being treated as local files.
 
 You can send follow-up guidance during an active turn or use **Stop request**
-to cancel the targeted request. Cancellation cannot undo completed side
+to cancel the targeted request. On desktop, **Enter** sends immediately,
+**Ctrl+Enter** adds the message to the queue after the current turn without
+interrupting or steering it, and **Shift+Enter** inserts a new line.
+Holding **Ctrl** changes the send button to a distinct queue icon; clicking
+it also queues the message. Queued messages remain after stopping a request.
+On mobile, Enter keeps its native newline behavior; use the send button or
+Ctrl/Cmd+Enter with a hardware keyboard.
+Cancellation cannot undo completed side
 effects. For stopped or interrupted work, **Continue** resumes from saved
 history; a tool call without a saved result might run again after a crash.
 Unsent image edits and attachment selections are local draft state, not a
@@ -196,9 +203,17 @@ restrictions. These are entry-point checks, not an OS sandbox for host commands.
 
 ## Requests for input
 
-When an agent asks a question, answer the pending request in its separate
-control, not by sending an ordinary chat message. Decisions offer suggested
-choices and a custom-response field; plain input requests ask for text. A
+When an agent asks a question in a direct web conversation, choose a suggested
+option and **Continue**, or write your own answer in the ordinary message box
+below the question. The box is explicitly labeled **Your answer** while a
+user-directed question is pending; sending it answers that exact request,
+not an ordinary chat message. Images, uploaded files, quotes, and local file
+context use the existing composer controls. Images are delivered to the model
+alongside the answer; file paths remain attached context. A response may also
+consist only of attachments. **Ctrl+Enter** still queues a separate message
+and does not answer the question.
+Execution views without a message composer retain their dedicated
+answer field (**Enter** submits; **Shift+Enter** inserts a new line). A
 parent-directed request is read-only to the human and must be answered by the
 parent session. The corresponding agent tools are `ask` and `reply`; there is
 no `yield` tool alias. Where a channel cannot display native controls, use

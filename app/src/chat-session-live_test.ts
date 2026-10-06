@@ -20,7 +20,7 @@ const graph = () => ({ nodes: [], sessions: [
   { sessionId: task, mode: 'task', parentSessionId: root, parentToolCallId: 'spawn', executionStatus: 'waiting', waitingForCall: false },
 ] })
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, canWrite = false) {
   const subscriptions: Array<{ projectId: string; observer: LiveObserver; closed: boolean }> = []
   const requests: Array<{ path: string; signal: AbortSignal; finish: (value: unknown) => void }> = []
   t.mock.method(globalThis, 'fetch', (url: URL, init: RequestInit) => new Promise<Response>(resolve => {
@@ -48,7 +48,7 @@ function fixture(t: TestContext) {
     if (id === 'vue') return { ...Vue, onMounted: () => {} }
     if (id.endsWith('.vue')) return { default: {} }
     if (id === 'vue-router') return { useRoute: () => ({ name: 'chat', query: {}, params: {} }), useRouter: () => ({ replace() {} }) }
-    if (id === '../composables/useInstallationContext.ts') return { useInstallationContext: () => Vue.ref({ mode: 'main', uiScopes: [] }) }
+    if (id === '../composables/useInstallationContext.ts') return { useInstallationContext: () => Vue.ref({ mode: 'main', uiScopes: canWrite ? ['chat:write'] : [] }) }
     if (id === '../composables/useLiveClient.ts') return {
       liveProjectId: (base: string) => new URL(base).pathname.split('/').at(-1),
       useLiveClientPool: () => pool,
@@ -87,6 +87,55 @@ function fixture(t: TestContext) {
   }
   return { mount, invalidate, requests, subscriptions }
 }
+
+test('main composer answers the pending question, retains rejected drafts and never sends them as ordinary chat', async t => {
+  const f = fixture(t, true)
+  const view = f.mount('a')
+  const state = view.state()
+  state.sessionStages = { [root]: 'waiting' }
+  const request = { kind: 'input', id: 'composer-input', sessionId: root, question: 'Which path?',
+    recipient: { kind: 'user', sessionId: root }, origin: { physicalId: 'root-0' },
+    createdAt: new Date().toISOString(), deadline: null }
+  state.handleYieldRequest(request)
+  assert.equal(state.answeringQuestion, true)
+  const answers: unknown[][] = []
+  state.yieldQuestion = { submitCustom: async (...args: unknown[]) => { answers.push(args); return false } }
+  state.inputText = '/literal answer, not a slash command'
+  await state.sendMessage()
+  assert.deepEqual(answers, [[request.id, '/literal answer, not a slash command', []]])
+  assert.equal(state.inputText, '/literal answer, not a slash command')
+  assert.equal(f.requests.length, 0, 'Answering must not call chat/send')
+  state.handleYieldRequest({ ...request, recipient: { kind: 'parent', sessionId: 'web:parent' } })
+  assert.equal(state.answeringQuestion, false)
+  state.handleYieldRequest(request)
+  state.resetConversation()
+  assert.equal(state.activeAsk, null)
+})
+
+test('composer attachment-only answers upload once and preserve the attachment after a rejected reply', async t => {
+  const f = fixture(t, true)
+  const state = f.mount('a').state()
+  state.sessionStages = { [root]: 'waiting' }
+  const request = { kind: 'input', id: 'attachment-answer', sessionId: root, question: 'Send the file',
+    recipient: { kind: 'user', sessionId: root }, origin: { physicalId: 'root-0' },
+    createdAt: new Date().toISOString(), deadline: null }
+  state.handleYieldRequest(request)
+  const answers: unknown[][] = []
+  state.yieldQuestion = { submitCustom: async (...args: unknown[]) => { answers.push(args); return false } }
+  state.inputText = ''
+  state.pendingAttachments = [{ key: 'file', file: new File(['Exact attachment'], 'notes.txt'), kind: 'file' }]
+  const sending = state.sendMessage()
+  await settle()
+  assert.match(f.requests[0].path, /api\/chat\/upload$/)
+  assert.equal(state.submittingMessage, true)
+  f.requests[0].finish({ path: 'C:\\fixture\\uploads\\notes.txt' })
+  await sending
+  assert.deepEqual(answers, [[request.id, 'See attached files.', ['C:\\fixture\\uploads\\notes.txt']]])
+  assert.equal(state.pendingAttachments.length, 1)
+  assert.equal(state.submittingMessage, false)
+  assert.equal(f.requests.filter(request => request.path.endsWith('/upload')).length, 1)
+  assert.equal(f.requests.some(request => request.path.endsWith('/send')), false)
+})
 
 test('background response origin survives live boundaries and restoration; legacy replies remain expanded', async t => {
   const f = fixture(t)

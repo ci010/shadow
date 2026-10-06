@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { WORK_APPROVE } from '../initiatives/work-contract.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
+import { answerMediaSchema } from './answer-media.ts'
 import type { SessionState } from './session-store.ts'
 import {
   parseYieldPolicy, parseYieldQuestion, parseYieldCustomText,
@@ -304,8 +305,8 @@ export class YieldManager {
     }
   }
 
-  answerUserText(sessionId: string, requestId: string, text: string): Promise<YieldAnswer> {
-    return this.answerText(this.userRequest(sessionId, requestId), text)
+  answerUserText(sessionId: string, requestId: string, text: string, media?: string[]): Promise<YieldAnswer> {
+    return this.answerText(this.userRequest(sessionId, requestId), text, media)
   }
 
   cancelUser(sessionId: string, requestId: string): Promise<void> {
@@ -406,20 +407,23 @@ export class YieldManager {
     return this.complete(pending, option, by)
   }
 
-  private answerText(pending: PendingYield, text: string): Promise<YieldAnswer> {
+  private answerText(pending: PendingYield, text: string, media?: string[]): Promise<YieldAnswer> {
+    const attachments = media === undefined ? undefined : answerMediaSchema.safeParse(media)
+    if (attachments && !attachments.success) throw new YieldError('invalid_request', 'Invalid answer attachments.')
     let option: string
     try { option = parseYieldCustomText(text) }
     catch (error) {
       if (!(error instanceof TypeError)) throw error
       throw new YieldError('invalid_request', error.message)
     }
-    return this.complete(pending, option, 'user', true)
+    return this.complete(pending, option, 'user', true, attachments?.data)
   }
 
-  private complete(pending: PendingYield, option: string, answeredBy: YieldAnswer['answeredBy'], custom = false): Promise<YieldAnswer> {
+  private complete(pending: PendingYield, option: string, answeredBy: YieldAnswer['answeredBy'], custom = false, media?: string[]): Promise<YieldAnswer> {
     const answer = Object.freeze<YieldAnswer>({
       requestId: pending.request.id, option, answeredBy, answeredAt: new Date().toISOString(),
       ...(custom ? { custom: true } : {}),
+      ...(media ? { media: [...media] } : {}),
       ...(pending.request.supersedes ? { revisedQuestion: parseYieldQuestion(pending.request) } : {}),
       ...(pending.request.origin ? { reference: Object.freeze({
         sessionId: pending.request.sessionId, physicalId: pending.request.origin.physicalId, requestId: pending.request.id,

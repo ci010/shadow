@@ -364,6 +364,7 @@ export class WebChannel extends AbstractChannel {
         forkAt,
         retry,
         stream,
+        delivery,
       } = rawBody
       if (typeof chatId !== 'string' || !chatId ||
           (content !== undefined && typeof content !== 'string') ||
@@ -373,6 +374,7 @@ export class WebChannel extends AbstractChannel {
           (forkAt !== undefined && (typeof forkAt !== 'number' || !Number.isSafeInteger(forkAt) || forkAt < 0)) ||
           (retry !== undefined && typeof retry !== 'boolean') ||
           (stream !== undefined && typeof stream !== 'boolean') ||
+          (delivery !== undefined && (delivery !== 'queue' || retry === true)) ||
           (media !== undefined && (!Array.isArray(media) || !media.every(item => typeof item === 'string')))) {
         return c.json({ error: 'invalid_request' }, 400)
       }
@@ -422,6 +424,7 @@ export class WebChannel extends AbstractChannel {
           {
             senderName: senderId ?? 'web-user',
             ...(retry ? { retry: true } : {}),
+            ...(delivery === 'queue' ? { delivery } : {}),
           },
           media,
         )

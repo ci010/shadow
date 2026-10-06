@@ -29,13 +29,14 @@
               <span class="yield-selected i-lucide-check" :class="{ visible: !customMode && selected === option }" aria-hidden="true" />
             </label>
             <button type="button" class="yield-option yield-custom-toggle" :class="{ selected: customMode }"
-              :aria-expanded="customMode" :aria-controls="`${id}-custom`" :aria-keyshortcuts="optionLetter(decisionRequest.options.length)" @click="openCustomResponse">
+              :aria-expanded="useComposer ? undefined : customMode" :aria-controls="useComposer ? composerId : `${id}-custom`" :aria-keyshortcuts="optionLetter(decisionRequest.options.length)" @click="openCustomResponse">
               <span class="yield-index" aria-hidden="true">{{ optionLetter(decisionRequest.options.length) }}</span>
-              <span class="yield-option-text">{{ customMode ? 'Your answer' : 'Or type your own answer...' }}</span>
+              <span class="yield-option-text">{{ useComposer ? 'Write your own answer in the message box below' : customMode ? 'Your answer' : 'Or type your own answer...' }}</span>
               <span class="yield-selected i-lucide-check" :class="{ visible: customMode }" aria-hidden="true" />
             </button>
           </div>
-          <div v-if="customMode || inputQuestion" :id="`${id}-custom`" class="yield-custom" :class="{ 'input-response': inputQuestion }">
+          <p v-if="useComposer && answerable" class="yield-composer-note">Type your answer in the message box below and send it to reply to this question. You can attach images and files.</p>
+          <div v-if="!useComposer && (customMode || inputQuestion)" :id="`${id}-custom`" class="yield-custom" :class="{ 'input-response': inputQuestion }">
             <label :for="`${id}-response`" class="yield-sr-only">Your response</label>
             <textarea :id="`${id}-response`" ref="customInput" v-model="customText" rows="3" required
               placeholder="Type your answer..." :maxlength="MAX_YIELD_CUSTOM_TEXT_LENGTH" />
@@ -53,7 +54,7 @@
       <div class="yield-actions">
         <button v-if="error" class="btn yield-reload" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? 'Reloading…' : 'Reload question' }}</button>
         <button v-if="answerable" class="btn yield-cancel" type="button" :disabled="busy" :title="decisionRequest?.ownerOnly ? 'Cancel only this confirmation without choosing an option' : 'Cancel this question and stop the current task without choosing an option'" @click="cancelQuestion">{{ cancelling ? 'Cancelling…' : decisionRequest?.ownerOnly ? 'Cancel confirmation' : 'Cancel task' }}</button>
-        <button v-if="answerable" class="btn yield-continue" type="submit" :disabled="busy || (customMode && !customText.trim())">
+        <button v-if="answerable && !(useComposer && (inputQuestion || customMode))" class="btn yield-continue" type="submit" :disabled="busy || (customMode && !customText.trim())">
           <span>{{ submitting ? 'Submitting…' : customMode ? 'Send response' : 'Continue' }}</span>
           <span v-if="!customMode" class="i-lucide-corner-down-left yield-enter" aria-hidden="true" />
         </button>
@@ -70,15 +71,17 @@ import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText, isInp
 import DecisionDiscussion from './DecisionDiscussion.vue'
 import DecisionBrief from './DecisionBrief.vue'
 
-const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean; expectedRequestId?: string }>()
-const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; inspect: [sessionId: string] }>()
+const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean; expectedRequestId?: string; useComposer?: boolean; composerId?: string; composerBusy?: boolean }>()
+const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; inspect: [sessionId: string]; custom: [] }>()
 const id = `yield-${useId()}`
 const documentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const enabled = computed(() => props.active && documentVisible.value)
 const customInput = ref<HTMLTextAreaElement>()
-const { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh, submit, cancelQuestion: cancelPendingQuestion } = useYieldRequest(
+const { request, selected, customMode, customText, error, submitting, cancelling, busy: requestBusy, loading, now, answerable, refresh, submit, submitCustom, cancelQuestion: cancelPendingQuestion } = useYieldRequest(
   () => ({ ...props, active: enabled.value }),
 )
+const busy = computed(() => requestBusy.value || props.composerBusy)
+defineExpose({ submitCustom, busy })
 const inputQuestion = computed(() => !!request.value && isInputRequest(request.value))
 const decisionRequest = computed(() => request.value && !isInputRequest(request.value) ? request.value : null)
 watch(request, (value, previous) => {
@@ -86,13 +89,20 @@ watch(request, (value, previous) => {
 }, { immediate: true })
 function optionLetter(index: number) { return String.fromCharCode(65 + index) }
 function handleKeydown(event: KeyboardEvent) {
+  if (event.target instanceof HTMLTextAreaElement && event.target === customInput.value
+    && event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229 && !event.repeat) {
+    event.preventDefault()
+    if (answerable.value && !busy.value) void submit()
+    return
+  }
   if (!answerable.value || busy.value || event.defaultPrevented || event.isComposing || event.repeat
     || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
     || event.target instanceof HTMLTextAreaElement) return
   if (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.type === 'radio') {
     event.preventDefault()
     event.stopPropagation()
-    void submit()
+    if (props.useComposer && customMode.value) emit('custom')
+    else void submit()
     return
   }
   if (!/^[a-z]$/i.test(event.key) || !decisionRequest.value) return
@@ -113,6 +123,7 @@ function handleKeydown(event: KeyboardEvent) {
 async function openCustomResponse() {
   if (!answerable.value || busy.value) return
   customMode.value = true
+  if (props.useComposer) { emit('custom'); return }
   await nextTick()
   customInput.value?.focus()
 }
@@ -152,6 +163,7 @@ fieldset:not(:disabled) .yield-option:hover, .yield-option.selected { background
 fieldset:disabled .yield-option { cursor: default; }
 fieldset:disabled .yield-index { color: var(--c-text-muted); }
 .yield-status { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; }
+.yield-composer-note { margin: 8px 0 0; color: var(--c-text-secondary); font-size: 12px; line-height: 1.5; }
 .yield-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; flex-shrink: 0; gap: 8px; margin-top: 16px; }
 .yield-actions:empty { display: none; }
 .yield-reload { margin-right: auto; }

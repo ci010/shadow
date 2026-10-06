@@ -18,6 +18,31 @@ import { MessageTool } from '../tools/message.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import { createResponseContext } from '../sessions/response-context.ts'
+import { channelMessageInput } from '../sessions/input.ts'
+
+test('explicit web queue delivery becomes a queue input and invalid policies are rejected before admission', async () => {
+  const channel = new WebChannel(new Bus(), {})
+  const app = new Hono()
+  const deliveries: ReturnType<typeof channelMessageInput>[] = []
+  channel.setReceiver(async message => {
+    deliveries.push(channelMessageInput(message))
+    return { status: 'accepted', sessionId: `web:${message.chatId}`, inputId: message.messageId }
+  })
+  await channel.start(app)
+  const send = (extra: Record<string, unknown> = {}) => app.request('/api/chat/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chatId: 'queue-fixture', content: 'Exact queued content', ...extra }),
+  })
+  try {
+    for (const extra of [{ delivery: 'queue' }, {}]) assert.equal((await send(extra)).status, 200)
+    assert.deepEqual(deliveries.map(input => input.kind === 'message' && input.policy), ['queue', 'interactive'])
+    assert.equal(deliveries[0].kind === 'message' && deliveries[0].content, 'Exact queued content')
+    for (const extra of [{ delivery: 'steering' }, { delivery: true }, { delivery: 'queue', retry: true }]) {
+      assert.equal((await send(extra)).status, 400)
+    }
+    assert.equal(deliveries.length, 2)
+  } finally { await channel.stop() }
+})
 
 test('live event envelopes and parallel tool IDs are forwarded only to the owning chat', async () => {
   const bus = new Bus()

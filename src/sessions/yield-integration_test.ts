@@ -28,6 +28,8 @@ import type { YieldPolicy } from './yield-contract.ts'
 import { channelMessageInput } from './input.ts'
 import type { OutboundMessage } from '../bus/events.ts'
 import { MicroApps } from '../microapps/service.ts'
+import { sessionWorkspacePath } from '../utils/paths.ts'
+import { physicalSessionId } from './session-identity.ts'
 
 const question = { question: 'Which approach?', options: ['Continue', 'Change approach', 'Stop'], default_option: 'Continue' }
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
@@ -99,6 +101,79 @@ async function answer(app: Hono, sessionId: string, requestId: string, option: s
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  for (const kind of ['decision', 'input'] as const) {
+    test(`${Store.name}: ${kind} custom composer attachments resume the paired call and persist image bytes`, async () => {
+      await withTempWorkspace(async workspace => {
+        const store: SessionStore = new Store(join(workspace, 'sessions'))
+        await store.init()
+        const f = fixture(workspace, store)
+        const sessionId = `web:answer-${kind}`
+        const uploads = join(sessionWorkspacePath(workspace, sessionId), 'uploads')
+        const image = join(uploads, 'answer.png')
+        const file = join(uploads, 'notes.txt')
+        const invalidImage = join(uploads, 'broken.png')
+        const foreign = join(sessionWorkspacePath(workspace, 'web:foreign'), 'uploads', 'secret.txt')
+        const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=', 'base64')
+        let segment = ''
+        try {
+          await f.sessions.start()
+          await f.sessions.buildSession(sessionId, undefined, { agentType: 'general' })
+          segment = physicalSessionId(f.sessions.getSessionState(sessionId)!)
+          await mkdir(uploads, { recursive: true })
+          await mkdir(join(sessionWorkspacePath(workspace, 'web:foreign'), 'uploads'), { recursive: true })
+          await Promise.all([writeFile(image, bytes), writeFile(file, 'Synthetic attachment'), writeFile(invalidImage, 'not an image'), writeFile(foreign, 'Private synthetic fixture')])
+          await f.sessions.deliver(sessionId, message('attachment-input'))
+          await waitFor(() => f.calls.length === 1)
+          f.calls[0].resolve(kind === 'decision' ? ask({ question: 'Continue?', options: ['Yes', 'No'], default_option: 'No' })
+            : { content: '', toolCalls: [{ id: 'ask-call', name: 'ask', arguments: { kind: 'input', question: 'Which files?' } }] })
+          await waitFor(() => !!(kind === 'decision' ? f.sessions.yields.get(sessionId) : f.sessions.inputs.get(sessionId)))
+          const request = kind === 'decision' ? f.sessions.yields.get(sessionId)! : f.sessions.inputs.get(sessionId)!
+          const content = kind === 'decision' ? { customText: 'Read these files.' } : { text: 'Read these files.' }
+          const post = (extra: Record<string, unknown>) => f.app.request(`/api/sessions/${sessionId}/ask`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestId: request.id, ...content, ...extra }),
+          })
+          for (const media of [[], [foreign], ['https://example.com/image.png'], ['relative.txt'], [invalidImage], [join(uploads, 'missing.txt')], Array(33).fill(file)]) {
+            assert.equal((await post({ media })).status, 400)
+          }
+          if (kind === 'decision') assert.equal((await post({ option: 'Yes', customText: undefined, media: [file] })).status, 400)
+          assert.equal(f.calls.length, 1, 'Invalid attachments must not consume the pending answer')
+          const media = [image, file]
+          const response = await post({ media })
+          assert.equal(response.status, 200)
+          assert.deepEqual((await response.json()).answer.media, media)
+          await waitFor(() => f.calls.length === 2)
+          const result = f.calls[1].messages.find(item => item.tool_call_id === 'ask-call')!
+          assert.ok(Array.isArray(result.content))
+          const text = result.content.find(part => part.type === 'text')!
+          assert.ok(text.type === 'text')
+          assert.deepEqual(JSON.parse(text.text.split('\n', 1)[0]!).media, media)
+          assert(result.content.some(part => part.type === 'image_url' && part.image_url.url === `data:image/png;base64,${bytes.toString('base64')}`))
+          assert(result.content.some(part => part.type === 'text' && part.text.includes(`[file: ${file}]`)))
+          f.calls[1].resolve(done())
+          await waitFor(() => f.facts.length === 1)
+          if (kind === 'decision') assert.deepEqual((await f.sessions.getYieldRecords(sessionId))[0].answer?.media, media)
+          else {
+            const records = []
+            for await (const event of store.readSessionLog(segment)) if (event.input_request) records.push(event.input_request)
+            assert.deepEqual((records.at(-1) as { answer: { media: string[] } }).answer.media, media)
+          }
+          await writeFile(image, 'Changed after the answer was delivered')
+        } finally { await f.sessions.stop(); await store.close?.() }
+        const reopened: SessionStore = new Store(join(workspace, 'sessions'))
+        await reopened.init()
+        const restored = fixture(workspace, reopened)
+        try {
+          await restored.sessions.start()
+          const history = await restored.sessions.getHistory(sessionId)
+          const results = history.messages.filter(item => item.tool_call_id === 'ask-call')
+          assert.equal(results.length, 1)
+          assert.ok(Array.isArray(results[0].content))
+          assert(results[0].content.some(part => part.type === 'image_url' && part.image_url.url === `data:image/png;base64,${bytes.toString('base64')}`))
+        } finally { await restored.sessions.stop(); await reopened.close?.() }
+      })
+    })
+  }
   test(`${Store.name}: approved app confirmation resumes the same author through an event, never a forged user turn`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

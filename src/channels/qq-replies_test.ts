@@ -10,6 +10,7 @@ import { SessionManager } from '../sessions/session-manager.ts'
 import { YieldManager } from '../sessions/yield.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
 import { AskTool } from '../tools/ask.ts'
+import { requireToolText } from '../tools/tool.ts'
 import { decisionBrief } from '../testing/decision.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
@@ -389,7 +390,7 @@ test('QQ real yield notification retains the initiating turn source, not the ans
   t.mock.timers.tick(300_000)
   await incoming(qq, 'group:one', 'answer')
   yields.answerChannel(ctx.sessionId, yields.get(ctx.sessionId)!.id, 'Yes', 'qq', 'alice')
-  assert.equal(JSON.parse(await pending).option, 'Yes')
+  assert.equal(JSON.parse(requireToolText(await pending)).option, 'Yes')
   await assert.rejects(qq.send(message({ replyTo: ctx.platformMessageId })), { kind: 'invalid_source' })
   assert.equal(wire.messages().length, 1)
 })

@@ -6,6 +6,7 @@ import { delegationOwner } from './execution-scope.ts'
 import { physicalSessionId } from './session-identity.ts'
 import { YieldError } from './yield.ts'
 import { inputTextSchema, type InputAnswer, type InputRecord, type InputRequest } from './input-request.ts'
+import { answerMediaSchema } from './answer-media.ts'
 
 interface Dependencies {
   getState(id: string): SessionState | null | undefined
@@ -150,8 +151,8 @@ export class InputRequests {
     this.deps.assertAccess(sessionId)
     return pending
   }
-  replyUser(sessionId: string, requestId: string, text: string, channel?: string, senderId?: string): Promise<InputAnswer> {
-    return this.complete(this.user(sessionId, requestId, channel, senderId), text, 'user')
+  replyUser(sessionId: string, requestId: string, text: string, channel?: string, senderId?: string, media?: string[]): Promise<InputAnswer> {
+    return this.complete(this.user(sessionId, requestId, channel, senderId), text, 'user', media)
   }
   cancelUser(sessionId: string, requestId: string, channel?: string, senderId?: string): Promise<void> {
     return this.close(this.user(sessionId, requestId, channel, senderId), new DOMException('Input cancelled by user.', 'AbortError'))
@@ -179,13 +180,16 @@ export class InputRequests {
     }
     return pending
   }
-  private complete(pending: Pending, text: string, answeredBy: InputAnswer['answeredBy']): Promise<InputAnswer> {
+  private complete(pending: Pending, text: string, answeredBy: InputAnswer['answeredBy'], media?: string[]): Promise<InputAnswer> {
     this.find(pending.request.id)
     const parsed = inputTextSchema.safeParse(text)
     if (!parsed.success) throw new YieldError('invalid_request', 'Reply must contain 1-4000 characters.')
+    const attachments = media === undefined ? undefined : answerMediaSchema.safeParse(media)
+    if (attachments && !attachments.success) throw new YieldError('invalid_request', 'Invalid answer attachments.')
     pending.phase = 'settling'
     if (pending.timer !== undefined) clearTimeout(pending.timer)
-    const answer: InputAnswer = { requestId: pending.request.id, text: parsed.data, answeredBy, answeredAt: new Date().toISOString() }
+    const answer: InputAnswer = { requestId: pending.request.id, text: parsed.data, answeredBy, answeredAt: new Date().toISOString(),
+      ...(attachments?.data ? { media: attachments.data } : {}) }
     return this.track(Promise.resolve().then(() => this.deps.write({ version: 1, request: pending.request, answer })).then(() => {
       this.cleanup(pending)
       if (pending.interrupted) pending.result.reject(pending.interrupted.reason)

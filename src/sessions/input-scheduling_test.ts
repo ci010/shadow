@@ -18,7 +18,7 @@ import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
 import type { SessionState, SessionStore } from './session-store.ts'
 import { isBackgroundResponse } from './response-context.ts'
-import type { SessionInput, SessionMessageInput, SessionTurnFact } from './input.ts'
+import { channelMessageInput, type SessionInput, type SessionMessageInput, type SessionTurnFact } from './input.ts'
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { Session } from './session.ts'
 import { sessionsApiPlugin } from './routes.ts'
@@ -154,6 +154,31 @@ function userInput(id: string, policy: SessionMessageInput['policy'] = 'queue'):
     channel: 'web', chatId: 'owner', messageId: id, senderId: 'owner',
   } } }
 }
+
+test('queued web messages neither interrupt nor steer the current turn and run FIFO afterwards', async () => {
+  const f = await fixture()
+  try {
+    f.session.dispatch(userInput('initial'), llm)
+    await waitFor(() => f.calls.length === 1)
+    for (const id of ['queued-first', 'queued-second']) {
+      f.session.dispatch(channelMessageInput({ channel: 'web', chatId: 'owner', senderId: 'owner',
+        messageId: id, timestamp: new Date().toISOString(), content: id, delivery: 'queue' }), llm)
+    }
+    assert.equal(f.calls[0].signal.aborted, false)
+    assert.equal(f.calls.length, 1)
+    assert.doesNotMatch(JSON.stringify(f.calls[0].messages), /queued-first|queued-second/)
+    f.calls[0].resolve(done('Initial result'))
+    await waitFor(() => f.calls.length === 2)
+    assert.match(JSON.stringify(f.calls[1].messages), /queued-first/)
+    assert.doesNotMatch(JSON.stringify(f.calls[1].messages), /queued-second/)
+    f.calls[1].resolve(done('First queued result'))
+    await waitFor(() => f.calls.length === 3)
+    assert.match(JSON.stringify(f.calls[2].messages), /queued-second/)
+    f.calls[2].resolve(done('Second queued result'))
+    await waitFor(() => f.facts.length === 3)
+    assert.deepEqual(f.facts.map(fact => fact.inputId), ['initial', 'queued-first', 'queued-second'])
+  } finally { await f.close() }
+})
 
 for (const phase of ['llm', 'tool'] as const) {
   test(`background completion during ${phase} joins the next inference without aborts or an unnecessary later turn`, async () => {

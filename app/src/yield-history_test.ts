@@ -29,6 +29,17 @@ test('a revised answer receipt displays the question actually answered, even bef
   assert.equal(entry.requestId, 'revised')
 })
 
+test('multimodal answer annotations retain the receipt and attachment references before journal refresh', () => {
+  const media = ['C:\\fixture\\uploads\\answer.png', 'C:\\fixture\\uploads\\notes.txt']
+  const answer = receipt({ option: 'My answer', custom: true, media })
+  const messages = [call(), { ...result(answer),
+    content: `${JSON.stringify(answer)}\n[file: ${media[1]}]\nImage snapshots (read these paths to view the same images again):\n"snapshot.png"` }]
+  const decision = inlineYieldDecisions(messages).entries.get(0)!
+  assert.equal(decision.status, 'user')
+  assert.deepEqual(decision.answer?.media, media)
+  assert.equal(decision.answer?.option, 'My answer')
+})
+
 test('yield records separate human, parent, timeout and custom answers from generic tool activity', () => {
   for (const answeredBy of ['user', 'parent', 'timeout']) {
     const messages = [call(), { content: 'Other output' }, result(receipt({ answeredBy }))]

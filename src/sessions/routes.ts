@@ -4,6 +4,8 @@ import { parseSessionName, SessionNameError } from './session-name.ts'
 import type { SessionManager } from './session-manager.ts'
 import { isConfigObject, parseSessionConfigPatch } from './config-patch.ts'
 import { YieldError } from './yield.ts'
+import { answerMediaSchema } from './answer-media.ts'
+import { validateAnswerUploads } from './answer-attachments.ts'
 import { z } from 'zod'
 import { WorkConflict, workChangeSchema, workKey } from '../initiatives/work-contract.ts'
 import { applyHumanWorkAction, humanWorkActionSchema } from '../projects/work-routes.ts'
@@ -526,8 +528,24 @@ export function sessionsApiPlugin(
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
       const cancel = c.req.method === 'DELETE'
+      let answerMedia: string[] | undefined
+      if (isConfigObject(body) && body.media !== undefined) {
+        const parsed = answerMediaSchema.safeParse(body.media)
+        if (cancel || !parsed.success || typeof body.option === 'string') return c.json({ error: 'invalid_request', message: 'Attachments require a custom answer.' }, 400)
+        const state = sessions.getSessionState(key)!
+        const { workdir } = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirCapabilityLookup)
+        if (!key.startsWith('web:') || !workdir.available || workdir.locality === 'remote') {
+          return c.json({ error: 'invalid_request', message: 'Answer attachments require a local web conversation.' }, 400)
+        }
+        try { await validateAnswerUploads(sessions.workspace, state.workspaceRoot ?? key, parsed.data, c.req.raw.signal) }
+        catch (error) {
+          if (!(error instanceof TypeError)) throw error
+          return c.json({ error: 'invalid_request', message: error.message }, 400)
+        }
+        answerMedia = parsed.data
+      }
       if (isConfigObject(body) && typeof body.requestId === 'string' && sessions.inputs.has(body.requestId)) {
-        if (Object.keys(body).some(key => key !== 'requestId' && (cancel || key !== 'text')) || !cancel && typeof body.text !== 'string') {
+        if (Object.keys(body).some(key => key !== 'requestId' && (cancel || (key !== 'text' && key !== 'media'))) || !cancel && typeof body.text !== 'string') {
           return c.json({ error: 'invalid_request', message: 'Supply requestId and text for an input reply.' }, 400)
         }
         try {
@@ -537,14 +555,14 @@ export function sessionsApiPlugin(
             return c.json({ cancelled: true })
           }
           if (typeof body.text !== 'string') return c.json({ error: 'invalid_request' }, 400)
-          return c.json({ answer: await sessions.inputs.replyUser(key, body.requestId, body.text) })
+          return c.json({ answer: await sessions.inputs.replyUser(key, body.requestId, body.text, undefined, undefined, answerMedia) })
         } catch (error) {
           if (!(error instanceof YieldError)) throw error
           return c.json({ error: error.code, message: error.message }, error.code === 'not_found' ? 404
             : error.code === 'forbidden' ? 403 : error.code === 'conflict' ? 409 : error.code === 'invalid_request' ? 400 : 503)
         }
       }
-      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'requestId' && (cancel || (key !== 'option' && key !== 'customText')))
+      if (!isConfigObject(body) || Object.keys(body).some(key => key !== 'requestId' && (cancel || (key !== 'option' && key !== 'customText' && key !== 'media')))
         || typeof body.requestId !== 'string' || !body.requestId
         || (!cancel && (Object.hasOwn(body, 'option') === Object.hasOwn(body, 'customText')
           || (Object.hasOwn(body, 'option') ? typeof body.option !== 'string' : typeof body.customText !== 'string')))) {
@@ -558,7 +576,7 @@ export function sessionsApiPlugin(
           return c.json({ cancelled: true })
         }
         if (typeof body.customText === 'string') {
-          return c.json({ answer: await sessions.yields.answerUserText(key, body.requestId, body.customText) })
+          return c.json({ answer: await sessions.yields.answerUserText(key, body.requestId, body.customText, answerMedia) })
         }
         if (typeof body.option !== 'string') return c.json({ error: 'invalid_request' }, 400)
         return c.json({ answer: await sessions.yields.answerUser(key, body.requestId, body.option) })

@@ -182,6 +182,43 @@ test('direct presets can still be selected after opening custom entry', async t 
   assert.equal(state.customText.value, '')
 })
 
+test('composer answers target the exact request and require matching attachment receipts', async t => {
+  const { state, requests } = harness(t)
+  requests[0]!.finish(Response.json({ request: question() }))
+  await settle()
+  assert.equal(await state.submitCustom('stale-request', 'Do not send this'), false)
+  assert.equal(requests.length, 1)
+  const media = ['C:\\fixture\\uploads\\image.png', 'C:\\fixture\\uploads\\notes.txt']
+  const answer = state.submitCustom('question-1', 'My own answer', media)
+  assert.deepEqual(JSON.parse(String(requests[1]!.init.body)), { requestId: 'question-1', customText: 'My own answer', media })
+  assert.equal(await state.choose('Minimal change'), false)
+  requests[1]!.finish(Response.json({ answer: {
+    requestId: 'question-1', option: 'My own answer', custom: true, answeredBy: 'user', answeredAt: new Date().toISOString(),
+  } }))
+  assert.equal(await answer, false)
+  assert.equal(state.customText.value, 'My own answer')
+  const retry = state.submitCustom('question-1', 'My own answer', media)
+  requests[2]!.finish(Response.json({ answer: {
+    requestId: 'question-1', option: 'My own answer', custom: true, media, answeredBy: 'user', answeredAt: new Date().toISOString(),
+  } }))
+  assert.equal(await retry, true)
+})
+
+test('plain input composer replies include attachments and cannot silently choose a preset', async t => {
+  const { state, requests } = harness(t)
+  const input = { kind: 'input', id: 'input-composer', sessionId: 'web:root', question: 'What should I read?',
+    recipient: { kind: 'user', sessionId: 'web:root' }, origin: { physicalId: 'root-0' },
+    createdAt: new Date().toISOString(), deadline: null }
+  requests[0]!.finish(Response.json({ request: input }))
+  await settle()
+  const media = ['C:\\fixture\\uploads\\notes.txt']
+  const reply = state.submitCustom(input.id, 'See attached files.', media)
+  assert.deepEqual(JSON.parse(String(requests[1]!.init.body)), { requestId: input.id, text: 'See attached files.', media })
+  requests[1]!.finish(Response.json({ answer: { requestId: input.id, text: 'See attached files.', media,
+    answeredBy: 'user', answeredAt: new Date().toISOString() } }))
+  assert.equal(await reply, true)
+})
+
 test('only visible waiting sessions fetch and stale session responses cannot appear', async t => {
   const { source, state, requests } = harness(t, { stage: 'tool' })
   assert.equal(requests.length, 0)

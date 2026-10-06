@@ -14,6 +14,7 @@ export interface InputAnswer {
   text: string
   answeredBy: 'user' | 'parent' | 'caller'
   answeredAt: string
+  media?: string[]
 }
 export interface InputRecord {
   version: 1

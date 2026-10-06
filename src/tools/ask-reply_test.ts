@@ -48,7 +48,7 @@ test('ask decision waits for the human and returns a JSON answer receipt', async
   const request = yields.get('root')!
   assert.deepEqual(request.recipient, { kind: 'user', sessionId: 'root' })
   const receipt = await yields.answerUser('root', request.id, 'C')
-  assert.deepEqual(JSON.parse(await waiting), receipt)
+  assert.deepEqual(JSON.parse(requireToolText(await waiting)), receipt)
 })
 
 test('input asks return plain text and A2A callers cannot request local human decisions', async () => {
@@ -60,7 +60,7 @@ test('input asks return plain text and A2A callers cannot request local human de
   await new Promise(resolve => setImmediate(resolve))
   const request = inputs.get('root')!
   const answer = await inputs.replyUser('root', request.id, 'fixture-path')
-  assert.deepEqual(JSON.parse(await waiting), answer)
+  assert.deepEqual(JSON.parse(requireToolText(await waiting)), answer)
   assert.equal('approved' in answer, false)
 })
 
@@ -70,7 +70,7 @@ test('reply answers a real child request and releases both calls with the same r
   const request = yields.get('child')!
   assert.deepEqual(request.recipient, { kind: 'parent', sessionId: 'parent' })
   const answer = await reply.execute({ request_id: request.id, text: 'A' }, context('parent'))
-  assert.deepEqual(JSON.parse(await waiting), JSON.parse(answer))
+  assert.deepEqual(JSON.parse(requireToolText(await waiting)), JSON.parse(answer))
   assert.equal(JSON.parse(answer).answeredBy, 'parent')
   await assert.rejects(reply.execute({ request_id: request.id, text: 'A' }, context('parent')),
     error => error instanceof YieldError && error.code === 'not_found')
@@ -113,7 +113,7 @@ test('binary decisions wait for an explicit authorized answer without an artific
   await assert.rejects(reply.execute({ request_id: request.id, text: 'Yes' }, context('root')),
     error => error instanceof YieldError && error.code === 'forbidden')
   yields.answerUser('root', request.id, 'No')
-  assert.equal(JSON.parse(await waiting).option, 'No')
+  assert.equal(JSON.parse(requireToolText(await waiting)).option, 'No')
 })
 
 test('abort propagates for ask and prevents an aborted parent from answering', async () => {

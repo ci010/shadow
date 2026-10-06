@@ -46,7 +46,7 @@ export function decisionStatusLabel(status: YieldDecision['status']): string {
 
 function readAnswer(text: string | undefined): YieldAnswer | undefined {
   if (!text) return
-  try { return parseYieldAnswer(JSON.parse(text)) }
+  try { return parseYieldAnswer(JSON.parse(text.split('\n', 1)[0]!)) }
   catch (error) { if (!(error instanceof TypeError || error instanceof SyntaxError)) throw error }
 }
 

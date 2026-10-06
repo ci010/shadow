@@ -1,8 +1,10 @@
 import type { ExecutionContext } from './context.ts'
 import type { InputRequests } from '../sessions/input-requests.ts'
 import { YieldError, type YieldManager } from '../sessions/yield.ts'
-import { parseYieldQuestion, parseYieldReference } from '../sessions/yield-contract.ts'
-import type { Tool, ToolParameters } from './tool.ts'
+import { parseYieldQuestion, parseYieldReference, type YieldOutcome } from '../sessions/yield-contract.ts'
+import type { InputAnswer } from '../sessions/input-request.ts'
+import type { Tool, ToolParameters, ToolResult } from './tool.ts'
+import { buildMediaParts } from '../agent/message-builder.ts'
 import { WORK_APPROVE, WORK_REJECT } from '../initiatives/work-contract.ts'
 import type { WorkAlignment } from '../sessions/work-alignment.ts'
 
@@ -28,7 +30,7 @@ const parameters = {
   additionalProperties: false,
 }
 
-export class AskTool implements Tool {
+export class AskTool implements Tool<ToolResult> {
   readonly name = 'ask'
   readonly readonly = false
   readonly supportsRemoteWorkdir = true
@@ -38,7 +40,7 @@ export class AskTool implements Tool {
   constructor(private readonly yields: YieldManager, private readonly inputs: Pick<InputRequests, 'get' | 'ask'>,
     private readonly work?: () => WorkAlignment | undefined) {}
 
-  async execute(args: Record<string, unknown>, ctx: ExecutionContext): Promise<string> {
+  async execute(args: Record<string, unknown>, ctx: ExecutionContext): Promise<ToolResult> {
     ctx.signal.throwIfAborted()
     const denied = ctx.tools?.executionDenial?.('ask', args)
     if (denied) return denied
@@ -50,7 +52,7 @@ export class AskTool implements Tool {
     }
     if (action === 'ask' && args.kind === 'input' && Object.keys(args).every(key => ['action', 'kind', 'question'].includes(key))) {
       if (typeof args.question !== 'string') throw new YieldError('invalid_request', 'Input requires a question.')
-      return JSON.stringify(await this.inputs.ask(args.question, ctx))
+      return this.answerResult(await this.inputs.ask(args.question, ctx), ctx)
     }
     if (action !== 'ask' || args.kind !== 'decision'
       || Object.keys(args).some(key => !['action', 'kind', 'question', 'options', 'default_option', 'sources', 'brief', 'reconsiders', 'proposal'].includes(key))) {
@@ -80,8 +82,14 @@ export class AskTool implements Tool {
     const stamps = question.workProposal
       ? [{ key: question.workProposal.key, revision: question.workProposal.baseRevision, assignmentRevision: question.workProposal.assignmentRevision }]
       : ctx.workStamps
-    return JSON.stringify(await this.yields.ask(ctx.sessionId, question, ctx.signal,
+    return this.answerResult(await this.yields.ask(ctx.sessionId, question, ctx.signal,
       ctx.inputSource === 'user' ? { channel: ctx.channel, senderId: ctx.senderId } : undefined,
-      ctx.inputSource === 'user' ? ctx.platformMessageId : undefined, ctx.toolCallId, stamps))
+      ctx.inputSource === 'user' ? ctx.platformMessageId : undefined, ctx.toolCallId, stamps), ctx)
+  }
+
+  private async answerResult(answer: InputAnswer | YieldOutcome, ctx: ExecutionContext): Promise<ToolResult> {
+    const text = JSON.stringify(answer)
+    if (!('media' in answer) || !answer.media?.length) return text
+    return { content: [{ type: 'text', text }, ...await buildMediaParts(answer.media, ctx.cwd ?? '.', ctx.cwd ?? '.', ctx.signal)] }
   }
 }

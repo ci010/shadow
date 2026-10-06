@@ -103,8 +103,11 @@ export type ReceiveChannelMessage = (message: InboundMessage) => Promise<Deliver
 
 /** Compatibility belongs at the channel boundary, not in the mailbox. */
 export function channelMessageInput(message: InboundMessage): SessionInput {
-  if (message.retry && message.silent) {
-    throw new TypeError('An input cannot be both retry and silent')
+  if (message.delivery !== undefined && message.delivery !== 'queue') {
+    throw new TypeError('Invalid channel delivery policy')
+  }
+  if (message.retry && (message.silent || message.delivery)) {
+    throw new TypeError('A retry cannot be silent or queued')
   }
   const sender: MessageContext = {
     ...(message.channelAddress ? { channelAddress: message.channelAddress } : {}),
@@ -140,7 +143,7 @@ export function channelMessageInput(message: InboundMessage): SessionInput {
       kind: 'message',
       content: message.content,
       media: message.media,
-      policy: message.silent ? 'silent' : 'interactive',
+      policy: message.silent ? 'silent' : message.delivery ?? 'interactive',
     }
 }
 

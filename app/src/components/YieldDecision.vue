@@ -20,6 +20,9 @@
     <div v-if="decision.answer" class="decision-answer">
       <strong>{{ decision.answer.custom ? 'Custom response' : 'Recorded response' }}</strong>
       <p>{{ decision.answer.option }}</p>
+      <MessageAttachments v-if="decision.answer.media?.length && apiBase !== undefined && (sessionId || decision.reference?.sessionId)"
+        :paths="decision.answer.media" :api-base="apiBase" :session-id="sessionId || decision.reference?.sessionId || ''" :workdir="workdir"
+        @preview="emit('preview', $event)" @open="emit('open', $event)" />
       <MessageTimestamp :timestamp="decision.answer.answeredAt" />
     </div>
     <p v-if="decision.status === 'waiting-user'" class="decision-note">Reply using the decision controls below the conversation.</p>
@@ -55,8 +58,12 @@ import YieldSource from './YieldSource.vue'
 import DecisionGraph from './DecisionGraph.vue'
 import DecisionDiscussion from './DecisionDiscussion.vue'
 import DecisionBrief from './DecisionBrief.vue'
-defineProps<{ decision: YieldDecision; apiBase?: string; canManage?: boolean }>()
-const emit = defineEmits<{ interact: []; inspect: [sessionId: string]; updated: [] }>()
+import MessageAttachments from './MessageAttachments.vue'
+import type { SessionDetails } from '../session-details.ts'
+import type { ImagePreview } from '../image-viewer.ts'
+import type { OpenFile } from '../file-workbench.ts'
+defineProps<{ decision: YieldDecision; apiBase?: string; canManage?: boolean; sessionId?: string; workdir?: SessionDetails['workdir'] }>()
+const emit = defineEmits<{ interact: []; inspect: [sessionId: string]; updated: []; preview: [image: ImagePreview]; open: [file: OpenFile] }>()
 </script>
 
 <style scoped>

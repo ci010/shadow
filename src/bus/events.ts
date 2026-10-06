@@ -66,6 +66,8 @@ export interface InboundMessage extends MessageContext {
   media?: string[]
   /** Record message in history but suppress the bot's response */
   silent?: boolean
+  /** Explicit web input queued after the current turn, without steering it. */
+  delivery?: 'queue'
   /**
    * Re-run the agent loop on the existing session history without appending a
    * new user message. Used by the web "retry" action so a failed request can be

@@ -1,5 +1,6 @@
 import { parseDecisionBrief, type DecisionBrief } from './decision-brief.ts'
 import { z } from 'zod'
+import { answerMediaSchema } from './answer-media.ts'
 import { workDecisionSchema, type WorkDecision } from '../initiatives/work-contract.ts'
 export const workStampsSchema = z.array(z.object({
   key: z.string().min(1).max(600), revision: z.number().int().positive(), adoptionId: z.string().uuid().optional(),
@@ -52,6 +53,7 @@ export interface YieldAnswer {
   answeredBy: 'user' | 'parent' | 'timeout'
   answeredAt: string
   custom?: true
+  media?: string[]
   reference?: YieldReference
   revisedQuestion?: YieldQuestion
   approved?: never
@@ -246,6 +248,10 @@ export function parseYieldAnswer(value: unknown, request?: YieldRequest): YieldA
   }
   const reference = value.reference === undefined ? undefined : parseYieldReference(value.reference)
   const revisedQuestion = value.revisedQuestion === undefined ? undefined : parseYieldQuestion(value.revisedQuestion)
+  const parsedMedia = value.media === undefined ? undefined : answerMediaSchema.safeParse(value.media)
+  if (parsedMedia && !parsedMedia.success) throw new TypeError('Invalid answer attachments.')
+  const media = parsedMedia?.data
+  if (media && (!value.custom || value.answeredBy !== 'user')) throw new TypeError('Only a custom user answer can contain attachments.')
   if (request && revisedQuestion && JSON.stringify(revisedQuestion) !== JSON.stringify(parseYieldQuestion(request))) {
     throw new TypeError('Revised question does not match the answered request.')
   }
@@ -255,7 +261,7 @@ export function parseYieldAnswer(value: unknown, request?: YieldRequest): YieldA
   }
   return { requestId: value.requestId, option: value.option, answeredBy: value.answeredBy,
     answeredAt: value.answeredAt, ...(value.custom ? { custom: true } : {}), ...(reference ? { reference } : {}),
-    ...(revisedQuestion ? { revisedQuestion } : {}) }
+    ...(revisedQuestion ? { revisedQuestion } : {}), ...(media ? { media } : {}) }
 }
 
 export function parseYieldDecisionRecord(value: unknown): YieldDecisionRecord {

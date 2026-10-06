@@ -2,6 +2,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { parseYieldRequest, parseYieldCustomText, MAX_YIELD_CUSTOM_TEXT_LENGTH, type YieldRequest } from '../../src/sessions/yield-contract.ts'
 import { parseInputRequest, type InputRequest } from '../../src/sessions/input-request.ts'
+import { answerMediaSchema, MAX_ANSWER_ATTACHMENTS } from '../../src/sessions/answer-media.ts'
 export { MAX_YIELD_CUSTOM_TEXT_LENGTH }
 export type AskRequest = YieldRequest | InputRequest
 export function isInputRequest(request: AskRequest): request is InputRequest { return 'kind' in request && request.kind === 'input' }
@@ -113,7 +114,7 @@ export function useYieldRequest(source: () => YieldSource) {
       if (read === controller) { read = undefined; loading.value = false }
     }
   }
-  async function mutate(isCancellation: boolean): Promise<boolean> {
+  async function mutate(isCancellation: boolean, media?: string[]): Promise<boolean> {
     const question = request.value
     if (!answerable.value || !question || write) return false
     const input = isInputRequest(question)
@@ -144,7 +145,8 @@ export function useYieldRequest(source: () => YieldSource) {
       const response = await fetch(endpoint(), {
         method: isCancellation ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isCancellation ? { requestId: question.id }
-          : { requestId: question.id, ...(input ? { text: option } : custom ? { customText: option } : { option }) }),
+          : { requestId: question.id, ...(input ? { text: option } : custom ? { customText: option } : { option }),
+            ...(media?.length ? { media } : {}) }),
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
       })
       const value = await readResponse(response)
@@ -157,6 +159,7 @@ export function useYieldRequest(source: () => YieldSource) {
         || !('requestId' in value.answer) || value.answer.requestId !== question.id
         || (input ? !('text' in value.answer) || value.answer.text !== option : !('option' in value.answer) || value.answer.option !== option)
         || (!input && custom && (!('custom' in value.answer) || value.answer.custom !== true))
+        || (media?.length && (!('media' in value.answer) || JSON.stringify(value.answer.media) !== JSON.stringify(media)))
         || !('answeredBy' in value.answer) || value.answer.answeredBy !== 'user'
         || !('answeredAt' in value.answer) || typeof value.answer.answeredAt !== 'string'
         || !Number.isFinite(Date.parse(value.answer.answeredAt))) {
@@ -210,6 +213,19 @@ export function useYieldRequest(source: () => YieldSource) {
   onUnmounted(stopRequests)
   return { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh,
     submit: () => mutate(false), cancelQuestion: () => mutate(true),
+    submitCustom: (requestId: string, text: string, media: string[] = []) => {
+      if (!answerable.value || busy.value || request.value?.id !== requestId) {
+        error.value = 'This question changed or is unavailable. Reload it before sending your answer.'
+        return Promise.resolve(false)
+      }
+      if (media.length && !answerMediaSchema.safeParse(media).success) {
+        error.value = `Attach up to ${MAX_ANSWER_ATTACHMENTS} files, then retry your answer.`
+        return Promise.resolve(false)
+      }
+      customMode.value = true
+      customText.value = text
+      return mutate(false, media)
+    },
     choose: (option: string) => {
       if (!answerable.value || busy.value || !request.value || isInputRequest(request.value) || !request.value.options.includes(option)) return Promise.resolve(false)
       customMode.value = false

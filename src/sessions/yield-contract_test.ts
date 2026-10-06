@@ -1,12 +1,25 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { MAX_YIELD_TIMEOUT_MS, MAX_YIELD_CUSTOM_TEXT_LENGTH, parseYieldCustomText, parseYieldPolicy, parseYieldQuestion, parseYieldRequest, parseYieldReview } from './yield-contract.ts'
+import { MAX_YIELD_TIMEOUT_MS, MAX_YIELD_CUSTOM_TEXT_LENGTH, parseYieldAnswer, parseYieldCustomText, parseYieldPolicy, parseYieldQuestion, parseYieldRequest, parseYieldReview } from './yield-contract.ts'
 
 const question = { question: 'Choose?', options: ['A', 'B', 'C'], defaultOption: 'B' }
 const request = {
   ...question, id: 'request-1', sessionId: 'root', recipient: { kind: 'user', sessionId: 'root' },
   createdAt: '2026-09-13T12:00:00.000Z', deadline: null,
 }
+
+test('answer attachments are copied, bounded and limited to custom human answers; old receipts still parse', () => {
+  const answer = { requestId: request.id, option: 'My own answer', custom: true, answeredBy: 'user', answeredAt: request.createdAt }
+  const media = ['C:\\fixture\\uploads\\notes.txt']
+  const parsed = parseYieldAnswer({ ...answer, media })
+  media[0] = 'Changed'
+  assert.deepEqual(parsed.media, ['C:\\fixture\\uploads\\notes.txt'])
+  assert.equal(parseYieldAnswer(answer).media, undefined)
+  for (const fields of [{ media: [] }, { media: [1] }, { media: [''] }, { media: Array(33).fill('file') },
+    { media: ['file'], custom: undefined }, { media: ['file'], answeredBy: 'parent' }]) {
+    assert.throws(() => parseYieldAnswer({ ...answer, ...fields }), TypeError)
+  }
+})
 
 test('discussion contracts reject fabricated completion or cross-owner replacement metadata', () => {
   const reference = { sessionId: 'root', physicalId: 'segment', requestId: 'request-1' }

@@ -121,14 +121,16 @@ export async function buildUserChatMessage(
  * - Local file paths → read and base64-encoded into a data URI.
  * - Non-image media items → appended as text annotations.
  */
-async function buildMediaParts(
+export async function buildMediaParts(
   media: string[],
   workspace: string,
   cwd: string,
+  signal?: AbortSignal,
 ): Promise<ContentPart[]> {
   const parts: ContentPart[] = []
 
   for (const src of media) {
+    signal?.throwIfAborted()
     if (!isImagePath(src)) {
       // Non-image: append as a text annotation instead of an image part
       parts.push({ type: 'text', text: `[file: ${src}]` })
@@ -148,7 +150,7 @@ async function buildMediaParts(
     const resolvedSrc = isAbsolute(src)
       ? src
       : resolveAgentPath(workspace, cwd, src)
-    parts.push((await readImage(resolvedSrc)).part)
+    parts.push((await readImage(resolvedSrc, signal)).part)
   }
 
   return parts
