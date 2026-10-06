@@ -147,8 +147,22 @@ started: inspect the outcome before any retry, especially writes.
 
 ## Managed Bot authoring
 
+Discord uses `channel_config`, not `authoring_change`. In owner coordination,
+read `action: schema`, then `list` for named Bot connections and the current
+configuration revision. `directory` resolves servers/channels/roles; `members`
+resolves people in a mutual server. Disambiguate repeated names with the human.
+Propose against the exact revision; never silently rebase another configuration.
+Agent Markdown, channel grants and fixed-copy knowledge publication all require
+human review in Project Bots > Discord access. An authorized Discord manager can
+only draft within its existing ceiling and current Bot; the same authorized
+human can confirm its exact draft/hash with `/shadow-approve`. Models never
+confirm. Do not infer Shadow ownership from a Discord administrator role or DM.
+Participant restrictions control invocation, not the audience of channel replies.
+Conversation memory, scoped learning and SOUL drafts never become global merely
+because two channels use the same Agent. Trusted host execution is not a sandbox.
+
 Use `authoring_change` with `action: schema` for current edit/check/review
-contracts. This workflow deploys managed Bot resources, not ordinary shared
+contracts for QQ/Feishu. This workflow deploys managed Bot resources, not ordinary shared
 Skills. Create a Change from the published baseline on the owner's request.
 Small prompt edits belong in that Change; substantial implementation belongs in
 a durable developer session with explicit resource paths. Pass changeId, goals

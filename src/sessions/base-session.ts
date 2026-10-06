@@ -8,6 +8,7 @@ import { continuedUserInvolvement, createResponseContext, reconcileResponseConti
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { mkdir } from 'node:fs/promises'
 import type { Bus } from '../bus/bus.ts'
+import type { OutboundMessage } from '../bus/events.ts'
 import {
   inputContext,
   retryMessage,
@@ -143,6 +144,7 @@ export abstract class BaseSession {
         `[session] Failed to persist messages for ${this.id}:`,
         errMsg(err),
       )
+      if (this.tools.boundary) throw err
     }
 
     // Record activity time so listings can show a "last active" timestamp.
@@ -156,6 +158,7 @@ export abstract class BaseSession {
         `[session] Failed to persist state for ${this.id}:`,
         errMsg(err),
       )
+      if (this.tools.boundary) throw err
     }
   }
 
@@ -188,6 +191,10 @@ export abstract class BaseSession {
   }
 
   protected onToolPhaseEnd(): void {}
+
+  protected emitOutbound(message: OutboundMessage): void {
+    this.bus.emit('message.outbound', this.tools.boundary?.stamp(message) ?? message)
+  }
 
   // ── Core LLM ↔ tool loop ───────────────────────────────────────────────
 
@@ -246,6 +253,8 @@ export abstract class BaseSession {
           : [{ role: 'system', content: workPrompt }, ...this.messages]
         : this.messages
       const inferenceMessages = withExecutionBudget(withResponseAudience(workMessages, responseContext), budget.remaining, 'turn')
+      await this.tools.boundary?.beforeInference(signal)
+      if (this.tools.boundary) await this.store.saveState(this.id, this.state)
 
       const traceAttributes = {
         sessionId: this.id,
@@ -278,6 +287,7 @@ export abstract class BaseSession {
             reasoningEffort,
           })
           signal.throwIfAborted()
+          this.tools.boundary?.assertCurrent()
           // Keep the returned message with its call, including across compaction.
           // Provider continuity (including encrypted state) is not display content.
           chatSpan.addEvent('model.response', {
@@ -350,8 +360,9 @@ export abstract class BaseSession {
         continue
       }
       if (response.content || done) {
+        await this.tools.boundary?.beforeOutput(signal)
         const { text, media } = parseMediaFromContent(response.content ?? '')
-        this.bus.emit('message.outbound', {
+        this.emitOutbound({
           event: 'response',
           channel: executionContext.channel,
           chatId: executionContext.chatId,
@@ -396,7 +407,8 @@ export abstract class BaseSession {
       ]
       await this.appendMessages(llm, { role: 'tool', content, tool_call_id: call.id, name: call.name })
       pendingResults.delete(call.id)
-      this.bus.emit('message.outbound', {
+      await this.tools.boundary?.beforeOutput(signal)
+      this.emitOutbound({
         event: 'tool_result',
         channel: executionContext.channel,
         chatId: executionContext.chatId,
@@ -416,7 +428,8 @@ export abstract class BaseSession {
         signal.throwIfAborted()
         for (const tc of group.calls) {
           const display = this.tools.getChatTextDisplay(tc.name, tc.arguments)
-          this.bus.emit('message.outbound', {
+          await this.tools.boundary?.beforeOutput(signal)
+          this.emitOutbound({
             event: 'tool_call',
             channel: executionContext.channel,
             chatId: executionContext.chatId,
@@ -502,7 +515,13 @@ export abstract class BaseSession {
     const senderName = msg.senderName ?? msg.senderId
     const isGroup = !!msg.isGroup
     const queryId = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    const continuity = reconcileResponseContinuity(this.messages)
+    this.messages = continuity.messages
     this.responseContext = createResponseContext(queryId, input.source, this.state.mode, msg.channel)
+    if (input.kind === 'message' && !silent && this.responseContext
+      && (this.state.recovery?.userInvolved || continuity.unfinishedUserResponse)) {
+      this.responseContext = { ...this.responseContext, userInvolved: true }
+    }
     if (input.kind === 'control' && input.command.type === 'resume' && this.responseContext
       && (this.state.recovery?.userInvolved ?? continuedUserInvolvement(this.messages))) {
       this.responseContext = { ...this.responseContext, userInvolved: true }
@@ -515,13 +534,7 @@ export abstract class BaseSession {
       senderId: msg.senderId,
       senderName,
       sessionId: this.id,
-    const continuity = reconcileResponseContinuity(this.messages)
-    this.messages = continuity.messages
       messageId: msg.messageId,
-    if (input.kind === 'message' && !silent && this.responseContext
-      && (this.state.recovery?.userInvolved || continuity.unfinishedUserResponse)) {
-      this.responseContext = { ...this.responseContext, userInvolved: true }
-    }
       isGroup,
       admin: msg.admin ?? false,
       physicalSessionId: this.physicalSessionId,
@@ -538,6 +551,10 @@ export abstract class BaseSession {
     }
     const attempted = !silent
     try {
+      if (this.tools.boundary) {
+        signal = AbortSignal.any([signal, this.tools.boundary.signal])
+        await this.tools.boundary.begin(input, signal)
+      }
       spanAttributes(attributes)
       if (attempted) {
         this.state.executionStatus = 'running'
@@ -617,6 +634,7 @@ export abstract class BaseSession {
 
       console.debug(`[${this.id}] Loaded ${this.messages.length} session history`)
       const executionContext: ExecutionContext = {
+        memoryAccess: this.tools.boundary?.memoryAccess,
         projectId: this.state.projectId,
         evalBridge: this.evalBridge,
         channelAddress: msg.channelAddress,
@@ -641,7 +659,7 @@ export abstract class BaseSession {
     } catch (err) {
       if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
         fact.status = 'cancelled'
-        if (!silent) {
+        if (!silent && !this.tools.boundary) {
           this.bus.emit('message.outbound', {
             channel: msg.channel,
             chatId: msg.chatId,
@@ -670,6 +688,7 @@ export abstract class BaseSession {
       try {
         if (attempted) await this.finishTurn(fact)
       } finally {
+        this.tools.boundary?.finish()
         this.responseContext = undefined
       }
     }

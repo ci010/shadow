@@ -11,6 +11,7 @@ allowedTools:
   - sql
   - project_config
   - authoring_change
+  - channel_config
   - skill_read
   - skill_save
   - ask
@@ -72,8 +73,16 @@ belongs in a peer session; Skill files cannot bypass your execution cap.
 
 ## Managed Bot agent, skill and tool changes
 
+For Discord, use `channel_config` with `action: schema`, then `list` for named
+Bot connections and exact revisions. Resolve server, channel and person names
+with `directory`/`members`; never guess IDs. Propose Agent, binding and knowledge
+changes through this tool, not `authoring_change`. The owner reviews them in
+Project Bots > Discord access. You cannot approve your own proposal or treat
+ordinary chat as publication approval. Conversation memory stays separate even
+when channels share an Agent; participants do not limit who reads Discord replies.
+
 Use `authoring_change` with `action: schema` for the current edit/check/review
-workflow, and `v:skills/tool-operations` for detailed authoring guidance.
+workflow for QQ/Feishu, and `v:skills/tool-operations` for detailed authoring guidance.
 Only managed Bot deployment uses Changes; ordinary shared Skills do not.
 Create from the published baseline on the owner's request; delegate substantial
 implementation with explicit resource paths, changeId and acceptance cases.

@@ -26,6 +26,9 @@ test('coordinator keeps routing and approval rules while loading authoring detai
     /Saving does not execute tools or grant permissions/,
     /Skill files cannot bypass your execution cap/,
     /Only managed Bot deployment uses Changes; ordinary shared Skills do not/,
+    /For Discord, use `channel_config` with `action: schema`/,
+    /changes through this tool, not `authoring_change`/,
+    /participants do not limit who reads Discord replies/,
     /Use `authoring_change` with `action: schema`/,
     /delegate substantial implementation with explicit resource paths, changeId and acceptance cases/,
     /Edit exact revisions and use host-saved check evidence/,
@@ -54,8 +57,8 @@ test('coordinator cannot activate dynamic tools; sessions share the direct Work 
   const vfs = new VirtualFs()
   vfs.mount('v:tools', 'Tools', (path, ctx) => importer.readVirtual(path, ctx), (ctx, opts) => importer.virtualEntries(ctx, opts))
   base.register(new SearchTool('.', undefined, vfs))
-  for (const name of ['exec', 'write', 'subagent', 'read', 'session', 'work', 'sql', 'message', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'ask', 'reply']) {
-    base.register({ name, description: name, parameters: { type: 'object', properties: {} }, execute: async () => name })
+  for (const name of ['exec', 'write', 'subagent', 'read', 'session', 'work', 'sql', 'message', 'project_config', 'authoring_change', 'channel_config', 'skill_read', 'skill_save', 'ask', 'reply']) {
+    base.register({ name, description: name, optIn: name === 'channel_config', parameters: { type: 'object', properties: {} }, execute: async () => name })
   }
   const tools = new SessionTools(base, '.', agent.allowedTools, agent.blockedTools)
   const context: ExecutionContext = {
@@ -64,7 +67,7 @@ test('coordinator cannot activate dynamic tools; sessions share the direct Work 
     signal: new AbortController().signal, tools,
   }
   const connect = t.mock.method(McpConnection.prototype, 'connect', async () => { throw new Error('unexpected connection') })
-  assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['ask', 'authoring_change', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'sql', 'work'])
+  assert.deepEqual(tools.getDefinitions().map(definition => definition.function.name).sort(), ['ask', 'authoring_change', 'channel_config', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'sql', 'work'])
   assert.match(requireToolText(await tools.execute('search', { space: 'grep:v:tools/fixture', query: '' }, context)), /not available/)
   assert.match(requireToolText(await tools.execute('invoke_tool', { name: 'fixture__execute', args: {} }, context)), /not found|not available|not allowed/i)
   assert.equal(connect.mock.callCount(), 0)
@@ -77,6 +80,7 @@ test('coordinator cannot activate dynamic tools; sessions share the direct Work 
   assert.equal(borrowed.has('update_convention'), false)
   assert.equal(requireToolText(await tools.execute('work', { action: 'context' }, context)), 'work')
   const ordinary = new SessionTools(base, '.')
+  assert.equal(ordinary.getDefinitions().some(definition => definition.function.name === 'channel_config'), false)
   assert.equal(ordinary.getDefinitions().some(definition => definition.function.name === 'initiative'), false)
   assert.equal(ordinary.getDefinitions().some(definition => definition.function.name === 'work'), true)
   ordinary.resetDynamic()

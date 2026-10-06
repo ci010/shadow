@@ -591,7 +591,7 @@ ancestry establishes coordination authority.
 Each Project has exactly one `web:orchestrator`, pinned as the default UI routing
 entry. Its built-in role and canonical runtime guard permit only
 read/search/session/message/work/sql, Project configuration and skill-authoring
-controls, and ask/reply, excluding invoke_tool/exec/write/subagent.
+controls, owner-only Discord `channel_config`, and ask/reply, excluding invoke_tool/exec/write/subagent.
 It routes to reusable sessions and lets users continue there, rather than owning
 their session hierarchy. Ensuring its existence never automatically runs an LLM.
 
@@ -862,7 +862,7 @@ separate mechanisms. A handoff is not a distributed transfer to another node.
 
 ### Prompt assembly
 
-`ContextBuilder` concatenates providers in registration order:
+For ordinary local Project sessions, `ContextBuilder` concatenates providers in registration order:
 
 1. **Runtime identity and execution contract:** platform, shell, channel/audience,
    role, permissions, and the session/task/call lifecycle. Role and mode limits
@@ -970,6 +970,42 @@ project-wide category directories, not the proposed per-project keyword hierarch
 everywhere. Working-set tracking captures the `write` tool path, not all edits
 made by shell commands, MCP tools, other applications, or all descendants.
 
+### Discord memory-domain boundary
+
+Managed Discord execution bypasses the ordinary Project prompt providers.
+`channels/integration.ts` supplies the approved Agent/skill snapshot, bounded
+platform metadata and authorized catalog context. It excludes global SOUL,
+identity, working sets, Project event/keyword indexes, conventions and generic
+resource/tool discovery before provider input is built. Names, paths, counts
+and source metadata are protected along with bodies; relevance never grants
+access.
+
+`memory/domains.ts` owns Project-private, Conversation, Shared and explicit
+Agent-private domains. WeakMap-backed leases bind runtime identity, domain
+revisions, conversation epoch and current-policy checks. The protected catalog
+stores immutable content versions and provenance; observed sources constrain
+derived notes, summaries, decisions and skills. A human-approved publication
+declassifies only its fixed reviewed copy, hiding private provenance from its
+external readers. Revocation blocks future use, not already-delivered content.
+Legacy uncatalogued files remain private by exclusion rather than an automatic
+full historical import.
+
+Each Bot/conversation/current authorization epoch gets its own domain, even
+when multiple channels use the same Agent. Binding saves and permission changes
+cancel old execution and open a fresh physical segment without replaying earlier
+history, summaries or provider conversation state. Logical IDs and owner-visible
+old history remain. Both session stores validate/persist the boundary metadata.
+Generic VFS rejects scoped memory leases; restricted execution uses a separate
+closed registry, not prompts or hidden tool names as its boundary.
+
+Same-scope blocking leaf calls and compaction preserve the owner's source
+restrictions. Output leases are checked before individual Discord sends/edits
+and cannot survive a changed connection generation or policy. The private
+memory catalog is under the owning Project's
+`config/channel-integrations/memory`, separate from the file-backed owner
+Knowledge browser. Trusted `exec` is deliberately outside an OS sandbox and
+can bypass application memory controls through host authority.
+
 ### Learning pipelines
 
 Each project's `LearningService` registers in-process activity aggregation
@@ -1011,6 +1047,20 @@ Memory guidance asks future sessions to identify useful or contradicted
 decisions; reflection records evidence-backed evaluations rather than treating
 repeated summaries as reinforcement. See
 [learning outcomes](tools-and-automations.md#learning-outcomes-and-recovery).
+
+Managed Discord sources and their children are excluded from this Project-wide
+pipeline, including legacy pending-batch recovery. `DiscordLearning` participates
+in the same scheduler with per-conversation/epoch/revision protected journals,
+source snapshots, independent cursors and retries. It reuses bounded
+SessionManager/BaseSession calls, not a new provider loop. Workers receive only
+exact versioned batch reads, `learning_record` and `learning_result`; no global
+memory or Discord output. New user input and revocation fence background work.
+Decision/event/skill output retains source restrictions in the Conversation
+domain. Soul reflection produces a private draft, never a global SOUL update.
+Prepared effects and idempotent atomic catalog writes permit interrupted-commit
+recovery without re-inference; conflicting edits require reconciliation.
+See [domain learning](tools-and-automations.md#discord-conversation-learning)
+for limits and the owner-visible status surface.
 
 ## Model providers
 
@@ -2015,6 +2065,29 @@ through Channels. UI status polling pauses when the Channels section is hidden.
 No/empty `allowFrom` means allow all; direct chats are admin by default, selected
 groups may be admin, and the web channel is always-admin at this layer.
 Those are local-agent trust assumptions, not a multi-tenant account system.
+Managed Discord is explicitly exempt: admission occurs before downloads,
+reactions, silent history or legacy slash routing, and both the shared channel
+assembly and manager force non-owner input. Unassigned channels and DMs fail
+closed; `adminChats`, Discord roles and DM defaults cannot create Shadow authority.
+
+`IntegrationStore` separates approved Agent snapshots from per-Bot assignments,
+validates current platform references and ceilings, and saves expiring
+revision/hash-bound reviews. `DiscordDirectory` discovers named servers,
+channels, roles and members with explicit completeness, bounded retry and fresh
+permission checks. Explicit thread bindings/disables win over inheritance;
+inheriting configuration never imports parent history. Private/archived-thread
+enumeration and forum/media parent bindings are not implemented.
+
+The authenticated `/api/integrations/discord` routes and owner/authorized-manager
+`channel_config` tools use that one configuration service. Models can propose,
+not approve. The coordinator's canonical cap explicitly exposes this opt-in
+tool, while manager chat gets a same-Bot ceiling. Agent file recovery preserves
+later manual edits. Vue's **Discord access** manages Agents, assignments,
+knowledge publication, learning status and reviews; Project-scoped
+`integrations` SSE carries invalidation only, never private content. Main blocks
+Discord publication through legacy `authoring_change`; QQ/Feishu retain that
+existing route. See [Messaging channels](channels.md) for operation and the
+outstanding live Discord acceptance boundary.
 
 `trustedChats` separately names exact group/channel IDs whose complete audience
 the operator trusts. It is configured per bot in the same validated settings
@@ -2066,7 +2139,10 @@ authorization. Discord reads re-resolve both bot and requesting member View
 Channel/Read Message History permissions, including parent-thread overwrites,
 or validate the current DM recipient. Private threads remain unsupported.
 An explicitly platform-bound thread child may read its own thread regardless
-of parent lineage. Internal virtual tasks/calls never inherit a channel binding.
+of parent lineage. Internal virtual tasks/calls never inherit a channel binding
+through generic dynamic-tool discovery. Managed Discord's closed registry may
+explicitly lend the same scope to a blocking leaf call; reads remain limited
+to the current conversation and authorization epoch.
 Feishu reads verify native sender/chat proof and current group membership;
 an explicitly bound root message is resolved to its real thread ID and reads
 cannot widen to the parent chat. Authorization uses app scopes and bot visibility,
@@ -2796,6 +2872,7 @@ from the host or other sessions**.
 | --- | --- |
 | Session state and logs | `.sessions`: JSONL files/state or SQLite `sessions.db` |
 | Memory and learning | Markdown/JSONL under `memory`, `.learning` progress/outcomes and Soul/identity files |
+| Discord policies and scoped memory | Project `config/channel-integrations`: protected reviews/audit, `memory` catalog and immutable blobs, per-scope `learning` journals; session boundary/worker receipts in both session stores |
 | Agent types and skills | Workspace `agents` and `skills`; shipped definitions are application assets |
 | Initiative context | Project-local SQLite work records and bounded prompt summaries; folder ownership lives in the host catalog |
 | Project catalog/config | Sibling host `projects.v2.json`; per-project `config/project.json` and `config/bots.v1.json` |
@@ -2816,6 +2893,8 @@ No general replication, backup, multi-writer transaction protocol, or
 exactly-once durability follows from these stores. Some write failures are
 logged while execution continues. Back up real user state deliberately rather
 than using it as a test fixture.
+Discord scoped state/catalog failures are fail-closed; this does not make every
+existing storage path transactional or every corruption automatically recoverable.
 
 ### Configuration
 
@@ -2914,6 +2993,11 @@ automatically replaced. Later turns resolve the latest inherited defaults.
   application ownership. Session/Initiative relevance scopes within a Project are not
   privacy controls, and project separation is not multi-tenant OS/RBAC
   isolation. Authorized local web access can expose agent-owned state.
+- **Discord memory:** restricted bindings use enforced domain/epoch/source
+  checks before context and reads, not Project relevance. Human fixed-copy
+  publication and explicit grants select the audience; channel participant
+  allowlists cannot hide replies from other Discord readers. Trusted host
+  execution can bypass this application boundary.
 - **External services:** providers receive assembled context; MCP, STT, search,
   and messaging services have their own credentials and data boundaries.
 - **Gateway:** keep loopback defaults. Explicit non-loopback hosting needs

@@ -6,6 +6,7 @@ import type { SessionTools } from './registry.ts'
 import type { ExecShell } from './shell.ts'
 
 export interface ExecutionContext extends MessageContext {
+  memoryAccess?: import('../memory/contracts.ts').MemoryAccess
   projectId?: string
   evalBridge?: ToolBridgeFactory
   /** Host-only semantic capability, shared with this turn's inference budget. */

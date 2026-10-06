@@ -276,6 +276,7 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  boundary?: import('../sessions/runtime-boundary.ts').RuntimeBoundary
   override getWorkGuard(): WorkToolGuard | undefined { return super.getWorkGuard() ?? this.base.getWorkGuard() }
   private borrowedOwner?: SessionTools
   private borrowedLifetime?: AbortSignal
@@ -581,6 +582,7 @@ export class SessionTools extends Tools {
   }
 
   override getDefinitions(): ToolDefinition[] {
+    this.boundary?.assertCurrent()
     const scope = this.scope
     return this.base.getDefinitions().filter((d) =>
       this.isToolAllowed(d.function.name)

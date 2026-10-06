@@ -623,6 +623,7 @@ export class Session extends BaseSession {
    * Synthesize a compact continuity context and persist it as a handoff snapshot.
    */
   private async compact(llm: LlmRuntimeConfig): Promise<CompactResult> {
+    await this.tools.boundary?.beforeInference(this.stopController.signal)
     const sessionId = this.id
     const state = this.state
     const work = this.tools.getWorkGuard()?.prompt(this.id)
@@ -637,7 +638,10 @@ export class Session extends BaseSession {
       targetPhysicalId,
       messages,
       llm.model,
+      this.tools.boundary,
+      this.state,
     )
+    this.tools.boundary?.assertCurrent()
 
     const startEvent: SessionStartEvent = {
       sessionId,
@@ -656,6 +660,7 @@ export class Session extends BaseSession {
         const systemPrompt = await this.rebuildSystemPrompt()
         newMessages.push({ role: 'system', content: systemPrompt })
       } catch (err) {
+        if (this.tools.boundary) throw err
         // Fall back to preserving the existing system prompt
         const existing = this.messages.find((m) => m.role === 'system')
         if (existing) newMessages.push(existing)

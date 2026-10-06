@@ -1,8 +1,36 @@
 # Discord deep integration and memory-domain authorization
 
-状态：待实现的完整设计方案，不是当前功能说明或安全保证。
+状态：原始完整设计与验收约束，保留设计时的表述；不是安全保证或验收证书。
 
 日期：2026-10-06。交付方式：一次完成下述闭环，不按 MVP 或分期交付。
+
+## 实施状态与尚未完成的验收
+
+当前工作树已接入真实 Project composition、Discord adapter、SessionManager、
+双存储、配置 API、owner chat 和 Discord access UI，而不只是类型或孤立组件：
+
+- Bot/Agent/绑定分离，名称目录与成员查询，默认拒绝，明确 DM/Thread 规则。
+- 指令/工具/域上限、精确版本草案、人工批准、撤销、审计与条件式 Agent 文件恢复。
+- Conversation/Shared/Agent-private 域、不可伪造的运行时读取上下文、
+  不可变版本和 provenance；Project 私有内容在进入 provider 前排除。
+- 重新绑定后的干净代次、同域 leaf call/compaction、逐请求输出检查、
+  连接代次失效；删除/重建会话后拒绝旧输出，撤权中止尚未发布的压缩摘要。
+  JSONL/SQLite 元数据与旧历史保留，批准结果不与回执发送成败混为一谈。
+- 按会话代次独立的 reflector/encapsulator/soul draft、来源快照、
+  journal/cursor/retry、已准备提交的恢复；不自动写入全局 skills/SOUL。
+- 本地合成 provider 测试、双存储和中断测试、真实 Main 启停/API 组合测试，
+  以及实际 Vue/Electron fixture 的配置/审核/窄屏交互检查。
+
+**仍未满足全部验收条件。** 未使用真实 Bot 凭据或专用 Discord server，
+尚未完成下文要求的真实角色变化、双频道、Thread、断线和撤权验收。
+私有/归档 Thread 全集和 forum/media 父频道绑定不受支持；旧未分类记忆
+通过排除保留私有，不自动为所有历史资源建立索引。损坏或并发冲突的保护文件
+可能使 Project/API 不可用；并非所有情况都有自动 UI 修复，冲突的学习提交
+需要人工核对，不能盲目重放。QQ/飞书不获得本次 Discord 的隔离保证。
+
+当前操作与边界见 [Messaging channels](channels.md)、
+[Tools and automations](tools-and-automations.md) 和
+[Architecture](architecture.md)。下述原设计及完成条件不因已有本地测试而删减。
 
 ## 目标与固定决策
 

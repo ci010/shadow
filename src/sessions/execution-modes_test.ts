@@ -212,11 +212,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const role = resolve(name)
         return name === 'orchestrator' && role ? { ...role, allowedTools: ['exec', 'invoke_tool', 'subagent'] } : role
       }
-      for (const name of ['search', 'session', 'work', 'initiative', 'project_config', 'skill_read', 'skill_save']) {
-        f.tools.register({ name, description: name, optIn: name === 'initiative',
+      for (const name of ['search', 'session', 'work', 'initiative', 'project_config', 'channel_config', 'skill_read', 'skill_save']) {
+        f.tools.register({ name, description: name, optIn: name === 'initiative' || name === 'channel_config',
           parameters: { type: 'object', properties: {} }, execute: async () => name })
       }
-      const allowed = ['ask', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'work']
+      const allowed = ['ask', 'channel_config', 'message', 'project_config', 'read', 'reply', 'search', 'session', 'skill_read', 'skill_save', 'work']
       try {
         await f.sessions.start()
         await f.sessions.buildSession('web:orchestrator', undefined, { mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator' })

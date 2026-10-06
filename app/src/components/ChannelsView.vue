@@ -21,6 +21,7 @@
           <div class="channel-copy"><h3>{{ channel.displayName }}</h3><p>{{ definition(channel.platform).label }} &middot; {{ definition(channel.platform).description }}</p></div>
           <span class="channel-state" :data-state="channel.state"><span class="channel-dot" aria-hidden="true" />{{ channelStateLabel(botChannel(channel)) }}</span>
           <div class="channel-actions">
+            <button v-if="channel.platform === 'discord'" :aria-expanded="accessBot === channel.id" @click="accessBot = accessBot === channel.id ? undefined : channel.id">Discord access</button>
             <button :disabled="!!saving" :aria-expanded="expanded === channel.id" :aria-controls="`channel-${channel.id}-editor`" @click="configure(channel)">{{ channel.configured ? 'Configure' : 'Set up' }}</button>
             <button v-if="channel.enabled" :disabled="!!saving" @click="changeConnection(channel, false)">Disconnect</button>
             <button v-else-if="channel.configured" :disabled="!!saving" @click="changeConnection(channel, true)">Connect</button>
@@ -42,7 +43,7 @@
             <div class="channel-fields">
               <template v-for="field in definition(channel.platform).fields.filter(field => !field.advanced)" :key="field.key">
                 <label :class="field.kind === 'checkbox' ? 'channel-checkbox' : 'channel-field'">
-                  <template v-if="field.kind === 'checkbox'"><input v-model="drafts[channel.id]![field.key]" type="checkbox" :name="field.key" />{{ field.label }}</template>
+                  <template v-if="field.kind === 'checkbox'"><input v-model="drafts[channel.id]![field.key]" type="checkbox" :name="field.key" /><span>{{ field.label }}<small v-if="field.hint" class="checkbox-hint">{{ field.hint }}</small></span></template>
                   <template v-else>
                     <span>{{ field.label }}<span v-if="field.required"> *</span></span>
                     <select v-if="field.kind === 'select'" v-model="drafts[channel.id]![field.key]" :name="field.key"><option v-for="option in field.options" :key="option" :value="option">{{ option === 'mention' ? 'Mentions and direct messages' : option === 'all' ? 'All messages' : option }}</option></select>
@@ -74,6 +75,7 @@
             </div>
           </fieldset>
         </form>
+        <DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord'" :api-base="apiBase" :project-id="projectId" :bot="channel" :active="active" />
       </article>
     </div>
   </section>
@@ -84,12 +86,14 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../channel-settings.ts'
 import { botChannel, botDraft, botPatch, createBotSettingsClient, type BotInstanceStatus } from '../bot-settings.ts'
+import DiscordAccess from './DiscordAccess.vue'
 
 const props = defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean }>()
 const channels = ref<BotInstanceStatus[]>([])
 const drafts = ref<Partial<Record<string, ChannelDraft>>>({})
 const errors = ref<Partial<Record<string, string>>>({})
 const expanded = ref<string>()
+const accessBot = ref<string>()
 const newPlatform = ref<ChannelId>('qq')
 const newName = ref('')
 const loading = ref(false)
@@ -251,6 +255,7 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .channel-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 13px; }
 .channel-field small { color: var(--c-text-secondary); font-size: 12px; line-height: 1.6; }
 .channel-checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.checkbox-hint { display: block; margin-top: 6px; color: var(--c-text-secondary); line-height: 1.6; }
 input:not([type="checkbox"]), textarea, select { width: 100%; min-width: 0; border: 1px solid var(--c-border); border-radius: var(--radius-control); padding: 10px; color: var(--c-text); background: var(--c-bg-input); font: inherit; }
 textarea { resize: vertical; }
 input::placeholder { color: var(--c-text-secondary); opacity: 1; }

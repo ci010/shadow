@@ -9,7 +9,7 @@ credential checks also apply. Opening the endpoint does not start projects.
 [`src/realtime/protocol.ts`](../src/realtime/protocol.ts) is importable by backend
 and renderer without Node or Vue imports.
 Topics are explicit project-scoped `chat` (with logical `sessionId`, such as
-`web:chat-123`), `sessions`, `logs`, `spans`, or `io`. Unknown projects and topic
+`web:chat-123`), `sessions`, `logs`, `spans`, `io`, or `integrations`. Unknown projects and topic
 kinds are rejected. A catalog Project whose runtime failed to start is known but
 unavailable, not an unknown Project: it does not reject the other subscriptions
 sharing the connection. At most 128 topics and 32 KiB of UTF-8 subscription JSON are
@@ -193,6 +193,20 @@ release the capture connection. A reconnected SSE feed cannot resume recording.
 
 See [Programmable I/O](io.md) for permissions, generated applications and
 current implementation limits.
+
+## Integration configuration invalidation
+
+The Project-scoped `integrations` topic carries only `{event: "invalidate"}`.
+Discord proposals, approvals, cancellations, domain changes and learning
+progress invalidate the owner configuration view. The renderer refetches the
+authenticated `GET /projects/<id>/api/integrations/discord` snapshot, including
+after reset/reconnect. No Agent Markdown, memory body, source metadata,
+credential or approval hash is copied into this shared SSE payload.
+
+An invalidation is not an authorization grant or proof that a draft was
+applied. HTTP reviews still bind the exact Project, revision and hash. The
+renderer cancels old requests and clears its configuration data on a
+Project/Bot switch; a newer snapshot does not silently rebase an unsaved form.
 
 ## Resource and lifecycle limits
 

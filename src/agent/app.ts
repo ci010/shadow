@@ -95,7 +95,7 @@ export class AgentApp {
     this.sessions.assertFolderAccess(sessionId)
     const input = channelMessageInput(msg)
     this.sessions.authorizeConversationInput(sessionId, input)
-    if (msg.senderId.trim()) {
+    if (msg.senderId.trim() && !msg.channelAdmissionId) {
       await this.identity?.observeInboundAccount(msg.channel, msg.senderId, msg.chatId, msg.senderName, msg.channelAddress)
     }
     const llm = this.getLlmRuntimeConfig()
@@ -131,7 +131,7 @@ export class AgentApp {
 
     // Fanout is a separate source publication; its failure cannot undo acceptance
     // of the original input or cause a client to retry an already accepted turn.
-    if (input.kind === 'message' && output === null) {
+    if (input.kind === 'message' && output === null && !msg.channelAdmissionId) {
       void this.events.publishChannelMessage(msg).catch((error) => {
         console.error(`[agent] Channel subscription delivery failed (${sessionId}, ${input.id}):`, errDetail(error))
       })

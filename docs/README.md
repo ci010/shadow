@@ -6,9 +6,9 @@
 | --- | --- |
 | [Project README](../README.md) | Node/pnpm setup, local development, builds, and entry points |
 | [Using Shadow](using-shadow.md) | Project/folder navigation, conversations, files, and answering agent questions |
-| [Messaging channels](channels.md) | Project bots, trust settings, and QQ passive-reply limits |
+| [Messaging channels](channels.md) | Discord per-channel Agents, UI/chat review, memory domains, recovery and live-test limits; QQ passive replies |
 | [Browser access](browser-access.md) | Local PIN and one-use pairing, trusted LAN, and PWA installation limits |
-| [Tools and automations](tools-and-automations.md) | Virtual discovery, Project MCP configuration, skills, and schedules |
+| [Tools and automations](tools-and-automations.md) | Virtual discovery, Project MCP, local versus Discord-domain learning, skills and schedules |
 | [Project conventions](project-conventions.md) | Project SQL, attributable rule changes, Work queries, decisions and personal memory boundaries |
 | [GitHub collaboration](github.md) | Project Issue/PR links, confirmed writes, cached evidence, explicit follow-up and uncertain outcome recovery |
 | [Session diagnosis](diagnostics.md) | Read-only export/API/CLI and development-only prompt capture |
@@ -75,12 +75,14 @@ and file ownership locks are preserved as history; use the current README and
 manifests for operation. Do not replace Deno with Node mechanically in an old
 proposal: that would invent a historical implementation that did not exist.
 
-## Proposed designs
+## Designs and implementation checkpoints
 
 - [Discord integration and memory-domain authorization](discord-agent-integration-plan.md):
-  proposed end-to-end plan for channel-specific Agents, UI/chat configuration,
+  original end-to-end plan for channel-specific Agents, UI/chat configuration,
   enforced memory domains, learning provenance, migration, and acceptance.
-  **Not implemented by this document.**
+  Its status notice distinguishes the connected implementation and local checks
+  from outstanding dedicated live Discord acceptance. Use Messaging channels
+  above for current behavior; the original plan is not an acceptance certificate.
 
 ## Design history
 

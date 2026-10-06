@@ -15,13 +15,16 @@ import { AgentResourceStore } from './store.ts'
 import { CapabilityBroker, assertSupportedJsonSchema, validateJsonSchema } from './capabilities.ts'
 import { executeAuthoredTool } from './tool-runtime.ts'
 import { conversationBindingKey, type ResolvedConversationPolicy } from './contracts.ts'
+import type { SessionState } from '../sessions/session-store.ts'
+import type { ChannelBoundary } from '../channels/integration-contract.ts'
 
 export interface ConversationPolicies {
   managed(sessionId: string): boolean
   resolve(sessionId: string): ResolvedConversationPolicy | undefined
   authorize(sessionId: string, input: SessionInput): void
-  tools(policy: ResolvedConversationPolicy, sessionId: string): SessionTools
-  prompt(policy: ResolvedConversationPolicy, sessionId: string): { systemPrompt: string; sections: Array<{ name: string; content: string; characters: number }> }
+  tools(policy: ResolvedConversationPolicy, sessionId: string, state?: SessionState): SessionTools
+  prompt(policy: ResolvedConversationPolicy, sessionId: string, state?: SessionState): { systemPrompt: string; sections: Array<{ name: string; content: string; characters: number }> }
+  boundary?(policy: ResolvedConversationPolicy, sessionId: string, state: SessionState): ChannelBoundary | undefined
 }
 
 export function validateToolArguments(schema: Record<string, unknown>, args: Record<string, unknown>): void {

@@ -14,6 +14,7 @@ import type { FolderRecord } from '../../folders/contracts.ts'
 import type { BotInstanceStatus } from '../../channels/setup-contract.ts'
 import type { AutomationSummary } from '../../cron/contracts.ts'
 import type { WebSearchStatus } from '../../config/web-search.ts'
+import { IntegrationDraftSchema, IntegrationOverviewSchema } from '../../channels/integration-contract.ts'
 
 test('real Main concurrently isolates Project folders, Home prompts, defaults, bots and restart state', { timeout: 90_000 }, async () => {
   await withTempWorkspace(async root => {
@@ -121,6 +122,32 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal(created.runtime.state, 'ready')
       const a = '/projects/default'
       const b = `/projects/${created.project.id}`
+      const discordPath = '/api/integrations/discord'
+      assert.equal((await fetch(base + a + discordPath)).status, 401)
+      const discordA = IntegrationOverviewSchema.parse(await json(a + discordPath))
+      const discordB = IntegrationOverviewSchema.parse(await json(b + discordPath))
+      assert.equal(discordA.projectId, 'default')
+      assert.equal(discordB.projectId, created.project.id)
+      assert.deepEqual(discordA.bindings, [])
+      assert.deepEqual(discordA.learning, [])
+      const coordinator = await json<{ sessionId: string }>(a + '/api/orchestrator', 'POST', {})
+      const coordinatorContext = await json<{ tools: Array<{ name: string }>; systemPrompt: string }>(
+        a + `/api/sessions/${encodeURIComponent(coordinator.sessionId)}/context`)
+      assert(coordinatorContext.tools.some(tool => tool.name === 'channel_config'))
+      assert.match(coordinatorContext.systemPrompt, /For Discord, use `channel_config`/)
+      const discordAgentId = randomUUID()
+      const discordDraft = IntegrationDraftSchema.parse(await json(a + discordPath + '/drafts', 'POST', {
+        baseRevision: discordA.revision, change: { kind: 'agent.save', agent: {
+          id: discordAgentId, name: 'host-discord-support', displayName: 'Host support',
+          markdown: '---\nname: host-discord-support\ndescription: Isolated host fixture\ndefaultMode: session\n---\nHOST_DISCORD_AGENT_CANARY',
+          execution: 'restricted', tools: ['read', 'memory_save', 'learned_skill'], readDomains: [], skills: [],
+        } },
+      }, 201))
+      assert.equal((await request(b + discordPath + `/drafts/${discordDraft.id}/commit`, 'POST', { hash: discordDraft.hash })).status, 404)
+      const approvedDiscord = IntegrationDraftSchema.parse(await json(a + discordPath + `/drafts/${discordDraft.id}/commit`, 'POST', { hash: discordDraft.hash }))
+      assert.equal(approvedDiscord.status, 'applied')
+      assert(!JSON.stringify(await json(b + discordPath)).includes('HOST_DISCORD_AGENT_CANARY'))
+      assert.equal((await request(a + discordPath)).headers.get('cache-control'), 'no-store')
       assert.equal((await fetch(base + '/api/app/web-search')).status, 401)
       assert.equal((await fetch(base + '/api/app/web-search', { method: 'PATCH', body: '{}' })).status, 401)
       const searchStatus = await json<WebSearchStatus>('/api/app/web-search', 'PATCH', {
@@ -305,6 +332,10 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal((await fetch(base + '/api/projects', { headers: browserHeaders })).status, 401)
       assert.deepEqual(await (await fetch(base + '/api/web-auth/session')).json(), { version: 1, required: true, authenticated: false })
       assert.equal((await json<{ projects: ProjectRecord[] }>('/api/projects')).projects.length, 2)
+      const restoredDiscord = IntegrationOverviewSchema.parse(await json(a + discordPath))
+      assert.equal(restoredDiscord.agents.find(agent => agent.id === discordAgentId)?.markdown.includes('HOST_DISCORD_AGENT_CANARY'), true)
+      assert.deepEqual(restoredDiscord.deploymentIssues, [])
+      assert.deepEqual(IntegrationOverviewSchema.parse(await json(b + discordPath)).agents, [])
       assert.equal((await json<{ model: string }>(a + '/api/config/model-defaults')).model, 'org-a@openai')
       assert.equal((await json<{ model: string }>(b + '/api/config/model-defaults')).model, 'app-choice@openai')
       assert.deepEqual(await json('/api/app/web-search'), searchStatus)

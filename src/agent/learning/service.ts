@@ -13,9 +13,9 @@ export interface LearningConfig {
 }
 
 export interface LearningCallbacks {
-  reflector(signal: AbortSignal, job: CronJob, accepted: (sessionId: string) => void): Promise<unknown>
-  encapsulator(signal: AbortSignal, job: CronJob, accepted: (sessionId: string) => void): Promise<unknown>
-  soulReflector(signal: AbortSignal, job: CronJob, accepted: (sessionId: string) => void): Promise<unknown>
+  reflector(signal: AbortSignal, job: CronJob, accepted: (sessionId: string) => void, manual?: boolean): Promise<unknown>
+  encapsulator(signal: AbortSignal, job: CronJob, accepted: (sessionId: string) => void, manual?: boolean): Promise<unknown>
+  soulReflector(signal: AbortSignal, job: CronJob, accepted: (sessionId: string) => void, manual?: boolean): Promise<unknown>
 }
 
 type Pipeline = keyof LearningCallbacks
@@ -74,7 +74,7 @@ export class LearningService {
     private cron: CronService,
     private isLearningSession: (sessionId: string) => boolean = () => false,
     private ledger?: LearningLedger,
-    private lifecycle: { deferStart?: boolean; changed?: () => void } = {},
+    private lifecycle: { deferStart?: boolean; changed?: () => void; pending?: (pipeline: Pipeline) => boolean } = {},
   ) {
     validateConfig(config)
     if (scope.closed) throw new Error('Learning requires a live project scope')
@@ -215,7 +215,7 @@ export class LearningService {
         this.accepted.set(pipeline, sessionId)
         state.lastDispatchedAt = new Date().toISOString()
         for (const resolve of this.admissions.get(pipeline) ?? []) resolve(sessionId)
-      })
+      }, this.manual.has(pipeline))
       controller.signal.throwIfAborted()
       this.results.set(pipeline, result)
       if (!controller.signal.aborted) {
@@ -226,11 +226,12 @@ export class LearningService {
         state.paused = undefined
         this.ledger?.setRetry(pipeline, { attempts: 0 })
         if (this.ledger && pipeline === 'reflector') {
-          if (result !== false) state.pending = true
+          if (result !== false || this.lifecycle.pending?.(pipeline)) state.pending = true
           for (const downstream of ['encapsulator', 'soulReflector'] as const) {
-            if (this.ledger.eventsFor(downstream).length) this.enqueue(downstream)
+            if (this.ledger.eventsFor(downstream).length || this.lifecycle.pending?.(downstream)) this.enqueue(downstream)
           }
-        } else if (this.ledger && pipeline !== 'reflector' && this.ledger.eventsFor(pipeline).length) state.pending = true
+        } else if (this.ledger && pipeline !== 'reflector' &&
+          (this.ledger.eventsFor(pipeline).length || this.lifecycle.pending?.(pipeline))) state.pending = true
       }
     }).catch((error: unknown) => {
       state.lastError = error instanceof Error ? error.message : String(error)

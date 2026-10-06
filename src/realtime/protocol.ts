@@ -4,7 +4,7 @@
 export type RealtimeTopic =
   | { kind: 'projects'; projectId?: never }
   | { kind: 'chat'; projectId: string; sessionId: string }
-  | { kind: 'sessions' | 'logs' | 'spans' | 'io'; projectId: string }
+  | { kind: 'sessions' | 'logs' | 'spans' | 'io' | 'integrations'; projectId: string }
 
 export type RealtimeEnvelope =
   | { type: 'event'; cursor: string; topic: RealtimeTopic; payload: unknown; requestId?: string }
@@ -37,7 +37,7 @@ export function isRealtimeTopic(value: unknown): value is RealtimeTopic {
   if (!identifier(value.projectId, 128)) return false
   if (value.kind === 'chat') return identifier(value.sessionId, 512) &&
     Object.keys(value).every(key => ['kind', 'projectId', 'sessionId'].includes(key))
-  return ['sessions', 'logs', 'spans', 'io'].includes(value.kind as string) &&
+  return ['sessions', 'logs', 'spans', 'io', 'integrations'].includes(value.kind as string) &&
     Object.keys(value).every(key => ['kind', 'projectId'].includes(key))
 }
 

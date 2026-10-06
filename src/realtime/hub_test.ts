@@ -90,6 +90,22 @@ test('session invalidations optionally carry a completed turn identity without c
   } finally { await stream.cancel(); hub.close() }
 })
 
+test('integration invalidations reuse the authenticated Project feed and reveal no configuration bodies', async () => {
+  const hub = new RealtimeHub()
+  const publisher = hub.registerProject('one')
+  const topic: RealtimeTopic = { kind: 'integrations', projectId: 'one' }
+  const stream = read(hub.connect([topic], new AbortController().signal))
+  try {
+    await stream.next(); await stream.next()
+    publisher.invalidateIntegrations!()
+    const event = await stream.next()
+    assert(event.type === 'event')
+    assert.deepEqual(event.topic, topic)
+    assert.deepEqual(event.payload, { event: 'invalidate' })
+    assert.deepEqual(parseRealtimeTopics(JSON.stringify([topic])), [topic])
+  } finally { await stream.cancel(); hub.close() }
+})
+
 test('host catalog topic is available without a project runtime and replays changes', async () => {
   const hub = new RealtimeHub()
   const topic: RealtimeTopic = { kind: 'projects' }

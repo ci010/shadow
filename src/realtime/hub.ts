@@ -14,6 +14,7 @@ export interface RealtimePublisher {
   invalidateSessions(sessionId?: string, completedTurnId?: string): void
   invalidateActivity(sessionId: string): void
   invalidateIo?(runId: string): void
+  invalidateIntegrations?(): void
   close(): void
 }
 interface Project {
@@ -90,6 +91,9 @@ export class RealtimeHub {
       },
       invalidateIo: runId => {
         if (active()) this.publish({ kind: 'io', projectId }, { event: 'invalidate', runId })
+      },
+      invalidateIntegrations: () => {
+        if (active()) this.publish({ kind: 'integrations', projectId }, { event: 'invalidate' })
       },
       close: () => {
         if (!active()) return

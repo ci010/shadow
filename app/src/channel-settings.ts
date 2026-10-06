@@ -47,12 +47,15 @@ export const channelDefinitions: Array<{
   },
   {
     id: 'discord', label: 'Discord', description: 'Connect a bot to your Discord servers and direct messages.', portal: 'https://discord.com/developers/applications',
-    instructions: ['Create an application and bot in the Discord Developer Portal, then copy the bot token.', 'Enable the Message Content intent and invite the bot with permissions to view channels and send messages.'],
+    instructions: ['Create an application and bot in the Discord Developer Portal, then copy the bot token.', 'Enable the Message Content intent and invite the bot with permissions to view channels and send messages.', 'After connecting, open Discord access to assign Agents and permissions. Channels and DMs stay closed until assigned.'],
     fields: [
       { key: 'token', label: 'Bot token', kind: 'password', required: true },
-      { key: 'triggerMode', label: 'Respond to', kind: 'select', options: ['mention', 'all'], default: 'mention', hint: 'Mention mode responds to mentions, direct messages and replies to the bot.' },
+      { key: 'triggerMode', label: 'Legacy response mode', kind: 'select', options: ['mention', 'all'], default: 'mention', hint: 'Project Bots use the per-channel trigger in Discord access instead of this legacy default.' },
+      { key: 'memberIntent', label: 'Request Guild Members intent', kind: 'checkbox', default: false, hint: 'Enable Server Members intent in the Discord Developer Portal first. This provides live membership-change events; REST permissions are still checked for every request and delivery.' },
       { key: 'reactionEmoji', label: 'Received-message reaction', kind: 'text', default: '👀', advanced: true, hint: 'Leave empty to disable the reaction.' },
-      ...accessFields,
+      ...accessFields.map(field => field.key === 'adminChats'
+        ? { ...field, label: 'Legacy admin channel IDs', hint: 'Retained for compatibility only. Project Discord permissions are configured through Discord access; DMs are not administrators.' }
+        : field.key === 'allowFrom' ? { ...field, hint: 'Optional connection-wide sender ceiling. Per-channel users and roles must also permit the sender.' } : field),
     ],
   },
 ]

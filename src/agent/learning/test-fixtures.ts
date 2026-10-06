@@ -25,6 +25,7 @@ export function fakeSessions(workspace: string, states: FakeState[]) {
       return Promise.resolve({ messages: [], total: s?.total ?? 0 })
     },
     getSessionState: (id: string) => records.get(id),
+    isManagedConversation: () => false,
     getExecutionResult: async () => undefined,
     getFileChanges: async () => ({ changes: [], total: 0, offset: 0 }),
     startSession: async (opts: { chatId: string; agentType?: string; task?: string; signal?: AbortSignal; onAccepted?: (id: string) => void }) => {

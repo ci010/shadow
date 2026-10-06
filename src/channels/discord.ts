@@ -12,6 +12,10 @@ import { parseYieldRequest, type YieldRequest } from '../sessions/yield-contract
 import { discordPermissions, discordRecord, DiscordPermission as Permission, isDiscordId } from './discord-permissions.ts'
 import { DISCORD_READ_OPERATIONS, discordHistoryArguments, discordMessageArguments, type ChannelOperationRequest, type ChannelOperationTarget } from './operations.ts'
 import { DISCORD_CONTENT_NOTICE, discordReadHistory, discordReadMessage } from './discord-operations.ts'
+import { discordBotIdentity, discordDirectory, discordMembers, inspectDiscordConversation } from './discord-directory.ts'
+import type { DiscordAdapterIntegration, DiscordBinding } from './integration-contract.ts'
+import { setTimeout as delay } from 'node:timers/promises'
+import { z } from 'zod'
 
 const DISCORD_API = 'https://discord.com/api/v10'
 const NO_MENTIONS = { parse: [], replied_user: false }
@@ -24,6 +28,7 @@ export interface DiscordChannelOptions {
   triggerMode?: 'all' | 'mention'
   /** Emoji to react with when a message is received. Set to empty string to disable. Default: '👀' */
   reactionEmoji?: string
+  memberIntent?: boolean
   /** Workspace root path — downloaded attachments are cached under <workspace>/uploads/ */
   workspace?: string
   /** Group-chat IDs (Discord channel IDs) that have admin privileges. DMs are admin by default. */
@@ -56,8 +61,10 @@ export class DiscordChannel extends AbstractChannel {
   private capabilityCache = new Map<string, { expiresAt: number; value: Promise<ChannelCapabilities> }>()
   private triggerMode: 'all' | 'mention'
   private reactionEmoji: string
+  private memberIntent: boolean
   private workspace: string
   private sessionManager?: SessionManager
+  private integration?: DiscordAdapterIntegration
   /** Maps channel or thread IDs to human-readable Discord names. */
   private channelNameCache = new Map<string, string>()
   /** Maps thread channel IDs to their parent channel IDs */
@@ -68,8 +75,52 @@ export class DiscordChannel extends AbstractChannel {
     this.token = opts.token
     this.triggerMode = opts.triggerMode ?? 'mention'
     this.reactionEmoji = opts.reactionEmoji ?? '👀'
+    this.memberIntent = opts.memberIntent ?? false
     this.workspace = opts.workspace ?? '.'
     this.sessionManager = opts.sessionManager
+  }
+
+  setDiscordIntegration(integration: DiscordAdapterIntegration): void {
+    if (this.integration) throw new Error('Discord integration is immutable.')
+    this.integration = integration
+  }
+
+  directory(guildId: string | undefined, after: string | undefined, signal: AbortSignal) {
+    return discordDirectory((path, init) => this.api(path, init), signal, guildId, after)
+  }
+
+  inspectConversation(chatId: string, senderId: string, signal: AbortSignal) {
+    return inspectDiscordConversation((path, init) => this.api(path, init), chatId, senderId, signal)
+  }
+
+  members(guildId: string, query: string, signal: AbortSignal) {
+    return discordMembers((path, init) => this.api(path, init), guildId, query, signal)
+  }
+
+  async inspectTarget(target: DiscordBinding['target'], signal: AbortSignal): Promise<{ botUserId: string; roleIds: string[] }> {
+    if (target.kind === 'dm') {
+      const [botUserId, user] = await Promise.all([
+        discordBotIdentity((path, init) => this.api(path, init), signal),
+        this.api(`/users/${target.userId}`, { signal }),
+      ])
+      const recipient = discordRecord(user)
+      if (recipient.id !== target.userId || recipient.bot === true) throw new Error('A DM assignment requires a real Discord user.')
+      return { botUserId, roleIds: [] }
+    }
+    const directory = await this.directory(target.guildId, undefined, signal)
+    const channel = directory.channels.find(channel => channel.id === target.channelId)
+    if (!channel?.supported || !channel.canView || !channel.canSend) throw new Error('Discord channel is unavailable, unsupported, or missing View/Send permission.')
+    return { botUserId: directory.botUserId, roleIds: directory.roles.map(role => role.id) }
+  }
+
+  protected override async request(input: string | URL, init: RequestInit = {}): Promise<Response> {
+    const signal = AbortSignal.any([this.controller.signal, ...(init.signal ? [init.signal] : [])])
+    for (let attempt = 0; ; attempt++) {
+      const response = await super.request(input, { ...init, signal })
+      if (response.status !== 429 || attempt >= 3 || !String(input).startsWith(`${DISCORD_API}/`)) return response
+      const rate = z.object({ retry_after: z.number().positive().max(60) }).parse(await response.json())
+      await delay(Math.ceil(rate.retry_after * 1000), undefined, { signal })
+    }
   }
 
   @Span('DiscordChannel.start')
@@ -93,6 +144,7 @@ export class DiscordChannel extends AbstractChannel {
 
   @Span('DiscordChannel.stop')
   stop(): Promise<void> {
+    this.integration?.invalidate()
     this.stopping = true
     this.controller.abort()
     this.setAccepting(false)
@@ -707,6 +759,8 @@ export class DiscordChannel extends AbstractChannel {
           this.ws?.close()
           break
         case 9: // Invalid Session
+          this.integration?.invalidate()
+          this.setAccepting(false)
           console.warn('Invalid session, re-identifying after delay')
           this.sessionId = null
           this.reportState('connecting')
@@ -727,6 +781,7 @@ export class DiscordChannel extends AbstractChannel {
       if (this.stopping || this.ws !== ws) return
       this.ws = null
       this.setAccepting(false)
+      this.integration?.invalidate()
       this.reportState('disconnected')
       clearTimeout(this.identifyTimer)
       console.warn(
@@ -771,7 +826,7 @@ export class DiscordChannel extends AbstractChannel {
         op: 2,
         d: {
           token: this.token,
-          intents: (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15), // GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
+          intents: (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15) | (this.memberIntent ? 1 << 1 : 0),
           properties: { os: 'node', browser: 'bot', device: 'bot' },
         },
       }))
@@ -811,6 +866,12 @@ export class DiscordChannel extends AbstractChannel {
     event: string,
     data: Record<string, unknown>,
   ): Promise<void> {
+    if (['CHANNEL_UPDATE', 'CHANNEL_DELETE', 'GUILD_UPDATE', 'GUILD_DELETE', 'GUILD_ROLE_UPDATE', 'GUILD_ROLE_DELETE',
+      'GUILD_MEMBER_UPDATE', 'GUILD_MEMBER_REMOVE', 'THREAD_UPDATE', 'THREAD_DELETE'].includes(event)) {
+      this.capabilityCache.clear()
+      this.channelNameCache.delete(String(data.id ?? ''))
+      this.integration?.invalidate()
+    }
     if (this.stopping) return
     if (/^(READY|RESUMED|GUILD_(CREATE|UPDATE|DELETE|ROLE_CREATE|ROLE_UPDATE|ROLE_DELETE|MEMBER_UPDATE)|CHANNEL_(CREATE|UPDATE|DELETE)|THREAD_(CREATE|UPDATE|DELETE))$/.test(event)) {
       this.capabilityCache.clear()
@@ -914,7 +975,24 @@ export class DiscordChannel extends AbstractChannel {
       let silent = false
       const sessionId = this.logicalSessionId(data.channel_id as string)
       const state = await this.sessionManager?.getSessionState(sessionId)
-      const sessionTriggerMode = state?.config?.triggerMode ?? this.triggerMode
+      if (!this.isAllowed(author.id)) return
+      const admission = await this.integration?.admit({
+        chatId: data.channel_id as string, senderId: author.id, messageId: data.id as string,
+      }, this.controller.signal)
+      const sessionTriggerMode = admission?.trigger ?? state?.config?.triggerMode ?? this.triggerMode
+      const approval = /^\/shadow-approve ([a-f0-9-]{36}) ([a-f0-9]{64})\s*$/i.exec(content)
+      if (approval && this.integration && admission) {
+        this.integration.discard(admission.admissionId)
+        let confirmation = 'The reviewed configuration is applied.'
+        try {
+          await this.integration.confirm(data.channel_id as string, author.id, approval[1], approval[2], this.controller.signal)
+        } catch {
+          console.warn('[discord] Configuration approval was rejected or requires recovery.')
+          confirmation = 'Approval could not be confirmed. Open the draft in Shadow to inspect its applied or recovery state, permissions, expiry, and conflicts.'
+        }
+        await this.presentDecisionText(data.channel_id as string, confirmation, data.id as string)
+        return
+      }
 
       // Apply trigger mode filter
       if (sessionTriggerMode === 'mention' && guildId) {
@@ -954,10 +1032,10 @@ export class DiscordChannel extends AbstractChannel {
         }
       }
 
-      const channelName = await this.resolveChannelName(channelId)
+      const channelName = admission?.location.name ?? await this.resolveChannelName(channelId)
       const parentChannelId = this.threadParentMap.get(channelId)
 
-      if (parentChannelId && !state) {
+      if (parentChannelId && !state && !this.integration) {
         console.log(
           `Thread ${channelId} has parent ${parentChannelId}, building session for thread...`,
         )
@@ -977,6 +1055,8 @@ export class DiscordChannel extends AbstractChannel {
           isGroup: !!guildId,
           senderName: authorName,
           silent,
+          channelAdmissionId: admission?.admissionId,
+          channelLocation: admission?.location,
         },
         media,
       )
@@ -996,9 +1076,10 @@ export class DiscordChannel extends AbstractChannel {
     if (!url || !filename) return null
 
     try {
-      const res = await this.request(url, {
-        headers: { Authorization: `Bot ${this.token}` },
-      })
+      const source = new URL(url)
+      if (source.protocol !== 'https:' || !['cdn.discordapp.com', 'media.discordapp.net'].includes(source.hostname) ||
+        !source.pathname.startsWith('/attachments/')) throw new Error('Unsupported Discord attachment source')
+      const res = await this.request(url)
       if (!res.ok) {
         console.warn(
           `[discord] Failed to download attachment ${filename}: ${res.status}`,

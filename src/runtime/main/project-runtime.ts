@@ -36,6 +36,7 @@ import { createDumpPromptCommand } from '../../slash-commands/handlers/dump-prom
 import { createHelpCommand } from '../../slash-commands/handlers/help.ts'
 import { createLearnCommand } from '../../slash-commands/handlers/learn.ts'
 import { LearningRuntime } from '../../agent/learning/pipelines.ts'
+import type { Pipeline } from '../../agent/learning/ledger.ts'
 import { LearningTools } from '../../agent/learning/tools.ts'
 import { createCompactCommand } from '../../slash-commands/handlers/compact.ts'
 import { createClearCommand } from '../../slash-commands/handlers/clear.ts'
@@ -113,6 +114,11 @@ import { Bus } from '../../bus/bus.ts'
 import { ChannelManager } from '../../channels/manager.ts'
 import { botSetupPlugin } from '../../channels/bot-setup.ts'
 import { BotInstanceStore } from '../../channels/bot-store.ts'
+import { MemoryDomains } from '../../memory/domains.ts'
+import { IntegrationStore } from '../../channels/integration-store.ts'
+import { DiscordIntegration, combineConversationPolicies } from '../../channels/integration.ts'
+import { DiscordLearning } from '../../channels/integration-learning.ts'
+import { discordIntegrationPlugin, ownerChannelConfigurationTool } from '../../channels/integration-routes.ts'
 import { projectConfigPlugin } from '../../projects/config-routes.ts'
 import { EventService } from '../../events/service.ts'
 import { PollingSources } from '../../events/polling-sources.ts'
@@ -144,7 +150,7 @@ import { assertSessionProjectOwnership } from '../../projects/session-ownership.
 import { EvalBridgeRuntime } from '../../script-runtime/bridge.ts'
 import { DEFAULT_PROJECT_ID } from '../../projects/contracts.ts'
 import { ProjectExecutor } from '../../projects/executor.ts'
-import { LearningService } from '../../agent/learning/service.ts'
+import { LearningService, type LearningCallbacks } from '../../agent/learning/service.ts'
 import { RealtimeHub, registerRealtimeRoute } from '../../realtime/hub.ts'
 import { IoBroker } from '../../io/broker.ts'
 import { IO_TERMINAL, IoError } from '../../io/contracts.ts'
@@ -441,6 +447,16 @@ export async function createProjectRuntime(
     ...(project.id === DEFAULT_PROJECT_ID ? { legacyConfig: config, legacyRawChannels: await configStore.persistedChannels() } : {}),
   })
   const authoringDirectory = resolve(workspace, '..', 'config', 'agent-resources')
+  const integrationDirectory = resolve(workspace, '..', 'config', 'channel-integrations')
+  const memoryDomains = new MemoryDomains(project.id, resolve(integrationDirectory, 'memory'))
+  const channelIntegrations = new IntegrationStore({
+    projectId: project.id, workspace, directory: integrationDirectory, bots: botStore, agents: agentTypes, memory: memoryDomains,
+  })
+  const discordIntegration = new DiscordIntegration({
+    store: channelIntegrations, memory: memoryDomains, bots: botStore, workspace, projectId: project.id, baseTools: tools,
+  })
+  cleanup.push(channelIntegrations.onChange(() => realtime.invalidateIntegrations?.()))
+  cleanup.push(() => discordIntegration.stop())
   const agentResources = new AgentResourceStore({ projectId: project.id, directory: authoringDirectory })
   const authoringChanges = new AuthoringChanges({ projectId: project.id, directory: authoringDirectory, resources: agentResources })
   const agentCredentials = new AgentCredentialStore(authoringDirectory)
@@ -468,7 +484,7 @@ export async function createProjectRuntime(
     },
   })
   const sessions: SessionManager = new SessionManager({
-    conversationPolicies: authoring,
+    conversationPolicies: combineConversationPolicies(discordIntegration, authoring),
     projectId: project.id,
     promptCaptures,
     hasInitiative: id => initiatives.getSummary(id) !== null,
@@ -860,6 +876,7 @@ export async function createProjectRuntime(
     },
     validateLive: async snapshot => {
       for (const binding of snapshot.bundle.bindings.filter(binding => binding.enabled)) {
+        if (binding.platform === 'discord') throw new Error('Discord assignments are managed in Project Bots > Discord access. Disable legacy bindings before publishing this bundle.')
         const bot = botStore.get(binding.botInstanceId)
         if (bot.platform !== binding.platform) throw new Error('Binding platform does not match its bot instance.')
         for (const id of binding.readFolders) {
@@ -938,6 +955,10 @@ export async function createProjectRuntime(
   }
   const changeTool = authoringChangeTool(changeManagement)
   const learningRuntime = new LearningRuntime(sessions, project.id, skills)
+  const discordLearning = new DiscordLearning({
+    projectId: project.id, directory: resolve(integrationDirectory, 'learning'), runtime: discordIntegration,
+    sessions, memory: memoryDomains, changed: () => realtime.invalidateIntegrations?.(),
+  })
   const learningTools = new LearningTools(learningRuntime)
   for (const tool of [learningTools.memory, learningTools.skill, learningTools.soul, learningTools.result]) tools.register(tool)
   tools.register(new LogTool(workspace, (entry, key, context) => learningTools.appendEvent(entry, key, context)))
@@ -1023,14 +1044,18 @@ export async function createProjectRuntime(
     events.unsubscribeByCronJob(jobId)
   })
 
+  const runLearning = (pipeline: Pipeline): LearningCallbacks['reflector'] => async (signal, job, accepted, manual) => {
+    const scoped = await discordLearning.run(pipeline, signal, accepted, manual)
+    const privateRun = await learningRuntime.run(pipeline, signal, job, accepted, cronDispatcher)
+    return privateRun || scoped
+  }
   const learning = new LearningService(bus, scope, {
-    reflector: (signal, job, accepted) => learningRuntime.run('reflector', signal, job, accepted, cronDispatcher),
-    encapsulator: (signal, job, accepted) => learningRuntime.run('encapsulator', signal, job, accepted, cronDispatcher),
-    soulReflector: (signal, job, accepted) => learningRuntime.run('soulReflector', signal, job, accepted, cronDispatcher),
+    reflector: runLearning('reflector'), encapsulator: runLearning('encapsulator'), soulReflector: runLearning('soulReflector'),
   }, config.learning, cronService, sessionId => {
     const state = sessions.getSessionState(sessionId)
-    return !!state && resolveAutomationSession(state)?.config?.source === 'learning'
-  }, learningRuntime.ledger, { deferStart: true, changed: () => realtime.invalidateSessions() })
+    return !!state && (!!state.channelBoundary?.learning || resolveAutomationSession(state)?.config?.source === 'learning')
+  }, learningRuntime.ledger, { deferStart: true, changed: () => realtime.invalidateSessions(),
+    pending: pipeline => discordLearning.hasPending(pipeline) })
   commandDispatcher.register(createLearnCommand(sessions, pipeline => learning.trigger(pipeline)))
   cleanup.push(() => learning.stop())
   app.get('/api/learning', c => c.json(learning.status()))
@@ -1058,8 +1083,12 @@ export async function createProjectRuntime(
       channels.updateConfig(newConfig)
   }
   const channels: ChannelManager = new ChannelManager(config, bus, sessions, (msg) => agent.receiveChannelMessage(msg), {
-    projectId: project.id, instanceStore: botStore, realtime,
+    projectId: project.id, instanceStore: botStore, realtime, discordIntegration,
   })
+  discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
+  const channelConfigurationTool = ownerChannelConfigurationTool(channelIntegrations, memoryDomains, channels.discordTransport())
+  tools.register(channelConfigurationTool)
+  importTool.registerBuiltin(channelConfigurationTool.name, channelConfigurationTool)
   cleanup.push(() => channels.stopAll())
   await startup.measure('channels', () => channels.init())
   for (const tool of channelTools(channels)) importTool.registerBuiltin(tool.name, tool)
@@ -1105,6 +1134,8 @@ export async function createProjectRuntime(
   cleanup.push(releaseFolderLifecycle)
 
   for (const plugin of [
+    discordIntegrationPlugin({ store: channelIntegrations, runtime: discordIntegration, transport: channels.discordTransport(),
+      bots: botStore, memory: memoryDomains, agents: agentTypes, sessions, learning: discordLearning, authorize: dependencies.authorize }),
     slashCommandsPlugin(commandDispatcher, sessions, dependencies.authorize),
     authoringCredentialsPlugin(agentCredentials, dependencies.authorize, credentialRequests),
     authoringPublicationPlugin(publicationRequests, dependencies.authorize),
@@ -1181,6 +1212,7 @@ export async function createProjectRuntime(
       () => handoffManager.stop(),
       () => backgroundTasks.stop(),
       () => agent.shutdown(),
+      () => discordIntegration.stop(),
       () => skills.stopWatching(),
       () => agentTypes.stopWatching(),
       () => mcpManager.stop(),
@@ -1213,6 +1245,7 @@ export async function createProjectRuntime(
 
   // Recover sessions interrupted by the previous process exit.
   const ready = Promise.all([startAgent, startCron]).then(async () => {
+    channelIntegrations.restoreAgents()
     await alignment.recoverDecisions(async reference => (await sessions.getYieldRecords(reference.sessionId, reference.physicalId))
       .find(record => record.request.id === reference.requestId))
     await startup.measure('recovery', () => sessions.recoverIncompleteSessions())

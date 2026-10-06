@@ -83,12 +83,23 @@ test('channel ingress awaits explicit admission and preserves sender, policy and
     senderName: 'Sender', chatName: 'Group', isGroup: true, silent: true, retry: true,
     admin: true, media: ['uploads/test.png'],
   })
+
   const receipt = accepted(received!)
   gate.resolve(receipt)
   assert.equal(await pending, receipt)
   const rejection = new Error('Mailbox rejected input')
   channel.setReceiver(async () => { throw rejection })
   await assert.rejects(channel.incoming(), rejection)
+})
+
+test('a verified managed channel admission never inherits legacy group or DM administrator privileges', async () => {
+  const channel = new TestChannel(new Bus(), undefined, true, ['chat'])
+  let captured: InboundMessage | undefined
+  channel.setReceiver(async message => { captured = message; return accepted(message) })
+  for (const isGroup of [true, false]) {
+    await channel.incoming('sender', { isGroup, channelAdmissionId: 'synthetic-admission' })
+    assert.equal(captured?.admin, false)
+  }
 })
 
 test('nonstreaming web send waits only for admission and preserves its response shape', async (t) => {

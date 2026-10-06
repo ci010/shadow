@@ -24,9 +24,10 @@ test('Discord audio is kept as a session attachment; a failed download is not tr
       return { status: 'accepted', sessionId: 'discord:100', inputId: message.messageId }
     })
     let downloadSucceeds = true
-    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
-      if (url === 'https://cdn.discordapp.com/voice.ogg') {
+      if (url === 'https://cdn.discordapp.com/attachments/100/456/voice.ogg') {
+        assert.equal(new Headers(init?.headers).has('authorization'), false, 'Bot credentials never reach the CDN')
         return downloadSucceeds ? new Response('voice', { status: 200 }) : new Response('', { status: 403 })
       }
       if (url.endsWith('/channels/100')) return Response.json({ name: 'dm' })
@@ -37,7 +38,7 @@ test('Discord audio is kept as a session attachment; a failed download is not tr
     }).handleDispatch.bind(channel)
     const message = {
       author: { id: '300', bot: false }, channel_id: '100', content: '', id: '123',
-      attachments: [{ id: '456', filename: 'voice.ogg', url: 'https://cdn.discordapp.com/voice.ogg' }],
+      attachments: [{ id: '456', filename: 'voice.ogg', url: 'https://cdn.discordapp.com/attachments/100/456/voice.ogg' }],
     }
     await dispatch('MESSAGE_CREATE', message)
     assert.deepEqual(messages[0].media, ['uploads/discord_456.ogg'])
@@ -47,5 +48,9 @@ test('Discord audio is kept as a session attachment; a failed download is not tr
     await dispatch('MESSAGE_CREATE', { ...message, id: '124' })
     assert.equal(messages[1].media, undefined)
     assert.match(messages[1].content, /attachment unavailable: download failed/)
+    await dispatch('MESSAGE_CREATE', { ...message, id: '125',
+      attachments: [{ ...message.attachments[0], url: 'https://untrusted.example/attachments/voice.ogg' }] })
+    assert.equal(messages[2].media, undefined)
+    assert.match(messages[2].content, /attachment unavailable: download failed/)
   })
 })

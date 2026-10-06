@@ -28,6 +28,9 @@ export function channelAddressFromSessionId(sessionId: string): ChannelAddress |
 
 /** Shared inbound metadata and agent execution context. */
 export interface MessageContext {
+  /** Opaque, in-memory admission from the platform adapter; never grants authority when deserialized. */
+  channelAdmissionId?: string
+  channelLocation?: import('../channels/integration-contract.ts').DiscordLocation
   channelAddress?: ChannelAddress
   /** Channel identifier (e.g. "discord", "telegram", "system") */
   channel: string
@@ -85,6 +88,12 @@ export interface InboundMessage extends MessageContext {
  * Message flowing from the agent out to a channel.
  */
 export interface OutboundMessage {
+  /** Runtime-issued lease; plain JSON copies cannot authorize a platform delivery. */
+  boundary?: {
+    access: import('../memory/contracts.ts').MemoryAccess
+    revision: string
+    senderId: string
+  }
   channelAddress?: ChannelAddress
   /** Target channel identifier */
   channel: string

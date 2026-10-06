@@ -46,6 +46,7 @@ export const DiscordChannelSchema = ChannelBaseSchema.extend({
   triggerMode: z.enum(['all', 'mention']).default('mention'),
   /** Emoji to react with when a message is received. Set to empty string to disable. Default: '👀' */
   reactionEmoji: z.string().default('👀'),
+  memberIntent: z.boolean().optional(),
 })
 
 export const FeishuChannelSchema = ChannelBaseSchema.extend({

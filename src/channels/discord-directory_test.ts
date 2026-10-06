@@ -1,0 +1,251 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { Bus } from '../bus/bus.ts'
+import { DiscordChannel } from './discord.ts'
+import { discordDirectory, discordMembers, inspectDiscordConversation, type DiscordApi } from './discord-directory.ts'
+import { DiscordPermission as P } from './discord-permissions.ts'
+import type { InboundMessage } from '../bus/events.ts'
+import type { DiscordLocation } from './integration-contract.ts'
+
+const signal = () => new AbortController().signal
+const permissions = (P.view | P.send | P.readHistory | P.sendInThreads).toString()
+const channel = (id: string, extra: Record<string, unknown> = {}) => ({
+  id, name: 'help', guild_id: '100', type: 0, parent_id: null, permission_overwrites: [], ...extra,
+})
+function dispatch(adapter: DiscordChannel, event: string, data: Record<string, unknown>) {
+  return (adapter as unknown as {
+    handleDispatch(event: string, data: Record<string, unknown>): Promise<void>
+  }).handleDispatch(event, data)
+}
+const location: DiscordLocation = {
+  id: '201', name: 'Named support channel', type: 0, guildId: '100', guildName: 'Our server',
+  parentId: null, parentName: null, recipientId: null,
+}
+
+function fixture() {
+  const values = new Map<string, unknown>([
+    ['/users/@me', { id: '900', username: 'helper', bot: true }],
+    ['/users/@me/guilds?limit=200', [{ id: '100', name: 'Our server', icon: null }]],
+    ['/guilds/100', { id: '100', name: 'Our server', owner_id: '999' }],
+    ['/guilds/100/roles', [{ id: '100', name: '@everyone', permissions: '0' }, { id: '700', name: 'Support', permissions }]],
+    ['/guilds/100/members/900', { user: { id: '900', username: 'helper', bot: true }, roles: ['700'] }],
+    ['/guilds/100/members/500', { user: { id: '500', username: 'sam', global_name: 'Sam' }, roles: ['700'], nick: 'Support Sam' }],
+    ['/guilds/100/channels', [channel('201'), channel('202'), channel('203', { type: 15 })]],
+    ['/guilds/100/threads/active', { threads: [
+      channel('301', { type: 11, parent_id: '201', thread_metadata: { archived: false, locked: false } }),
+      channel('302', { type: 12, parent_id: '201', thread_metadata: { archived: false, locked: false } }),
+    ] }],
+    ['/channels/201', channel('201')],
+    ['/channels/301', channel('301', { type: 11, parent_id: '201', thread_metadata: { archived: false, locked: false } })],
+  ])
+  const calls: string[] = []
+  const api: DiscordApi = async (path, init) => {
+    assert(init?.signal)
+    assert(!init.method || init.method === 'GET', 'Discovery never performs platform writes')
+    calls.push(path)
+    if (!values.has(path)) throw new Error(`Unavailable synthetic API: ${path}`)
+    return structuredClone(values.get(path))
+  }
+  return { values, api, calls }
+}
+
+test('directory discovers names before any messages, preserves duplicate names and marks unsupported types', async () => {
+  const f = fixture()
+  const result = await discordDirectory(f.api, signal(), '100')
+  assert.equal(result.botUserId, '900')
+  assert.equal(result.guilds[0].name, 'Our server')
+  assert.equal(result.channels.filter(item => item.name === 'help').length, 5)
+  assert.equal(result.channels.find(item => item.id === '301')?.parentId, '201')
+  assert.equal(result.channels.find(item => item.id === '302')?.supported, false)
+  assert.equal(result.channels.find(item => item.id === '203')?.supported, false)
+  assert.equal(result.completeness, 'channels-and-active-threads')
+  assert.match(result.notice, /Archived and private/)
+  assert(!f.calls.some(path => path.includes('/messages')))
+})
+
+test('live sender/Bot roles, overwrite precedence, timeouts and thread metadata are enforced', async () => {
+  const f = fixture()
+  const inspect = () => inspectDiscordConversation(f.api, '201', '500', signal())
+  assert.equal((await inspect()).actor.name, 'Support Sam')
+  f.values.set('/channels/201', channel('201', { permission_overwrites: [
+    { id: '100', type: 0, deny: P.send.toString(), allow: '0' },
+    { id: '700', type: 0, deny: '0', allow: P.send.toString() },
+    { id: '500', type: 1, deny: P.send.toString(), allow: '0' },
+  ] }))
+  assert.equal((await inspect()).canSend, false)
+  f.values.set('/channels/201', channel('201'))
+  f.values.set('/guilds/100/members/500', { user: { id: '500', username: 'sam' }, roles: [] })
+  assert.equal((await inspect()).canView, false)
+  f.values.set('/guilds/100/members/500', { user: { id: '500', username: 'sam' }, roles: ['700'],
+    communication_disabled_until: new Date(Date.now() + 60_000).toISOString() })
+  assert.equal((await inspect()).canSend, false)
+  f.values.set('/guilds/100/members/500', { user: { id: '500', username: 'sam' }, roles: ['700'] })
+  assert.equal((await inspectDiscordConversation(f.api, '301', '500', signal())).canSend, true)
+  f.values.set('/channels/301', channel('301', { type: 11, parent_id: '201', thread_metadata: { archived: true, locked: true } }))
+  assert.equal((await inspectDiscordConversation(f.api, '301', '500', signal())).canSend, false)
+  f.values.set('/guilds/100/members/900', { user: { id: '900', username: 'bot', bot: true }, roles: ['700'],
+    communication_disabled_until: new Date(Date.now() + 60_000).toISOString() })
+  assert.equal((await discordDirectory(f.api, signal(), '100')).channels.find(item => item.id === '201')?.canSend, false)
+})
+
+test('missing, contradictory or malformed metadata fails instead of pretending the directory is empty', async () => {
+  const f = fixture()
+  f.values.set('/guilds/100/channels', [{ id: '201', type: 0, name: 'help', guild_id: '100' }])
+  await assert.rejects(discordDirectory(f.api, signal(), '100'), /metadata is unavailable/)
+  f.values.set('/channels/201', channel('999'))
+  await assert.rejects(inspectDiscordConversation(f.api, '201', '500', signal()), /another conversation/)
+  f.values.set('/channels/201', channel('201'))
+  f.values.set('/guilds/100/members/500', { user: { id: '500', username: 'sam' }, roles: ['700'], communication_disabled_until: 'invalid' })
+  await assert.rejects(inspectDiscordConversation(f.api, '201', '500', signal()))
+  f.values.delete('/guilds/100/roles')
+  await assert.rejects(discordDirectory(f.api, signal(), '100'), /Unavailable synthetic API/)
+})
+
+test('DM recipient identity is exact and private/group threads cannot become administrative entrypoints', async () => {
+  const f = fixture()
+  f.values.set('/channels/401', { id: '401', type: 1, recipients: [{ id: '500', username: 'sam' }] })
+  const result = await inspectDiscordConversation(f.api, '401', '500', signal())
+  assert.equal(result.location.name, 'sam')
+  assert.deepEqual(result.actor.roleIds, [])
+  await assert.rejects(inspectDiscordConversation(f.api, '401', '501', signal()), /recipient/)
+  f.values.set('/channels/401', channel('401', { type: 12, parent_id: '201' }))
+  await assert.rejects(inspectDiscordConversation(f.api, '401', '500', signal()), /not supported/)
+})
+
+test('guild paging rejects duplicate/backward IDs and member search returns disambiguated non-Bot users', async () => {
+  const f = fixture()
+  const guilds = Array.from({ length: 200 }, (_, i) => ({ id: String(400 - i), name: 'Same name', icon: null }))
+  f.values.set('/users/@me/guilds?limit=200', guilds)
+  assert.equal((await discordDirectory(f.api, signal())).guildCursor, '400')
+  f.values.set('/users/@me/guilds?limit=200&after=400', [guilds[0]])
+  await assert.rejects(discordDirectory(f.api, signal(), undefined, '400'), /invalid server page/)
+  f.values.set('/users/@me/guilds?limit=200', [guilds[0], guilds[0]])
+  await assert.rejects(discordDirectory(f.api, signal()), /invalid server page/)
+  f.values.set('/guilds/100/members/search?query=Sam%20%23one&limit=25', [
+    { user: { id: '500', username: 'sam-one' }, roles: [], nick: 'Sam' },
+    { user: { id: '501', username: 'sam-two' }, roles: [], nick: 'Sam' },
+    { user: { id: '900', username: 'sam-bot', bot: true }, roles: [] },
+  ])
+  assert.deepEqual((await discordMembers(f.api, '100', 'Sam #one', signal())).map(member => member.username), ['sam-one', 'sam-two'])
+})
+
+test('adapter honors bounded rate-limit retries and cancellation without a gateway or real token', async t => {
+  const f = fixture()
+  const channel = new DiscordChannel(new Bus(), { token: 'synthetic-token' })
+  t.after(() => channel.stop())
+  let attempts = 0
+  let abort: AbortController | undefined
+  t.mock.method(globalThis, 'fetch', async (input: string | URL, init?: RequestInit) => {
+    const path = String(input).replace('https://discord.com/api/v10', '')
+    if (path === '/users/@me' && ++attempts <= 2) return Response.json({ retry_after: .001 }, { status: 429 })
+    if (abort) {
+      abort.abort()
+      return Response.json({ retry_after: 1 }, { status: 429 })
+    }
+    return Response.json(await f.api(path, init))
+  })
+  assert.equal((await channel.directory(undefined, undefined, signal())).botUserId, '900')
+  assert.equal(attempts, 3)
+  abort = new AbortController()
+  await assert.rejects(channel.directory(undefined, undefined, abort.signal), /abort/i)
+  assert.equal(attempts, 4)
+})
+
+test('actual Discord ingress authorizes before reactions, attachments or silent history and uses binding metadata', async t => {
+  const adapter = new DiscordChannel(new Bus(), { token: 'synthetic-token', triggerMode: 'mention', adminChats: ['201'] })
+  t.after(() => adapter.stop())
+  const received: InboundMessage[] = []
+  let allowed = false, requests = 0
+  let trigger: 'all' | 'mention' = 'all'
+  adapter.setDiscordIntegration({
+    admit: async () => {
+      if (!allowed) throw new Error('Unassigned channel')
+      return { admissionId: 'synthetic-proof', trigger, location }
+    },
+    discard() {}, confirm: async () => {}, invalidate() {},
+  })
+  adapter.setReceiver(async message => {
+    received.push(message)
+    return { status: 'accepted', sessionId: 'discord:201', inputId: message.messageId }
+  })
+  t.mock.method(globalThis, 'fetch', async () => { requests++; return new Response(null, { status: 204 }) })
+  const message = { id: '400', channel_id: '201', guild_id: '100', content: 'No mention',
+    author: { id: '500', username: 'Sam', bot: false } }
+  await assert.rejects(dispatch(adapter, 'MESSAGE_CREATE', { ...message, attachments: [{
+    id: '600', filename: 'private.txt', url: 'https://cdn.discordapp.com/attachments/201/600/private.txt',
+  }] }), /Unassigned channel/)
+  assert.equal(requests, 0)
+  assert.equal(received.length, 0)
+  allowed = true
+  await dispatch(adapter, 'MESSAGE_CREATE', message)
+  assert.equal(received[0]!.silent, false, 'The assignment overrides the legacy mention-only setting')
+  assert.equal(received[0]!.admin, false)
+  assert.equal(received[0]!.chatName, location.name)
+  assert.deepEqual(received[0]!.channelLocation, location)
+  assert.equal(requests, 1, 'Only the admitted reaction performs I/O; names come from authorization metadata')
+  trigger = 'mention'
+  await dispatch(adapter, 'MESSAGE_CREATE', { ...message, id: '401' })
+  assert.equal(received[1]!.silent, true)
+  assert.equal(received[1]!.channelAdmissionId, 'synthetic-proof')
+  assert.equal(requests, 1)
+})
+
+test('per-request output guards stop subsequent Discord send and edit chunks after revocation', async t => {
+  const adapter = new DiscordChannel(new Bus(), { token: 'synthetic-token' })
+  t.after(() => adapter.stop())
+  let allowed = true, checks = 0, requests = 0
+  t.mock.method(globalThis, 'fetch', async () => { requests++; allowed = false; return Response.json({ id: '700' }) })
+  const guard = async () => { checks++; if (!allowed) throw new Error('Synthetic authorization revoked') }
+  for (const operation of ['send', 'edit']) {
+    allowed = true; checks = 0; requests = 0
+    const content = 'Scoped response '.repeat(400)
+    await assert.rejects(adapter.withDeliveryGuard(guard, () => operation === 'send'
+      ? adapter.send({ channel: 'discord', chatId: '201', event: 'response', done: true, content })
+      : adapter.update('700', '201', content)), /Channel request failed/)
+    assert.equal(requests, 1)
+    assert.equal(checks, 2)
+  }
+})
+
+test('human approval delivery failure never rewrites an applied outcome as a rejected approval', async t => {
+  const adapter = new DiscordChannel(new Bus(), { token: 'synthetic-token' })
+  t.after(() => adapter.stop())
+  let applied = false, confirms = 0, presentations = 0
+  adapter.setDiscordIntegration({
+    admit: async () => ({ admissionId: 'synthetic-proof', trigger: 'mention', location }),
+    discard() {}, invalidate() {},
+    confirm: async () => { confirms++; applied = true },
+  })
+  t.mock.method(adapter, 'presentDecisionText', async (_chatId: string, content: string) => {
+    presentations++
+    assert.equal(content, 'The reviewed configuration is applied.')
+    throw new Error('Synthetic presentation failure')
+  })
+  await assert.rejects(dispatch(adapter, 'MESSAGE_CREATE', {
+    id: '400', channel_id: '201', guild_id: '100', author: { id: '500', username: 'Sam', bot: false },
+    content: `/shadow-approve 11111111-1111-4111-8111-111111111111 ${'a'.repeat(64)}`,
+  }), /Synthetic presentation failure/)
+  assert(applied)
+  assert.equal(confirms, 1)
+  assert.equal(presentations, 1)
+})
+
+test('uncertain approval completion asks the human to inspect applied and recovery state without entering the model', async t => {
+  const adapter = new DiscordChannel(new Bus(), { token: 'synthetic-token' })
+  t.after(() => adapter.stop())
+  const messages: string[] = []
+  adapter.setDiscordIntegration({
+    admit: async () => ({ admissionId: 'synthetic-proof', trigger: 'mention', location }),
+    discard() {}, invalidate() {},
+    confirm: async () => { throw new Error('Synthetic failure after a configuration side effect') },
+  })
+  adapter.setReceiver(async () => { assert.fail('Approval commands must not enter the model') })
+  t.mock.method(adapter, 'presentDecisionText', async (_chatId: string, content: string) => { messages.push(content) })
+  await dispatch(adapter, 'MESSAGE_CREATE', {
+    id: '400', channel_id: '201', guild_id: '100', author: { id: '500', username: 'Sam', bot: false },
+    content: `/shadow-approve 11111111-1111-4111-8111-111111111111 ${'a'.repeat(64)}`,
+  })
+  assert.equal(messages.length, 1)
+  assert.match(messages[0]!, /could not be confirmed/)
+  assert.match(messages[0]!, /applied or recovery state/)
+})

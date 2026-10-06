@@ -37,6 +37,8 @@ import { isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
 import { evaluateAuthoringScenario } from './authoring-evaluation.ts'
+import { runBoundedSession } from './bounded-session.ts'
+import type { ChannelBoundary } from '../channels/integration-contract.ts'
 import { LOCAL_NODE_ID, normalizeSessionLocality, resolveSessionLocations, type WorkdirCapabilityLookup, type WorkdirRefV1 } from './locality.ts'
 import { parseTopicSessionFields, type TopicMetadata } from './topic-contract.ts'
 import type { NodeInventoryResponse } from '../cluster/node-inventory.ts'
@@ -205,7 +207,7 @@ export function sessionPromptLocality(
 
 interface BlockingCallFrame {
   callerId: string
-  tools: CallTools
+  tools: SessionTools
   input?: SessionInput
   session?: EphemeralSession
   blockedReason?: string
@@ -302,12 +304,76 @@ export class SessionManager {
     })
   }
 
+  async runScopedLearning(input: {
+    ownerSessionId: string; epoch: string; revision: string; batchId: string
+    pipeline: NonNullable<ChannelBoundary['learning']>['pipeline']
+    prompt: string; input: string; signal: AbortSignal
+    tools: (state: SessionState) => SessionTools; accepted?: (sessionId: string) => void
+  }) {
+    const sessionId = `virtual:discord-learning-${crypto.randomUUID()}`
+    return this.withSessionPreparation(sessionId, async () => {
+      const owner = this.getSessionState(input.ownerSessionId)
+      const llm = this.deps.getLlmRuntimeConfig?.()
+      if (this.stopped || !this.deps.projectId || !llm || !owner?.channelBoundary ||
+        owner.channelBoundary.ownerSessionId || owner.channelBoundary.epoch !== input.epoch ||
+        owner.channelBoundary.revision !== input.revision) throw new Error('Scoped learning requires a current owning conversation.')
+      const state: SessionState = {
+        sessionId, projectId: this.deps.projectId, physicalIdVersion: 2, segmentIndex: 0,
+        mode: 'call', executionStatus: 'running', agentType: owner.agentType,
+        parentSessionId: owner.sessionId, workspaceRoot: owner.workspaceRoot ?? owner.sessionId,
+        config: { ...owner.config }, description: `Conversation ${input.pipeline}`,
+        channelBoundary: { ...structuredClone(owner.channelBoundary), startSegment: 0, ownerSessionId: owner.sessionId,
+          learning: { batchId: input.batchId, pipeline: input.pipeline } },
+      }
+      const tools = input.tools(state)
+      let persisted = false
+      try {
+        input.signal.throwIfAborted()
+        if (!tools.boundary) throw new Error('Scoped learning cannot run without a memory boundary.')
+        await this.saveState(sessionId, state)
+        persisted = true
+        if (this.stopped) throw new Error('Project session manager stopped before learning admission.')
+        input.accepted?.(sessionId)
+        const result = await runBoundedSession({
+          workspace: this.workspace, projectId: this.deps.projectId, provider: this.deps.provider,
+          llm: { ...llm, ...state.config }, state, tools, prompt: input.prompt, input: input.input, signal: input.signal,
+          onSession: session => { this.sessions[sessionId] = session },
+        })
+        const physicalId = physicalSessionId(state)
+        await this.store.createSessionLog(physicalId, [{ previous_physical_id: null, timestamp: new Date().toISOString() }])
+        await this.store.appendMessages(physicalId, result.messages.map(message => ({
+          ...message, timestamp: message.timestamp ?? new Date().toISOString(),
+        })))
+        if (result.result) await this.store.appendRawEvents(physicalId, [{ execution_receipt: result.result }])
+        state.executionStatus = result.status
+        await this.saveState(sessionId, state)
+        return result
+      } catch (error) {
+        if (persisted) {
+          state.executionStatus = input.signal.aborted ? 'cancelled' : 'failed'
+          await this.saveState(sessionId, state)
+        } else {
+          delete this.sessionStates[sessionId]
+        }
+        throw error
+      } finally {
+        delete this.sessions[sessionId]
+        await tools.resetDynamicAndWait()
+        this.deps.bus.emit('session.activity.changed', { sessionId })
+      }
+    })
+  }
+
   getDelegationOwner(sessionId: string): string | undefined {
     return delegationOwner(this.sessionStates[sessionId])
   }
 
   getAllowedSubagentModes(sessionId: string): readonly ExecutionMode[] {
-    if (this.isManagedConversation(sessionId)) return []
+    if (this.isManagedConversation(sessionId)) {
+      const state = this.sessionStates[sessionId]
+      return state?.channelBoundary && state.mode === 'session' &&
+        this.deps.conversationPolicies?.resolve(sessionId)?.agent.allowedTools?.includes('subagent') ? ['call'] : []
+    }
     const state = this.sessionStates[sessionId]
     return allowedSubagentModes(state?.mode ?? 'session', !!delegationOwner(state))
   }
@@ -360,7 +426,9 @@ export class SessionManager {
       throw error
     }
     const role = this.resolveAgentTypeTools(state.agentType, state.sessionKind)
-    const tools = new CallTools(context.tools, this.workspace, role.allowedTools, role.blockedTools, role.agentType.allowedModules)
+    const policy = state.channelBoundary ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
+    const tools = policy ? this.deps.conversationPolicies!.tools(policy, sessionId, state)
+      : new CallTools(context.tools, this.workspace, role.allowedTools, role.blockedTools, role.agentType.allowedModules)
     const settled = Promise.withResolvers<void>()
     const frame: BlockingCallFrame = {
       callerId: context.sessionId, tools, cancelled: false, settled: settled.promise,
@@ -1110,6 +1178,7 @@ ${JSON.stringify(request)}`,
   deliver(sessionId: string, input: SessionInput, llm?: LlmRuntimeConfig): Promise<DeliveryReceipt> {
     return this.withSessionPreparation(sessionId, async (): Promise<DeliveryReceipt> => {
       this.deps.conversationPolicies?.authorize(sessionId, input)
+      await this.reconcileChannelContext(sessionId)
       this.assertFolderAccess(sessionId)
       this.assertHistoryWritable(sessionId)
       const state = this.sessionStates[sessionId]
@@ -1247,6 +1316,50 @@ ${JSON.stringify(request)}`,
     this.deps.conversationPolicies?.authorize(sessionId, input)
   }
 
+  invalidateChannelContexts(bindingIds: ReadonlySet<string>): void {
+    for (const [id, session] of Object.entries(this.sessions)) {
+      const scope = this.sessionStates[id]?.channelBoundary
+      if (scope && bindingIds.has(scope.bindingId)) session.stop()
+    }
+  }
+
+  private async reconcileChannelContext(sessionId: string): Promise<void> {
+    if (!this.deps.conversationPolicies?.boundary || !this.isManagedConversation(sessionId)) return
+    const policy = this.deps.conversationPolicies.resolve(sessionId)
+    if (!policy) return
+    const state = this.sessionStates[sessionId] ?? await this.getOrCreateState(sessionId)
+    const boundary = this.deps.conversationPolicies.boundary(policy, sessionId, state)
+    if (!boundary || state.channelBoundary?.epoch === boundary.epoch) return
+    const active = this.sessions[sessionId]
+    active?.stop()
+    await active?.completion
+    const timestamp = new Date().toISOString()
+    const agent = policy.agent
+    const next: SessionState = {
+      ...state, channelBoundary: boundary, segmentIndex: boundary.startSegment,
+      agentType: agent.name, mode: 'session', config: {
+        model: agent.model, temperature: agent.temperature, maxTokens: agent.maxTokens,
+        thinking: agent.thinking, reasoningEffort: agent.reasoningEffort,
+      },
+      contextResetAt: timestamp, lastKnownTokens: 0, executionStatus: 'pending',
+      recovery: undefined, preloadTools: undefined,
+    }
+    await this.store.createSessionLog(physicalSessionId(next), [{
+      sessionId, physicalIdVersion: next.physicalIdVersion,
+      previous_physical_id: physicalSessionId(state), timestamp, context_reset: true,
+      channel_epoch: boundary.epoch, channel_domain: boundary.domainId,
+    }])
+    try { await this.store.saveState(sessionId, next) }
+    catch (error) {
+      try { await this.store.deleteSessionLog(physicalSessionId(next)) }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Failed to persist and clean up channel context') }
+      throw error
+    }
+    Object.assign(state, next)
+    this.acceptedInputs.delete(sessionId)
+    this.deps.bus.emit('session.changed', { sessionId })
+  }
+
   async retireIdleConversationContexts(matches: (sessionId: string) => boolean): Promise<void> {
     if ([...this.preparations.keys()].some(matches)) throw new ConversationContextsBusyError('A channel input is being admitted. Publication can continue after admission finishes.')
     const active = Object.entries(this.sessions).filter(([id]) => matches(id))
@@ -1303,8 +1416,10 @@ ${JSON.stringify(request)}`,
         this.deps.store,
         this.deps.handoffManager,
         onStopped,
-        () => this.decisionSystemPrompt(sessionId, ctx.conversationPolicy
-          ? Promise.resolve(this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId).systemPrompt)
+        () => ctx.state.channelBoundary && ctx.conversationPolicy
+          ? Promise.resolve(this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId, ctx.state).systemPrompt)
+          : this.decisionSystemPrompt(sessionId, ctx.conversationPolicy
+          ? Promise.resolve(this.deps.conversationPolicies!.prompt(ctx.conversationPolicy, sessionId, ctx.state).systemPrompt)
           : this.deps.context.buildSystemPrompt(ctx.promptCtx)),
         this.deps.quickModel,
         this.sleepInactivityMs,
@@ -1450,6 +1565,10 @@ ${JSON.stringify(request)}`,
     const ownerId = mode === 'session' || stateFields?.parentSessionId === null ? undefined
       : stateFields?.parentSessionId ?? (parent?.index === undefined && stateFields !== undefined ? parent?.id : undefined)
     if (ownerId) this.assertCanCreateChild(ownerId, mode)
+    const channelOwner = ownerId ? this.sessionStates[ownerId]?.channelBoundary : undefined
+    if (channelOwner && (mode !== 'call' || stateFields?.agentType !== this.sessionStates[ownerId!].agentType)) {
+      throw new Error('Channel delegation requires a blocking call with the same approved Agent.')
+    }
     if (mode === 'call' && (!ownerId || stateFields?.reportTo !== undefined)) {
       throw new Error('Calls require a permitted structural owner and cannot use report_to.')
     }
@@ -1500,6 +1619,7 @@ ${JSON.stringify(request)}`,
       ? parentWorkdir
       : undefined
     const state: SessionState = {
+      ...(channelOwner ? { channelBoundary: { ...structuredClone(channelOwner), ownerSessionId: ownerId!, startSegment: 0 } } : {}),
       ownershipVersion: 2,
       physicalIdVersion: 2,
       projectId: this.deps.projectId,
@@ -2236,6 +2356,8 @@ ${JSON.stringify(request)}`,
       }
     }
 
+    messages = reconcileResponseContinuity(messages).messages
+    if (!physicalId && !shallow) messages = truncatePreservingToolPairs(messages, maxMessages)
     const total = messages.length
     if (offset != null && pageSize != null) {
       const start = offset < 0 ? Math.max(0, total + offset) : offset
@@ -2251,7 +2373,9 @@ ${JSON.stringify(request)}`,
   ): Array<{ name: string; description: string; parameters: unknown }> {
     const conversationPolicy = sessionId ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
     if (conversationPolicy && sessionId) {
-      return this.deps.conversationPolicies!.tools(conversationPolicy, sessionId).getDefinitions().map(tool => tool.function)
+      const tools = this.deps.conversationPolicies!.tools(conversationPolicy, sessionId, this.sessionStates[sessionId])
+      try { return tools.getDefinitions().map(tool => tool.function) }
+      finally { tools.resetDynamic() }
     }
     if (sessionId) {
       const sess = this.sessions[sessionId]
@@ -2315,7 +2439,7 @@ ${JSON.stringify(request)}`,
 
     const active = opts.sessionId ? this.getActiveSession(sessionId) : undefined
     const conversationPolicy = opts.sessionId ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
-    if (active && !opts.preview) {
+    if (active && !opts.preview && !this.sessionStates[sessionId]?.channelBoundary) {
       return {
         source: 'active-history',
         systemPrompt: extractSystemPrompt(active.history[0]),
@@ -2325,7 +2449,7 @@ ${JSON.stringify(request)}`,
 
     if (conversationPolicy) {
       return {
-        source: 'preview', ...this.deps.conversationPolicies!.prompt(conversationPolicy, sessionId),
+        source: 'preview', ...this.deps.conversationPolicies!.prompt(conversationPolicy, sessionId, structuredClone(this.sessionStates[sessionId])),
         tools: this.getToolDefinitions(sessionId),
       }
     }
@@ -2356,8 +2480,6 @@ ${JSON.stringify(request)}`,
       initiativeId: state?.initiativeId,
       contextResetAt: state?.contextResetAt,
       ...sessionPromptLocality(state),
-    messages = reconcileResponseContinuity(messages).messages
-    if (!physicalId && !shallow) messages = truncatePreservingToolPairs(messages, maxMessages)
     }
 
     const { systemPrompt, sections } = await this.deps.context.buildSystemPromptDetails(promptCtx)
@@ -2387,7 +2509,7 @@ ${JSON.stringify(request)}`,
       this.deps.agentTypes.resolve('general')!
 
     if (name === 'orchestrator' || sessionKind === 'orchestrator') {
-      const allowedTools = ['read', 'search', 'session', 'message', 'work', 'sql', 'project_config', 'authoring_change', 'skill_read', 'skill_save', 'ask', 'reply']
+      const allowedTools = ['read', 'search', 'session', 'message', 'work', 'sql', 'project_config', 'authoring_change', 'channel_config', 'skill_read', 'skill_save', 'ask', 'reply']
       return {
         agentType: { ...resolved, allowedTools, blockedTools: undefined },
         allowedTools,
@@ -2555,8 +2677,10 @@ ${JSON.stringify(request)}`,
       contextResetAt: state.contextResetAt,
       ...sessionPromptLocality(state),
     }
-    const systemPrompt = await this.decisionSystemPrompt(sessionId, conversationPolicy
-      ? this.deps.conversationPolicies!.prompt(conversationPolicy, sessionId).systemPrompt
+    const systemPrompt = state.channelBoundary && conversationPolicy
+      ? this.deps.conversationPolicies!.prompt(conversationPolicy, sessionId, state).systemPrompt
+      : await this.decisionSystemPrompt(sessionId, conversationPolicy
+      ? this.deps.conversationPolicies!.prompt(conversationPolicy, sessionId, state).systemPrompt
       : this.deps.context.buildSystemPrompt(promptCtx))
 
     // Execution must retain unfinished tool calls; display/fork sanitization
@@ -2570,7 +2694,7 @@ ${JSON.stringify(request)}`,
           ? { parentPhysicalId: state.parent.physicalId, forkAt: state.parent.index }
           : undefined,
       )
-      : (await this.getHistory(sessionId)).messages
+      : (await this.getHistory(sessionId, state.channelBoundary ? { shallow: true } : undefined)).messages
 
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -2578,7 +2702,7 @@ ${JSON.stringify(request)}`,
     ]
 
     const sessionTools = conversationPolicy
-      ? this.deps.conversationPolicies!.tools(conversationPolicy, sessionId)
+      ? this.calls.get(sessionId)?.tools ?? this.deps.conversationPolicies!.tools(conversationPolicy, sessionId, state)
       : this.calls.get(sessionId)?.tools ?? new SessionTools(
       this.deps.tools,
       this.deps.workspace,

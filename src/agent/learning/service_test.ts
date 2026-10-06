@@ -16,6 +16,37 @@ const input: SessionInput = {
   content: 'same-content', policy: 'queue', source: { kind: 'session', sessionId: 'same-source' },
 }
 
+test('domain-local pending work feeds the existing scheduler without sharing Project cursors', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  await withTempWorkspace(async workspace => {
+    const scope = createProjectScope('a')
+    const bus = new Bus()
+    const ledger = new LearningLedger(workspace, 'a')
+    const manual: boolean[] = []
+    let downstream = 2
+    let runs = 0
+    const service = new LearningService(bus, scope, {
+      async reflector(_signal, _job, _accepted, requested) { manual.push(!!requested); return false },
+      async encapsulator() { downstream--; runs++; return false },
+      async soulReflector() { return false },
+    }, config, new CronService(workspace, 'UTC', scope), () => false, ledger, {
+      pending: pipeline => pipeline === 'encapsulator' && downstream > 0,
+    })
+    try {
+      await service.trigger('reflector')
+      assert.deepEqual(manual, [true])
+      assert.equal(service.status().pipelines.encapsulator.pending, true)
+      t.mock.timers.tick(20); await tick()
+      assert.equal(runs, 1)
+      assert.equal(service.status().pipelines.encapsulator.pending, true)
+      t.mock.timers.tick(20); await tick()
+      assert.equal(runs, 2)
+      assert.equal(service.status().pipelines.encapsulator.pending, false)
+      assert.equal(ledger.eventsFor('encapsulator').length, 0)
+    } finally { await service.stop(); scope.close() }
+  })
+})
+
 test('learning buffers and timers are org-local, preserve pending work across interval updates and report dispatch truthfully', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
   const buses = [new Bus(), new Bus()]

@@ -14,7 +14,7 @@ export const secretFields: Record<ChannelId, readonly string[]> = {
 const publicFields: Record<ChannelId, readonly string[]> = {
   qq: ['appId', 'sandbox', 'intents', 'markdown', 'allowFrom', 'adminChats', 'trustedChats'],
   feishu: ['appId', 'allowFrom', 'adminChats', 'trustedChats'],
-  discord: ['triggerMode', 'reactionEmoji', 'allowFrom', 'adminChats', 'trustedChats'],
+  discord: ['triggerMode', 'reactionEmoji', 'memberIntent', 'allowFrom', 'adminChats', 'trustedChats'],
 }
 const text = z.string().max(16_384).refine((value) => !/[\x00-\x1f]/.test(value))
 const secret = text.refine((value) => value.trim().length > 0 && value !== REDACTED_SECRET)
@@ -37,6 +37,7 @@ export const channelPatchSchemas = {
   discord: z.object({
     ...common, token: secret.optional(), triggerMode: z.enum(['all', 'mention']).optional(),
     reactionEmoji: text.refine((value) => value.length <= 100).optional(),
+    memberIntent: z.boolean().optional(),
   }).strict(),
 }
 const envelope = z.object({ config: z.record(z.unknown()) }).strict()

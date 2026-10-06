@@ -18,6 +18,8 @@ import type { BotInstance, BotInstanceStore } from './bot-store.ts'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import type { RealtimePublisher } from '../realtime/hub.ts'
 import type { ChannelOperationContext, ChannelOperationRequest } from './operations.ts'
+import type { DiscordIntegration } from './integration.ts'
+import type { DiscordBinding, DiscordIntegrationTransport } from './integration-contract.ts'
 
 type ChannelFactory = (id: ChannelId, config: Config, instance?: BotInstance) => BaseChannel
 export interface ChannelManagerOptions {
@@ -27,6 +29,7 @@ export interface ChannelManagerOptions {
   /** Defaults to the construction scope; the host closes it after channel shutdown. */
   scope?: ProjectScope
   realtime?: RealtimePublisher
+  discordIntegration?: DiscordIntegration
 }
 
 // Host-wide ownership, not a routing registry. Failed cleanup retains its claim.
@@ -229,6 +232,7 @@ export class ChannelManager {
   }
 
   private async stopBot(id: string): Promise<boolean> {
+    this.options?.discordIntegration?.invalidateBot(id)
     if (this.cleanupFailed.has(id)) return false
     const previous = this.channels.get(id)
     this.channels.delete(id)
@@ -254,6 +258,16 @@ export class ChannelManager {
       ...(bot.legacySessionId ? { legacySessionId: true } : {}),
     } : undefined
     if (scope) channel.setBotScope?.(scope)
+    const integration = this.options?.discordIntegration
+    if (integration && bot?.platform === 'discord') {
+      if (!channel.setDiscordIntegration) throw new ChannelSetupError('bot_adapter_scope_unavailable', 503)
+      channel.setDiscordIntegration({
+        admit: (input, signal) => integration.prepareIngress(bot.id, input, signal),
+        discard: id => integration.discardAdmission(id),
+        confirm: async (chatId, senderId, draftId, hash, signal) => { await integration.confirmChat(bot.id, chatId, senderId, draftId, hash, signal) },
+        invalidate: () => integration.invalidateBot(bot.id),
+      })
+    }
     channel.setReceiver(async message => {
       if (this.closing || this.channels.get(key) !== channel || this.cleanupFailed.has(key) || this.needsApply.has(key)) {
         throw new ChannelAdmissionError('The source bot connection is unavailable', 503)
@@ -264,6 +278,7 @@ export class ChannelManager {
       if (message.channel !== channel.name) throw new ChannelAdmissionError('Channel identity mismatch', 403)
       return this.receive({
         ...message, ...(scope ? { channelAddress: { ...scope, conversationId: message.chatId } } : {}),
+        ...(integration && bot?.platform === 'discord' ? { admin: false } : {}),
       })
     })
     channel.setDecisionHandler?.(async decision => {
@@ -279,8 +294,30 @@ export class ChannelManager {
       const bot = this.options.instanceStore.list().find(bot => bot.id === address.botInstanceId)
       return bot?.platform === name && !!bot.legacySessionId === !!address.legacySessionId ? bot.id : undefined
     }
+
     if (name === 'web' || name === 'virtual') return name
     return this.options.instanceStore.list().find(bot => bot.platform === name && bot.legacySessionId)?.id
+  }
+
+  discordTransport(): DiscordIntegrationTransport {
+    const channel = (botId: string) => {
+      const value = this.availableByKey(botId)
+      if (!(value instanceof DiscordChannel) || this.closing) throw new ChannelAdmissionError('The Discord Bot must be connected.', 503)
+      return value
+    }
+    const run = async <T>(botId: string, operation: (value: DiscordChannel) => Promise<T>): Promise<T> => {
+      const value = channel(botId), verify = value.connectionGuard()
+      const result = await value.withConnection(() => operation(value))
+      verify()
+      if (channel(botId) !== value) throw new ChannelAdmissionError('The Discord connection changed.', 503)
+      return result
+    }
+    return {
+      directory: (botId, guildId, after, signal) => run(botId, value => value.directory(guildId, after, signal)),
+      inspect: (botId, chatId, senderId, signal) => run(botId, value => value.inspectConversation(chatId, senderId, signal)),
+      inspectTarget: (botId, target, signal) => run(botId, value => value.inspectTarget(target, signal)),
+      members: (botId, guildId, query, signal) => run(botId, value => value.members(guildId, query, signal)),
+    }
   }
 
   private availableByKey(name: string): BaseChannel | undefined {
@@ -442,6 +479,7 @@ export class ChannelManager {
         allowFrom: ch.discord.allowFrom,
         triggerMode: ch.discord.triggerMode,
         reactionEmoji: ch.discord.reactionEmoji,
+        memberIntent: ch.discord.memberIntent,
         workspace: this.config.agent.workspace,
         adminChats: ch.discord.adminChats,
         sessionManager: this.sessionManager,
@@ -686,9 +724,16 @@ export class ChannelManager {
     const channel = key ? this.availableByKey(key) : undefined
     if (!channel) throw new YieldError('unavailable', 'The source bot is unavailable.')
     const verify = channel.connectionGuard?.()
-    if (msg.yieldRequest) await this.deliverDecision(msg)
-    else if (channel.withConnection) await channel.withConnection(() => channel.onMessage(msg))
-    else await channel.onMessage(msg)
+    const integration = msg.channel === 'discord' ? this.options?.discordIntegration : undefined
+    const guard = () => integration!.assertDelivery(msg, this.dispatchController?.signal ?? new AbortController().signal)
+    if (integration) await guard()
+    const run = async () => {
+      if (msg.yieldRequest) await this.deliverDecision(msg)
+      else if (channel.withConnection) await channel.withConnection(() => channel.onMessage(msg))
+      else await channel.onMessage(msg)
+    }
+    if (integration && channel.withDeliveryGuard) await channel.withDeliveryGuard(guard, run)
+    else await run()
     verify?.()
   }
 

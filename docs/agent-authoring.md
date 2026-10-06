@@ -231,7 +231,15 @@ The binding chooses the role and selected skills:
 }
 ```
 
-Platforms are `qq`, `discord` and `feishu`. Different groups may choose different
+The legacy binding schema retains `qq`, `discord` and `feishu` for compatibility.
+Current Main composition routes **Discord** through its explicit channel policy
+service and rejects Discord publication through this authoring path. Use
+`channel_config` and **Bots > Discord access** for Discord Agents, closed tool
+registries, memory domains and clean authorization epochs; see
+[Messaging channels](channels.md). The behavior below describes QQ/Feishu
+managed authoring, not an alternative Discord authority.
+
+Different groups may choose different
 roles, prompts, skill selections, folder scopes and grants. `parameters` are
 model-visible data, not secrets. Missing `allowFrom` allows any sender admitted
 by the channel; an explicit empty list admits nobody. Sender restrictions are
@@ -247,7 +255,8 @@ disclosed content from history.
 There is no general-role fallback for a disabled or removed previously managed
 binding, including after restart. Legacy bot session identities resolve through
 the Project's legacy bot instance. Conversations never enrolled in a published
-binding retain their prior behavior. Configure a group before allowing it to
+binding on this QQ/Feishu path retain their prior behavior. Discord is instead
+default-deny even for never-assigned channels and DMs. Configure a group before allowing it to
 handle untrusted requests; installing this framework alone does not restrict
 all existing bots.
 

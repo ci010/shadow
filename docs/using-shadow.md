@@ -128,6 +128,25 @@ preview's channel, not an existing conversation.
 Previews do not create sessions or inherit a conversation's history, configuration,
 published bot policy, or Work bindings. Real session context retains those checks.
 
+## Discord configuration
+
+Open **Project settings > Bots > your Discord Bot > Discord access** to
+discover named servers, channels, roles and people; publish Agents; and review
+channel/DM assignments and knowledge publication. One Bot may use different
+Agents per channel. Unassigned channels/DMs are closed, including previously
+configured legacy admin chats. Participant restrictions select callers, not
+who can read the channel's replies.
+
+Alternatively, ask the Project **Coordinator** to configure a named Discord
+channel. Its `channel_config` tool discovers Bot connections and platform
+resources, reads exact revisions and drafts changes. You still approve the
+exact change in Discord access; the model cannot approve. Authorized Discord
+management channels may submit only bounded proposals for their own Bot.
+**Preview applied access for a person** shows the effective prompt/tools without
+calling a model; generic Agent previews do not establish platform authorization.
+See [Discord access](channels.md#discord-agents-and-channel-access) for thread/DM
+rules, clean contexts, recovery, trusted-execution warnings and live-test limits.
+
 ## Project knowledge
 
 Use the book icon to open the current Project's **Knowledge** tab without
@@ -136,6 +155,15 @@ skills, and shows explicit references between entries; a graph edge is not a
 semantic inference. Built-in skills are read-only. Deleting an entry removes
 only that file, not its incoming references or already-loaded instructions.
 Agent learning can later recreate deleted knowledge.
+
+This file-backed Project browser is an owner surface, not the scoped Discord
+memory catalog. Restricted Discord Agents do not inherit its files, global
+SOUL, indexes, events or other conversations. Their notes, summaries and learned
+skills remain in a Conversation domain for the current authorization epoch.
+Use **Discord access > Knowledge** to inspect domains, review fixed-copy sharing,
+revoke access and inspect conversation-learning status. Reusing an Agent in
+two channels does not share their memory. Deleting a legacy Project file is
+not the same operation as revoking an approved Discord publication.
 
 Markdown links in the preview open linked knowledge entries in the same
 Project, including relative paths and `v:memory/` / `v:skills/` aliases.

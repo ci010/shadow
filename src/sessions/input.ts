@@ -110,6 +110,8 @@ export function channelMessageInput(message: InboundMessage): SessionInput {
     throw new TypeError('A retry cannot be silent or queued')
   }
   const sender: MessageContext = {
+    channelAdmissionId: message.channelAdmissionId,
+    channelLocation: message.channelLocation,
     ...(message.channelAddress ? { channelAddress: message.channelAddress } : {}),
     channel: message.channel,
     chatId: message.chatId,
@@ -177,6 +179,8 @@ export function inputContext(sessionId: string, input: SessionInput): MessageCon
   const sender = inputSender(input)
   const user = input.source.kind === 'user' ? input.source.sender : undefined
   return {
+    channelAdmissionId: user?.channelAdmissionId,
+    channelLocation: user?.channelLocation,
     ...((reply?.channelAddress ?? user?.channelAddress) ? { channelAddress: reply?.channelAddress ?? user?.channelAddress } : {}),
     channel: reply?.channel ?? 'system',
     chatId: reply?.chatId ?? sessionId,

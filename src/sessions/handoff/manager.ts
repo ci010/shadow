@@ -17,6 +17,8 @@ import { type HandoffCapture, HandoffSummaryTool } from './tools.ts'
 import type { ExecutionContext } from '../../tools/context.ts'
 import type { SessionStore } from '../session-store.ts'
 import { getProjectScope, type ProjectScope } from '../../projects/scope.ts'
+import type { RuntimeBoundary } from '../runtime-boundary.ts'
+import type { SessionState } from '../session-store.ts'
 const handoffPromptTemplate = readFileSync(new URL('./HANDOFF.md', import.meta.url), 'utf8')
 
 const MAX_HANDOFF_SUMMARY_LENGTH = 10_000
@@ -87,10 +89,13 @@ export class HandoffManager {
     targetSessionId: string,
     messages: ChatMessage[],
     model: string,
+    boundary?: RuntimeBoundary,
+    sourceState?: SessionState,
   ): Promise<CompactResult> {
     if (this.stopped) throw new Error('HandoffManager is stopped')
     const controller = new AbortController()
-    const create = () => this.createWithinScope(sessionId, sourceSessionId, targetSessionId, messages, model, controller.signal)
+    const signal = boundary ? AbortSignal.any([controller.signal, boundary.signal]) : controller.signal
+    const create = () => this.createWithinScope(sessionId, sourceSessionId, targetSessionId, messages, model, signal, boundary, sourceState)
     const pending = this.scope ? this.scope.run(create) : create()
     this.running.set(pending, controller)
     try {
@@ -113,6 +118,8 @@ export class HandoffManager {
     messages: ChatMessage[],
     model: string,
     signal: AbortSignal,
+    boundary?: RuntimeBoundary,
+    sourceState?: SessionState,
   ): Promise<CompactResult> {
     // Run the combined handoff+reflect loop
     const context = await this.runHandoffLoop(
@@ -120,6 +127,8 @@ export class HandoffManager {
       messages,
       model,
       signal,
+      boundary,
+      sourceState,
     )
 
     const snapshot: HandoffOptions = {
@@ -131,7 +140,7 @@ export class HandoffManager {
       context,
     }
 
-    const summary = this.buildHandoffSummary(snapshot)
+    const summary = this.buildHandoffSummary(snapshot, !!boundary)
 
     return {
       targetSessionId,
@@ -169,6 +178,8 @@ export class HandoffManager {
     messages: ChatMessage[],
     model: string,
     signal: AbortSignal,
+    boundary?: RuntimeBoundary,
+    sourceState?: SessionState,
   ): Promise<HandoffContext> {
     const fallback = this.synthesizeContext(messages)
     const transcript = this.buildTranscript(messages)
@@ -191,8 +202,9 @@ export class HandoffManager {
     // Build tools registry with handoff-specific tools only
     const tools = new Tools(workspace)
     tools.register(new HandoffSummaryTool(capture, fallback))
-    tools.register(new ReadTool(workspace))
+    if (!boundary) tools.register(new ReadTool(workspace))
     const sessionTools = new SessionTools(tools, workspace)
+    if (boundary) sessionTools.boundary = { ...boundary, stamp: message => message, close: () => {}, finish: () => {} }
 
     // Build initial messages
     const userContent = this.buildHandoffUserContent(transcript)
@@ -203,6 +215,7 @@ export class HandoffManager {
 
     const physicalId = sessionId + '-handoff'
     const executionContext: ExecutionContext = {
+      memoryAccess: boundary?.memoryAccess,
       ...(this.scope ? { projectId: this.scope.projectId } : {}),
       channel: 'handoff',
       senderId: 'handoff',
@@ -210,7 +223,7 @@ export class HandoffManager {
       messageId: crypto.randomUUID(),
       sessionId: sessionId,
       physicalSessionId: physicalId,
-      admin: true,
+      admin: !boundary,
       tools: sessionTools,
       signal,
     }
@@ -219,10 +232,15 @@ export class HandoffManager {
       `[handoff] Starting combined handoff loop for session: ${sessionId}`,
     )
 
+    const internalState: SessionState = boundary && sourceState?.channelBoundary ? {
+      sessionId: `virtual:channel-handoff-${crypto.randomUUID()}`, physicalIdVersion: 2, segmentIndex: 0,
+      projectId: sourceState.projectId, mode: 'call', parentSessionId: sessionId,
+      channelBoundary: { ...structuredClone(sourceState.channelBoundary), ownerSessionId: sessionId, startSegment: 0 },
+    } : { sessionId, segmentIndex: 0, ...(this.scope ? { projectId: this.scope.projectId } : {}) }
     await new HandoffSession(
       workspace,
-      sessionId,
-      { sessionId: sessionId, segmentIndex: 0, ...(this.scope ? { projectId: this.scope.projectId } : {}) },
+      internalState.sessionId,
+      internalState,
       loopMessages,
       this.provider,
       sessionTools,
@@ -245,6 +263,10 @@ export class HandoffManager {
     // The session-memory md IS the continuation Summary (MEM.md): current
     // focus + progress, produced only by compact.
     const md = renderContinuationSummary(capture.context ?? fallback)
+    if (boundary) {
+      boundary.rememberSummary(md)
+      return capture.context ?? fallback
+    }
     await mkdir(dirname(absoluteMemoryPath), { recursive: true })
     await writeFile(absoluteMemoryPath, md)
     console.info(`[handoff] Session summary written: ${absoluteMemoryPath}`)
@@ -315,10 +337,12 @@ export class HandoffManager {
     return recent.join('\n')
   }
 
-  private buildHandoffSummary(snapshot: HandoffOptions): string {
+  private buildHandoffSummary(snapshot: HandoffOptions, scoped = false): string {
     const lines = [
       '# Previous Conversation Summary',
-      `- Previous session (${snapshot.sourceMessageCount} messages) can be accessed via: read("v:sessions/${snapshot.sourceSessionId}")`,
+      scoped
+        ? '- Earlier details are retained only in this authorized context. Use read("v:memory") for its scoped records; no other session-history paths are available.'
+        : `- Previous session (${snapshot.sourceMessageCount} messages) can be accessed via: read("v:sessions/${snapshot.sourceSessionId}")`,
       `- Current Session: ${snapshot.targetSessionId}`,
       '',
       ...(snapshot.context.summary

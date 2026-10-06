@@ -87,6 +87,8 @@ export interface SessionParent {
 }
 
 export interface SessionState {
+  /** A persisted scope reference, never a live authorization lease. */
+  channelBoundary?: import('../channels/integration-contract.ts').ChannelBoundary
   /** Execution enforcement, independent of Work tool availability. Absent on legacy records. */
   workPolicy?: WorkPolicy
   /** User-selected display name, independent of identity and topic instructions. */

@@ -95,6 +95,7 @@ export class VirtualFs {
     relativePath: string,
     context: ExecutionContext,
   ): Promise<string> | null {
+    if (context.memoryAccess) throw new Error('Channel memory leases cannot access the Project virtual filesystem. Use the scoped conversation tools.')
     const { prefix, subpath } = this.parse(relativePath)
     const mount = prefix ? this.mounts.get(prefix) : undefined
     if (!mount) {
@@ -112,6 +113,7 @@ export class VirtualFs {
     request: VirtualWriteRequest,
     context: ExecutionContext,
   ): Promise<string> | null {
+    if (context.memoryAccess) throw new Error('Channel memory leases cannot write Project resources.')
     const { prefix, subpath } = this.parse(relativePath)
     const mount = this.mounts.get(prefix)
     if (!mount) {
@@ -133,6 +135,7 @@ export class VirtualFs {
     context: ExecutionContext,
     options: Pick<VirtualListOptions, 'content'> = {},
   ): Promise<Array<VirtualEntry & { path: string }>> | null {
+    if (context.memoryAccess) throw new Error('Channel memory leases cannot discover Project resources.')
     const { prefix, subpath } = this.parse(relativePath)
     if (subpath.split('/').some(part => part === '.' || part === '..')) throw new Error('Invalid virtual search path.')
     const mount = prefix ? this.mounts.get(prefix) : undefined

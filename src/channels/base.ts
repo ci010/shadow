@@ -9,6 +9,7 @@ import type { YieldRequest } from '../sessions/yield-contract.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import type { ChannelOperation, ChannelOperationRequest, ChannelOperationTarget } from './operations.ts'
+import type { DiscordAdapterIntegration } from './integration-contract.ts'
 
 export interface ChannelDecision {
   channelAddress?: ChannelAddress
@@ -44,6 +45,8 @@ export interface BaseChannel {
   setProjectScope?(scope: ProjectScope): void
   setIdentityHandler?(handler: (identity: string) => void): void
   withConnection?<T>(operation: () => T): T
+  withDeliveryGuard?<T>(guard: () => Promise<void>, operation: () => T): T
+  setDiscordIntegration?(integration: DiscordAdapterIntegration): void
   connectionGuard?(): () => void
 
   /** Configure explicit message admission before starting the channel. */
@@ -88,6 +91,7 @@ export abstract class AbstractChannel implements BaseChannel {
   private decisionHandler?: ChannelDecisionHandler
   private requestController = new AbortController()
   private connectionContext = new AsyncLocalStorage<AbortSignal>()
+  private deliveryContext = new AsyncLocalStorage<(() => Promise<void>) | undefined>()
   private projectScope = getProjectScope()
   protected chatActiveMessage: Map<string, {
     messageId: string
@@ -211,6 +215,10 @@ export abstract class AbstractChannel implements BaseChannel {
     return this.projectScope ? this.projectScope.run(run) : run()
   }
 
+  withDeliveryGuard<T>(guard: () => Promise<void>, operation: () => T): T {
+    return this.deliveryContext.run(guard, operation)
+  }
+
   protected assertConnection(): void {
     const source = this.connectionContext.getStore()
     if (source && (source.aborted || source !== this.requestController.signal)) {
@@ -229,6 +237,8 @@ export abstract class AbstractChannel implements BaseChannel {
 
   protected async request(input: string | URL, init: RequestInit = {}): Promise<Response> {
     try {
+      const guard = this.deliveryContext.getStore()
+      if (guard) await this.deliveryContext.run(undefined, guard)
       this.assertConnection()
       const signal = AbortSignal.any([
         this.requestController.signal, AbortSignal.timeout(60_000),
@@ -340,8 +350,8 @@ export abstract class AbstractChannel implements BaseChannel {
       throw new ChannelAdmissionError(`[${this.name}] Message receiver is not configured`, 503)
     }
 
-    const admin = this.alwaysAdmin || !fields?.isGroup ||
-      !!this.adminChats?.includes(chatId)
+    const admin = !fields?.channelAdmissionId && (this.alwaysAdmin || !fields?.isGroup ||
+      !!this.adminChats?.includes(chatId))
 
     this.chatActiveMessage.delete(chatId)
 

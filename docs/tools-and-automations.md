@@ -8,14 +8,14 @@ evidence / revalidate when**. Inferred motivations remain hypotheses, not facts
 about a person's identity. Easily recomputed environment facts and temporary
 task state usually stay in source history. No durable change is a valid result.
 
-The learning roles use `learning_memory` to read a revision and save a scoped
+The local Project learning roles use `learning_memory` to read a revision and save a scoped
 decision. Existing general sessions retain normal `write` access to wiki memory;
 there is no new approval step. Repeated evidence can support, correct or retire
 a decision. Retired decisions are retained as historical evidence but must not
 guide new actions. Source identities are checked against the assigned batch;
 the model still owns the semantic interpretation.
 
-`learned_skill` writes lesson-only `SKILL.md` packages to the actual shared
+In that local Project workflow, `learned_skill` writes lesson-only `SKILL.md` packages to the actual shared
 Project skill space, using revision checks and the existing registry. It does
 not grant executable tools, override bundled skills, install agents or make an
 admin/core skill. Those changes use the established authoring route; a local
@@ -66,6 +66,66 @@ Configuration updates or `/learn <reflector|encapsulator|soul-reflector>` explic
 resume paused work. Disabling learning stops active dispatch; it does not delete
 pending source history or journal data. The current backend must load the new
 code for these semantics to apply; old runs are never rewritten as successful.
+
+### Discord conversation learning
+
+Managed Discord conversations and their children are excluded from the legacy
+Project source enumeration, including recovery of old pending batches.
+`DiscordLearning` connects to the same `LearningService` schedule, but keeps
+independent protected journals for each Bot/conversation/authorization
+epoch/revision under the Project configuration's
+`channel-integrations/learning`. Turning off learning stops this dispatch too.
+
+Only current conversations with `read`, `memory_save` and `learned_skill`
+grants are eligible. New input takes priority over background work. Every
+worker rechecks its binding, verified platform sender, connection generation,
+input generation, memory sources and epoch; none inherits global SOUL or
+another conversation's prompt. Internal bounded calls use the existing
+SessionManager/BaseSession loop with only `read`, `learning_record` and
+`learning_result`, no Discord output transport.
+
+Reflector batches pin at most four bounded source ranges from the current
+epoch, materialize immutable history resources and record private decisions
+and events. Encapsulation and Soul reflection consume exact unconsumed
+decision/event **versions**, with separate cursors. Workers must read every
+required input; changing a named record requires its read revision. Tool
+failures or missing/invalid receipts prevent application and acknowledgment.
+Per-worker limits include twelve model rounds, 128 tool calls and two minutes.
+
+Records, summaries and instruction-only skills remain in the Conversation
+domain, with observed source restrictions. The conversation's `learned_skill`
+tool uses this catalog, not the Project `skills` directory. Soul reflection
+produces a private `soul-draft` and a **Draft only** receipt; it never updates
+global SOUL or treats repeated single-conversation evidence as independent
+cross-conversation support. Sharing requires separately reviewed fixed-copy
+publication and explicit domain grants.
+
+Prepared effects are saved before atomic/idempotent catalog application.
+Successful recorded application advances only that domain's cursors and
+downstream consumption, including acknowledged Soul drafts. Restart recovery
+can finish a prepared commit without another model call or duplicate effects.
+An external conflicting edit is not silently overwritten. Failed domains
+back off independently and pause after three attempts; their progress is not
+merged into the Project learning journal. In **Discord access > Knowledge**,
+expand **Conversation learning** for per-context status and paused reasons.
+Worker IDs and receipts remain available in owner APIs and session history.
+Use `/learn <pipeline>` in an owner chat to retry after reconciliation.
+
+## Discord configuration tools
+
+The Project coordinator explicitly exposes the opt-in `channel_config` tool.
+Read `schema` for formats, `list` for named Bot connections and the current
+revision, and `directory`/`members` for server/channel/role/person discovery.
+`resource` and `agent_file` inspect owner-visible catalog records or current
+instructions; `propose` requests a human review in **Discord access**.
+There is no approval action. Forwarded peer/event inputs, scoped channel
+executions and internal calls cannot impersonate a direct owner web turn.
+
+An authorized Discord management assignment instead receives a same-Bot,
+ceiling-limited version. It cannot discover private Project memory, administer
+another Bot or expand its own authority. The exact human confirmation flow and
+audience implications are documented in [Messaging channels](channels.md).
+Use `authoring_change` for QQ/Feishu managed deployment, not Discord.
 
 ## Shell and interrupted model requests
 
@@ -168,7 +228,7 @@ remote-workdir limitations.
 
 ## Channel platform reads
 
-Channel API operations are dynamic tools, not additions to the base tool list.
+Legacy channel API operations are dynamic tools, not additions to the base tool list.
 Read `v:tools/channel_operations`, `v:tools/discord_history` or
 `v:tools/discord_message_get`, `v:tools/feishu_history` or
 `v:tools/feishu_message_get` for contracts, then use `invoke_tool`.
@@ -189,11 +249,19 @@ These operations require an authenticated channel-user turn in the matching
 platform-bound conversation. A native thread's session may have a parent or
 child lineage and still read its own bound thread. Parenthood is neither a
 denial nor an authorization grant. Internal `virtual:*` tasks/calls do not
-inherit their spawner's channel binding; no new platform thread is created by
+inherit their spawner's channel binding through this generic dynamic route; no new platform thread is created by
 these tools. Web conversations, peer/event inputs and remote workdirs also do
 not inherit a bot read grant. Migrated legacy bot
 conversations still require their explicit bot address; platform-only fallback
 does not authorize reads.
+
+Managed Discord execution instead exposes approved `discord_history` and
+`discord_message_get` directly in its closed scoped registry; it has no
+`invoke_tool`. A blocking leaf call can use the explicitly borrowed parent
+scope, never select a different Bot or conversation. Reads stop at the current
+authorization epoch's start, including pagination and individual message
+lookups. They do not import parent-thread or earlier-epoch history. See
+[Discord access](channels.md#discord-agents-and-channel-access).
 
 Discovery lists implemented operations, not permissions. Loading a contract
 does not connect another bot or grant access. Every call rechecks the live source
@@ -221,8 +289,9 @@ Omitted text is marked `unavailable`; omitted text, attachments or embeds are
 returned as `null`, not asserted to be empty.
 Returned platform messages are external data, not replayed user instructions;
 no session is created or awakened and attachments are not downloaded. API
-errors, permission failures and rate limits are explicit failures, not empty
-history or automatic retries. Normal responses still use the existing outbound
+errors and permission failures are explicit failures, not empty history.
+Discord rate limits use bounded abortable retry; exhausted or excessive delays
+fail explicitly. Normal responses still use the existing outbound
 channel pipeline; these tools do not send, edit or moderate platform messages.
 
 Feishu has its own native history APIs and pagination: `feishu_history` defaults

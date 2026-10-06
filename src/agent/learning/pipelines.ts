@@ -56,6 +56,12 @@ export class LearningRuntime {
   async recover(): Promise<void> {
     for (const batch of this.ledger.unfinished()) {
       if (batch.state !== 'running') continue
+      if (batch.sources.some(source => this.sessions.getSessionState(source.sessionId)?.channelBoundary ||
+        this.sessions.isManagedConversation(source.sessionId))) {
+        this.ledger.interrupt(batch.id, 'Legacy learning cannot recover channel-scoped sources into Project-private memory.')
+        this.ledger.setRetry(batch.pipeline, { attempts: 0, paused: 'Review this legacy batch. Channel-scoped learning uses its own domain journal.' })
+        continue
+      }
       const sessionId = batch.attempts.at(-1)!
       if (this.sessions.getSessionState(sessionId)?.executionStatus === 'completed' && batch.proposal) {
         try {
@@ -79,6 +85,7 @@ export class LearningRuntime {
       signal.throwIfAborted()
       const state = this.sessions.getSessionState(row.sessionId)
       if (!state || state.projectId && state.projectId !== this.projectId
+        || state.channelBoundary || this.sessions.isManagedConversation(row.sessionId)
         || row.sessionId.startsWith('heartbeat:') || row.sessionId.startsWith('sleep:')
         || resolveAutomationSession(state)?.config?.source === 'learning') continue
       for (let segmentIndex = 0; segmentIndex <= row.segmentIndex; segmentIndex++) {
@@ -217,6 +224,10 @@ export class LearningRuntime {
         batch = this.ledger.create(pipeline, sources, events)
       }
       const id = batch.id
+      if (batch.sources.some(source => this.sessions.getSessionState(source.sessionId)?.channelBoundary ||
+        this.sessions.isManagedConversation(source.sessionId))) {
+        throw new LearningRunError('This legacy batch contains channel-scoped sources. It cannot run in Project-private learning; use the conversation-scoped memory workflow.', false)
+      }
       const sessionId = await dispatcher.dispatch(job, signal, learningTask(batch), sessionId => {
         this.ledger.bind(id, sessionId)
         accepted?.(sessionId)
