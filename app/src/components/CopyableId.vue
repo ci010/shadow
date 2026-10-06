@@ -10,39 +10,10 @@
 </template>
 
 <script setup lang="ts">
-import { onUnmounted, ref, watch } from 'vue'
+import { useTextCopy } from '../composables/useTextCopy.ts'
 
 const props = defineProps<{ value: string; label: string }>()
-const copied = ref(false)
-const busy = ref(false)
-const error = ref('')
-let generation = 0
-let timer: ReturnType<typeof setTimeout> | undefined
-function reset() {
-  generation++
-  clearTimeout(timer)
-  copied.value = false
-  busy.value = false
-  error.value = ''
-}
-async function copy() {
-  if (busy.value) return
-  reset()
-  const current = generation
-  busy.value = true
-  try {
-    await navigator.clipboard.writeText(props.value)
-    if (generation !== current) return
-    copied.value = true
-    timer = setTimeout(() => { copied.value = false }, 2000)
-  } catch {
-    if (generation === current) error.value = 'Could not copy. Select the ID and copy it manually.'
-  } finally {
-    if (generation === current) busy.value = false
-  }
-}
-watch(() => props.value, reset)
-onUnmounted(reset)
+const { copied, busy, error, copy } = useTextCopy(() => props.value)
 </script>
 
 <style scoped>

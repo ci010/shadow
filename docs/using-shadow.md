@@ -101,8 +101,14 @@ reported explicitly. These failures do not silently switch models or replay the
 generation request; learning pauses until configuration is corrected or retried
 explicitly. A historical failure does not prove the current selection is invalid.
 
-The **Agents** tab previews a role's system prompt and available tools.
-**Simulate channel** changes the preview's channel, not an existing conversation.
+The **Agents** tab groups searchable role definitions by Built-in and Workspace.
+**Overview** shows the selected definition's default mode, explicit model
+overrides and tool filters. **Tools** and **System prompt** inspect the assembled
+preview separately; tools expand to show parameters, and prompts can be read as
+formatted text or exact raw text. Copy JSON exports all resolved tools, even
+when the list is filtered.
+**Preview channel** is available in those two inspection views. It changes the
+preview's channel, not an existing conversation.
 Previews do not create sessions or inherit a conversation's history, configuration,
 published bot policy, or Work bindings. Real session context retains those checks.
 

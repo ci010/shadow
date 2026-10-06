@@ -1,6 +1,7 @@
 <template>
-  <div class="rounded-md border border-default bg-surface flex flex-col min-w-0 min-h-0 flex-shrink-0 overflow-hidden" :style="!collapsed && maxHeight ? `max-height: ${maxHeight}` : ''">
+  <div class="flex flex-col min-w-0 min-h-0 flex-shrink-0" :class="embedded ? 'tools-embedded' : 'rounded-md border border-default bg-surface overflow-hidden'" :style="!collapsed && maxHeight ? `max-height: ${maxHeight}` : ''">
     <div
+      v-if="!embedded"
       class="px-4 py-3 border-b border-default flex-shrink-0 flex items-center justify-between"
       :class="{ 'card-header-toggle': collapsible }"
       @click="collapsible && (collapsed = !collapsed)"
@@ -13,35 +14,39 @@
         v-if="tools.length"
         class="copy-btn"
         :class="{ copied }"
+        :disabled="copyBusy"
         @click.stop="copy"
       >
         <span class="w-3 h-3" :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />
         {{ copied ? 'Copied!' : 'Copy JSON' }}
       </button>
     </div>
+    <p v-if="copyError && !embedded" class="copy-error" role="alert">{{ copyError }}</p>
     <template v-if="!collapsible || !collapsed">
-      <div v-if="!tools.length" class="flex-1 flex items-center justify-center text-ink/40 text-sm px-4 py-3">
+      <div v-if="!tools.length" class="tools-empty flex-1 flex items-center justify-center text-ink/40 text-sm px-4 py-3">
         {{ emptyMessage || 'No tools available.' }}
       </div>
-      <div v-else class="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+      <div v-else :class="embedded ? 'tools-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
         <div class="tools-list">
-          <div v-for="t in tools" :key="t.name" class="tool-def" @click="toggle(t.name)">
-            <div class="tool-def-header">
-              <span class="tool-def-name">{{ t.name }}</span>
-              <span class="tool-def-toggle">{{ expanded.has(t.name) ? '&#9660;' : '&#9654;' }}</span>
-            </div>
-            <span v-if="!expanded.has(t.name)" class="tool-def-desc">{{ t.description }}</span>
-            <template v-if="expanded.has(t.name)">
+          <details v-for="t in tools" :key="t.name" class="tool-def">
+            <summary>
+              <div class="tool-def-header">
+                <span class="tool-def-name">{{ t.name }}</span>
+                <span class="tool-def-toggle i-lucide-chevron-right" aria-hidden="true" />
+              </div>
+              <span class="tool-def-desc">{{ t.description }}</span>
+            </summary>
+            <div class="tool-def-body">
               <p class="tool-def-desc-full selectable-text">{{ t.description }}</p>
               <div v-if="t.parameters?.properties" class="tool-def-params selectable-text">
                 <div v-for="(prop, key) in t.parameters.properties" :key="key" class="tool-def-param">
                   <span class="tool-def-param-name">{{ key }}<span v-if="t.parameters.required?.includes(String(key))" class="tool-def-required">*</span></span>
-                  <span v-if="prop.type" class="tool-def-param-type">{{ prop.type }}</span>
+                  <span v-if="prop.type" class="tool-def-param-type">{{ Array.isArray(prop.type) ? prop.type.join(' | ') : prop.type }}</span>
                   <span v-if="prop.description" class="tool-def-param-desc">{{ prop.description }}</span>
                 </div>
               </div>
-            </template>
-          </div>
+            </div>
+          </details>
         </div>
       </div>
     </template>
@@ -49,13 +54,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { useTextCopy } from '../composables/useTextCopy.ts'
 
 export interface ToolDef {
   name: string
   description: string
   parameters?: {
-    properties?: Record<string, { type?: string; description?: string }>
+    properties?: Record<string, { type?: string | string[]; description?: string }>
     required?: string[]
   }
 }
@@ -65,6 +70,7 @@ const props = withDefaults(defineProps<{
   emptyMessage?: string
   maxHeight?: string
   collapsible?: boolean
+  embedded?: boolean
 }>(), {
   emptyMessage: 'No tools available.',
   maxHeight: '',
@@ -73,20 +79,7 @@ const props = withDefaults(defineProps<{
 
 const collapsed = defineModel<boolean>('collapsed', { default: false })
 
-const copied = ref(false)
-const expanded = reactive(new Set<string>())
-
-function toggle(name: string) {
-  if (expanded.has(name)) expanded.delete(name)
-  else expanded.add(name)
-}
-
-function copy() {
-  if (!props.tools.length) return
-  navigator.clipboard.writeText(JSON.stringify(props.tools, null, 2))
-  copied.value = true
-  setTimeout(() => { copied.value = false }, 2000)
-}
+const { copied, busy: copyBusy, error: copyError, copy } = useTextCopy(() => JSON.stringify(props.tools, null, 2))
 </script>
 
 <style scoped>
@@ -179,7 +172,8 @@ function copy() {
 }
 
 .tool-def-toggle {
-  font-size: 0.5rem;
+  width: 12px;
+  height: 12px;
   color: var(--c-text-muted);
   flex-shrink: 0;
 }
@@ -192,6 +186,26 @@ function copy() {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.tool-def summary { display: block; list-style: none; cursor: pointer; }
+.tool-def summary::-webkit-details-marker { display: none; }
+.tool-def summary:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+.tool-def[open] .tool-def-toggle { transform: rotate(90deg); }
+.tool-def[open] .tool-def-desc { display: none; }
+.tool-def-body { min-width: 0; overflow-wrap: anywhere; }
+.copy-error { margin: 8px 16px; color: var(--c-error); font-size: 12px; }
+.tools-embedded .tools-list { gap: 0; }
+.tools-embedded .tool-def { display: block; padding: 12px 0; border-bottom: 1px solid var(--c-border-soft); background: transparent; transform: none; }
+.tools-embedded .tool-def:first-child { padding-top: 0; }
+.tools-embedded .tool-def summary { min-height: 44px; padding: 4px 0; }
+.tools-embedded .tools-empty { justify-content: flex-start; min-height: 44px; padding: 16px 0; color: var(--c-text-secondary); font-size: 13px; }
+.tools-embedded .tool-def-name { font-size: 13px; color: var(--c-text); overflow-wrap: anywhere; }
+.tools-embedded .tool-def-toggle { width: 16px; height: 16px; }
+.tools-embedded .tool-def-desc { margin-top: 4px; font-size: 13px; line-height: 1.6; -webkit-line-clamp: 2; }
+.tools-embedded .tool-def-desc-full { margin: 8px 0 16px; font-size: 13px; line-height: 1.6; }
+.tools-embedded .tool-def-params { gap: 12px; margin: 0; padding: 12px 0 0; border-color: var(--c-border-soft); }
+.tools-embedded .tool-def-param { padding: 0; border: 0; gap: 4px; }
+.tools-embedded .tool-def-param-name, .tools-embedded .tool-def-param-type, .tools-embedded .tool-def-param-desc { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 
 .tool-def-desc-full {
   font-size: 0.65rem;

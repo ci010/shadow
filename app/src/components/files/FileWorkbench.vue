@@ -572,10 +572,11 @@ button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .conversation-document, .diagnosis-document, .file-document, .knowledge-document, .project-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .project-document { overflow-y: auto; }
-.agents-document { width: 100%; max-width: 1240px; margin: 0 auto; padding: 28px 24px 48px; box-sizing: border-box; }
+.agents-document { flex: 1; width: 100%; height: 100%; min-height: 0; max-width: 1240px; margin: 0 auto; padding: 24px; box-sizing: border-box; }
 .workbench-explorer.drawer { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .explorer-backdrop { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }
 @media (max-width: 700px) {
+  .agents-document { padding: 12px; }
   .document-menu button { min-height: 44px; }
   .workbench-content.draft-document { padding: 58px 0 28px; }
 }

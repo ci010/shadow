@@ -1,9 +1,10 @@
 <template>
   <div
-    class="rounded-md border border-default bg-surface flex flex-col min-w-0 min-h-0 overflow-hidden"
-    :class="{ 'card-collapsed': collapsible && collapsed }"
+    class="flex flex-col min-w-0 min-h-0"
+    :class="[embedded ? 'prompt-embedded' : 'rounded-md border border-default bg-surface overflow-hidden', { 'card-collapsed': collapsible && collapsed }]"
   >
     <div
+      v-if="!embedded"
       class="px-4 py-3 border-b border-default flex-shrink-0 flex items-center justify-between"
       :class="{ 'card-header-toggle': collapsible }"
       @click="collapsible && (collapsed = !collapsed)"
@@ -19,30 +20,34 @@
         v-if="prompt"
         class="copy-btn"
         :class="{ copied }"
+        :disabled="copyBusy"
         @click.stop="copy"
       >
         <span class="w-3 h-3" :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />
         {{ copied ? 'Copied!' : 'Copy' }}
       </button>
     </div>
+    <p v-if="copyError && !embedded" class="copy-error" role="alert">{{ copyError }}</p>
     <template v-if="!collapsible || !collapsed">
-      <div v-if="!prompt && emptyMessage" class="flex-1 flex items-center justify-center text-ink/40 text-sm px-4">
+      <div v-if="!prompt && emptyMessage" class="prompt-empty flex-1 flex items-center justify-center text-ink/40 text-sm px-4">
         {{ emptyMessage }}
       </div>
-      <div v-else-if="prompt" class="flex-1 overflow-y-auto px-4 py-3 min-h-0">
-        <div class="prose max-w-none system-prompt-content" v-html="rendered" />
+      <div v-else-if="prompt" :class="embedded ? 'prompt-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
+        <pre v-if="raw" class="system-prompt-raw">{{ prompt }}</pre>
+        <div v-else class="prose max-w-none system-prompt-content" v-html="rendered" />
       </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
 const mobileResources = useMobileResources()
 import { marked } from 'marked'
 import katex from 'katex'
+import { useTextCopy } from '../composables/useTextCopy.ts'
 
 marked.setOptions({ breaks: true })
 
@@ -60,6 +65,8 @@ const props = withDefaults(defineProps<{
   showTokenEstimate?: boolean
   title?: string
   collapsible?: boolean
+  embedded?: boolean
+  raw?: boolean
 }>(), {
   emptyMessage: '',
   showTokenEstimate: false,
@@ -69,7 +76,7 @@ const props = withDefaults(defineProps<{
 
 const collapsed = defineModel<boolean>('collapsed', { default: false })
 
-const copied = ref(false)
+const { copied, busy: copyBusy, error: copyError, copy } = useTextCopy(() => props.prompt)
 
 function preprocessCustomXml(text: string): string {
   text = text.replace(
@@ -135,12 +142,6 @@ function renderMarkdown(text: string): string {
 
 const rendered = computed(() => renderMarkdown(props.prompt))
 
-function copy() {
-  if (!props.prompt) return
-  navigator.clipboard.writeText(props.prompt)
-  copied.value = true
-  setTimeout(() => { copied.value = false }, 2000)
-}
 </script>
 
 <style scoped>
@@ -248,4 +249,13 @@ function copy() {
   background: var(--c-bg-soft);
   font-weight: 600;
 }
+.copy-error { margin: 8px 16px; color: var(--c-error); font-size: 12px; }
+.system-prompt-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 'IBM Plex Mono', ui-monospace, monospace; color: var(--c-text-body); }
+.prompt-embedded .system-prompt-content { max-width: 72ch; font-size: 14px; line-height: 1.7; color: var(--c-text-body); }
+.prompt-embedded .system-prompt-content :deep(h1) { font-size: 20px; line-height: 1.4; margin: 0 0 20px; }
+.prompt-embedded .system-prompt-content :deep(h2) { font-size: 16px; line-height: 1.5; margin: 24px 0 12px; }
+.prompt-embedded .system-prompt-content :deep(h3) { font-size: 14px; line-height: 1.5; margin: 20px 0 8px; }
+.prompt-embedded .system-prompt-content :deep(pre) { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt-embedded .system-prompt-content :deep(table) { display: block; max-width: 100%; overflow-x: auto; }
+.prompt-embedded .prompt-empty { justify-content: flex-start; min-height: 44px; padding: 0; color: var(--c-text-secondary); font-size: 13px; }
 </style>
