@@ -1,4 +1,4 @@
-import { ChannelAdmissionError, type BaseChannel, type ChannelDecision } from './base.ts'
+import { ChannelAdmissionError, ChannelConnectionError, type BaseChannel, type ChannelDecision } from './base.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import { YieldError } from '../sessions/yield.ts'
 import { channelSessionId, type ChannelAddress, type OutboundMessage } from '../bus/events.ts'
@@ -471,7 +471,7 @@ export class ChannelManager {
     const ch = {
       discord: config.channels.discord ?? { enabled: false, triggerMode: 'mention' as const, reactionEmoji: '👀' },
       feishu: config.channels.feishu ?? { enabled: false },
-      qq: config.channels.qq ?? { enabled: false, sandbox: false, markdown: true },
+      qq: config.channels.qq ?? { enabled: false, sandbox: false, markdown: true, triggerMode: 'mention' as const },
     }
     if (id === 'discord') {
       return new DiscordChannel(this.bus, {
@@ -506,6 +506,7 @@ export class ChannelManager {
       sandbox: ch.qq.sandbox,
       intents: ch.qq.intents,
       markdown: ch.qq.markdown,
+      triggerMode: ch.qq.triggerMode,
       allowFrom: ch.qq.allowFrom,
       workspace: this.config.agent.workspace,
       adminChats: ch.qq.adminChats,
@@ -592,7 +593,8 @@ export class ChannelManager {
         this.releaseIdentity(channel)
         this.channels.delete(id)
         this.health.set(id, { state: 'error', message: error instanceof ChannelSetupError
-          ? error.code : 'Connection failed. Check credentials, platform permissions, and network access.' })
+          ? error.code : error instanceof ChannelConnectionError ? error.message
+          : 'Connection failed. Check credentials, platform permissions, and network access.' })
       } catch {
         this.cleanupFailed.add(id)
         channel.setStatusListener?.(() => {})

@@ -9,6 +9,7 @@ import { crc32 } from 'node:zlib'
 import test from 'node:test'
 import { build, createServer, preview, type Plugin, type ViteDevServer } from 'vite'
 import config from '../vite.config.ts'
+import { archiveFixtures } from './archive-test-fixture.ts'
 
 const repository = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -114,6 +115,7 @@ test('Open File Viewer renders protected files with local assets in dev and buil
   timeout: 240_000,
   skip: process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? 'Electron requires a display server.' : false,
 }, async t => {
+  for (const [name, bytes] of await archiveFixtures()) fixtures.set(name, bytes)
   const scratch = resolve(repository, '.test-artifacts')
   await mkdir(scratch, { recursive: true })
   const directory = await mkdtemp(join(scratch, 'file-viewer-'))
@@ -130,14 +132,20 @@ test('Open File Viewer renders protected files with local assets in dev and buil
       const sdk = chunks.find(chunk => Object.keys(chunk.modules).some(id => id.replaceAll('\\', '/').includes('/@open-file-viewer/core/dist/index.js')))
       assert(sdk, 'Inspect the actual SDK production chunk')
       const code = chunks.map(chunk => chunk.code).join('\n')
-      for (const name of ['image', 'text', 'video', 'audio', 'xmind']) {
+      for (const name of ['image', 'text', 'video', 'audio', 'xmind', 'archive']) {
         assert.doesNotMatch(code, new RegExp(`function ${name}Plugin\\d*\\(`), `${name} SDK plugin is eliminated`)
       }
-      for (const name of ['cad', 'gis', 'asset', 'office', 'archive']) {
+      for (const name of ['cad', 'gis', 'asset', 'office']) {
         assert.match(sdk.code, new RegExp(`function ${name}Plugin\\d*\\(`), `${name} SDK plugin is retained`)
       }
       const modules = chunks.flatMap(chunk => Object.entries(chunk.modules).filter(([, module]) => module.renderedLength > 0).map(([id]) => id.replaceAll('\\', '/')))
       assert(!modules.some(id => /\/(?:heic2any|hls\.js|prismjs)\//.test(id)), 'Unused SDK conversion, streaming and code dependencies have no emitted code')
+      assert(!modules.some(id => /\/(?:seek-bzip|xz-decompress|7z-wasm)\//.test(id)), 'Archive decoders are absent from the main renderer chunks')
+      assert(Object.values(bundle).some(output => output.fileName.endsWith('.wasm') && output.fileName.includes('7zz')), 'Archive WASM is bundled locally')
+      assert(Object.values(bundle).some(output => output.fileName.includes('archive-worker')), 'Archive code lives in a lazy worker')
+      for (const name of ['License.txt', 'unRarLicense.txt', 'SOURCE.txt']) {
+        assert(Object.values(bundle).some(output => output.fileName === `assets/7zip/${name}`), 'Archive license and source notices accompany the WASM')
+      }
       assert(modules.some(id => id.includes('/utif/')), 'Office retains the shared decoder for embedded PPTX TIFF images')
       inspectedBundle = true
     },

@@ -61,6 +61,8 @@ export const FeishuChannelSchema = ChannelBaseSchema.extend({
 })
 
 export const QQChannelSchema = ChannelBaseSchema.extend({
+  /** Record all delivered group messages; only mentions trigger a model turn by default. */
+  triggerMode: z.enum(['all', 'mention']).default('mention'),
   /** Bot AppID from the QQ Bot platform (q.qq.com). */
   appId: z.string().optional(),
   /** Bot AppSecret (client secret) used to mint the app access token. */

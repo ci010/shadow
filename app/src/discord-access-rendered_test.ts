@@ -25,7 +25,7 @@ test('Discord settings render named resources, exact human reviews, learning dom
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const agentId = randomUUID(), domainId = randomUUID(), resourceId = randomUUID(), conversationDomainId = randomUUID(), epoch = randomUUID()
   const bot = { id: 'fixture-bot', projectId: 'fixture-project', platform: 'discord', displayName: 'Community Bot',
-    enabled: true, configured: true, state: 'connected', config: {}, secrets: { token: true } }
+    label: 'Discord', enabled: true, configured: true, state: 'connected', config: {}, secrets: { token: true } }
   const now = new Date().toISOString()
   const overview = IntegrationOverviewSchema.parse({
     projectId: bot.projectId, version: 1, revision: 0, deploymentIssues: [],
@@ -54,14 +54,20 @@ test('Discord settings render named resources, exact human reviews, learning dom
       load(id) {
         if (id !== '\0discord-fixture') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h, reactive } from 'vue';
+          import { createApp, h, reactive, nextTick } from 'vue';
           import DiscordAccess from '/src/components/DiscordAccess.vue';
+          import ChannelsView from '/src/components/ChannelsView.vue';
           const state=reactive({apiBase:location.origin,projectId:'fixture-project',bot:${JSON.stringify(bot)},active:true});
+          const reviewUi=reactive({open:false,id:'',botId:'fixture-bot'});
           const app=createApp({setup:()=>()=>h('main',{style:'max-width:960px;margin:0 auto;padding:24px;box-sizing:border-box'},[
-            h(DiscordAccess,state)
+            reviewUi.open ? h(ChannelsView,{apiBase:location.origin,projectId:'fixture-project',available:true,active:true,
+              requestedReviewId:reviewUi.id,reviewBotId:reviewUi.botId}) : h(DiscordAccess,state)
           ])});
           app.provide(Symbol.for('shadow.live-client-pool'),{client:()=>({subscribe:()=>({close(){},ready:async()=>{}})})});
           window.__switchProject=()=>{state.projectId='another-project'};
+          window.__refreshBot=async()=>{state.bot={...state.bot,config:{...state.bot.config},secrets:{...state.bot.secrets}};await nextTick()};
+          window.__switchBot=async()=>{state.bot={...state.bot,id:'another-bot'};await nextTick()};
+          window.__openReviewSettings=async(id,botId='fixture-bot')=>{reviewUi.id=id;reviewUi.botId=botId;reviewUi.open=true;await nextTick()};
           app.mount('#app');`
       },
       configureServer(server) {
@@ -76,13 +82,14 @@ test('Discord settings render named resources, exact human reviews, learning dom
             response.end('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module" src="/discord-fixture.ts"></script></body></html>')
             return
           }
+          if (path === '/api/channels') { json({channels:[bot]}); return }
           if (!path.startsWith('/api/integrations/discord')) { next(); return }
           void (async () => {
             if (request.method === 'GET') {
               if (path.endsWith('/discord')) { json(overview); return }
               if (path.includes('/directory/')) {
                 const guildId = url.searchParams.get('guildId')
-                json({ botInstanceId: bot.id, botUserId: '900', guilds: [{ id: '100', name: 'Community workspace', icon: null }],
+                json({ botInstanceId: path.split('/').at(-1), botUserId: '900', guilds: [{ id: '100', name: 'Community workspace', icon: null }],
                   guildId, guildCursor: null, channels: guildId ? [
                     { id: '201', name: 'customer-help', type: 0, parentId: null, canView: true, canSend: true, canReadHistory: true, supported: true },
                     { id: '202', name: 'product-questions', type: 0, parentId: null, canView: true, canSend: true, canReadHistory: true, supported: true },

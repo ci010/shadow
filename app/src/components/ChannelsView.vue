@@ -8,6 +8,7 @@
     <p v-else-if="loading && !channels.length" role="status">Loading channel connections...</p>
     <div v-if="listError" class="channel-error" role="alert"><p>{{ listError }}</p><button @click="refresh()">Retry</button></div>
     <p v-if="notice" class="channel-notice" role="status">{{ notice }}</p>
+    <p v-if="reviewLinkError" class="channel-error" role="alert">{{ reviewLinkError }}</p>
     <form v-if="available" class="bot-create" @submit.prevent="addBot">
       <label>Platform<select v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
       <label>Bot name<input v-model="newName" maxlength="100" required :disabled="!!saving" placeholder="Name this connection" /></label>
@@ -75,7 +76,8 @@
             </div>
           </fieldset>
         </form>
-        <DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord'" :api-base="apiBase" :project-id="projectId" :bot="channel" :active="active" />
+        <DiscordAccess v-if="available && accessBot === channel.id && channel.platform === 'discord'" :api-base="apiBase" :project-id="projectId" :bot="channel" :active="active"
+          :requested-review-id="requestedReviewId" />
       </article>
     </div>
   </section>
@@ -88,12 +90,13 @@ import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../cha
 import { botChannel, botDraft, botPatch, createBotSettingsClient, type BotInstanceStatus } from '../bot-settings.ts'
 import DiscordAccess from './DiscordAccess.vue'
 
-const props = defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean }>()
+const props = defineProps<{ apiBase: string; projectId: string; available: boolean; active: boolean; reviewBotId?: string; requestedReviewId?: string }>()
 const channels = ref<BotInstanceStatus[]>([])
 const drafts = ref<Partial<Record<string, ChannelDraft>>>({})
 const errors = ref<Partial<Record<string, string>>>({})
 const expanded = ref<string>()
 const accessBot = ref<string>()
+const reviewLinkError = ref('')
 const newPlatform = ref<ChannelId>('qq')
 const newName = ref('')
 const loading = ref(false)
@@ -204,7 +207,7 @@ async function removeBot(bot: BotInstanceStatus) {
   } catch (cause) { if (!controller.signal.aborted) errors.value[bot.id] = cause instanceof Error ? cause.message : 'Could not remove the bot. Refresh before retrying.' }
   finally { if (mutation === controller) { mutation = undefined; saving.value = undefined; scheduleRefresh() } }
 }
-watch(() => [props.apiBase, props.available], () => {
+watch([() => props.apiBase, () => props.projectId, () => props.available], () => {
   stopPolling()
   mutation?.abort()
   mutation = undefined
@@ -213,10 +216,19 @@ watch(() => [props.apiBase, props.available], () => {
   drafts.value = {}
   errors.value = {}
   expanded.value = undefined
+  accessBot.value = undefined
+  reviewLinkError.value = ''
   notice.value = ''
   listError.value = ''
   void refresh()
 })
+watch([() => props.requestedReviewId, () => props.reviewBotId, () => props.active,
+  () => channels.value.map(bot => `${bot.id}:${bot.platform}`).join('|'), loading], () => {
+  if (!props.active || !props.requestedReviewId || loading.value || listError.value) return
+  const bot = channels.value.find(bot => bot.platform === 'discord' && (!props.reviewBotId || bot.id === props.reviewBotId))
+  reviewLinkError.value = bot ? '' : 'The linked Discord Bot is unavailable in this Project. Refresh the Bot list or ask for a new review link.'
+  accessBot.value = bot?.id
+}, { immediate: true })
 watch(() => props.active, active => { if (active) void refresh(); else stopPolling() }, { immediate: true })
 onBeforeUnmount(() => { stopPolling(); mutation?.abort() })
 </script>

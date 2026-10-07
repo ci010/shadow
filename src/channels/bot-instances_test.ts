@@ -23,6 +23,7 @@ import type { FeishuTransport } from './feishu-transport.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
 import { createProjectScope, getProjectScope, type ProjectScope } from '../projects/scope.ts'
 import { WebChannel } from './web.ts'
+import { QQChannel } from './qq.ts'
 
 function directory(t: TestContext): string {
   const path = join(process.cwd(), '.test-data', `bot-instances-${randomUUID()}`)
@@ -107,6 +108,41 @@ async function runtime(t: TestContext, root: string, projectId: string, bots: nu
   return { bus, store, instances, received, receivedScopes, created, manager, app, address, outbound, yields,
     promptInvalidations: () => promptInvalidations }
 }
+
+test('QQ per-bot trigger modes persist, reach the real adapter and can be reconfigured', async t => {
+  const root = directory(t)
+  const path = join(root, 'bots.json')
+  const store = new BotInstanceStore({ projectId: 'A', path })
+  const credentials = { appId: 'synthetic-app', secret: 'synthetic-secret', enabled: true }
+  const mention = store.create('qq', 'Mention bot', credentials)
+  const all = store.create('qq', 'All messages bot', { ...credentials, triggerMode: 'all' })
+  assert.equal(store.status(mention.id).config.triggerMode, 'mention')
+  assert.equal(new BotInstanceStore({ projectId: 'A', path }).status(all.id).config.triggerMode, 'all')
+  assert.throws(() => store.update(all.id, { config: { triggerMode: 'invalid' } }), /invalid_channel_config/)
+  const received: InboundMessage[] = []
+  const manager = new ChannelManager(ConfigSchema.parse({}), new Bus(), {} as SessionManager, async message => {
+    received.push(message)
+    return { status: 'accepted', sessionId: deriveSessionId(message), inputId: message.messageId }
+  }, { projectId: 'A', instanceStore: store })
+  await manager.init()
+  t.after(() => manager.stopAll())
+  const incoming = async (botId: string) => {
+    const channel = manager['channels'].get(botId)
+    assert.ok(channel instanceof QQChannel)
+    await channel['handleDispatch']('GROUP_MESSAGE_CREATE', {
+      id: 'source', content: 'Context without a mention', group_openid: 'group',
+      author: { member_openid: 'sender' }, timestamp: new Date().toISOString(),
+    })
+  }
+  await incoming(mention.id)
+  await incoming(all.id)
+  assert.deepEqual(received.map(message => message.silent), [true, false])
+  const saved = await manager.updateBot(all.id, { config: { triggerMode: 'mention' } })
+  assert.equal(saved.config.triggerMode, 'mention')
+  await incoming(all.id)
+  assert.equal(received.at(-1)?.silent, true)
+  assert.equal(new BotInstanceStore({ projectId: 'A', path }).status(all.id).config.triggerMode, 'mention')
+})
 
 test('trusted audiences are scoped to exact project, bot and conversation, never sender or admin status', async t => {
   const root = directory(t)

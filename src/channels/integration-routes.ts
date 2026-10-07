@@ -112,7 +112,7 @@ export function discordIntegrationPlugin(options: {
 export function ownerChannelConfigurationTool(store: IntegrationStore, memory: MemoryDomains, transport: DiscordIntegrationTransport): Tool {
   return {
     name: 'channel_config', optIn: true,
-    description: 'Owner-only Discord configuration discovery and draft creation. Read schema for change formats, list for named Bots and exact revisions, then directory/members for names. Never approves changes. Review drafts in Project Bots > Discord access.',
+    description: 'Owner-only Bot configuration discovery and Discord draft creation. list includes QQ/Feishu authoring routes; use authoring_change for their Agent Markdown, tools and bindings, not Discord proposals. Read schema for formats. Discord directory/members resolve names; propose with botId returns a reviewUrl to show the user. Never approves changes.',
     parameters: { type: 'object', properties: { action: { type: 'string', enum: ['schema', 'list', 'directory', 'members', 'resource', 'agent_file', 'propose'] },
       botId: { type: 'string' }, guildId: { type: 'string' }, after: { type: 'string' }, query: { type: 'string' },
       resourceId: { type: 'string' }, agentId: { type: 'string' },
@@ -131,13 +131,20 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
           query: z.string().trim().min(1).max(100) }).strict(),
         z.object({ action: z.literal('resource'), resourceId: z.string().uuid() }).strict(),
         z.object({ action: z.literal('agent_file'), agentId: z.string().uuid() }).strict(),
-        z.object({ action: z.literal('propose'), baseRevision: z.number().int().nonnegative(), changeJson: z.string().max(2 * 1024 * 1024) }).strict(),
+        z.object({ action: z.literal('propose'), botId: z.string().min(1).optional(),
+          baseRevision: z.number().int().nonnegative(), changeJson: z.string().max(2 * 1024 * 1024) }).strict(),
       ]).parse(raw)
       if (input.action === 'schema') return JSON.stringify(integrationConfigurationGuide)
       if (input.action === 'list') return JSON.stringify({ ...store.snapshot(), projectId: store.options.projectId,
         bots: store.options.bots.list().filter(bot => bot.platform === 'discord').map(bot => ({
           id: bot.id, displayName: bot.displayName, platform: bot.platform, enabled: bot.enabled,
-        })), domains: memory.domains(), resources: memory.ownerResources(), tools: integrationToolNames })
+        })),
+        otherPlatformBots: store.options.bots.list().filter(bot => bot.platform !== 'discord').map(bot => ({
+          id: bot.id, displayName: bot.displayName, platform: bot.platform, enabled: bot.enabled,
+          authoringTool: 'authoring_change',
+        })),
+        otherPlatformWorkflow: 'QQ/Feishu are supported through authoring_change in Shadow owner chat. Read its schema, create/read a Change to discover inventory.conversations and exact addresses, edit Agent Markdown/skill tools/bindings, check, then propose. The owner approves the exact publication card; Discord revisions and review URLs do not apply. project_config inspect is read-only discovery without creating a Change.',
+        domains: memory.domains(), resources: memory.ownerResources(), tools: integrationToolNames })
       if (input.action === 'directory') return JSON.stringify(await transport.directory(input.botId, input.guildId, input.after, context.signal))
       if (input.action === 'members') {
         if (!transport.members) throw new IntegrationError('member_search_unavailable', 'Member search is not supported by this connection.', 503)
@@ -146,8 +153,17 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
       }
       if (input.action === 'resource') return JSON.stringify(memory.ownerRead(input.resourceId))
       if (input.action === 'agent_file') return JSON.stringify(store.ownerAgentFile(input.agentId))
-      return JSON.stringify(await store.propose({ kind: 'owner', id: 'shadow-owner' },
-        IntegrationChangeSchema.parse(JSON.parse(input.changeJson)), input.baseRevision, context.signal))
+      const change = IntegrationChangeSchema.parse(JSON.parse(input.changeJson))
+      const botId = input.botId ?? (change.kind === 'bindings.save' ? change.bindings[0]?.botInstanceId : undefined)
+      if (botId && !store.options.bots.list().some(bot => bot.id === botId && bot.platform === 'discord')) {
+        throw new IntegrationError('bot_unavailable', 'Choose a Discord Bot from this Project. QQ/Feishu Agent Markdown, tools and bindings use authoring_change with owner publication review, not channel_config propose.', 400)
+      }
+      const draft = await store.propose({ kind: 'owner', id: 'shadow-owner' }, change, input.baseRevision, context.signal)
+      const query = new URLSearchParams({ discordReview: draft.id, ...(botId ? { discordBot: botId } : {}) })
+      return JSON.stringify({ ...draft,
+        reviewUrl: `/projects/${encodeURIComponent(store.options.projectId)}/settings/bots?${query}`,
+        nextStep: 'Show reviewUrl as a clickable Markdown link. The owner must inspect the exact change and click Approve and apply in Settings; opening the link does not approve it.',
+      })
     },
   }
 }

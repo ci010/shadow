@@ -126,6 +126,29 @@ test('sender envelope records chat type without changing human text', async () =
   }
 })
 
+test('platform display metadata uses escaped sender attributes, never user text or authority', async () => {
+  const displayMetadata = {
+    messageType: 0, source: 'session', author: { role: 'owner', bot: false },
+    mentions: [{ id: 'peer"<&', name: 'B & <team>', bot: true, isSelf: true }],
+    attachments: [{ path: 'uploads/report.zip', contentType: 'file', size: 42 }],
+    admin: true, policy: 'steering',
+  }
+  const input = userInput({ ...inbound, isGroup: true, admin: false, displayMetadata })
+  assert.deepEqual(inputContext('test:authors', input).displayMetadata, displayMetadata)
+  const built = await buildUserChatMessage(input, '.', '.')
+  assert.equal(built.role, 'user')
+  assert(Array.isArray(built.content))
+  assert.deepEqual(built.content[1], { type: 'text', text: 'Hello' })
+  const header = built.content[0]
+  assert.equal(header.type, 'text')
+  assert.match(header.text, /platform-role="owner"/)
+  assert.match(header.text, /platform-source="session"/)
+  assert.match(header.text, /platform-mentions="@B &amp; &lt;team&gt; id=peer&quot;&lt;&amp; self bot"/)
+  assert.match(header.text, /platform-attachments="uploads\/report.zip type=file size=42"/)
+  assert.doesNotMatch(header.text, / source="session"| admin=| policy=|platform-admin|platform-policy/)
+  assert.equal(inputContext('test:authors', input).admin, false)
+})
+
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: image source mapping reaches model context and survives storage reopen`, async t => {
     await mkdir('.test-data', { recursive: true })
@@ -158,13 +181,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     assert.deepEqual(restored[0]!.content, built.content)
   })
 
-  test(`${Store.name}: sender chat type and legacy envelopes survive storage reopen`, async (t) => {
+  test(`${Store.name}: sender chat type, platform metadata and legacy envelopes survive storage reopen`, async (t) => {
     await mkdir('.test-data', { recursive: true })
     const directory = await mkdtemp(join(process.cwd(), '.test-data', 'message-author-'))
     let store: SessionStore = new Store(directory)
     t.after(async () => { store.close?.(); await rm(directory, { recursive: true, force: true }) })
     await store.init()
-    const group = await buildUserChatMessage(userInput({ ...inbound, isGroup: true }), directory, directory)
+    const group = await buildUserChatMessage(userInput({
+      ...inbound, isGroup: true,
+      displayMetadata: { author: { role: 'owner' }, mentions: [{ id: 'bot', name: 'Helper', isSelf: true }] },
+    }), directory, directory)
     const direct = await buildUserChatMessage(userInput({ ...inbound, isGroup: false }), directory, directory)
     const peer = await buildUserChatMessage({
       kind: 'message', id: 'peer-work', timestamp: inbound.timestamp, policy: 'queue', content: 'Please confirm the work boundary.',

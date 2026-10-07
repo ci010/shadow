@@ -2,6 +2,8 @@ import { defineConfig, normalizePath, type Plugin, type ProxyOptions } from 'vit
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import type { EventEmitter } from 'node:events'
 import type { ClientRequest, IncomingMessage } from 'node:http'
@@ -87,9 +89,27 @@ export function desktopBackendRouting(
 
 const routing = desktopBackendRouting()
 
+function archiveLicenses(): Plugin {
+  const require = createRequire(import.meta.url)
+  return {
+    name: 'shadow-archive-licenses',
+    generateBundle() {
+      for (const name of ['License.txt', 'unRarLicense.txt']) {
+        this.emitFile({ type: 'asset', fileName: `assets/7zip/${name}`, source: readFileSync(require.resolve(`7z-wasm/${name}`)) })
+      }
+      this.emitFile({ type: 'asset', fileName: 'assets/7zip/SOURCE.txt', source:
+        '7z-wasm 1.2.0 (7-Zip 24.09), used without modifications.\n'
+        + 'WASM wrapper, build scripts and patches: https://github.com/use-strict/7z-wasm/tree/v1.2.0\n'
+        + '7-Zip source: https://www.7-zip.org/a/7z2409-src.tar.xz\n'
+        + 'GNU LGPL 2.1: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html\n'
+        + 'The unRAR code must not be used to develop a RAR-compatible archiver.\n' })
+    },
+  }
+}
+
 export default defineConfig({
   base: './',
-  plugins: [routing.plugin, pdfViewerAssets(), vue(), UnoCSS({
+  plugins: [routing.plugin, pdfViewerAssets(), archiveLicenses(), vue(), UnoCSS({
     configFile: fileURLToPath(new URL('./unocss.config.ts', import.meta.url)),
   })],
   optimizeDeps: { exclude: ['emf-converter'] },

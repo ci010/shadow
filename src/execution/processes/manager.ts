@@ -119,7 +119,7 @@ export class ProcessManager {
         env: spawnEnv ?? sysEnv, windowsVerbatimArguments: useVerbatimArgs,
       }, options.signal)
       const managed: ManagedProcess = {
-        ...guarded, isolated: true, command: script, cwd, shell, startedAt: new Date(),
+        ...guarded, isolated: true, command: script, cwd, shell: effectiveShell, startedAt: new Date(),
       }
       managed.exitPromise = guarded.exitPromise.then(status => {
         managed.exitedAt = new Date()
@@ -180,7 +180,7 @@ export class ProcessManager {
       pid: proc.pid,
       command: script,
       cwd,
-      shell,
+      shell: effectiveShell,
       startedAt: new Date(),
       process: proc,
       stdoutChunks,

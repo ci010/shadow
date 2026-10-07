@@ -4,6 +4,16 @@ import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, clos
 import { documentTabKeys, DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, openKnowledgeTab, openProjectTab, projectTabFromKey, projectTabKey, withDiagnosisTab } from './file-workbench.ts'
 
 const file = (path: string) => ({ path, entry: { name: path.split('/').at(-1)!, ext: '.md', type: 'file' as const, size: 12, mtime: null } })
+test('archive tabs retain their member identity without colliding with workspace paths or nested containers', () => {
+  const source = file('bundle.zip/inner.zip/notes.txt')
+  const member = { ...source, entry: { ...source.entry, archive: { path: 'bundle.zip', members: ['inner.zip/notes.txt'] } } }
+  const nested = { ...source, entry: { ...source.entry, archive: { path: 'bundle.zip', members: ['inner.zip', 'notes.txt'] } } }
+  assert.notEqual(fileTabKey(source), fileTabKey(member))
+  assert.notEqual(fileTabKey(member), fileTabKey(nested))
+  const tabs = openFileTab(openFileTab({ files: [], selected: '' }, member), nested)
+  assert.equal(tabs.files.length, 2)
+  assert.equal(openFileTab(tabs, member).selected, fileTabKey(member))
+})
 test('opening files retains existing tabs, deduplicates by full path and selects without replacing state', () => {
   const initial: FileTabs = { files: [], selected: '' }
   const first = openFileTab(initial, file('README.md'))

@@ -16,6 +16,16 @@ test('explicit model and effort selections survive loading', () => {
   assert.equal(config.agent.reasoningEffort, 'high')
 })
 
+test('QQ defaults existing and new bot configurations to mention-only triggering', () => {
+  assert.equal(ConfigSchema.parse({ channels: { qq: {} } }).channels.qq?.triggerMode, 'mention')
+  for (const triggerMode of ['mention', 'all']) {
+    assert.equal(ConfigSchema.parse({ channels: { qq: { triggerMode } } }).channels.qq?.triggerMode, triggerMode)
+  }
+  for (const triggerMode of ['invalid', true, null]) {
+    assert.equal(ConfigSchema.safeParse({ channels: { qq: { triggerMode } } }).success, false)
+  }
+})
+
 test('Node-only execution is an explicit boolean opt-in and preserves other configuration', () => {
   assert.equal(ConfigSchema.parse({}).tools.exec, undefined)
   assert.equal(ConfigSchema.parse({ tools: { exec: {} } }).tools.exec?.nodeOnly, undefined)

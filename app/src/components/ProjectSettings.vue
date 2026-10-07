@@ -29,7 +29,9 @@
           <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'providers' } }">Manage shared provider connections</RouterLink>
           <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'models' } }">App model defaults</RouterLink>
         </section>
-        <ChannelsView v-if="botsOpened" v-show="section === 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="section === 'bots' && route.name === 'project-settings' && route.params.projectId === projectId" />
+        <ChannelsView v-if="botsOpened" v-show="section === 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="section === 'bots' && route.name === 'project-settings' && route.params.projectId === projectId"
+          :review-bot-id="typeof route.query.discordBot === 'string' ? route.query.discordBot : undefined"
+          :requested-review-id="typeof route.query.discordReview === 'string' ? route.query.discordReview : undefined" />
         <form v-show="section === 'learning'" @submit.prevent="saveLearning">
           <h2>Learning</h2>
           <p class="settings-help">Reflection, skill encapsulation and identity learning use only this project's sessions and Home.</p>

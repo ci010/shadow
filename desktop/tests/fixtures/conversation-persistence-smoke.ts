@@ -66,6 +66,26 @@ async function main() {
     await input('Unsent draft\nSecond line')
     await reload()
     assert.equal(await execute(`document.querySelector('textarea').value`), 'Unsent draft\nSecond line')
+    await execute(`window.__composerBeforeSettings = document.querySelector('textarea[aria-label="Message"]')`)
+    await execute(`window.__navigate('/projects/a/settings/general')`)
+    await wait(`document.querySelector('.project-settings-view input')?.value === 'Project A'`)
+    for (const [width, height] of [[1100, 800], [600, 650]]) {
+      window.setContentSize(width, height)
+      await wait(`(() => {
+        const dock = document.querySelector('.conversation-dock');
+        const workbench = document.querySelector('.file-workbench');
+        const settings = document.querySelector('.project-settings-view');
+        return dock && !dock.getClientRects().length && settings?.getClientRects().length
+          && getComputedStyle(workbench).getPropertyValue('--composer-height').trim() === '0px';
+      })()`)
+      assert.equal(await execute(`document.querySelector('textarea[aria-label="Message"]') === window.__composerBeforeSettings`), true)
+      assert.equal(await execute(`window.__composerBeforeSettings.value`), 'Unsent draft\nSecond line')
+    }
+    window.setContentSize(1100, 800)
+    await execute(`window.__navigate('/projects/a/chat/web%3Achat-one')`)
+    await wait(`document.querySelector('.conversation-dock')?.getClientRects().length > 0`)
+    assert.equal(await execute(`document.querySelector('textarea[aria-label="Message"]') === window.__composerBeforeSettings`), true)
+    assert.equal(await execute(`window.__composerBeforeSettings.value`), 'Unsent draft\nSecond line')
     await execute(`document.querySelector('.diagnosis-tab [role="tab"]').click()`)
     await wait(`!!document.querySelector('[id$="diagnosis-prompt-tab"]')`)
     await execute(`document.querySelector('[id$="diagnosis-prompt-tab"]').click()`)

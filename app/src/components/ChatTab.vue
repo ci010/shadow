@@ -33,7 +33,7 @@
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name))" :keyboard-active="keyboardActive" :draft="!activeSessionId"
       :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
-      :can-quote="canQuoteSelection" :style="{ '--composer-height': `${dockHeight}px` }"
+      :can-quote="canQuoteSelection" :style="{ '--composer-height': `${composerVisible ? dockHeight : 0}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
       @diagnosis-visible="diagnosisVisibilityChanged"
       @knowledge-navigation="knowledgeNavigation"
@@ -462,6 +462,7 @@ import ImageViewer from './ImageViewer.vue'
 import { imagePreviewFromEvent, imagePreviewMarkup, type ImagePreview } from '../image-viewer.ts'
 import { messageAttachments } from '../message-attachments.ts'
 import { conversationFileLink } from '../conversation-file-link.ts'
+import { discordReviewLink } from '../discord-integration.ts'
 import { composerDraftKey, useComposerDraft } from '../composables/useComposerDraft.ts'
 import { useDiagnosisNavigation } from '../composables/useDiagnosisNavigation.ts'
 import SessionDiagnosis from './SessionDiagnosis.vue'
@@ -564,6 +565,9 @@ function openConversationLink(event: MouseEvent) {
   if (image) { event.preventDefault(); openImagePreview(image); return }
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
   const anchor = event.target instanceof Element ? event.target.closest('a') : null
+  const review = anchor && !anchor.hasAttribute('download') &&
+    discordReviewLink(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
+  if (review) { event.preventDefault(); void router.push(review); return }
   const id = anchor && conversationLinkSession(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
   if (!id) {
     const file = anchor && !anchor.hasAttribute('download') && conversationFileLink(anchor.getAttribute('href') ?? '')
@@ -1113,7 +1117,7 @@ const activePanel = ref<ConversationPanel>('conversation')
 const diagnosisOpened = ref(false)
 const conversationDocumentVisible = ref(true)
 const knowledgeDocumentVisible = ref(false)
-const composerVisible = computed(() => !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
+const composerVisible = computed(() => route.name !== 'project-settings' && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
 function knowledgeNavigation(active: boolean, entryId?: string) {
   knowledgeDocumentVisible.value = active
   emit('knowledge-navigation', active, entryId)

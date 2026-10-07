@@ -46,10 +46,17 @@
           <p v-if="searchError" class="file-tree-note error" role="alert">{{ searchError }}</p>
           <p v-if="!searching && !searchError && !searchPaths.length" class="file-tree-note">No matching file paths.</p>
           <p v-if="searchTruncated" class="file-tree-note">Showing the first 200 matches. Narrow your search to find more.</p>
-          <button v-for="path in searchPaths" :key="path" type="button" class="file-search-result"
+          <template v-for="path in searchPaths" :key="path">
+          <FileTreeNode v-if="isArchive(path)" :api-base="displaySource.apiBase" :session-id="displaySource.sessionId"
+            :folder-id="displaySource.folderId" :dir="path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''"
+            :entry="searchEntry(path)" :depth="0" :active="active && !sourcePending" :workspace-key="workspaceKey"
+            :selected-path="selectedPath" :reveal-version="revealVersion" :refresh-version="revision"
+            @open="onOpen" @node-offline="fileOffline = true" />
+          <button v-else type="button" class="file-search-result"
             :aria-current="selectedPath === path ? 'page' : undefined" :title="path" @click="openSearchResult(path)">
             <span class="i-lucide-file w-4 h-4" aria-hidden="true" /><span>{{ path }}</span>
           </button>
+          </template>
         </template>
         <p v-if="filterQuery && changesOnly && !filteredEntries.length && gitStatus?.available" class="file-tree-note">No matching changes.</p>
         <template v-if="!normalizedFilter || changesOnly">
@@ -86,6 +93,7 @@ import { changedDirectory, gitUnavailableLabel, type GitStatus } from '../../git
 import type { OpenFile } from '../../file-workbench.ts'
 import { canRetainHomeTree, fileEntryKey, fileWorkspaceKey, reconcileFileEntries, type FileTreeSource } from '../../file-tree-state.ts'
 import { HomeTreeCacheKey, type HomeTreeState } from '../../home-tree-cache.ts'
+import { isArchive } from '../../archive-format.ts'
 
 const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; folderId?: string; previewOnOpen?: boolean; treeOnly?: boolean; active?: boolean; gitStatus?: GitStatus; gitLoading?: boolean; gitError?: string; gitOffline?: boolean; remote?: boolean; selectedPath?: string; revealVersion?: number }>(), { active: true, remote: false, revealVersion: 0 })
 const emit = defineEmits<{ open: [payload: OpenFile]; 'refresh-git': [] }>()
@@ -194,10 +202,13 @@ function onOpen(payload: { path: string; entry: FileEntry }): void {
   previewPath.value = payload.path
   previewEntry.value = payload.entry
 }
-function openSearchResult(path: string) {
+function searchEntry(path: string): FileEntry {
   const name = path.split('/').at(-1)!
   const dot = name.lastIndexOf('.')
-  onOpen({ path, entry: { name, type: 'file', ext: dot < 0 ? '' : name.slice(dot).toLowerCase(), size: 0, mtime: null } })
+  return { name, type: 'file', ext: dot < 0 ? '' : name.slice(dot).toLowerCase(), size: 0, mtime: null }
+}
+function openSearchResult(path: string) {
+  onOpen({ path, entry: searchEntry(path) })
 }
 function closePreview(): void {
   previewEntry.value = null

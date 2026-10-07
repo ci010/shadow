@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path'
+import type { ChannelMessageMetadata } from '../bus/events.ts'
 import { inputSender, type EventInputSource, type SessionMessageInput } from '../sessions/input.ts'
 import type { ChatMessage, ContentPart } from '../providers/provider.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
@@ -21,6 +22,35 @@ function escapeAttr(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
+function platformAttributes(metadata: ChannelMessageMetadata | undefined): string {
+  if (!metadata) return ''
+  const attributes: Array<[string, string | number | boolean | undefined]> = [
+    ['message-type', metadata.messageType],
+    ['source', metadata.source],
+    ['bot', metadata.author?.bot],
+    ['role', metadata.author?.role],
+  ]
+  if (metadata.mentions?.length) {
+    attributes.push(['mentions', metadata.mentions.map(mention => [
+      mention.name ? `@${mention.name}` : undefined,
+      mention.id ? `id=${mention.id}` : undefined,
+      mention.isSelf === true ? 'self' : undefined,
+      mention.bot === true ? 'bot' : undefined,
+      mention.role ? `role=${mention.role}` : undefined,
+    ].filter(Boolean).join(' ')).join('; ')])
+  }
+  if (metadata.attachments?.length) {
+    attributes.push(['attachments', metadata.attachments.map(attachment => [
+      attachment.path,
+      attachment.contentType ? `type=${attachment.contentType}` : undefined,
+      ...(['size', 'width', 'height'] as const).flatMap(key =>
+        attachment[key] === undefined ? [] : [`${key}=${attachment[key]}`]),
+    ].filter(Boolean).join(' ')).join('; ')])
+  }
+  return attributes.filter(([, value]) => value !== undefined && value !== '')
+    .map(([key, value]) => ` platform-${key}="${escapeAttr(String(value))}"`).join('')
+}
+
 /**
  * Build a self-closing `<sender>` XML tag identifying the message author.
  * Injected as a separate content part so the user's actual text is untouched.
@@ -40,7 +70,8 @@ export function buildSenderTag(msg: SessionMessageInput): string {
     : ''
   const revisions = msg.source.kind === 'session' && msg.source.workStamps?.length
     ? ` work-revisions="${escapeAttr(JSON.stringify(msg.source.workStamps.map(({ key, revision }) => ({ key, revision }))))}"` : ''
-  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work}${revisions} />`
+  const platform = msg.source.kind === 'user' ? platformAttributes(msg.source.sender.displayMetadata) : ''
+  return `<sender id="${escapeAttr(sender.id)}" name="${escapeAttr(sender.name)}"${origin}${work}${revisions}${platform} />`
 }
 
 /**

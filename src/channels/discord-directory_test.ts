@@ -6,8 +6,28 @@ import { discordDirectory, discordMembers, inspectDiscordConversation, type Disc
 import { DiscordPermission as P } from './discord-permissions.ts'
 import type { InboundMessage } from '../bus/events.ts'
 import type { DiscordLocation } from './integration-contract.ts'
+import { Hono } from 'hono'
+import { ChannelConnectionError } from './base.ts'
 
 const signal = () => new AbortController().signal
+
+test('Discord startup distinguishes safe credential and network errors without exposing tokens', async t => {
+  for (const status of [401, 403, 500, 0]) {
+    const adapter = new DiscordChannel(new Bus(), { token: 'SYNTHETIC_PRIVATE_TOKEN' })
+    t.after(() => adapter.stop())
+    const mock = t.mock.method(globalThis, 'fetch', async () => {
+      if (!status) throw new Error('Network failed with SYNTHETIC_PRIVATE_TOKEN in headers')
+      return new Response('SYNTHETIC_PRIVATE_TOKEN', { status })
+    })
+    await assert.rejects(adapter.start(new Hono()), error => {
+      assert(error instanceof ChannelConnectionError)
+      assert.equal(error.code, status === 401 ? 'authentication' : status === 403 ? 'permission' : status ? 'gateway' : 'network')
+      assert(!error.message.includes('SYNTHETIC_PRIVATE_TOKEN'))
+      return true
+    })
+    mock.mock.restore()
+  }
+})
 const permissions = (P.view | P.send | P.readHistory | P.sendInThreads).toString()
 const channel = (id: string, extra: Record<string, unknown> = {}) => ({
   id, name: 'help', guild_id: '100', type: 0, parent_id: null, permission_overwrites: [], ...extra,

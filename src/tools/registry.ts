@@ -12,6 +12,7 @@ import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/
 import { redactMcpText } from '../mcp/errors.ts'
 import type { WorkToolGuard } from '../sessions/work-alignment.ts'
 import { isVirtualPath } from '../vfs/virtual-fs.ts'
+import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from './ask-policy.ts'
 type Tool = TypedTool<ToolResult>
 
 const CALL_DENIED_TOOLS = new Set(['subagent', 'ask', 'reply', 'message', 'cancel', 'work', 'event_subscribe', 'event_source', 'cron', 'cron_add', 'cron_list', 'cron_remove', 'continuation', 'initiative', 'skill_read', 'skill_save'])
@@ -276,6 +277,12 @@ export class Tools {
  * Lookup order: dynamic layer first, then base registry.
  */
 export class SessionTools extends Tools {
+  private askAvailable = true
+
+  restrictChannelTools(channel?: string, sessionId?: string): void {
+    if (!channelSupportsAsk(channel, sessionId)) this.askAvailable = false
+  }
+
   boundary?: import('../sessions/runtime-boundary.ts').RuntimeBoundary
   override getWorkGuard(): WorkToolGuard | undefined { return super.getWorkGuard() ?? this.base.getWorkGuard() }
   private borrowedOwner?: SessionTools
@@ -312,6 +319,7 @@ export class SessionTools extends Tools {
 
   /** Check if a tool name passes the allow/block policy. */
   private isToolAllowed(name: string): boolean {
+    if (name === 'ask' && !this.askAvailable) return false
     if ((name === 'session' || name === 'work') && this.scope && this.scope.mode !== 'session') return false
     if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
@@ -382,6 +390,7 @@ export class SessionTools extends Tools {
     const tools = new SessionTools(this.base, this.workspace,
       this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined, this.allowedModules)
     tools.scope = this.scope
+    tools.askAvailable = this.askAvailable
     return tools
   }
 
@@ -437,6 +446,7 @@ export class SessionTools extends Tools {
   }
 
   private isDynamicToolAllowed(name: string): boolean {
+    if (name === 'ask' && !this.askAvailable) return false
     if (this.scope?.mode === 'call' && CALL_DENIED_TOOLS.has(name)) return false
     if (this.allowed) return this.allowed.has('invoke_tool')
     return !this.blocked?.has(name)
@@ -485,6 +495,7 @@ export class SessionTools extends Tools {
   }
 
   executionDenial(name: string, args: Record<string, unknown>): string | undefined {
+    if (name === 'ask' && !this.askAvailable) return this.rejectExecution(CHAT_QUESTION_GUIDANCE)
     if (name === 'invoke_tool' && typeof args.name === 'string') {
       return this.executionDenial(args.name, typeof args.args === 'object' && args.args !== null ? args.args as Record<string, unknown> : {})
     }
@@ -528,6 +539,7 @@ export class SessionTools extends Tools {
     const copy = new SessionTools(base, this.workspace,
       this.allowed ? [...this.allowed] : undefined, this.blocked ? [...this.blocked] : undefined, this.allowedModules)
     copy.borrowedOwner = this.dynamicOwner
+    copy.askAvailable = this.askAvailable
     copy.borrowedLifetime = this.ownerSignal
     for (const tool of this.tools.values()) {
       if (this.canUseDynamic(tool.name) && this.hasDynamic(tool.name)) {

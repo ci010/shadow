@@ -2,6 +2,7 @@
 import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/execution/filesystem/text-encoding.ts'
 import { apiUrl } from '../api-url.ts'
 import { nodeOfflineError, workdirUnavailableMessage } from '../workdir-request-error.ts'
+import type { ArchiveReference } from '../archive-format.ts'
 
 export interface FileEntry {
   name: string
@@ -9,6 +10,7 @@ export interface FileEntry {
   ext: string
   size: number
   mtime: string | null
+  archive?: ArchiveReference
 }
 
 export interface DirListing {
@@ -144,7 +146,7 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     return buildUrl(apiBase, `${root(sessionId)}/raw`, { path })
   }
 
-  async function readBlob(sessionId: string, path: string, signal?: AbortSignal): Promise<Blob> {
+  async function readBlob(sessionId: string, path: string, signal?: AbortSignal, maxBytes = Infinity): Promise<Blob> {
     const deadline = AbortSignal.timeout(30_000)
     const combined = signal ? AbortSignal.any([signal, deadline]) : deadline
     try {
@@ -152,6 +154,24 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
         signal: combined, credentials: 'same-origin', referrerPolicy: 'no-referrer', redirect: 'error',
       })
       if (!response.ok) throw await fileRequestError(response)
+      if (Number.isFinite(maxBytes)) {
+        const reader = response.body?.getReader()
+        if (!reader) throw new Error('Could not read the file response.')
+        const parts: Uint8Array<ArrayBuffer>[] = []
+        let size = 0
+        try {
+          if (Number(response.headers.get('content-length')) > maxBytes) throw new Error('Archives larger than 128 MB must be downloaded to browse locally.')
+          for (;;) {
+            combined.throwIfAborted()
+            const { done, value } = await reader.read()
+            if (done) break
+            size += value.byteLength
+            if (size > maxBytes) throw new Error('Archives larger than 128 MB must be downloaded to browse locally.')
+            parts.push(value)
+          }
+          return new Blob(parts, { type: response.headers.get('content-type') ?? '' })
+        } finally { await reader.cancel(); reader.releaseLock() }
+      }
       // Consume the body inside the deadline, not just its response headers.
       return await response.blob()
     } catch (error) {
@@ -207,6 +227,7 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
   }
   function isFileEntry(value: unknown): value is FileEntry {
     return isRecord(value) && typeof value.name === 'string' && !!value.name && !/[\/\\]/.test(value.name)
+      && value.archive === undefined
       && value.name !== '.' && value.name !== '..' && (value.type === 'dir' || value.type === 'file')
       && typeof value.ext === 'string' && typeof value.size === 'number' && Number.isFinite(value.size) && value.size >= 0
       && (value.mtime === null || typeof value.mtime === 'string')

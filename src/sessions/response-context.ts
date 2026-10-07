@@ -62,7 +62,7 @@ export function continuedUserInvolvement(messages: ChatMessage[]): boolean {
     if (message.role !== 'user') continue
     if (message.name === '__work_realignment__') continue
     const tag = Array.isArray(message.content) ? message.content[0] : undefined
-    return tag?.type === 'text' && /^<sender id="[^"]*" name="[^"]*" chat="(?:direct|group)"\s*\/>$/.test(tag.text)
+    return tag?.type === 'text' && /^<sender id="[^"]*" name="[^"]*" chat="(?:direct|group)"(?: platform-[a-z-]+="[^"]*")*\s*\/>$/.test(tag.text)
   }
   return false
 }

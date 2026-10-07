@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
+import { channelSessionId } from '../bus/events.ts'
 import type { LLMProvider, LLMResponse, ChatMessage } from '../providers/provider.ts'
 import type { AgentTypesManager } from '../agent/types/manager.ts'
 import type { ChannelManager } from '../channels/manager.ts'
@@ -97,7 +98,10 @@ function fixture(workspace: string, store: SessionStore, settings: {
   const sessions: SessionManager = new SessionManager({
     workspace, store, provider, bus, tools, agentTypes, events,
     handoffManager: { shouldHandoff: () => false },
-    context: { buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }) },
+    context: {
+      buildSystemPrompt: async (ctx: any) => JSON.stringify({ sessionId: ctx.sessionId, mode: ctx.mode, role: ctx.agent.name }),
+      buildSystemPromptDetails: async () => ({ systemPrompt: 'Synthetic preview', sections: [] }),
+    },
     getLlmRuntimeConfig: () => llm, callTimeoutMs: settings.callTimeoutMs,
     hasInitiative: settings.hasInitiative,
   } as unknown as SessionManagerDeps)
@@ -139,6 +143,40 @@ function sourceContext(workspace: string, f: ReturnType<typeof fixture>): Execut
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: QQ and Discord hide ask in live and inactive sessions and reject stale calls without waiting`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      try {
+        await f.sessions.start()
+        for (const channel of ['qq', 'discord', 'web', 'feishu']) {
+          const preview = await f.sessions.getContext({ channel, agentType: 'limited', preview: true })
+          assert.equal(preview.tools.some(tool => tool.name === 'ask'), channel !== 'qq' && channel !== 'discord')
+          for (const id of [`${channel}:test`, channelSessionId({ projectId: 'fixture', botInstanceId: 'bot',
+            platform: channel, conversationId: 'test' })]) {
+            const denied = channel === 'qq' || channel === 'discord'
+            await f.sessions.buildSession(id, undefined, { mode: 'session', agentType: 'limited' })
+            assert.equal(f.sessions.getToolDefinitions(id).some(tool => tool.name === 'ask'), !denied)
+            assert.equal(f.sessions.getToolDefinitions(id, { allowedTools: ['ask'] }).some(tool => tool.name === 'ask'), !denied)
+            await f.sessions.deliver(id, input('Please clarify'))
+            const request = await f.next(id)
+            assert.equal(request.names.includes('ask'), !denied)
+            if (denied) {
+              request.resolve(invoke('ask', { kind: 'input', question: 'Which channel?' }, 'stale-ask'))
+              const retry = await f.next(id)
+              assert.match(JSON.stringify(retry.messages), /ask tool is unavailable/)
+              assert.equal(f.sessions.inputs.get(id), null)
+              assert.equal(f.sessions.yields.get(id), null)
+              retry.resolve(done('Which channel should I use?'))
+            } else request.resolve(done())
+            await waitFor(() => f.facts.some(fact => fact.sessionId === id))
+          }
+        }
+      } finally { await f.sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: concurrent explicit and implicit creation cannot replace admitted state or history`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

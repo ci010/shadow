@@ -63,7 +63,6 @@ async function main() {
         ['report.pdf', `document.querySelector('.ofv-pdf-text-layer')?.textContent.includes('Synthetic PDF report')`],
         ['report.docx', `document.querySelector('.viewer-container')?.textContent.includes('Synthetic Word report')`],
         ['report.xlsx', `document.querySelector('.viewer-container')?.textContent.includes('Synthetic sheet cell')`],
-        ['bundle.zip', `document.querySelector('.shadow-archive-source')?.textContent.includes('Synthetic archive entry')`],
         ['message.eml', `document.querySelector('.viewer-container')?.textContent.includes('Synthetic mail body')`],
         ['drawing.dxf', `!!document.querySelector('.ofv-svg-stage line')`],
         ['shape.excalidraw', `!!document.querySelector('.ofv-svg-stage')`],
@@ -136,23 +135,56 @@ async function main() {
           await writeFile(join(process.env.VIEWER_SCREENSHOTS, `viewer-${name}-${width}-${dark ? 'dark' : 'light'}.png`),
             (await window.webContents.capturePage()).toPNG())
       }
-      if (name === 'bundle.zip') {
-        await execute(`Array.from(document.querySelectorAll('.ofv-archive-item')).find(row => row.textContent.includes('icon.svg')).click()`)
-        await wait(`document.querySelector('.shadow-archive-media')?.complete && document.querySelector('.shadow-archive-media')?.naturalWidth > 0`)
-        await execute(`(() => {
-          const imageUrl = document.querySelector('.shadow-archive-media').src;
-          const revoke = URL.revokeObjectURL.bind(URL);
-          window.archiveImageRevoked = false;
-          URL.revokeObjectURL = url => { if (url === imageUrl) window.archiveImageRevoked = true; revoke(url); };
-          Array.from(document.querySelectorAll('.ofv-archive-item')).find(row => row.textContent.includes('large.txt')).click();
-        })()`)
-        await wait(`document.querySelector('.shadow-archive-note')?.textContent.includes('truncated')`)
-        assert.equal(await execute(`document.querySelector('.shadow-archive-source').textContent.length`), 65536)
-        assert.equal(await execute(`!!window.unsafeArchiveEntry`), false, 'Archive HTML is displayed as inert source')
-        assert.equal(await execute(`window.archiveImageRevoked`), true, 'Changing archive entries revokes the native preview URL')
       }
-      }
+      await execute(`window.viewerFixture.browse('bundle.zip')`)
+      await wait(`!!document.querySelector('.tree-row[data-path="bundle.zip"]')`)
+      assert.equal(await execute(`!!document.querySelector('.tree-row[data-path="bundle.zip/notes.txt"]')`), false, 'Collapsed archive has no eagerly loaded members')
+      await execute(`document.querySelector('.tree-row[data-path="bundle.zip"]').click()`)
+      await wait(`!!document.querySelector('.tree-row[data-path="bundle.zip/notes.txt"]')`)
+      await execute(`document.querySelector('.tree-row[data-path="bundle.zip/notes.txt"]').click()`)
+      await wait(`document.querySelector('.file-modal-text')?.textContent.includes('Synthetic archive entry')`)
+      assert.equal(await execute(`!!document.querySelector('.ofv-archive-layout')`), false)
+      await execute(`document.querySelector('.tree-row[data-path="bundle.zip/folder"]').click()`)
+      await wait(`!!document.querySelector('.tree-row[data-path="bundle.zip/folder/deep.txt"]')`)
+      await execute(`document.querySelector('.tree-row[data-path="bundle.zip/icon.svg"]').click()`)
+      await wait(`Array.from(document.querySelectorAll('.file-modal-body img')).some(img => img.complete && img.naturalWidth > 0)`)
+      await execute(`document.querySelector('.tree-row[data-path="bundle.zip/large.txt"]').click()`)
+      await wait(`document.querySelector('.file-modal-text')?.textContent.length === 65536`)
+      assert.equal(await execute(`!!window.unsafeArchiveEntry`), false)
+      await execute(`document.querySelector('.tree-row[data-path="bundle.zip/page.html"]').click()`)
+      await wait(`document.querySelector('.file-modal-text')?.textContent.includes('<script>')`)
+      assert.equal(await execute(`!!document.querySelector('.file-modal-frame') || !!window.unsafeArchiveEntry`), false, 'Archive HTML stays inert')
+      assert.equal(await execute(`document.documentElement.scrollWidth <= innerWidth`), true, 'Archive tree and preview fit mobile')
+      if (process.env.VIEWER_SCREENSHOTS) await writeFile(join(process.env.VIEWER_SCREENSHOTS, `archive-tree-${width}-${dark ? 'dark' : 'light'}.png`),
+        (await window.webContents.capturePage()).toPNG())
     }
+    for (const name of ['bundle.7z', 'bundle.rar', 'bundle.tar', 'bundle.tar.gz', 'bundle.tar.bz2', 'bundle.tar.xz',
+      'notes.txt.gz', 'notes.txt.bz2', 'notes.txt.xz']) {
+      await execute(`window.viewerFixture.browse(${JSON.stringify(name)})`)
+      await wait(`!!document.querySelector('.tree-row[data-path=${JSON.stringify(name)}]')`)
+      await execute(`document.querySelector('.tree-row[data-path=${JSON.stringify(name)}]').click()`)
+      await wait(`!!document.querySelector('.tree-row[data-path=${JSON.stringify(`${name}/notes.txt`)}]')`)
+      await execute(`document.querySelector('.tree-row[data-path=${JSON.stringify(`${name}/notes.txt`)}]').click()`)
+      await wait(`document.querySelector('.file-modal-text')?.textContent.includes('Synthetic archive entry')`)
+    }
+    await execute(`window.viewerFixture.browse('nested.zip')`)
+    await wait(`!!document.querySelector('.tree-row[data-path="nested.zip"]')`)
+    await execute(`document.querySelector('.tree-row[data-path="nested.zip"]').click()`)
+    await wait(`!!document.querySelector('.tree-row[data-path="nested.zip/bundle.7z"]')`)
+    await execute(`document.querySelector('.tree-row[data-path="nested.zip/bundle.7z"]').click()`)
+    await wait(`!!document.querySelector('.tree-row[data-path="nested.zip/bundle.7z/notes.txt"]')`)
+    await execute(`document.querySelector('.tree-row[data-path="nested.zip/bundle.7z/notes.txt"]').click()`)
+    await wait(`document.querySelector('.file-modal-text')?.textContent.includes('Synthetic archive entry')`)
+    await execute(`window.viewerFixture.browse('empty.zip')`)
+    await wait(`!!document.querySelector('.tree-row[data-path="empty.zip"]')`)
+    await execute(`document.querySelector('.tree-row[data-path="empty.zip"]').click()`)
+    await wait(`document.querySelector('.tree-note')?.textContent.includes('Empty archive')`)
+    await execute(`window.viewerFixture.browse('encrypted.7z')`)
+    await wait(`!!document.querySelector('.tree-row[data-path="encrypted.7z"]')`)
+    await execute(`document.querySelector('.tree-row[data-path="encrypted.7z"]').click()`)
+    await wait(`!!document.querySelector('.tree-row[data-path="encrypted.7z/notes.txt"]')`)
+    await execute(`document.querySelector('.tree-row[data-path="encrypted.7z/notes.txt"]').click()`)
+    await wait(`document.querySelector('[role="alert"]')?.textContent.includes('Password-protected')`)
     await execute(`window.viewerFixture.open('offline.docx')`)
     await wait(`document.querySelector('.node-offline-state')?.textContent.includes('Node offline') || document.body.textContent.includes('Node offline')`)
     await execute(`window.viewerFixture.open('denied.docx')`)

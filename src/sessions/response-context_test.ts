@@ -97,6 +97,14 @@ test('continuation finds the unfinished input audience without mistaking old use
     { type: 'text' as const, text: '<sender id="owner" name="owner" chat="direct" />' },
   ] }
   assert(continuedUserInvolvement([direct, { role: 'tool', content: 'Completed' }]))
+  assert(continuedUserInvolvement([{ role: 'user', content: [
+    { type: 'text', text: '<sender id="member" name="Alice" chat="group" platform-role="owner" platform-source="session" />' },
+    { type: 'text', text: 'Original request' },
+  ] }]))
+  assert(!continuedUserInvolvement([{ role: 'user', content: [
+    { type: 'text', text: '<sender id="peer" name="Agent" chat="group" source="session" />' },
+    { type: 'text', text: 'Background report' },
+  ] }]))
   assert(continuedUserInvolvement([direct, { role: 'assistant', content: 'Rechecking',
     responseContext: createResponseContext('turn', user, 'session', 'web') },
   { role: 'user', name: '__work_realignment__', content: 'Work changed' }]))

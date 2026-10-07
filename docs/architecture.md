@@ -1193,6 +1193,16 @@ Its `shell: "node"` mode executes inline TypeScript in a Node child with a
 session tool bridge. OS-shell names such as `pwsh`, `bash`, or `cmd` select the
 ordinary managed-process path.
 
+Local OS-shell failures include the exit code, actual shell (including automatic
+Windows `cmd` to `sh` escalation), resolved working directory, and separate
+stdout/stderr sections with explicit `(empty)` markers when a stream has no
+output. Signal termination also reports the signal. Foreground results and
+background completion failures share this format; successful output is unchanged.
+A nonzero exit remains a failure, but its meaning is command-specific: for
+example, `git grep` exits with code 1 when there are no matches, usually without
+diagnostic output. Node-script and remote-execution results retain their own
+formats.
+
 `ask(kind="decision")` is called directly, not through the Node script bridge. Its question
 advertises two distinct suggested options and one default; legacy three-option
 requests remain readable. Both binary and legacy three-option questions use the

@@ -273,7 +273,13 @@ test('ExecTool foreground LocalExecutor parity: nonzero exit without output', as
   const result = await execTool(cwd(), new RecordingExecutor(process))
     .execute({ script: 'exit 7' }, context(cwd()))
 
-  assertEquals(requireToolText(result), 'Error: command exited with code 7')
+  assertEquals(requireToolText(result), [
+    'Error: command exited with code 7',
+    `Shell: ${process.shell}`,
+    `Cwd: ${process.cwd}`,
+    '[stdout]', '(empty)',
+    '[stderr]', '(empty)',
+  ].join('\n'))
   assert.equal(isCompletedToolFailure(result), true)
 })
 
@@ -282,23 +288,37 @@ test('signal exits and missing exit codes do not attest completed failures', asy
     const result = await execTool(cwd(), new RecordingExecutor(managedProcess(Promise.resolve(status))))
       .execute({ script: 'interrupted' }, context(cwd()))
     assert.equal(isCompletedToolFailure(result), false)
+    if (status.signal) assert.match(requireToolText(result), /Signal: SIGTERM/)
   }
 })
 
 for (const mode of ['session', 'call'] as const) {
-  for (const output of [{ stdout: 'PASS before failure', stderr: 'assertion failed' }, { stderr: 'assertion failed' }]) {
-    test(`exec ${mode} preserves failed status and output (${output.stdout ? 'stdout + stderr' : 'stderr only'})`, async () => {
+  for (const output of [
+    { stdout: 'PASS before failure', stderr: 'assertion failed' },
+    { stdout: '', stderr: 'assertion failed' },
+    { stdout: 'PASS before failure', stderr: '' },
+    { stdout: '', stderr: '' },
+    { stdout: ' \n', stderr: '\t' },
+  ]) {
+    test(`exec ${mode} preserves failed status and diagnostics (${JSON.stringify(output)})`, async () => {
       const status = { success: false, code: 7, signal: null }
       const managed = managedProcess(Promise.resolve(status), output)
+      managed.shell = 'sh'
+      managed.cwd = join(sandbox, 'resolved-workdir')
       const tool = new ExecTool(sandbox, 120_000, new CommandHandlerManager(),
         { terminate: async () => status } as unknown as ProcessManager, defaultManagedShell(),
         new RecordingBackgroundTasks() as unknown as BackgroundTaskManager, new RecordingExecutor(managed))
       const ctx = mode === 'call' ? callContext(sandbox, tool) : context(sandbox)
       const result = await tool.execute({ script: 'synthetic failure' }, ctx)
       assert(typeof result !== 'string' && result.isError === true)
-      assertMatch(requireToolText(result), /^Error: command exited with code 7\n/)
-      assertMatch(requireToolText(result), /\[stderr\]\nassertion failed/)
-      if (output.stdout) assertMatch(requireToolText(result), /PASS before failure/)
+      assert.equal(isCompletedToolFailure(result), true)
+      assert.equal(requireToolText(result), [
+        'Error: command exited with code 7',
+        'Shell: sh',
+        `Cwd: ${managed.cwd}`,
+        '[stdout]', output.stdout || '(empty)',
+        '[stderr]', output.stderr || '(empty)',
+      ].join('\n'))
     })
   }
 }
@@ -330,6 +350,11 @@ for (const shell of [defaultManagedShell(), 'node'] as const) {
         assertMatch(output, /Status: failed/)
         assertMatch(output, /PASS before failure/)
         assertMatch(output, /assertion failed/)
+        if (shell !== 'node') {
+          assert(output.includes(`Shell: ${shell}\nCwd: ${sandbox}`))
+          assertMatch(output, /\[stdout\]\nPASS before failure/)
+          assertMatch(output, /\[stderr\]\nassertion failed/)
+        }
         assert.equal(tasks.listTasks()[0].status, 'failed')
         await t.waitFor(() => assert.equal(inputs.length, 1))
         assertMatch(inputs[0], /failed/)

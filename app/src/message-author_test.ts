@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { groupSenderNames, messageRoleLabel, parseSessionMessage, sessionMessageTitle } from './message-author.ts'
+import { groupSenderNames, messageEnvelope, messageRoleLabel, parseSessionMessage, sessionMessageTitle } from './message-author.ts'
+
+test('platform metadata stays hidden in the sender envelope without changing the displayed author or body', () => {
+  const message = { role: 'user', name: 'Alice', content: [
+    { type: 'text', text: '<sender id="member" name="Alice" chat="group" platform-role="owner" platform-source="session" platform-mentions="@Report Bot id=bot self" />' },
+    { type: 'text', text: '@Report Bot read the file\nQQ display metadata is a literal part of this message.' },
+    { type: 'text', text: '[file: uploads/report.zip]' },
+  ] }
+  assert.equal(messageEnvelope(message)?.content, message.content.slice(1).map(part => part.text).join(''))
+  assert.deepEqual(groupSenderNames([message]), ['Alice'])
+  assert.equal(messageRoleLabel(message), 'user')
+  assert.equal(parseSessionMessage(message), undefined)
+})
 
 test('session handoffs use recorded origin rather than a human-looking sender name', () => {
   const message = { role: 'user', name: 'admin', timestamp: '2026-09-18T05:00:00Z', content: [

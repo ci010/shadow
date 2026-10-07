@@ -4,10 +4,32 @@ import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import { channelDefinitions, channelDraft, channelPatch, channelStateLabel, createChannelSettingsClient, parseChannelList, parseChannelStatus } from './channel-settings.ts'
 import type { ChannelSetupStatus } from '../../src/channels/setup-contract.ts'
+import { botDraft, botPatch, parseBotStatus } from './bot-settings.ts'
 
 const statuses = (): ChannelSetupStatus[] => channelDefinitions.map(item => ({
   id: item.id, label: item.label, enabled: false, configured: false, state: 'unconfigured', config: {}, secrets: {},
 }))
+test('QQ bot trigger mode defaults to mentions and round-trips both choices through the settings form', () => {
+  const bot = parseBotStatus({
+    ...statuses()[0], id: 'qq-bot', projectId: 'project', platform: 'qq', displayName: 'Group bot',
+  }, 'project')
+  assert.equal(botDraft(bot).triggerMode, 'mention')
+  const field = channelDefinitions[0].fields.find(field => field.key === 'triggerMode')!
+  assert.equal(field.kind, 'select')
+  assert.equal(field.advanced, undefined)
+  assert.deepEqual(field.options, ['mention', 'all'])
+  assert.match(field.hint!, /saved as context without a model call/)
+  for (const triggerMode of ['mention', 'all']) {
+    const draft = { ...botDraft(bot), triggerMode }
+    const patch = botPatch(bot, draft, false)
+    assert.equal(patch.config.triggerMode, triggerMode)
+    const saved = parseBotStatus({ ...bot, config: patch.config }, 'project')
+    assert.equal(botDraft(saved).triggerMode, triggerMode)
+  }
+  assert.throws(() => botPatch(bot, { ...botDraft(bot), triggerMode: 'invalid' }, false), /valid value/)
+  assert.throws(() => parseBotStatus({ ...bot, config: { triggerMode: 'invalid' } }, 'project'), /invalid channel status/)
+})
+
 test('status contract rejects malformed, duplicate, unknown and credential-bearing responses', () => {
   const channels = statuses()
   assert.deepEqual(parseChannelList({ channels: channels.toReversed() }), channels)

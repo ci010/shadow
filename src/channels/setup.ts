@@ -12,7 +12,7 @@ export const secretFields: Record<ChannelId, readonly string[]> = {
   discord: ['token'],
 }
 const publicFields: Record<ChannelId, readonly string[]> = {
-  qq: ['appId', 'sandbox', 'intents', 'markdown', 'allowFrom', 'adminChats', 'trustedChats'],
+  qq: ['appId', 'sandbox', 'intents', 'markdown', 'triggerMode', 'allowFrom', 'adminChats', 'trustedChats'],
   feishu: ['appId', 'allowFrom', 'adminChats', 'trustedChats'],
   discord: ['triggerMode', 'reactionEmoji', 'memberIntent', 'allowFrom', 'adminChats', 'trustedChats'],
 }
@@ -28,7 +28,7 @@ export const channelPatchSchemas = {
   qq: z.object({
     ...common, appId: text.optional(), secret: secret.optional(), token: secret.optional(),
     sandbox: z.boolean().optional(), intents: z.number().int().min(0).max(0xffffffff).optional(),
-    markdown: z.boolean().optional(),
+    markdown: z.boolean().optional(), triggerMode: z.enum(['all', 'mention']).optional(),
   }).strict(),
   feishu: z.object({
     ...common, appId: text.optional(), appSecret: secret.optional(),

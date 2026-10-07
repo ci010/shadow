@@ -9,8 +9,8 @@
               <option v-for="option in textEncodings" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
           </label>
-          <button v-if="isMarkdown || isMemoryEvents || (kind === 'html' && !resources.native)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? 'Preview' : 'Source' }}</button>
-          <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native" text="Reload preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Reload preview" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
+          <button v-if="isMarkdown || isMemoryEvents || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? 'Preview' : 'Source' }}</button>
+          <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native && !entry.archive" text="Reload preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Reload preview" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
           <HoverInfo v-if="!inline" :text="fullscreen ? 'Exit fullscreen' : 'Fullscreen'" v-slot="{ triggerProps }">
           <button
             class="file-modal-btn"
@@ -31,19 +31,27 @@
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
       <div class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat, 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
         <NodeOfflineState v-if="offline" :checking="loading" description="This preview will be available when the owning node reconnects." @retry="loadText" />
+        <div v-else-if="entry.archive && (!loaded || error)" class="file-modal-note" :role="error ? 'alert' : 'status'">
+          {{ error || 'Reading archive entry...' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
+        </div>
+        <div v-else-if="archiveContainer" class="file-modal-note">
+          Expand this archive in the file tree to browse its contents, or use Download to save it.
+        </div>
         <FileViewerPreview v-else-if="viewerFormat" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
-          :path="path" :name="entry.name" :active="active" />
+          :path="path" :name="entry.name" :active="active" :source-blob="archiveBlob" />
         <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || 'Loading…' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
         </div>
+        <img v-else-if="kind === 'image' && entry.archive" :src="rawSource" :alt="entry.name" class="file-modal-media"
+          referrerpolicy="no-referrer" @error="archiveMediaError" />
         <ImageAnnotationPreview v-else-if="kind === 'image'" :key="`image:${rawSource}`" :src="rawSource" :name="entry.name"
           :source-key="JSON.stringify([apiBase, sessionId, folderId, path])" :context-key="contextKey"
-          :active="active" :editable="canQuote" :keyboard-active="selectionActive"
+          :active="active" :editable="canQuote && !entry.archive" :keyboard-active="selectionActive"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
-        <video v-else-if="kind === 'video' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${rawSource}`" :src="raw" class="file-modal-media" controls autoplay />
-        <audio v-else-if="kind === 'audio' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`audio:${rawSource}`" :src="raw" controls class="file-modal-audio" />
+        <video v-else-if="kind === 'video' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${rawSource}`" :src="raw" class="file-modal-media" controls autoplay @error="archiveMediaError" />
+        <audio v-else-if="kind === 'audio' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`audio:${rawSource}`" :src="raw" controls class="file-modal-audio" @error="archiveMediaError" />
         <iframe
-          v-else-if="kind === 'html' && active && !sourceView && !resources.native"
+          v-else-if="kind === 'html' && active && !textMode"
           :key="frameNonce"
           :src="staticSrc"
           class="file-modal-frame"
@@ -53,6 +61,7 @@
         ></iframe>
         <div v-else-if="textMode" class="file-modal-text-wrap">
           <p v-if="kind === 'html' && resources.native" class="file-modal-note">HTML source is shown on mobile. Interactive HTML previews and their linked assets require the browser app.</p>
+          <p v-if="entry.archive" class="file-modal-note">Read-only archive entry. Linked assets are not loaded from the workspace.</p>
           <p v-if="loaded && encodingWarning" class="file-encoding-warning" role="status">{{ encodingWarning }}</p>
           <div v-if="loading" class="file-modal-note">Loading…</div>
           <div v-else-if="error" class="file-modal-note" role="alert">{{ error }} <button class="file-modal-btn" @click="loadText">Retry</button></div>
@@ -79,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useFileDownload } from '../../composables/useFileDownload.ts'
 import DOMPurify from 'dompurify'
 import { useMobileResources, vMobileMedia } from '../../mobile-resources.ts'
@@ -95,7 +104,9 @@ import ImageAnnotationPreview from './ImageAnnotationPreview.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
 import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
-import { textEncodings, type TextEncoding } from '../../../../src/execution/filesystem/text-encoding.ts'
+import { decodeTextPreview, textEncodings, type TextEncoding } from '../../../../src/execution/filesystem/text-encoding.ts'
+import { isArchive } from '../../archive-format.ts'
+import { readArchiveEntry } from '../../archive-files.ts'
 import { isMemoryEventFile, parseMemoryEvents } from '../../memory-events.ts'
 import { fileMarkdownUrl, formatFileQuote, markdownSelectionLines, markdownSourceBlocks, plainSelectionLines, renderedSelectionLines } from '../../file-selection.ts'
 import {
@@ -126,11 +137,19 @@ const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
 const path = computed(() => joinPath(props.dir, props.entry.name))
 const kind = computed(() => fileKind(props.entry.ext))
 const viewerFormat = computed(() => fileViewerFormat(props.entry.ext))
-const isMarkdown = computed(() => ['.md', '.markdown'].includes(props.entry.ext.toLowerCase()))
-const isMemoryEvents = computed(() => isMemoryEventFile(path.value))
+const archiveContainer = computed(() => isArchive(props.entry.name))
+const archiveBlob = shallowRef<Blob>()
+const archiveUrl = ref('')
+function releaseArchive() {
+  if (archiveUrl.value) URL.revokeObjectURL(archiveUrl.value)
+  archiveUrl.value = ''
+  archiveBlob.value = undefined
+}
+const isMarkdown = computed(() => !props.entry.archive && ['.md', '.markdown'].includes(props.entry.ext.toLowerCase()))
+const isMemoryEvents = computed(() => !props.entry.archive && isMemoryEventFile(path.value))
 const sourceView = ref(false)
-const textMode = computed(() => !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native))))
-const rawSource = computed(() => files.value.rawUrl(props.sessionId, path.value))
+const textMode = computed(() => !archiveContainer.value && !viewerFormat.value && (kind.value === 'text' || (kind.value === 'html' && (sourceView.value || resources.native || !!props.entry.archive))))
+const rawSource = computed(() => props.entry.archive ? archiveUrl.value : files.value.rawUrl(props.sessionId, path.value))
 const raw = computed(() => resources.resolve(rawSource.value))
 const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.value))
 
@@ -151,13 +170,16 @@ const truncated = ref(false)
 const memoryRecords = computed(() => isMemoryEvents.value ? parseMemoryEvents(textContent.value, truncated.value) : [])
 const loading = ref(false)
 const error = ref('')
+function archiveMediaError() {
+  if (props.entry.archive) error.value = 'The browser could not decode this archive entry. Retry or download the file.'
+}
 const offline = ref(false)
 const binary = ref(false)
 const loaded = ref(false)
 const highlight = ref<InstanceType<typeof FileHighlightText>>()
 const highlightError = ref('')
 const selectionRoot = ref<HTMLElement>()
-const selectionEnabled = computed(() => props.active && props.selectionActive && textMode.value
+const selectionEnabled = computed(() => props.active && props.selectionActive && !props.entry.archive && textMode.value
   && loaded.value && !loading.value && !error.value && !binary.value && !!textContent.value.trim())
 const selectionKey = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId, path.value, sourceView.value, frameNonce.value, encoding.value]))
 function quoteSelection(text: string, range: Range): void {
@@ -210,11 +232,32 @@ async function loadText(): Promise<void> {
   binary.value = false
   loaded.value = false
   highlightError.value = ''
-  if (viewerFormat.value || (!textMode.value && !props.remote) || !props.active || !(props.folderId || props.sessionId)) return
+  if (!props.active || !(props.folderId || props.sessionId)) return
+  if (!props.entry.archive && (archiveContainer.value || viewerFormat.value || (!textMode.value && !props.remote))) return
   const controller = new AbortController()
   request = controller
   loading.value = true
   try {
+    if (props.entry.archive) {
+      if (!archiveBlob.value) {
+        const blob = await readArchiveEntry(props.apiBase, props.sessionId, props.folderId, props.entry.archive, controller.signal)
+        if (controller.signal.aborted) return
+        archiveBlob.value = blob
+        archiveUrl.value = URL.createObjectURL(blob)
+      }
+      if (textMode.value) {
+        const bytes = new Uint8Array(await archiveBlob.value.slice(0, 65536).arrayBuffer())
+        if (controller.signal.aborted) return
+        truncated.value = archiveBlob.value.size > bytes.length
+        const decoded = decodeTextPreview(bytes, encoding.value, truncated.value)
+        binary.value = decoded.binary
+        textContent.value = decoded.content ?? ''
+        encodingWarning.value = decoded.encodingWarning ?? ''
+      }
+      offline.value = false
+      loaded.value = true
+      return
+    }
     // Media elements cannot read structured API errors. Verify the owning
     // workdir before handing a scoped raw/static URL to the browser.
     if (!textMode.value) {
@@ -245,7 +288,8 @@ async function loadText(): Promise<void> {
   }
 }
 
-watch(() => [props.apiBase, props.sessionId, props.folderId, path.value, kind.value, props.remote], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, path.value, kind.value, props.remote, props.entry.archive], () => {
+  releaseArchive()
   downloads.reset()
   encoding.value = 'auto'
   offline.value = false
@@ -256,12 +300,15 @@ watch(() => [props.apiBase, props.sessionId, props.folderId, path.value, kind.va
 }, { immediate: true })
 watch(() => props.active, active => {
   if (active && !loaded.value) void loadText()
-  else if (!active) { request?.abort(); request = undefined; loading.value = false }
+  else if (!active) {
+    request?.abort(); request = undefined; loading.value = false
+    if (props.entry.archive) { releaseArchive(); loaded.value = false; textContent.value = '' }
+  }
 })
 watch(sourceView, () => {
   if (kind.value === 'html') void loadText()
 })
-onUnmounted(() => request?.abort())
+onUnmounted(() => { request?.abort(); releaseArchive() })
 </script>
 
 <style scoped>

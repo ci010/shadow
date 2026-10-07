@@ -1,11 +1,10 @@
-export type FileViewerFormat = 'pdf' | 'office' | 'archive' | 'email' | 'ebook' | 'drawing' | 'cad' | 'model' | 'gis' | 'asset'
+export type FileViewerFormat = 'pdf' | 'office' | 'email' | 'ebook' | 'drawing' | 'cad' | 'model' | 'gis' | 'asset'
 
 const formats: ReadonlyArray<readonly [FileViewerFormat, readonly string[]]> = [
   ['pdf', ['pdf']],
   ['office', ['doc', 'docx', 'docm', 'dot', 'dotx', 'dotm', 'rtf', 'odt', 'fodt', 'wps',
     'xls', 'xlsx', 'xlsm', 'xlsb', 'xlt', 'xltx', 'xltm', 'ods', 'fods', 'numbers', 'et',
     'ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'ppsm', 'potx', 'potm', 'odp', 'fodp', 'key', 'dps']],
-  ['archive', ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz']],
   ['email', ['eml', 'msg', 'mbox']],
   ['ebook', ['epub', 'ofd', 'xps', 'oxps']],
   ['drawing', ['drawio', 'dio', 'excalidraw', 'tldraw']],

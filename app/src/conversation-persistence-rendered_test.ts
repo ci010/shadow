@@ -32,16 +32,23 @@ test('real composer and diagnosis selections survive page reload and preserve se
       load(id) {
         if (id !== '\0persistence') return
         return `import 'uno.css'; import '/src/styles.css';
-          import { createApp, h } from 'vue';
+          import { createApp, h, ref, watch } from 'vue';
           import { createRouter, createWebHistory } from 'vue-router';
           import Chat from '/src/components/ChatTab.vue';
           const router = createRouter({history:createWebHistory(),routes:[
-            {name:'chat',path:'/projects/:projectId/chat/:sessionId?',component:{}}
+            {name:'chat',path:'/projects/:projectId/chat/:sessionId?',component:{}},
+            {name:'project-settings',path:'/projects/:projectId/settings/:section?',component:{}},
+            {name:'agents',path:'/projects/:projectId/agents',component:{}},
+            {name:'settings',path:'/settings/:section?',component:{}}
           ]});
           const app = createApp({setup() {
+            const sessionId = ref('');
+            watch(router.currentRoute, route => {
+              if (route.name === 'chat') sessionId.value = route.params.sessionId || '';
+            }, {immediate:true});
             return () => { const route = router.currentRoute.value;
-              return h(Chat, {key:route.params.sessionId || 'draft', managed:true, projectId:route.params.projectId,
-                sessionId:route.params.sessionId || '', apiBase:location.origin + '/projects/' + route.params.projectId,
+              return h(Chat, {key:sessionId.value || 'draft', managed:true, projectId:route.params.projectId,
+                sessionId:sessionId.value, apiBase:location.origin + '/projects/' + route.params.projectId,
                 visible:true, style:'height:100vh',
                 knowledgeRequest:route.query.panel === 'knowledge' ? {entryId:route.query.entry} : undefined,
                 onPrepared:sessionId => router.replace({name:'chat',params:{projectId:route.params.projectId,sessionId}}),
@@ -92,6 +99,8 @@ test('real composer and diagnosis selections survive page reload and preserve se
             json({ sessionId, name: null, workdir: { kind: 'local', displayPath: '/synthetic' }, usage: null,
               usageScope: 'session', context: { usedTokens: null, windowTokens: null } })
           } else if (path.endsWith('/files')) json({ path: '', entries: [] })
+          else if (path.endsWith('/api/projects')) json({ projects: [{ id: 'a', name: 'Project A', createdAt: '2026-01-01T00:00:00Z' }] })
+          else if (path.endsWith('/api/config')) json({ agent: { model: 'synthetic', workspace: '/synthetic', temperature: 0.7 } })
           else if (path.endsWith('/git/status')) json({ available: false, reason: 'not_repository' })
           else if (path.endsWith('/v1/query/session-spans')) json({ sessionId: url.searchParams.get('sessionId'), physicalSessionId: 'segment', hasMore: false, entries: [] })
           else if (/\/api\/sessions\/[^/]+$/.test(path)) json({ currentPhysicalId: 'segment', previousPhysicalId: null, messages: [] })

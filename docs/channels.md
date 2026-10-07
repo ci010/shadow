@@ -7,6 +7,15 @@ App-wide. A saved bot configuration is not proof of platform delivery or
 verified connectivity; the backend can be locally ready while a bot is
 offline. Legacy WeChat/iLink adapters are not started by Project runtimes.
 
+QQ and Discord conversations do not expose the `ask` tool, including private
+messages and Bot chats opened inside Shadow. Agents ask clarification questions
+in ordinary replies and end the turn; the next user message continues the
+conversation. Explicit Agent tool allowlists, old tool calls and dynamic
+`invoke_tool` calls cannot re-enable `ask` in these channels. Web, Feishu and
+internal parent/child decision flows retain their existing behavior.
+This does not approve protected operations: use their dedicated owner review
+in Shadow. Existing pending requests are not automatically answered or cancelled.
+
 For QQ/Feishu and other legacy trust-guidance paths, **Trusted group or channel IDs** declare that everyone able to read replies
 in that conversation is trusted, not just the senders allowed to message the
 bot. Unknown audiences receive restrained shared-conversation guidance.
@@ -53,11 +62,37 @@ The Project **Coordinator** exposes `channel_config`: `schema` documents inputs,
 `directory`/`members` discover resources before a message has been sent there.
 It can inspect current Agent files and catalog resources and propose changes,
 but cannot approve them. Approve owner-chat drafts in **Discord access > Review**.
+Proposals return a `reviewUrl` for the Agent to include as a clickable chat link.
+The link opens Project Settings, the selected Discord Bot and the exact review;
+it contains no approval hash and never checks the acknowledgment or applies a
+change. Agent/knowledge drafts without a selected Bot open the Project review
+through its first available Discord connection. Missing Bots or reviews produce
+an explicit unavailable notice rather than selecting a different draft.
 An explicitly authorized Discord management channel gets a bounded version of
 the same tool, restricted to its Bot and existing tool/domain ceiling. Its
 proposal can also be confirmed with `/shadow-approve <draft-id> <hash>` by the
 same currently authorized human. Ordinary chat text and model tool calls are
 never that approval. QQ/Feishu managed authoring remains a separate workflow.
+
+### QQ/Feishu configuration from Shadow owner chat
+
+QQ and Feishu also support owner-chat authoring of Agent Markdown, selected tools
+and per-conversation bindings. This is the existing `authoring_change` workflow,
+not Discord's `channel_config propose`. Owner `channel_config list` includes
+`otherPlatformBots` and the appropriate authoring route so an absent Discord
+assignment is not mistaken for unsupported QQ configuration.
+
+Use `project_config inspect` for read-only discovery, or create/read an isolated
+Change to obtain the Project's Bot and conversation inventory. Match the target
+session to its exact Bot/platform/conversation address. Edit the Agent resource,
+selected skill tools and binding, run the Change checks, then propose the exact
+revision. Tools are read/search and published skill tool aliases with explicit
+module/grant ceilings, not the unrestricted host tool catalog.
+The owner must approve the publication card in Shadow; this workflow does not
+currently use Discord's Settings Review page. A model cannot approve publication.
+Do not expose management tools to the target QQ group or treat a QQ group role
+as Shadow ownership. Unbound QQ conversations retain their existing behavior
+until an owner-approved binding is published.
 
 **Participants control invocation, not reply visibility.** Anyone who can read
 the Discord channel can read the Bot's replies, even if they cannot invoke it.
@@ -129,6 +164,20 @@ Message Content intent can limit returned text. Name caches never authorize
 stale permissions. Attachment downloads accept supported official HTTPS
 attachment URLs without sending Bot authorization to the CDN.
 
+Main backend startup initializes a process-wide proxy for native Node `fetch`
+and Undici requests; Discord Gateway WebSocket uses the same dispatcher.
+`HTTP_PROXY`/`HTTPS_PROXY` and `NO_PROXY` take precedence over Windows static
+system proxy settings. Loopback traffic always stays direct, and a failed proxy
+does not silently fall back to direct access. Restart the backend after changing
+proxy settings (including the Electron backend, not just the renderer page).
+PAC, SOCKS and credential-bearing proxy URLs are currently unsupported and
+produce an explicit startup error. This is not a proxy guarantee for SDKs using
+their own HTTP agents or for arbitrary subprocesses.
+
+Discord startup distinguishes an unreachable API from HTTP 401 (rejected Bot
+token) and HTTP 403 (denied gateway request), without exposing request headers
+or raw credential-bearing network errors.
+
 ### Recovery and current limits
 
 Review shows conflicts, audit history and interrupted approved changes.
@@ -152,6 +201,130 @@ these paths. **Dedicated live Discord server acceptance remains outstanding**:
 two channels, real membership changes, threads, disconnect/reconnect and
 revocation have not been certified against a real Bot by this change. This
 does not extend the new isolation guarantees to QQ or Feishu.
+
+## QQ group reception
+
+Shadow handles both ordinary group messages (`GROUP_MESSAGE_CREATE`) and
+mentions (`GROUP_AT_MESSAGE_CREATE`) by default, using the existing
+`GROUP_AND_C2C_EVENT` intent (`1 << 25`). No additional Shadow switch is needed.
+The Bot must also have QQ's "receive all messages" capability enabled on the
+platform; Shadow cannot enable that permission or receive messages QQ does not
+deliver. See the official [full group-message event](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html).
+
+In **Project settings > Bots > Configure > Trigger model on**, choose
+**Mentions and direct messages** (the default) or **All messages**. This saves
+the Bot's `triggerMode` as `mention` or `all`; existing configurations without
+the field default to `mention` too.
+
+Reception and triggering are separate. In `mention` mode, ordinary group
+messages are saved to session history without a model call, automatic
+compaction, or reply. The next mention-triggered turn can use that history as
+context. In `all` mode, every admitted group message enters the normal Agent
+turn/reply flow. Direct messages always trigger regardless of this setting.
+The adapter recognizes the dedicated mention event and mentions of this Bot
+in the full-message event's structured `mentions` list, using QQ's boolean
+`is_you: true` marker or a matching Bot ID. Full-message mode can use a
+group-scoped Bot OpenID different from the gateway identity; the self-mention
+marker still triggers a turn. Mentions of other users do not.
+The sender `allowFrom` policy still applies, and the same message ID
+delivered through both event types is processed only once per group.
+This does not enable full-message reception for QQ guild channels. Successful
+delivery for one configured Bot does not establish platform access for every Bot.
+
+## QQ incoming messages and files
+
+GROUP and C2C events share the same normalized input path. Shadow handles ordinary
+text, ARK cards (`message_type: 3`), parallel elements (`101`), forwarded records
+(`102`) and quoted content (`103`), including recursively nested combinations.
+Card-only messages are retained as structured text. Card fields are display data:
+their links/previews are not fetched or executed automatically. Card traversal
+is bounded to 6 levels and 200 visited values; incomplete content is identified.
+Credential-named card fields and `message_scene.ext` authentication tokens are
+excluded from prompts, logs and the reference cache.
+
+Sender identity uses the existing first `<sender ... />` content block.
+Mentions, scene source, message type, platform roles and attachment properties
+travel as typed display metadata and become escaped `platform-*` attributes
+in that block, not JSON appended to the user's text. Known QQ mention IDs are
+rendered as `@Display name` in the body; unresolved IDs remain unchanged rather
+than being guessed. The normal chat display already hides the metadata envelope.
+Existing stored messages are not rewritten by this change.
+The original sender ID still controls admission; QQ `owner`/`admin`
+metadata never grants Shadow owner privileges, including inside forwarded items.
+Cross-application union identifiers are not needed for this routing and are not
+forwarded.
+
+Shadow downloads `attachments` included in QQ GROUP, C2C, guild mention and
+guild direct-message events, including messages containing only files.
+Documents and archives are not restricted to images: they enter the normal
+session attachment pipeline as local file references for the Agent's available
+tools, rather than being sent to the model as images or executed automatically.
+
+Files are saved in the owning Bot conversation's `uploads` directory. Names keep
+a sanitized, length-bounded original filename with a unique prefix, so multiple
+same-name files cannot overwrite one another. When the filename is missing,
+Shadow uses the URL path and known attachment/HTTP MIME types. Failed or
+malformed attachments produce an explicit unavailable notice in the conversation;
+successful files in the same message are retained. Blocked senders cannot cause
+downloads. The normal group mention/all-message trigger setting still applies.
+
+For voice attachments, Shadow prefers `voice_wav_url`, explicitly falls back to
+the original URL if conversion download fails, and retains `asr_refer_text` as
+platform-provided, potentially inaccurate transcription. Attachment size,
+dimensions and type are labeled as platform-declared metadata, not authorization
+or a substitute for inspecting the file.
+
+This is reception of attachments **pushed by QQ**, not synchronization or browsing
+of the QQ group file library. Shadow cannot receive files for which the platform
+does not deliver an attachment URL, nor recover expired download links. Automated
+fixtures cover these receive paths; actual platform delivery of each file type
+still needs verification with a configured Bot.
+
+For receive diagnostics, backend logs emit `[qq] Gateway dispatch` with only the
+event name, message type, text length, attachment count and nested element count.
+Additional flags report the presence of cards, scene metadata, message/reference
+indices and scene authentication, without exposing their values. A
+`[qq] Reference lookup` reports cache availability; `[qq] Attachment reception`
+reports received/saved/failed counts when
+attachments were present. They do not contain message text, sender IDs, filenames,
+download URLs or credentials. Sending a file and then a separate mention requires
+the original file event to reach Shadow; the mention alone does not attach the
+previous file. Shadow's model-trigger setting does not enable QQ-side delivery.
+
+QQ also documents **quoted messages** (`message_type: 103`): attachments can be
+inside `msg_elements[].attachments`, rather than at the top level. Shadow reads
+these referenced attachments and marks quoted text as context, without treating
+the original author's metadata as authorization. This allows quoting/replying to
+an existing file and mentioning the Bot **when QQ includes the referenced file's
+download URL**. `msg_idx` is used for deduplication when present. `ref_msg_idx`
+and element indices can also resolve previously accepted messages in a bounded
+in-memory cache, reusing their already-downloaded attachments. Inline reference
+content takes precedence. Cache keys are scoped to the Bot instance and chat;
+unaccepted inputs are never cached. Each Bot retains at most 200 entries, with
+cached text capped at 32,000 characters and truncation marked explicitly.
+The cache clears on stop/replacement/restart; it is not a second persistent
+session-history store. Normalized content and local media references still use
+the normal JSONL/SQLite session pipeline. Missing/evicted references produce an
+unavailable notice, not a guessed message, and Shadow does not fetch remote
+history using opaque indices or scene tokens.
+Malformed/missing reference data and traversal limits (8 levels, 100 elements)
+are reported explicitly. Text and binary JSON gateway frames are decoded;
+unreadable frames produce a sanitized `Gateway frame rejected` warning.
+
+The test Bot's initial 2026-10-07 ordinary-file-then-separate-mention attempt delivered
+only mention events without attachments or nested elements. That is not proof
+that QQ never supports group files, nor that a particular permission is disabled.
+The [official message types](https://bot.qq.com/wiki/develop/api-v2/server-inter/message/type/overview.html)
+and [group mention schema](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_at_message_create.html)
+describe file and quote support, but do not establish access for every Bot.
+Do not equate the platform's "enable notifications" setting with full-message
+reception. C2C file reception is user-confirmed. At 01:51 UTC+8 on 2026-10-07,
+the test Bot also received an ordinary group-file event, downloaded its attachment,
+and persisted the file reference in the group history. Subsequent group messages
+used the full-message event rather than the dedicated mention event; this exposed
+the need to recognize `mentions[].is_you` for model triggering.
+Rich-message, quoted-file and binary frame fixtures cover the adapter, provider
+input and both session stores; live quoted-file delivery is still unverified.
 
 ## QQ GROUP and C2C passive replies
 

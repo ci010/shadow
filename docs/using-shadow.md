@@ -84,6 +84,10 @@ the UI. Stored patches are bounded to 65,536 characters, with a
 2,097,152-character input and 100 ms computation limit; the history API returns
 pages of 30 writes. Diff persistence failures after a write stop automatic retries.
 
+Project settings hide the conversation input and its status controls so they do
+not cover the settings form. Returning to the conversation restores the input
+with its unsent draft intact.
+
 Use **Project settings → General → Delete project** to delete a non-Default
 project. Confirm by typing its name. Deletion removes
 its Home (including conversation history, memory, skills, bots, automations and
@@ -234,11 +238,39 @@ current conversation without sending a new message.
 
 File tabs use [Open File Viewer](https://github.com/xushanpei/open-file-viewer)
 for four groups: PDF/Office (including EPUB/OFD/XPS), Engineering (CAD, 3D,
-drawings and GIS), Archive/Email, and Assets/Data. Image/media and text/code SDK
+drawings and GIS), Email, and Assets/Data. Image/media and text/code SDK
 plugins and the XMind plugin are not registered; standalone files keep Shadow's
-existing image, media, text, Markdown and HTML views. Common archive entries use
-a small browser-native image/media and bounded plain-source preview instead of
-loading a second syntax-highlighting or image-conversion engine.
+existing image, media, text, Markdown and HTML views.
+
+ZIP, 7z, RAR, TAR, GZIP, BZIP2 and XZ files expand in the file tree, including
+compressed TAR containers (`.tar.gz`/`.tgz`, `.tar.bz2`, `.tar.xz`) and nested
+archives. No archive is read until expanded. The first expansion fetches the
+archive through its owning session/folder API and lists its metadata; inner
+directories expand from that index, without extracting their files. Selecting
+an entry fetches the archive again and extracts only that entry for the existing
+file preview. Compressed TAR containers and solid archives may require decoding
+earlier data to reach the requested entry; this is not HTTP range streaming.
+Refresh invalidates expanded archive indexes. Path search searches workspace
+files, not archive contents.
+
+The locally bundled `7z-wasm` decoder runs in a disposable Web Worker; no native
+7-Zip install, host extraction directory or external conversion service is used.
+Production assets include its license, unRAR restriction and corresponding
+upstream source/build links under `assets/7zip/`.
+Collapsing a pending archive, changing source or leaving the view cancels its
+operation. Limits are 128 MB per archive (also for decoded TAR containers),
+32 MB per extracted entry, 50,000 directory entries, four member-path levels
+and 30 seconds per decoder operation. Unsupported/encrypted files, links,
+unsafe or ambiguous entry names and corrupt archives produce a retryable error.
+The archive row's download action opens its download view. HTML and Markdown
+entries show bounded source; linked workspace assets, quoting and image
+annotation are disabled for archive members. Entry Blob URLs are released when
+their preview is hidden or closed.
+
+The pinned SDK patch removes its archive plugin from both ESM/CommonJS entry
+points and declarations; pnpm overrides remove its exclusive `seek-bzip` and
+`xz-decompress` dependencies. Keep that patch aligned when upgrading the SDK.
+`jszip` and `pako` remain because Office and other registered viewers share them.
 Production builds tree-shake the unregistered SDK plugin JavaScript and its
 unused HEIC, HLS and Prism dependencies. Shared parsers remain where needed:
 for example, Office uses the TIFF decoder for embedded PPTX images, and

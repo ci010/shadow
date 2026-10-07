@@ -10,9 +10,14 @@ overrides:
   jose: 6.2.10
   postcss: 8.5.26
   undici@^6.0.0: 6.28.0
+  '@open-file-viewer/core>seek-bzip': '-'
+  '@open-file-viewer/core>xz-decompress': '-'
 
 allowBuilds:
   electron: true
   electron-winstaller: true
   esbuild: true
   koffi: false
+
+patchedDependencies:
+  '@open-file-viewer/core@0.1.48': patches/@open-file-viewer__core@0.1.48.patch

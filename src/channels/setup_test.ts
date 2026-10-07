@@ -111,6 +111,7 @@ test('channel API authorizes both GET and PATCH and exposes only the three selec
   assert.equal(body.channels[0].configured, true)
   assert.equal(body.channels[0].state, 'disabled')
   assert.equal(body.channels[0].config.appId, 'public-app-id')
+  assert.equal(body.channels[0].config.triggerMode, 'mention')
   assert.deepEqual(body.channels[0].secrets, { secret: true, token: true })
   assert.doesNotMatch(JSON.stringify(body), /synthetic-|config\.json|access_token/)
   assert.equal((await f.patch('wechat', { enabled: true })).status, 404)
@@ -128,6 +129,7 @@ test('strict partial patches validate required credentials and never blank store
   for (const patch of [
     { secret: '' }, { secret: '   ' }, { secret: '__SHADOW_REDACTED__' },
     { intents: -1 }, { intents: 1.5 }, { intents: 0x1_0000_0000 }, { sandbox: 1 },
+    { triggerMode: 'invalid' }, { triggerMode: true },
     { allowFrom: [123] }, { adminChats: 'admin' }, { appId: 'line\nbreak' },
     { trustedChats: 'room' }, { trustedChats: [123] }, { trustedChats: [' '] },
     { trustedChats: ['room\n'] }, { trustedChats: Array(1001).fill('room') },
@@ -141,7 +143,7 @@ test('persisted config reconnects immediately; only transport events mark connec
   const f = await fixture(t)
   const saved = await f.patch('qq', {
     appId: 'app', secret: 'synthetic-secret', token: 'synthetic-token', enabled: true,
-    markdown: false, sandbox: true, intents: 123, allowFrom: ['allowed'], adminChats: ['admin'],
+    markdown: false, sandbox: true, intents: 123, allowFrom: ['allowed'], adminChats: ['admin'], triggerMode: 'all',
   })
   assert.equal(saved.status, 200)
   const first = f.created[0]
@@ -168,6 +170,8 @@ test('persisted config reconnects immediately; only transport events mark connec
   assert.equal(f.persisted().channels.qq.secret, 'synthetic-secret')
   assert.equal(f.persisted().channels.qq.token, 'synthetic-token')
   assert.equal(f.persisted().channels.qq.markdown, false)
+  assert.equal(f.persisted().channels.qq.triggerMode, 'all')
+  assert.equal(f.manager.status('qq').config.triggerMode, 'all')
   assert.deepEqual(f.persisted().fixture, { preserve: true })
   assert.equal(f.persisted().providers.fixture.apiKey, 'synthetic-provider-secret')
   assert.doesNotMatch(JSON.stringify(f.manager.status('qq')), /synthetic-/)
@@ -346,7 +350,7 @@ test('real channel GET and PATCH responses round-trip through the frontend parse
   const { parseChannelList, parseChannelStatus } = await import('../../app/src/channel-settings.ts')
   const f = await fixture(t)
   const publicConfig: Record<ChannelId, ChannelSetupStatus['config']> = {
-    qq: { appId: 'qq-app', sandbox: true, markdown: false, intents: 0xffffffff, allowFrom: ['qq-sender'], adminChats: ['qq-admin'], trustedChats: ['qq-room'] },
+    qq: { appId: 'qq-app', sandbox: true, markdown: false, triggerMode: 'all', intents: 0xffffffff, allowFrom: ['qq-sender'], adminChats: ['qq-admin'], trustedChats: ['qq-room'] },
     feishu: { appId: 'feishu-app', allowFrom: ['feishu-sender'], adminChats: ['feishu-admin'], trustedChats: ['feishu-room'] },
     discord: { triggerMode: 'all', reactionEmoji: '', allowFrom: ['discord-sender'], adminChats: ['discord-admin'], trustedChats: ['discord-room'] },
   }

@@ -1,6 +1,7 @@
 import type { SessionPromptContext } from './builder.ts'
 import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
+import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-policy.ts'
 
 export function toolsGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
@@ -47,7 +48,10 @@ ${mode === 'call'
 - Local Node: compose tool chains; \`infer()\` handles semantic judgments, not deterministic work. Read \`node-scripting\` first for API, budgets, errors and direct-only boundaries.`)
   }
 
-  if (mode !== 'call' && isToolAllowed(ctx.agent, 'ask')) {
+  if (mode !== 'call' && !channelSupportsAsk(ctx.channel, ctx.sessionId)) {
+    sections.push(`### Questions in chat\n\n${CHAT_QUESTION_GUIDANCE}`)
+  }
+  if (mode !== 'call' && channelSupportsAsk(ctx.channel, ctx.sessionId) && isToolAllowed(ctx.agent, 'ask')) {
     sections.push(`### Questions and decisions
 
 - **\`ask\`** — \`kind: "input"\` needs only a question for missing text, never authorization. \`kind: "decision"\` handles consequential decisions, not routine choices.

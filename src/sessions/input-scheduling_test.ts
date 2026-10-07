@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { getEventListeners } from 'node:events'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { describe, test } from 'node:test'
 import { Hono } from 'hono'
 import { Bus } from '../bus/bus.ts'
+import { QQChannel } from '../channels/qq.ts'
 import { BackgroundTaskManager } from '../agent/background-task.ts'
 import { EventService } from '../events/service.ts'
 import { channelSessionId, type OutboundMessage } from '../bus/events.ts'
@@ -22,6 +23,7 @@ import { channelMessageInput, type SessionInput, type SessionMessageInput, type 
 import { SessionManager, type SessionManagerDeps } from './session-manager.ts'
 import { Session } from './session.ts'
 import { sessionsApiPlugin } from './routes.ts'
+import { sessionWorkspacePath } from '../utils/paths.ts'
 
 const llm = { model: 'fixture', contextWindow: 128_000, temperature: 0 }
 const done = (content = 'Finished'): LLMResponse => ({ content, toolCalls: [] })
@@ -730,6 +732,124 @@ for (const staged of [false, true]) {
       await waitFor(() => f.session.quiescent)
       assert.equal(f.facts.length, staged ? 2 : 3)
     } finally { await f.close() }
+  })
+}
+
+for (const storage of ['jsonl', 'sqlite'] as const) {
+  test(`QQ documented rich message content persists and reaches the provider (${storage})`, async t => {
+    const f = await fixture({ storage, state: { sessionId: 'qq:group:group' } })
+    const channel = new QQChannel(f.bus, { appId: 'synthetic', secret: 'synthetic', workspace: f.workspace })
+    channel.setReceiver(async message => {
+      assert.equal(message.admin, false)
+      assert.equal(message.senderName, 'Example sender')
+      f.session.dispatch(channelMessageInput(message), llm)
+      return { status: 'accepted', sessionId: f.state.sessionId, inputId: message.messageId }
+    })
+    t.mock.method(globalThis, 'fetch', async () => new Response('voice bytes'))
+    try {
+      await channel['handleDispatch']('GROUP_AT_MESSAGE_CREATE', {
+        id: 'rich-input', group_openid: 'group',
+        author: { member_openid: 'sender', username: 'Example sender', member_role: 'owner' },
+        timestamp: new Date().toISOString(), content: '', message_type: 101,
+        message_scene: { source: 'default', ext: ['msg_idx=rich-index', 'auth_token=private-secret'] },
+        msg_elements: [
+          { message_type: 3, ark_data: { ark_type: 'feed', fields: { title: 'Report', desc: 'Quarterly results' } } },
+          { attachments: [{ content_type: 'voice', voice_wav_url: 'https://multimedia.nt.qq.com.cn/voice',
+            asr_refer_text: 'Summarize the report' }] },
+        ],
+      })
+      await waitFor(() => f.calls.length === 1)
+      const providerText = JSON.stringify(f.calls[0].messages)
+      assert.match(providerText, /Quarterly results/)
+      assert.match(providerText, /Summarize the report/)
+      assert.match(providerText, /voice\.wav/)
+      assert.doesNotMatch(providerText, /private-secret/)
+      f.calls[0].resolve(done('Summary'))
+      await waitFor(() => f.session.quiescent)
+      const records = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(f.state)))
+      assert.match(JSON.stringify(records), /Quarterly results/)
+      assert.match(JSON.stringify(records), /voice\.wav/)
+      assert.doesNotMatch(JSON.stringify(records), /private-secret/)
+    } finally { await channel.stop(); await f.close() }
+  })
+
+  test(`QQ file-only non-mention survives storage and reaches the next full-mode mention (${storage})`, async t => {
+    const f = await fixture({ storage, state: { sessionId: 'qq:group:group' } })
+    const channel = new QQChannel(f.bus, { appId: 'synthetic', secret: 'synthetic', workspace: f.workspace })
+    channel.setReceiver(async message => {
+      f.session.dispatch(channelMessageInput(message), llm)
+      return { status: 'accepted', sessionId: f.state.sessionId, inputId: message.messageId }
+    })
+    t.mock.method(globalThis, 'fetch', async () => new Response('synthetic zip bytes'))
+    const data = { group_openid: 'group', author: { member_openid: 'sender' }, timestamp: new Date().toISOString() }
+    try {
+      await channel['handleDispatch']('GROUP_MESSAGE_CREATE', {
+        ...data, id: 'file', content: '', attachments: [{
+          filename: 'report (16).zip', content_type: 'file', url: 'https://multimedia.nt.qq.com.cn/download',
+        }],
+      })
+      await waitFor(() => f.session.history.length === 1 && f.session.quiescent)
+      assert.equal(f.calls.length, 0)
+      const records = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(f.state)))
+      assert.match(JSON.stringify(records), /report__16_\.zip/)
+      await channel['handleDispatch']('GROUP_MESSAGE_CREATE', {
+        ...data, id: 'mention', content: '<@group-bot-openid> Can you read the file I just sent?',
+        author: { member_openid: 'sender', username: 'Alice', member_role: 'owner' },
+        mentions: [{ id: 'group-bot-openid', username: 'Report Bot', is_you: true }],
+      })
+      await waitFor(() => f.calls.length === 1)
+      const providerInput = JSON.stringify(f.calls[0].messages)
+      assert.match(providerInput, /platform-role=\\\"owner\\\"/)
+      assert.match(providerInput, /@Report Bot Can you read the file/)
+      assert.doesNotMatch(providerInput, /QQ display metadata|QQ attachment metadata|<@group-bot-openid>/)
+      const path = providerInput.match(/uploads\/qq_[\da-f-]+_report__16_\.zip/)?.[0]
+      assert.ok(path, 'next provider request includes the earlier file attachment')
+      assert.equal(await readFile(join(sessionWorkspacePath(f.workspace, f.state.sessionId), path), 'utf8'), 'synthetic zip bytes')
+      f.calls[0].resolve(done('The attached report is available.'))
+      await waitFor(() => f.session.quiescent)
+      const saved = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(f.state)))
+      assert.doesNotMatch(JSON.stringify(saved), /QQ display metadata|QQ attachment metadata|<@group-bot-openid>/)
+      assert.match(JSON.stringify(saved), /platform-role=\\\"owner\\\"/)
+    } finally { await channel.stop(); await f.close() }
+  })
+
+  test(`QQ non-mention messages persist without calls and feed the next mention (${storage})`, async () => {
+    const f = await fixture({ storage, state: { sessionId: 'qq:group:group' } })
+    const channel = new QQChannel(f.bus, { appId: 'synthetic', secret: 'synthetic' })
+    channel.setReceiver(async message => {
+      f.session.dispatch(channelMessageInput(message), llm)
+      return { status: 'accepted', sessionId: f.state.sessionId, inputId: message.messageId }
+    })
+    const incoming = (id: string, content: string, mentioned = false) => channel['handleDispatch'](
+      mentioned ? 'GROUP_AT_MESSAGE_CREATE' : 'GROUP_MESSAGE_CREATE',
+      { id, content, group_openid: 'group', author: { member_openid: 'sender' }, timestamp: new Date().toISOString() },
+    )
+    try {
+      await incoming('background', 'The launch date is October 20.')
+      await waitFor(() => f.session.history.length === 1 && f.session.phase === 'idle')
+      assert.equal(f.calls.length, 0)
+      assert.equal(f.facts.length, 0)
+      assert.equal(f.outboundMessages.length, 0)
+      const records = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(f.state)))
+      assert.match(JSON.stringify(records), /The launch date is October 20/)
+      await incoming('mention', 'What is the launch date?', true)
+      await waitFor(() => f.calls.length === 1)
+      assert.match(JSON.stringify(f.calls[0].messages), /The launch date is October 20/)
+      assert.match(JSON.stringify(f.calls[0].messages), /What is the launch date/)
+      await incoming('during-call', 'The venue is the main hall.')
+      assert.equal(f.calls[0].signal.aborted, false)
+      f.calls[0].resolve(done('October 20'))
+      await waitFor(() => f.session.quiescent)
+      assert.equal(f.calls.length, 1)
+      assert.equal(f.facts.length, 1)
+      assert.match(JSON.stringify(f.session.history), /The venue is the main hall/)
+      await incoming('next-mention', 'Where is the launch?', true)
+      await waitFor(() => f.calls.length === 2)
+      assert.match(JSON.stringify(f.calls[1].messages), /The venue is the main hall/)
+      f.calls[1].resolve(done('The main hall'))
+      await waitFor(() => f.session.quiescent)
+      assert.equal(f.facts.length, 2)
+    } finally { await channel.stop(); await f.close() }
   })
 }
 

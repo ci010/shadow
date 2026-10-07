@@ -15,17 +15,21 @@
  */
 
 import { extname } from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Hono } from 'hono'
-import type { OutboundMessage } from '../bus/events.ts'
+import type { ChannelMessageMetadata, OutboundMessage } from '../bus/events.ts'
 import type { Bus } from '../bus/bus.ts'
 import { Span } from '../otel/tracing.ts'
 import { readMediaFile, saveToUploads } from '../utils/paths.ts'
 import { RingSet } from '../utils/ring-set.ts'
 import { errMsg } from '../utils/truncate.ts'
-import { AbstractChannel } from './base.ts'
+import { AbstractChannel, ChannelAdmissionError } from './base.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import { QQDeliveryError, QQPassiveReplies, qqResponseError } from './qq-replies.ts'
+import {
+  decodeQQGatewayPayload, qqAttachmentSources, qqInboundDiagnostics, qqIncomingContent,
+  qqMessageIndices, QQReferences, type QQGatewayPayload,
+} from './qq-inbound.ts'
 
 // ---------------------------------------------------------------------------
 // Endpoints & constants
@@ -38,7 +42,7 @@ const SANDBOX_API_BASE = 'https://sandbox.api.sgroup.qq.com'
 // Gateway intents (bitmask). See https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html
 const INTENT_GUILDS = 1 << 0
 const INTENT_PUBLIC_GUILD_MESSAGES = 1 << 30 // AT_MESSAGE_CREATE
-const INTENT_GROUP_AND_C2C_EVENT = 1 << 25 // GROUP_AT_MESSAGE_CREATE | C2C_MESSAGE_CREATE
+const INTENT_GROUP_AND_C2C_EVENT = 1 << 25 // GROUP_MESSAGE_CREATE | GROUP_AT_MESSAGE_CREATE | C2C_MESSAGE_CREATE
 const DEFAULT_INTENTS = INTENT_GUILDS | INTENT_PUBLIC_GUILD_MESSAGES |
   INTENT_GROUP_AND_C2C_EVENT
 
@@ -121,8 +125,10 @@ export interface QQChannelOptions {
   intents?: number
   /** Render outbound messages as QQ Markdown (msg_type 2). Defaults to true. */
   markdown?: boolean
+  /** Group messages are recorded either way; defaults to triggering only on mentions. */
+  triggerMode?: 'all' | 'mention'
   allowFrom?: string[]
-  /** Workspace root path — downloaded attachments are cached under <workspace>/uploads/ */
+  /** Workspace root path — downloaded attachments are cached in the owning session's uploads directory. */
   workspace?: string
   /** Group / channel IDs that have admin privileges. DMs are admin by default. */
   adminChats?: string[]
@@ -165,6 +171,7 @@ export class QQChannel extends AbstractChannel {
   private apiBase: string
   private intents: number
   private markdown: boolean
+  private triggerMode: 'all' | 'mention'
   private workspace: string
 
   // Access token cache
@@ -182,7 +189,7 @@ export class QQChannel extends AbstractChannel {
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private identifyTimer?: ReturnType<typeof setTimeout>
   private heartbeatAcknowledged = true
-  private botAppId: string | null = null
+  private botUserId: string | null = null
 
   // Dedup recently seen message IDs (gateway may redeliver)
   private _seenIds = new RingSet<string>(200)
@@ -190,6 +197,7 @@ export class QQChannel extends AbstractChannel {
   // Legacy guild behavior only. GROUP/C2C must carry their exact source ID.
   private _lastMsgId = new Map<string, string>()
   private passiveReplies = new QQPassiveReplies()
+  private references = new QQReferences()
 
   constructor(bus: Bus, opts: QQChannelOptions) {
     super(bus, opts.allowFrom, false, opts.adminChats)
@@ -199,6 +207,7 @@ export class QQChannel extends AbstractChannel {
     this.apiBase = opts.sandbox ? SANDBOX_API_BASE : API_BASE
     this.intents = opts.intents ?? DEFAULT_INTENTS
     this.markdown = opts.markdown ?? true
+    this.triggerMode = opts.triggerMode ?? 'mention'
     this.workspace = opts.workspace ?? '.'
   }
 
@@ -213,7 +222,7 @@ export class QQChannel extends AbstractChannel {
     this.setAccepting(true)
     this.reportState('connecting')
     this.stopping = false
-    this.botAppId = this.appId
+    this.botUserId = null
 
     console.info('[qq] Connecting to QQ Bot gateway...')
     await this.connect()
@@ -246,6 +255,7 @@ export class QQChannel extends AbstractChannel {
     this.seq = null
     this.passiveReplies.clear()
     this._lastMsgId.clear()
+    this.references.clear()
     this.reportState('disconnected')
     console.info('[qq] Channel stopped')
     return Promise.resolve()
@@ -616,21 +626,18 @@ export class QQChannel extends AbstractChannel {
 
     if (this.stopping || this.controller !== controller) return
     const ws = new WebSocket(this.gatewayUrl)
+    ws.binaryType = 'arraybuffer'
     this.ws = ws
 
     this.ws.onopen = this.bindCallback(() => console.debug('[qq] WebSocket connected'))
 
     this.ws.onmessage = this.bindCallback((event: MessageEvent) => {
       if (this.stopping || this.ws !== ws) return
-      let data: {
-        op: number
-        d: Record<string, unknown> | null
-        s: number | null
-        t: string | null
-      }
+      let data: QQGatewayPayload
       try {
-        data = JSON.parse(String(event.data))
+        data = decodeQQGatewayPayload(event.data)
       } catch {
+        console.warn('[qq] Gateway frame rejected: invalid encoding or payload')
         return
       }
 
@@ -793,6 +800,7 @@ export class QQChannel extends AbstractChannel {
       this.reportState('connected')
       this.sessionId = (data.session_id as string) ?? null
       const user = data.user as Record<string, string> | undefined
+      this.botUserId = typeof user?.id === 'string' ? user.id : null
       console.info(
         `[qq] Ready: sessionId=${this.sessionId}, bot=${
           user?.username ?? this.appId
@@ -806,9 +814,16 @@ export class QQChannel extends AbstractChannel {
       return
     }
 
+    // Log wire shape only: message bodies, sender IDs and signed URLs stay private.
+    console.info('[qq] Gateway dispatch', {
+      event: /^[A-Z_]{1,64}$/.test(event) ? event : 'unknown',
+      ...qqInboundDiagnostics(data),
+    })
+
     switch (event) {
+      case 'GROUP_MESSAGE_CREATE':
       case 'GROUP_AT_MESSAGE_CREATE':
-        await this.onGroupMessage(data)
+        await this.onGroupMessage(data, event === 'GROUP_AT_MESSAGE_CREATE')
         break
       case 'C2C_MESSAGE_CREATE':
         await this.onC2CMessage(data)
@@ -822,23 +837,33 @@ export class QQChannel extends AbstractChannel {
     }
   }
 
-  private async onGroupMessage(data: Record<string, unknown>): Promise<void> {
+  private async onGroupMessage(data: Record<string, unknown>, mentioned: boolean): Promise<void> {
     const msgId = data.id as string | undefined
     const groupId = data.group_openid as string | undefined
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.member_openid
     if (!msgId || !groupId || !senderId) return
+    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `group:${groupId}`
-    if (!this._seenIds.add(JSON.stringify([chatId, msgId]))) return
+    if (!this.isNewIncoming(chatId, msgId, data)) return
 
-    const content = ((data.content as string) ?? '').trim()
-    const media = await this.downloadAttachments(data, chatId)
+    const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
     if (!content && !media) return
 
+    const mentionsBot = mentioned || (Array.isArray(data.mentions) && data.mentions.some(
+      (mention: unknown) => mention !== null && typeof mention === 'object'
+        && (('is_you' in mention && mention.is_you === true)
+          || ('id' in mention && typeof mention.id === 'string'
+            && (mention.id === this.botUserId || mention.id === this.appId))),
+    ))
     await this.passiveReplies.admit(chatId, msgId, data.timestamp, () => this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: true,
+      ...(typeof author?.username === 'string' ? { senderName: author.username } : {}),
+      displayMetadata,
+      silent: this.triggerMode === 'mention' && !mentionsBot,
     }, media))
+    this.rememberIncoming(chatId, data, content, media)
   }
 
   private async onC2CMessage(data: Record<string, unknown>): Promise<void> {
@@ -846,17 +871,20 @@ export class QQChannel extends AbstractChannel {
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.user_openid
     if (!msgId || !senderId) return
+    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = `c2c:${senderId}`
-    if (!this._seenIds.add(JSON.stringify([chatId, msgId]))) return
+    if (!this.isNewIncoming(chatId, msgId, data)) return
 
-    const content = ((data.content as string) ?? '').trim()
-    const media = await this.downloadAttachments(data, chatId)
+    const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, ((data.content as string) ?? '').trim())
     if (!content && !media) return
 
     await this.passiveReplies.admit(chatId, msgId, data.timestamp, () => this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: false,
+      ...(typeof author?.username === 'string' ? { senderName: author.username } : {}),
+      displayMetadata,
     }, media))
+    this.rememberIncoming(chatId, data, content, media)
   }
 
   private async onGuildMessage(
@@ -867,59 +895,105 @@ export class QQChannel extends AbstractChannel {
     const author = data.author as Record<string, string> | undefined
     const senderId = author?.id
     if (!msgId || !senderId) return
-    if (!this._seenIds.add(msgId)) return
-
+    if (!this.isAllowed(senderId)) throw new ChannelAdmissionError('[qq] Sender is not authorized', 403)
     const chatId = isDirect
       ? `dms:${data.guild_id as string}`
       : `channel:${data.channel_id as string}`
+    if (!this.isNewIncoming(chatId, msgId, data)) return
     this._lastMsgId.set(chatId, msgId)
 
     const member = data.member as Record<string, unknown> | undefined
     const senderName = (member?.nick as string) ?? author?.username ?? senderId
 
-    const content = stripGuildMention((data.content as string) ?? '').trim()
-    const media = await this.downloadAttachments(data, chatId)
+    const { content, media, displayMetadata } = await this.downloadAttachments(data, chatId, stripGuildMention((data.content as string) ?? '').trim())
     if (!content && !media) return
 
     await this.handleIncoming(senderId, chatId, content, msgId, {
       platformMessageId: msgId,
       isGroup: !isDirect,
       senderName,
+      displayMetadata,
     }, media)
+    this.rememberIncoming(chatId, data, content, media)
   }
 
   // ── Attachments ────────────────────────────────────────────────────────────
 
+  private isNewIncoming(chatId: string, msgId: string, data: Record<string, unknown>): boolean {
+    const { messageIndex } = qqMessageIndices(data)
+    return this._seenIds.add(JSON.stringify([chatId, messageIndex ? 'index' : 'id', messageIndex ?? msgId]))
+  }
+
+  private rememberIncoming(chatId: string, data: Record<string, unknown>, content: string, media?: string[]): void {
+    if (this.stopping) return
+    const { messageIndex, invalid } = qqMessageIndices(data)
+    if (invalid) return
+    const index = messageIndex ?? (typeof data.id === 'string' ? data.id : undefined)
+    if (index) {
+      this.assertConnection()
+      this.references.remember(chatId, index, { content, media: media ?? [] })
+    }
+  }
+
   /**
    * Download any inbound attachments and cache them under the session uploads
-   * dir. Returns the local relative paths, or undefined if none.
+   * dir. Keep failures in the message so attachment-only input is not lost.
    */
   private async downloadAttachments(
     data: Record<string, unknown>,
     chatId: string,
-  ): Promise<string[] | undefined> {
-    const attachments = data.attachments as
-      | Array<Record<string, unknown>>
-      | undefined
-    if (!attachments || attachments.length === 0) return undefined
-
+    content: string,
+  ): Promise<{ content: string; media?: string[]; displayMetadata?: ChannelMessageMetadata }> {
+    const { referenceIndex } = qqMessageIndices(data)
+    const reference = referenceIndex ? this.references.get(chatId, referenceIndex) : undefined
+    const incoming = qqIncomingContent(data, content, reference, index => this.references.get(chatId, index))
+    if (referenceIndex) console.info('[qq] Reference lookup', { cached: !!reference, usedCachedMedia: incoming.cachedMedia.length })
+    const { attachments } = incoming
+    content = incoming.content
+    if (incoming.notices.length) console.warn('[qq] Incomplete attachment or quoted message data')
+    const assertActive = this.connectionGuard()
     const sessionId = this.logicalSessionId(chatId)
-    const results: string[] = []
+    const results: string[] = [...incoming.cachedMedia]
+    const displayMetadata: ChannelMessageMetadata = { ...incoming.displayMetadata }
+    const attachmentMetadata: NonNullable<ChannelMessageMetadata['attachments']> = []
+    let downloadedCount = 0
+    const notices: string[] = [...incoming.notices]
     for (const att of attachments) {
-      let url = att.url as string | undefined
-      if (!url) continue
-      // QQ media URLs sometimes omit the scheme
-      if (!/^https?:\/\//.test(url)) url = `https://${url}`
+      assertActive()
       try {
-        const res = await this.request(url)
-        if (!res.ok) {
-          console.warn(`[qq] Failed to download attachment: ${res.status}`)
-          continue
+        const sources = qqAttachmentSources(att)
+        let downloaded: { url: URL; bytes: Uint8Array; filename?: string; contentType?: string; httpType?: string } | undefined
+        for (const [index, source] of sources.entries()) {
+          try {
+            // QQ media URLs sometimes omit the scheme or use a protocol-relative URL.
+            const rawUrl = source.url.trim()
+            const url = new URL(rawUrl.startsWith('//') ? `https:${rawUrl}`
+              : /^[a-z][a-z\d+.-]*:/i.test(rawUrl) ? rawUrl : `https://${rawUrl}`)
+            if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid attachment URL')
+            const res = await this.request(url)
+            if (!res.ok) {
+              await res.body?.cancel()
+              console.warn(`[qq] Failed to download attachment: ${res.status}`)
+              throw new Error('Attachment download failed')
+            }
+            downloaded = { url, bytes: new Uint8Array(await res.arrayBuffer()),
+              filename: source.filename, contentType: source.contentType, httpType: res.headers.get('content-type') ?? undefined }
+            break
+          } catch {
+            assertActive()
+            if (index === sources.length - 1) throw new Error('Attachment download failed')
+            console.warn('[qq] Converted voice download failed; trying the original attachment')
+          }
         }
-        const buf = new Uint8Array(await res.arrayBuffer())
-        const rawName = (att.filename as string) ?? `qq_${Date.now()}`
-        const ext = extname(rawName) || guessExt(att.content_type as string)
-        const saveName = `qq_${Date.now()}${ext}`
+        if (!downloaded) throw new Error('No attachment URL')
+        const { url, bytes: buf } = downloaded
+        const urlName = decodeURIComponent(url.pathname.split('/').at(-1) ?? '')
+        const rawName = downloaded.filename?.trim() ? downloaded.filename : urlName || 'attachment'
+        const safeName = rawName.split(/[\\/]/).at(-1)!.normalize('NFC')
+          .replace(/[^\p{L}\p{N}_.-]/gu, '_').replace(/^\.+|\.+$/g, '').slice(-60) || 'attachment'
+        const ext = extname(safeName) || guessExt(downloaded.contentType) || guessExt(downloaded.httpType)
+        const saveName = `qq_${randomUUID()}_${safeName}${extname(safeName) ? '' : ext}`
+        assertActive()
         this.assertConnection()
         const rel = await saveToUploads(
           this.workspace,
@@ -928,11 +1002,26 @@ export class QQChannel extends AbstractChannel {
           buf,
         )
         results.push(rel)
-      } catch (err) {
-        console.warn('[qq] Error downloading attachment', errMsg(err))
+        downloadedCount++
+        const metadata: NonNullable<ChannelMessageMetadata['attachments']>[number] = { path: rel }
+        if (typeof att.content_type === 'string') metadata.contentType = att.content_type
+        for (const key of ['size', 'width', 'height'] as const) {
+          if (typeof att[key] === 'number' && Number.isSafeInteger(att[key]) && att[key] >= 0) metadata[key] = att[key]
+        }
+        if (Object.keys(metadata).length > 1) attachmentMetadata.push(metadata)
+      } catch {
+        assertActive()
+        // Signed CDN URLs and response bodies must not enter logs or prompts.
+        console.warn('[qq] Error downloading attachment')
+        notices.push('[attachment unavailable: download failed]')
       }
     }
-    return results.length > 0 ? results : undefined
+    if (attachments.length) {
+      console.info('[qq] Attachment reception', { received: attachments.length, saved: downloadedCount, failed: attachments.length - downloadedCount })
+    }
+    if (attachmentMetadata.length) displayMetadata.attachments = attachmentMetadata
+    return { content: [content, ...notices].filter(Boolean).join('\n'), media: results.length ? results : undefined,
+      ...(Object.keys(displayMetadata).length ? { displayMetadata } : {}) }
   }
 }
 
@@ -958,10 +1047,20 @@ function guessExt(contentType: string | undefined): string {
     'image/gif': '.gif',
     'image/webp': '.webp',
     'video/mp4': '.mp4',
+    'audio/mpeg': '.mp3',
+    'audio/ogg': '.ogg',
+    'audio/wav': '.wav',
     'audio/silk': '.silk',
+    'voice': '.silk',
     'application/pdf': '.pdf',
+    'text/plain': '.txt',
+    'text/csv': '.csv',
+    'application/json': '.json',
+    'application/zip': '.zip',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
   }
-  return map[contentType.split(';')[0].trim()] ?? ''
+  return map[contentType.split(';')[0].trim().toLowerCase()] ?? ''
 }
 
 /** Strip `<@!123>` style mention markup from guild channel message text. */

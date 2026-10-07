@@ -6,7 +6,7 @@ import type { Bus } from '../bus/bus.ts'
 import { Span } from '../otel/tracing.ts'
 import { readMediaFile, saveToUploads } from '../utils/paths.ts'
 import { errMsg } from '../utils/truncate.ts'
-import { AbstractChannel } from './base.ts'
+import { AbstractChannel, ChannelConnectionError } from './base.ts'
 import { unavailableCapabilities, type ChannelCapabilities } from './capabilities.ts'
 import { parseYieldRequest, type YieldRequest } from '../sessions/yield-contract.ts'
 import { discordPermissions, discordRecord, DiscordPermission as Permission, isDiscordId } from './discord-permissions.ts'
@@ -16,6 +16,7 @@ import { discordBotIdentity, discordDirectory, discordMembers, inspectDiscordCon
 import type { DiscordAdapterIntegration, DiscordBinding } from './integration-contract.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
+import { WebSocket, getGlobalDispatcher, type MessageEvent } from 'undici'
 
 const DISCORD_API = 'https://discord.com/api/v10'
 const NO_MENTIONS = { parse: [], replied_user: false }
@@ -137,7 +138,8 @@ export class DiscordChannel extends AbstractChannel {
     console.info('Connecting to Discord gateway...')
     try {
       await this.connect()
-    } catch {
+    } catch (error) {
+      if (error instanceof ChannelConnectionError) throw error
       throw new Error('Discord connection failed')
     }
   }
@@ -699,16 +701,21 @@ export class DiscordChannel extends AbstractChannel {
   // ── WebSocket logic ───────────────────────────────────────────────────
 
   private async getGatewayUrl(): Promise<string> {
-    const res = await this.request(`${DISCORD_API}/gateway/bot`, {
-      headers: { Authorization: `Bot ${this.token}` },
-      signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000)]),
-    })
+    let res: Response
+    try {
+      res = await this.request(`${DISCORD_API}/gateway/bot`, {
+        headers: { Authorization: `Bot ${this.token}` },
+        signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15_000)]),
+      })
+    } catch {
+      throw new ChannelConnectionError('network')
+    }
     if (res.ok) {
       const data = await res.json() as { url: string }
       return `${data.url}/?v=10&encoding=json`
     }
     await res.body?.cancel()
-    throw new Error('Discord gateway request failed')
+    throw new ChannelConnectionError(res.status === 401 ? 'authentication' : res.status === 403 ? 'permission' : 'gateway')
   }
 
   private async connect(): Promise<void> {
@@ -719,7 +726,7 @@ export class DiscordChannel extends AbstractChannel {
     const gatewayUrl = await this.getGatewayUrl()
     if (this.stopping || this.controller !== controller) return
 
-    const ws = new WebSocket(gatewayUrl)
+    const ws = new WebSocket(gatewayUrl, { dispatcher: getGlobalDispatcher() })
     this.ws = ws
 
     this.ws.onopen = this.bindCallback(() => {

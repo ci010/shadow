@@ -14,6 +14,7 @@ import * as gitFiles from './git-files.ts'
 import { createHomeTreeCache, HomeTreeCacheKey } from './home-tree-cache.ts'
 import { parseSessionGraph } from './folders-sidebar.ts'
 import * as homeTreeCacheModule from './home-tree-cache.ts'
+import { archiveDirectory, type ArchiveMember, type ArchiveReference } from './archive-format.ts'
 
 // Exercise the actual SFC setup/watch lifecycle with a headless Vue renderer.
 function component(name: string, modules: Record<string, unknown> = {}): Component {
@@ -75,6 +76,119 @@ const entry = { name: '.node-version', ext: '', type: 'file', size: 8, mtime: nu
 const base = { apiBase: 'http://localhost', sessionId: '', folderId: 'folder-a', active: true }
 
 const offlineResponse = { error: 'workdir_unavailable', reason: 'node-offline', nodeId: 'child', capabilityId: 'folder' }
+
+test('archive rows load only when expanded, cancel on collapse, retry, and discard stale sources', async t => {
+  const pending: { archive: ArchiveReference; signal: AbortSignal; resolve: (entries: ArchiveMember[]) => void; reject: (error: Error) => void }[] = []
+  const index: ArchiveMember[] = [{ path: 'folder/notes.txt', type: 'file', size: 4, encrypted: false, link: false }]
+  const opened: unknown[] = []
+  const { props, state } = mount(t, 'FileTreeNode', {
+    ...base, dir: 'reports', depth: 0, entry: { ...entry, name: 'bundle.7z', ext: '.7z' }, onOpen: (value: unknown) => opened.push(value),
+  }, undefined, {
+    '../../archive-files.ts': { listArchive: (_api: string, _session: string, _folder: string, archive: ArchiveReference, signal: AbortSignal) =>
+      new Promise<ArchiveMember[]>((resolve, reject) => pending.push({ archive, signal, resolve, reject })) },
+  })
+  assert.equal(state().expandable, true)
+  assert.equal(pending.length, 0)
+  state().onRowClick()
+  assert.equal(opened.length, 0)
+  assert.deepEqual(pending[0]!.archive, { path: 'reports/bundle.7z', members: [] })
+  state().onRowClick()
+  assert(pending[0]!.signal.aborted)
+  pending[0]!.resolve(index)
+  await settle()
+  assert.deepEqual(state().children, [])
+  state().onRowClick()
+  pending[1]!.reject(new Error('damaged archive'))
+  await settle()
+  assert.match(state().loadError, /damaged/)
+  void state().loadChildren()
+  pending[2]!.resolve(index)
+  await settle()
+  assert.equal(state().children[0].name, 'folder')
+  state().onRowClick(); state().onRowClick()
+  assert.equal(pending.length, 3, 'Reopening a loaded archive reuses its metadata')
+  props.refreshVersion = 1
+  await settle()
+  assert.equal(state().expanded, true)
+  assert.equal(pending.length, 4, 'Refresh reloads expanded archives')
+  props.apiBase = 'http://fixture/projects/other'
+  await settle()
+  assert(pending[3]!.signal.aborted)
+  pending[3]!.resolve(index)
+  await settle()
+  assert.deepEqual(state().children, [])
+})
+
+test('archive subfolders expand from metadata without fetching or extracting, and changes remain diffs', async t => {
+  const pending = requests(t)
+  const index: ArchiveMember[] = [{ path: 'folder/notes.txt', type: 'file', size: 4, encrypted: false, link: false }]
+  const folder = archiveDirectory(index, { path: 'bundle.zip', members: [] })[0]!
+  const { state } = mount(t, 'FileTreeNode', { ...base, dir: 'bundle.zip', depth: 1, entry: folder, archiveIndex: index })
+  state().onRowClick()
+  await settle()
+  assert.equal(pending.length, 0)
+  assert.deepEqual(state().children[0].archive, { path: 'bundle.zip', members: ['folder/notes.txt'] })
+  let opened = false
+  const changed = mount(t, 'FileTreeNode', { ...base, dir: '', depth: 0, changesOnly: true,
+    entry: { ...entry, name: 'bundle.zip' }, onOpen: () => { opened = true } })
+  changed.state().onRowClick()
+  assert.equal(changed.state().expandable, false)
+  assert(opened)
+})
+
+test('archive containers never enter Open File Viewer or text decoding', async t => {
+  const pending = requests(t)
+  for (const ext of ['.zip', '.rar', '.7z', '.gz', '.xz']) {
+    const { state } = mount(t, 'FilePreviewModal', { ...base, remote: true, dir: '', entry: { ...entry, name: `bundle${ext}`, ext } })
+    assert.equal(state().archiveContainer, true)
+    assert.equal(state().viewerFormat, undefined)
+    assert.equal(state().textMode, false)
+  }
+  assert.equal(pending.length, 0)
+})
+
+test('archive entry previews use bounded inert source and release bytes and URLs when inactive', async t => {
+  const pending = requests(t)
+  const reads: AbortSignal[] = []
+  const revoked: string[] = []
+  t.mock.method(URL, 'revokeObjectURL', (url: string) => revoked.push(url))
+  const { props, state } = mount(t, 'FilePreviewModal', {
+    ...base, dir: 'bundle.zip', canQuote: true, selectionActive: true,
+    entry: { ...entry, name: 'page.html', ext: '.html', archive: { path: 'bundle.zip', members: ['page.html'] } },
+  }, undefined, {
+    '../../archive-files.ts': { readArchiveEntry: async (_api: string, _session: string, _folder: string, _archive: unknown, signal: AbortSignal) => {
+      reads.push(signal)
+      return new Blob(['<script>unsafe()</script>', 'x'.repeat(70000)])
+    } },
+  })
+  await settle()
+  assert.equal(state().loaded, true)
+  assert.equal(state().textMode, true)
+  assert.equal(state().textContent.length, 65536)
+  assert.equal(state().truncated, true)
+  assert.equal(state().selectionEnabled, false)
+  assert.equal(pending.length, 0, 'No invented archive member path is sent to the workspace API')
+  const url = state().archiveUrl
+  state().encoding = 'utf-8'
+  await state().loadText()
+  assert.equal(reads.length, 1, 'Changing encoding reuses only the current entry')
+  props.active = false
+  await settle()
+  assert(revoked.includes(url))
+  assert.equal(state().archiveBlob, undefined)
+  props.active = true
+  await settle()
+  assert.equal(reads.length, 2)
+})
+
+test('archive member SDK previews use supplied bytes without a workspace member request', async t => {
+  const pending = requests(t)
+  const blob = new Blob(['office entry'])
+  const { viewers } = mountViewer(t, { sourceBlob: blob })
+  await settle()
+  assert.equal(pending.length, 0)
+  assert.equal(viewers[0]!.options.file, blob)
+})
 
 test('revealing a nested file expands only its ancestors and loads existing children', async t => {
   const pending = requests(t)
@@ -340,10 +454,10 @@ test('Open File Viewer retries parser failures and changes theme without downloa
   assert.equal(viewers[2]!.destroyed, true)
 })
 
-test('Open File Viewer keeps archive entry notifications separate from the opened file', async t => {
+test('Open File Viewer keeps embedded attachment notifications separate from the opened file', async t => {
   const pending = requests(t)
-  const { state, viewers } = mountViewer(t, { path: 'bundle.zip', name: 'bundle.zip' })
-  pending[0]!.finishBlob('archive')
+  const { state, viewers } = mountViewer(t, { path: 'message.eml', name: 'message.eml' })
+  pending[0]!.finishBlob('email')
   await settle()
   const notifications = viewers[0]!.options
   const child = { source: new Blob(['entry']), name: 'unknown.entry', extension: 'entry', mimeType: '' }
@@ -353,15 +467,15 @@ test('Open File Viewer keeps archive entry notifications separate from the opene
   notifications.onError!(new Error('entry parser'), child)
   assert.equal(state().error, '')
   assert(notifications.file instanceof Blob)
-  notifications.onLoad!({ ...child, source: notifications.file, name: 'bundle.zip' })
+  notifications.onLoad!({ ...child, source: notifications.file, name: 'message.eml' })
   assert.equal(state().loading, false)
-  notifications.onUnsupported!({ ...child, source: notifications.file, name: 'bundle.zip' })
+  notifications.onUnsupported!({ ...child, source: notifications.file, name: 'message.eml' })
   assert.match(state().error, /cannot be previewed/)
 })
 
 test('Open File Viewer routes PDF and extra formats without text decoding or remote directory probes', async t => {
   const pending = requests(t)
-  for (const ext of ['.pdf', '.docx', '.zip', '.eml', '.glb']) {
+  for (const ext of ['.pdf', '.docx', '.eml', '.glb']) {
     const { state } = mount(t, 'FilePreviewModal', { ...base, remote: true, dir: '', entry: { ...entry, name: `file${ext}`, ext } })
     assert(state().viewerFormat)
     assert.equal(state().textMode, false)

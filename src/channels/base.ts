@@ -30,6 +30,20 @@ export class ChannelAdmissionError extends Error {
   }
 }
 
+const connectionFailures = {
+  network: 'Cannot reach the Discord API. Check network access, proxy configuration and TLS certificates.',
+  authentication: 'Discord rejected the Bot token (HTTP 401). Check the token in the Bot settings.',
+  permission: 'Discord denied the gateway request (HTTP 403). Check the application and platform permissions.',
+  gateway: 'Discord rejected the gateway request. Check platform availability and retry later.',
+} as const
+
+export class ChannelConnectionError extends Error {
+  constructor(readonly code: keyof typeof connectionFailures) {
+    super(connectionFailures[code])
+    this.name = 'ChannelConnectionError'
+  }
+}
+
 /**
  * Abstract base for all communication channels (Discord, Telegram, Feishu, etc.).
  *

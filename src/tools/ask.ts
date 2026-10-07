@@ -7,6 +7,7 @@ import type { Tool, ToolParameters, ToolResult } from './tool.ts'
 import { buildMediaParts } from '../agent/message-builder.ts'
 import { WORK_APPROVE, WORK_REJECT } from '../initiatives/work-contract.ts'
 import type { WorkAlignment } from '../sessions/work-alignment.ts'
+import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from './ask-policy.ts'
 
 const parameters = {
   type: 'object' as const,
@@ -42,6 +43,9 @@ export class AskTool implements Tool<ToolResult> {
 
   async execute(args: Record<string, unknown>, ctx: ExecutionContext): Promise<ToolResult> {
     ctx.signal.throwIfAborted()
+    if (!channelSupportsAsk(ctx.channel, ctx.sessionId) || !channelSupportsAsk(ctx.channelAddress?.platform)) {
+      throw new YieldError('forbidden', CHAT_QUESTION_GUIDANCE)
+    }
     const denied = ctx.tools?.executionDenial?.('ask', args)
     if (denied) return denied
     const action = args.action === undefined ? 'ask' : args.action

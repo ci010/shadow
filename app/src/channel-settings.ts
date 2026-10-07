@@ -23,10 +23,11 @@ export const channelDefinitions: Array<{
 }> = [
   {
     id: 'qq', label: 'QQ', description: 'Connect an official QQ bot to group chats and direct messages.', portal: 'https://q.qq.com/',
-    instructions: ['Create a bot on the QQ Open Platform and copy its App ID and App Secret.', 'Enable the group and direct-message events approved for your bot. For test accounts, use sandbox mode.'],
+    instructions: ['Create a bot on the QQ Open Platform and copy its App ID and App Secret.', 'Enable the group and direct-message events approved for your bot. For test accounts, use sandbox mode.', 'Enable QQ\'s receive-all-messages capability to retain group context even without a mention.'],
     fields: [
       { key: 'appId', label: 'App ID', kind: 'text', required: true },
       { key: 'secret', label: 'App Secret', kind: 'password', required: true },
+      { key: 'triggerMode', label: 'Trigger model on', kind: 'select', options: ['mention', 'all'], default: 'mention', hint: 'Default: only @mentions trigger a model call in groups. Other messages are saved as context without a model call. All messages triggers on every received group message. Direct messages always trigger.' },
       { key: 'sandbox', label: 'Use sandbox', kind: 'checkbox', default: false },
       { key: 'markdown', label: 'Send Markdown messages', kind: 'checkbox', default: true },
       { key: 'token', label: 'Legacy bot token', kind: 'password', advanced: true, hint: 'Only needed for legacy guild APIs.' },

@@ -26,6 +26,15 @@ export function channelAddressFromSessionId(sessionId: string): ChannelAddress |
   return { projectId, botInstanceId, platform, conversationId }
 }
 
+/** Platform-provided display context, never Shadow identity, authority or scheduling. */
+export interface ChannelMessageMetadata {
+  messageType?: number
+  source?: string
+  author?: { bot?: boolean; role?: string }
+  mentions?: Array<{ id?: string; name?: string; bot?: boolean; role?: string; isSelf?: boolean }>
+  attachments?: Array<{ path: string; contentType?: string; size?: number; width?: number; height?: number }>
+}
+
 /** Shared inbound metadata and agent execution context. */
 export interface MessageContext {
   /** Opaque, in-memory admission from the platform adapter; never grants authority when deserialized. */
@@ -46,6 +55,7 @@ export interface MessageContext {
   senderId: string
   /** Sender display name */
   senderName?: string
+  displayMetadata?: ChannelMessageMetadata
   /** Chat / conversation id within the channel */
   chatId: string
   /** Human-readable chat or channel name, if known */

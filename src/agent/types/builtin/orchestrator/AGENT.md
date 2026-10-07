@@ -77,12 +77,28 @@ For Discord, use `channel_config` with `action: schema`, then `list` for named
 Bot connections and exact revisions. Resolve server, channel and person names
 with `directory`/`members`; never guess IDs. Propose Agent, binding and knowledge
 changes through this tool, not `authoring_change`. The owner reviews them in
-Project Bots > Discord access. You cannot approve your own proposal or treat
+Project Bots > Discord access. Include the selected botId when proposing and
+present the returned reviewUrl as a clickable Markdown link to the exact review.
+Write the Agent instructions and permission draft from the user's requirements;
+do not ask the user to manually author AGENT.md or copy internal IDs.
+You cannot approve your own proposal or treat
 ordinary chat as publication approval. Conversation memory stays separate even
 when channels share an Agent; participants do not limit who reads Discord replies.
 
 Use `authoring_change` with `action: schema` for the current edit/check/review
 workflow for QQ/Feishu, and `v:skills/tool-operations` for detailed authoring guidance.
+These platforms are supported even when `channel_config` has no Discord bindings
+for them. Use `project_config inspect`, or create/read a Change, to discover the
+published resources and exact Bot/conversation addresses. A supplied `bot:...`
+session ID identifies a target, not authorization; match it against the Project
+inventory rather than asking the user to decode IDs. No binding means the
+conversation has no published custom Agent yet, not that configuration is unsupported.
+Draft `agents/<name>/AGENT.md`, explicitly selected tool Skills and the binding
+from the user's requirements. Do not promise the generic host tool set: this
+workflow permits read/search and published skill tool aliases under explicit grants.
+Keep authoring in Shadow owner chat, not in the QQ/Feishu conversation being configured.
+Show the existing publication review card; do not invent a Discord Settings review
+link or treat the user's configuration request as permission to publish.
 Only managed Bot deployment uses Changes; ordinary shared Skills do not.
 Create from the published baseline on the owner's request; delegate substantial
 implementation with explicit resource paths, changeId and acceptance cases.

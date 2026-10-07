@@ -3,16 +3,22 @@
     <TreeRow button-class="tree-row" :button-attrs="{ 'data-path': fullPath, 'aria-busy': loading, 'aria-disabled': !active }" :label="entry.name" :depth="depth"
       :selected="selectedPath === fullPath" :current="selectedPath === fullPath ? 'page' : undefined"
       :title="decoration ? `${fullPath}\n${entry.type === 'dir' ? 'Contains changes: ' : ''}${gitChangeLabel(decoration)}` : fullPath"
-      :expanded="entry.type === 'dir' ? expanded : undefined" @select="onRowClick">
+      :expanded="expandable ? expanded : undefined" @select="onRowClick">
       <template #icon><span :class="loading ? 'i-lucide-loader-circle animate-spin' : entry.type === 'dir' ? folderIcon(entry.name, expanded) : fileIcon(entry.name)" /></template>
       <template v-if="entry.type === 'file'" #meta>
         <span v-if="decoration" class="git-status" :aria-label="gitChangeLabel(decoration)">{{ gitChangeBadge(decoration) }}</span>
         <span v-else>{{ sizeLabel }}</span>
       </template>
+      <template v-if="archiveContainer" #actions>
+        <button type="button" class="archive-open" :aria-label="`Download or view ${entry.name}`" :disabled="!active"
+          @click="emit('open', { path: fullPath, entry })"><span class="i-lucide-download" aria-hidden="true" /></button>
+      </template>
     </TreeRow>
 
-    <div v-if="entry.type === 'dir'" v-show="expanded" class="tree-children">
+    <div v-if="expandable" v-show="expanded" class="tree-children">
       <div v-if="loadError && !changesOnly" class="tree-note error" role="alert">{{ loadError }} <button class="btn btn-sm" @click="loadChildren">Retry</button></div>
+      <p v-if="loading" class="tree-note" role="status">{{ archiveContainer ? 'Reading archive directory...' : 'Loading...' }}</p>
+      <p v-else-if="loaded && !loadError && !displayChildren.length" class="tree-note">{{ archiveContainer ? 'Empty archive.' : 'Empty folder.' }}</p>
       <FileTreeNode
         v-for="child in filteredChildren"
         :key="fileEntryKey(child)"
@@ -27,6 +33,7 @@
         :refresh-version="refreshVersion"
         :workspace-key="workspaceKey"
         :home-state="homeState"
+        :archive-index="childArchiveIndex"
         :changes="changes"
         :changes-only="changesOnly"
         :selected-path="selectedPath"
@@ -39,7 +46,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, toRefs, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, toRefs, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import TreeRow from '../TreeRow.vue'
 import { fileIcon, folderIcon } from '../../file-icons.ts'
@@ -47,6 +54,8 @@ import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import { fileEntryKey, fileWorkspaceKey, reconcileFileEntries } from '../../file-tree-state.ts'
 import { homeDirectoryState, type HomeTreeState } from '../../home-tree-cache.ts'
 import { changedDirectory, gitChangeBadge, gitChangeLabel, gitDecoration, type GitChange } from '../../git-files.ts'
+import { archiveDirectory, isArchive, type ArchiveMember } from '../../archive-format.ts'
+import { listArchive } from '../../archive-files.ts'
 import {
   type FileEntry,
   formatSize,
@@ -70,6 +79,7 @@ const props = withDefaults(defineProps<{
   selectedPath?: string
   revealVersion?: number
   filterQuery?: string
+  archiveIndex?: ArchiveMember[]
 }>(), { active: true, changes: () => [], changesOnly: false, refreshVersion: 0 })
 
 const emit = defineEmits<{ open: [payload: { path: string; entry: FileEntry }]; 'node-offline': [] }>()
@@ -78,9 +88,14 @@ const files = computed(() => useSessionFiles(props.apiBase, props.folderId))
 
 const fullPath = computed(() => joinPath(props.dir, props.entry.name))
 const sizeLabel = computed(() => props.entry.mtime === null ? '' : formatSize(props.entry.size))
-const decoration = computed(() => gitDecoration(fullPath.value, props.entry.type === 'dir', props.changes))
+const archiveContainer = computed(() => !props.changesOnly && props.entry.type === 'file' && isArchive(props.entry.name))
+const expandable = computed(() => props.entry.type === 'dir' || archiveContainer.value)
+const decoration = computed(() => props.entry.archive ? undefined : gitDecoration(fullPath.value, props.entry.type === 'dir', props.changes))
+const ownArchiveIndex = shallowRef<ArchiveMember[]>()
+const childArchiveIndex = computed(() => archiveContainer.value ? ownArchiveIndex.value : props.archiveIndex)
 
-const { expanded, children, loaded, stale } = toRefs(homeDirectoryState(props.homeState, fullPath.value, props.changesOnly && props.entry.type === 'dir'))
+const { expanded, children, loaded, stale } = toRefs(homeDirectoryState(
+  props.entry.archive || archiveContainer.value ? undefined : props.homeState, fullPath.value, props.changesOnly && props.entry.type === 'dir'))
 const displayChildren = computed(() => props.changesOnly ? changedDirectory(props.changes, fullPath.value) : children.value)
 const filteredChildren = computed(() => displayChildren.value.filter(child =>
   !props.filterQuery || child.type === 'dir' || child.name.toLocaleLowerCase().includes(props.filterQuery)))
@@ -96,12 +111,26 @@ async function loadChildren(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const listing = await files.value.listDir(props.sessionId, fullPath.value, controller.signal)
-    if (controller.signal.aborted) return
-    if (props.homeState && fileWorkspaceKey(props, listing.workdir) !== props.workspaceKey) {
-      throw new Error('Folder location changed. Refresh files before opening this folder.')
+    let entries: FileEntry[]
+    if (archiveContainer.value) {
+      const archive = props.entry.archive ?? { path: fullPath.value, members: [] }
+      const index = await listArchive(props.apiBase, props.sessionId, props.folderId, archive, controller.signal)
+      if (controller.signal.aborted) return
+      entries = archiveDirectory(index, archive)
+      ownArchiveIndex.value = index
+    } else if (props.entry.archive) {
+      if (!props.archiveIndex) throw new Error('Archive directory is unavailable. Refresh the file tree.')
+      const { path, members } = props.entry.archive
+      entries = archiveDirectory(props.archiveIndex, { path, members: members.slice(0, -1) }, members.at(-1))
+    } else {
+      const listing = await files.value.listDir(props.sessionId, fullPath.value, controller.signal)
+      if (props.homeState && fileWorkspaceKey(props, listing.workdir) !== props.workspaceKey) {
+        throw new Error('Folder location changed. Refresh files before opening this folder.')
+      }
+      entries = listing.entries
     }
-    children.value = reconcileFileEntries(children.value, listing.entries)
+    if (controller.signal.aborted) return
+    children.value = reconcileFileEntries(children.value, entries)
     loaded.value = true
     stale.value = false
   } catch (cause) {
@@ -116,9 +145,10 @@ async function loadChildren(): Promise<void> {
 
 function onRowClick(): void {
   if (!props.active) return
-  if (props.entry.type === 'dir') {
+  if (expandable.value) {
     expanded.value = !expanded.value
     if (expanded.value) void loadChildren()
+    else { request?.abort(); request = undefined; loading.value = false }
   } else {
     emit('open', { path: fullPath.value, entry: props.entry })
   }
@@ -133,18 +163,19 @@ watch(() => [props.workspaceKey ?? sourceKey.value, fullPath.value, sourceKey.va
       request = undefined
       loading.value = false
     }
-    if (reset) {
+    if (reset || (changed && (archiveContainer.value || props.entry.archive))) {
       loaded.value = false
       stale.value = false
-      expanded.value = props.changesOnly && props.entry.type === 'dir'
+      if (reset) expanded.value = props.changesOnly && props.entry.type === 'dir'
       children.value = []
+      ownArchiveIndex.value = undefined
       loadError.value = ''
     } else if (refresh !== previousRefresh || (source !== previousSource && !props.homeState)) stale.value = true
     if (active && expanded.value && (!loaded.value || stale.value)) void loadChildren()
 })
 async function revealSelected(): Promise<void> {
   if (!props.active || !props.selectedPath) return
-  if (props.entry.type === 'dir' && props.selectedPath.startsWith(`${fullPath.value}/`)) {
+  if (expandable.value && props.selectedPath.startsWith(`${fullPath.value}/`)) {
     expanded.value = true
     void loadChildren()
   } else if (props.selectedPath === fullPath.value) {
@@ -156,6 +187,12 @@ async function revealSelected(): Promise<void> {
 }
 watch(() => [props.selectedPath, props.revealVersion, props.active, props.refreshVersion], revealSelected, { flush: 'post' })
 onMounted(() => { if (expanded.value) void loadChildren(); void revealSelected() })
+watch(() => [props.archiveIndex, props.entry.size, props.entry.mtime], () => {
+  if (!archiveContainer.value && !props.entry.archive) return
+  request?.abort(); request = undefined; loading.value = false
+  stale.value = true
+  if (props.active && expanded.value) void loadChildren()
+})
 onUnmounted(() => request?.abort())
 </script>
 
@@ -177,4 +214,8 @@ onUnmounted(() => request?.abort())
 .tree-note.error {
   color: var(--c-error, #ef4444);
 }
+.archive-open { display: grid; place-items: center; width: 28px; min-height: 28px; padding: 0; border: 0; color: var(--c-text-secondary); background: transparent; cursor: pointer; }
+.archive-open:hover { color: var(--c-text); background: var(--c-bg-soft); }
+.archive-open:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+@media (pointer: coarse) { .archive-open { width: 44px; min-height: 44px; } }
 </style>

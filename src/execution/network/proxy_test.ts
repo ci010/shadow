@@ -6,6 +6,7 @@ import { connect, type Socket } from 'node:net'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { fetch } from 'undici'
+import { WebSocketServer } from 'ws'
 import { LocalProxyDispatcher } from './proxy-client.ts'
 import { localProxyConfiguration, proxyForUrl, windowsProxyConfiguration } from './proxy.ts'
 
@@ -16,6 +17,9 @@ test('Windows static routes preserve protocol choices, wildcard bypasses and loc
   })
   assert.equal(proxyForUrl(proxy, 'https://public.example/a'), 'http://proxy.example:8081/')
   assert.equal(proxyForUrl(proxy, 'http://public.example/a'), 'http://proxy.example:8080/')
+  assert.equal(proxyForUrl(proxy, 'wss://public.example/socket'), 'http://proxy.example:8081/')
+  assert.equal(proxyForUrl(proxy, 'ws://public.example/socket'), 'http://proxy.example:8080/')
+  assert.equal(proxyForUrl(proxy, 'ws://localhost:1234/socket'), undefined)
   for (const url of ['http://localhost:1234', 'http://localhost.', 'https://127.0.0.2', 'http://[::1]', 'http://[::ffff:127.0.0.1]', 'http://10.8.7.6',
     'https://192.168.5.2', 'https://a.internal.example', 'http://printer', 'https://specific.example:8443']) {
     assert.equal(proxyForUrl(proxy, url), undefined, url)
@@ -62,6 +66,8 @@ test('credentials and unsupported proxy modes fail explicitly without echoing se
 
 test('real CONNECT transport and native Node preload use the configured proxy while loopback stays direct', async () => {
   const upstream = createServer((_request, response) => response.end('synthetic resource'))
+  const gateway = new WebSocketServer({ server: upstream })
+  gateway.on('connection', socket => socket.send('synthetic gateway'))
   const proxy = createServer()
   const sockets = new Set<Socket>()
   const requests: string[] = []
@@ -103,8 +109,37 @@ test('real CONNECT transport and native Node preload use the configured proxy wh
     ], { timeout: 10_000, windowsHide: true, env: { ...process.env, SHADOW_APP_NETWORK_PROXY: JSON.stringify(configuration) } })
     assert.equal(child.stdout.trim(), 'synthetic resource\nfalse')
     assert.equal(requests.length, 2)
+    const env = { ...process.env }
+    for (const key of Object.keys(env)) if (/^(https?_proxy|no_proxy|SHADOW_APP_NETWORK_PROXY)$/i.test(key)) delete env[key]
+    env.HTTP_PROXY = `http://127.0.0.1:${address.port}`
+    const backend = await promisify(execFile)(process.execPath, [
+      '--import', 'tsx', '--input-type=module', '--eval', `
+        import assert from 'node:assert/strict';
+        import { WebSocket, getGlobalDispatcher } from 'undici';
+        import { initializeBackendNetwork } from ${JSON.stringify(new URL('./backend.ts', import.meta.url).href)};
+        await Promise.all([initializeBackendNetwork(), initializeBackendNetwork()]);
+        const dispatcher = getGlobalDispatcher();
+        await initializeBackendNetwork();
+        assert.equal(getGlobalDispatcher(), dispatcher);
+        console.log(await (await fetch('http://resource.example.invalid/backend')).text());
+        console.log(await (await fetch('http://127.0.0.1:${target.port}/local')).text());
+        await new Promise((resolve, reject) => {
+          const ws = new WebSocket('ws://gateway.example.invalid/gateway', { dispatcher });
+          ws.onmessage = event => { console.log(event.data); ws.close(); };
+          ws.onerror = () => reject(new Error('Gateway connection failed'));
+          ws.onclose = resolve;
+        });
+        await dispatcher.close();
+      `,
+    ], { timeout: 15_000, windowsHide: true, env })
+    assert.match(backend.stdout, /Backend proxy source: environment/)
+    assert.match(backend.stdout, /synthetic resource\nsynthetic resource\nsynthetic gateway/)
+    assert.equal(requests.length, 4, 'Backend fetch and WebSocket use CONNECT, while loopback bypasses the proxy')
+    assert.deepEqual(requests.slice(-2), ['resource.example.invalid:80', 'gateway.example.invalid:80'])
   } finally {
     await dispatcher.close()
+    for (const client of gateway.clients) client.terminate()
+    await new Promise<void>(resolve => gateway.close(() => resolve()))
     for (const socket of sockets) socket.destroy()
     await Promise.all([upstream, proxy].map(server => new Promise<void>(resolve => server.close(() => resolve()))))
   }

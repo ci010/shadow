@@ -46,10 +46,16 @@ async function main() {
     await execute(`(async()=>{for (const item of document.querySelectorAll('.picker-row input')) {
       item.click(); await new Promise(resolve=>setTimeout(resolve,0));
     } ${field('Everyone who can send', 'input')}.click();})()`)
+    await execute('window.__refreshBot()')
+    assert.equal(await execute("document.querySelectorAll('.picker-row input:checked').length"), 2,
+      'Status polling preserves channel selections')
     await click('Review assignments')
     await wait(`${button('Approve and apply')} && document.querySelector('.review-assignment')`)
     assert.equal(await execute(`${button('Approve and apply')}.disabled`), true)
     await execute(`${field('I reviewed the exact text', 'input')}.click()`)
+    await execute('window.__refreshBot()')
+    assert.equal(await execute(`${button('Approve and apply')}?.disabled`), false,
+      'Status polling preserves the selected review and acknowledgment')
     await click('Approve and apply')
     await wait(`document.body.innerText.includes('Reviewed change applied')`)
     await click('Channels & people')
@@ -61,6 +67,19 @@ async function main() {
     await execute(`{const item=${field('Edit a published Agent', 'select')}; item.selectedIndex=1; item.dispatchEvent(new Event('change',{bubbles:true}));}`)
     await wait(`document.querySelector('.code-input')?.value.includes('approved help articles')`)
     assert.equal(await execute(`${field('Stable name', 'input')}.disabled`), true)
+    await execute(`{
+      const item=document.querySelector('.code-input');
+      item.value+='\\nUNSAVED_POLLING_CANARY';
+      item.dispatchEvent(new Event('input',{bubbles:true}));
+      item.focus(); item.setSelectionRange(4,9);
+      window.__editingElement=item;
+    }`)
+    for (let index = 0; index < 3; index++) await execute('window.__refreshBot()')
+    assert.equal(await execute(`document.querySelector('.code-input') === window.__editingElement &&
+      document.activeElement === window.__editingElement &&
+      window.__editingElement.value.includes('UNSAVED_POLLING_CANARY') &&
+      window.__editingElement.selectionStart === 4 && window.__editingElement.selectionEnd === 9`), true,
+    'Fresh Bot status objects must not reset Agent text, focus, selection or the current tab')
     await click('Knowledge')
     await execute(`document.querySelector('details summary').click()`)
     await wait(`document.body.innerText.includes('The source cursor has not advanced')`)
@@ -71,6 +90,7 @@ async function main() {
     await wait(`${field('Exact text to share', 'textarea')}?.value.includes('No private account details')`)
     await click('Review knowledge publication')
     await wait(`document.querySelector('.review-body pre')?.textContent.includes('No private account details')`)
+    const linkedReview = await execute("document.querySelector('.review-body').closest('[data-review-id]').dataset.reviewId")
     assert.equal(await execute(`${button('Approve and apply')}.disabled`), true)
     await capture('review')
     await click('Channels & people')
@@ -80,9 +100,27 @@ async function main() {
     assert.equal(await execute(`getComputedStyle(document.querySelector('.form-grid')).gridTemplateColumns.split(' ').length`), 1)
     await capture('mobile')
     await click('Agents')
+    await execute('window.__switchBot()')
+    await wait(`${field('Server', 'select')}?.options.length === 2`)
+    await click('Agents')
+    assert.equal(await execute(`${field('Display name', 'input')}.value`), '',
+      'Changing Bot identity still clears the old draft')
+    assert.equal(await execute(`document.querySelector('.code-input').value.includes('UNSAVED_POLLING_CANARY')`), false)
     await execute('window.__switchProject()')
     await wait(`document.querySelector('[role="alert"]')?.textContent.includes('another Project')`)
     assert.equal(await execute('document.querySelector(".code-input")'), null, 'Old Project instructions disappear when ownership changes')
+    await execute(`window.__openReviewSettings(${JSON.stringify(linkedReview)})`)
+    await wait(`document.querySelector('.review-body pre')?.textContent.includes('No private account details')`)
+    assert.equal(await execute(`${button('Approve and apply')}.disabled`), true,
+      'Following an owner-chat review link opens the Bot and exact review, never approves it')
+    assert.equal(await execute(`${field('I reviewed the exact text', 'input')}.checked`), false)
+    await click('Refresh status')
+    assert.equal(await execute(`document.querySelector('.review-body')?.closest('[data-review-id]').dataset.reviewId`), linkedReview)
+    await execute(`window.__openReviewSettings('11111111-1111-4111-8111-111111111111')`)
+    await wait(`document.body.innerText.includes('This review is unavailable')`)
+    assert.equal(await execute('document.querySelector(".review-body")'), null)
+    await execute(`window.__openReviewSettings(${JSON.stringify(linkedReview)},'missing-bot')`)
+    await wait(`document.body.innerText.includes('linked Discord Bot is unavailable')`)
     assert(!errors.some(error => error.includes('Unhandled error')), errors.join('\n'))
     console.log('DISCORD_ACCESS_SMOKE_OK')
   } finally { window.destroy() }

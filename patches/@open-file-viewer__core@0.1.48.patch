@@ -1,0 +1,1763 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 8ab47e3f4b96068ff638857d1fe168f275efb897..3637a27a4d05f4b4266778712fcb2a977090b4a1 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -89,7 +89,6 @@ var init_php = __esm({
+ // src/index.ts
+ var index_exports = {};
+ __export(index_exports, {
+-  archivePlugin: () => archivePlugin,
+   assetPlugin: () => assetPlugin,
+   audioPlugin: () => audioPlugin,
+   cadPlugin: () => cadPlugin,
+@@ -19640,841 +19639,6 @@ function normalizeOfdError(error) {
+   return "\u6587\u4EF6\u53EF\u80FD\u5DF2\u635F\u574F\uFF0C\u6216\u4E0D\u662F\u6709\u6548\u7684 OFD \u5305";
+ }
+ 
+-// src/plugins/archive.ts
+-var import_jszip5 = __toESM(require("jszip"), 1);
+-var import_pako2 = __toESM(require("pako"), 1);
+-var archiveExtensions = /* @__PURE__ */ new Set(["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz"]);
+-var archiveMimeTypes = /* @__PURE__ */ new Set([
+-  "application/zip",
+-  "application/x-zip-compressed",
+-  "application/vnd.rar",
+-  "application/x-rar-compressed",
+-  "application/x-7z-compressed",
+-  "application/x-tar",
+-  "application/gzip",
+-  "application/x-gzip",
+-  "application/x-bzip2",
+-  "application/x-xz"
+-]);
+-var archiveMimeFormatMap = {
+-  "application/zip": "zip",
+-  "application/x-zip-compressed": "zip",
+-  "application/vnd.rar": "rar",
+-  "application/x-rar-compressed": "rar",
+-  "application/x-7z-compressed": "7z",
+-  "application/x-tar": "tar",
+-  "application/gzip": "gz",
+-  "application/x-gzip": "gz",
+-  "application/x-bzip2": "bz2",
+-  "application/x-xz": "xz"
+-};
+-function archivePlugin() {
+-  return {
+-    name: "archive",
+-    match(file) {
+-      return archiveExtensions.has(file.extension) || archiveMimeTypes.has(file.mimeType);
+-    },
+-    async render(ctx) {
+-      const url = createObjectUrl(ctx.file);
+-      const isExternal = Boolean(ctx.file.url);
+-      const panel = createPanel("ofv-archive");
+-      ctx.viewport.append(panel);
+-      const ext = resolveFormat(ctx.file, archiveMimeFormatMap).toLowerCase();
+-      let archiveEntries = [];
+-      let isEncrypted = false;
+-      let parseError = null;
+-      let archiveProbe = null;
+-      try {
+-        if (ext === "zip") {
+-          try {
+-            const zip = await import_jszip5.default.loadAsync(await readArrayBuffer(ctx.file), {
+-              decodeFileName: decodeZipFileName
+-            });
+-            archiveEntries = Object.values(zip.files).map((entry) => ({
+-              name: entry.name,
+-              unsafeName: entry.unsafeOriginalName,
+-              size: entry._data?.uncompressedSize || 0,
+-              dir: entry.dir,
+-              read: () => entry.async("arraybuffer")
+-            }));
+-          } catch (zipErr) {
+-            if (isEncryptedError(zipErr)) {
+-              isEncrypted = true;
+-            } else {
+-              throw zipErr;
+-            }
+-          }
+-        } else if (ext === "tar") {
+-          archiveEntries = untar(await readArrayBuffer(ctx.file));
+-        } else if (ext === "gz" || ext === "tgz" || ext === "tar.gz") {
+-          const u8 = new Uint8Array(await readArrayBuffer(ctx.file));
+-          const decompressed = import_pako2.default.ungzip(u8);
+-          const originalName = ctx.file.name.endsWith(".gz") ? ctx.file.name.slice(0, -3) : ctx.file.name.endsWith(".tgz") ? ctx.file.name.slice(0, -4) + ".tar" : ctx.file.name;
+-          if (ext === "tgz" || ext === "tar.gz" || originalName.endsWith(".tar")) {
+-            archiveEntries = untar(toArrayBuffer(decompressed));
+-          } else {
+-            archiveEntries = [
+-              {
+-                name: originalName,
+-                size: decompressed.byteLength,
+-                dir: false,
+-                read: async () => toArrayBuffer(decompressed)
+-              }
+-            ];
+-          }
+-        } else if (ext === "bz2") {
+-          const compressed = new Uint8Array(await readArrayBuffer(ctx.file));
+-          const decompressed = await bunzip2(compressed);
+-          const originalName = ctx.file.name.toLowerCase().endsWith(".bz2") ? ctx.file.name.slice(0, -4) : ctx.file.name;
+-          archiveEntries = [
+-            {
+-              name: originalName || "decompressed",
+-              size: decompressed.byteLength,
+-              dir: false,
+-              read: async () => toArrayBuffer(decompressed)
+-            }
+-          ];
+-        } else if (ext === "xz") {
+-          const compressed = new Uint8Array(await readArrayBuffer(ctx.file));
+-          const decompressed = await unxz(compressed);
+-          const originalName = deriveSingleFileArchiveName(ctx.file.name, ".xz", "decompressed");
+-          if (originalName.toLowerCase().endsWith(".tar") || ctx.file.name.toLowerCase().endsWith(".txz")) {
+-            archiveEntries = untar(toArrayBuffer(decompressed));
+-          } else {
+-            archiveEntries = [
+-              {
+-                name: originalName,
+-                size: decompressed.byteLength,
+-                dir: false,
+-                read: async () => toArrayBuffer(decompressed)
+-              }
+-            ];
+-          }
+-        } else if (["rar", "7z"].includes(ext)) {
+-          archiveProbe = probeArchiveHeader(await readArrayBuffer(ctx.file), ext);
+-        } else {
+-          parseError = `\u8BE5\u683C\u5F0F (.${ext.toUpperCase()}) \u76EE\u524D\u6682\u4E0D\u652F\u6301\u76F4\u63A5\u5728\u6D4F\u89C8\u5668\u7AEF\u5728\u7EBF\u89E3\u538B\u548C\u76EE\u5F55\u9884\u89C8\u3002`;
+-        }
+-      } catch (err) {
+-        parseError = `\u538B\u7F29\u5305\u89E3\u6790\u5931\u8D25\uFF1A${err.message || err}`;
+-      }
+-      if (isEncrypted) {
+-        const fallback = createEncryptedFallback(ctx.file, url, {
+-          title: "\u538B\u7F29\u5305\u5DF2\u52A0\u5BC6\uFF0C\u65E0\u6CD5\u5728\u7EBF\u9884\u89C8",
+-          message: "\u8BF7\u4E0B\u8F7D\u540E\u5728\u672C\u5730\u8F93\u5165\u5BC6\u7801\u89E3\u538B\uFF0C\u6216\u4E0A\u4F20\u89E3\u5BC6\u540E\u7684\u538B\u7F29\u5305\u3002",
+-          action: "\u4E0B\u8F7D\u538B\u7F29\u5305"
+-        });
+-        panel.append(fallback);
+-        ctx.viewport.classList.add("ofv-center");
+-        return {
+-          destroy() {
+-            ctx.viewport.classList.remove("ofv-center");
+-            revokeObjectUrl(url, isExternal);
+-            panel.remove();
+-          }
+-        };
+-      }
+-      if (archiveProbe) {
+-        renderArchiveProbe(panel, archiveProbe, ctx.file.name, url);
+-        return {
+-          destroy() {
+-            revokeObjectUrl(url, isExternal);
+-            panel.remove();
+-          }
+-        };
+-      }
+-      if (parseError) {
+-        const fallback = document.createElement("div");
+-        fallback.className = "ofv-fallback";
+-        const title = document.createElement("strong");
+-        title.textContent = parseError;
+-        const meta = document.createElement("span");
+-        meta.textContent = "\u5EFA\u8BAE\u4E0B\u8F7D\u89C6\u9891/\u6587\u6863\u7B49\u6587\u4EF6\u81F3\u672C\u5730\u67E5\u770B\uFF0C\u6216\u4F7F\u7528\u539F\u751F\u89E3\u538B\u5DE5\u5177\u63D0\u53D6\u5185\u5BB9\u3002";
+-        const download = document.createElement("a");
+-        download.href = url;
+-        download.download = ctx.file.name;
+-        download.textContent = "\u4E0B\u8F7D\u538B\u7F29\u5305";
+-        fallback.append(title, meta, download);
+-        panel.append(fallback);
+-        ctx.viewport.classList.add("ofv-center");
+-        return {
+-          destroy() {
+-            ctx.viewport.classList.remove("ofv-center");
+-            revokeObjectUrl(url, isExternal);
+-            panel.remove();
+-          }
+-        };
+-      }
+-      const layout = document.createElement("div");
+-      layout.className = "ofv-archive-layout";
+-      const sidebar = document.createElement("div");
+-      sidebar.className = "ofv-archive-sidebar";
+-      const sidebarPanel = document.createElement("div");
+-      sidebarPanel.className = "ofv-archive-sidebar-panel";
+-      const header = document.createElement("div");
+-      header.className = "ofv-archive-header";
+-      const sidebarTitle = document.createElement("span");
+-      sidebarTitle.className = "ofv-archive-header-title";
+-      sidebarTitle.textContent = `\u6587\u4EF6\u5217\u8868 (${archiveEntries.filter((e) => !e.dir).length})`;
+-      const sidebarToggle = document.createElement("button");
+-      sidebarToggle.className = "ofv-archive-sidebar-toggle";
+-      sidebarToggle.type = "button";
+-      sidebarToggle.setAttribute("aria-label", "\u5C55\u5F00\u6587\u4EF6\u5217\u8868");
+-      sidebarToggle.setAttribute("aria-expanded", "false");
+-      sidebarToggle.title = "\u5C55\u5F00\u6587\u4EF6\u5217\u8868";
+-      sidebarToggle.textContent = "\u2039";
+-      header.append(sidebarToggle, sidebarTitle);
+-      sidebarPanel.append(header);
+-      const tree = document.createElement("div");
+-      tree.className = "ofv-archive-tree";
+-      sidebarPanel.append(tree);
+-      sidebar.append(sidebarPanel);
+-      const mainPanel = document.createElement("div");
+-      mainPanel.className = "ofv-archive-main";
+-      layout.append(sidebar, mainPanel);
+-      panel.append(layout);
+-      let currentSubInstance = null;
+-      const getSidebarViewportWidth = () => ctx.viewport.clientWidth || ctx.size.width;
+-      const shouldAutoCollapseSidebar = () => getSidebarViewportWidth() <= 520;
+-      const setSidebarCollapsed = (collapsed) => {
+-        layout.classList.toggle("is-sidebar-collapsed", collapsed);
+-        sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+-        const label = collapsed ? "\u5C55\u5F00\u6587\u4EF6\u5217\u8868" : "\u6536\u8D77\u6587\u4EF6\u5217\u8868";
+-        sidebarToggle.setAttribute("aria-label", label);
+-        sidebarToggle.title = label;
+-        sidebarToggle.textContent = collapsed ? "\u203A" : "\u2039";
+-      };
+-      setSidebarCollapsed(false);
+-      sidebarToggle.addEventListener("click", () => {
+-        setSidebarCollapsed(!layout.classList.contains("is-sidebar-collapsed"));
+-      });
+-      const showDefaultSummary = (isSupplemental = true) => {
+-        mainPanel.replaceChildren();
+-        const summary = document.createElement("div");
+-        summary.className = "ofv-archive-info";
+-        if (isSupplemental) {
+-          hideSupplementalInfo4(summary);
+-        }
+-        const heading = document.createElement("h3");
+-        heading.textContent = ctx.file.name;
+-        const info = document.createElement("div");
+-        info.className = "ofv-archive-info-meta";
+-        const fileCount = archiveEntries.filter((e) => !e.dir).length;
+-        const dirCount = archiveEntries.filter((e) => e.dir).length;
+-        appendArchiveInfo(info, "\u683C\u5F0F\u7C7B\u578B", `.${ext.toUpperCase()} \u538B\u7F29\u6587\u4EF6`);
+-        appendArchiveInfo(info, "\u5305\u542B\u6587\u4EF6\u6570", `${fileCount} \u4E2A`);
+-        appendArchiveInfo(info, "\u5305\u542B\u76EE\u5F55\u6570", `${dirCount} \u4E2A`);
+-        appendArchiveInfo(
+-          info,
+-          "\u64CD\u4F5C\u63D0\u793A",
+-          fileCount === 0 ? "\u538B\u7F29\u5305\u5185\u6CA1\u6709\u53EF\u9884\u89C8\u7684\u6587\u4EF6\u3002" : "\u8BF7\u70B9\u51FB\u5DE6\u4FA7\u680F\u4E2D\u7684\u6587\u4EF6\u8FDB\u884C\u8054\u52A8\u9884\u89C8\u3002"
+-        );
+-        summary.append(heading, info, createArchiveSummary(archiveEntries));
+-        mainPanel.append(summary);
+-      };
+-      const visibleEntries = archiveEntries.filter((e) => !e.dir).slice(0, 500);
+-      showDefaultSummary(visibleEntries.length > 0);
+-      let destroyed = false;
+-      let renderToken = 0;
+-      const openArchiveEntry = async (entry, item) => {
+-        if (destroyed) {
+-          return;
+-        }
+-        if (shouldAutoCollapseSidebar()) {
+-          setSidebarCollapsed(true);
+-        }
+-        const token = ++renderToken;
+-        sidebar.querySelectorAll(".ofv-archive-item").forEach((el) => {
+-          el.classList.remove("is-active");
+-          el.removeAttribute("aria-current");
+-        });
+-        item.classList.add("is-active");
+-        item.setAttribute("aria-current", "true");
+-        if (currentSubInstance) {
+-          currentSubInstance.destroy();
+-          currentSubInstance = null;
+-          ctx.toolbar?.refreshCommandSupport();
+-        }
+-        mainPanel.replaceChildren(createArchiveLoading(entry.name.split("/").pop() || entry.name));
+-        try {
+-          let buffer = await entry.read();
+-          if (destroyed || token !== renderToken) {
+-            return;
+-          }
+-          const subName = entry.name.split("/").pop() || entry.name;
+-          const subExt = subName.split(".").pop()?.toLowerCase() || "";
+-          if (subExt === "shp") {
+-            const basePath = entry.name.slice(0, -4);
+-            const dbfEntry = archiveEntries.find((e) => e.name.toLowerCase() === basePath.toLowerCase() + ".dbf");
+-            const shxEntry = archiveEntries.find((e) => e.name.toLowerCase() === basePath.toLowerCase() + ".shx");
+-            if (dbfEntry && shxEntry) {
+-              const prjEntry = archiveEntries.find((e) => e.name.toLowerCase() === basePath.toLowerCase() + ".prj");
+-              const newZip = new import_jszip5.default();
+-              newZip.file(subName, buffer);
+-              newZip.file(dbfEntry.name.split("/").pop(), await dbfEntry.read());
+-              newZip.file(shxEntry.name.split("/").pop(), await shxEntry.read());
+-              if (prjEntry) {
+-                newZip.file(prjEntry.name.split("/").pop(), await prjEntry.read());
+-              }
+-              buffer = await newZip.generateAsync({ type: "arraybuffer" });
+-              if (destroyed || token !== renderToken) {
+-                return;
+-              }
+-            }
+-          }
+-          const subContainer = document.createElement("div");
+-          subContainer.style.cssText = "width: 100%; height: 100%; position: relative; display: flex; flex-direction: column;";
+-          mainPanel.replaceChildren(subContainer);
+-          const subViewport = document.createElement("div");
+-          subViewport.className = "ofv-viewport";
+-          subViewport.style.cssText = "flex: 1; width: 100%; height: 100%; position: relative; overflow: auto;";
+-          subContainer.append(subViewport);
+-          const subFile = await normalizeFile(buffer, subName);
+-          const plugins = [...ctx.options.plugins || [], fallbackPlugin()];
+-          let matchedPlugin = await findSubPreviewPlugin(plugins, subFile);
+-          if (destroyed || token !== renderToken) {
+-            return;
+-          }
+-          if (matchedPlugin.name === "archive") {
+-            matchedPlugin = fallbackPlugin();
+-          }
+-          let previewError;
+-          const nextSubInstance = await Promise.resolve().then(
+-            () => matchedPlugin.render({
+-              host: ctx.host,
+-              viewport: subViewport,
+-              file: subFile,
+-              size: { width: subViewport.clientWidth || 600, height: subViewport.clientHeight || 400 },
+-              options: ctx.options,
+-              toolbar: ctx.toolbar,
+-              setLoading: () => {
+-              },
+-              setError: (err) => {
+-                previewError = err instanceof Error ? err : new Error(String(err));
+-                subViewport.replaceChildren(createInlineError("\u6587\u4EF6\u9884\u89C8\u5931\u8D25", previewError.message));
+-              }
+-            })
+-          ).catch((error) => {
+-            previewError = error instanceof Error ? error : new Error(String(error));
+-            subViewport.replaceChildren(createInlineError("\u6587\u4EF6\u9884\u89C8\u5931\u8D25", previewError.message));
+-            return void 0;
+-          });
+-          if (destroyed || token !== renderToken) {
+-            nextSubInstance?.destroy();
+-            return;
+-          }
+-          if (nextSubInstance && !previewError) {
+-            currentSubInstance = nextSubInstance;
+-            ctx.toolbar?.refreshCommandSupport();
+-          } else if (nextSubInstance) {
+-            nextSubInstance.destroy();
+-            ctx.toolbar?.refreshCommandSupport();
+-          }
+-        } catch (err) {
+-          if (destroyed || token !== renderToken) {
+-            return;
+-          }
+-          currentSubInstance = null;
+-          ctx.toolbar?.refreshCommandSupport();
+-          mainPanel.replaceChildren(createInlineError("\u89E3\u538B\u52A0\u8F7D\u5931\u8D25", String(err.message || err)));
+-        }
+-      };
+-      visibleEntries.forEach((entry, index) => {
+-        const item = document.createElement("button");
+-        item.className = "ofv-archive-item";
+-        item.type = "button";
+-        item.title = entry.name;
+-        const icon = document.createElement("span");
+-        icon.className = "ofv-archive-item-icon";
+-        icon.textContent = getIcon(entry.name, entry.dir);
+-        const name = document.createElement("span");
+-        name.className = "ofv-archive-item-name";
+-        name.textContent = entry.name;
+-        name.title = entry.name;
+-        item.append(icon, name);
+-        tree.append(item);
+-        item.addEventListener("click", async () => {
+-          await openArchiveEntry(entry, item);
+-        });
+-        if (index === 0) {
+-          void openArchiveEntry(entry, item);
+-        }
+-      });
+-      return {
+-        canCommand(command) {
+-          return currentSubInstance?.canCommand?.(command) ?? false;
+-        },
+-        command(command) {
+-          return currentSubInstance?.command?.(command) ?? false;
+-        },
+-        preparePrint() {
+-          return currentSubInstance?.preparePrint?.();
+-        },
+-        resize(size) {
+-          currentSubInstance?.resize?.(size);
+-        },
+-        destroy() {
+-          destroyed = true;
+-          renderToken += 1;
+-          if (currentSubInstance) {
+-            currentSubInstance.destroy();
+-          }
+-          revokeObjectUrl(url, isExternal);
+-          panel.remove();
+-        }
+-      };
+-    }
+-  };
+-}
+-async function findSubPreviewPlugin(plugins, file) {
+-  for (const plugin of plugins) {
+-    if (await plugin.match(file)) {
+-      return plugin;
+-    }
+-  }
+-  return fallbackPlugin();
+-}
+-async function bunzip2(bytes) {
+-  const restoreBuffer = installSeekBzipBufferCompat();
+-  try {
+-    const module2 = await import("seek-bzip");
+-    const decoder = module2.default || module2;
+-    const decoded = decoder.decode(bytes);
+-    return decoded instanceof Uint8Array ? decoded : decoded instanceof ArrayBuffer ? new Uint8Array(decoded) : Uint8Array.from(decoded);
+-  } finally {
+-    restoreBuffer();
+-  }
+-}
+-function installSeekBzipBufferCompat() {
+-  const globalObject = globalThis;
+-  if (typeof globalObject.Buffer === "function") {
+-    return () => void 0;
+-  }
+-  class SeekBzipBuffer extends Uint8Array {
+-    copy(target, targetStart = 0, sourceStart = 0, sourceEnd = this.length) {
+-      const slice = this.subarray(sourceStart, sourceEnd);
+-      target.set(slice, targetStart);
+-      return slice.length;
+-    }
+-    toString(encoding) {
+-      if (encoding === "hex") {
+-        return Array.from(this).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+-      }
+-      return new TextDecoder().decode(this);
+-    }
+-  }
+-  globalObject.Buffer = SeekBzipBuffer;
+-  return () => {
+-    if (globalObject.Buffer === SeekBzipBuffer) {
+-      Reflect.deleteProperty(globalObject, "Buffer");
+-    }
+-  };
+-}
+-async function unxz(bytes) {
+-  const module2 = await import("xz-decompress");
+-  const XzReadableStream = module2.XzReadableStream || module2.default?.XzReadableStream;
+-  if (typeof XzReadableStream !== "function") {
+-    throw new Error("XZ \u89E3\u7801\u5668\u4E0D\u53EF\u7528\u3002");
+-  }
+-  const response = new Response(new XzReadableStream(createByteReadableStream(bytes)));
+-  return new Uint8Array(await response.arrayBuffer());
+-}
+-function createByteReadableStream(bytes) {
+-  const blob = new Blob([bytes]);
+-  if (typeof blob.stream === "function") {
+-    return blob.stream();
+-  }
+-  return new ReadableStream({
+-    start(controller) {
+-      controller.enqueue(bytes);
+-      controller.close();
+-    }
+-  });
+-}
+-function deriveSingleFileArchiveName(fileName, suffix, fallback) {
+-  return fileName.toLowerCase().endsWith(suffix) ? fileName.slice(0, -suffix.length) || fallback : fileName || fallback;
+-}
+-function toArrayBuffer(bytes) {
+-  const copy = new Uint8Array(bytes.byteLength);
+-  copy.set(bytes);
+-  return copy.buffer;
+-}
+-function decodeZipFileName(bytes) {
+-  const data = Array.isArray(bytes) ? Uint8Array.from(bytes.map((value) => value.charCodeAt(0) & 255)) : bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+-  const utf8 = decodeZipNameWith(data, "utf-8", true);
+-  if (utf8 && !looksMojibake(utf8)) {
+-    return utf8;
+-  }
+-  const gb18030 = decodeZipNameWith(data, "gb18030", false) || decodeZipNameWith(data, "gbk", false);
+-  if (gb18030 && !looksMojibake(gb18030)) {
+-    return gb18030;
+-  }
+-  return utf8 || new TextDecoder("latin1").decode(data);
+-}
+-function decodeZipNameWith(bytes, encoding, fatal) {
+-  try {
+-    return new TextDecoder(encoding, { fatal }).decode(bytes);
+-  } catch {
+-    return void 0;
+-  }
+-}
+-function looksMojibake(value) {
+-  return /[\uFFFDÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß]/.test(value);
+-}
+-function createInlineError(titleText, detailText) {
+-  const fallback = document.createElement("div");
+-  fallback.className = "ofv-fallback";
+-  const title = document.createElement("strong");
+-  title.textContent = titleText;
+-  const detail = document.createElement("span");
+-  detail.textContent = detailText;
+-  fallback.append(title, detail);
+-  return fallback;
+-}
+-function appendArchiveInfo(parent, label, value) {
+-  const row = document.createElement("div");
+-  const key = document.createElement("strong");
+-  key.textContent = `${label}\uFF1A`;
+-  row.append(key, document.createTextNode(value));
+-  parent.append(row);
+-}
+-function hideSupplementalInfo4(element) {
+-  element.hidden = true;
+-  element.setAttribute("aria-hidden", "true");
+-  element.style.display = "none";
+-}
+-function createArchiveSummary(entries) {
+-  const files = entries.filter((entry) => !entry.dir);
+-  const summary = document.createElement("dl");
+-  summary.className = "ofv-archive-summary";
+-  const totalSize = files.reduce((sum, entry) => sum + entry.size, 0);
+-  const largest = files.reduce((current, entry) => !current || entry.size > current.size ? entry : current, void 0);
+-  appendArchiveSummary(summary, "\u603B\u89E3\u538B\u5927\u5C0F", formatBytes2(totalSize));
+-  appendArchiveSummary(summary, "\u6700\u5927\u6587\u4EF6", largest ? `${largest.name} \xB7 ${formatBytes2(largest.size)}` : "\u65E0");
+-  appendArchiveSummary(summary, "\u7C7B\u578B\u5206\u5E03", formatArchiveExtensions(files));
+-  appendArchiveSummary(summary, "\u53EF\u9884\u89C8\u6761\u76EE", String(files.slice(0, 500).length));
+-  appendArchiveSummary(summary, "\u98CE\u9669\u8DEF\u5F84", String(files.filter((entry) => isRiskyArchivePath(entry.unsafeName || entry.name)).length));
+-  return summary;
+-}
+-function appendArchiveSummary(parent, label, value) {
+-  const key = document.createElement("dt");
+-  key.textContent = label;
+-  const content = document.createElement("dd");
+-  content.textContent = value;
+-  parent.append(key, content);
+-}
+-function formatArchiveExtensions(entries) {
+-  const counts = /* @__PURE__ */ new Map();
+-  for (const entry of entries) {
+-    const name = entry.name.split("/").pop() || entry.name;
+-    const index = name.lastIndexOf(".");
+-    const extension = index > 0 ? name.slice(index + 1).toLowerCase() : "(\u65E0\u6269\u5C55\u540D)";
+-    counts.set(extension, (counts.get(extension) || 0) + 1);
+-  }
+-  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6).map(([extension, count]) => `${extension} ${count}`).join(", ") || "\u65E0";
+-}
+-function isRiskyArchivePath(name) {
+-  return name.startsWith("/") || /^[A-Za-z]:[\\/]/.test(name) || name.split(/[\\/]+/).includes("..");
+-}
+-function createArchiveLoading(fileName) {
+-  const loading = document.createElement("div");
+-  loading.className = "ofv-archive-loading";
+-  const spinner = document.createElement("div");
+-  spinner.className = "ofv-archive-loading-spinner";
+-  const text = document.createElement("span");
+-  text.textContent = `\u6B63\u5728\u89E3\u538B\u5E76\u52A0\u8F7D [${fileName}]...`;
+-  loading.append(spinner, text);
+-  return loading;
+-}
+-function renderArchiveProbe(panel, probe, fileName, url) {
+-  const section = createSection(`${probe.format} \u7ED3\u6784\u9884\u89C8`);
+-  const note = document.createElement("p");
+-  note.textContent = probe.note;
+-  const meta = document.createElement("div");
+-  meta.className = "ofv-archive-probe-meta";
+-  appendArchiveInfo(meta, "\u6587\u4EF6", fileName);
+-  appendArchiveInfo(meta, "\u683C\u5F0F", probe.format);
+-  for (const item of probe.meta) {
+-    appendArchiveInfo(meta, item.label, item.value);
+-  }
+-  const download = document.createElement("a");
+-  download.className = "ofv-asset-download";
+-  download.href = url;
+-  download.download = fileName;
+-  download.textContent = "\u4E0B\u8F7D\u538B\u7F29\u5305";
+-  section.append(note, meta, download);
+-  if (!probe.valid) {
+-    const error = document.createElement("p");
+-    error.className = "ofv-data-error";
+-    error.textContent = probe.error || "\u538B\u7F29\u5305\u5934\u4FE1\u606F\u65E0\u6CD5\u8BC6\u522B\u3002";
+-    section.append(error);
+-  }
+-  if (probe.entries.length > 0) {
+-    const wrapper = document.createElement("div");
+-    wrapper.className = "ofv-table-scroll ofv-archive-probe-table";
+-    const table = document.createElement("table");
+-    const thead = document.createElement("thead");
+-    const header = document.createElement("tr");
+-    for (const label of ["\u6587\u4EF6", "\u539F\u59CB\u5927\u5C0F", "\u538B\u7F29\u5927\u5C0F"]) {
+-      const th = document.createElement("th");
+-      th.textContent = label;
+-      header.append(th);
+-    }
+-    thead.append(header);
+-    const tbody = document.createElement("tbody");
+-    for (const entry of probe.entries.slice(0, 200)) {
+-      const tr = document.createElement("tr");
+-      for (const value of [
+-        entry.name,
+-        entry.size === void 0 ? "\u672A\u77E5" : formatBytes2(entry.size),
+-        entry.packedSize === void 0 ? "\u672A\u77E5" : formatBytes2(entry.packedSize)
+-      ]) {
+-        const td = document.createElement("td");
+-        td.textContent = value;
+-        tr.append(td);
+-      }
+-      tbody.append(tr);
+-    }
+-    table.append(thead, tbody);
+-    wrapper.append(table);
+-    section.append(wrapper);
+-  }
+-  panel.append(section);
+-}
+-function probeArchiveHeader(arrayBuffer, extension) {
+-  const bytes = new Uint8Array(arrayBuffer);
+-  if (extension === "rar") {
+-    return probeRar(bytes);
+-  }
+-  if (extension === "7z") {
+-    return probe7z(bytes);
+-  }
+-  if (extension === "bz2") {
+-    return probeBzip2(bytes);
+-  }
+-  if (extension === "xz") {
+-    return probeXz(bytes);
+-  }
+-  return {
+-    format: extension.toUpperCase(),
+-    valid: false,
+-    error: "\u6682\u4E0D\u652F\u6301\u8BE5\u538B\u7F29\u683C\u5F0F\u7684\u5934\u4FE1\u606F\u89E3\u6790\u3002",
+-    meta: [],
+-    entries: [],
+-    note: "\u5F53\u524D\u4EC5\u63D0\u4F9B\u538B\u7F29\u5305\u8BC6\u522B\u548C\u4E0B\u8F7D\u5165\u53E3\u3002"
+-  };
+-}
+-function probeRar(bytes) {
+-  const rar4 = bytes.length >= 7 && bytes[0] === 82 && bytes[1] === 97 && bytes[2] === 114 && bytes[3] === 33 && bytes[4] === 26 && bytes[5] === 7 && bytes[6] === 0;
+-  const rar5 = bytes.length >= 8 && bytes[0] === 82 && bytes[1] === 97 && bytes[2] === 114 && bytes[3] === 33 && bytes[4] === 26 && bytes[5] === 7 && bytes[6] === 1 && bytes[7] === 0;
+-  const entries = rar4 ? parseRar4Entries(bytes) : [];
+-  return {
+-    format: "RAR",
+-    valid: rar4 || rar5,
+-    error: rar4 || rar5 ? void 0 : "\u7F3A\u5C11 RAR signature\u3002",
+-    meta: [
+-      { label: "\u7248\u672C", value: rar5 ? "RAR5" : rar4 ? "RAR4" : "\u672A\u77E5" },
+-      { label: "\u7B7E\u540D", value: byteSignature(bytes) },
+-      { label: "\u53EF\u89C1\u6761\u76EE", value: String(entries.length) }
+-    ],
+-    entries,
+-    note: rar4 ? "\u5F53\u524D\u8F7B\u91CF\u8BFB\u53D6 RAR4 \u672A\u52A0\u5BC6\u6587\u4EF6\u5934\uFF0C\u7528\u4E8E\u76EE\u5F55\u786E\u8BA4\uFF1B\u5B9E\u9645\u89E3\u538B\u4ECD\u5EFA\u8BAE\u63A5\u5165 unrar WASM \u6216\u672C\u5730\u5DE5\u5177\u3002" : "\u5F53\u524D\u8BC6\u522B RAR \u5BB9\u5668\u548C\u7248\u672C\uFF1BRAR5 \u76EE\u5F55\u89E3\u6790\u9700\u8981\u4E13\u7528\u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function parseRar4Entries(bytes) {
+-  const view3 = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+-  const entries = [];
+-  let offset = 7;
+-  while (offset + 7 <= bytes.length && entries.length < 200) {
+-    const type = bytes[offset + 2];
+-    const flags = view3.getUint16(offset + 3, true);
+-    let headerSize = view3.getUint16(offset + 5, true);
+-    if (headerSize < 7 || offset + headerSize > bytes.length) {
+-      break;
+-    }
+-    if ((flags & 32768) !== 0) {
+-      if (offset + 11 > bytes.length) {
+-        break;
+-      }
+-      headerSize += view3.getUint32(offset + 7, true);
+-    }
+-    if (type === 116 && offset + 32 <= bytes.length) {
+-      const packedSize = view3.getUint32(offset + 7, true);
+-      const unpackedSize = view3.getUint32(offset + 11, true);
+-      const nameSize = view3.getUint16(offset + 26, true);
+-      const nameOffset = offset + 32;
+-      const nameEnd = Math.min(nameOffset + nameSize, offset + headerSize, bytes.length);
+-      const nameBytes = bytes.slice(nameOffset, nameEnd);
+-      const name = new TextDecoder("latin1").decode(nameBytes).replace(/\0.*$/, "");
+-      if (name) {
+-        entries.push({ name, size: unpackedSize, packedSize });
+-      }
+-    }
+-    offset += headerSize;
+-  }
+-  return entries;
+-}
+-function probe7z(bytes) {
+-  const valid = bytes.length >= 32 && bytes[0] === 55 && bytes[1] === 122 && bytes[2] === 188 && bytes[3] === 175 && bytes[4] === 39 && bytes[5] === 28;
+-  const meta = [{ label: "\u7B7E\u540D", value: byteSignature(bytes) }];
+-  if (valid) {
+-    const view3 = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+-    meta.push({ label: "\u7248\u672C", value: `${bytes[6]}.${bytes[7]}` });
+-    meta.push({ label: "Next header offset", value: String(readUint64Le2(view3, 12)) });
+-    meta.push({ label: "Next header size", value: String(readUint64Le2(view3, 20)) });
+-    meta.push({ label: "Next header CRC", value: `0x${view3.getUint32(28, true).toString(16).toUpperCase()}` });
+-  }
+-  return {
+-    format: "7Z",
+-    valid,
+-    error: valid ? void 0 : "\u7F3A\u5C11 7z signature\u3002",
+-    meta,
+-    entries: [],
+-    note: "\u5F53\u524D\u8BC6\u522B 7z \u5BB9\u5668\u548C next header \u8FB9\u754C\uFF1B\u76EE\u5F55\u548C\u89E3\u538B\u9700\u8981 LZMA/7z \u4E13\u7528\u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function probeBzip2(bytes) {
+-  const valid = bytes.length >= 4 && bytes[0] === 66 && bytes[1] === 90 && bytes[2] === 104 && bytes[3] >= 49 && bytes[3] <= 57;
+-  return {
+-    format: "BZIP2",
+-    valid,
+-    error: valid ? void 0 : "\u7F3A\u5C11 BZh magic header\u3002",
+-    meta: [
+-      { label: "\u7B7E\u540D", value: byteSignature(bytes) },
+-      { label: "\u5757\u5927\u5C0F", value: valid ? `${String.fromCharCode(bytes[3])}00 KB` : "\u672A\u77E5" }
+-    ],
+-    entries: [],
+-    note: "BZIP2 \u901A\u5E38\u662F\u5355\u6587\u4EF6\u538B\u7F29\u6D41\uFF0C\u672C\u9884\u89C8\u5668\u5F53\u524D\u5C55\u793A\u5BB9\u5668\u5934\u4FE1\u606F\uFF1B\u89E3\u538B\u53EF\u540E\u7EED\u63A5\u5165 bzip2 \u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function probeXz(bytes) {
+-  const valid = bytes.length >= 6 && bytes[0] === 253 && bytes[1] === 55 && bytes[2] === 122 && bytes[3] === 88 && bytes[4] === 90 && bytes[5] === 0;
+-  return {
+-    format: "XZ",
+-    valid,
+-    error: valid ? void 0 : "\u7F3A\u5C11 XZ magic header\u3002",
+-    meta: [
+-      { label: "\u7B7E\u540D", value: byteSignature(bytes) },
+-      { label: "Stream flags", value: bytes.length >= 8 ? `0x${bytes[6].toString(16).padStart(2, "0").toUpperCase()} 0x${bytes[7].toString(16).padStart(2, "0").toUpperCase()}` : "\u672A\u77E5" }
+-    ],
+-    entries: [],
+-    note: "XZ \u901A\u5E38\u662F\u5355\u6587\u4EF6 LZMA2 \u538B\u7F29\u6D41\uFF0C\u672C\u9884\u89C8\u5668\u5F53\u524D\u5C55\u793A\u5BB9\u5668\u5934\u4FE1\u606F\uFF1B\u89E3\u538B\u53EF\u540E\u7EED\u63A5\u5165 xz/lzma \u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function readUint64Le2(view3, offset) {
+-  return BigInt(view3.getUint32(offset, true)) | BigInt(view3.getUint32(offset + 4, true)) << 32n;
+-}
+-function formatBytes2(bytes) {
+-  if (bytes < 1024) {
+-    return `${bytes} B`;
+-  }
+-  if (bytes < 1024 * 1024) {
+-    return `${(bytes / 1024).toFixed(1)} KB`;
+-  }
+-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+-}
+-function byteSignature(bytes) {
+-  if (bytes.length === 0) {
+-    return "\u7A7A\u6587\u4EF6";
+-  }
+-  const ascii = new TextDecoder("ascii").decode(bytes.slice(0, Math.min(bytes.length, 16))).replace(/[^\x20-\x7E]/g, ".");
+-  const hex = Array.from(bytes.slice(0, Math.min(bytes.length, 8))).map((byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+-  return `${ascii} (${hex})`;
+-}
+-function untar(arrayBuffer) {
+-  const entries = [];
+-  const u8 = new Uint8Array(arrayBuffer);
+-  let offset = 0;
+-  const readString2 = (start, length) => {
+-    let end = start;
+-    while (end < start + length && u8[end] !== 0) {
+-      end++;
+-    }
+-    return new TextDecoder().decode(u8.subarray(start, end)).trim();
+-  };
+-  while (offset + 512 <= arrayBuffer.byteLength) {
+-    const magic = readString2(offset + 257, 6);
+-    if (magic !== "ustar" && magic !== "ustar\0") {
+-      let allZero = true;
+-      for (let i = 0; i < 512; i++) {
+-        if (u8[offset + i] !== 0) {
+-          allZero = false;
+-          break;
+-        }
+-      }
+-      if (allZero) {
+-        break;
+-      }
+-      break;
+-    }
+-    const name = readString2(offset, 100);
+-    const prefix = readString2(offset + 345, 155);
+-    const fullName = prefix ? `${prefix}/${name}` : name;
+-    const sizeStr = readString2(offset + 124, 12);
+-    const size = parseInt(sizeStr, 8) || 0;
+-    const typeflag = readString2(offset + 156, 1);
+-    const dir = typeflag === "5" || fullName.endsWith("/");
+-    const contentOffset = offset + 512;
+-    entries.push({
+-      name: fullName,
+-      size,
+-      dir,
+-      read: async () => arrayBuffer.slice(contentOffset, contentOffset + size)
+-    });
+-    offset += 512 + Math.ceil(size / 512) * 512;
+-  }
+-  return entries;
+-}
+-function getIcon(name, dir) {
+-  if (dir) return "\u{1F4C1}";
+-  const ext = name.split(".").pop()?.toLowerCase();
+-  switch (ext) {
+-    case "png":
+-    case "jpg":
+-    case "jpeg":
+-    case "gif":
+-    case "svg":
+-    case "webp":
+-      return "\u{1F5BC}\uFE0F";
+-    case "pdf":
+-      return "\u{1F4D5}";
+-    case "doc":
+-    case "docx":
+-      return "\u{1F4D8}";
+-    case "xls":
+-    case "xlsx":
+-      return "\u{1F4D7}";
+-    case "ppt":
+-    case "pptx":
+-      return "\u{1F4D9}";
+-    case "zip":
+-    case "rar":
+-    case "7z":
+-    case "tar":
+-    case "gz":
+-      return "\u{1F4E6}";
+-    case "mp4":
+-    case "mkv":
+-    case "avi":
+-    case "webm":
+-      return "\u{1F3A5}";
+-    case "mp3":
+-    case "wav":
+-    case "ogg":
+-      return "\u{1F3B5}";
+-    case "txt":
+-    case "md":
+-    case "html":
+-    case "js":
+-    case "ts":
+-    case "json":
+-    case "css":
+-      return "\u{1F4C4}";
+-    default:
+-      return "\u{1F4C4}";
+-  }
+-}
+-
+ // src/plugins/email.ts
+ var emailExtensions = /* @__PURE__ */ new Set(["eml", "msg", "mbox"]);
+ var emailMimeTypes = /* @__PURE__ */ new Set(["message/rfc822", "application/vnd.ms-outlook", "application/mbox"]);
+@@ -30626,7 +29790,6 @@ function hexPreview2(bytes) {
+ }
+ // Annotate the CommonJS export names for ESM import in node:
+ 0 && (module.exports = {
+-  archivePlugin,
+   assetPlugin,
+   audioPlugin,
+   cadPlugin,
+@@ -30647,4 +29810,3 @@ function hexPreview2(bytes) {
+   xmindPlugin,
+   xpsPlugin
+ });
+-//# sourceMappingURL=index.cjs.map
+\ No newline at end of file
+diff --git a/dist/index.d.cts b/dist/index.d.cts
+index 3f4cfa6382a43db127b91654eb06a9c1ae55ad2a..020dd7365b02f60b3736faf5ede56766a5ed1167 100644
+--- a/dist/index.d.cts
++++ b/dist/index.d.cts
+@@ -311,7 +311,6 @@ declare function officePlugin(options?: OfficePluginOptions): PreviewPlugin;
+ 
+ declare function ofdPlugin(): PreviewPlugin;
+ 
+-declare function archivePlugin(): PreviewPlugin;
+ 
+ declare function emailPlugin(): PreviewPlugin;
+ 
+@@ -420,4 +419,4 @@ declare function assetPlugin(): PreviewPlugin;
+ 
+ declare function fallbackPlugin(): PreviewPlugin;
+ 
+-export { type CadBinaryPreviewContext, type CadPluginOptions, type FileViewer, type LibreDwgPreviewOptions, type OfficeConversionContext, type OfficeConversionResult, type OfficePluginOptions, type PdfPluginOptions, type PdfWebFallbackScripts, type PreviewCommand, type PreviewContext, type PreviewFallback, type PreviewFile, type PreviewFit, type PreviewInstance, type PreviewItem, type PreviewLocale, type PreviewMessages, type PreviewOptions, type PreviewPlugin, type PreviewSize, type PreviewSource, type PreviewSupportOptions, type PreviewTheme, type PreviewToolbarActionId, type PreviewToolbarBuiltInAction, type PreviewToolbarCustomAction, type PreviewToolbarOptions, type PreviewToolbarRenderContext, type VideoPluginOptions, type WebglDwgEngineLoader, type WebglDwgPreviewOptions, archivePlugin, assetPlugin, audioPlugin, cadPlugin, createViewer, drawingPlugin, emailPlugin, epubPlugin, fallbackPlugin, gisPlugin, imagePlugin, isPreviewSupported, model3dPlugin, ofdPlugin, officePlugin, pdfPlugin, textPlugin, videoPlugin, xmindPlugin, xpsPlugin };
++export { type CadBinaryPreviewContext, type CadPluginOptions, type FileViewer, type LibreDwgPreviewOptions, type OfficeConversionContext, type OfficeConversionResult, type OfficePluginOptions, type PdfPluginOptions, type PdfWebFallbackScripts, type PreviewCommand, type PreviewContext, type PreviewFallback, type PreviewFile, type PreviewFit, type PreviewInstance, type PreviewItem, type PreviewLocale, type PreviewMessages, type PreviewOptions, type PreviewPlugin, type PreviewSize, type PreviewSource, type PreviewSupportOptions, type PreviewTheme, type PreviewToolbarActionId, type PreviewToolbarBuiltInAction, type PreviewToolbarCustomAction, type PreviewToolbarOptions, type PreviewToolbarRenderContext, type VideoPluginOptions, type WebglDwgEngineLoader, type WebglDwgPreviewOptions, assetPlugin, audioPlugin, cadPlugin, createViewer, drawingPlugin, emailPlugin, epubPlugin, fallbackPlugin, gisPlugin, imagePlugin, isPreviewSupported, model3dPlugin, ofdPlugin, officePlugin, pdfPlugin, textPlugin, videoPlugin, xmindPlugin, xpsPlugin };
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 3f4cfa6382a43db127b91654eb06a9c1ae55ad2a..020dd7365b02f60b3736faf5ede56766a5ed1167 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -311,7 +311,6 @@ declare function officePlugin(options?: OfficePluginOptions): PreviewPlugin;
+ 
+ declare function ofdPlugin(): PreviewPlugin;
+ 
+-declare function archivePlugin(): PreviewPlugin;
+ 
+ declare function emailPlugin(): PreviewPlugin;
+ 
+@@ -420,4 +419,4 @@ declare function assetPlugin(): PreviewPlugin;
+ 
+ declare function fallbackPlugin(): PreviewPlugin;
+ 
+-export { type CadBinaryPreviewContext, type CadPluginOptions, type FileViewer, type LibreDwgPreviewOptions, type OfficeConversionContext, type OfficeConversionResult, type OfficePluginOptions, type PdfPluginOptions, type PdfWebFallbackScripts, type PreviewCommand, type PreviewContext, type PreviewFallback, type PreviewFile, type PreviewFit, type PreviewInstance, type PreviewItem, type PreviewLocale, type PreviewMessages, type PreviewOptions, type PreviewPlugin, type PreviewSize, type PreviewSource, type PreviewSupportOptions, type PreviewTheme, type PreviewToolbarActionId, type PreviewToolbarBuiltInAction, type PreviewToolbarCustomAction, type PreviewToolbarOptions, type PreviewToolbarRenderContext, type VideoPluginOptions, type WebglDwgEngineLoader, type WebglDwgPreviewOptions, archivePlugin, assetPlugin, audioPlugin, cadPlugin, createViewer, drawingPlugin, emailPlugin, epubPlugin, fallbackPlugin, gisPlugin, imagePlugin, isPreviewSupported, model3dPlugin, ofdPlugin, officePlugin, pdfPlugin, textPlugin, videoPlugin, xmindPlugin, xpsPlugin };
++export { type CadBinaryPreviewContext, type CadPluginOptions, type FileViewer, type LibreDwgPreviewOptions, type OfficeConversionContext, type OfficeConversionResult, type OfficePluginOptions, type PdfPluginOptions, type PdfWebFallbackScripts, type PreviewCommand, type PreviewContext, type PreviewFallback, type PreviewFile, type PreviewFit, type PreviewInstance, type PreviewItem, type PreviewLocale, type PreviewMessages, type PreviewOptions, type PreviewPlugin, type PreviewSize, type PreviewSource, type PreviewSupportOptions, type PreviewTheme, type PreviewToolbarActionId, type PreviewToolbarBuiltInAction, type PreviewToolbarCustomAction, type PreviewToolbarOptions, type PreviewToolbarRenderContext, type VideoPluginOptions, type WebglDwgEngineLoader, type WebglDwgPreviewOptions, assetPlugin, audioPlugin, cadPlugin, createViewer, drawingPlugin, emailPlugin, epubPlugin, fallbackPlugin, gisPlugin, imagePlugin, isPreviewSupported, model3dPlugin, ofdPlugin, officePlugin, pdfPlugin, textPlugin, videoPlugin, xmindPlugin, xpsPlugin };
+diff --git a/dist/index.js b/dist/index.js
+index cc0b6679015bd96ba9c7912b72c969af6b7e1220..91d0397761da6ecc91c7401fdf737f394236d261 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -19526,841 +19526,6 @@ function normalizeOfdError(error) {
+   return "\u6587\u4EF6\u53EF\u80FD\u5DF2\u635F\u574F\uFF0C\u6216\u4E0D\u662F\u6709\u6548\u7684 OFD \u5305";
+ }
+ 
+-// src/plugins/archive.ts
+-import JSZip5 from "jszip";
+-import pako from "pako";
+-var archiveExtensions = /* @__PURE__ */ new Set(["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz"]);
+-var archiveMimeTypes = /* @__PURE__ */ new Set([
+-  "application/zip",
+-  "application/x-zip-compressed",
+-  "application/vnd.rar",
+-  "application/x-rar-compressed",
+-  "application/x-7z-compressed",
+-  "application/x-tar",
+-  "application/gzip",
+-  "application/x-gzip",
+-  "application/x-bzip2",
+-  "application/x-xz"
+-]);
+-var archiveMimeFormatMap = {
+-  "application/zip": "zip",
+-  "application/x-zip-compressed": "zip",
+-  "application/vnd.rar": "rar",
+-  "application/x-rar-compressed": "rar",
+-  "application/x-7z-compressed": "7z",
+-  "application/x-tar": "tar",
+-  "application/gzip": "gz",
+-  "application/x-gzip": "gz",
+-  "application/x-bzip2": "bz2",
+-  "application/x-xz": "xz"
+-};
+-function archivePlugin() {
+-  return {
+-    name: "archive",
+-    match(file) {
+-      return archiveExtensions.has(file.extension) || archiveMimeTypes.has(file.mimeType);
+-    },
+-    async render(ctx) {
+-      const url = createObjectUrl(ctx.file);
+-      const isExternal = Boolean(ctx.file.url);
+-      const panel = createPanel("ofv-archive");
+-      ctx.viewport.append(panel);
+-      const ext = resolveFormat(ctx.file, archiveMimeFormatMap).toLowerCase();
+-      let archiveEntries = [];
+-      let isEncrypted = false;
+-      let parseError = null;
+-      let archiveProbe = null;
+-      try {
+-        if (ext === "zip") {
+-          try {
+-            const zip = await JSZip5.loadAsync(await readArrayBuffer(ctx.file), {
+-              decodeFileName: decodeZipFileName
+-            });
+-            archiveEntries = Object.values(zip.files).map((entry) => ({
+-              name: entry.name,
+-              unsafeName: entry.unsafeOriginalName,
+-              size: entry._data?.uncompressedSize || 0,
+-              dir: entry.dir,
+-              read: () => entry.async("arraybuffer")
+-            }));
+-          } catch (zipErr) {
+-            if (isEncryptedError(zipErr)) {
+-              isEncrypted = true;
+-            } else {
+-              throw zipErr;
+-            }
+-          }
+-        } else if (ext === "tar") {
+-          archiveEntries = untar(await readArrayBuffer(ctx.file));
+-        } else if (ext === "gz" || ext === "tgz" || ext === "tar.gz") {
+-          const u8 = new Uint8Array(await readArrayBuffer(ctx.file));
+-          const decompressed = pako.ungzip(u8);
+-          const originalName = ctx.file.name.endsWith(".gz") ? ctx.file.name.slice(0, -3) : ctx.file.name.endsWith(".tgz") ? ctx.file.name.slice(0, -4) + ".tar" : ctx.file.name;
+-          if (ext === "tgz" || ext === "tar.gz" || originalName.endsWith(".tar")) {
+-            archiveEntries = untar(toArrayBuffer(decompressed));
+-          } else {
+-            archiveEntries = [
+-              {
+-                name: originalName,
+-                size: decompressed.byteLength,
+-                dir: false,
+-                read: async () => toArrayBuffer(decompressed)
+-              }
+-            ];
+-          }
+-        } else if (ext === "bz2") {
+-          const compressed = new Uint8Array(await readArrayBuffer(ctx.file));
+-          const decompressed = await bunzip2(compressed);
+-          const originalName = ctx.file.name.toLowerCase().endsWith(".bz2") ? ctx.file.name.slice(0, -4) : ctx.file.name;
+-          archiveEntries = [
+-            {
+-              name: originalName || "decompressed",
+-              size: decompressed.byteLength,
+-              dir: false,
+-              read: async () => toArrayBuffer(decompressed)
+-            }
+-          ];
+-        } else if (ext === "xz") {
+-          const compressed = new Uint8Array(await readArrayBuffer(ctx.file));
+-          const decompressed = await unxz(compressed);
+-          const originalName = deriveSingleFileArchiveName(ctx.file.name, ".xz", "decompressed");
+-          if (originalName.toLowerCase().endsWith(".tar") || ctx.file.name.toLowerCase().endsWith(".txz")) {
+-            archiveEntries = untar(toArrayBuffer(decompressed));
+-          } else {
+-            archiveEntries = [
+-              {
+-                name: originalName,
+-                size: decompressed.byteLength,
+-                dir: false,
+-                read: async () => toArrayBuffer(decompressed)
+-              }
+-            ];
+-          }
+-        } else if (["rar", "7z"].includes(ext)) {
+-          archiveProbe = probeArchiveHeader(await readArrayBuffer(ctx.file), ext);
+-        } else {
+-          parseError = `\u8BE5\u683C\u5F0F (.${ext.toUpperCase()}) \u76EE\u524D\u6682\u4E0D\u652F\u6301\u76F4\u63A5\u5728\u6D4F\u89C8\u5668\u7AEF\u5728\u7EBF\u89E3\u538B\u548C\u76EE\u5F55\u9884\u89C8\u3002`;
+-        }
+-      } catch (err) {
+-        parseError = `\u538B\u7F29\u5305\u89E3\u6790\u5931\u8D25\uFF1A${err.message || err}`;
+-      }
+-      if (isEncrypted) {
+-        const fallback = createEncryptedFallback(ctx.file, url, {
+-          title: "\u538B\u7F29\u5305\u5DF2\u52A0\u5BC6\uFF0C\u65E0\u6CD5\u5728\u7EBF\u9884\u89C8",
+-          message: "\u8BF7\u4E0B\u8F7D\u540E\u5728\u672C\u5730\u8F93\u5165\u5BC6\u7801\u89E3\u538B\uFF0C\u6216\u4E0A\u4F20\u89E3\u5BC6\u540E\u7684\u538B\u7F29\u5305\u3002",
+-          action: "\u4E0B\u8F7D\u538B\u7F29\u5305"
+-        });
+-        panel.append(fallback);
+-        ctx.viewport.classList.add("ofv-center");
+-        return {
+-          destroy() {
+-            ctx.viewport.classList.remove("ofv-center");
+-            revokeObjectUrl(url, isExternal);
+-            panel.remove();
+-          }
+-        };
+-      }
+-      if (archiveProbe) {
+-        renderArchiveProbe(panel, archiveProbe, ctx.file.name, url);
+-        return {
+-          destroy() {
+-            revokeObjectUrl(url, isExternal);
+-            panel.remove();
+-          }
+-        };
+-      }
+-      if (parseError) {
+-        const fallback = document.createElement("div");
+-        fallback.className = "ofv-fallback";
+-        const title = document.createElement("strong");
+-        title.textContent = parseError;
+-        const meta = document.createElement("span");
+-        meta.textContent = "\u5EFA\u8BAE\u4E0B\u8F7D\u89C6\u9891/\u6587\u6863\u7B49\u6587\u4EF6\u81F3\u672C\u5730\u67E5\u770B\uFF0C\u6216\u4F7F\u7528\u539F\u751F\u89E3\u538B\u5DE5\u5177\u63D0\u53D6\u5185\u5BB9\u3002";
+-        const download = document.createElement("a");
+-        download.href = url;
+-        download.download = ctx.file.name;
+-        download.textContent = "\u4E0B\u8F7D\u538B\u7F29\u5305";
+-        fallback.append(title, meta, download);
+-        panel.append(fallback);
+-        ctx.viewport.classList.add("ofv-center");
+-        return {
+-          destroy() {
+-            ctx.viewport.classList.remove("ofv-center");
+-            revokeObjectUrl(url, isExternal);
+-            panel.remove();
+-          }
+-        };
+-      }
+-      const layout = document.createElement("div");
+-      layout.className = "ofv-archive-layout";
+-      const sidebar = document.createElement("div");
+-      sidebar.className = "ofv-archive-sidebar";
+-      const sidebarPanel = document.createElement("div");
+-      sidebarPanel.className = "ofv-archive-sidebar-panel";
+-      const header = document.createElement("div");
+-      header.className = "ofv-archive-header";
+-      const sidebarTitle = document.createElement("span");
+-      sidebarTitle.className = "ofv-archive-header-title";
+-      sidebarTitle.textContent = `\u6587\u4EF6\u5217\u8868 (${archiveEntries.filter((e) => !e.dir).length})`;
+-      const sidebarToggle = document.createElement("button");
+-      sidebarToggle.className = "ofv-archive-sidebar-toggle";
+-      sidebarToggle.type = "button";
+-      sidebarToggle.setAttribute("aria-label", "\u5C55\u5F00\u6587\u4EF6\u5217\u8868");
+-      sidebarToggle.setAttribute("aria-expanded", "false");
+-      sidebarToggle.title = "\u5C55\u5F00\u6587\u4EF6\u5217\u8868";
+-      sidebarToggle.textContent = "\u2039";
+-      header.append(sidebarToggle, sidebarTitle);
+-      sidebarPanel.append(header);
+-      const tree = document.createElement("div");
+-      tree.className = "ofv-archive-tree";
+-      sidebarPanel.append(tree);
+-      sidebar.append(sidebarPanel);
+-      const mainPanel = document.createElement("div");
+-      mainPanel.className = "ofv-archive-main";
+-      layout.append(sidebar, mainPanel);
+-      panel.append(layout);
+-      let currentSubInstance = null;
+-      const getSidebarViewportWidth = () => ctx.viewport.clientWidth || ctx.size.width;
+-      const shouldAutoCollapseSidebar = () => getSidebarViewportWidth() <= 520;
+-      const setSidebarCollapsed = (collapsed) => {
+-        layout.classList.toggle("is-sidebar-collapsed", collapsed);
+-        sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+-        const label = collapsed ? "\u5C55\u5F00\u6587\u4EF6\u5217\u8868" : "\u6536\u8D77\u6587\u4EF6\u5217\u8868";
+-        sidebarToggle.setAttribute("aria-label", label);
+-        sidebarToggle.title = label;
+-        sidebarToggle.textContent = collapsed ? "\u203A" : "\u2039";
+-      };
+-      setSidebarCollapsed(false);
+-      sidebarToggle.addEventListener("click", () => {
+-        setSidebarCollapsed(!layout.classList.contains("is-sidebar-collapsed"));
+-      });
+-      const showDefaultSummary = (isSupplemental = true) => {
+-        mainPanel.replaceChildren();
+-        const summary = document.createElement("div");
+-        summary.className = "ofv-archive-info";
+-        if (isSupplemental) {
+-          hideSupplementalInfo4(summary);
+-        }
+-        const heading = document.createElement("h3");
+-        heading.textContent = ctx.file.name;
+-        const info = document.createElement("div");
+-        info.className = "ofv-archive-info-meta";
+-        const fileCount = archiveEntries.filter((e) => !e.dir).length;
+-        const dirCount = archiveEntries.filter((e) => e.dir).length;
+-        appendArchiveInfo(info, "\u683C\u5F0F\u7C7B\u578B", `.${ext.toUpperCase()} \u538B\u7F29\u6587\u4EF6`);
+-        appendArchiveInfo(info, "\u5305\u542B\u6587\u4EF6\u6570", `${fileCount} \u4E2A`);
+-        appendArchiveInfo(info, "\u5305\u542B\u76EE\u5F55\u6570", `${dirCount} \u4E2A`);
+-        appendArchiveInfo(
+-          info,
+-          "\u64CD\u4F5C\u63D0\u793A",
+-          fileCount === 0 ? "\u538B\u7F29\u5305\u5185\u6CA1\u6709\u53EF\u9884\u89C8\u7684\u6587\u4EF6\u3002" : "\u8BF7\u70B9\u51FB\u5DE6\u4FA7\u680F\u4E2D\u7684\u6587\u4EF6\u8FDB\u884C\u8054\u52A8\u9884\u89C8\u3002"
+-        );
+-        summary.append(heading, info, createArchiveSummary(archiveEntries));
+-        mainPanel.append(summary);
+-      };
+-      const visibleEntries = archiveEntries.filter((e) => !e.dir).slice(0, 500);
+-      showDefaultSummary(visibleEntries.length > 0);
+-      let destroyed = false;
+-      let renderToken = 0;
+-      const openArchiveEntry = async (entry, item) => {
+-        if (destroyed) {
+-          return;
+-        }
+-        if (shouldAutoCollapseSidebar()) {
+-          setSidebarCollapsed(true);
+-        }
+-        const token = ++renderToken;
+-        sidebar.querySelectorAll(".ofv-archive-item").forEach((el) => {
+-          el.classList.remove("is-active");
+-          el.removeAttribute("aria-current");
+-        });
+-        item.classList.add("is-active");
+-        item.setAttribute("aria-current", "true");
+-        if (currentSubInstance) {
+-          currentSubInstance.destroy();
+-          currentSubInstance = null;
+-          ctx.toolbar?.refreshCommandSupport();
+-        }
+-        mainPanel.replaceChildren(createArchiveLoading(entry.name.split("/").pop() || entry.name));
+-        try {
+-          let buffer = await entry.read();
+-          if (destroyed || token !== renderToken) {
+-            return;
+-          }
+-          const subName = entry.name.split("/").pop() || entry.name;
+-          const subExt = subName.split(".").pop()?.toLowerCase() || "";
+-          if (subExt === "shp") {
+-            const basePath = entry.name.slice(0, -4);
+-            const dbfEntry = archiveEntries.find((e) => e.name.toLowerCase() === basePath.toLowerCase() + ".dbf");
+-            const shxEntry = archiveEntries.find((e) => e.name.toLowerCase() === basePath.toLowerCase() + ".shx");
+-            if (dbfEntry && shxEntry) {
+-              const prjEntry = archiveEntries.find((e) => e.name.toLowerCase() === basePath.toLowerCase() + ".prj");
+-              const newZip = new JSZip5();
+-              newZip.file(subName, buffer);
+-              newZip.file(dbfEntry.name.split("/").pop(), await dbfEntry.read());
+-              newZip.file(shxEntry.name.split("/").pop(), await shxEntry.read());
+-              if (prjEntry) {
+-                newZip.file(prjEntry.name.split("/").pop(), await prjEntry.read());
+-              }
+-              buffer = await newZip.generateAsync({ type: "arraybuffer" });
+-              if (destroyed || token !== renderToken) {
+-                return;
+-              }
+-            }
+-          }
+-          const subContainer = document.createElement("div");
+-          subContainer.style.cssText = "width: 100%; height: 100%; position: relative; display: flex; flex-direction: column;";
+-          mainPanel.replaceChildren(subContainer);
+-          const subViewport = document.createElement("div");
+-          subViewport.className = "ofv-viewport";
+-          subViewport.style.cssText = "flex: 1; width: 100%; height: 100%; position: relative; overflow: auto;";
+-          subContainer.append(subViewport);
+-          const subFile = await normalizeFile(buffer, subName);
+-          const plugins = [...ctx.options.plugins || [], fallbackPlugin()];
+-          let matchedPlugin = await findSubPreviewPlugin(plugins, subFile);
+-          if (destroyed || token !== renderToken) {
+-            return;
+-          }
+-          if (matchedPlugin.name === "archive") {
+-            matchedPlugin = fallbackPlugin();
+-          }
+-          let previewError;
+-          const nextSubInstance = await Promise.resolve().then(
+-            () => matchedPlugin.render({
+-              host: ctx.host,
+-              viewport: subViewport,
+-              file: subFile,
+-              size: { width: subViewport.clientWidth || 600, height: subViewport.clientHeight || 400 },
+-              options: ctx.options,
+-              toolbar: ctx.toolbar,
+-              setLoading: () => {
+-              },
+-              setError: (err) => {
+-                previewError = err instanceof Error ? err : new Error(String(err));
+-                subViewport.replaceChildren(createInlineError("\u6587\u4EF6\u9884\u89C8\u5931\u8D25", previewError.message));
+-              }
+-            })
+-          ).catch((error) => {
+-            previewError = error instanceof Error ? error : new Error(String(error));
+-            subViewport.replaceChildren(createInlineError("\u6587\u4EF6\u9884\u89C8\u5931\u8D25", previewError.message));
+-            return void 0;
+-          });
+-          if (destroyed || token !== renderToken) {
+-            nextSubInstance?.destroy();
+-            return;
+-          }
+-          if (nextSubInstance && !previewError) {
+-            currentSubInstance = nextSubInstance;
+-            ctx.toolbar?.refreshCommandSupport();
+-          } else if (nextSubInstance) {
+-            nextSubInstance.destroy();
+-            ctx.toolbar?.refreshCommandSupport();
+-          }
+-        } catch (err) {
+-          if (destroyed || token !== renderToken) {
+-            return;
+-          }
+-          currentSubInstance = null;
+-          ctx.toolbar?.refreshCommandSupport();
+-          mainPanel.replaceChildren(createInlineError("\u89E3\u538B\u52A0\u8F7D\u5931\u8D25", String(err.message || err)));
+-        }
+-      };
+-      visibleEntries.forEach((entry, index) => {
+-        const item = document.createElement("button");
+-        item.className = "ofv-archive-item";
+-        item.type = "button";
+-        item.title = entry.name;
+-        const icon = document.createElement("span");
+-        icon.className = "ofv-archive-item-icon";
+-        icon.textContent = getIcon(entry.name, entry.dir);
+-        const name = document.createElement("span");
+-        name.className = "ofv-archive-item-name";
+-        name.textContent = entry.name;
+-        name.title = entry.name;
+-        item.append(icon, name);
+-        tree.append(item);
+-        item.addEventListener("click", async () => {
+-          await openArchiveEntry(entry, item);
+-        });
+-        if (index === 0) {
+-          void openArchiveEntry(entry, item);
+-        }
+-      });
+-      return {
+-        canCommand(command) {
+-          return currentSubInstance?.canCommand?.(command) ?? false;
+-        },
+-        command(command) {
+-          return currentSubInstance?.command?.(command) ?? false;
+-        },
+-        preparePrint() {
+-          return currentSubInstance?.preparePrint?.();
+-        },
+-        resize(size) {
+-          currentSubInstance?.resize?.(size);
+-        },
+-        destroy() {
+-          destroyed = true;
+-          renderToken += 1;
+-          if (currentSubInstance) {
+-            currentSubInstance.destroy();
+-          }
+-          revokeObjectUrl(url, isExternal);
+-          panel.remove();
+-        }
+-      };
+-    }
+-  };
+-}
+-async function findSubPreviewPlugin(plugins, file) {
+-  for (const plugin of plugins) {
+-    if (await plugin.match(file)) {
+-      return plugin;
+-    }
+-  }
+-  return fallbackPlugin();
+-}
+-async function bunzip2(bytes) {
+-  const restoreBuffer = installSeekBzipBufferCompat();
+-  try {
+-    const module = await import("seek-bzip");
+-    const decoder = module.default || module;
+-    const decoded = decoder.decode(bytes);
+-    return decoded instanceof Uint8Array ? decoded : decoded instanceof ArrayBuffer ? new Uint8Array(decoded) : Uint8Array.from(decoded);
+-  } finally {
+-    restoreBuffer();
+-  }
+-}
+-function installSeekBzipBufferCompat() {
+-  const globalObject = globalThis;
+-  if (typeof globalObject.Buffer === "function") {
+-    return () => void 0;
+-  }
+-  class SeekBzipBuffer extends Uint8Array {
+-    copy(target, targetStart = 0, sourceStart = 0, sourceEnd = this.length) {
+-      const slice = this.subarray(sourceStart, sourceEnd);
+-      target.set(slice, targetStart);
+-      return slice.length;
+-    }
+-    toString(encoding) {
+-      if (encoding === "hex") {
+-        return Array.from(this).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+-      }
+-      return new TextDecoder().decode(this);
+-    }
+-  }
+-  globalObject.Buffer = SeekBzipBuffer;
+-  return () => {
+-    if (globalObject.Buffer === SeekBzipBuffer) {
+-      Reflect.deleteProperty(globalObject, "Buffer");
+-    }
+-  };
+-}
+-async function unxz(bytes) {
+-  const module = await import("xz-decompress");
+-  const XzReadableStream = module.XzReadableStream || module.default?.XzReadableStream;
+-  if (typeof XzReadableStream !== "function") {
+-    throw new Error("XZ \u89E3\u7801\u5668\u4E0D\u53EF\u7528\u3002");
+-  }
+-  const response = new Response(new XzReadableStream(createByteReadableStream(bytes)));
+-  return new Uint8Array(await response.arrayBuffer());
+-}
+-function createByteReadableStream(bytes) {
+-  const blob = new Blob([bytes]);
+-  if (typeof blob.stream === "function") {
+-    return blob.stream();
+-  }
+-  return new ReadableStream({
+-    start(controller) {
+-      controller.enqueue(bytes);
+-      controller.close();
+-    }
+-  });
+-}
+-function deriveSingleFileArchiveName(fileName, suffix, fallback) {
+-  return fileName.toLowerCase().endsWith(suffix) ? fileName.slice(0, -suffix.length) || fallback : fileName || fallback;
+-}
+-function toArrayBuffer(bytes) {
+-  const copy = new Uint8Array(bytes.byteLength);
+-  copy.set(bytes);
+-  return copy.buffer;
+-}
+-function decodeZipFileName(bytes) {
+-  const data = Array.isArray(bytes) ? Uint8Array.from(bytes.map((value) => value.charCodeAt(0) & 255)) : bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+-  const utf8 = decodeZipNameWith(data, "utf-8", true);
+-  if (utf8 && !looksMojibake(utf8)) {
+-    return utf8;
+-  }
+-  const gb18030 = decodeZipNameWith(data, "gb18030", false) || decodeZipNameWith(data, "gbk", false);
+-  if (gb18030 && !looksMojibake(gb18030)) {
+-    return gb18030;
+-  }
+-  return utf8 || new TextDecoder("latin1").decode(data);
+-}
+-function decodeZipNameWith(bytes, encoding, fatal) {
+-  try {
+-    return new TextDecoder(encoding, { fatal }).decode(bytes);
+-  } catch {
+-    return void 0;
+-  }
+-}
+-function looksMojibake(value) {
+-  return /[\uFFFDÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß]/.test(value);
+-}
+-function createInlineError(titleText, detailText) {
+-  const fallback = document.createElement("div");
+-  fallback.className = "ofv-fallback";
+-  const title = document.createElement("strong");
+-  title.textContent = titleText;
+-  const detail = document.createElement("span");
+-  detail.textContent = detailText;
+-  fallback.append(title, detail);
+-  return fallback;
+-}
+-function appendArchiveInfo(parent, label, value) {
+-  const row = document.createElement("div");
+-  const key = document.createElement("strong");
+-  key.textContent = `${label}\uFF1A`;
+-  row.append(key, document.createTextNode(value));
+-  parent.append(row);
+-}
+-function hideSupplementalInfo4(element) {
+-  element.hidden = true;
+-  element.setAttribute("aria-hidden", "true");
+-  element.style.display = "none";
+-}
+-function createArchiveSummary(entries) {
+-  const files = entries.filter((entry) => !entry.dir);
+-  const summary = document.createElement("dl");
+-  summary.className = "ofv-archive-summary";
+-  const totalSize = files.reduce((sum, entry) => sum + entry.size, 0);
+-  const largest = files.reduce((current, entry) => !current || entry.size > current.size ? entry : current, void 0);
+-  appendArchiveSummary(summary, "\u603B\u89E3\u538B\u5927\u5C0F", formatBytes2(totalSize));
+-  appendArchiveSummary(summary, "\u6700\u5927\u6587\u4EF6", largest ? `${largest.name} \xB7 ${formatBytes2(largest.size)}` : "\u65E0");
+-  appendArchiveSummary(summary, "\u7C7B\u578B\u5206\u5E03", formatArchiveExtensions(files));
+-  appendArchiveSummary(summary, "\u53EF\u9884\u89C8\u6761\u76EE", String(files.slice(0, 500).length));
+-  appendArchiveSummary(summary, "\u98CE\u9669\u8DEF\u5F84", String(files.filter((entry) => isRiskyArchivePath(entry.unsafeName || entry.name)).length));
+-  return summary;
+-}
+-function appendArchiveSummary(parent, label, value) {
+-  const key = document.createElement("dt");
+-  key.textContent = label;
+-  const content = document.createElement("dd");
+-  content.textContent = value;
+-  parent.append(key, content);
+-}
+-function formatArchiveExtensions(entries) {
+-  const counts = /* @__PURE__ */ new Map();
+-  for (const entry of entries) {
+-    const name = entry.name.split("/").pop() || entry.name;
+-    const index = name.lastIndexOf(".");
+-    const extension = index > 0 ? name.slice(index + 1).toLowerCase() : "(\u65E0\u6269\u5C55\u540D)";
+-    counts.set(extension, (counts.get(extension) || 0) + 1);
+-  }
+-  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6).map(([extension, count]) => `${extension} ${count}`).join(", ") || "\u65E0";
+-}
+-function isRiskyArchivePath(name) {
+-  return name.startsWith("/") || /^[A-Za-z]:[\\/]/.test(name) || name.split(/[\\/]+/).includes("..");
+-}
+-function createArchiveLoading(fileName) {
+-  const loading = document.createElement("div");
+-  loading.className = "ofv-archive-loading";
+-  const spinner = document.createElement("div");
+-  spinner.className = "ofv-archive-loading-spinner";
+-  const text = document.createElement("span");
+-  text.textContent = `\u6B63\u5728\u89E3\u538B\u5E76\u52A0\u8F7D [${fileName}]...`;
+-  loading.append(spinner, text);
+-  return loading;
+-}
+-function renderArchiveProbe(panel, probe, fileName, url) {
+-  const section = createSection(`${probe.format} \u7ED3\u6784\u9884\u89C8`);
+-  const note = document.createElement("p");
+-  note.textContent = probe.note;
+-  const meta = document.createElement("div");
+-  meta.className = "ofv-archive-probe-meta";
+-  appendArchiveInfo(meta, "\u6587\u4EF6", fileName);
+-  appendArchiveInfo(meta, "\u683C\u5F0F", probe.format);
+-  for (const item of probe.meta) {
+-    appendArchiveInfo(meta, item.label, item.value);
+-  }
+-  const download = document.createElement("a");
+-  download.className = "ofv-asset-download";
+-  download.href = url;
+-  download.download = fileName;
+-  download.textContent = "\u4E0B\u8F7D\u538B\u7F29\u5305";
+-  section.append(note, meta, download);
+-  if (!probe.valid) {
+-    const error = document.createElement("p");
+-    error.className = "ofv-data-error";
+-    error.textContent = probe.error || "\u538B\u7F29\u5305\u5934\u4FE1\u606F\u65E0\u6CD5\u8BC6\u522B\u3002";
+-    section.append(error);
+-  }
+-  if (probe.entries.length > 0) {
+-    const wrapper = document.createElement("div");
+-    wrapper.className = "ofv-table-scroll ofv-archive-probe-table";
+-    const table = document.createElement("table");
+-    const thead = document.createElement("thead");
+-    const header = document.createElement("tr");
+-    for (const label of ["\u6587\u4EF6", "\u539F\u59CB\u5927\u5C0F", "\u538B\u7F29\u5927\u5C0F"]) {
+-      const th = document.createElement("th");
+-      th.textContent = label;
+-      header.append(th);
+-    }
+-    thead.append(header);
+-    const tbody = document.createElement("tbody");
+-    for (const entry of probe.entries.slice(0, 200)) {
+-      const tr = document.createElement("tr");
+-      for (const value of [
+-        entry.name,
+-        entry.size === void 0 ? "\u672A\u77E5" : formatBytes2(entry.size),
+-        entry.packedSize === void 0 ? "\u672A\u77E5" : formatBytes2(entry.packedSize)
+-      ]) {
+-        const td = document.createElement("td");
+-        td.textContent = value;
+-        tr.append(td);
+-      }
+-      tbody.append(tr);
+-    }
+-    table.append(thead, tbody);
+-    wrapper.append(table);
+-    section.append(wrapper);
+-  }
+-  panel.append(section);
+-}
+-function probeArchiveHeader(arrayBuffer, extension) {
+-  const bytes = new Uint8Array(arrayBuffer);
+-  if (extension === "rar") {
+-    return probeRar(bytes);
+-  }
+-  if (extension === "7z") {
+-    return probe7z(bytes);
+-  }
+-  if (extension === "bz2") {
+-    return probeBzip2(bytes);
+-  }
+-  if (extension === "xz") {
+-    return probeXz(bytes);
+-  }
+-  return {
+-    format: extension.toUpperCase(),
+-    valid: false,
+-    error: "\u6682\u4E0D\u652F\u6301\u8BE5\u538B\u7F29\u683C\u5F0F\u7684\u5934\u4FE1\u606F\u89E3\u6790\u3002",
+-    meta: [],
+-    entries: [],
+-    note: "\u5F53\u524D\u4EC5\u63D0\u4F9B\u538B\u7F29\u5305\u8BC6\u522B\u548C\u4E0B\u8F7D\u5165\u53E3\u3002"
+-  };
+-}
+-function probeRar(bytes) {
+-  const rar4 = bytes.length >= 7 && bytes[0] === 82 && bytes[1] === 97 && bytes[2] === 114 && bytes[3] === 33 && bytes[4] === 26 && bytes[5] === 7 && bytes[6] === 0;
+-  const rar5 = bytes.length >= 8 && bytes[0] === 82 && bytes[1] === 97 && bytes[2] === 114 && bytes[3] === 33 && bytes[4] === 26 && bytes[5] === 7 && bytes[6] === 1 && bytes[7] === 0;
+-  const entries = rar4 ? parseRar4Entries(bytes) : [];
+-  return {
+-    format: "RAR",
+-    valid: rar4 || rar5,
+-    error: rar4 || rar5 ? void 0 : "\u7F3A\u5C11 RAR signature\u3002",
+-    meta: [
+-      { label: "\u7248\u672C", value: rar5 ? "RAR5" : rar4 ? "RAR4" : "\u672A\u77E5" },
+-      { label: "\u7B7E\u540D", value: byteSignature(bytes) },
+-      { label: "\u53EF\u89C1\u6761\u76EE", value: String(entries.length) }
+-    ],
+-    entries,
+-    note: rar4 ? "\u5F53\u524D\u8F7B\u91CF\u8BFB\u53D6 RAR4 \u672A\u52A0\u5BC6\u6587\u4EF6\u5934\uFF0C\u7528\u4E8E\u76EE\u5F55\u786E\u8BA4\uFF1B\u5B9E\u9645\u89E3\u538B\u4ECD\u5EFA\u8BAE\u63A5\u5165 unrar WASM \u6216\u672C\u5730\u5DE5\u5177\u3002" : "\u5F53\u524D\u8BC6\u522B RAR \u5BB9\u5668\u548C\u7248\u672C\uFF1BRAR5 \u76EE\u5F55\u89E3\u6790\u9700\u8981\u4E13\u7528\u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function parseRar4Entries(bytes) {
+-  const view3 = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+-  const entries = [];
+-  let offset = 7;
+-  while (offset + 7 <= bytes.length && entries.length < 200) {
+-    const type = bytes[offset + 2];
+-    const flags = view3.getUint16(offset + 3, true);
+-    let headerSize = view3.getUint16(offset + 5, true);
+-    if (headerSize < 7 || offset + headerSize > bytes.length) {
+-      break;
+-    }
+-    if ((flags & 32768) !== 0) {
+-      if (offset + 11 > bytes.length) {
+-        break;
+-      }
+-      headerSize += view3.getUint32(offset + 7, true);
+-    }
+-    if (type === 116 && offset + 32 <= bytes.length) {
+-      const packedSize = view3.getUint32(offset + 7, true);
+-      const unpackedSize = view3.getUint32(offset + 11, true);
+-      const nameSize = view3.getUint16(offset + 26, true);
+-      const nameOffset = offset + 32;
+-      const nameEnd = Math.min(nameOffset + nameSize, offset + headerSize, bytes.length);
+-      const nameBytes = bytes.slice(nameOffset, nameEnd);
+-      const name = new TextDecoder("latin1").decode(nameBytes).replace(/\0.*$/, "");
+-      if (name) {
+-        entries.push({ name, size: unpackedSize, packedSize });
+-      }
+-    }
+-    offset += headerSize;
+-  }
+-  return entries;
+-}
+-function probe7z(bytes) {
+-  const valid = bytes.length >= 32 && bytes[0] === 55 && bytes[1] === 122 && bytes[2] === 188 && bytes[3] === 175 && bytes[4] === 39 && bytes[5] === 28;
+-  const meta = [{ label: "\u7B7E\u540D", value: byteSignature(bytes) }];
+-  if (valid) {
+-    const view3 = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+-    meta.push({ label: "\u7248\u672C", value: `${bytes[6]}.${bytes[7]}` });
+-    meta.push({ label: "Next header offset", value: String(readUint64Le2(view3, 12)) });
+-    meta.push({ label: "Next header size", value: String(readUint64Le2(view3, 20)) });
+-    meta.push({ label: "Next header CRC", value: `0x${view3.getUint32(28, true).toString(16).toUpperCase()}` });
+-  }
+-  return {
+-    format: "7Z",
+-    valid,
+-    error: valid ? void 0 : "\u7F3A\u5C11 7z signature\u3002",
+-    meta,
+-    entries: [],
+-    note: "\u5F53\u524D\u8BC6\u522B 7z \u5BB9\u5668\u548C next header \u8FB9\u754C\uFF1B\u76EE\u5F55\u548C\u89E3\u538B\u9700\u8981 LZMA/7z \u4E13\u7528\u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function probeBzip2(bytes) {
+-  const valid = bytes.length >= 4 && bytes[0] === 66 && bytes[1] === 90 && bytes[2] === 104 && bytes[3] >= 49 && bytes[3] <= 57;
+-  return {
+-    format: "BZIP2",
+-    valid,
+-    error: valid ? void 0 : "\u7F3A\u5C11 BZh magic header\u3002",
+-    meta: [
+-      { label: "\u7B7E\u540D", value: byteSignature(bytes) },
+-      { label: "\u5757\u5927\u5C0F", value: valid ? `${String.fromCharCode(bytes[3])}00 KB` : "\u672A\u77E5" }
+-    ],
+-    entries: [],
+-    note: "BZIP2 \u901A\u5E38\u662F\u5355\u6587\u4EF6\u538B\u7F29\u6D41\uFF0C\u672C\u9884\u89C8\u5668\u5F53\u524D\u5C55\u793A\u5BB9\u5668\u5934\u4FE1\u606F\uFF1B\u89E3\u538B\u53EF\u540E\u7EED\u63A5\u5165 bzip2 \u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function probeXz(bytes) {
+-  const valid = bytes.length >= 6 && bytes[0] === 253 && bytes[1] === 55 && bytes[2] === 122 && bytes[3] === 88 && bytes[4] === 90 && bytes[5] === 0;
+-  return {
+-    format: "XZ",
+-    valid,
+-    error: valid ? void 0 : "\u7F3A\u5C11 XZ magic header\u3002",
+-    meta: [
+-      { label: "\u7B7E\u540D", value: byteSignature(bytes) },
+-      { label: "Stream flags", value: bytes.length >= 8 ? `0x${bytes[6].toString(16).padStart(2, "0").toUpperCase()} 0x${bytes[7].toString(16).padStart(2, "0").toUpperCase()}` : "\u672A\u77E5" }
+-    ],
+-    entries: [],
+-    note: "XZ \u901A\u5E38\u662F\u5355\u6587\u4EF6 LZMA2 \u538B\u7F29\u6D41\uFF0C\u672C\u9884\u89C8\u5668\u5F53\u524D\u5C55\u793A\u5BB9\u5668\u5934\u4FE1\u606F\uFF1B\u89E3\u538B\u53EF\u540E\u7EED\u63A5\u5165 xz/lzma \u89E3\u7801\u5668\u3002"
+-  };
+-}
+-function readUint64Le2(view3, offset) {
+-  return BigInt(view3.getUint32(offset, true)) | BigInt(view3.getUint32(offset + 4, true)) << 32n;
+-}
+-function formatBytes2(bytes) {
+-  if (bytes < 1024) {
+-    return `${bytes} B`;
+-  }
+-  if (bytes < 1024 * 1024) {
+-    return `${(bytes / 1024).toFixed(1)} KB`;
+-  }
+-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+-}
+-function byteSignature(bytes) {
+-  if (bytes.length === 0) {
+-    return "\u7A7A\u6587\u4EF6";
+-  }
+-  const ascii = new TextDecoder("ascii").decode(bytes.slice(0, Math.min(bytes.length, 16))).replace(/[^\x20-\x7E]/g, ".");
+-  const hex = Array.from(bytes.slice(0, Math.min(bytes.length, 8))).map((byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+-  return `${ascii} (${hex})`;
+-}
+-function untar(arrayBuffer) {
+-  const entries = [];
+-  const u8 = new Uint8Array(arrayBuffer);
+-  let offset = 0;
+-  const readString2 = (start, length) => {
+-    let end = start;
+-    while (end < start + length && u8[end] !== 0) {
+-      end++;
+-    }
+-    return new TextDecoder().decode(u8.subarray(start, end)).trim();
+-  };
+-  while (offset + 512 <= arrayBuffer.byteLength) {
+-    const magic = readString2(offset + 257, 6);
+-    if (magic !== "ustar" && magic !== "ustar\0") {
+-      let allZero = true;
+-      for (let i = 0; i < 512; i++) {
+-        if (u8[offset + i] !== 0) {
+-          allZero = false;
+-          break;
+-        }
+-      }
+-      if (allZero) {
+-        break;
+-      }
+-      break;
+-    }
+-    const name = readString2(offset, 100);
+-    const prefix = readString2(offset + 345, 155);
+-    const fullName = prefix ? `${prefix}/${name}` : name;
+-    const sizeStr = readString2(offset + 124, 12);
+-    const size = parseInt(sizeStr, 8) || 0;
+-    const typeflag = readString2(offset + 156, 1);
+-    const dir = typeflag === "5" || fullName.endsWith("/");
+-    const contentOffset = offset + 512;
+-    entries.push({
+-      name: fullName,
+-      size,
+-      dir,
+-      read: async () => arrayBuffer.slice(contentOffset, contentOffset + size)
+-    });
+-    offset += 512 + Math.ceil(size / 512) * 512;
+-  }
+-  return entries;
+-}
+-function getIcon(name, dir) {
+-  if (dir) return "\u{1F4C1}";
+-  const ext = name.split(".").pop()?.toLowerCase();
+-  switch (ext) {
+-    case "png":
+-    case "jpg":
+-    case "jpeg":
+-    case "gif":
+-    case "svg":
+-    case "webp":
+-      return "\u{1F5BC}\uFE0F";
+-    case "pdf":
+-      return "\u{1F4D5}";
+-    case "doc":
+-    case "docx":
+-      return "\u{1F4D8}";
+-    case "xls":
+-    case "xlsx":
+-      return "\u{1F4D7}";
+-    case "ppt":
+-    case "pptx":
+-      return "\u{1F4D9}";
+-    case "zip":
+-    case "rar":
+-    case "7z":
+-    case "tar":
+-    case "gz":
+-      return "\u{1F4E6}";
+-    case "mp4":
+-    case "mkv":
+-    case "avi":
+-    case "webm":
+-      return "\u{1F3A5}";
+-    case "mp3":
+-    case "wav":
+-    case "ogg":
+-      return "\u{1F3B5}";
+-    case "txt":
+-    case "md":
+-    case "html":
+-    case "js":
+-    case "ts":
+-    case "json":
+-    case "css":
+-      return "\u{1F4C4}";
+-    default:
+-      return "\u{1F4C4}";
+-  }
+-}
+-
+ // src/plugins/email.ts
+ var emailExtensions = /* @__PURE__ */ new Set(["eml", "msg", "mbox"]);
+ var emailMimeTypes = /* @__PURE__ */ new Set(["message/rfc822", "application/vnd.ms-outlook", "application/mbox"]);
+@@ -30511,7 +29676,6 @@ function hexPreview2(bytes) {
+   return rows.join("\n");
+ }
+ export {
+-  archivePlugin,
+   assetPlugin,
+   audioPlugin,
+   cadPlugin,
+@@ -30532,4 +29696,3 @@ export {
+   xmindPlugin,
+   xpsPlugin
+ };
+-//# sourceMappingURL=index.js.map

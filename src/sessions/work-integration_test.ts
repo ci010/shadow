@@ -444,9 +444,16 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       await f.alignment.execute({ kind: 'session', sessionId: id }, 'adopt', work.key, 1, adoption)
       await f.send('Run the failing check, inspect the result, then repair the fixture.')
       await waitFor(() => f.calls.length === 1)
-      f.calls[0].resolve(call('exec', { script: 'exit 7', shell: defaultManagedShell() }, 'normal-failure'))
+      f.calls[0].resolve(call('exec', { script: 'exit 7', shell: defaultManagedShell(), cwd: workspace }, 'normal-failure'))
       await waitFor(() => f.calls.length === 2)
       assert.match(JSON.stringify(f.calls[1].messages), /command exited with code 7/)
+      const diagnostics = JSON.stringify([
+        `Shell: ${defaultManagedShell()}`,
+        `Cwd: ${workspace}`,
+        '[stdout]', '(empty)',
+        '[stderr]', '(empty)',
+      ].join('\n')).slice(1, -1)
+      assert(JSON.stringify(f.calls[1].messages).includes(diagnostics))
       assert.equal(f.initiatives.workEffects().length, 0)
       f.calls[1].resolve(call('fixture_write', {}, 'repair'))
       await waitFor(() => f.calls.length === 3)
@@ -456,6 +463,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const history: unknown[] = []
       for await (const record of store.readSessionLog(physicalSessionId(f.sessions.getSessionState(id)!))) history.push(record)
       assert.match(JSON.stringify(history), /command exited with code 7/)
+      assert(JSON.stringify(history).includes(diagnostics))
       assert.ok(f.initiatives.workHistory(work.key).some(event => event.kind === 'tool_result'
         && (event.data as { outcome: string }).outcome === 'returned_error'))
     } finally {

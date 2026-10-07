@@ -21,7 +21,7 @@ import NodeOfflineState from './NodeOfflineState.vue'
 import { fileViewerFormat } from '../../file-viewer.ts'
 import '../../open-file-viewer.css'
 
-const props = defineProps<{ apiBase: string; sessionId: string; folderId?: string; path: string; name: string; active: boolean }>()
+const props = defineProps<{ apiBase: string; sessionId: string; folderId?: string; path: string; name: string; active: boolean; sourceBlob?: Blob }>()
 const { isDark } = useTheme()
 const extension = computed(() => props.name.slice(props.name.lastIndexOf('.')).toLowerCase())
 const container = ref<HTMLElement>()
@@ -55,7 +55,6 @@ function mount(controller: AbortController): void {
       error.value = `Could not render this file: ${cause.message}`
     },
     onUnsupported: unsupported => {
-      // Archive entries have their own fallback; they must not hide the archive.
       if (controller.signal.aborted || unsupported.source !== file) return
       loading.value = false
       error.value = 'This file format cannot be previewed by the installed viewer.'
@@ -71,7 +70,7 @@ async function load(): Promise<void> {
   loading.value = true
   try {
     const [blob, module] = await Promise.all([
-      useSessionFiles(props.apiBase, props.folderId).readBlob(props.sessionId, props.path, controller.signal),
+      props.sourceBlob ?? useSessionFiles(props.apiBase, props.folderId).readBlob(props.sessionId, props.path, controller.signal),
       import('../../open-file-viewer-sdk.ts'),
     ])
     if (controller.signal.aborted) return
@@ -90,7 +89,7 @@ async function load(): Promise<void> {
   }
 }
 onMounted(() => void load())
-watch(() => [props.apiBase, props.sessionId, props.folderId, props.path, props.name, props.active], () => {
+watch(() => [props.apiBase, props.sessionId, props.folderId, props.path, props.name, props.active, props.sourceBlob], () => {
   offline.value = false
   void load()
 }, { flush: 'post' })

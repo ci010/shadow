@@ -60,7 +60,7 @@ export type IntegrationChange = z.infer<typeof IntegrationChangeSchema>
 export const integrationConfigurationGuide = {
   workflow: 'list -> directory/members -> propose with the exact list revision -> human review. schema only documents inputs; it grants no permission.',
   actions: {
-    list: 'Read current revision, Agents, bindings and permitted domains. Owner chat also lists named Discord Bot connections, including unassigned ones; enabled is configuration, not proof of connectivity.',
+    list: 'Read current Discord revision, Agents, bindings and permitted domains. Owner chat lists named Discord connections in bots and QQ/Feishu connections with their authoring route in otherPlatformBots; enabled is configuration, not proof of connectivity. QQ/Feishu use authoring_change, not these Discord revisions or proposal formats.',
     directory: 'Owner: {botId,guildId?,after?}. Discord manager: {guildId?,after?}, always its own Bot. Omit guildId to discover named servers, then supply a returned guild ID for channels/roles. Use guildCursor as after for another server page.',
     members: '{guildId,query}, plus botId in owner chat. Search a name in a mutual server; at most 25 results. Discord has no global person-name search. Use returned IDs, not guessed IDs.',
     resource: 'Owner only: {resourceId}. Read an exact catalog resource and its version/source metadata before proposing a fixed-copy publication.',

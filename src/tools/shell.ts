@@ -170,20 +170,27 @@ export class ExecTool implements Tool<ToolResult> {
   }
 
   private formatManagedProcessOutput(
-    stdoutChunks: Uint8Array[],
-    stderrChunks: Uint8Array[],
-    exitCode: number,
-    success: boolean,
-    shell?: ManagedShell,
+    managed: ManagedProcess,
+    status: ManagedProcessStatus,
     completed = false,
   ): ToolResult {
-    const stdout = decodeChunks(stdoutChunks, shell)
-    const stderr = decodeChunks(stderrChunks, shell)
+    const { code: exitCode, success } = status
+    const stdout = decodeChunks(managed.stdoutChunks, managed.shell)
+    const stderr = decodeChunks(managed.stderrChunks, managed.shell)
     let output = ''
     if (stdout) output += stdout
     if (stderr) output += `\n[stderr]\n${stderr}`
     if (!success) {
-      output = `Error: command exited with code ${exitCode}${output.trim() ? `\n${output}` : ''}`
+      output = [
+        `Error: command exited with code ${exitCode}`,
+        `Shell: ${managed.shell}`,
+        `Cwd: ${managed.cwd}`,
+        ...(status.signal ? [`Signal: ${status.signal}`] : []),
+        '[stdout]',
+        stdout || '(empty)',
+        '[stderr]',
+        stderr || '(empty)',
+      ].join('\n')
     }
     const result = {
       isError: !success,
@@ -220,11 +227,8 @@ export class ExecTool implements Tool<ToolResult> {
       },
       managed.exitPromise.then((status) => {
         const output = requireToolText(this.formatManagedProcessOutput(
-          managed.stdoutChunks,
-          managed.stderrChunks,
-          status.code,
-          status.success,
-          managed.shell,
+          managed,
+          status,
         ))
         if (!status.success) throw new Error(output)
         return output
@@ -416,11 +420,8 @@ export class ExecTool implements Tool<ToolResult> {
 
     // Process finished within the timeout window
     return this.formatManagedProcessOutput(
-      managed.stdoutChunks,
-      managed.stderrChunks,
-      result.status.code,
-      result.status.success,
-      managed.shell,
+      managed,
+      result.status,
       result.status.signal === null && result.status.code >= 0 && !context.signal.aborted,
     )
   }
@@ -446,12 +447,12 @@ export class ExecTool implements Tool<ToolResult> {
     const terminate = () => cleanup ??= this.cleanupForeground(context, () => this.processManager.terminate(managed))
     try {
       const result = await waitForExit(managed.exitPromise, timeoutMs, context.signal)
-      if (result) return this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, result.status.code, result.status.success, managed.shell,
+      if (result) return this.formatManagedProcessOutput(managed, result.status,
         result.status.signal === null && result.status.code >= 0 && !context.signal.aborted)
       cancel()
       const status = await terminate()
       return `Error: foreground exec timed out after ${formatElapsed(timeoutMs)}; process terminated.\n${
-        requireToolText(this.formatManagedProcessOutput(managed.stdoutChunks, managed.stderrChunks, status.code, status.success, managed.shell))}`
+        requireToolText(this.formatManagedProcessOutput(managed, status))}`
     } finally {
       cancel()
       await terminate()

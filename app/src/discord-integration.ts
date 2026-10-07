@@ -6,6 +6,18 @@ import {
 } from '../../src/channels/integration-contract.ts'
 import { MemoryResourceSchema } from '../../src/memory/contracts.ts'
 
+export function discordReviewLink(href: string, projectId: string): string | undefined {
+  if (!href.startsWith('/') || href.startsWith('//')) return
+  const url = new URL(href, 'https://shadow.invalid')
+  if (url.origin !== 'https://shadow.invalid' || url.pathname !== `/projects/${encodeURIComponent(projectId)}/settings/bots`) return
+  const review = z.string().uuid().safeParse(url.searchParams.get('discordReview'))
+  if (!review.success) return
+  const bot = url.searchParams.get('discordBot')
+  if (bot !== null && (!bot || bot.length > 128)) return
+  const query = new URLSearchParams({ discordReview: review.data, ...(bot ? { discordBot: bot } : {}) })
+  return `${url.pathname}?${query}`
+}
+
 export function createDiscordIntegrationClient(base: string, projectId: string, request: typeof fetch = fetch) {
   async function json(path: string, signal: AbortSignal, body?: unknown): Promise<unknown> {
     const response = await request(apiUrl(base, `/api/integrations/discord${path}`), {

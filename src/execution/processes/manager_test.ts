@@ -4,7 +4,33 @@ import { syncBuiltinESMExports } from 'node:module'
 import { PassThrough } from 'node:stream'
 import { setImmediate as tick } from 'node:timers/promises'
 import test from 'node:test'
-import { terminateProcessTree, type ManagedProcessStatus } from './manager.ts'
+import { ProcessManager, terminateProcessTree, type ManagedProcessStatus } from './manager.ts'
+import { resolveExecShell } from './shells.ts'
+import { withTempWorkspace } from '../../testing/workspace.ts'
+
+for (const supervised of [false, true]) {
+  test(`Windows shell escalation records the actual shell (supervised=${supervised})`, {
+    skip: process.platform !== 'win32',
+    timeout: 15_000,
+  }, async t => {
+    if (!await resolveExecShell('sh')) return t.skip('sh is not installed')
+    await withTempWorkspace(async root => {
+      const manager = new ProcessManager()
+      const managed = await manager.spawn(': grep', root, undefined, 'cmd', [], {
+        isolated: true,
+        ...(supervised ? { supervision: { deadlineAt: Date.now() + 10_000 } } : {}),
+      })
+      try {
+        assert.equal((await managed.exitPromise).success, true)
+        assert.equal(managed.shell, 'sh')
+        assert.equal(managed.cwd, root)
+      } finally {
+        await manager.terminate(managed)
+        manager.remove(managed.pid)
+      }
+    })
+  })
+}
 
 function fixture() {
   const child = new ChildProcess()

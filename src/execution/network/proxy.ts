@@ -92,6 +92,8 @@ function windowsBypass(pattern: string, url: URL): boolean {
 
 export function proxyForUrl(configuration: ProxyConfiguration, value: string | URL): string | undefined {
   const url = new URL(value)
+  if (url.protocol === 'wss:') url.protocol = 'https:'
+  if (url.protocol === 'ws:') url.protocol = 'http:'
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
   // Never send local app credentials or loopback service traffic through an upstream proxy.
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '::1' ||

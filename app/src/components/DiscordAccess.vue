@@ -9,6 +9,7 @@
     </nav>
     <p v-if="error" class="access-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="access-notice" role="status">{{ notice }}</p>
+    <p v-if="reviewLinkError" class="access-error" role="alert">{{ reviewLinkError }}</p>
     <p v-if="busy" role="status">{{ busy }}</p>
     <template v-if="overview">
       <p v-if="formRevision !== overview.revision" class="access-notice">Configuration changed. Refresh before creating another review; your unsaved form is preserved for comparison.</p>
@@ -159,7 +160,7 @@
       <div v-else>
         <p class="boundary-note">Approval is bound to the exact content, resource permissions and configuration revision. Expired or conflicting reviews must be recreated. A model cannot approve its own change.</p>
         <p v-if="!overview.drafts.length" class="muted">No reviews yet. Propose an assignment, Agent or knowledge change, here or through an authorized chat.</p>
-        <div v-for="draft in orderedDrafts" :key="draft.id" class="review-row">
+        <div v-for="draft in orderedDrafts" :key="draft.id" class="review-row" :data-review-id="draft.id">
           <header><div><h5>{{ changeTitle(draft.change) }}</h5><p>{{ draft.status }} · {{ localTime(draft.createdAt) }} · {{ draft.actor.kind === 'owner' ? 'Shadow owner' : 'Discord manager' }}</p></div><button @click="reviewId = reviewId === draft.id ? '' : draft.id" :aria-expanded="reviewId === draft.id">{{ reviewId === draft.id ? 'Hide review' : 'Open review' }}</button></header>
           <div v-if="reviewId === draft.id" class="review-body">
             <p class="access-notice">{{ draft.warning }}</p>
@@ -180,7 +181,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { BotInstanceStatus } from '../bot-settings.ts'
 import { bindingLabel, createDiscordIntegrationClient, discordIds } from '../discord-integration.ts'
 import type { DiscordBinding, DiscordDirectory, DiscordMember, IntegrationAgentInput, IntegrationChange, IntegrationDraft, IntegrationOverview, IntegrationPreview } from '../../../src/channels/integration-contract.ts'
@@ -188,7 +189,7 @@ import type { MemorySource } from '../../../src/memory/contracts.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import type { LiveSubscription } from '../live-client.ts'
 
-const props = defineProps<{ apiBase: string; projectId: string; bot: BotInstanceStatus; active: boolean }>()
+const props = defineProps<{ apiBase: string; projectId: string; bot: BotInstanceStatus; active: boolean; requestedReviewId?: string }>()
 const uid = `discord-access-${props.bot.id}`
 const pages = [{ id: 'channels', label: 'Channels & people' }, { id: 'agents', label: 'Agents' }, { id: 'knowledge', label: 'Knowledge' }, { id: 'reviews', label: 'Reviews' }] as const
 const tab = ref<(typeof pages)[number]['id']>('channels')
@@ -234,6 +235,8 @@ const publicationContent = ref('')
 const publicationSources = ref<MemorySource[]>([])
 const publicationKind = ref<'note' | 'skill'>('note')
 const reviewId = ref('')
+const reviewLinkError = ref('')
+let openedReviewLink = ''
 const reviewAcknowledged = ref(false)
 const formRevision = ref<number>()
 const livePool = useLiveClientPool()
@@ -425,7 +428,19 @@ function previousData(change: IntegrationChange) {
         : 'No existing object is overwritten by this operation.', null, 2)
 }
 watch(reviewId, () => { reviewAcknowledged.value = false })
-watch(() => [props.apiBase, props.projectId, props.bot.id, props.active], async () => {
+watch([() => props.requestedReviewId, overview], async ([id, snapshot]) => {
+  if (!id) { openedReviewLink = ''; reviewLinkError.value = ''; return }
+  if (!props.active || !snapshot || !id || openedReviewLink === id) return
+  tab.value = 'reviews'; reviewAcknowledged.value = false
+  const draft = snapshot.drafts.find(draft => draft.id === id)
+  openedReviewLink = draft ? id : ''
+  reviewId.value = draft?.id ?? ''
+  reviewLinkError.value = draft ? '' : 'This review is unavailable in this Project. It may have been removed; ask the Agent for a new draft.'
+  await nextTick()
+  if (reviewId.value === id) document.querySelector(`[data-review-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' })
+})
+watch([() => props.apiBase, () => props.projectId, () => props.bot.id, () => props.active], async () => {
+  openedReviewLink = ''; reviewLinkError.value = ''
   liveSubscription?.close(); liveSubscription = undefined; refreshNeeded = false; formRevision.value = undefined
   controller?.abort(); controller = undefined; busy.value = ''
   overview.value = undefined; directory.value = undefined; guilds.value = []; guildId.value = ''; guildCursor.value = null

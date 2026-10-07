@@ -14,6 +14,39 @@ const question = { kind: 'decision', question: 'Choose?', options: ['A', 'B', 'C
 const context = (sessionId: string, signal = new AbortController().signal) => ({ sessionId, signal }) as ExecutionContext
 const invalid = (error: unknown) => error instanceof YieldError && error.code === 'invalid_request'
 
+test('QQ and Discord cannot expose or invoke ask, including explicit allowlists and dynamic gateways', async () => {
+  const { tool, yields, inputs } = fixture()
+  for (const channel of ['qq', 'discord']) {
+    const sessionId = `${channel}:test`
+    const base = new Tools('.')
+    base.register(tool)
+    const scoped = new SessionTools(base, '.', ['ask', 'invoke_tool'])
+    scoped.restrictChannelTools(channel, sessionId)
+    scoped.registerDynamic(tool)
+    for (const tools of [scoped, scoped.snapshot(), scoped.createIsolated()]) {
+      assert(!tools.getDefinitions().some(definition => definition.function.name === 'ask'))
+      assert(!tools.has('ask'))
+      assert(!tools.canUseDynamic('ask'))
+      const ctx = { ...context(sessionId), channel, tools }
+      assert.match(requireToolText(await tools.execute('ask', { kind: 'input', question: 'Which?' }, ctx)), /ask tool is unavailable/)
+      assert.match(requireToolText(await tools.executeDynamic('ask', {}, ctx)), /ask tool is unavailable/)
+      assert.match(tools.executionDenial('invoke_tool', { name: 'ask', args: {} })!, /ask tool is unavailable/)
+    }
+    for (const args of [{ kind: 'input', question: 'Which?' }, question, { action: 'context' }]) {
+      await assert.rejects(tool.execute(args, { ...context(sessionId), channel: 'web' }), /ask tool is unavailable/)
+    }
+    assert.equal(yields.get(sessionId), null)
+    assert.equal(inputs.get(sessionId), null)
+  }
+  for (const channel of ['web', 'feishu', 'a2a']) {
+    const base = new Tools('.')
+    base.register(tool)
+    const tools = new SessionTools(base, '.')
+    tools.restrictChannelTools(channel, `${channel}:test`)
+    assert(tools.has('ask'))
+  }
+})
+
 function fixture() {
   const states: Record<string, SessionState> = {
     root: { sessionId: 'root', segmentIndex: 0 },

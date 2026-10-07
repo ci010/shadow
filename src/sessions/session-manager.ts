@@ -2370,10 +2370,12 @@ ${JSON.stringify(request)}`,
   getToolDefinitions(
     sessionId?: string,
     behaviorOverride?: { allowedTools?: string[]; blockedTools?: string[] },
+    channel?: string,
   ): Array<{ name: string; description: string; parameters: unknown }> {
     const conversationPolicy = sessionId ? this.deps.conversationPolicies?.resolve(sessionId) : undefined
     if (conversationPolicy && sessionId) {
       const tools = this.deps.conversationPolicies!.tools(conversationPolicy, sessionId, this.sessionStates[sessionId])
+      tools.restrictChannelTools(channel, sessionId)
       try { return tools.getDefinitions().map(tool => tool.function) }
       finally { tools.resetDynamic() }
     }
@@ -2394,6 +2396,7 @@ ${JSON.stringify(request)}`,
       ? this.resolveAgentTypeTools(state?.agentType, state?.sessionKind)
       : behaviorOverride ?? (state ? this.resolveAgentTypeTools(state.agentType, state.sessionKind) : {})
     const scoped = new SessionTools(this.deps.tools, this.workspace, policy.allowedTools, policy.blockedTools)
+    scoped.restrictChannelTools(channel, sessionId)
     if (sessionId) scoped.setExecutionScope(this.sessionStates[sessionId]?.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
     const allDefs = scoped.getDefinitions()
     const filtered = allDefs.filter((d) =>
@@ -2490,7 +2493,7 @@ ${JSON.stringify(request)}`,
     const tools = this.getToolDefinitions(opts.sessionId, {
       allowedTools,
       blockedTools,
-    })
+    }, channel)
 
     const decisions = opts.sessionId ? await this.decisionValidityPrompt(sessionId) : ''
     return { source: 'preview', systemPrompt: decisions ? `${systemPrompt}\n\n${decisions}` : systemPrompt,
@@ -2711,6 +2714,7 @@ ${JSON.stringify(request)}`,
       resolvedAgentType.allowedModules,
     )
     if (!conversationPolicy && !this.calls.has(sessionId)) sessionTools.setExecutionScope(state.mode ?? 'session', this.getAllowedSubagentModes(sessionId))
+    sessionTools.restrictChannelTools(msg.channel, sessionId)
 
     // Import tools specified by parent (e.g., subagent preload_tools param)
     if (state.preloadTools && Object.keys(state.preloadTools).length > 0) {

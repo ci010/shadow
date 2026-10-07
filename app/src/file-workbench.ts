@@ -7,6 +7,7 @@ export interface OpenFile {
 }
 
 export function fileTabKey(file: OpenFile): string {
+  if (file.entry.archive) return `\0archive:${JSON.stringify([file.entry.archive.path, ...file.entry.archive.members])}`
   return file.view === 'diff' ? `\0diff:${file.path}` : file.path
 }
 

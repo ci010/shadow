@@ -217,7 +217,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: owner coordinator discovers unassigned named Bots and drafts through its real tool loop, never approving`, async t => {
     const f = await fixture(t, Store)
     const unassigned = f.addBot('901')
-    f.bots.create('qq', 'Unrelated QQ', { enabled: false })
+    const qq = f.bots.create('qq', 'QQ support', { enabled: false })
+    const feishu = f.bots.create('feishu', 'Feishu support', { enabled: false })
     await f.sessions.buildSession('web:orchestrator', undefined, {
       mode: 'session', agentType: 'orchestrator', sessionKind: 'orchestrator',
     })
@@ -228,7 +229,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       { id: 'directory', name: 'channel_config', arguments: { action: 'directory', botId: unassigned.id } },
       { id: 'members', name: 'channel_config', arguments: { action: 'members', botId: unassigned.id, guildId: '100', query: 'Member' } },
       { id: 'file', name: 'channel_config', arguments: { action: 'agent_file', agentId: f.profile.id } },
-      { id: 'propose', name: 'channel_config', arguments: { action: 'propose', baseRevision: base,
+      { id: 'propose', name: 'channel_config', arguments: { action: 'propose', botId: unassigned.id, baseRevision: base,
         changeJson: JSON.stringify({ kind: 'agent.save', agent: { ...f.profile, markdown: f.profile.markdown + '\nOWNER_CHAT_DRAFT' } }) } },
     ] })
     const ownerMessage = () => channelMessageInput({ channel: 'web', chatId: 'orchestrator', senderId: 'owner',
@@ -243,16 +244,36 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     assert.equal(listed.projectId, f.projectId)
     assert.deepEqual(listed.bots.map(bot => bot.displayName), ['Help desk', 'Bot 901'])
     assert.equal(listed.bots[1]!.id, unassigned.id)
+    assert.deepEqual(output('list').otherPlatformBots, [
+      { id: qq.id, displayName: 'QQ support', platform: 'qq', enabled: false, authoringTool: 'authoring_change' },
+      { id: feishu.id, displayName: 'Feishu support', platform: 'feishu', enabled: false, authoringTool: 'authoring_change' },
+    ])
+    assert.match(output('list').otherPlatformWorkflow, /inventory.conversations/)
+    assert.match(output('list').otherPlatformWorkflow, /owner approves/)
     assert(!JSON.stringify(f.requests).includes('synthetic-token') && !JSON.stringify(f.requests).includes('fixture-901'))
     assert.match(JSON.stringify(output('schema')), /human review/)
     assert.equal(output('directory').guilds[0].name, 'Our server')
     assert.equal(output('members').members[0].name, 'Member')
     assert.equal(output('file').markdown, f.profile.markdown)
     const draft = f.config.draft(output('propose').id)
+    const review = new URL(output('propose').reviewUrl, 'https://shadow.invalid')
+    assert.equal(review.pathname, `/projects/${encodeURIComponent(f.projectId)}/settings/bots`)
+    assert.equal(review.searchParams.get('discordReview'), draft.id)
+    assert.equal(review.searchParams.get('discordBot'), unassigned.id)
+    assert(!review.href.includes(draft.hash))
+    assert.match(output('propose').nextStep, /does not approve/)
     assert.equal(draft.status, 'pending')
     assert.equal(draft.actor.kind, 'owner')
     assert.equal(f.config.snapshot().revision, base)
     assert.equal(f.config.agent(f.profile.id).markdown, f.profile.markdown)
+
+    f.requests.length = 0
+    f.responses.push({ content: '', toolCalls: [{ id: 'wrong-platform', name: 'channel_config',
+      arguments: { action: 'propose', botId: qq.id, baseRevision: base,
+        changeJson: JSON.stringify({ kind: 'agent.save', agent: f.profile }) } }] })
+    await f.deliver('web:orchestrator', ownerMessage())
+    assert.match(JSON.stringify(f.requests), /QQ\/Feishu.*authoring_change/)
+    assert.equal(f.config.snapshot().revision, base)
 
     f.requests.length = 0
     f.responses.push({ content: '', toolCalls: [{ id: 'self-approval', name: 'channel_config',

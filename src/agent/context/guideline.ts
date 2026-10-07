@@ -3,6 +3,7 @@ import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 import { allowedSubagentModes } from '../../sessions/execution-mode.ts'
 import { isToolAllowed } from '../../utils/tool-allow.ts'
 import { toolsGuideline } from './tools-guideline.ts'
+import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-policy.ts'
 
 // ── Constant fragments ───────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ export function executionModeGuideline(ctx: SessionPromptContext): string {
   const hasDelegationParent = !!ctx.parentSessionId
   const modes = ctx.agent.name !== 'orchestrator' && isToolAllowed(ctx.agent, 'subagent')
     ? allowedSubagentModes(mode, hasDelegationParent) : []
-  const decision = isToolAllowed(ctx.agent, 'ask')
+  const decision = !channelSupportsAsk(ctx.channel, ctx.sessionId) ? CHAT_QUESTION_GUIDANCE : isToolAllowed(ctx.agent, 'ask')
     ? 'Use ask for missing input or consequential decisions; reply answers a specific pending request.'
     : 'Report blockers or missing input explicitly; do not invent an answer.'
   if (mode === 'call') {

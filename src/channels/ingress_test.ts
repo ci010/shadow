@@ -502,7 +502,7 @@ test('QQ dispatch awaits and propagates receiver rejection for group, private an
     handleDispatch(event: string, data: Record<string, unknown>): Promise<void>
   }).handleDispatch.bind(channel)
   for (const [index, event] of [
-    'GROUP_AT_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE',
+    'GROUP_MESSAGE_CREATE', 'GROUP_AT_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE', 'AT_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE',
   ].entries()) {
     await assert.rejects(dispatch(event, {
       id: `message-${index}`, content: 'hello', group_openid: 'group', guild_id: 'guild',
@@ -510,6 +510,6 @@ test('QQ dispatch awaits and propagates receiver rejection for group, private an
     }), rejection)
   }
   assert.deepEqual(received.map((message) => message.chatId), [
-    'group:group', 'c2c:user', 'channel:channel', 'dms:guild',
+    'group:group', 'group:group', 'c2c:user', 'channel:channel', 'dms:guild',
   ])
 })
