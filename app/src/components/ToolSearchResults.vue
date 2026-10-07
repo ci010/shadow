@@ -6,19 +6,20 @@
         <span class="search-file-icon" :class="fileIcon(file.path)" aria-hidden="true" />
         <span>{{ file.path }}</span>
       </header>
-      <div class="search-lines" tabindex="0" :aria-label="`Matching lines in ${file.path}`">
+      <div class="search-lines" tabindex="0" :aria-label="t('Matching lines in {path}', { path: file.path })">
         <div v-for="(match, index) in file.matches" :key="index" class="search-match">
-          <span class="search-line-number" :data-line="match.line" :aria-label="`Line ${match.line}`" />
+          <span class="search-line-number" :data-line="match.line" :aria-label="t('Line {line}', { line: match.line })" />
           <pre class="search-code"><FileHighlightText :key="generation" :source="match.text" :path="file.path" :active="true" @error="setError(fileIndex, index, $event)" /></pre>
         </div>
       </div>
     </section>
     <p v-for="(notice, index) in result.notices" :key="index" class="search-notice">{{ notice }}</p>
-    <p v-if="errors.size" class="search-error" role="status">Syntax highlighting is unavailable. Plain text is still available. <button type="button" class="btn btn-sm" @click="retry">Retry</button></p>
+    <p v-if="errors.size" class="search-error" role="status">{{ t('Syntax highlighting is unavailable. Plain text is still available.') }} <button type="button" class="btn btn-sm" @click="retry">{{ t('Retry') }}</button></p>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { reactive, ref, watch } from 'vue'
 import type { ToolSearchResult } from '../tool-search-results.ts'
 import { fileIcon } from '../file-icons.ts'

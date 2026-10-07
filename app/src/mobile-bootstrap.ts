@@ -10,17 +10,19 @@ import { createMobileSession, createMobileFetch, mobileBootTarget, mobileSession
 import { installMobileLiveSource } from './live-client.ts'
 import { createFetchEventSource } from './mobile-sse.ts'
 import { installMobileCaptureRestriction } from './io/mobile-policy.ts'
+import { t, i18n, type MessageKey } from './i18n.ts'
+import LanguageSelector from './components/LanguageSelector.vue'
 
 export async function startMobileClient() {
   let mounted: VueApp | undefined
-  const unavailable = (message: string) => {
+  const unavailable = (message: MessageKey) => {
     mounted?.unmount()
     mounted = createApp(defineComponent({
       setup: () => () => h('main', { role: 'alert', style: 'padding:32px;color:var(--c-text);background:var(--c-bg-card);min-height:100dvh' }, [
-        h('h1', 'Mobile client unavailable'), h('p', message),
+        h(LanguageSelector), h('h1', t('Mobile client unavailable')), h('p', t(message)),
       ]),
     }))
-    mounted.mount('#app')
+    mounted.use(i18n).mount('#app')
   }
   if (mobileBootTarget('mobile', Capacitor.isNativePlatform()) !== 'native') {
     unavailable('Install the Android or iOS client to connect securely to Main. This mobile build cannot run as a browser or desktop administrator.')
@@ -41,7 +43,7 @@ export async function startMobileClient() {
     mounted = view === 'connected'
       ? createApp(MainApp).use(router).use(createInstallationContextProvider(createMobileClientContext(session.origin.value)))
       : createApp(MobileConnection, { session })
-    mounted.provide(mobileSessionKey, session)
+    mounted.use(i18n).provide(mobileSessionKey, session)
     mounted.mount('#app')
   }, { immediate: true, flush: 'sync' })
   let removeListener: (() => Promise<void>) | undefined

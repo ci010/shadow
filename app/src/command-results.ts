@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { isCommandReceipt, type CommandReceipt } from '../../src/slash-commands/receipt.ts'
 
 export interface CommandMessage {
@@ -12,7 +13,7 @@ export function mergeCommandResults<T extends { timestamp?: string; commandRecei
   messages: T[], raw: unknown,
 ): Array<T | CommandMessage> {
   if (raw === undefined) return [...messages]
-  if (!Array.isArray(raw) || !raw.every(isCommandReceipt)) throw new Error('Invalid command history. Refresh to retry.')
+  if (!Array.isArray(raw) || !raw.every(isCommandReceipt)) throw new Error(t('Invalid command history. Refresh to retry.'))
   const receipts = new Map<string, CommandReceipt>()
   for (const message of messages) if (message.commandReceipt) receipts.set(message.commandReceipt.id, message.commandReceipt)
   for (const receipt of raw) receipts.set(receipt.id, receipt)

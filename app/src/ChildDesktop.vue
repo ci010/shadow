@@ -1,26 +1,26 @@
 <template>
   <DesktopFrame>
-    <template #navigation><span class="child-role">Child · Local status and nodes</span></template>
+    <template #navigation><span class="child-role">{{ t('Child · Local status and nodes') }}</span></template>
     <main class="child-shell">
       <section class="child-status" aria-labelledby="child-title">
-        <header><h1 id="child-title">This Child</h1><button class="btn" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing…' : error ? 'Retry local connection' : 'Refresh status' }}</button></header>
-        <p v-if="error" role="alert" class="status-error">{{ error }} Main connection is unknown; no connected state is assumed.</p>
+        <header><h1 id="child-title">{{ t('This Child') }}</h1><button class="btn" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : error ? t('Retry local connection') : t('Refresh status') }}</button></header>
+        <p v-if="error" role="alert" class="status-error">{{ error }} {{ t('Main connection is unknown; no connected state is assumed.') }}</p>
         <template v-if="status">
-          <p role="status"><strong>{{ error ? 'Local status unavailable' : status.connection === 'connected' ? 'Connected to Main' : status.connection === 'connecting' ? 'Connecting to Main — approval may still be pending' : 'Not connected to Main' }}</strong></p>
+          <p role="status"><strong>{{ error ? t('Local status unavailable') : status.connection === 'connected' ? t('Connected to Main') : status.connection === 'connecting' ? t('Connecting to Main — approval may still be pending') : t('Not connected to Main') }}</strong></p>
           <p v-if="!error && status.error" class="status-error">{{ status.error }}</p>
-          <p v-if="status.connection !== 'connected'">Connection retries automatically with the saved identity, including while this window is hidden and after restart. Check Main's pending devices before creating another offer.</p>
-          <p>Closing this window keeps Child running in the background. Reopen it from the Shadow tray/menu-bar icon. Choose Quit in that menu to stop the node.</p>
+          <p v-if="status.connection !== 'connected'">{{ t('Connection retries automatically with the saved identity, including while this window is hidden and after restart. Check Main\'s pending devices before creating another offer.') }}</p>
+          <p>{{ t('Closing this window keeps Child running in the background. Reopen it from the Shadow tray/menu-bar icon. Choose Quit in that menu to stop the node.') }}</p>
           <dl>
-            <div><dt>Device fingerprint</dt><dd class="fingerprint">{{ status.fingerprint }}</dd></div>
-            <div><dt>Main device endpoint</dt><dd>{{ status.mainEndpoint }}</dd></div>
-            <div><dt>Child home</dt><dd>{{ status.dataDir }}</dd></div>
+            <div><dt>{{ t('Device fingerprint') }}</dt><dd class="fingerprint">{{ status.fingerprint }}</dd></div>
+            <div><dt>{{ t('Main device endpoint') }}</dt><dd>{{ status.mainEndpoint }}</dd></div>
+            <div><dt>{{ t('Child home') }}</dt><dd>{{ status.dataDir }}</dd></div>
             <div v-for="workdir in status.workdirs" :key="workdir.capabilityId"><dt>{{ workdir.displayName }}</dt><dd>{{ workdir.rootPath }}</dd></div>
           </dl>
-          <p>Compare this fingerprint with the pending device on Main. Approve only if they match. Local setup completion does not mean approval.</p>
-          <p v-if="status.allowInsecureLocalTransport && status.mainEndpoint.startsWith('http:')">Trusted LAN/VPN HTTP test transport: traffic is unencrypted; device authentication is still required.</p>
-          <details><summary>Execution access on this computer</summary><p>The approved Main may use the shared work folder, managed session workdirs under Child home, and shell commands as your OS account. Shell access is not a sandbox. These advertised capabilities become available after device approval.</p></details>
+          <p>{{ t('Compare this fingerprint with the pending device on Main. Approve only if they match. Local setup completion does not mean approval.') }}</p>
+          <p v-if="status.allowInsecureLocalTransport && status.mainEndpoint.startsWith('http:')">{{ t('Trusted LAN/VPN HTTP test transport: traffic is unencrypted; device authentication is still required.') }}</p>
+          <details><summary>{{ t('Execution access on this computer') }}</summary><p>{{ t('The approved Main may use the shared work folder, managed session workdirs under Child home, and shell commands as your OS account. Shell access is not a sandbox. These advertised capabilities become available after device approval.') }}</p></details>
         </template>
-        <p class="scope-note">Chat and Main administration are not proxied on Child. Use Main for those tasks. This page and the local inventory remain available when Main is offline.</p>
+        <p class="scope-note">{{ t('Chat and Main administration are not proxied on Child. Use Main for those tasks. This page and the local inventory remain available when Main is offline.') }}</p>
       </section>
       <NodesView :api-base="apiBase" />
     </main>
@@ -28,6 +28,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from './i18n.ts'
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import DesktopFrame from './DesktopFrame.vue'
 import NodesView from './components/NodesView.vue'
@@ -48,14 +49,14 @@ async function refresh() {
   loading.value = true
   try {
     const response = await fetch(`${props.apiBase}/local/v1/child`, { signal: AbortSignal.any([current.signal, AbortSignal.timeout(5000)]), cache: 'no-store' })
-    if (!response.ok) throw new Error('Local Child status request failed')
+    if (!response.ok) throw new Error(t('Local Child status request failed'))
     const next = parseChildStatus(await response.json())
     if (request !== current) return
     status.value = next
     error.value = ''
   } catch {
     if (request !== current || disposed) return
-    error.value = 'Cannot reach the local Child runtime. Retry, or restart Shadow if the backend stopped.'
+    error.value = t('Cannot reach the local Child runtime. Retry, or restart Shadow if the backend stopped.')
   } finally {
     if (request === current && !disposed) {
       loading.value = false

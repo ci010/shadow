@@ -1,21 +1,24 @@
 <template>
-  <button ref="trigger" class="mobile-menu-trigger" type="button" aria-label="Open navigation" aria-controls="mobile-navigation" :aria-expanded="menuOpen" @click="menuOpen = true">
+  <button ref="trigger" class="mobile-menu-trigger" type="button" :aria-label="t('Open navigation')" aria-controls="mobile-navigation" :aria-expanded="menuOpen" @click="menuOpen = true">
     <span class="i-lucide-menu w-5 h-5" aria-hidden="true" />
   </button>
   <span v-if="!headerOwner" class="mobile-page-title">{{ title }}</span>
   <div ref="headerTarget" class="mobile-header-content" />
-  <MobileSheet v-model:open="menuOpen" label="Navigation" side :return-focus="trigger" :drag-progress="dragProgress">
+  <MobileSheet v-model:open="menuOpen" :label="t('Navigation')" side :return-focus="trigger" :drag-progress="dragProgress">
     <div id="mobile-navigation" class="mobile-navigation-content">
       <div ref="navigationTarget" class="mobile-global-navigation" />
       <div ref="projectsTarget" class="mobile-project-navigation" />
       <div ref="actionsTarget" class="mobile-global-actions" />
+      <div class="mobile-global-actions"><LanguageSelector /></div>
     </div>
   </MobileSheet>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import MobileSheet from './MobileSheet.vue'
+import LanguageSelector from './LanguageSelector.vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import { canStartDrawerSwipe, completesSwipe, drawerSwipeProgress, swipeIntent, type EdgeSwipe } from '../mobile-swipe.ts'
 

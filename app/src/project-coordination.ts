@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 export const ORCHESTRATOR_SESSION_ID = 'web:orchestrator'
 
 export interface TopicMetadata {
@@ -14,7 +15,7 @@ export function parseTopicMetadata(value: unknown): TopicMetadata | undefined {
     || !('goal' in value) || typeof value.goal !== 'string'
     || !('scope' in value) || typeof value.scope !== 'string'
     || ('nonGoals' in value && value.nonGoals !== undefined && typeof value.nonGoals !== 'string')) {
-    throw new Error('Cannot read topic metadata. Refresh conversations to retry.')
+    throw new Error(t('Cannot read topic metadata. Refresh conversations to retry.'))
   }
   return { title: value.title, goal: value.goal, scope: value.scope,
     ...('nonGoals' in value && typeof value.nonGoals === 'string' ? { nonGoals: value.nonGoals } : {}) }

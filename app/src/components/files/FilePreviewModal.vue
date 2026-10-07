@@ -1,46 +1,46 @@
 <template>
   <div class="file-modal-backdrop" :class="{ fullscreen, inline }" @click.self="$emit('close')" @keydown.esc.stop="$emit('close')">
-    <div class="file-modal" :class="{ fullscreen, inline }" :role="inline ? 'region' : 'dialog'" :aria-modal="inline ? undefined : true" :aria-label="`Preview ${entry.name}`">
+    <div class="file-modal" :class="{ fullscreen, inline }" :role="inline ? 'region' : 'dialog'" :aria-modal="inline ? undefined : true" :aria-label="t('Preview {name}', { name: entry.name })">
       <div class="file-modal-header">
         <HoverInfo :text="path" v-slot="{ triggerProps }"><span v-bind="triggerProps" class="file-modal-title" tabindex="0">{{ inline ? path : entry.name }}</span></HoverInfo>
         <div class="file-modal-actions">
-          <label v-if="textMode" class="file-encoding-control">Encoding
-            <select v-model="encoding" aria-label="Text encoding" @change="loadText">
+          <label v-if="textMode" class="file-encoding-control">{{ t('Encoding') }}
+            <select v-model="encoding" :aria-label="t('Text encoding')" @change="loadText">
               <option v-for="option in textEncodings" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
           </label>
-          <button v-if="isMarkdown || isMemoryEvents || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? 'Preview' : 'Source' }}</button>
-          <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native && !entry.archive" text="Reload preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Reload preview" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
-          <HoverInfo v-if="!inline" :text="fullscreen ? 'Exit fullscreen' : 'Fullscreen'" v-slot="{ triggerProps }">
+          <button v-if="isMarkdown || isMemoryEvents || (kind === 'html' && !resources.native && !entry.archive)" class="file-modal-btn" :aria-pressed="sourceView" @click="sourceView = !sourceView">{{ sourceView ? t('Preview') : t('Source') }}</button>
+          <HoverInfo v-if="kind === 'html' && !sourceView && !resources.native && !entry.archive" :text="t('Reload preview')" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" :aria-label="t('Reload preview')" @click="reloadFrame"><span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" /></button></HoverInfo>
+          <HoverInfo v-if="!inline" :text="fullscreen ? t('Exit fullscreen') : t('Fullscreen')" v-slot="{ triggerProps }">
           <button
             class="file-modal-btn"
             v-bind="triggerProps"
             @click="fullscreen = !fullscreen"
-            :aria-label="fullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+            :aria-label="fullscreen ? t('Exit fullscreen') : t('Fullscreen')"
           ><span class="w-4 h-4" :class="fullscreen ? 'i-lucide-minimize' : 'i-lucide-maximize'" aria-hidden="true" /></button>
           </HoverInfo>
-          <a v-if="raw && !offline" class="file-modal-btn" :href="raw" :download="entry.name" :aria-label="`Download ${entry.name}`" referrerpolicy="no-referrer"
+          <a v-if="raw && !offline" class="file-modal-btn" :href="raw" :download="entry.name" :aria-label="t('Download {name}', { name: entry.name })" referrerpolicy="no-referrer"
             :aria-busy="downloads.pending.has(raw)" :aria-disabled="downloads.pending.has(raw)"
             @click="downloads.download($event, raw, entry.name)">
             <span class="w-4 h-4" :class="downloads.pending.has(raw) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" />
-            {{ downloads.pending.has(raw) ? 'Downloading...' : 'Download' }}
+            {{ downloads.pending.has(raw) ? t('Downloading...') : t('Download') }}
           </a>
-          <HoverInfo v-if="!inline" text="Close file preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" aria-label="Close file preview" @click="$emit('close')"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button></HoverInfo>
+          <HoverInfo v-if="!inline" text="Close file preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" :aria-label="t('Close file preview')" @click="$emit('close')"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button></HoverInfo>
         </div>
       </div>
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
       <div class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat, 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
-        <NodeOfflineState v-if="offline" :checking="loading" description="This preview will be available when the owning node reconnects." @retry="loadText" />
+        <NodeOfflineState v-if="offline" :checking="loading" :description="t('This preview will be available when the owning node reconnects.')" @retry="loadText" />
         <div v-else-if="entry.archive && (!loaded || error)" class="file-modal-note" :role="error ? 'alert' : 'status'">
-          {{ error || 'Reading archive entry...' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
+          {{ error || t('Reading archive entry...') }} <button v-if="error" class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button>
         </div>
         <div v-else-if="archiveContainer" class="file-modal-note">
-          Expand this archive in the file tree to browse its contents, or use Download to save it.
+          {{ t('Expand this archive in the file tree to browse its contents, or use Download to save it.') }}
         </div>
         <FileViewerPreview v-else-if="viewerFormat" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId"
           :path="path" :name="entry.name" :active="active" :source-blob="archiveBlob" />
         <div v-else-if="remote && !textMode && !loaded" class="file-modal-note" :role="error ? 'alert' : 'status'">
-          {{ error || 'Loading…' }} <button v-if="error" class="file-modal-btn" @click="loadText">Retry</button>
+          {{ error || t('Loading…') }} <button v-if="error" class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button>
         </div>
         <img v-else-if="kind === 'image' && entry.archive" :src="rawSource" :alt="entry.name" class="file-modal-media"
           referrerpolicy="no-referrer" @error="archiveMediaError" />
@@ -60,26 +60,25 @@
           :title="entry.name"
         ></iframe>
         <div v-else-if="textMode" class="file-modal-text-wrap">
-          <p v-if="kind === 'html' && resources.native" class="file-modal-note">HTML source is shown on mobile. Interactive HTML previews and their linked assets require the browser app.</p>
-          <p v-if="entry.archive" class="file-modal-note">Read-only archive entry. Linked assets are not loaded from the workspace.</p>
+          <p v-if="kind === 'html' && resources.native" class="file-modal-note">{{ t('HTML source is shown on mobile. Interactive HTML previews and their linked assets require the browser app.') }}</p>
+          <p v-if="entry.archive" class="file-modal-note">{{ t('Read-only archive entry. Linked assets are not loaded from the workspace.') }}</p>
           <p v-if="loaded && encodingWarning" class="file-encoding-warning" role="status">{{ encodingWarning }}</p>
-          <div v-if="loading" class="file-modal-note">Loading…</div>
-          <div v-else-if="error" class="file-modal-note" role="alert">{{ error }} <button class="file-modal-btn" @click="loadText">Retry</button></div>
-          <div v-else-if="binary" class="file-modal-note">This file contains binary data. Use Download to save it.</div>
-          <div v-else-if="isMemoryEvents && !sourceView" ref="selectionRoot" class="file-memory-events" role="list" aria-label="Memory events">
+          <div v-if="loading" class="file-modal-note">{{ t('Loading…') }}</div>
+          <div v-else-if="error" class="file-modal-note" role="alert">{{ error }} <button class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button></div>
+          <div v-else-if="binary" class="file-modal-note">{{ t('This file contains binary data. Use Download to save it.') }}</div>
+          <div v-else-if="isMemoryEvents && !sourceView" ref="selectionRoot" class="file-memory-events" role="list" :aria-label="t('Memory events')">
             <MemoryEventRecord v-for="record in memoryRecords" :key="record.start" :record="record" />
           </div>
-          <article v-else-if="isMarkdown && !sourceView" ref="selectionRoot" class="file-markdown selectable-text" aria-label="Markdown preview">
+          <article v-else-if="isMarkdown && !sourceView" ref="selectionRoot" class="file-markdown selectable-text" :aria-label="t('Markdown preview')">
             <div v-for="(block, index) in renderedMarkdown" :key="index" class="file-source-block"
               :data-source-start="block.start" :data-source-end="block.end" :data-source-provenance="block.provenance" v-html="block.html" />
           </article>
           <pre v-else ref="selectionRoot" class="file-modal-text"><FileHighlightText :key="selectionKey" ref="highlight" :source="textContent" :path="path" :active="active && loaded && !loading && !binary" @error="highlightError = $event" /></pre>
-          <div v-if="highlightError && ((!isMarkdown && !isMemoryEvents) || sourceView)" class="file-modal-note file-highlight-notice" role="status">{{ highlightError }} <button class="file-modal-btn" @click="highlight?.retry()">Retry</button></div>
-          <div v-if="truncated" class="file-modal-note">Preview truncated — use “Download” for the full file.</div>
+          <div v-if="highlightError && ((!isMarkdown && !isMemoryEvents) || sourceView)" class="file-modal-note file-highlight-notice" role="status">{{ highlightError }} <button class="file-modal-btn" @click="highlight?.retry()">{{ t('Retry') }}</button></div>
+          <div v-if="truncated" class="file-modal-note">{{ t('Preview truncated — use “Download” for the full file.') }}</div>
         </div>
         <div v-else class="file-modal-note">
-          No inline preview available.
-          Use Download to save the file.
+          {{ t('No inline preview available. Use Download to save the file.') }}
         </div>
         <SelectionMenu v-if="selectionEnabled" :key="selectionKey" :container="selectionRoot" :active="selectionEnabled" :can-quote="canQuote" @quote="quoteSelection" />
       </div>
@@ -88,6 +87,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useFileDownload } from '../../composables/useFileDownload.ts'
 import DOMPurify from 'dompurify'
@@ -171,7 +171,7 @@ const memoryRecords = computed(() => isMemoryEvents.value ? parseMemoryEvents(te
 const loading = ref(false)
 const error = ref('')
 function archiveMediaError() {
-  if (props.entry.archive) error.value = 'The browser could not decode this archive entry. Retry or download the file.'
+  if (props.entry.archive) error.value = t('The browser could not decode this archive entry. Retry or download the file.')
 }
 const offline = ref(false)
 const binary = ref(false)
@@ -281,7 +281,7 @@ async function loadText(): Promise<void> {
   } catch (cause) {
     if (!controller.signal.aborted) {
       offline.value = isNodeOfflineError(cause)
-      error.value = offline.value ? '' : cause instanceof Error ? cause.message : 'Could not load preview. Retry.'
+      error.value = offline.value ? '' : cause instanceof Error ? cause.message : t('Could not load preview. Retry.')
     }
   } finally {
     if (request === controller) { request = undefined; loading.value = false }

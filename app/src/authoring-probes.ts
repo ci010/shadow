@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -6,9 +7,9 @@ import type { PublicationSource } from './publication-requests.ts'
 
 export function parseProbeResponse(value: unknown, projectId: string): ProbeRequest[] {
   if (!isRecord(value) || Object.keys(value).length !== 1 || !Array.isArray(value.requests)
-    || value.requests.length > 1000) throw new Error('Invalid probe requests')
+    || value.requests.length > 1000) throw new Error(t('Invalid probe requests'))
   const requests = value.requests.map(item => parseProbeRequest(item, projectId))
-  if (new Set(requests.map(item => item.id)).size !== requests.length) throw new Error('Duplicate probe requests')
+  if (new Set(requests.map(item => item.id)).size !== requests.length) throw new Error(t('Duplicate probe requests'))
   return requests
 }
 
@@ -65,20 +66,20 @@ export function useAuthoringProbes(source: () => PublicationSource) {
         cache: 'no-store', redirect: 'error',
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
       })
-      if (!response.ok) throw new Error('Probe requests unavailable')
+      if (!response.ok) throw new Error(t('Probe requests unavailable'))
       const next = visibleProbeRequests(parseProbeResponse(await response.json(), source().projectId), source().sessionId)
       if (current !== generation || controller.signal.aborted) return
       requests.value = next.map(item => receipts.get(item.id) ?? item)
       if (!requests.value.some(item => item.id === selectedId.value)) selectedId.value = requests.value[0]?.id ?? ''
       if (manual) {
         needsReload.value = false
-        if (!next.length) notice.value = 'No connection test is available. Check the change’s recorded runs before requesting another test.'
+        if (!next.length) notice.value = t('No connection test is available. Check the change’s recorded runs before requesting another test.')
       }
       if (!needsReload.value) error.value = ''
     } catch {
       if (current === generation && !controller.signal.aborted) {
         needsReload.value = true
-        error.value = 'Could not load connection tests. Check your owner access and connection, then reload.'
+        error.value = t('Could not load connection tests. Check your owner access and connection, then reload.')
       }
     } finally {
       if (read === controller) { read = undefined; loading.value = false }
@@ -89,7 +90,7 @@ export function useAuthoringProbes(source: () => PublicationSource) {
     if (!enabled.value || !pending || write || needsReload.value || pending.status !== 'pending') return false
     if (!cancel && Date.parse(pending.expiresAt) <= Date.now()) {
       needsReload.value = true
-      error.value = 'This approval expired. Reload to check for a new request.'
+      error.value = t('This approval expired. Reload to check for a new request.')
       return false
     }
     read?.abort()
@@ -108,28 +109,28 @@ export function useAuthoringProbes(source: () => PublicationSource) {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]),
       })
       status = response.status
-      if (!response.ok) throw new Error('Probe decision not confirmed')
+      if (!response.ok) throw new Error(t('Probe decision not confirmed'))
       const body: unknown = await response.json()
-      if (!isRecord(body) || Object.keys(body).length !== 1 || !('result' in body)) throw new Error('Invalid probe receipt')
+      if (!isRecord(body) || Object.keys(body).length !== 1 || !('result' in body)) throw new Error(t('Invalid probe receipt'))
       const result = parseProbeDecisionResult(body.result)
       if (result.requestId !== pending.id || result.revision !== pending.revision
-        || (cancel && result.status !== 'cancelled')) throw new Error('Probe receipt mismatch')
+        || (cancel && result.status !== 'cancelled')) throw new Error(t('Probe receipt mismatch'))
       if (current !== generation || controller.signal.aborted) return false
       const completed = { ...pending, status: result.status, runId: result.runId, error: result.error }
       receipts.set(pending.id, completed)
       requests.value = requests.value.map(item => item.id === pending.id ? completed : item)
       notice.value = result.status === 'completed'
-        ? 'Controlled connection test completed. This is not full business acceptance and does not publish the change.'
-        : result.status === 'cancelled' ? 'Connection test cancelled. Nothing was published.'
-          : 'Connection test failed. Inspect the recorded run; a new test needs a new approval.'
+        ? t('Controlled connection test completed. This is not full business acceptance and does not publish the change.')
+        : result.status === 'cancelled' ? t('Connection test cancelled. Nothing was published.')
+          : t('Connection test failed. Inspect the recorded run; a new test needs a new approval.')
       return true
     } catch {
       if (current === generation && !controller.signal.aborted) {
         needsReload.value = true
         error.value = status === 409
-          ? 'This request changed, expired or was already used. Reload before deciding.'
-          : status === 401 || status === 403 ? 'Only an authorized Project owner can approve this connection test.'
-            : 'Could not confirm the test result. Reload to inspect its status and recorded run; do not repeat approval blindly.'
+          ? t('This request changed, expired or was already used. Reload before deciding.')
+          : status === 401 || status === 403 ? t('Only an authorized Project owner can approve this connection test.')
+            : t('Could not confirm the test result. Reload to inspect its status and recorded run; do not repeat approval blindly.')
       }
       return false
     } finally {

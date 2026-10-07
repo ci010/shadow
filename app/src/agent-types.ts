@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { ToolDef } from './components/ToolsCard.vue'
 
 export interface AgentTypeMeta {
@@ -41,14 +42,14 @@ function isTool(value: unknown): value is ToolDef {
 }
 export function parseAgentTypes(value: unknown): AgentTypeMeta[] {
   if (!Array.isArray(value) || !value.every(isAgent) || new Set(value.map(agent => agent.name)).size !== value.length) {
-    throw new Error('Cannot read agent type definitions. Retry the catalog.')
+    throw new Error(t('Cannot read agent type definitions. Retry the catalog.'))
   }
   return value
 }
 export function parseAgentContext(value: unknown): { systemPrompt: string; tools: ToolDef[] } {
   if (!record(value) || typeof value.systemPrompt !== 'string' || !Array.isArray(value.tools)
     || !value.tools.every(isTool) || new Set(value.tools.map(tool => tool.name)).size !== value.tools.length) {
-    throw new Error('Cannot read the assembled agent preview. Retry the preview.')
+    throw new Error(t('Cannot read the assembled agent preview. Retry the preview.'))
   }
   return { systemPrompt: value.systemPrompt, tools: value.tools }
 }

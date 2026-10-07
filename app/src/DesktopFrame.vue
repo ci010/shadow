@@ -5,30 +5,32 @@
       <span class="desktop-window-title">Shadow</span>
       <div v-if="$slots.navigation" class="chrome-navigation"><slot name="navigation" /></div>
       <div class="chrome-drag-space" aria-hidden="true" />
-      <div v-if="$slots.actions" class="chrome-actions"><slot name="actions" /></div>
+      <div class="chrome-actions"><LanguageSelector /><slot name="actions" /></div>
       <span v-if="error" class="window-error" role="alert">{{ error }}</span>
       <div v-if="controls" class="window-controls">
-        <button aria-label="Minimize window" title="Minimize" @click="run(() => controls!.minimize())">
+        <button :aria-label="t('Minimize window')" :title="t('Minimize')" @click="run(() => controls!.minimize())">
           <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6h10"/></svg>
         </button>
-        <button :aria-label="maximized ? 'Restore window' : 'Maximize window'" :title="maximized ? 'Restore' : 'Maximize'" @click="toggleMaximize">
+        <button :aria-label="maximized ? t('Restore window') : t('Maximize window')" :title="maximized ? t('Restore') : t('Maximize')" @click="toggleMaximize">
           <svg v-if="maximized" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3V1h8v8H9M1 3h8v8H1z"/></svg>
           <svg v-else viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1h10v10H1z"/></svg>
         </button>
-        <button class="window-close" aria-label="Close window" title="Close" @click="run(() => controls!.close())">
+        <button class="window-close" :aria-label="t('Close window')" :title="t('Close')" @click="run(() => controls!.close())">
           <svg viewBox="0 0 12 12" aria-hidden="true"><path d="m1 1 10 10M1 11 11 1"/></svg>
         </button>
       </div>
     </header>
-    <header v-if="mobile" class="mobile-title-bar" aria-label="Mobile navigation"><slot name="mobile-header" /></header>
+    <header v-if="mobile" class="mobile-title-bar" :aria-label="t('Mobile navigation')"><slot name="mobile-header" /></header>
     <div class="desktop-content"><slot /></div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from './i18n.ts'
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { observeDesktopWindow } from './desktop-window.ts'
 import shadowLogo from './assets/shadow-logo.png'
+import LanguageSelector from './components/LanguageSelector.vue'
 
 defineProps<{ mobile?: boolean }>()
 const controls = window.shadowDesktop?.windowControls
@@ -38,7 +40,7 @@ let unsubscribe: (() => void) | undefined
 async function run(action: () => Promise<unknown>) {
   error.value = ''
   try { await action() }
-  catch { error.value = 'Window control failed. Please retry.' }
+  catch { error.value = t('Window control failed. Please retry.') }
 }
 async function toggleMaximize() {
   if (controls) await run(async () => { maximized.value = (await controls.toggleMaximize()).maximized })
@@ -46,7 +48,7 @@ async function toggleMaximize() {
 onMounted(() => {
   if (controls) unsubscribe = observeDesktopWindow(
     controls, (value) => { maximized.value = value },
-    () => { error.value = 'Could not read window state.' },
+    () => { error.value = t('Could not read window state.') },
   )
 })
 onBeforeUnmount(() => unsubscribe?.())

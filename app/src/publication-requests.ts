@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -18,14 +19,14 @@ export function parsePublicationResponse(value: unknown, projectId: string): Pub
 
 export function parsePublicationRequests(value: unknown, projectId: string): PublicationRequest[] {
   if (!isRecord(value) || Object.keys(value).some(key => !['request', 'requests'].includes(key)) || !('request' in value)) {
-    throw new Error('Invalid publication request')
+    throw new Error(t('Invalid publication request'))
   }
   const legacy = value.request === null ? null : parsePublicationRequest(value.request, projectId)
   if (!('requests' in value)) return legacy ? [legacy] : []
-  if (!Array.isArray(value.requests) || value.requests.length > 1000) throw new Error('Invalid publication requests')
+  if (!Array.isArray(value.requests) || value.requests.length > 1000) throw new Error(t('Invalid publication requests'))
   const requests = value.requests.map(item => parsePublicationRequest(item, projectId))
   if (new Set(requests.map(item => item.id)).size !== requests.length
-    || JSON.stringify(legacy) !== JSON.stringify(requests[0] ?? null)) throw new Error('Publication review mismatch')
+    || JSON.stringify(legacy) !== JSON.stringify(requests[0] ?? null)) throw new Error(t('Publication review mismatch'))
   return requests
 }
 
@@ -81,7 +82,7 @@ export function usePublicationRequest(source: () => PublicationSource) {
         cache: 'no-store', redirect: 'error',
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
       })
-      if (!response.ok) throw new Error('Publication review unavailable')
+      if (!response.ok) throw new Error(t('Publication review unavailable'))
       const next = visiblePublicationRequests(parsePublicationRequests(await response.json(), source().projectId), source().sessionId)
         .filter(item => !resolvedIds.has(item.id))
         .map(item => waitingIds.has(item.id) && !item.status ? { ...item, status: 'waiting' as const } : item)
@@ -90,13 +91,13 @@ export function usePublicationRequest(source: () => PublicationSource) {
       if (!next.some(item => item.id === selectedId.value)) selectedId.value = next[0]?.id ?? ''
       if (manual) {
         needsReload.value = false
-        if (!next.length) notice.value = 'No publication is pending. If the previous result was uncertain, inspect the published revision before requesting another review.'
+        if (!next.length) notice.value = t('No publication is pending. If the previous result was uncertain, inspect the published revision before requesting another review.')
       }
       if (!needsReload.value) error.value = ''
     } catch {
       if (current === generation && !controller.signal.aborted) {
         needsReload.value = true
-        error.value = 'Could not load the publication review. Check your owner access and connection, then reload.'
+        error.value = t('Could not load the publication review. Check your owner access and connection, then reload.')
       }
     } finally {
       if (read === controller) { read = undefined; loading.value = false }
@@ -123,32 +124,32 @@ export function usePublicationRequest(source: () => PublicationSource) {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]),
       })
       status = response.status
-      if (!response.ok) throw new Error('Publication decision was not confirmed')
+      if (!response.ok) throw new Error(t('Publication decision was not confirmed'))
       const body: unknown = await response.json()
-      if (!isRecord(body) || Object.keys(body).length !== 1 || !('result' in body)) throw new Error('Invalid publication receipt')
+      if (!isRecord(body) || Object.keys(body).length !== 1 || !('result' in body)) throw new Error(t('Invalid publication receipt'))
       const result = parsePublicationResult(body.result)
       if (result.requestId !== pending.id || result.revision !== pending.revision
-        || (cancel ? result.status !== 'cancelled' : !['published', 'waiting'].includes(result.status))) throw new Error('Publication receipt mismatch')
+        || (cancel ? result.status !== 'cancelled' : !['published', 'waiting'].includes(result.status))) throw new Error(t('Publication receipt mismatch'))
       if (current !== generation || controller.signal.aborted) return false
       if (result.status === 'waiting') {
         waitingIds.add(pending.id)
         requests.value = requests.value.map(item => item.id === pending.id ? { ...item, status: 'waiting' } : item)
-        notice.value = 'Approval recorded. Publication is waiting for active conversations to finish; do not approve again.'
+        notice.value = t('Approval recorded. Publication is waiting for active conversations to finish; do not approve again.')
         return true
       }
       resolvedIds.add(pending.id)
       requests.value = requests.value.filter(item => item.id !== pending.id)
-      notice.value = cancel ? 'Publication cancelled. Your draft is unchanged.'
-        : 'Agent configuration published. Configured conversations use it on their next turn.'
+      notice.value = cancel ? t('Publication cancelled. Your draft is unchanged.')
+        : t('Agent configuration published. Configured conversations use it on their next turn.')
       return true
     } catch {
       if (current === generation && !controller.signal.aborted) {
         needsReload.value = true
         error.value = status === 409
-          ? 'This review changed or was already resolved. Reload and review the current proposal before deciding.'
+          ? t('This review changed or was already resolved. Reload and review the current proposal before deciding.')
           : status === 401 || status === 403
-            ? 'Only an authorized Project owner can decide this publication.'
-            : 'Could not confirm the result. Reload before trying again; if no request remains, inspect the published revision.'
+            ? t('Only an authorized Project owner can decide this publication.')
+            : t('Could not confirm the result. Reload before trying again; if no request remains, inspect the published revision.')
       }
       return false
     } finally {

@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 
 export async function githubRequest(base: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
@@ -8,6 +9,6 @@ export async function githubRequest(base: string, path: string, body?: unknown, 
   })
   const value: unknown = await response.json()
   if (!response.ok) throw new Error(value && typeof value === 'object' && 'message' in value && typeof value.message === 'string'
-    ? value.message : `GitHub integration request failed (HTTP ${response.status}). Check access and retry.`)
+    ? value.message : t('GitHub integration request failed (HTTP {status}). Check access and retry.', { status: response.status }))
   return value
 }

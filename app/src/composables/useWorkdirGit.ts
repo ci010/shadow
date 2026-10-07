@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { onUnmounted, ref, shallowRef, watch, type Ref } from 'vue'
 import { createGitFilesClient, type GitStatus } from '../git-files.ts'
 import { isNodeOfflineError } from '../workdir-request-error.ts'
@@ -39,7 +40,7 @@ export function useWorkdirGit(source: () => { apiBase: string; sessionId: string
     } catch (cause) {
       if (!request.signal.aborted) {
         offline.value = isNodeOfflineError(cause)
-        error.value = offline.value ? '' : cause instanceof Error ? cause.message : 'Could not load Git changes. Retry.'
+        error.value = offline.value ? '' : cause instanceof Error ? cause.message : t('Could not load Git changes. Retry.')
       }
     } finally {
       if (controller === request) {

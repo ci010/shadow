@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { ImageSource } from './image-context.ts'
 import { apiUrl } from './api-url.ts'
 import { createUuid } from './uuid.ts'
@@ -27,7 +28,7 @@ export function updateImageAttachment(
     return existing.map(attachment => attachment === previous && options.source
       ? { ...attachment, source: { ...options.source } } : attachment)
   }
-  if (file && !isImageAttachment(file)) throw new Error('Only an image can be added from the image preview.')
+  if (file && !isImageAttachment(file)) throw new Error(t('Only an image can be added from the image preview.'))
   const next: PendingChatAttachment | undefined = file ? {
     key: previous?.key ?? (options.createId ?? createUuid)(),
     sourceKey,
@@ -95,7 +96,7 @@ export function clipboardImageFiles(data: {
     const file = item.getAsFile()
     if (file && isImageAttachment(file)) files.push(file)
     else if (!file && item.type.toLowerCase().startsWith('image/')) {
-      throw new Error('Could not read the clipboard image. Paste again or use Add file.')
+      throw new Error(t('Could not read the clipboard image. Paste again or use Add file.'))
     }
   }
   return files
@@ -110,13 +111,13 @@ export function droppedChatFiles(data: {
   if (!data) return []
   const items = Array.from(data.items ?? []).filter(item => item.kind === 'file')
   if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
-    throw new Error('Folders cannot be attached by dropping them. Drop files instead.')
+    throw new Error(t('Folders cannot be attached by dropping them. Drop files instead.'))
   }
   const files = Array.from(data.files ?? [])
   if (files.length) return files
   return items.map(item => {
     const file = item.getAsFile()
-    if (!file) throw new Error('Could not read the dropped file. Drop it again or use Add file.')
+    if (!file) throw new Error(t('Could not read the dropped file. Drop it again or use Add file.'))
     return file
   })
 }
@@ -166,7 +167,7 @@ export function revokeChatAttachmentPreviews(
 }
 
 function invalidUploadResponse(): Error {
-  return new Error('Main returned an invalid attachment upload response. Retry.')
+  return new Error(t('Main returned an invalid attachment upload response. Retry.'))
 }
 
 async function uploadOneChatAttachment(
@@ -187,7 +188,7 @@ async function uploadOneChatAttachment(
     signal,
   })
   if (!response.ok) {
-    let message = 'Could not upload attachment. Retry.'
+    let message = t('Could not upload attachment. Retry.')
     try {
       const body = await response.json() as { error?: unknown }
       if (typeof body?.error === 'string' && body.error) message = body.error

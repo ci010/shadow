@@ -1,42 +1,42 @@
 <template>
-  <section class="maintenance" aria-label="Knowledge maintenance">
+  <section class="maintenance" :aria-label="t('Knowledge maintenance')">
     <header>
-      <div><h2>Link health</h2><p>Checked daily without an AI session. Scans never modify knowledge. Repair requires a reviewed preview and confirmation.</p></div>
+      <div><h2>{{ t('Link health') }}</h2><p>{{ t('Checked daily without an AI session. Scans never modify knowledge. Repair requires a reviewed preview and confirmation.') }}</p></div>
       <div class="actions">
-        <button type="button" :disabled="busy || !!preview" @click="refresh">Refresh report</button>
-        <button type="button" :disabled="busy || !!preview || status?.scanning" @click="scan">{{ scanning ? 'Scanning...' : 'Scan now' }}</button>
+        <button type="button" :disabled="busy || !!preview" @click="refresh">{{ t('Refresh report') }}</button>
+        <button type="button" :disabled="busy || !!preview || status?.scanning" @click="scan">{{ scanning ? t('Scanning...') : t('Scan now') }}</button>
       </div>
     </header>
-    <p v-if="loading" role="status">Loading scan report...</p>
-    <p v-if="status?.scanning && !scanning" role="status">A scan is in progress. Refresh the report shortly.</p>
+    <p v-if="loading" role="status">{{ t('Loading scan report...') }}</p>
+    <p v-if="status?.scanning && !scanning" role="status">{{ t('A scan is in progress. Refresh the report shortly.') }}</p>
     <p v-if="error || status?.lastError" role="alert" class="error">{{ error || status?.lastError }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <template v-if="status?.report">
       <div class="report-summary">
-        <span>Last scan: {{ formatDate(status.report.scannedAt) }} · {{ status.report.entriesScanned }} entries</span>
-        <button type="button" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? 'Hide findings' : `Show findings (${status.report.findings.length})` }}</button>
+        <span>{{ t('Last scan:') }} {{ formatDate(status.report.scannedAt) }} · {{ status.report.entriesScanned }} {{ t('entries') }}</span>
+        <button type="button" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? t('Hide findings') : t('Show findings ({length})', { length: status.report.findings.length }) }}</button>
       </div>
-      <p v-if="!status.report.findings.length" class="muted">No unresolved local references were found in this snapshot.</p>
+      <p v-if="!status.report.findings.length" class="muted">{{ t('No unresolved local references were found in this snapshot.') }}</p>
       <template v-if="expanded && status.report.findings.length">
-        <label>Show
-          <select v-model="filter" aria-label="Filter link findings">
-            <option value="all">All findings</option>
-            <option value="missing">Confirmed missing</option>
-            <option value="unavailable">Unavailable / unsafe to inspect</option>
-            <option value="outside-catalog">Exists outside catalog</option>
+        <label>{{ t('Show') }}
+          <select v-model="filter" :aria-label="t('Filter link findings')">
+            <option value="all">{{ t('All findings') }}</option>
+            <option value="missing">{{ t('Confirmed missing') }}</option>
+            <option value="unavailable">{{ t('Unavailable / unsafe to inspect') }}</option>
+            <option value="outside-catalog">{{ t('Exists outside catalog') }}</option>
           </select>
         </label>
         <div class="findings">
           <article v-for="group in groups" :key="group.sourceId">
             <div class="source-heading">
               <button type="button" class="source-link" @click="$emit('select', group.sourceId)">{{ group.title }}</button>
-              <button v-if="group.repairable" type="button" :disabled="busy || !!preview" @click="prepare(group.sourceId)">Preview Wiki repair</button>
-              <span v-else class="muted">Review only</span>
+              <button v-if="group.repairable" type="button" :disabled="busy || !!preview" @click="prepare(group.sourceId)">{{ t('Preview Wiki repair') }}</button>
+              <span v-else class="muted">{{ t('Review only') }}</span>
             </div>
             <div v-if="filteredFindings.length > pageSize" class="pagination">
-              <button type="button" :disabled="page === 0" @click="page--">Previous findings</button>
-              <span>{{ page * pageSize + 1 }}–{{ Math.min((page + 1) * pageSize, filteredFindings.length) }} of {{ filteredFindings.length }}</span>
-              <button type="button" :disabled="(page + 1) * pageSize >= filteredFindings.length" @click="page++">Next findings</button>
+              <button type="button" :disabled="page === 0" @click="page--">{{ t('Previous findings') }}</button>
+              <span>{{ page * pageSize + 1 }}–{{ Math.min((page + 1) * pageSize, filteredFindings.length) }} {{ t('of') }} {{ filteredFindings.length }}</span>
+              <button type="button" :disabled="(page + 1) * pageSize >= filteredFindings.length" @click="page++">{{ t('Next findings') }}</button>
             </div>
             <code>{{ group.sourceId }}</code>
             <ul><li v-for="finding in group.findings" :key="finding.id">
@@ -46,16 +46,17 @@
             </li></ul>
           </article>
         </div>
-        <p v-if="!groups.length" class="muted">No findings match this filter.</p>
+        <p v-if="!groups.length" class="muted">{{ t('No findings match this filter.') }}</p>
       </template>
     </template>
-    <p v-else-if="!loading" class="muted">No saved report yet. Scan now or wait for the scheduled check.</p>
+    <p v-else-if="!loading" class="muted">{{ t('No saved report yet. Scan now or wait for the scheduled check.') }}</p>
     <KnowledgeRepairDialog v-if="preview" :api-base="apiBase" :project-id="projectId" :preview="preview"
       @close="preview = undefined" @applied="applied" />
   </section>
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from '../i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { createKnowledgeMaintenanceClient, type KnowledgeMaintenanceFinding, type KnowledgeMaintenanceStatus, type KnowledgeRepairPreview } from '../knowledge-maintenance.ts'
 import KnowledgeRepairDialog from './KnowledgeRepairDialog.vue'
@@ -93,8 +94,8 @@ const groups = computed(() => {
 const filteredFindings = computed(() => (status.value?.report?.findings ?? [])
   .filter(finding => filter.value === 'all' || finding.reason === filter.value))
 watch(() => [filter.value, status.value?.report?.id], () => { page.value = 0 })
-const reasonLabel = (reason: KnowledgeMaintenanceFinding['reason']) => reason === 'missing' ? 'Confirmed missing' : reason === 'unavailable' ? 'Unavailable / unverified' : 'Exists outside catalog'
-const formatDate = (value: string) => new Date(value).toLocaleString()
+const reasonLabel = (reason: KnowledgeMaintenanceFinding['reason']) => reason === 'missing' ? t('Confirmed missing') : reason === 'unavailable' ? t('Unavailable / unverified') : t('Exists outside catalog')
+const formatDate = (value: string) => formatDateTime(new Date(value))
 function begin() {
   request?.abort()
   request = new AbortController()
@@ -109,7 +110,7 @@ async function refresh() {
     const result = await createKnowledgeMaintenanceClient(props.apiBase).status(current.signal)
     if (!current.signal.aborted) status.value = result
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load the maintenance report.'
+    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load the maintenance report.')
   } finally { if (!current.signal.aborted) loading.value = false }
 }
 async function scan() {
@@ -123,7 +124,7 @@ async function scan() {
     status.value = { intervalMs: status.value?.intervalMs ?? 86_400_000, scanning: false, report }
     expanded.value = true
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : 'The scan failed. The previous report may be stale.'
+    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('The scan failed. The previous report may be stale.')
   } finally { if (!current.signal.aborted) scanning.value = false }
 }
 async function prepare(sourceId: string) {
@@ -134,12 +135,12 @@ async function prepare(sourceId: string) {
     const result = await createKnowledgeMaintenanceClient(props.apiBase).preview(status.value.report.id, sourceId, current.signal)
     if (!current.signal.aborted) preview.value = result
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not prepare a repair preview.'
+    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not prepare a repair preview.')
   } finally { if (!current.signal.aborted) preparing.value = false }
 }
 async function applied(id: string) {
   preview.value = undefined
-  notice.value = 'Repair applied to the selected Wiki file. Pages and historical references were preserved.'
+  notice.value = t('Repair applied to the selected Wiki file. Pages and historical references were preserved.')
   if (status.value) status.value = { ...status.value, report: null }
   emit('changed', id)
   await scan()

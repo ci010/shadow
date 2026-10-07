@@ -1,5 +1,6 @@
-<template><canvas ref="canvas" width="640" height="360" role="img" :aria-label="node.text || 'Generated drawing'">{{ node.text || 'Generated drawing' }}</canvas></template>
+<template><canvas ref="canvas" width="640" height="360" role="img" :aria-label="node.text || t('Generated drawing')">{{ node.text || t('Generated drawing') }}</canvas></template>
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { ref, watch } from 'vue'
 import type { IoUiNode } from '../../../../src/io/contracts.ts'
 const props = defineProps<{ node: IoUiNode }>()

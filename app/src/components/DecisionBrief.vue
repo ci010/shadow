@@ -1,37 +1,38 @@
 <template>
-  <section class="decision-brief selectable-text" :class="{ 'basis-graph': graph }" aria-label="Decision brief and basis">
-    <div class="basis-node"><strong>Original goal</strong><p>{{ brief.goal }}</p></div>
+  <section class="decision-brief selectable-text" :class="{ 'basis-graph': graph }" :aria-label="t('Decision brief and basis')">
+    <div class="basis-node"><strong>{{ t('Original goal') }}</strong><p>{{ brief.goal }}</p></div>
     <details class="basis-evidence" :open="graph">
-      <summary>Evidence, assumptions and proposals</summary>
+      <summary>{{ t('Evidence, assumptions and proposals') }}</summary>
       <article v-for="(claim, index) in brief.claims" :key="index" class="basis-node" :class="claim.kind">
         <strong>{{ labels[claim.kind] }}</strong><p>{{ claim.text }}</p>
         <details v-if="claim.evidence" class="evidence-source">
-          <summary>Exact {{ claim.evidence.kind === 'user' ? 'human input' : 'tool receipt' }} excerpt</summary>
+          <summary>{{ t('Exact') }} {{ claim.evidence.kind === 'user' ? t('human input') : t('tool receipt') }} {{ t('excerpt') }}</summary>
           <blockquote>{{ claim.evidence.quote }}</blockquote>
-          <p>Session: {{ claim.evidence.sessionId }} · Segment: {{ claim.evidence.physicalId }} · Source: {{ claim.evidence.id }}</p>
-          <p>Authorship and excerpt are checked against the saved record; the agent's interpretation is not independently verified.</p>
-          <button type="button" @click="emit('inspect', claim.evidence.sessionId)">Open evidence session</button>
+          <p>{{ t('Session:') }} {{ claim.evidence.sessionId }} {{ t('· Segment:') }} {{ claim.evidence.physicalId }} {{ t('· Source:') }} {{ claim.evidence.id }}</p>
+          <p>{{ t('Authorship and excerpt are checked against the saved record; the agent\'s interpretation is not independently verified.') }}</p>
+          <button type="button" @click="emit('inspect', claim.evidence.sessionId)">{{ t('Open evidence session') }}</button>
         </details>
       </article>
     </details>
-    <div class="basis-node"><strong>Why your decision is needed</strong><p>{{ brief.whyHuman }}</p></div>
-    <div class="basis-node"><strong>Agent recommendation</strong><p>{{ brief.recommendation }}</p><strong>Tradeoff</strong><p>{{ brief.tradeoff }}</p></div>
+    <div class="basis-node"><strong>{{ t('Why your decision is needed') }}</strong><p>{{ brief.whyHuman }}</p></div>
+    <div class="basis-node"><strong>{{ t('Agent recommendation') }}</strong><p>{{ brief.recommendation }}</p><strong>{{ t('Tradeoff') }}</strong><p>{{ brief.tradeoff }}</p></div>
     <div class="basis-scope">
-      <div class="basis-node"><strong>Blocked until decided</strong><ul><li v-for="work in brief.blocked" :key="work">{{ work }}</li></ul></div>
-      <div class="basis-node"><strong>Can continue within existing authorization</strong>
-        <ul v-if="brief.unaffected.length"><li v-for="work in brief.unaffected" :key="work">{{ work }}</li></ul><p v-else>No independent work identified.</p>
+      <div class="basis-node"><strong>{{ t('Blocked until decided') }}</strong><ul><li v-for="work in brief.blocked" :key="work">{{ work }}</li></ul></div>
+      <div class="basis-node"><strong>{{ t('Can continue within existing authorization') }}</strong>
+        <ul v-if="brief.unaffected.length"><li v-for="work in brief.unaffected" :key="work">{{ work }}</li></ul><p v-else>{{ t('No independent work identified.') }}</p>
       </div>
     </div>
-    <p v-if="graph" class="basis-note">Flow expresses the agent's stated rationale, not proven causation. Dashed nodes are assumptions or proposals.</p>
+    <p v-if="graph" class="basis-note">{{ t('Flow expresses the agent\'s stated rationale, not proven causation. Dashed nodes are assumptions or proposals.') }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import type { DecisionBrief } from '../../../src/sessions/decision-brief.ts'
 defineProps<{ brief: DecisionBrief; graph?: boolean }>()
 const emit = defineEmits<{ inspect: [sessionId: string] }>()
-const labels = { user_constraint: 'Recorded user constraint', observation: 'Agent observation with a source',
-  assumption: 'Unverified assumption', proposal: 'Agent proposal, not a user requirement' }
+const labels = { get user_constraint() { return t('Recorded user constraint') }, get observation() { return t('Agent observation with a source') },
+  get assumption() { return t('Unverified assumption') }, get proposal() { return t('Agent proposal, not a user requirement') } }
 </script>
 
 <style scoped>

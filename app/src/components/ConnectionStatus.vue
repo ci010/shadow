@@ -1,22 +1,23 @@
 <template>
-  <section v-if="notices.length" ref="root" class="connection-status" aria-label="Connection status" @keydown.esc="close">
+  <section v-if="notices.length" ref="root" class="connection-status" :aria-label="t('Connection status')" @keydown.esc="close">
     <button ref="trigger" type="button" class="status-trigger" :aria-expanded="expanded" :aria-controls="id" @click="expanded = !expanded">
       <span class="status-mark" aria-hidden="true">!</span>
-      <span role="status">{{ notices.length === 1 ? notices[0]!.title : `${notices.length} connection notices` }}</span>
+      <span role="status">{{ notices.length === 1 ? notices[0]!.title : t('{length} connection notices', { length: notices.length }) }}</span>
       <svg viewBox="0 0 16 16" aria-hidden="true" :class="{ expanded }"><path d="m5 6 3 3 3-3" /></svg>
     </button>
     <div v-show="expanded" :id="id" class="status-popover">
       <section v-for="notice in notices" :key="notice.id" class="status-notice">
         <h2>{{ notice.title }}</h2>
         <p>{{ notice.message }}</p>
-        <button v-if="notice.id === 'child'" type="button" @click="$emit('manage-node')">Manage this node</button>
-        <button v-if="notice.id === 'live'" type="button" @click="$emit('retry')">Retry live updates</button>
+        <button v-if="notice.id === 'child'" type="button" @click="$emit('manage-node')">{{ t('Manage this node') }}</button>
+        <button v-if="notice.id === 'live'" type="button" @click="$emit('retry')">{{ t('Retry live updates') }}</button>
       </section>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 
 const props = defineProps<{ childTitle?: string; liveError?: string; notificationError?: string }>()
@@ -26,9 +27,9 @@ const root = ref<HTMLElement>()
 const trigger = ref<HTMLButtonElement>()
 const expanded = ref(false)
 const notices = computed(() => [
-  ...(props.childTitle ? [{ id: 'child', title: props.childTitle, message: "Main-backed tools may be stale, but this Child's local controls remain available." }] : []),
-  ...(props.liveError ? [{ id: 'live', title: 'Live updates interrupted', message: props.liveError }] : []),
-  ...(props.notificationError ? [{ id: 'sound', title: 'Notification sounds', message: props.notificationError }] : []),
+  ...(props.childTitle ? [{ id: 'child', title: props.childTitle, message: t('Main-backed tools may be stale, but this Child\'s local controls remain available.') }] : []),
+  ...(props.liveError ? [{ id: 'live', title: t('Live updates interrupted'), message: props.liveError }] : []),
+  ...(props.notificationError ? [{ id: 'sound', title: t('Notification sounds'), message: props.notificationError }] : []),
 ])
 watch(() => notices.value.map(notice => notice.id), (current, previous = []) => {
   if (!current.length) expanded.value = false

@@ -1,30 +1,30 @@
 <template>
   <div ref="workspaceElement" class="projects-workspace">
-    <button v-if="sidebarOpen && !sidebarPinned && !mobileIntegrated" class="projects-backdrop" tabindex="-1" aria-label="Close projects" @click="closeSidebar()" />
+    <button v-if="sidebarOpen && !sidebarPinned && !mobileIntegrated" class="projects-backdrop" tabindex="-1" :aria-label="t('Close projects')" @click="closeSidebar()" />
     <Teleport :to="mobile?.projectsTarget.value || 'body'" :disabled="!mobileIntegrated">
     <aside v-show="mobileIntegrated ? visible : sidebarVisible" id="projects-sidebar" ref="sidebarElement" class="projects-sidebar" :class="{ 'is-floating': !sidebarPinned && !mobileIntegrated, 'in-mobile-menu': mobileIntegrated }"
-      :style="{ '--projects-width': `${sidebarPinned ? sidebarWidth : preferredWidth}px` }" aria-label="Projects">
+      :style="{ '--projects-width': `${sidebarPinned ? sidebarWidth : preferredWidth}px` }" :aria-label="t('Projects')">
       <SidebarResizer v-if="sidebarPinned && visible" :model-value="sidebarWidth" :bounds="resizeBounds"
-        label="Resize projects" controls="projects-sidebar" @update:model-value="preferredWidth = $event" />
+        :label="t('Resize projects')" controls="projects-sidebar" @update:model-value="preferredWidth = $event" />
       <header class="projects-heading">
-        <h1>Projects</h1>
+        <h1>{{ t('Projects') }}</h1>
         <div class="projects-heading-actions">
-          <HoverInfo v-if="desktop" :text="sidebarPinned ? 'Hide projects' : 'Pin projects'"><template #default="{ triggerProps }">
-            <button ref="pinButton" class="project-add projects-pin-toggle" v-bind="triggerProps" :aria-label="sidebarPinned ? 'Hide projects' : 'Pin projects'"
+          <HoverInfo v-if="desktop" :text="sidebarPinned ? t('Hide projects') : t('Pin projects')"><template #default="{ triggerProps }">
+            <button ref="pinButton" class="project-add projects-pin-toggle" v-bind="triggerProps" :aria-label="sidebarPinned ? t('Hide projects') : t('Pin projects')"
               :aria-pressed="sidebarPinned" @click="togglePinned">
               <span :class="sidebarPinned ? 'i-lucide-panel-left-close' : 'i-lucide-pin'" class="w-4 h-4" aria-hidden="true" />
             </button>
           </template></HoverInfo>
-          <button class="project-add" aria-label="Add project" :aria-expanded="creating" @click="creating = !creating"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
-          <button v-if="!sidebarPinned && !mobileIntegrated" ref="closeButton" class="project-add" aria-label="Close projects" @click="closeSidebar()"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button>
+          <button class="project-add" :aria-label="t('Add project')" :aria-expanded="creating" @click="creating = !creating"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
+          <button v-if="!sidebarPinned && !mobileIntegrated" ref="closeButton" class="project-add" :aria-label="t('Close projects')" @click="closeSidebar()"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button>
         </div>
       </header>
       <form v-if="creating" class="project-create" @submit.prevent="createProject">
-        <label>Project name<input v-model="name" required autocomplete="off" :disabled="saving" /></label>
-        <button class="btn btn-sm" :disabled="saving || !name.trim()">{{ saving ? 'Creating...' : 'Create project' }}</button>
+        <label>{{ t('Project name') }}<input v-model="name" required autocomplete="off" :disabled="saving" /></label>
+        <button class="btn btn-sm" :disabled="saving || !name.trim()">{{ saving ? t('Creating...') : t('Create project') }}</button>
       </form>
-      <p v-if="loading" class="project-note" role="status">Loading projects...</p>
-      <div v-if="error" class="project-note project-error" role="alert"><p>{{ error }}</p><button class="btn btn-sm" @click="refresh">Retry catalog</button></div>
+      <p v-if="loading" class="project-note" role="status">{{ t('Loading projects...') }}</p>
+      <div v-if="error" class="project-note project-error" role="alert"><p>{{ error }}</p><button class="btn btn-sm" @click="refresh">{{ t('Retry catalog') }}</button></div>
       <div id="project-groups" class="project-groups">
         <ProjectGroup v-for="project in projects" :key="project.id" :api-base="apiBase" :project="project"
           :data-project-id="project.id" :folder-revision="folderRevision"
@@ -44,9 +44,9 @@
     <div class="project-conversations" @focusin="contentFocused">
       <header v-if="!sidebarPinned && !mobileIntegrated" class="projects-toolbar">
         <button ref="sidebarTrigger" class="projects-toggle" :aria-expanded="sidebarOpen" aria-controls="projects-sidebar"
-          :aria-label="`Projects${selectedProjectName ? `: ${selectedProjectName}` : ''}`" @click="toggleSidebar">
+          :aria-label="t('Projects{value1}', { value1: selectedProjectName ? `: ${selectedProjectName}` : '' })" @click="toggleSidebar">
           <span class="i-lucide-panel-left-open w-4 h-4" aria-hidden="true" />
-          <span class="projects-current-name">{{ selectedProjectName || 'Projects' }}</span>
+          <span class="projects-current-name">{{ selectedProjectName || t('Projects') }}</span>
           <span class="i-lucide-chevron-down w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </header>
@@ -55,10 +55,10 @@
         :selected-session-id="selected?.sessionId"
         @open="openAutomationRun">
       <section v-if="!selected && !automation" class="project-empty">
-        <h1>Where would you like to work?</h1>
-        <p>Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.</p>
-        <button v-for="project in projects" :key="project.id" class="btn" @click="startDraft(project.id)">Start in {{ project.name }}</button>
-        <button v-if="!projects.length && !loading && !error" class="btn" @click="openCreateProject">Create a project</button>
+        <h1>{{ t('Where would you like to work?') }}</h1>
+        <p>{{ t('Choose a folder or start a chat in a project. Each project keeps its own Home and model defaults.') }}</p>
+        <button v-for="project in projects" :key="project.id" class="btn" @click="startDraft(project.id)">{{ t('Start in') }} {{ project.name }}</button>
+        <button v-if="!projects.length && !loading && !error" class="btn" @click="openCreateProject">{{ t('Create a project') }}</button>
       </section>
       <ProjectConversation v-for="resource in resources" :key="resource.key"
         :ref="component => setConversation(resource.key, component)"
@@ -82,6 +82,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, onMounted, onUnmounted, provide, reactive, ref, shallowRef, watch, type ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ProjectGroup from './ProjectGroup.vue'
@@ -221,8 +222,8 @@ function folderChanged(folder?: FolderRecord) {
   const operation = folderOperation.value
   if (!operation) return
   const target = projects.value.find(org => org.id === folder?.projectId)
-  notice.value = folder ? `${operation.folder.name} moved to ${target?.name ?? folder.projectId}.`
-    : `${operation.folder.name} removed from ${operation.project.name}.`
+  notice.value = folder ? t('{name} moved to {projectId}.', { name: operation.folder.name, projectId: target?.name ?? folder.projectId })
+    : t('{name} removed from {name2}.', { name: operation.folder.name, name2: operation.project.name })
   notice.value += ' Files are unchanged; existing conversations remain in the original project.'
   folderOperation.value = undefined
   folderRevision.value++
@@ -243,7 +244,7 @@ function syncRoute() {
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
     selected.value = undefined
     automation.value = undefined
-    if (projectId && !loading.value) error.value = 'This project is unavailable. Refresh the catalog or choose another project.'
+    if (projectId && !loading.value) error.value = t('This project is unavailable. Refresh the catalog or choose another project.')
     return
   }
   const automationId = syncAutomationRoute(projectId)
@@ -294,7 +295,7 @@ async function createProject() {
     creating.value = false
     startDraft(project.id)
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not create project. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not create project. Retry.')
   } finally { saving.value = false }
 }
 function startDraft(projectId: string, folder?: FolderRecord, remote = false) {
@@ -385,7 +386,7 @@ function forgetProject(projectId: string) {
 function projectDeleted(projectId: string) {
   forgetProject(projectId)
   projects.value = projects.value.filter(project => project.id !== projectId)
-  notice.value = 'Project deleted. Working folders and their files were kept.'
+  notice.value = t('Project deleted. Working folders and their files were kept.')
   void refresh()
 }
 function onProjectDeleted(event: Event) {

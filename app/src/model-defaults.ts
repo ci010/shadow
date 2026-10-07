@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { projectJson } from './projects.ts'
 import { isReasoningEffort } from '../../src/agent/llm-config.ts'
@@ -28,7 +29,7 @@ export function parseModelDefaults(value: unknown): ModelDefaultsState {
   if (!isRecord(value) || !validFields(value) || typeof value.model !== 'string' || typeof value.temperature !== 'number'
     || !validFields(value.overrides) || !validFields(value.inherited)
     || typeof value.inherited.model !== 'string' || typeof value.inherited.temperature !== 'number') {
-    throw new Error('Main returned invalid model defaults. Reload settings and retry.')
+    throw new Error(t('Main returned invalid model defaults. Reload settings and retry.'))
   }
   return {
     ...value, model: value.model, temperature: value.temperature, overrides: value.overrides,

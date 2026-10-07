@@ -2,7 +2,7 @@
   <div ref="node" class="tree-node" :class="decoration ? `git-${decoration}` : undefined">
     <TreeRow button-class="tree-row" :button-attrs="{ 'data-path': fullPath, 'aria-busy': loading, 'aria-disabled': !active }" :label="entry.name" :depth="depth"
       :selected="selectedPath === fullPath" :current="selectedPath === fullPath ? 'page' : undefined"
-      :title="decoration ? `${fullPath}\n${entry.type === 'dir' ? 'Contains changes: ' : ''}${gitChangeLabel(decoration)}` : fullPath"
+      :title="decoration ? `${fullPath}\n${entry.type === 'dir' ? t('Contains changes: ') : ''}${gitChangeLabel(decoration)}` : fullPath"
       :expanded="expandable ? expanded : undefined" @select="onRowClick">
       <template #icon><span :class="loading ? 'i-lucide-loader-circle animate-spin' : entry.type === 'dir' ? folderIcon(entry.name, expanded) : fileIcon(entry.name)" /></template>
       <template v-if="entry.type === 'file'" #meta>
@@ -10,15 +10,15 @@
         <span v-else>{{ sizeLabel }}</span>
       </template>
       <template v-if="archiveContainer" #actions>
-        <button type="button" class="archive-open" :aria-label="`Download or view ${entry.name}`" :disabled="!active"
+        <button type="button" class="archive-open" :aria-label="t('Download or view {name}', { name: entry.name })" :disabled="!active"
           @click="emit('open', { path: fullPath, entry })"><span class="i-lucide-download" aria-hidden="true" /></button>
       </template>
     </TreeRow>
 
     <div v-if="expandable" v-show="expanded" class="tree-children">
-      <div v-if="loadError && !changesOnly" class="tree-note error" role="alert">{{ loadError }} <button class="btn btn-sm" @click="loadChildren">Retry</button></div>
-      <p v-if="loading" class="tree-note" role="status">{{ archiveContainer ? 'Reading archive directory...' : 'Loading...' }}</p>
-      <p v-else-if="loaded && !loadError && !displayChildren.length" class="tree-note">{{ archiveContainer ? 'Empty archive.' : 'Empty folder.' }}</p>
+      <div v-if="loadError && !changesOnly" class="tree-note error" role="alert">{{ loadError }} <button class="btn btn-sm" @click="loadChildren">{{ t('Retry') }}</button></div>
+      <p v-if="loading" class="tree-note" role="status">{{ archiveContainer ? t('Reading archive directory...') : t('Loading...') }}</p>
+      <p v-else-if="loaded && !loadError && !displayChildren.length" class="tree-note">{{ archiveContainer ? t('Empty archive.') : t('Empty folder.') }}</p>
       <FileTreeNode
         v-for="child in filteredChildren"
         :key="fileEntryKey(child)"
@@ -46,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, toRefs, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import TreeRow from '../TreeRow.vue'
@@ -119,13 +120,13 @@ async function loadChildren(): Promise<void> {
       entries = archiveDirectory(index, archive)
       ownArchiveIndex.value = index
     } else if (props.entry.archive) {
-      if (!props.archiveIndex) throw new Error('Archive directory is unavailable. Refresh the file tree.')
+      if (!props.archiveIndex) throw new Error(t('Archive directory is unavailable. Refresh the file tree.'))
       const { path, members } = props.entry.archive
       entries = archiveDirectory(props.archiveIndex, { path, members: members.slice(0, -1) }, members.at(-1))
     } else {
       const listing = await files.value.listDir(props.sessionId, fullPath.value, controller.signal)
       if (props.homeState && fileWorkspaceKey(props, listing.workdir) !== props.workspaceKey) {
-        throw new Error('Folder location changed. Refresh files before opening this folder.')
+        throw new Error(t('Folder location changed. Refresh files before opening this folder.'))
       }
       entries = listing.entries
     }
@@ -136,7 +137,7 @@ async function loadChildren(): Promise<void> {
   } catch (cause) {
     if (!controller.signal.aborted) {
       if (isNodeOfflineError(cause)) emit('node-offline')
-      else loadError.value = cause instanceof Error ? cause.message : 'Could not load folder.'
+      else loadError.value = cause instanceof Error ? cause.message : t('Could not load folder.')
     }
   } finally {
     if (request === controller) { request = undefined; loading.value = false }

@@ -1,15 +1,17 @@
 <template>
   <div v-if="record || state?.error" class="session-work-status">
-    <p v-if="state?.error" role="alert">Task status unavailable. <button @click="snapshot?.refresh()">Retry</button></p>
+    <p v-if="state?.error" role="alert">{{ t('Task status unavailable.') }} <button @click="snapshot?.refresh()">{{ t('Retry') }}</button></p>
     <button v-if="record" type="button" class="current-task" :title="record.workflow?.title || record.definition.objective" @click="$emit('open', record.key)">
       <span class="i-lucide-workflow" aria-hidden="true" />
-      <span>{{ records.length > 1 ? `${records.length} work items` : record.workflow?.title || record.definition.objective }}</span>
-      <span class="current-task-state">{{ record.paused ? 'Paused' : record.workflow?.status.replaceAll('_', ' ') || 'Review needed' }}</span>
+      <span>{{ records.length > 1 ? t('{length} work items', { length: records.length }) : record.workflow?.title || record.definition.objective }}</span>
+      <span class="current-task-state">{{ record.paused ? t('Paused') : enumLabel(record.workflow?.status) || t('Review needed') }}</span>
       <span class="i-lucide-arrow-up-right" aria-hidden="true" />
     </button>
   </div>
 </template>
 <script setup lang="ts">
+import { t } from '../i18n.ts'
+import { enumLabel } from '../display-labels.ts'
 import { computed, onUnmounted, shallowRef, watch } from 'vue'
 import { createSnapshot } from '../project-live-state.ts'
 import { projectJson } from '../projects.ts'

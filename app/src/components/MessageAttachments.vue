@@ -1,8 +1,8 @@
 <template>
-  <div v-if="paths.length" class="message-attachments" aria-label="Attachments">
+  <div v-if="paths.length" class="message-attachments" :aria-label="t('Attachments')">
     <div v-for="item in items" :key="item.path" class="message-attachment" :class="`attachment-${item.kind}`">
       <button v-if="item.kind === 'image' && item.url && !failed.has(item.path)" type="button" class="attachment-image-link"
-        aria-haspopup="dialog" :aria-label="`View image: ${item.name}`"
+        aria-haspopup="dialog" :aria-label="t('View image: {name}', { name: item.name })"
         @click="$emit('preview', { src: item.url, name: item.name, downloadUrl: item.downloadUrl ?? undefined, trigger: $event.currentTarget as HTMLButtonElement })">
         <img :src="item.url" :alt="item.name" loading="lazy" class="attachment-image" referrerpolicy="no-referrer" @error="failed.add(item.path)">
       </button>
@@ -14,28 +14,29 @@
         :src="item.url" controls preload="none" :aria-label="item.name" @error="failed.add(item.path)" />
       <div v-if="item.kind !== 'image' || !item.url || failed.has(item.path)" class="attachment-details">
         <component :is="item.file ? 'button' : 'div'" class="attachment-main" :class="{ 'attachment-open': item.file }"
-          :type="item.file ? 'button' : undefined" :aria-label="item.file ? `Open ${item.name} in tab` : undefined"
+          :type="item.file ? 'button' : undefined" :aria-label="item.file ? t('Open {name} in tab', { name: item.name }) : undefined"
           @click="item.file && $emit('open', item.file)">
           <span class="attachment-icon" :class="item.kind === 'video' ? 'i-lucide-file-video' : item.kind === 'audio' ? 'i-lucide-file-audio' : 'i-lucide-file'" aria-hidden="true" />
           <span class="attachment-description">
             <span class="attachment-name" :title="item.name">{{ item.name }}</span>
-            <span class="attachment-type">{{ item.extension ? item.extension.toUpperCase() + ' file' : 'File' }}</span>
+            <span class="attachment-type">{{ item.extension ? item.extension.toUpperCase() + t(' file') : t('File') }}</span>
           </span>
         </component>
-        <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="`Download ${item.name}`" :title="`Download ${item.name}`" referrerpolicy="no-referrer"
+        <a v-if="item.downloadUrl" class="attachment-download" :href="item.downloadUrl" :download="item.name" :aria-label="t('Download {name}', { name: item.name })" :title="t('Download {name}', { name: item.name })" referrerpolicy="no-referrer"
           :aria-busy="downloads.pending.has(item.downloadUrl)" :aria-disabled="downloads.pending.has(item.downloadUrl)"
           @click="downloads.download($event, item.downloadUrl, item.name)">
-          <span :class="downloads.pending.has(item.downloadUrl) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" /><span>{{ downloads.pending.has(item.downloadUrl) ? 'Downloading...' : 'Download' }}</span>
+          <span :class="downloads.pending.has(item.downloadUrl) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" /><span>{{ downloads.pending.has(item.downloadUrl) ? t('Downloading...') : t('Download') }}</span>
         </a>
       </div>
-      <p v-if="!item.url" class="attachment-error" role="status">Attachment unavailable in this conversation.</p>
-      <p v-else-if="failed.has(item.path)" class="attachment-error" role="status">Preview unavailable. Download the file to open it on your device.</p>
+      <p v-if="!item.url" class="attachment-error" role="status">{{ t('Attachment unavailable in this conversation.') }}</p>
+      <p v-else-if="failed.has(item.path)" class="attachment-error" role="status">{{ t('Preview unavailable. Download the file to open it on your device.') }}</p>
       <p v-if="item.downloadUrl && downloads.errors.has(item.downloadUrl)" class="attachment-error" role="alert">{{ downloads.errors.get(item.downloadUrl) }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, reactive, watch } from 'vue'
 import { useFileDownload } from '../composables/useFileDownload.ts'
 import { buildMediaUrl, chatIdForMediaSession } from '../media-url.ts'

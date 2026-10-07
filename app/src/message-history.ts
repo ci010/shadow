@@ -1,3 +1,4 @@
+import { i18n, t } from './i18n.ts'
 import { sessionMessageTitle, type SessionMessageSource } from './message-author.ts'
 import { eventPresentation, eventSourceSession, type ChatEventMeta } from './chat-events.ts'
 import { decisionStatusLabel, inlineYieldDecisions, type YieldDecision, type InlineYieldDecisions } from './yield-history.ts'
@@ -37,9 +38,9 @@ export function resendableUserMessage<T extends HistoryMessage>(messages: readon
   return last && isUserMessage(last) ? last : undefined
 }
 
-export function messageTime(timestamp?: string, locale?: string): { dateTime?: string; label: string; title: string } {
+export function messageTime(timestamp?: string, locale: string = i18n.global.locale.value): { dateTime?: string; label: string; title: string } {
   const date = typeof timestamp === 'string' && timestamp ? new Date(timestamp) : undefined
-  if (!date || !Number.isFinite(date.getTime())) return { label: 'Time unavailable', title: 'No timestamp was recorded for this message.' }
+  if (!date || !Number.isFinite(date.getTime())) return { label: t('Time unavailable'), title: t('No timestamp was recorded for this message.') }
   return {
     dateTime: date.toISOString(),
     label: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date),
@@ -67,27 +68,27 @@ export function messageHistoryMarkers(
       if (!sourceId && !presentation.completion) return []
       kind = 'event'
       label = presentation.title
-      source = (sourceId && names.get(sourceId)) || message.eventMeta.source || sourceId || 'Unknown session'
+      source = (sourceId && names.get(sourceId)) || message.eventMeta.source || sourceId || t('Unknown session')
     } else if (message.sessionSource) {
       sourceId = message.sessionSource.id
       kind = 'session'
       label = sessionMessageTitle(message.sessionSource)
-      source = (sourceId && names.get(sourceId)) || message.sessionSource.name || sourceId || 'Unknown session'
+      source = (sourceId && names.get(sourceId)) || message.sessionSource.name || sourceId || t('Unknown session')
     } else {
       kind = 'user'
-      label = 'User message'
-      source = message.senderName || 'User'
+      label = t('User message')
+      source = message.senderName || t('User')
     }
     const text = message.content.replace(/\s+/g, ' ').trim()
-    return [{ index, preview: text || (kind === 'event' ? label : 'Attachment'), timestamp: message.timestamp, kind, label, source, sourceId,
+    return [{ index, preview: text || (kind === 'event' ? label : t('Attachment')), timestamp: message.timestamp, kind, label, source, sourceId,
       groupable: kind === 'session' && ['progress', 'acknowledgement'].includes(message.sessionSource?.intent ?? ''),
     }]
   })
   for (const [index, decision] of decisions) {
     markers.push({
-      index, kind: 'decision', label: decisionStatusLabel(decision.status), source: 'Decision',
+      index, kind: 'decision', label: decisionStatusLabel(decision.status), source: t('Decision'),
       status: decision.status, timestamp: decision.timestamp,
-      preview: [decision.question, decision.answer ? `Response: ${decision.answer.option}` : ''].filter(Boolean).join('\n'),
+      preview: [decision.question, decision.answer ? t('Response: {option}', { option: decision.answer.option }) : ''].filter(Boolean).join('\n'),
     })
   }
   const positions = new Map([...after].flatMap(([anchor, decisions]) => decisions.map(([index]) => [index, anchor] as const)))
@@ -112,22 +113,22 @@ export function groupMessageHistoryMarkers(
     const members = [...(previous.members ?? [previous]), marker]
     const sources = new Set(members.map(member => member.sourceId || member.source))
     grouped[grouped.length - 1] = {
-      index: previous.index, kind: 'collaboration', label: 'Internal collaboration', groupable: true,
-      source: `${members.length} messages · ${sources.size} ${sources.size === 1 ? 'session' : 'sessions'}`,
+      index: previous.index, kind: 'collaboration', label: t('Internal collaboration'), groupable: true,
+      source: `${t('{count} messages', { count: members.length }, members.length)} · ${t('{count} sessions', { count: sources.size }, sources.size)}`,
       preview: marker.preview, timestamp: marker.timestamp, members,
     }
   }
   return grouped
 }
 
-export function formatMessageTime(timestamp?: string, now = new Date(), locale?: string): string {
-  if (typeof timestamp !== 'string' || !timestamp) return 'Time unavailable'
+export function formatMessageTime(timestamp?: string, now = new Date(), locale: string = i18n.global.locale.value): string {
+  if (typeof timestamp !== 'string' || !timestamp) return t('Time unavailable')
   const date = new Date(timestamp)
-  if (!Number.isFinite(date.getTime())) return 'Time unavailable'
+  if (!Number.isFinite(date.getTime())) return t('Time unavailable')
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
-  const day = date.toDateString() === now.toDateString() ? 'Today'
-    : date.toDateString() === yesterday.toDateString() ? 'Yesterday'
+  const day = date.toDateString() === now.toDateString() ? t('Today')
+    : date.toDateString() === yesterday.toDateString() ? t('Yesterday')
     : new Intl.DateTimeFormat(locale, {
       month: 'short', day: 'numeric',
       ...(date.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),

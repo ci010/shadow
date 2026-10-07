@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { createUuid } from './uuid.ts'
 
 export interface ImageSource {
@@ -7,15 +8,15 @@ export interface ImageSource {
 
 export function imageSourcePath(headers: Pick<Headers, 'get'>): string {
   const encoded = headers.get('X-Shadow-Source-Path')
-  if (!encoded) throw new Error('The image source is unavailable. Restart Main and reopen the image before attaching it.')
+  if (!encoded) throw new Error(t('The image source is unavailable. Restart Main and reopen the image before attaching it.'))
   let path: string
   try {
     path = decodeURIComponent(encoded)
   } catch {
-    throw new Error('The image source path is invalid. Reopen the image to retry.')
+    throw new Error(t('The image source path is invalid. Reopen the image to retry.'))
   }
   if (!/^(?:[a-z]:[\\/]|\\\\[^\\]+\\[^\\]+|\/)/i.test(path) || path.includes('\0')) {
-    throw new Error('The image source path is invalid. Reopen the image to retry.')
+    throw new Error(t('The image source path is invalid. Reopen the image to retry.'))
   }
   return path
 }
@@ -58,6 +59,6 @@ export function hasImageReference(data: Pick<DataTransfer, 'types'> | null): boo
 export function readImageReference(data: Pick<DataTransfer, 'types' | 'getData'> | null): ImageReference | undefined {
   if (!data || !hasImageReference(data)) return
   const reference = references.get(data.getData(IMAGE_REFERENCE_MIME))
-  if (!reference) throw new Error('This image reference is no longer available. Drag the image again.')
+  if (!reference) throw new Error(t('This image reference is no longer available. Drag the image again.'))
   return reference
 }

@@ -22,10 +22,11 @@
     </div>
     <IoCanvas v-else-if="node.type === 'canvas'" :node="node" />
     <IoMedia v-else-if="node.type === 'media' && node.sourceId && streams?.has(node.sourceId)" :stream="streams.get(node.sourceId)" :label="node.text || node.sourceId" />
-    <p v-else-if="node.type === 'media'">This source is not active.</p>
+    <p v-else-if="node.type === 'media'">{{ t('This source is not active.') }}</p>
   </template>
 </template>
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { reactive, watch } from 'vue'
 import type { IoPacket, IoUiNode } from '../../../../src/io/contracts.ts'
 import IoCanvas from './IoCanvas.vue'

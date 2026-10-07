@@ -17,10 +17,10 @@
         >
           <div class="log-item-main">
             <span class="log-time">{{ entry.time ?? '--:--:--' }}</span>
-            <span class="log-module">{{ entry.module ?? 'system' }}</span>
+            <span class="log-module">{{ entry.module ?? t('system') }}</span>
             <span class="log-summary">{{ entry.summary }}</span>
           </div>
-          <span class="log-tag" :class="entry.kind">{{ entry.kind === 'trace' ? 'trace' : 'log' }}</span>
+          <span class="log-tag" :class="entry.kind">{{ entry.kind === 'trace' ? t('trace') : t('log') }}</span>
         </button>
       </div>
     </div>
@@ -28,6 +28,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, ref } from 'vue'
 
 export type LogEntry = {

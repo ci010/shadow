@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 
 export interface ToolActivityMessage {
@@ -62,7 +63,7 @@ export function parseToolCall(message: ToolActivityMessage): { name: string; arg
       if (isRecord(args)) return { name: match[1], args, raw: JSON.stringify(args, null, 2) }
     } catch { /* Legacy display text is not always JSON. Keep it visible. */ }
   }
-  return { name: message.toolName || match?.[1] || message.content || 'Tool', args: {}, raw: match?.[2] ?? '' }
+  return { name: message.toolName || match?.[1] || message.content || t('Tool'), args: {}, raw: match?.[2] ?? '' }
 }
 
 export function resolveToolCall(message: ToolActivityMessage): ReturnType<typeof parseToolCall> {
@@ -100,8 +101,8 @@ function activity(message: ToolActivityMessage, index: number, result?: ToolActi
   const search = /^(search|grep|rg|glob|find_files)$/.test(name)
   const exec = /^(exec|shell|bash|powershell)$/.test(name)
   const description = typeof args.description === 'string' ? args.description : ''
-  const title = write ? `${args.match !== undefined ? 'Edit' : String(args.flag ?? '').includes('a') ? 'Append' : 'Write'} ${basename || 'file'}`
-    : read ? `View ${basename || 'file'}` : search ? 'Search files' : description || name
+  const title = write ? `${args.match !== undefined ? t('Edit') : String(args.flag ?? '').includes('a') ? t('Append') : t('Write')} ${basename || t('file')}`
+    : read ? t('View {value1}', { value1: basename || t('file') }) : search ? t('Search files') : description || name
   const summary = write || read ? (path === basename ? '' : path)
     : typeof args.command === 'string' ? args.command
     : typeof args.pattern === 'string' ? args.pattern
@@ -163,7 +164,7 @@ export function groupToolActivity(messages: readonly ToolActivityMessage[], excl
       } else if (pairedResults.has(index)) {
         index++
       } else {
-        entries.push({ index, name: message.toolName || 'Tool', title: `${message.toolName || 'Tool'} result`,
+        entries.push({ index, name: message.toolName || t('Tool'), title: t('{tool} result', { tool: message.toolName || t('Tool') }),
           summary: '', arguments: '', result: message.content, icon: 'tool', usage: message.usage, images: message.media,
           failed: /^Error:/i.test(message.content.trimStart()) })
         index++

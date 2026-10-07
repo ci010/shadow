@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -21,18 +22,18 @@ export function privateCredentialTransport(base: string): boolean {
 
 export function parseCredentialResponse(value: unknown, projectId: string): CredentialRequest | null {
   if (!isRecord(value) || Object.keys(value).length !== 1 || !('request' in value)) {
-    throw new Error('Invalid private credential request')
+    throw new Error(t('Invalid private credential request'))
   }
   return value.request === null ? null : parseCredentialRequest(value.request, projectId)
 }
 
 function submissionError(status: number, cancelling: boolean): string {
-  if (status === 401 || status === 403) return 'Only an authorized Project owner can update this credential request.'
-  if (status === 409) return 'This credential request changed or has closed. Reload it before continuing.'
-  if (status === 400 || status === 413) return 'The credential was not accepted. Enter a nonempty value of at most 16,384 characters without line breaks.'
+  if (status === 401 || status === 403) return t('Only an authorized Project owner can update this credential request.')
+  if (status === 409) return t('This credential request changed or has closed. Reload it before continuing.')
+  if (status === 400 || status === 413) return t('The credential was not accepted. Enter a nonempty value of at most 16,384 characters without line breaks.')
   return cancelling
-    ? 'Could not confirm cancellation. Check the connection and reload this request.'
-    : 'Could not confirm the credential save. Check Main and reload this request before trying again.'
+    ? t('Could not confirm cancellation. Check the connection and reload this request.')
+    : t('Could not confirm the credential save. Check Main and reload this request before trying again.')
 }
 
 export function useCredentialRequest(source: () => CredentialRequestSource) {
@@ -80,7 +81,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
         cache: 'no-store', redirect: 'error',
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
       })
-      if (!response.ok) throw new Error('Credential request unavailable')
+      if (!response.ok) throw new Error(t('Credential request unavailable'))
       const next = parseCredentialResponse(await response.json(), source().projectId)
       if (current !== generation || controller.signal.aborted) return
       if (next?.id !== request.value?.id) {
@@ -91,7 +92,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
       if (!writeError) error.value = ''
     } catch {
       if (current === generation && !controller.signal.aborted) {
-        error.value = 'Could not load private credential entry. Check your owner access and connection, then retry.'
+        error.value = t('Could not load private credential entry. Check your owner access and connection, then retry.')
       }
     } finally {
       if (read === controller) { read = undefined; loading.value = false }
@@ -102,7 +103,7 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
     if (!enabled.value || !pending || write) return false
     if (!secure.value) {
       secret.value = ''
-      error.value = 'Private credential entry requires HTTPS or a local loopback connection to Main.'
+      error.value = t('Private credential entry requires HTTPS or a local loopback connection to Main.')
       return false
     }
     if (!cancelling && !valid.value) {
@@ -127,12 +128,12 @@ export function useCredentialRequest(source: () => CredentialRequestSource) {
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
       })
       status = response.status
-      if (!response.ok) throw new Error('Credential operation was not confirmed')
+      if (!response.ok) throw new Error(t('Credential operation was not confirmed'))
       const body: unknown = await response.json()
-      if (!isRecord(body) || Object.keys(body).length !== 1 || !('result' in body)) throw new Error('Invalid credential receipt')
+      if (!isRecord(body) || Object.keys(body).length !== 1 || !('result' in body)) throw new Error(t('Invalid credential receipt'))
       const result = parseCredentialRequestResult(body.result)
       if (result.requestId !== pending.id || result.secretRef !== pending.secretRef
-        || result.status !== (cancelling ? 'cancelled' : 'saved')) throw new Error('Credential receipt mismatch')
+        || result.status !== (cancelling ? 'cancelled' : 'saved')) throw new Error(t('Credential receipt mismatch'))
       if (current !== generation || controller.signal.aborted) return false
       request.value = null
       return true

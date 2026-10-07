@@ -13,7 +13,7 @@
       :label="session.label"
       :ariaLabel="`${session.label}${activityStage(session) === 'waiting' ? ' (needs reply)' : ''}${delegatedLabel(session) ? ` (${delegatedLabel(session)})` : ''}${session.isDirectChat ? '' : ' (read-only)'}`"
       :current="activeSessionId === session.sessionId ? 'page' : undefined"
-      :title="[session.label, session.sessionId, session.description, session.parentSessionId ? `Parent: ${session.parentSessionId}` : session.contextParentSessionId ? `Forked from: ${session.contextParentSessionId}` : ''].filter(Boolean).join('\n')"
+      :title="[session.label, session.sessionId, session.description, session.parentSessionId ? t('Parent: {parentSessionId}', { parentSessionId: session.parentSessionId }) : session.contextParentSessionId ? t('Forked from: {contextParentSessionId}', { contextParentSessionId: session.contextParentSessionId }) : ''].filter(Boolean).join('\n')"
       separate-toggle
       button-class="session-select"
       toggle-class="lineage-toggle"
@@ -24,23 +24,23 @@
     >
       <template #icon><span :class="session.isDirectChat ? 'i-lucide-message-square' : 'i-lucide-bot'" /></template>
       <template #meta><SessionActivity :stage="activityStage(session)" :subagents="delegatedActivity(session)" compact :icon-only="rail" :title="undefined" /></template>
-      <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="`Delete conversation ${session.label}`" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
+      <template #actions><HoverInfo text="Delete conversation" :disabled="!showInfo"><template #default="{ triggerProps }"><button class="session-delete" v-bind="triggerProps" :aria-label="t('Delete conversation {label}', { label: session.label })" @click="$emit('delete', session.sessionId)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button></template></HoverInfo></template>
       <template v-if="showInfo" #info="{ close }">
         <div class="session-info">
           <strong class="session-info-title">{{ session.label }}</strong>
           <p v-if="session.description" class="session-info-description">{{ session.description }}</p>
           <div class="session-info-status">
             <SessionActivity :stage="stages[session.sessionId]" status-icons />
-            <span v-if="!session.isDirectChat" class="session-info-readonly"><span class="i-lucide-lock-keyhole" aria-hidden="true" />Read-only</span>
+            <span v-if="!session.isDirectChat" class="session-info-readonly"><span class="i-lucide-lock-keyhole" aria-hidden="true" />{{ t('Read-only') }}</span>
           </div>
           <div class="session-info-identity">
-            <span class="session-info-key">Session ID</span>
-            <CopyableId class="session-info-id" :value="session.sessionId" label="Session ID" />
+            <span class="session-info-key">{{ t('Session ID') }}</span>
+            <CopyableId class="session-info-id" :value="session.sessionId" :label="t('Session ID')" />
           </div>
           <p v-if="delegatedLabel(session)">{{ delegatedLabel(session) }}</p>
-          <button class="session-info-open" @click="$emit('select', session.sessionId); close()">Open conversation</button>
+          <button class="session-info-open" @click="$emit('select', session.sessionId); close()">{{ t('Open conversation') }}</button>
           <template v-if="descendants(session).length">
-            <h4>Related conversations</h4>
+            <h4>{{ t('Related conversations') }}</h4>
             <FolderSessionList class="session-info-related" :sessions="descendants(session)" :active-session-id="activeSessionId" :collapsed="collapsed"
               :stages="stages" :executions-by-owner="executionsByOwner" :show-info="false" @select="$emit('select', $event); close()" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
           </template>
@@ -51,6 +51,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import { sessionNavigationParent, visibleSessions, type SidebarSession } from '../folders-sidebar.ts'
 import SessionActivity from './SessionActivity.vue'

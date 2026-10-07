@@ -1,4 +1,5 @@
 import type { IoSource } from '../../../src/io/contracts.ts'
+import { t } from '../i18n.ts'
 
 let restricted = false
 export const MOBILE_CAPTURE_UNAVAILABLE = 'Camera, microphone, and screen capture are not supported by this mobile client. Use the browser or desktop app, or upload an existing file.'
@@ -12,5 +13,5 @@ export function installMobileCaptureRestriction() {
 export function mobileCaptureRestricted(): boolean { return restricted }
 export function mobileCaptureIssue(sources: readonly Pick<IoSource, 'kind'>[]): string | undefined {
   return restricted && sources.some(source => source.kind === 'microphone' || source.kind === 'camera' || source.kind === 'screen')
-    ? MOBILE_CAPTURE_UNAVAILABLE : undefined
+    ? t(MOBILE_CAPTURE_UNAVAILABLE) : undefined
 }

@@ -1,25 +1,25 @@
 <template>
-  <nav class="segment-nav" aria-label="Conversation segments" :aria-busy="busy">
-    <span class="segment-position" role="status">{{ historical ? 'Viewing previous session' : 'Current session' }}</span>
-    <HoverInfo :text="historical ? 'View older session' : 'View previous session'">
+  <nav class="segment-nav" :aria-label="t('Conversation segments')" :aria-busy="busy">
+    <span class="segment-position" role="status">{{ historical ? t('Viewing previous session') : t('Current session') }}</span>
+    <HoverInfo :text="historical ? t('View older session') : t('View previous session')">
       <template #default="{ triggerProps }">
-        <button v-bind="triggerProps" type="button" class="segment-nav-btn" aria-label="View previous session"
+        <button v-bind="triggerProps" type="button" class="segment-nav-btn" :aria-label="t('View previous session')"
           :disabled="busy || !hasPrevious" @click="$emit('previous')">
           <svg viewBox="0 0 24 20" aria-hidden="true"><path d="m6 5-5 5 5 5M1 10h5m14 0h3" /><circle cx="13" cy="10" r="6" /></svg>
         </button>
       </template>
     </HoverInfo>
-    <HoverInfo :text="historical ? 'Back to current session' : 'Current session'">
+    <HoverInfo :text="historical ? t('Back to current session') : t('Current session')">
       <template #default="{ triggerProps }">
         <button v-bind="triggerProps" type="button" class="segment-nav-btn" :class="{ 'is-current': !historical }"
-          aria-label="Back to current session" :disabled="busy || !historical" @click="$emit('current')">
+          :aria-label="t('Back to current session')" :disabled="busy || !historical" @click="$emit('current')">
           <svg viewBox="0 0 24 20" aria-hidden="true"><path d="M1 10h5m12 0h5" /><circle cx="12" cy="10" r="6" /></svg>
         </button>
       </template>
     </HoverInfo>
     <HoverInfo text="View next session">
       <template #default="{ triggerProps }">
-        <button v-bind="triggerProps" type="button" class="segment-nav-btn" aria-label="View next session"
+        <button v-bind="triggerProps" type="button" class="segment-nav-btn" :aria-label="t('View next session')"
           :disabled="busy || !historical" @click="$emit('next')">
           <svg viewBox="0 0 24 20" aria-hidden="true"><path d="m18 5 5 5-5 5m0-5h5M1 10h3" /><circle cx="11" cy="10" r="6" /></svg>
         </button>
@@ -29,6 +29,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import HoverInfo from './HoverInfo.vue'
 defineProps<{ hasPrevious: boolean; historical: boolean; busy: boolean }>()
 defineEmits<{ previous: []; next: []; current: [] }>()

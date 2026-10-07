@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { AutomationRequestError, fetchAutomationRuns, type AutomationRunSummary } from './automations.ts'
 import { createLiveRefresh } from './live-refresh.ts'
 
@@ -53,7 +54,7 @@ export function createAutomationRunHistory(
     },
     onError: cause => {
       state.loading = refreshRequested
-      state.error = cause instanceof AutomationRequestError ? cause.message : 'Runs could not be loaded. Check Main and retry.'
+      state.error = cause instanceof AutomationRequestError ? cause.message : t('Runs could not be loaded. Check Main and retry.')
     },
   })
   function refresh() {

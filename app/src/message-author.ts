@@ -1,3 +1,5 @@
+import { t } from './i18n.ts'
+import { enumLabel } from './display-labels.ts'
 import { isRecord } from './folders-sidebar.ts'
 
 interface AuthorMessage {
@@ -52,18 +54,18 @@ export function parseSessionMessage(message: unknown) {
 
 export function sessionMessageTitle(source: SessionMessageSource): string {
   const labels: Record<string, string> = {
-    request: 'Session request', question: 'Session question', progress: 'Session progress',
-    handoff: 'Session handoff', acknowledgement: 'Session acknowledgement',
+    request: t('Session request'), question: t('Session question'), progress: t('Session progress'),
+    handoff: t('Session handoff'), acknowledgement: t('Session acknowledgement'),
   }
-  return source.intent && Object.hasOwn(labels, source.intent) ? labels[source.intent] : 'Session message'
+  return source.intent && Object.hasOwn(labels, source.intent) ? labels[source.intent] : t('Session message')
 }
 
 export function messageRoleLabel(message: unknown): string {
   const session = parseSessionMessage(message)
   if (session) return sessionMessageTitle(session.sessionSource)
-  if (messageEnvelope(message)?.tag === 'event') return 'System event'
-  if (isRecord(message) && message.role === 'user' && message.name === '__compaction_summary__') return 'Context summary'
-  return isRecord(message) && typeof message.role === 'string' ? message.role : 'Unknown role'
+  if (messageEnvelope(message)?.tag === 'event') return t('System event')
+  if (isRecord(message) && message.role === 'user' && message.name === '__compaction_summary__') return t('Context summary')
+  return isRecord(message) && typeof message.role === 'string' ? enumLabel(message.role) : t('Unknown role')
 }
 
 function sender(message: AuthorMessage) {
@@ -75,7 +77,7 @@ function sender(message: AuthorMessage) {
   if (attrs.source === 'session') return undefined
   const id = attrs.id?.trim()
   const name = (typeof message.name === 'string' ? message.name.trim() : '')
-    || attrs.name?.trim() || id || 'Unknown sender'
+    || attrs.name?.trim() || id || t('Unknown sender')
   return { id, name, chat: attrs.chat }
 }
 

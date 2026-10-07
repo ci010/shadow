@@ -1,34 +1,35 @@
 <template>
   <form class="model-defaults-form" @submit.prevent="save" @input="notice = ''" @change="notice = ''">
-    <h2>Model defaults</h2>
-    <p class="settings-help">Leave a setting unset to follow {{ parentLabel }}. Explicit project and conversation choices take priority. Changes apply to the next turn, not a running response.</p>
-    <p v-if="loading" role="status">Loading model defaults...</p>
-    <p v-if="error" class="settings-error" role="alert">{{ error }} <button type="button" class="btn btn-sm" :disabled="loading || saving" @click="load">Reload defaults</button></p>
+    <h2>{{ t('Model defaults') }}</h2>
+    <p class="settings-help">{{ t('Leave a setting unset to follow') }} {{ parentLabel }}{{ t('. Explicit project and conversation choices take priority. Changes apply to the next turn, not a running response.') }}</p>
+    <p v-if="loading" role="status">{{ t('Loading model defaults...') }}</p>
+    <p v-if="error" class="settings-error" role="alert">{{ error }} <button type="button" class="btn btn-sm" :disabled="loading || saving" @click="load">{{ t('Reload defaults') }}</button></p>
     <fieldset :disabled="loading || saving || !state">
-      <label class="settings-field">Default model
-        <input v-model="model" :list="`${id}-models`" :placeholder="`Follow ${parentLabel}: ${state?.inherited.model ?? ''}`" />
+      <label class="settings-field">{{ t('Default model') }}
+        <input v-model="model" :list="`${id}-models`" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.model ?? '' })" />
       </label>
       <datalist :id="`${id}-models`"><option v-for="option in models" :key="option" :value="option" /></datalist>
       <p v-if="modelsError" class="settings-error" role="alert">{{ modelsError }}</p>
-      <label class="settings-field">Default effort
+      <label class="settings-field">{{ t('Default effort') }}
         <select v-model="effort">
-          <option v-for="option in effortOptionsForModel(model || state?.inherited.model || '')" :key="option.value" :value="option.value">{{ option.value === 'default' ? `Follow ${parentLabel} · ${inheritedEffort}` : option.label }}</option>
+          <option v-for="option in effortOptionsForModel(model || state?.inherited.model || '')" :key="option.value" :value="option.value">{{ option.value === 'default' ? t('Follow {parentLabel} · {inheritedEffort}', { parentLabel: parentLabel, inheritedEffort: inheritedEffort }) : option.label }}</option>
         </select>
       </label>
-      <label class="settings-field">Temperature
-        <input v-model="temperature" type="number" step="0.1" :placeholder="`Follow ${parentLabel}: ${state?.inherited.temperature ?? ''}`" />
+      <label class="settings-field">{{ t('Temperature') }}
+        <input v-model="temperature" type="number" step="0.1" :placeholder="t('Follow {parentLabel}: {value2}', { parentLabel: parentLabel, value2: state?.inherited.temperature ?? '' })" />
       </label>
       <div class="settings-actions">
-        <button class="btn save-defaults" type="submit">{{ saving ? 'Saving...' : 'Save model defaults' }}</button>
-        <button class="btn" type="button" @click="model = ''; effort = 'default'; temperature = ''; notice = ''">Use inherited values</button>
+        <button class="btn save-defaults" type="submit">{{ saving ? t('Saving...') : t('Save model defaults') }}</button>
+        <button class="btn" type="button" @click="model = ''; effort = 'default'; temperature = ''; notice = ''">{{ t('Use inherited values') }}</button>
       </div>
     </fieldset>
-    <p v-if="state" class="settings-help">Effective now: {{ state.model }} · {{ currentEffort(state) }} effort.</p>
+    <p v-if="state" class="settings-help">{{ t('Effective now:') }} {{ state.model }} · {{ currentEffort(state) }} {{ t('effort.') }}</p>
     <p v-if="notice" class="settings-help" role="status">{{ notice }}</p>
   </form>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, useId } from 'vue'
 import { createModelDefaultsClient, type ModelDefaultsState } from '../model-defaults.ts'
 import { createProjectSettingsClient } from '../project-settings.ts'
@@ -36,7 +37,7 @@ import { currentEffort, effortOptionsForModel, reasoningSettingsForEffort, type 
 
 const props = defineProps<{ apiBase: string; scope: 'app' | 'project'; projectId?: string }>()
 const id = useId()
-const parentLabel = computed(() => props.scope === 'app' ? 'built-in defaults' : 'App defaults')
+const parentLabel = computed(() => props.scope === 'app' ? t('built-in defaults') : t('App defaults'))
 const state = ref<ModelDefaultsState>()
 const model = ref('')
 const effort = ref<EffortChoice>('default')
@@ -63,9 +64,9 @@ async function load() {
   error.value = modelsError.value = notice.value = ''
   await Promise.all([
     client.load(controller.signal).then(value => { if (!controller.signal.aborted) accept(value) })
-      .catch(cause => { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load defaults.' }),
+      .catch(cause => { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load defaults.') }),
     createProjectSettingsClient(props.apiBase).models(controller.signal).then(value => { if (!controller.signal.aborted) models.value = value })
-      .catch(cause => { if (!controller.signal.aborted) modelsError.value = cause instanceof Error ? cause.message : 'Could not load model choices.' }),
+      .catch(cause => { if (!controller.signal.aborted) modelsError.value = cause instanceof Error ? cause.message : t('Could not load model choices.') }),
   ])
   if (request === controller) loading.value = false
 }
@@ -76,16 +77,16 @@ async function save() {
   error.value = notice.value = ''
   try {
     const value = temperature.value === '' ? null : Number(temperature.value)
-    if (value !== null && !Number.isFinite(value)) throw new Error('Enter a valid temperature or leave it empty.')
+    if (value !== null && !Number.isFinite(value)) throw new Error(t('Enter a valid temperature or leave it empty.'))
     const result = await client.save({
       model: model.value.trim() || null, temperature: value, ...reasoningSettingsForEffort(effort.value),
     }, controller.signal)
     if (controller.signal.aborted) return
     accept(result)
-    notice.value = props.scope === 'app' ? 'App defaults saved.' : 'Project defaults saved.'
+    notice.value = props.scope === 'app' ? t('App defaults saved.') : t('Project defaults saved.')
     window.dispatchEvent(new CustomEvent('shadow:config-changed', { detail: { projectId: props.projectId } }))
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not save defaults. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not save defaults. Retry.')
   } finally { if (request === controller) saving.value = false }
 }
 onMounted(load)

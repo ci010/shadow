@@ -1,17 +1,18 @@
 <template>
-  <article class="command-result" :class="{ 'command-failed': receipt.failed }" :data-command-id="receipt.id" aria-label="Command result">
+  <article class="command-result" :class="{ 'command-failed': receipt.failed }" :data-command-id="receipt.id" :aria-label="t('Command result')">
     <header class="command-header">
       <code>{{ receipt.command }}</code>
       <MessageTimestamp :timestamp="receipt.timestamp" />
     </header>
-    <p class="command-caption">{{ receipt.failed ? 'Command error' : 'Command result' }} · Not sent to AI</p>
-    <div class="command-output" tabindex="0" role="region" aria-label="Command output">
+    <p class="command-caption">{{ receipt.failed ? t('Command error') : t('Command result') }} {{ t('· Not sent to AI') }}</p>
+    <div class="command-output" tabindex="0" role="region" :aria-label="t('Command output')">
       <slot />
     </div>
   </article>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import type { CommandReceipt } from '../../../src/slash-commands/receipt.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 defineProps<{ receipt: CommandReceipt }>()

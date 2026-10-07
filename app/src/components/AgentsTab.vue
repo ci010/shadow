@@ -1,27 +1,27 @@
 <template>
-  <section class="agent-browser" aria-label="Agent types">
+  <section class="agent-browser" :aria-label="t('Agent types')">
     <div class="agent-browser-layout" :class="{ 'show-detail': showDetail && requestedAgent }">
-      <aside ref="navigation" class="agent-navigation" aria-label="Agent type navigation">
+      <aside ref="navigation" class="agent-navigation" :aria-label="t('Agent type navigation')">
         <header class="catalog-header">
-          <h2>Agent types <span class="catalog-count">{{ agentTypes.length }}</span></h2>
+          <h2>{{ t('Agent types') }} <span class="catalog-count">{{ agentTypes.length }}</span></h2>
           <label class="agent-search">
             <span class="i-lucide-search" aria-hidden="true" />
-            <input v-model="agentQuery" type="search" aria-label="Search agent types" placeholder="Search types" autocomplete="off" />
+            <input v-model="agentQuery" type="search" :aria-label="t('Search agent types')" :placeholder="t('Search types')" autocomplete="off" />
           </label>
         </header>
         <div class="agent-list">
           <div v-if="listError" class="agent-error" role="alert">
-            <p>{{ listError }}</p><button type="button" class="text-action" @click="loadAgentTypes">Retry catalog</button>
+            <p>{{ listError }}</p><button type="button" class="text-action" @click="loadAgentTypes">{{ t('Retry catalog') }}</button>
           </div>
-          <p v-else-if="loadingList" class="agent-note" role="status">Loading agent types...</p>
-          <p v-else-if="!agentTypes.length" class="agent-note">No agent types available.</p>
-          <p v-else-if="!filteredGroups.length" class="agent-note" role="status">No matching agent types.</p>
+          <p v-else-if="loadingList" class="agent-note" role="status">{{ t('Loading agent types...') }}</p>
+          <p v-else-if="!agentTypes.length" class="agent-note">{{ t('No agent types available.') }}</p>
+          <p v-else-if="!filteredGroups.length" class="agent-note" role="status">{{ t('No matching agent types.') }}</p>
           <section v-for="group in filteredGroups" :key="group.source" class="agent-group" :aria-labelledby="`${id}-${group.source}`">
             <h3 :id="`${id}-${group.source}`">{{ group.label }}</h3>
             <button v-for="agent in group.agents" :key="agent.name" type="button" class="agent-item"
               :class="{ active: requestedAgent?.name === agent.name }" :aria-pressed="requestedAgent?.name === agent.name"
               :data-agent-name="agent.name" @click="selectAgent(agent)">
-              <span class="agent-item-top"><span class="agent-name">{{ agent.name }}</span><span class="agent-mode">{{ agent.defaultMode ?? 'session' }}</span></span>
+              <span class="agent-item-top"><span class="agent-name">{{ agent.name }}</span><span class="agent-mode">{{ enumLabel(agent.defaultMode ?? t('session')) }}</span></span>
               <span class="agent-desc">{{ agent.description }}</span>
             </button>
           </section>
@@ -31,11 +31,11 @@
       <div ref="detail" class="agent-detail">
         <template v-if="requestedAgent">
           <header class="agent-heading">
-            <button type="button" class="agent-back text-action" @click="backToTypes"><span class="i-lucide-arrow-left" aria-hidden="true" />Agent types</button>
+            <button type="button" class="agent-back text-action" @click="backToTypes"><span class="i-lucide-arrow-left" aria-hidden="true" />{{ t('Agent types') }}</button>
             <h2 ref="heading" tabindex="-1">{{ requestedAgent.name }}</h2>
             <p>{{ requestedAgent.description }}</p>
           </header>
-          <div ref="tablist" class="agent-tabs" role="tablist" aria-label="Agent details">
+          <div ref="tablist" class="agent-tabs" role="tablist" :aria-label="t('Agent details')">
             <button v-for="(tab, index) in views" :id="`${id}-${tab.id}-tab`" :key="tab.id" type="button" role="tab"
               :aria-controls="`${id}-${tab.id}-panel`" :aria-selected="activeTab === tab.id" :tabindex="activeTab === tab.id ? 0 : -1"
               @click="activeTab = tab.id" @keydown="tabKeydown($event, index)">
@@ -46,75 +46,77 @@
           <div class="agent-content">
             <section v-show="activeTab === 'overview'" :id="`${id}-overview-panel`" class="agent-overview" role="tabpanel" :aria-labelledby="`${id}-overview-tab`" tabindex="0">
               <section class="overview-section">
-                <h3>Definition</h3>
+                <h3>{{ t('Definition') }}</h3>
                 <dl class="agent-facts">
-                  <div><dt>Source</dt><dd>{{ requestedAgent.source === 'builtin' ? 'Built-in' : 'Workspace' }}</dd></div>
-                  <div><dt>Default mode</dt><dd>{{ requestedAgent.defaultMode ?? 'session' }}</dd></div>
+                  <div><dt>{{ t('Source') }}</dt><dd>{{ requestedAgent.source === 'builtin' ? t('Built-in') : t('Workspace') }}</dd></div>
+                  <div><dt>{{ t('Default mode') }}</dt><dd>{{ enumLabel(requestedAgent.defaultMode ?? t('session')) }}</dd></div>
                 </dl>
               </section>
               <section v-if="hasModelOverrides" class="overview-section">
-                <h3>Model overrides</h3>
+                <h3>{{ t('Model overrides') }}</h3>
                 <dl class="agent-facts">
-                  <div v-if="requestedAgent.model"><dt>Model</dt><dd><code>{{ requestedAgent.model }}</code></dd></div>
-                  <div v-if="requestedAgent.temperature != null"><dt>Temperature</dt><dd>{{ requestedAgent.temperature }}</dd></div>
-                  <div v-if="requestedAgent.maxTokens != null"><dt>Max tokens</dt><dd>{{ requestedAgent.maxTokens }}</dd></div>
+                  <div v-if="requestedAgent.model"><dt>{{ t('Model') }}</dt><dd><code>{{ requestedAgent.model }}</code></dd></div>
+                  <div v-if="requestedAgent.temperature != null"><dt>{{ t('Temperature') }}</dt><dd>{{ requestedAgent.temperature }}</dd></div>
+                  <div v-if="requestedAgent.maxTokens != null"><dt>{{ t('Max tokens') }}</dt><dd>{{ requestedAgent.maxTokens }}</dd></div>
                 </dl>
-                <p class="agent-note">Only explicit role overrides are shown. Unset preferences inherit their defaults.</p>
+                <p class="agent-note">{{ t('Only explicit role overrides are shown. Unset preferences inherit their defaults.') }}</p>
               </section>
               <section class="overview-section">
-                <h3>Tool filters</h3>
+                <h3>{{ t('Tool filters') }}</h3>
                 <dl v-if="requestedAgent.allowedTools !== undefined || requestedAgent.blockedTools !== undefined" class="tool-policies">
-                  <div v-if="requestedAgent.allowedTools !== undefined"><dt>Allowlist</dt><dd><code v-for="tool in requestedAgent.allowedTools" :key="tool">{{ tool }}</code><span v-if="!requestedAgent.allowedTools.length">None listed</span></dd></div>
-                  <div v-if="requestedAgent.blockedTools !== undefined"><dt>Blocklist</dt><dd><code v-for="tool in requestedAgent.blockedTools" :key="tool">{{ tool }}</code><span v-if="!requestedAgent.blockedTools.length">None listed</span></dd></div>
+                  <div v-if="requestedAgent.allowedTools !== undefined"><dt>{{ t('Allowlist') }}</dt><dd><code v-for="tool in requestedAgent.allowedTools" :key="tool">{{ tool }}</code><span v-if="!requestedAgent.allowedTools.length">{{ t('None listed') }}</span></dd></div>
+                  <div v-if="requestedAgent.blockedTools !== undefined"><dt>{{ t('Blocklist') }}</dt><dd><code v-for="tool in requestedAgent.blockedTools" :key="tool">{{ tool }}</code><span v-if="!requestedAgent.blockedTools.length">{{ t('None listed') }}</span></dd></div>
                 </dl>
-                <p v-else class="agent-note">No allowlist or blocklist declared.</p>
-                <p class="agent-note">These are definition filters, not an existing conversation's permissions. Inspect Tools for the resolved preview.</p>
+                <p v-else class="agent-note">{{ t('No allowlist or blocklist declared.') }}</p>
+                <p class="agent-note">{{ t('These are definition filters, not an existing conversation\'s permissions. Inspect Tools for the resolved preview.') }}</p>
               </section>
               <section class="overview-section preview-links">
-                <h3>Inspect the preview</h3>
-                <p class="agent-note">See the tools and assembled system prompt for a selected channel.</p>
-                <div><button type="button" class="text-action" @click="openView('tools')">View tools<span class="i-lucide-arrow-right" aria-hidden="true" /></button><button type="button" class="text-action" @click="openView('prompt')">Read system prompt<span class="i-lucide-arrow-right" aria-hidden="true" /></button></div>
+                <h3>{{ t('Inspect the preview') }}</h3>
+                <p class="agent-note">{{ t('See the tools and assembled system prompt for a selected channel.') }}</p>
+                <div><button type="button" class="text-action" @click="openView('tools')">{{ t('View tools') }}<span class="i-lucide-arrow-right" aria-hidden="true" /></button><button type="button" class="text-action" @click="openView('prompt')">{{ t('Read system prompt') }}<span class="i-lucide-arrow-right" aria-hidden="true" /></button></div>
               </section>
             </section>
 
             <template v-if="activeTab !== 'overview'">
               <div class="preview-toolbar">
-                <label class="preview-channel">Preview channel<select v-model="channel" aria-label="Preview channel"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></select></label>
-                <div v-if="activeTab === 'prompt'" class="prompt-format" role="group" aria-label="System prompt format">
-                  <button type="button" :aria-pressed="!rawPrompt" @click="rawPrompt = false">Read</button><button type="button" :aria-pressed="rawPrompt" @click="rawPrompt = true">Raw</button>
+                <label class="preview-channel">{{ t('Preview channel') }}<select v-model="channel" :aria-label="t('Preview channel')"><option v-for="ch in channels" :key="ch" :value="ch">{{ ch }}</option></select></label>
+                <div v-if="activeTab === 'prompt'" class="prompt-format" role="group" :aria-label="t('System prompt format')">
+                  <button type="button" :aria-pressed="!rawPrompt" @click="rawPrompt = false">{{ t('Read') }}</button><button type="button" :aria-pressed="rawPrompt" @click="rawPrompt = true">{{ t('Raw') }}</button>
                 </div>
                 <button type="button" class="preview-copy" :disabled="copyBusy || !contextMatchesSelection || loadingContext || !!contextError || activeTab === 'tools' && !resolvedTools.length || activeTab === 'prompt' && !renderedSystemPrompt" @click="copy">
-                  <span :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />{{ copied ? 'Copied' : activeTab === 'tools' ? 'Copy JSON' : 'Copy prompt' }}
+                  <span :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />{{ copied ? t('Copied') : activeTab === 'tools' ? t('Copy JSON') : t('Copy prompt') }}
                 </button>
               </div>
-              <p v-if="loadingContext" class="agent-note" role="status">Loading {{ requestedAgent.name }} preview for {{ channel }}...</p>
-              <div v-if="contextError" class="agent-error" role="alert"><p>{{ contextError }}</p><button type="button" class="text-action" @click="retryContext">Retry preview</button></div>
-              <p v-if="selected && (loadingContext || contextError || !contextMatchesSelection)" class="previous-context" role="status">Showing the previous preview: <strong>{{ selected.name }}</strong> / {{ resolvedChannel }}. The requested preview is not available yet.</p>
+              <p v-if="loadingContext" class="agent-note" role="status">{{ t('Loading') }} {{ requestedAgent.name }} {{ t('preview for') }} {{ channel }}...</p>
+              <div v-if="contextError" class="agent-error" role="alert"><p>{{ contextError }}</p><button type="button" class="text-action" @click="retryContext">{{ t('Retry preview') }}</button></div>
+              <p v-if="selected && (loadingContext || contextError || !contextMatchesSelection)" class="previous-context" role="status">{{ t('Showing the previous preview:') }} <strong>{{ selected.name }}</strong> / {{ resolvedChannel }}{{ t('. The requested preview is not available yet.') }}</p>
               <p v-if="copyError" class="agent-error" role="alert">{{ copyError }}</p>
-              <p v-if="copied" class="copy-feedback" role="status">{{ activeTab === 'tools' ? 'Tools JSON copied.' : 'System prompt copied.' }}</p>
+              <p v-if="copied" class="copy-feedback" role="status">{{ activeTab === 'tools' ? t('Tools JSON copied.') : t('System prompt copied.') }}</p>
             </template>
             <section v-show="activeTab === 'tools'" :id="`${id}-tools-panel`" role="tabpanel" :aria-labelledby="`${id}-tools-tab`" :aria-busy="loadingContext" tabindex="0">
               <template v-if="activeTab === 'tools' && selected">
-                <label class="agent-search tool-search"><span class="i-lucide-search" aria-hidden="true" /><input v-model="toolQuery" type="search" aria-label="Search tools" placeholder="Search tools" autocomplete="off" /></label>
-                <ToolsCard :key="contextKey" :tools="filteredTools" embedded :empty-message="toolQuery.trim() ? 'No matching tools.' : 'No tools available.'" />
+                <label class="agent-search tool-search"><span class="i-lucide-search" aria-hidden="true" /><input v-model="toolQuery" type="search" :aria-label="t('Search tools')" :placeholder="t('Search tools')" autocomplete="off" /></label>
+                <ToolsCard :key="contextKey" :tools="filteredTools" embedded :empty-message="toolQuery.trim() ? t('No matching tools.') : t('No tools available.')" />
               </template>
             </section>
             <section v-show="activeTab === 'prompt'" :id="`${id}-prompt-panel`" role="tabpanel" :aria-labelledby="`${id}-prompt-tab`" :aria-busy="loadingContext" tabindex="0">
               <template v-if="activeTab === 'prompt' && selected">
-                <p v-if="renderedSystemPrompt" class="prompt-estimate">Approx. {{ Math.round(renderedSystemPrompt.length / 4).toLocaleString() }} tokens</p>
+                <p v-if="renderedSystemPrompt" class="prompt-estimate">{{ t('Approx.') }} {{ formatNumber(Math.round(renderedSystemPrompt.length / 4)) }} {{ t('tokens') }}</p>
                 <SystemPromptCard :key="contextKey" :prompt="renderedSystemPrompt" embedded :raw="rawPrompt" empty-message="No system prompt." />
               </template>
             </section>
-            <p v-if="activeTab !== 'overview' && selected" class="preview-scope">Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.</p>
+            <p v-if="activeTab !== 'overview' && selected" class="preview-scope">{{ t('Preview only. Conversation history, configuration, bot policy and Work bindings are not inherited.') }}</p>
           </div>
         </template>
-        <p v-else class="agent-empty">{{ loadingList ? 'Loading agent types...' : 'Select an agent type to inspect.' }}</p>
+        <p v-else class="agent-empty">{{ loadingList ? t('Loading agent types...') : t('Select an agent type to inspect.') }}</p>
       </div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t, formatNumber } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { apiUrl } from '../api-url.ts'
@@ -127,7 +129,7 @@ const props = defineProps<{ apiBase: string }>()
 const route = useRoute()
 const router = useRouter()
 const id = `agents-${useId()}`
-const views = [{ id: 'overview', label: 'Overview' }, { id: 'tools', label: 'Tools' }, { id: 'prompt', label: 'System prompt' }] as const
+const views = [{ id: 'overview', get label() { return t('Overview') } }, { id: 'tools', get label() { return t('Tools') } }, { id: 'prompt', get label() { return t('System prompt') } }] as const
 type AgentView = typeof views[number]['id']
 const activeTab = ref<AgentView>('overview')
 const agentQuery = ref('')
@@ -161,7 +163,7 @@ const hasModelOverrides = computed(() => !!requestedAgent.value?.model || reques
 const filteredGroups = computed(() => {
   const query = agentQuery.value.trim().toLowerCase()
   const matches = agentTypes.value.filter(agent => `${agent.name} ${agent.description}`.toLowerCase().includes(query))
-  return ([{ source: 'builtin', label: 'Built-in' }, { source: 'workspace', label: 'Workspace' }] as const)
+  return ([{ source: 'builtin', label: t('Built-in') }, { source: 'workspace', label: t('Workspace') }] as const)
     .map(group => ({ ...group, agents: matches.filter(agent => agent.source === group.source) })).filter(group => group.agents.length)
 })
 const filteredTools = computed(() => {
@@ -178,14 +180,14 @@ async function loadAgentTypes() {
   listError.value = ''
   try {
     const response = await fetch(buildUrl('/debug/agent-types'), { signal: request.signal })
-    if (!response.ok) throw new Error(`Failed to load agent types (${response.status}).`)
+    if (!response.ok) throw new Error(t('Failed to load agent types ({status}).', { status: response.status }))
     const data = parseAgentTypes(await response.json())
     if (request.signal.aborted) return
     agentTypes.value = data
     if (requestedAgent.value && route.params.agentName !== requestedAgent.value.name) selectAgent(requestedAgent.value, false)
   } catch (cause) {
     if (!request.signal.aborted) {
-      listError.value = cause instanceof Error ? cause.message : 'Failed to load agent types.'
+      listError.value = cause instanceof Error ? cause.message : t('Failed to load agent types.')
       console.error('Failed to load agent types:', cause)
     }
   } finally { if (!request.signal.aborted) loadingList.value = false }
@@ -198,7 +200,7 @@ async function loadContext(agent: AgentTypeMeta) {
   contextError.value = ''
   try {
     const response = await fetch(buildUrl(`/debug/agent-types/${encodeURIComponent(agent.name)}/context`, { channel: previewChannel }), { signal: request.signal })
-    if (!response.ok) throw new Error(`Failed to load ${agent.name} context (${response.status}).`)
+    if (!response.ok) throw new Error(t('Failed to load {name} context ({status}).', { name: agent.name, status: response.status }))
     const data = parseAgentContext(await response.json())
     if (request.signal.aborted) return
     selected.value = agent
@@ -207,7 +209,7 @@ async function loadContext(agent: AgentTypeMeta) {
     resolvedTools.value = data.tools
   } catch (cause) {
     if (!request.signal.aborted) {
-      contextError.value = cause instanceof Error ? cause.message : `Failed to load ${agent.name} context.`
+      contextError.value = cause instanceof Error ? cause.message : t('Failed to load {name} context.', { name: agent.name })
       console.error('Failed to load agent context:', cause)
     }
   } finally { if (!request.signal.aborted) loadingContext.value = false }

@@ -1,30 +1,31 @@
 <template>
   <section class="learning-runtime" :aria-labelledby="headingId">
-    <h3 :id="headingId">Runtime status</h3>
-    <p v-if="loading && !status" role="status">Loading learning status...</p>
+    <h3 :id="headingId">{{ t('Runtime status') }}</h3>
+    <p v-if="loading && !status" role="status">{{ t('Loading learning status...') }}</p>
     <div v-if="error" class="learning-error" role="alert">
       <p>{{ error }}</p>
-      <button type="button" class="btn btn-sm" :disabled="loading" @click="refresh">Retry learning status</button>
+      <button type="button" class="btn btn-sm" :disabled="loading" @click="refresh">{{ t('Retry learning status') }}</button>
     </div>
     <template v-if="status">
-      <p>{{ status.stopped ? 'Learning service stopped.' : status.enabled ? 'Automatic learning is enabled.' : 'Automatic learning is paused.' }}</p>
+      <p>{{ status.stopped ? t('Learning service stopped.') : status.enabled ? t('Automatic learning is enabled.') : t('Automatic learning is paused.') }}</p>
       <dl class="learning-pipelines">
         <div v-for="pipeline in learningPipelines" :key="pipeline.id" class="learning-pipeline">
           <dt>{{ pipeline.label }}</dt>
           <dd>
             <span>{{ learningPipelineState(status, status.pipelines[pipeline.id]) }}</span>
-            <span v-if="status.pipelines[pipeline.id].lastCheckedAt">Last checked: <time :datetime="status.pipelines[pipeline.id].lastCheckedAt">{{ formatTime(status.pipelines[pipeline.id].lastCheckedAt) }}</time></span>
-            <span v-if="status.pipelines[pipeline.id].lastDispatchedAt">Last launch accepted: <time :datetime="status.pipelines[pipeline.id].lastDispatchedAt">{{ formatTime(status.pipelines[pipeline.id].lastDispatchedAt) }}</time></span>
-            <span v-if="status.pipelines[pipeline.id].lastError" class="learning-error">Last error: {{ status.pipelines[pipeline.id].lastError }}</span>
+            <span v-if="status.pipelines[pipeline.id].lastCheckedAt">{{ t('Last checked:') }} <time :datetime="status.pipelines[pipeline.id].lastCheckedAt">{{ formatTime(status.pipelines[pipeline.id].lastCheckedAt) }}</time></span>
+            <span v-if="status.pipelines[pipeline.id].lastDispatchedAt">{{ t('Last launch accepted:') }} <time :datetime="status.pipelines[pipeline.id].lastDispatchedAt">{{ formatTime(status.pipelines[pipeline.id].lastDispatchedAt) }}</time></span>
+            <span v-if="status.pipelines[pipeline.id].lastError" class="learning-error">{{ t('Last error:') }} {{ status.pipelines[pipeline.id].lastError }}</span>
           </dd>
         </div>
       </dl>
-      <p class="learning-help">Launch acceptance is not task completion. Open Self-reflection conversations to follow the resulting work.</p>
+      <p class="learning-help">{{ t('Launch acceptance is not task completion. Open Self-reflection conversations to follow the resulting work.') }}</p>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from '../i18n.ts'
 import { onUnmounted, ref, useId, watch } from 'vue'
 import { fetchLearningStatus, learningPipelines, learningPipelineState, type LearningStatus } from '../learning-settings.ts'
 
@@ -36,7 +37,7 @@ const error = ref('')
 let request: AbortController | undefined
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
-const formatTime = (value?: string) => value ? new Date(value).toLocaleString() : ''
+const formatTime = (value?: string) => value ? formatDateTime(new Date(value)) : ''
 function stop() {
   clearTimeout(timer)
   request?.abort()
@@ -56,7 +57,7 @@ async function refresh() {
   } catch (cause) {
     if (!controller.signal.aborted) {
       status.value = undefined
-      error.value = cause instanceof Error ? cause.message : 'Could not load learning status. Retry.'
+      error.value = cause instanceof Error ? cause.message : t('Could not load learning status. Retry.')
     }
   } finally {
     if (request === controller) {

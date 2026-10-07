@@ -1,9 +1,9 @@
 <template>
   <div class="settings-view">
-    <header class="settings-heading"><h1>App settings</h1><p>Provider connections and web search settings are shared across Projects. Model defaults can be overridden by Projects and conversations.</p></header>
-    <p v-if="!available" role="status">Settings are managed by Main administrators.</p>
+    <header class="settings-heading"><h1>{{ t('App settings') }}</h1><p>{{ t('Provider connections and web search settings are shared across Projects. Model defaults can be overridden by Projects and conversations.') }}</p></header>
+    <p v-if="!available" role="status">{{ t('Settings are managed by Main administrators.') }}</p>
     <div v-else class="settings-layout">
-      <nav class="settings-navigation" aria-label="Settings sections">
+      <nav class="settings-navigation" :aria-label="t('Settings sections')">
         <RouterLink v-for="item in sections" :key="item.id" :to="{ name: 'settings', params: { section: item.id } }"
           :aria-current="section === item.id ? 'page' : undefined" :class="{ selected: section === item.id }">
           <span :class="item.icon" aria-hidden="true" />{{ item.label }}
@@ -13,6 +13,11 @@
         <ModelDefaultsForm v-if="section === 'models'" :api-base="apiBase" scope="app" />
         <WebSearchSettings v-if="section === 'web-search'" :api-base="apiBase" />
         <SoundSettings v-if="section === 'sounds'" />
+        <section v-if="section === 'language'" aria-labelledby="language-settings-title">
+          <h2 id="language-settings-title">{{ t('Language') }}</h2>
+          <p>{{ t('Choose the language used by this app. Your choice is saved on this device and does not change agent responses.') }}</p>
+          <LanguageSelector />
+        </section>
         <ProvidersView v-show="section === 'providers'" v-bind="props" embedded :active="section === 'providers'"
           @configured="$emit('configured')" @retry="$emit('retry')" @close="$emit('close')" />
       </div>
@@ -28,15 +33,18 @@ import ProvidersView from './ProvidersView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
 import WebSearchSettings from './WebSearchSettings.vue'
 import SoundSettings from './SoundSettings.vue'
+import LanguageSelector from './LanguageSelector.vue'
+import { t } from '../i18n.ts'
 
 const props = defineProps<{ apiBase: string; status: ProviderSetupStatus | null; error: string; checking: boolean; available: boolean }>()
 defineEmits<{ configured: []; retry: []; close: [] }>()
 const route = useRoute()
 const sections = [
-  { id: 'providers', label: 'Providers', icon: 'i-lucide-cpu' },
-  { id: 'models', label: 'Models', icon: 'i-lucide-sliders-horizontal' },
-  { id: 'web-search', label: 'Web search', icon: 'i-lucide-search' },
-  { id: 'sounds', label: 'Sounds', icon: 'i-lucide-volume-2' },
+  { id: 'providers', get label() { return t('Providers') }, icon: 'i-lucide-cpu' },
+  { id: 'models', get label() { return t('Models') }, icon: 'i-lucide-sliders-horizontal' },
+  { id: 'web-search', get label() { return t('Web search') }, icon: 'i-lucide-search' },
+  { id: 'sounds', get label() { return t('Sounds') }, icon: 'i-lucide-volume-2' },
+  { id: 'language', get label() { return t('Language') }, icon: 'i-lucide-languages' },
 ]
 const section = computed(() => sections.find(item => item.id === route.params.section)?.id ?? 'providers')
 </script>

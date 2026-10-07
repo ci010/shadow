@@ -1,23 +1,24 @@
 <template>
   <details class="decision-source" @toggle="onToggle">
-    <summary>{{ answered ? 'Answered decision' : 'Related decision' }} · {{ source.sessionId }}</summary>
-    <p class="source-note">{{ answered ? 'Reference from the answer receipt.' : 'Agent-selected reference.' }} The record's existence is checked; this is not proof of causation or permission.</p>
-    <p v-if="loading" role="status">Loading original decision…</p>
-    <p v-else-if="error" role="alert">{{ error }} <button type="button" @click="load">Retry</button></p>
+    <summary>{{ answered ? t('Answered decision') : t('Related decision') }} · {{ source.sessionId }}</summary>
+    <p class="source-note">{{ answered ? t('Reference from the answer receipt.') : t('Agent-selected reference.') }} {{ t('The record\'s existence is checked; this is not proof of causation or permission.') }}</p>
+    <p v-if="loading" role="status">{{ t('Loading original decision…') }}</p>
+    <p v-else-if="error" role="alert">{{ error }} <button type="button" @click="load">{{ t('Retry') }}</button></p>
     <template v-else-if="record">
       <strong>{{ decisionStatusLabel(recordedDecision(record).status) }}</strong>
       <p class="source-question">{{ record.request.question }}</p>
       <ol><li v-for="option in record.request.options" :key="option">{{ option }}</li></ol>
-      <p v-if="record.answer"><strong>Recorded response:</strong> {{ record.answer.option }}</p>
+      <p v-if="record.answer"><strong>{{ t('Recorded response:') }}</strong> {{ record.answer.option }}</p>
       <p v-else-if="record.closed">{{ record.closed.message }}</p>
-      <p v-else>No confirmed answer in this record. This preview does not indicate an active wait.</p>
-      <p class="source-note">Request: {{ record.request.id }} · Segment: {{ record.request.origin?.physicalId }}</p>
-      <button type="button" @click="emit('inspect', source.sessionId)">Open source session</button>
+      <p v-else>{{ t('No confirmed answer in this record. This preview does not indicate an active wait.') }}</p>
+      <p class="source-note">{{ t('Request:') }} {{ record.request.id }} {{ t('· Segment:') }} {{ record.request.origin?.physicalId }}</p>
+      <button type="button" @click="emit('inspect', source.sessionId)">{{ t('Open source session') }}</button>
     </template>
   </details>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onUnmounted, ref, shallowRef, watch } from 'vue'
 import { decisionReader } from '../decision-graph.ts'
 import { decisionStatusLabel, recordedDecision } from '../yield-history.ts'
@@ -42,7 +43,7 @@ async function load() {
     const next = await decisionReader(props.apiBase, current.signal)(source)
     if (!current.signal.aborted) record.value = next
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load the original decision.'
+    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load the original decision.')
   } finally {
     if (controller === current) loading.value = false
   }

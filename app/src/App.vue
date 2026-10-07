@@ -3,7 +3,7 @@
     <template #mobile-header><MobileChrome :title="mobilePageTitle" /></template>
     <template #navigation>
       <Teleport :to="mobile.navigationTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.navigationTarget.value">
-        <nav class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }" aria-label="Main navigation">
+        <nav class="tab-nav" :class="{ 'mobile-app-nav': mobile.enabled.value }" :aria-label="t('Main navigation')">
           <template v-for="group in navigationGroups" :key="group.name">
             <span v-if="group.label" class="tab-group-label">{{ group.label }}</span>
             <router-link v-for="item in group.items" :key="item.name" :to="item.name === 'chat' ? lastChatLocation : { name: item.name, params: ['agents', 'spans', 'logs'].includes(item.name) ? { projectId: route.params.projectId || 'default' } : {} }" custom v-slot="{ isActive, navigate }">
@@ -19,19 +19,19 @@
       <Teleport :to="mobile.actionsTarget.value || 'body'" :disabled="!mobile.enabled.value || !mobile.actionsTarget.value">
           <DesktopBrowserAccess v-if="isMain && desktopWebPairing" :api="desktopWebPairing" />
           <MobileConnection v-if="mobileSession" :session="mobileSession" connected />
-          <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">Sign out</button>
+          <button v-if="browserSession?.status.value?.required" class="tab" :disabled="browserSession.busy.value" @click="browserSession.logout()">{{ t('Sign out') }}</button>
           <button class="theme-toggle" :aria-pressed="sounds.preferences.value.enabled"
-            :aria-label="sounds.preferences.value.enabled ? 'Mute notification sounds' : 'Enable notification sounds'"
-            :title="sounds.error.value || (sounds.preferences.value.enabled ? 'Mute notification sounds' : 'Enable notification sounds')" @click="toggleSounds">
+            :aria-label="sounds.preferences.value.enabled ? t('Mute notification sounds') : t('Enable notification sounds')"
+            :title="sounds.error.value || (sounds.preferences.value.enabled ? t('Mute notification sounds') : t('Enable notification sounds'))" @click="toggleSounds">
             <span :class="sounds.preferences.value.enabled ? 'i-lucide-volume-2' : 'i-lucide-volume-x'" class="w-3.5 h-3.5" aria-hidden="true" />
-            <span v-if="mobile.enabled.value">{{ sounds.preferences.value.enabled ? 'Mute sounds' : 'Enable sounds' }}</span>
+            <span v-if="mobile.enabled.value">{{ sounds.preferences.value.enabled ? t('Mute sounds') : t('Enable sounds') }}</span>
           </button>
-          <button class="theme-toggle" @click="toggleTheme" :title="isDark ? 'Switch to light' : 'Switch to dark'" :aria-label="isDark ? 'Switch to light theme' : 'Switch to dark theme'">
+          <button class="theme-toggle" @click="toggleTheme" :title="isDark ? t('Switch to light') : t('Switch to dark')" :aria-label="isDark ? t('Switch to light theme') : t('Switch to dark theme')">
             <!-- Sun icon (shown in dark mode) -->
             <span v-if="isDark" class="i-lucide-sun w-3.5 h-3.5" aria-hidden="true" />
             <!-- Moon icon (shown in light mode) -->
             <span v-else class="i-lucide-moon w-3.5 h-3.5" aria-hidden="true" />
-            <span v-if="mobile.enabled.value">{{ isDark ? 'Light theme' : 'Dark theme' }}</span>
+            <span v-if="mobile.enabled.value">{{ isDark ? t('Light theme') : t('Dark theme') }}</span>
           </button>
       </Teleport>
     </template>
@@ -40,8 +40,8 @@
 
     <main class="app-main">
       <IoHost :bridge="ioBridge" @open-conversation="router.push(projectChatLocation($event))" />
-      <div v-if="['spans', 'logs'].includes(String(route.name))" class="resource-scope" aria-label="Project scope">
-        Project
+      <div v-if="['spans', 'logs'].includes(String(route.name))" class="resource-scope" :aria-label="t('Project scope')">
+        {{ t('Project') }}
         <router-link :to="{ name: 'project-settings', params: { projectId: route.params.projectId, section: 'general' } }">{{ route.params.projectId }}</router-link>
       </div>
       <ConnectionStatus :child-title="showChildRecovery ? recoveryTitle : undefined" :live-error="liveError"
@@ -69,6 +69,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from './i18n.ts'
 import { computed, ref, onMounted, onUnmounted, watch, provide, inject } from 'vue'
 import { browserSessionKey } from './web-auth.ts'
 import { mobileSessionKey } from './mobile-client.ts'
@@ -94,7 +95,7 @@ import { useAppNotificationSounds } from './composables/useAppNotificationSounds
 const route = useRoute()
 const workspaceRoutes: readonly string[] = ['chat', 'projects', 'project-settings', 'agents']
 const mobile = provideMobileChrome()
-const mobilePageTitles: Record<string, string> = { chat: 'Chat', projects: 'Projects', nodes: 'Nodes', settings: 'Settings', 'project-settings': 'Project settings', agents: 'Agents', spans: 'Spans', logs: 'Logs' }
+const mobilePageTitles: Record<string, string> = { get chat() { return t('Chat') }, get projects() { return t('Projects') }, get nodes() { return t('Nodes') }, get settings() { return t('Settings') }, get 'project-settings'() { return t('Project settings') }, get agents() { return t('Agents') }, get spans() { return t('Spans') }, get logs() { return t('Logs') } }
 const mobilePageTitle = computed(() => mobilePageTitles[String(route.name)] ?? 'Shadow')
 watch(() => route.fullPath, () => { mobile.menuOpen.value = false })
 const ioBridge = createIoBridge()
@@ -132,8 +133,8 @@ const showChildRecovery = computed(() =>
 )
 const recoveryTitle = computed(() =>
   installationContext.value.mainConnection === 'connecting'
-    ? 'Reconnecting to Main'
-    : 'Main is unavailable'
+    ? t('Reconnecting to Main')
+    : t('Main is unavailable')
 )
 
 const logCount = ref(0)
@@ -172,7 +173,7 @@ async function refreshProvider(refresh = false) {
   } catch (error) {
     if (signal.aborted || generation !== providerGeneration) return
     providerStatus.value = null
-    providerError.value = error instanceof Error ? error.message : 'Could not check provider configuration. Retry when Main is available.'
+    providerError.value = error instanceof Error ? error.message : t('Could not check provider configuration. Retry when Main is available.')
   } finally {
     if (generation === providerGeneration) checkingProvider.value = false
   }
@@ -202,7 +203,7 @@ const navigationGroups = computed(() => {
     },
     {
       name: 'diagnostics',
-      label: 'Diagnostics',
+      label: t('Diagnostics'),
       items: items.filter((item) => item.group === 'diagnostics'),
     },
   ]

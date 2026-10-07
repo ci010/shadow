@@ -6,30 +6,30 @@
       <header class="image-viewer-header">
         <h2 :id="titleId" :title="image.name">{{ image.name }}</h2>
         <button type="button" class="viewer-control" :disabled="status !== 'ready'" :aria-pressed="actualSize"
-          :aria-label="actualSize ? 'Fit image to window' : 'View image at actual size'" @click="toggleSize">
+          :aria-label="actualSize ? t('Fit image to window') : t('View image at actual size')" @click="toggleSize">
           <span :class="actualSize ? 'i-lucide-minimize' : 'i-lucide-scan'" aria-hidden="true" />
-          <span class="viewer-control-label">{{ actualSize ? 'Fit' : '100%' }}</span>
+          <span class="viewer-control-label">{{ actualSize ? t('Fit') : '100%' }}</span>
         </button>
-        <a v-if="downloadUrl" class="viewer-control" :href="downloadUrl" :download="image.name" :aria-label="`Download ${image.name}`" referrerpolicy="no-referrer"
+        <a v-if="downloadUrl" class="viewer-control" :href="downloadUrl" :download="image.name" :aria-label="t('Download {name}', { name: image.name })" referrerpolicy="no-referrer"
           :aria-busy="downloads.pending.has(downloadUrl)" :aria-disabled="downloads.pending.has(downloadUrl)"
           @click="downloads.download($event, downloadUrl, image.name)">
           <span :class="downloads.pending.has(downloadUrl) ? 'i-lucide-loader-circle animate-spin' : 'i-lucide-download'" aria-hidden="true" />
         </a>
-        <button ref="closeButton" type="button" class="viewer-control" aria-label="Close image viewer" autofocus @click="close">
+        <button ref="closeButton" type="button" class="viewer-control" :aria-label="t('Close image viewer')" autofocus @click="close">
           <span class="i-lucide-x" aria-hidden="true" />
         </button>
       </header>
       <p v-if="downloadUrl && downloads.errors.has(downloadUrl)" class="viewer-download-error" role="alert">{{ downloads.errors.get(downloadUrl) }}</p>
       <div ref="viewport" class="image-viewer-viewport" :class="{ 'actual-size': actualSize }" tabindex="0" role="region"
-        aria-label="Image preview" :aria-busy="status === 'loading'">
+        :aria-label="t('Image preview')" :aria-busy="status === 'loading'">
         <div v-if="status !== 'error'" class="image-viewer-canvas">
           <img :key="attempt" :src="resources.resolve(image.src)" :alt="image.name" :class="{ loading: status === 'loading' }" referrerpolicy="no-referrer"
             @load="status = 'ready'" @error="status = 'error'">
         </div>
-        <p v-if="status === 'loading'" class="image-viewer-status" role="status">Loading image...</p>
+        <p v-if="status === 'loading'" class="image-viewer-status" role="status">{{ t('Loading image...') }}</p>
         <div v-else-if="status === 'error'" class="image-viewer-status" role="alert">
-          <p>Could not load this image.</p>
-          <button type="button" class="btn" @click="retry">Retry</button>
+          <p>{{ t('Could not load this image.') }}</p>
+          <button type="button" class="btn" @click="retry">{{ t('Retry') }}</button>
         </div>
       </div>
     </dialog>
@@ -37,6 +37,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onBeforeUnmount, onDeactivated, onMounted, ref, useId, watch } from 'vue'
 import { useFileDownload } from '../composables/useFileDownload.ts'
 import type { ImagePreview } from '../image-viewer.ts'

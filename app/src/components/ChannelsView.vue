@@ -1,20 +1,20 @@
 <template>
   <section class="channels-view" aria-labelledby="channels-title">
     <header class="channels-heading">
-      <div><h2 id="channels-title">Bots</h2><p>Connect multiple bots to this project's Home chats. Each connection runs independently.</p></div>
-      <button :disabled="loading || !!saving" @click="refresh()">Refresh status</button>
+      <div><h2 id="channels-title">{{ t('Bots') }}</h2><p>{{ t('Connect multiple bots to this project\'s Home chats. Each connection runs independently.') }}</p></div>
+      <button :disabled="loading || !!saving" @click="refresh()">{{ t('Refresh status') }}</button>
     </header>
-    <p v-if="!available" role="status">Channel settings are managed by Main administrators.</p>
-    <p v-else-if="loading && !channels.length" role="status">Loading channel connections...</p>
-    <div v-if="listError" class="channel-error" role="alert"><p>{{ listError }}</p><button @click="refresh()">Retry</button></div>
+    <p v-if="!available" role="status">{{ t('Channel settings are managed by Main administrators.') }}</p>
+    <p v-else-if="loading && !channels.length" role="status">{{ t('Loading channel connections...') }}</p>
+    <div v-if="listError" class="channel-error" role="alert"><p>{{ listError }}</p><button @click="refresh()">{{ t('Retry') }}</button></div>
     <p v-if="notice" class="channel-notice" role="status">{{ notice }}</p>
     <p v-if="reviewLinkError" class="channel-error" role="alert">{{ reviewLinkError }}</p>
     <form v-if="available" class="bot-create" @submit.prevent="addBot">
-      <label>Platform<select v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
-      <label>Bot name<input v-model="newName" maxlength="100" required :disabled="!!saving" placeholder="Name this connection" /></label>
-      <button :disabled="!!saving || !newName.trim()">Add bot</button>
+      <label>{{ t('Platform') }}<select v-model="newPlatform" :disabled="!!saving"><option v-for="item in channelDefinitions" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
+      <label>{{ t('Bot name') }}<input v-model="newName" maxlength="100" required :disabled="!!saving" :placeholder="t('Name this connection')" /></label>
+      <button :disabled="!!saving || !newName.trim()">{{ t('Add bot') }}</button>
     </form>
-    <p v-if="!loading && !listError && !channels.length" class="channel-notice">No bots yet. Add a bot, then configure its credentials to connect it.</p>
+    <p v-if="!loading && !listError && !channels.length" class="channel-notice">{{ t('No bots yet. Add a bot, then configure its credentials to connect it.') }}</p>
     <div class="channel-list">
       <article v-for="channel in channels" :key="channel.id" class="channel-row" :data-channel="channel.id">
         <header class="channel-heading">
@@ -22,24 +22,24 @@
           <div class="channel-copy"><h3>{{ channel.displayName }}</h3><p>{{ definition(channel.platform).label }} &middot; {{ definition(channel.platform).description }}</p></div>
           <span class="channel-state" :data-state="channel.state"><span class="channel-dot" aria-hidden="true" />{{ channelStateLabel(botChannel(channel)) }}</span>
           <div class="channel-actions">
-            <button v-if="channel.platform === 'discord'" :aria-expanded="accessBot === channel.id" @click="accessBot = accessBot === channel.id ? undefined : channel.id">Discord access</button>
-            <button :disabled="!!saving" :aria-expanded="expanded === channel.id" :aria-controls="`channel-${channel.id}-editor`" @click="configure(channel)">{{ channel.configured ? 'Configure' : 'Set up' }}</button>
-            <button v-if="channel.enabled" :disabled="!!saving" @click="changeConnection(channel, false)">Disconnect</button>
-            <button v-else-if="channel.configured" :disabled="!!saving" @click="changeConnection(channel, true)">Connect</button>
-            <button :disabled="!!saving" @click="removeBot(channel)">Remove</button>
+            <button v-if="channel.platform === 'discord'" :aria-expanded="accessBot === channel.id" @click="accessBot = accessBot === channel.id ? undefined : channel.id">{{ t('Discord access') }}</button>
+            <button :disabled="!!saving" :aria-expanded="expanded === channel.id" :aria-controls="`channel-${channel.id}-editor`" @click="configure(channel)">{{ channel.configured ? t('Configure') : t('Set up') }}</button>
+            <button v-if="channel.enabled" :disabled="!!saving" @click="changeConnection(channel, false)">{{ t('Disconnect') }}</button>
+            <button v-else-if="channel.configured" :disabled="!!saving" @click="changeConnection(channel, true)">{{ t('Connect') }}</button>
+            <button :disabled="!!saving" @click="removeBot(channel)">{{ t('Remove') }}</button>
           </div>
         </header>
         <p v-if="channel.message" class="channel-message" :class="{ 'channel-error': channel.state === 'error' }">{{ channel.message }}</p>
         <p v-if="errors[channel.id]" class="channel-error" role="alert">{{ errors[channel.id] }}</p>
-        <p v-if="saving === channel.id" role="status">Updating {{ channel.displayName }} connection...</p>
+        <p v-if="saving === channel.id" role="status">{{ t('Updating') }} {{ channel.displayName }} {{ t('connection...') }}</p>
         <form v-if="expanded === channel.id" :id="`channel-${channel.id}-editor`" class="channel-editor" @submit.prevent="saveConfiguration(channel, true)">
           <fieldset :disabled="!!saving">
-            <legend class="sr-only">{{ channel.displayName }} connection settings</legend>
-            <label class="channel-field bot-name">Bot name<input v-model="drafts[channel.id]!.displayName" maxlength="100" required /></label>
+            <legend class="sr-only">{{ channel.displayName }} {{ t('connection settings') }}</legend>
+            <label class="channel-field bot-name">{{ t('Bot name') }}<input v-model="drafts[channel.id]!.displayName" maxlength="100" required /></label>
             <div class="channel-instructions">
-              <strong>Before you connect</strong>
+              <strong>{{ t('Before you connect') }}</strong>
               <ol><li v-for="instruction in definition(channel.platform).instructions" :key="instruction">{{ instruction }}</li></ol>
-              <button type="button" class="portal-link" @click="openPortal(channel)">Open {{ definition(channel.platform).label }} developer portal <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
+              <button type="button" class="portal-link" @click="openPortal(channel)">{{ t('Open') }} {{ definition(channel.platform).label }} {{ t('developer portal') }} <span class="i-lucide-arrow-up-right" aria-hidden="true" /></button>
             </div>
             <div class="channel-fields">
               <template v-for="field in definition(channel.platform).fields.filter(field => !field.advanced)" :key="field.key">
@@ -47,32 +47,32 @@
                   <template v-if="field.kind === 'checkbox'"><input v-model="drafts[channel.id]![field.key]" type="checkbox" :name="field.key" /><span>{{ field.label }}<small v-if="field.hint" class="checkbox-hint">{{ field.hint }}</small></span></template>
                   <template v-else>
                     <span>{{ field.label }}<span v-if="field.required"> *</span></span>
-                    <select v-if="field.kind === 'select'" v-model="drafts[channel.id]![field.key]" :name="field.key"><option v-for="option in field.options" :key="option" :value="option">{{ option === 'mention' ? 'Mentions and direct messages' : option === 'all' ? 'All messages' : option }}</option></select>
+                    <select v-if="field.kind === 'select'" v-model="drafts[channel.id]![field.key]" :name="field.key"><option v-for="option in field.options" :key="option" :value="option">{{ option === 'mention' ? t('Mentions and direct messages') : option === 'all' ? t('All messages') : option }}</option></select>
                     <input v-else v-model="drafts[channel.id]![field.key]" :type="field.kind" :name="field.key" :autocomplete="field.kind === 'password' ? 'new-password' : 'off'" :spellcheck="false"
-                      :placeholder="field.kind === 'password' && channel.secrets[field.key] ? 'Saved — leave blank to keep' : undefined" />
+                      :placeholder="field.kind === 'password' && channel.secrets[field.key] ? t('Saved — leave blank to keep') : undefined" />
                     <small v-if="field.hint">{{ field.hint }}</small>
-                    <small v-if="field.kind === 'password'">{{ channel.secrets[field.key] ? 'A credential is saved. Enter a value only to replace it.' : 'Credentials are saved on Main and never returned to this form.' }}</small>
+                    <small v-if="field.kind === 'password'">{{ channel.secrets[field.key] ? t('A credential is saved. Enter a value only to replace it.') : t('Credentials are saved on Main and never returned to this form.') }}</small>
                   </template>
                 </label>
               </template>
             </div>
             <details class="channel-advanced">
-              <summary>Advanced settings and access</summary>
+              <summary>{{ t('Advanced settings and access') }}</summary>
               <div class="channel-fields">
                 <label v-for="field in definition(channel.platform).fields.filter(field => field.advanced)" :key="field.key" class="channel-field">
                   <span>{{ field.label }}</span>
                   <textarea v-if="field.kind === 'list'" :value="String(drafts[channel.id]![field.key] ?? '')" @input="drafts[channel.id]![field.key] = ($event.target as HTMLTextAreaElement).value" :name="field.key" rows="3" spellcheck="false" />
                   <input v-else v-model="drafts[channel.id]![field.key]" :type="field.kind" :name="field.key"
                     :autocomplete="field.kind === 'password' ? 'new-password' : 'off'" :spellcheck="false"
-                    :placeholder="field.kind === 'password' && channel.secrets[field.key] ? 'Saved — leave blank to keep' : undefined" />
+                    :placeholder="field.kind === 'password' && channel.secrets[field.key] ? t('Saved — leave blank to keep') : undefined" />
                   <small v-if="field.hint">{{ field.hint }}</small>
                 </label>
               </div>
             </details>
             <div class="channel-form-actions">
-              <button class="channel-primary" type="submit">{{ channel.enabled ? 'Save and reconnect' : 'Save and connect' }}</button>
-              <button v-if="!channel.enabled" type="button" @click="saveConfiguration(channel, false)">Save without connecting</button>
-              <button type="button" @click="cancelConfiguration(channel)">Cancel</button>
+              <button class="channel-primary" type="submit">{{ channel.enabled ? t('Save and reconnect') : t('Save and connect') }}</button>
+              <button v-if="!channel.enabled" type="button" @click="saveConfiguration(channel, false)">{{ t('Save without connecting') }}</button>
+              <button type="button" @click="cancelConfiguration(channel)">{{ t('Cancel') }}</button>
             </div>
           </fieldset>
         </form>
@@ -84,6 +84,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import type { ChannelId } from '../../../src/channels/setup-contract.ts'
 import { channelDefinitions, channelStateLabel, type ChannelDraft } from '../channel-settings.ts'
@@ -125,7 +126,7 @@ async function refresh(background = false) {
     channels.value = result
     listError.value = ''
   } catch (error) {
-    if (!controller.signal.aborted) listError.value = error instanceof Error ? error.message : 'Could not load channels. Refresh to retry.'
+    if (!controller.signal.aborted) listError.value = error instanceof Error ? error.message : t('Could not load channels. Refresh to retry.')
   } finally {
     if (request === controller) { loading.value = false; request = undefined; scheduleRefresh() }
   }
@@ -152,16 +153,16 @@ async function update(channel: BotInstanceStatus, patch: { displayName?: string;
     if (controller.signal.aborted) return
     channels.value = channels.value.map(item => item.id === result.id ? result : item)
     if (resetDraft) drafts.value[channel.id] = botDraft(result)
-    notice.value = `${channel.displayName} settings saved. ${channelStateLabel(botChannel(result))}.`
+    notice.value = t('{displayName} settings saved. {value2}.', { displayName: channel.displayName, value2: channelStateLabel(botChannel(result)) })
   } catch (error) {
-    if (!controller.signal.aborted) errors.value[channel.id] = error instanceof Error ? error.message : 'Could not update the channel. Refresh its status before retrying.'
+    if (!controller.signal.aborted) errors.value[channel.id] = error instanceof Error ? error.message : t('Could not update the channel. Refresh its status before retrying.')
   } finally {
     if (mutation === controller) { mutation = undefined; saving.value = undefined; scheduleRefresh() }
   }
 }
 async function saveConfiguration(channel: BotInstanceStatus, enabled: boolean) {
   try { await update(channel, botPatch(channel, drafts.value[channel.id]!, enabled)) }
-  catch (error) { errors.value[channel.id] = error instanceof Error ? error.message : 'Check the channel settings.' }
+  catch (error) { errors.value[channel.id] = error instanceof Error ? error.message : t('Check the channel settings.') }
 }
 async function changeConnection(channel: BotInstanceStatus, enabled: boolean) {
   await update(channel, { config: { enabled } }, false)
@@ -171,7 +172,7 @@ async function openPortal(channel: BotInstanceStatus) {
     const url = definition(channel.platform).portal
     if (window.shadowDesktop?.openExternal) await window.shadowDesktop.openExternal(url)
     else window.open(url, '_blank', 'noopener,noreferrer')
-  } catch { errors.value[channel.id] = `Could not open the browser. Open ${definition(channel.platform).portal} manually.` }
+  } catch { errors.value[channel.id] = t('Could not open the browser. Open {portal} manually.', { portal: definition(channel.platform).portal }) }
 }
 async function addBot() {
   if (saving.value || !props.available) return
@@ -186,12 +187,12 @@ async function addBot() {
     channels.value.push(bot)
     configure(bot)
     newName.value = ''
-    notice.value = `${bot.displayName} added. Configure credentials before connecting.`
-  } catch (cause) { if (!controller.signal.aborted) listError.value = cause instanceof Error ? cause.message : 'Could not add the bot. Refresh before retrying.' }
+    notice.value = t('{displayName} added. Configure credentials before connecting.', { displayName: bot.displayName })
+  } catch (cause) { if (!controller.signal.aborted) listError.value = cause instanceof Error ? cause.message : t('Could not add the bot. Refresh before retrying.') }
   finally { if (mutation === controller) { mutation = undefined; saving.value = undefined; scheduleRefresh() } }
 }
 async function removeBot(bot: BotInstanceStatus) {
-  if (saving.value || !props.available || !confirm(`Disconnect and remove ${bot.displayName}? Existing chats will be retained.`)) return
+  if (saving.value || !props.available || !confirm(t('Disconnect and remove {displayName}? Existing chats will be retained.', { displayName: bot.displayName }))) return
   stopPolling()
   const controller = new AbortController()
   mutation = controller
@@ -203,8 +204,8 @@ async function removeBot(bot: BotInstanceStatus) {
     channels.value = channels.value.filter(item => item.id !== bot.id)
     delete drafts.value[bot.id]
     if (expanded.value === bot.id) expanded.value = undefined
-    notice.value = `${bot.displayName} removed.`
-  } catch (cause) { if (!controller.signal.aborted) errors.value[bot.id] = cause instanceof Error ? cause.message : 'Could not remove the bot. Refresh before retrying.' }
+    notice.value = t('{displayName} removed.', { displayName: bot.displayName })
+  } catch (cause) { if (!controller.signal.aborted) errors.value[bot.id] = cause instanceof Error ? cause.message : t('Could not remove the bot. Refresh before retrying.') }
   finally { if (mutation === controller) { mutation = undefined; saving.value = undefined; scheduleRefresh() } }
 }
 watch([() => props.apiBase, () => props.projectId, () => props.available], () => {
@@ -226,7 +227,7 @@ watch([() => props.requestedReviewId, () => props.reviewBotId, () => props.activ
   () => channels.value.map(bot => `${bot.id}:${bot.platform}`).join('|'), loading], () => {
   if (!props.active || !props.requestedReviewId || loading.value || listError.value) return
   const bot = channels.value.find(bot => bot.platform === 'discord' && (!props.reviewBotId || bot.id === props.reviewBotId))
-  reviewLinkError.value = bot ? '' : 'The linked Discord Bot is unavailable in this Project. Refresh the Bot list or ask for a new review link.'
+  reviewLinkError.value = bot ? '' : t('The linked Discord Bot is unavailable in this Project. Refresh the Bot list or ask for a new review link.')
   accessBot.value = bot?.id
 }, { immediate: true })
 watch(() => props.active, active => { if (active) void refresh(); else stopPolling() }, { immediate: true })

@@ -1,41 +1,41 @@
 <template>
   <details class="decision-discussion" @toggle="toggle">
-    <summary>{{ canRequest ? 'Need context or a revised question?' : 'Questions and revisions' }}</summary>
-    <p>Asking here does not select an answer. Automatic defaults are paused after a request is accepted.
-      Explanations are generated without tools from saved context, not an independent investigation.</p>
+    <summary>{{ canRequest ? t('Need context or a revised question?') : t('Questions and revisions') }}</summary>
+    <p>{{ t('Asking here does not select an answer. Automatic defaults are paused after a request is accepted. Explanations are generated without tools from saved context, not an independent investigation.') }}</p>
     <template v-if="canRequest || canInvalidate">
-      <label :for="inputId">What needs explaining or changing?</label>
+      <label :for="inputId">{{ t('What needs explaining or changing?') }}</label>
       <textarea :id="inputId" v-model="question" rows="3" maxlength="4000" :disabled="sending" />
       <div v-if="canRequest" class="discussion-actions">
-        <button type="button" :disabled="sending || running || !question.trim()" @click="submit('clarify')">Ask for explanation</button>
-        <button v-if="!exactProposal" type="button" :disabled="sending || running || !question.trim()" @click="submit('revise')">Request revised question</button>
-        <button type="button" :disabled="sending || running || !question.trim()" @click="submit('investigation')">Return for investigation · no approval</button>
-        <button type="button" :disabled="sending || running || !question.trim()" @click="submit('deferred')">Defer · continue independent work</button>
+        <button type="button" :disabled="sending || running || !question.trim()" @click="submit('clarify')">{{ t('Ask for explanation') }}</button>
+        <button v-if="!exactProposal" type="button" :disabled="sending || running || !question.trim()" @click="submit('revise')">{{ t('Request revised question') }}</button>
+        <button type="button" :disabled="sending || running || !question.trim()" @click="submit('investigation')">{{ t('Return for investigation · no approval') }}</button>
+        <button type="button" :disabled="sending || running || !question.trim()" @click="submit('deferred')">{{ t('Defer · continue independent work') }}</button>
       </div>
-      <p v-if="canRequest">A revision remains unanswered. Investigation or deferral ends this wait without selecting an option; the original session can investigate or continue only already-authorized unaffected work.</p>
-      <button v-if="canInvalidate" type="button" :disabled="sending || !question.trim()" @click="submit('invalidate')">Mark premise obsolete and flag dependent decisions</button>
-      <p v-if="canInvalidate">Explain which premise changed. This preserves historical answers, flags linked decisions for revalidation and does not undo completed work.</p>
+      <p v-if="canRequest">{{ t('A revision remains unanswered. Investigation or deferral ends this wait without selecting an option; the original session can investigate or continue only already-authorized unaffected work.') }}</p>
+      <button v-if="canInvalidate" type="button" :disabled="sending || !question.trim()" @click="submit('invalidate')">{{ t('Mark premise obsolete and flag dependent decisions') }}</button>
+      <p v-if="canInvalidate">{{ t('Explain which premise changed. This preserves historical answers, flags linked decisions for revalidation and does not undo completed work.') }}</p>
     </template>
-    <p v-if="loading || sending" role="status">{{ sending ? 'Requesting discussion...' : 'Loading discussion...' }}</p>
+    <p v-if="loading || sending" role="status">{{ sending ? t('Requesting discussion...') : t('Loading discussion...') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="notice" role="status">{{ notice }}</p>
     <article v-for="review in reviews" :key="review.id" class="discussion-record">
-      <strong>{{ review.kind === 'clarify' ? 'User asked for context' : 'User requested revision' }}</strong>
+      <strong>{{ review.kind === 'clarify' ? t('User asked for context') : t('User requested revision') }}</strong>
       <p class="discussion-text">{{ review.question }}</p>
-      <p v-if="review.status === 'running'" role="status">Preparing a tool-free response. The original decision is still unanswered.</p>
-      <p v-else-if="review.status === 'interrupted'">This discussion was interrupted. It has not been resumed automatically.</p>
+      <p v-if="review.status === 'running'" role="status">{{ t('Preparing a tool-free response. The original decision is still unanswered.') }}</p>
+      <p v-else-if="review.status === 'interrupted'">{{ t('This discussion was interrupted. It has not been resumed automatically.') }}</p>
       <template v-else>
-        <strong>{{ review.status === 'failed' ? 'Discussion failed' : 'Agent explanation — not an answer or approval' }}</strong>
+        <strong>{{ review.status === 'failed' ? t('Discussion failed') : t('Agent explanation — not an answer or approval') }}</strong>
         <p class="discussion-text">{{ review.response }}</p>
-        <p v-if="review.replacement">New version: {{ review.replacement.requestId }}. Use the current question's answer controls.</p>
+        <p v-if="review.replacement">{{ t('New version:') }} {{ review.replacement.requestId }}{{ t('. Use the current question\'s answer controls.') }}</p>
       </template>
     </article>
-    <p v-if="!loading && !reviews.length && !error">No discussions have been recorded for this version.</p>
-    <button type="button" :disabled="loading" @click="refresh">Refresh discussion</button>
+    <p v-if="!loading && !reviews.length && !error">{{ t('No discussions have been recorded for this version.') }}</p>
+    <button type="button" :disabled="loading" @click="refresh">{{ t('Refresh discussion') }}</button>
   </details>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
 import { decisionKey } from '../decision-graph.ts'
@@ -68,18 +68,18 @@ async function refresh() {
     const url = apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.reference.sessionId)}/decisions/reviews`,
       { physicalId: props.reference.physicalId, requestId: props.reference.requestId })
     const response = await fetch(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) })
-    if (!response.ok) throw new Error('Could not load this decision discussion.')
+    if (!response.ok) throw new Error(t('Could not load this decision discussion.'))
     const data = await response.json()
-    if (!Array.isArray(data.reviews)) throw new Error('Invalid decision discussion response.')
+    if (!Array.isArray(data.reviews)) throw new Error(t('Invalid decision discussion response.'))
     const next = data.reviews.map(parseYieldReview)
-    if (next.some((review: YieldReview) => decisionKey(review.reference) !== decisionKey(props.reference))) throw new Error('Discussion origin does not match.')
+    if (next.some((review: YieldReview) => decisionKey(review.reference) !== decisionKey(props.reference))) throw new Error(t('Discussion origin does not match.'))
     if (generation !== current || controller.signal.aborted) return
     reviews.value = next
     error.value = ''
     if (running.value) timer = setTimeout(() => { void refresh() }, 1500)
     else emit('updated')
   } catch (cause) {
-    if (generation === current && !controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load discussion.'
+    if (generation === current && !controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load discussion.')
   } finally { if (generation === current) loading.value = false }
 }
 async function submit(kind: 'clarify' | 'revise' | 'investigation' | 'deferred' | 'invalidate') {
@@ -105,26 +105,26 @@ async function submit(kind: 'clarify' | 'revise' | 'investigation' | 'deferred' 
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
     })
     const data = await response.json()
-    if (!response.ok) throw new Error(typeof data.message === 'string' ? data.message : 'Discussion was not accepted. Reload the current question.')
+    if (!response.ok) throw new Error(typeof data.message === 'string' ? data.message : t('Discussion was not accepted. Reload the current question.'))
     if (generation !== current || controller.signal.aborted) return
     if (!discussion) {
       if (kind === 'invalidate' ? data.approved !== false || !Array.isArray(data.affected)
         : data.continuation?.approved !== false || data.continuation?.requestId !== props.reference.requestId
-          || data.continuation?.disposition !== kind) throw new Error('Decision follow-up receipt did not match.')
-      notice.value = kind === 'invalidate' ? 'Premise marked obsolete. Linked decisions require revalidation.' : 'No option was selected. The original session received your follow-up.'
-      if (kind === 'invalidate' && data.notificationErrors?.length) error.value = 'The premise was saved as obsolete, but some sessions could not be notified. Their decision history will require revalidation when reopened.'
+          || data.continuation?.disposition !== kind) throw new Error(t('Decision follow-up receipt did not match.'))
+      notice.value = kind === 'invalidate' ? t('Premise marked obsolete. Linked decisions require revalidation.') : t('No option was selected. The original session received your follow-up.')
+      if (kind === 'invalidate' && data.notificationErrors?.length) error.value = t('The premise was saved as obsolete, but some sessions could not be notified. Their decision history will require revalidation when reopened.')
       question.value = ''; attempt = undefined; emit('updated')
       return
     }
     const review = parseYieldReview(data.review)
-    if (review.id !== attempt?.id || decisionKey(review.reference) !== decisionKey(props.reference)) throw new Error('Discussion receipt did not match.')
+    if (review.id !== attempt?.id || decisionKey(review.reference) !== decisionKey(props.reference)) throw new Error(t('Discussion receipt did not match.'))
     reviews.value = [...reviews.value.filter(item => item.id !== review.id), review]
     attempt = undefined
     question.value = ''
     emit('updated')
     void refresh()
   } catch (cause) {
-    if (generation === current && !controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not request discussion.'
+    if (generation === current && !controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not request discussion.')
   } finally { if (generation === current) sending.value = false }
 }
 function toggle(event: Event) {

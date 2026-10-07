@@ -1,36 +1,37 @@
 <template>
-  <section v-if="embedded || tasks.length || error" v-show="active" class="background-tasks" :class="{ embedded }" aria-label="Background tasks" :aria-busy="loading">
+  <section v-if="embedded || tasks.length || error" v-show="active" class="background-tasks" :class="{ embedded }" :aria-label="t('Background tasks')" :aria-busy="loading">
     <button v-if="!embedded && tasks.length" type="button" class="background-toggle" :aria-expanded="expanded" :aria-controls="listId" @click="expanded = !expanded">
       <span class="i-lucide-terminal task-icon" aria-hidden="true" />
-      <span>Background tasks</span>
-      <span class="background-count" role="status">{{ loading ? 'Checking…' : `${total} running` }}</span>
+      <span>{{ t('Background tasks') }}</span>
+      <span class="background-count" role="status">{{ loading ? t('Checking…') : t('{total} running', { total: total }) }}</span>
       <span :class="expanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'" class="task-icon" aria-hidden="true" />
     </button>
     <div v-if="error" class="background-error" role="alert">
-      <span>{{ error }}</span><button type="button" class="background-retry" :disabled="loading" @click="refresh">Retry</button>
+      <span>{{ error }}</span><button type="button" class="background-retry" :disabled="loading" @click="refresh">{{ t('Retry') }}</button>
     </div>
-    <p v-if="embedded && !tasks.length && !error" class="background-empty">{{ loading ? 'Checking background tasks…' : 'No background tasks running.' }}</p>
+    <p v-if="embedded && !tasks.length && !error" class="background-empty">{{ loading ? t('Checking background tasks…') : t('No background tasks running.') }}</p>
     <div v-if="tasks.length" v-show="embedded || expanded" :id="listId" class="background-list">
       <ul>
         <li v-for="task in tasks" :key="task.id">
           <span class="running-dot" aria-hidden="true" />
           <div class="background-detail">
-            <code class="background-title">{{ task.title || 'Untitled task' }}</code>
+            <code class="background-title">{{ task.title || t('Untitled task') }}</code>
             <div class="background-meta">
               <span>{{ labels[task.kind] }}</span>
               <code>bg:{{ task.id }}</code>
-              <span v-if="task.status === 'cancelling'" role="status">Cancelling…</span>
-              <span>Started <time :datetime="task.createdAt">{{ started(task.createdAt) }}</time></span>
+              <span v-if="task.status === 'cancelling'" role="status">{{ t('Cancelling…') }}</span>
+              <span>{{ t('Started') }} <time :datetime="task.createdAt">{{ started(task.createdAt) }}</time></span>
             </div>
           </div>
         </li>
       </ul>
-      <p v-if="total > tasks.length" class="background-limit">Showing the latest {{ tasks.length }} of {{ total }} running tasks.</p>
+      <p v-if="total > tasks.length" class="background-limit">{{ t('Showing the latest {shown} of {total} running tasks.', { shown: tasks.length, total }) }}</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from '../i18n.ts'
 import { ref, useId, watch } from 'vue'
 import { fetchBackgroundTasks, type ActiveBackgroundTask } from '../background-tasks.ts'
 import { createLiveRefresh } from '../live-refresh.ts'
@@ -46,13 +47,13 @@ const total = ref(0)
 const loading = ref(false)
 const error = ref('')
 const expanded = ref(false)
-const labels = { process: 'Process', tool: 'Tool', subagent: 'Agent' }
+const labels = { get process() { return t('Process') }, get tool() { return t('Tool') }, get subagent() { return t('Agent') } }
 let identity = ''
 let refresh = () => {}
 watch([total, loading, error], () => emit('status', { total: total.value, loading: loading.value, error: error.value }), { immediate: true })
 
 function started(value: string) {
-  return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return formatDateTime(new Date(value), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, sessionId, active], _old, onCleanup) => {
@@ -83,7 +84,7 @@ watch(() => [props.apiBase, props.sessionId, props.active] as const, ([base, ses
       total.value = 0
       loading.value = false
       error.value = cause instanceof Error && cause.name !== 'TypeError' && cause.name !== 'TimeoutError' && cause.name !== 'SyntaxError'
-        ? cause.message : 'Background task status is unavailable. Check Main and retry.'
+        ? cause.message : t('Background task status is unavailable. Check Main and retry.')
     },
   })
   refresh = () => { loading.value = true; snapshot.refresh() }

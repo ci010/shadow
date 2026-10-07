@@ -1,18 +1,18 @@
 <template>
   <div ref="root" class="tool-file-preview" :aria-busy="loading" @pointerdown="dragging = true">
-    <p v-if="loading" class="preview-notice" role="status">Loading file diff...</p>
-    <p v-else-if="error" class="preview-notice preview-error" role="alert">{{ error }} <button type="button" @click="load">Retry</button></p>
-    <p v-else-if="!changes.length" class="preview-notice">No historical file diff was recorded for this tool call. The original arguments and result are available in Details.</p>
-    <section v-for="change in changes" :key="change.id" class="tool-file-diff" :aria-label="`File diff: ${path || change.path}`">
+    <p v-if="loading" class="preview-notice" role="status">{{ t('Loading file diff...') }}</p>
+    <p v-else-if="error" class="preview-notice preview-error" role="alert">{{ error }} <button type="button" @click="load">{{ t('Retry') }}</button></p>
+    <p v-else-if="!changes.length" class="preview-notice">{{ t('No historical file diff was recorded for this tool call. The original arguments and result are available in Details.') }}</p>
+    <section v-for="change in changes" :key="change.id" class="tool-file-diff" :aria-label="t('File diff: {path}', { path: path || change.path })">
       <header class="diff-file-header" :title="change.path">
         <span class="diff-file-icon" :class="fileIcon(path || change.path)" aria-hidden="true" />
         <span class="diff-file-path">{{ path || change.path }}</span>
       </header>
       <p v-if="change.unavailable" class="preview-notice">{{ change.unavailable }}</p>
-      <p v-if="highlightErrors[change.id]" class="preview-notice preview-error" role="status">{{ highlightErrors[change.id] }} <button type="button" @click="highlight(change)">Retry highlighting</button></p>
-      <div v-if="change.hunks.length" class="diff-scroll" tabindex="0" :aria-label="`Scroll diff for ${path || change.path}`">
+      <p v-if="highlightErrors[change.id]" class="preview-notice preview-error" role="status">{{ highlightErrors[change.id] }} <button type="button" @click="highlight(change)">{{ t('Retry highlighting') }}</button></p>
+      <div v-if="change.hunks.length" class="diff-scroll" tabindex="0" :aria-label="t('Scroll diff for {path}', { path: path || change.path })">
         <div class="diff-content">
-          <section v-for="(hunk, hunkIndex) in change.hunks" :key="hunkIndex" class="diff-hunk" :aria-label="`Changes at line ${hunk.newStart}`">
+          <section v-for="(hunk, hunkIndex) in change.hunks" :key="hunkIndex" class="diff-hunk" :aria-label="t('Changes at line {newStart}', { newStart: hunk.newStart })">
             <div class="diff-hunk-heading">@@ -{{ hunk.oldStart }},{{ hunk.oldLines }} +{{ hunk.newStart }},{{ hunk.newLines }} @@</div>
             <div v-for="(row, rowIndex) in diffLines(hunk)" :key="rowIndex" class="diff-row" :class="`diff-${row.kind}`">
               <span class="diff-line-number" :data-line="row.oldLine" aria-hidden="true" />
@@ -24,15 +24,16 @@
         </div>
       </div>
       <template v-else-if="change.writtenContent !== undefined">
-        <p class="preview-notice">Written content only; a before/after diff is unavailable.</p>
+        <p class="preview-notice">{{ t('Written content only; a before/after diff is unavailable.') }}</p>
         <pre class="written-content"><span v-for="(token, index) in highlighted[change.id]?.[0]?.[0] ?? [{ text: change.writtenContent }]" :key="index" class="diff-token" :style="{ '--file-token-light': token.light, '--file-token-dark': token.dark }">{{ token.text }}</span></pre>
       </template>
-      <p v-else-if="!change.unavailable" class="preview-notice">No content changes.</p>
+      <p v-else-if="!change.unavailable" class="preview-notice">{{ t('No content changes.') }}</p>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { diffLines } from '../git-files.ts'
 import { fileIcon } from '../file-icons.ts'
@@ -71,7 +72,7 @@ async function highlight(change: ToolFileChange): Promise<void> {
     }
   } catch {
     if (request && request === controller && !request.signal.aborted) {
-      highlightErrors.value[change.id] = 'Syntax highlighting is unavailable. The plain-text diff remains available.'
+      highlightErrors.value[change.id] = t('Syntax highlighting is unavailable. The plain-text diff remains available.')
     }
   }
 }
@@ -92,7 +93,7 @@ async function load(): Promise<void> {
     changes.value = next
     for (const change of next) if (change.hunks.length || change.writtenContent !== undefined) void highlight(change)
   } catch (cause) {
-    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load the recorded file diff. Retry.'
+    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load the recorded file diff. Retry.')
   } finally {
     if (controller === request) loading.value = false
   }

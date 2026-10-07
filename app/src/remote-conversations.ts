@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { createChatDraft, deferChatSession } from './chat-draft.ts'
 import { capabilityAvailability, type NodeInventoryEntry } from './node-inventory.ts'
 import { isRecord } from './folders-sidebar.ts'
@@ -28,11 +29,11 @@ export type RemoteChatTarget = RemoteConversationTarget | RemoteNodeTarget
 
 export function remoteNodeTargets(nodes: readonly NodeInventoryEntry[]): RemoteNodeTarget[] {
   return nodes.filter(node => node.role === 'child').map(node => ({
-    nodeId: node.nodeId, nodeName: node.displayName, displayName: 'From scratch',
+    nodeId: node.nodeId, nodeName: node.displayName, displayName: t('From scratch'),
     available: node.connection === 'connected' && node.supportsManagedSessions === true,
     ...(node.connection !== 'connected'
-      ? { unavailableReason: node.connection === 'revoked' ? 'Revoked' : 'Offline' }
-      : !node.supportsManagedSessions ? { unavailableReason: 'Update this device to start from scratch' } : {}),
+      ? { unavailableReason: node.connection === 'revoked' ? t('Revoked') : t('Offline') }
+      : !node.supportsManagedSessions ? { unavailableReason: t('Update this device to start from scratch') } : {}),
   }))
 }
 
@@ -75,23 +76,23 @@ export function createRemoteChatDraft(apiBase: string, target: RemoteChatTarget,
         if (response.status === 409 && response.headers.get('content-type')?.includes('application/json')) {
           const detail: unknown = await response.json()
           if (isRecord(detail) && detail.error === 'managed_sessions_unsupported') {
-            throw new Error('This device does not support remote Start from scratch. Update the device and retry. No local folder was used.')
+            throw new Error(t('This device does not support remote Start from scratch. Update the device and retry. No local folder was used.'))
           }
           if (isRecord(detail) && ['remote_folder_identity_required', 'remote_workdir_identity_unsupported'].includes(String(detail.error))) {
-            throw new Error('This device cannot verify remote folder ownership for a project. Update Main and the device to a version supporting ownership verification, then retry. No local folder was used.')
+            throw new Error(t('This device cannot verify remote folder ownership for a project. Update Main and the device to a version supporting ownership verification, then retry. No local folder was used.'))
           }
           if (isRecord(detail) && detail.error === 'folder_owned_by_another_project') {
-            throw new Error('This remote folder overlaps a folder in another project. Choose a different folder. No local folder was used.')
+            throw new Error(t('This remote folder overlaps a folder in another project. Choose a different folder. No local folder was used.'))
           }
           if (isRecord(detail) && ['remote_workdir_changed', 'legacy_remote_identity_unavailable'].includes(String(detail.error))) {
-            throw new Error('An existing remote folder could not be verified. Restore and reconnect its original folder capability before retrying. No local folder was used.')
+            throw new Error(t('An existing remote folder could not be verified. Restore and reconnect its original folder capability before retrying. No local folder was used.'))
           }
         }
         if (response.status === 409 || response.status === 503) {
-          throw new Error('The selected remote workspace is unavailable. Reconnect its device or choose another location. No local folder was used.')
+          throw new Error(t('The selected remote workspace is unavailable. Reconnect its device or choose another location. No local folder was used.'))
         }
-        if (response.status === 401 || response.status === 403) throw new Error('Remote conversation access was denied. Reconnect the authorized Main app.')
-        throw new Error(`Could not start the remote conversation (${response.status}). Retry when Main is available.`)
+        if (response.status === 401 || response.status === 403) throw new Error(t('Remote conversation access was denied. Reconnect the authorized Main app.'))
+        throw new Error(t('Could not start the remote conversation ({status}). Retry when Main is available.', { status: response.status }))
       }
       const result: unknown = await response.json()
       if (!isRecord(result) || typeof result.chatId !== 'string' || !result.chatId.startsWith('chat-')
@@ -99,7 +100,7 @@ export function createRemoteChatDraft(apiBase: string, target: RemoteChatTarget,
         || result.workdir.version !== 1 || result.workdir.nodeId !== selection.nodeId
         || typeof result.workdir.capabilityId !== 'string' || !result.workdir.capabilityId
         || (selection.capabilityId ? result.workdir.capabilityId !== selection.capabilityId : result.folderId !== undefined)) {
-        throw new Error('Main returned an invalid remote conversation. Refresh before retrying.')
+        throw new Error(t('Main returned an invalid remote conversation. Refresh before retrying.'))
       }
       return `web:${result.chatId}`
     }),

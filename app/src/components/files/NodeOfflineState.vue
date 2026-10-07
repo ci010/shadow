@@ -1,17 +1,18 @@
 <template>
   <div class="node-offline" role="status" :aria-busy="checking">
-    <div class="node-offline-heading"><span class="i-lucide-cloud-off" aria-hidden="true" /><strong>Node offline</strong></div>
+    <div class="node-offline-heading"><span class="i-lucide-cloud-off" aria-hidden="true" /><strong>{{ t('Node offline') }}</strong></div>
     <p>{{ description }}</p>
     <button class="node-offline-check" :disabled="checking" @click="$emit('retry')">
-      <span class="i-lucide-refresh-cw" aria-hidden="true" />{{ checking ? 'Checking…' : 'Check again' }}
+      <span class="i-lucide-refresh-cw" aria-hidden="true" />{{ checking ? t('Checking…') : t('Check again') }}
     </button>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 withDefaults(defineProps<{ checking?: boolean; description?: string }>(), {
   checking: false,
-  description: 'Files and Git changes will be available when the owning node reconnects.',
+  get description() { return t('Files and Git changes will be available when the owning node reconnects.') },
 })
 defineEmits<{ retry: [] }>()
 </script>

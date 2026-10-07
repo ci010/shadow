@@ -2,23 +2,25 @@
   <article class="work-item-card" :class="{ selected }" :data-work-key="item.key">
     <button type="button" class="work-title" :aria-pressed="selected" @click="$emit('select', item.key)">{{ item.title }}</button>
     <div class="work-item-state"><span :class="`status-${item.status}`">{{ workStatus(item) }}</span>
-      <span v-if="item.paused">Paused</span>
-      <span v-if="item.proposals" class="review">Review needed</span>
-      <span v-else-if="item.interpretationReview" class="review">Clarification needed</span>
+      <span v-if="item.paused">{{ t('Paused') }}</span>
+      <span v-if="item.proposals" class="review">{{ t('Review needed') }}</span>
+      <span v-else-if="item.interpretationReview" class="review">{{ t('Clarification needed') }}</span>
     </div>
     <button v-if="item.assignee && sessionExists" type="button" class="work-assignee" :title="item.assignee" @click="$emit('session', item.assignee)">
       <span class="i-lucide-message-square" aria-hidden="true" />{{ sessionTitle }}<span class="i-lucide-arrow-up-right" aria-hidden="true" />
     </button>
-    <span v-else class="work-unassigned">{{ item.assignee ? 'Session unavailable' : 'Unassigned' }}</span>
+    <span v-else class="work-unassigned">{{ item.assignee ? t('Session unavailable') : t('Unassigned') }}</span>
     <p v-if="item.blockedReason" class="work-blocker">{{ item.blockedReason }}</p>
-    <p v-if="item.dependencies.length" class="work-dependencies">{{ item.dependencies.length }} {{ item.dependencies.length === 1 ? 'dependency' : 'dependencies' }}</p>
+    <p v-if="item.dependencies.length" class="work-dependencies">{{ item.dependencies.length }} {{ item.dependencies.length === 1 ? t('dependency') : t('dependencies') }}</p>
     <p v-for="link in item.github" :key="link.url" class="work-github">
       <a :href="link.url" target="_blank" rel="noopener noreferrer">{{ link.repository }}#{{ link.number }}</a>
-      · {{ link.state }}<template v-if="link.ci"> · CI {{ link.ci }} · {{ link.review }}</template>
+      · {{ enumLabel(link.state) }}<template v-if="link.ci"> · CI {{ enumLabel(link.ci) }} · {{ enumLabel(link.review) }}</template>
     </p>
   </article>
 </template>
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t } from '../i18n.ts'
 import type { ProjectWorkItem } from '../../../src/projects/work-overview.ts'
 import { workStatus } from '../project-work.ts'
 defineProps<{ item: ProjectWorkItem; selected: boolean; sessionTitle: string; sessionExists: boolean }>()

@@ -1,25 +1,26 @@
 <template>
-  <section v-if="jobs.length || initialLoading || error" class="automations-sidebar" aria-label="Automations" :aria-busy="loading">
-    <h3 v-if="!rail">Automations</h3>
+  <section v-if="jobs.length || initialLoading || error" class="automations-sidebar" :aria-label="t('Automations')" :aria-busy="loading">
+    <h3 v-if="!rail">{{ t('Automations') }}</h3>
     <div v-if="error" class="automations-error" role="alert">
       <p v-if="!rail">{{ error }}</p>
-      <button type="button" class="text-action" aria-label="Retry automations" @click="refresh">Retry</button>
+      <button type="button" class="text-action" :aria-label="t('Retry automations')" @click="refresh">{{ t('Retry') }}</button>
     </div>
-    <p v-if="initialLoading && !error && !rail" class="automations-note" role="status">Loading automations…</p>
-    <HoverInfo v-for="job in jobs" :key="job.id" :text="`${job.name} · Fresh context per run`"><template #default="{ triggerProps }">
+    <p v-if="initialLoading && !error && !rail" class="automations-note" role="status">{{ t('Loading automations…') }}</p>
+    <HoverInfo v-for="job in jobs" :key="job.id" :text="t('{name} · Fresh context per run', { name: job.name })"><template #default="{ triggerProps }">
       <button type="button" class="automation-entry" v-bind="triggerProps" :class="{ selected: selectedId === job.id, 'is-rail': rail }"
-        :aria-label="`Open automation ${job.name}`" :aria-current="selectedId === job.id ? 'page' : undefined"
+        :aria-label="t('Open automation {name}', { name: job.name })" :aria-current="selectedId === job.id ? 'page' : undefined"
         :data-automation-id="job.id" @click="$emit('select', job.id)">
         <span class="i-lucide-repeat-2 automation-icon" aria-hidden="true" />
         <span v-if="!rail" class="automation-name">{{ job.name }}</span>
         <SessionActivity v-if="working(job.id)" :stage="working(job.id)" compact :icon-only="rail" :title="undefined" />
-        <span v-else-if="!job.enabled && !rail" class="automation-history">Inactive</span>
+        <span v-else-if="!job.enabled && !rail" class="automation-history">{{ t('Inactive') }}</span>
       </button>
     </template></HoverInfo>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import HoverInfo from './HoverInfo.vue'
 import SessionActivity from './SessionActivity.vue'

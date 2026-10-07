@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 export interface ImagePreview {
   src: string
   name: string
@@ -43,5 +44,5 @@ export function imagePreviewFromEvent(event: MouseEvent | KeyboardEvent): ImageP
   if (!image?.getAttribute('src')) return
   const src = image.currentSrc || image.src
   if (!isPreviewImageUrl(src)) return
-  return { src, name: image.alt || 'Image', trigger }
+  return { src, name: image.alt || t('Image'), trigger }
 }

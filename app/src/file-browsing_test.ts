@@ -572,8 +572,8 @@ test('scratch workbenches hide the explorer and Git without losing the expansion
     await renderToString(createSSRApp(probe, { apiBase: 'http://localhost', contextKey: 'test', active: true, ...identity }))
   }
   const source = readFileSync(new URL('./components/files/FileWorkbench.vue', import.meta.url), 'utf8')
-  assert.match(source, /<aside v-if="explorerAvailable"/)
-  assert.match(source, /<HoverInfo v-if="explorerAvailable" text="Toggle files \(Ctrl\+Shift\+E\)"/)
+  assert.match(source, /<aside v-if="explorerAvailable \|\| \(tabs\.knowledge && knowledgeEnabled\)"/)
+  assert.match(source, /<HoverInfo v-if="explorerAvailable \|\| knowledgeSelected" :text="knowledgeSelected \? t\('Toggle Knowledge navigation \(Ctrl\+Shift\+E\)'\) : t\('Toggle files \(Ctrl\+Shift\+E\)'\)"/)
 })
 
 test('memory event previews retain original source, scoped quotes and view state without refetching', async t => {

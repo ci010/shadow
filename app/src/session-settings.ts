@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
 import { isGptModel, isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
@@ -12,13 +13,13 @@ export interface ConversationSettings extends ReasoningSettings {
 }
 
 export const effortOptions = [
-  { value: 'default', label: 'Default', description: 'Use project thinking and effort settings' },
-  { value: 'none', label: 'None', description: 'No thinking' },
-  { value: 'low', label: 'Low', description: '' },
-  { value: 'medium', label: 'Medium', description: '' },
-  { value: 'high', label: 'High', description: '' },
-  { value: 'xhigh', label: 'XHigh', description: '' },
-  { value: 'max', label: 'Max', description: '' },
+  { value: 'default', get label() { return t('Default') }, get description() { return t('Use project thinking and effort settings') } },
+  { value: 'none', get label() { return t('None') }, get description() { return t('No thinking') } },
+  { value: 'low', get label() { return t('Low') }, description: '' },
+  { value: 'medium', get label() { return t('Medium') }, description: '' },
+  { value: 'high', get label() { return t('High') }, description: '' },
+  { value: 'xhigh', get label() { return t('XHigh') }, description: '' },
+  { value: 'max', get label() { return t('Max') }, description: '' },
 ] as const
 
 export type EffortChoice = typeof effortOptions[number]['value']
@@ -52,17 +53,17 @@ export async function updateSessionSettings(
     body: JSON.stringify(patch),
     signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
   })
-  if (!response.ok) throw new Error(`Could not save conversation settings (${response.status}). Please try again.`)
+  if (!response.ok) throw new Error(t('Could not save conversation settings ({status}). Please try again.', { status: response.status }))
   const data: unknown = await response.json()
   if (!isRecord(data) || data.key !== sessionId
     || (data.config !== undefined && data.config !== null && !isRecord(data.config))) {
-    throw new Error('Main returned invalid conversation settings. Please try again.')
+    throw new Error(t('Main returned invalid conversation settings. Please try again.'))
   }
   const config = isRecord(data.config) ? data.config : {}
   if ((config.model !== undefined && (typeof config.model !== 'string' || !config.model.trim()))
     || (config.thinking !== undefined && (!isRecord(config.thinking) || !['enabled', 'disabled'].includes(String(config.thinking.type))))
     || (config.reasoningEffort !== undefined && !isReasoningEffort(config.reasoningEffort))) {
-    throw new Error('Main returned invalid conversation settings. Please try again.')
+    throw new Error(t('Main returned invalid conversation settings. Please try again.'))
   }
   return {
     ...(typeof config.model === 'string' ? { model: config.model } : {}),

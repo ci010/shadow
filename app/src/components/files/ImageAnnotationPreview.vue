@@ -1,11 +1,11 @@
 <template>
-  <section ref="preview" class="image-annotation-preview" :aria-label="`Image preview: ${name}`" :aria-busy="loading || busy">
+  <section ref="preview" class="image-annotation-preview" :aria-label="t('Image preview: {name}', { name: name })" :aria-busy="loading || busy">
     <div class="image-annotation-toolbar">
-      <div class="image-annotation-colors" role="group" aria-label="Marker color">
-        <HoverInfo v-for="swatch in palette" :key="swatch.color" :text="`${swatch.label} marker`">
+      <div class="image-annotation-colors" role="group" :aria-label="t('Marker color')">
+        <HoverInfo v-for="swatch in palette" :key="swatch.color" :text="t('{label} marker', { label: swatch.label })">
           <template #default="{ triggerProps }">
             <button v-bind="triggerProps" type="button" class="image-annotation-swatch"
-              :style="{ '--marker-color': swatch.color }" :aria-label="`${swatch.label} marker`"
+              :style="{ '--marker-color': swatch.color }" :aria-label="t('{label} marker', { label: swatch.label })"
               :aria-pressed="color === swatch.color" :disabled="!canEdit" @click="color = swatch.color">
               <span aria-hidden="true">{{ color === swatch.color ? '✓' : '' }}</span>
             </button>
@@ -14,8 +14,8 @@
         <HoverInfo text="Choose a custom marker color">
           <template #default="{ triggerProps }">
             <label class="image-annotation-custom">
-              <span>Color</span>
-              <input v-bind="triggerProps" v-model="color" type="color" aria-label="Custom marker color" :disabled="!canEdit">
+              <span>{{ t('Color') }}</span>
+              <input v-bind="triggerProps" v-model="color" type="color" :aria-label="t('Custom marker color')" :disabled="!canEdit">
             </label>
           </template>
         </HoverInfo>
@@ -23,52 +23,53 @@
       <div class="image-annotation-actions">
         <HoverInfo text="Undo the last stroke (Ctrl+Z)">
           <template #default="{ triggerProps }">
-            <button v-bind="triggerProps" type="button" class="image-annotation-undo" aria-label="Undo last stroke" aria-keyshortcuts="Control+Z"
-              :disabled="!canUndo" @click="undoStroke">Undo</button>
+            <button v-bind="triggerProps" type="button" class="image-annotation-undo" :aria-label="t('Undo last stroke')" aria-keyshortcuts="Control+Z"
+              :disabled="!canUndo" @click="undoStroke">{{ t('Undo') }}</button>
           </template>
         </HoverInfo>
         <HoverInfo text="Remove all marks and the marked image from the next message">
           <template #default="{ triggerProps }">
             <button v-bind="triggerProps" type="button" class="image-annotation-clear"
-              :disabled="!editable || !active || !hasMarks" @click="clearMarks">Clear</button>
+              :disabled="!editable || !active || !hasMarks" @click="clearMarks">{{ t('Clear') }}</button>
           </template>
         </HoverInfo>
       </div>
     </div>
     <p class="image-annotation-hint">
-      {{ sourceError ? 'Image preview · References unavailable' : editable ? 'Draw to mark · Ctrl-drag to attach' : 'Marking unavailable in this chat · Ctrl-drag to attach elsewhere' }}
+      {{ sourceError ? t('Image preview · References unavailable') : editable ? t('Draw to mark · Ctrl-drag to attach') : t('Marking unavailable in this chat · Ctrl-drag to attach elsewhere') }}
     </p>
-    <p v-if="loading" class="image-annotation-status" role="status">Loading image…</p>
+    <p v-if="loading" class="image-annotation-status" role="status">{{ t('Loading image…') }}</p>
     <div v-if="loaded && sourceError" class="image-annotation-error image-annotation-source-error" role="status">
-      <p>{{ sourceError }} You can still view the image; marking and references are disabled until its source is available.</p>
-      <button type="button" class="image-annotation-retry image-annotation-source-retry" @click="loadImage">Reload image source</button>
+      <p>{{ sourceError }} {{ t('You can still view the image; marking and references are disabled until its source is available.') }}</p>
+      <button type="button" class="image-annotation-retry image-annotation-source-retry" @click="loadImage">{{ t('Reload image source') }}</button>
     </div>
     <div v-if="loadError || exportError" class="image-annotation-error" role="alert">
       <p>{{ loadError || exportError }}</p>
       <button type="button" class="image-annotation-retry" :disabled="busy || (!loadError && !canEdit)"
-        @click="retry">{{ loadError ? 'Retry image' : 'Retry marked image' }}</button>
+        @click="retry">{{ loadError ? t('Retry image') : t('Retry marked image') }}</button>
     </div>
     <div v-show="loaded" class="image-annotation-stage">
       <canvas ref="canvas" class="image-annotation-canvas" :class="{ 'is-readonly': !editable || !!sourceError, 'is-drag-ready': dragReady }"
-        :draggable="dragReady" :aria-label="`${name}. ${editable && !sourceError ? 'Hold the pointer and draw to mark the image.' : 'Read-only image preview.'}`"
+        :draggable="dragReady" :aria-label="`${name}. ${editable && !sourceError ? t('Hold the pointer and draw to mark the image.') : t('Read-only image preview.')}`"
         role="img" tabindex="0" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"
         @pointercancel="pointerCancel" @lostpointercapture="lostPointerCapture"
         @dragstart="dragStart" @dragend="dragEnd" @contextmenu="contextMenu" />
     </div>
     <p v-if="busy" class="image-annotation-status" role="status">
-      {{ drawing ? 'Marking image…' : 'Preparing marked image…' }}
+      {{ drawing ? t('Marking image…') : t('Preparing marked image…') }}
     </p>
     <p v-else-if="hasMarks && !exportError" class="image-annotation-status" role="status">
-      {{ editable ? 'Marked preview · Finish a stroke to update the attached copy.' : 'Marked preview · Ctrl-drag to attach elsewhere' }}
+      {{ editable ? t('Marked preview · Finish a stroke to update the attached copy.') : t('Marked preview · Ctrl-drag to attach elsewhere') }}
     </p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import HoverInfo from '../HoverInfo.vue'
 import { imageSourcePath, startImageReferenceDrag, type ImageContextBusy, type ImageContextUpdate } from '../../image-context.ts'
-import { AnnotationPointer, annotationPoint, annotationSizeError, drawAnnotationStroke, isAnnotationUndo, markedImageName, type AnnotationPoint, type AnnotationStroke } from '../../image-annotation.ts'
+import { AnnotationLoadError, AnnotationPointer, annotationLoadErrorMessage, annotationPoint, annotationSizeError, drawAnnotationStroke, isAnnotationUndo, markedImageName, type AnnotationPoint, type AnnotationStroke } from '../../image-annotation.ts'
 
 const props = defineProps<{
   src: string
@@ -84,9 +85,9 @@ const emit = defineEmits<{
   'image-busy': [payload: ImageContextBusy]
 }>()
 const palette = [
-  { label: 'Red', color: '#ef4444' },
-  { label: 'Amber', color: '#f59e0b' },
-  { label: 'Blue', color: '#3b82f6' },
+  { get label() { return t('Red') }, color: '#ef4444' },
+  { get label() { return t('Amber') }, color: '#f59e0b' },
+  { get label() { return t('Blue') }, color: '#3b82f6' },
 ]
 const canvas = ref<HTMLCanvasElement>()
 const preview = ref<HTMLElement>()
@@ -124,7 +125,7 @@ function updateContext(file: File | null) {
   if (!disposed) emit('image-context', { ...identity, file, ...(file ? { source: imageSource(true) } : {}) })
 }
 function imageSource(modified: boolean) {
-  if (!originalPath) throw new Error('The image source is unavailable. Reopen the image to retry.')
+  if (!originalPath) throw new Error(t('The image source is unavailable. Reopen the image to retry.'))
   return { path: originalPath, modified }
 }
 function setBusy(value: boolean) {
@@ -176,20 +177,20 @@ async function loadImage() {
   try {
     const response = await fetch(props.src, { signal: abort.signal })
     if (disposed || generation !== loadGeneration || abort.signal.aborted) return
-    if (!response.ok) throw new Error(`Image request failed (HTTP ${response.status}). Retry or open the raw image.`)
+    if (!response.ok) throw new AnnotationLoadError(t('Image request failed (HTTP {status}). Retry or open the raw image.', { status: response.status }))
     let sourcePath: string | undefined
     try {
       sourcePath = imageSourcePath(response.headers)
     } catch (error) {
-      sourceError.value = error instanceof Error ? error.message : 'The image source could not be read. Reload the image source to retry.'
+      sourceError.value = error instanceof Error ? error.message : t('The image source could not be read. Reload the image source to retry.')
     }
     const length = Number(response.headers.get('content-length'))
     const headerError = annotationSizeError(length)
-    if (headerError) throw new Error(headerError)
+    if (headerError) throw new AnnotationLoadError(headerError)
     const blob = await response.blob()
     const sizeError = annotationSizeError(blob.size)
-    if (sizeError) throw new Error(sizeError)
-    if (!blob.type.toLowerCase().startsWith('image/')) throw new Error('The response is not an image. Retry or open the raw image.')
+    if (sizeError) throw new AnnotationLoadError(sizeError)
+    if (!blob.type.toLowerCase().startsWith('image/')) throw new AnnotationLoadError(t('The response is not an image. Retry or open the raw image.'))
     if (disposed || generation !== loadGeneration) return
     url = URL.createObjectURL(blob)
     objectUrl = url
@@ -198,10 +199,10 @@ async function loadImage() {
     await decoded.decode()
     if (disposed || generation !== loadGeneration) return
     const dimensionError = annotationSizeError(blob.size, decoded.naturalWidth, decoded.naturalHeight)
-    if (dimensionError) throw new Error(dimensionError)
+    if (dimensionError) throw new AnnotationLoadError(dimensionError)
     const target = canvas.value
     const context = target?.getContext('2d')
-    if (!target || !context) throw new Error('Image drawing is unavailable. Retry or open the raw image.')
+    if (!target || !context) throw new AnnotationLoadError(t('Image drawing is unavailable. Retry or open the raw image.'))
     target.width = decoded.naturalWidth
     target.height = decoded.naturalHeight
     context.drawImage(decoded, 0, 0)
@@ -213,8 +214,7 @@ async function loadImage() {
     loaded.value = true
   } catch (error) {
     if (disposed || generation !== loadGeneration || abort.signal.aborted) return
-    loadError.value = error instanceof Error && error.message.includes('image')
-      ? error.message : 'This image could not be decoded safely. Retry or open the raw image.'
+    loadError.value = annotationLoadErrorMessage(error)
   } finally {
     if (url) {
       URL.revokeObjectURL(url)
@@ -327,10 +327,10 @@ function finishStroke() {
   exportMarkedImage()
 }
 function pointerCancel(event: PointerEvent) {
-  if (pointer.owns(event.pointerId)) cancelPending('Drawing was interrupted. Retry marked image to attach the visible marks.')
+  if (pointer.owns(event.pointerId)) cancelPending(t('Drawing was interrupted. Retry marked image to attach the visible marks.'))
 }
 function lostPointerCapture(event: PointerEvent) {
-  if (pointer.owns(event.pointerId)) cancelPending('Drawing was interrupted. Retry marked image to attach the visible marks.')
+  if (pointer.owns(event.pointerId)) cancelPending(t('Drawing was interrupted. Retry marked image to attach the visible marks.'))
 }
 function exportMarkedImage() {
   const target = canvas.value
@@ -342,7 +342,7 @@ function exportMarkedImage() {
   function fail() {
     updateContext(null)
     markedFile = undefined
-    exportError.value = 'The marked image could not be prepared. Retry marked image or clear the marks.'
+    exportError.value = t('The marked image could not be prepared. Retry marked image or clear the marks.')
     setBusy(false)
   }
   try {
@@ -386,7 +386,7 @@ function keyChange(event: KeyboardEvent) {
 }
 function windowBlur() {
   controlHeld.value = false
-  if (pointer.active) cancelPending('Drawing was interrupted. Retry marked image to attach the visible marks.')
+  if (pointer.active) cancelPending(t('Drawing was interrupted. Retry marked image to attach the visible marks.'))
 }
 watch(() => [props.src, props.sourceKey, props.contextKey], () => {
   cancelPending()
@@ -394,7 +394,7 @@ watch(() => [props.src, props.sourceKey, props.contextKey], () => {
   void loadImage()
 })
 watch(() => props.editable, (editable) => {
-  if (!editable && busy.value) cancelPending('Marking paused. Retry marked image when this chat is editable.')
+  if (!editable && busy.value) cancelPending(t('Marking paused. Retry marked image when this chat is editable.'))
 })
 watch(() => props.active, (active) => {
   if (!active) {

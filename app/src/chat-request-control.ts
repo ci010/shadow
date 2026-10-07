@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { reactive } from 'vue'
 import { apiUrl } from './api-url.ts'
 
@@ -31,7 +32,7 @@ export function createChatRequestControl(
     const requestId = state.requestId
     if (!requestId) {
       state.stopping = false
-      state.error = 'Current request identity is unavailable. Refresh activity and retry Stop request. No cancellation was sent.'
+      state.error = t('Current request identity is unavailable. Refresh activity and retry Stop request. No cancellation was sent.')
       return
     }
     state.stopping = true
@@ -49,7 +50,7 @@ export function createChatRequestControl(
         if (!response.ok || !result || typeof result !== 'object'
           || !('sessionId' in result) || result.sessionId !== target
           || !('status' in result) || (result.status !== 'requested' && result.status !== 'idle')) {
-          throw new Error(`Could not stop the request (${response.status}). It may still be running. Retry Stop request.`)
+          throw new Error(t('Could not stop the request ({status}). It may still be running. Retry Stop request.', { status: response.status }))
         }
         // An abort acknowledgement is not completion: tools may still be unwinding.
         if (result.status === 'idle') finish()
@@ -57,7 +58,7 @@ export function createChatRequestControl(
         if (state.phase !== 'finished') {
           state.stopping = false
           state.error = cause instanceof Error
-            ? cause.message : 'Could not stop the request. It may still be running. Retry Stop request.'
+            ? cause.message : t('Could not stop the request. It may still be running. Retry Stop request.')
         }
       } finally {
         cancellation = undefined
@@ -120,7 +121,7 @@ export async function resumeChatRequest(
       || !('recoveryId' in result) || result.recoveryId !== recoveryId
       || !('requestId' in result) || typeof result.requestId !== 'string' || !result.requestId
       || !('status' in result) || result.status !== 'accepted') {
-      throw new Error(`Could not continue this conversation (${response.status}). Refresh its status before trying again.`)
+      throw new Error(t('Could not continue this conversation ({status}). Refresh its status before trying again.', { status: response.status }))
     }
     control.admitted(result.requestId)
   } catch (error) {

@@ -1,3 +1,4 @@
+import { t, formatNumber } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { parseTopicMetadata, type TopicMetadata } from './project-coordination.ts'
 
@@ -16,7 +17,7 @@ export interface SessionDetails {
 
 const tokenCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 const nullableString = (value: unknown): value is string | null => value === null || typeof value === 'string'
-const invalid = () => new Error('Could not read session details. Reopen the menu to retry.')
+const invalid = () => new Error(t('Could not read session details. Reopen the menu to retry.'))
 
 function nullableCount(value: unknown): number | null {
   if (value === null) return null
@@ -65,9 +66,8 @@ export function parseSessionDetails(value: unknown, sessionId: string): SessionD
   }
 }
 
-const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 export function formatTokenCount(value: number): string {
-  return compact.format(value)
+  return formatNumber(value, { notation: 'compact', maximumFractionDigits: 1 })
 }
 
 export function contextPercent(context: SessionDetails['context']): number | null {

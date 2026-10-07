@@ -1,11 +1,11 @@
 <template>
   <Teleport to="body">
-    <div v-if="selection" ref="menu" class="selection-menu" role="menu" aria-label="Text selection" :style="position" @pointerdown.prevent>
-      <button role="menuitem" aria-keyshortcuts="Q" :disabled="!canQuote" :title="canQuote ? 'Insert quote into the message' : 'Quoting needs an editable conversation'" @click="quote">
-        <span class="i-lucide-quote" aria-hidden="true" /><span>Quote</span><kbd>q</kbd>
+    <div v-if="selection" ref="menu" class="selection-menu" role="menu" :aria-label="t('Text selection')" :style="position" @pointerdown.prevent>
+      <button role="menuitem" aria-keyshortcuts="Q" :disabled="!canQuote" :title="canQuote ? t('Insert quote into the message') : t('Quoting needs an editable conversation')" @click="quote">
+        <span class="i-lucide-quote" aria-hidden="true" /><span>{{ t('Quote') }}</span><kbd>q</kbd>
       </button>
       <button role="menuitem" aria-keyshortcuts="C" :disabled="copying" @click="copy">
-        <span class="i-lucide-copy" aria-hidden="true" /><span>Copy</span><kbd>c</kbd>
+        <span class="i-lucide-copy" aria-hidden="true" /><span>{{ t('Copy') }}</span><kbd>c</kbd>
       </button>
       <p v-if="error" class="selection-menu-error" role="alert">{{ error }}</p>
     </div>
@@ -13,6 +13,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { selectionAction } from '../selection-actions.ts'
 
@@ -61,7 +62,7 @@ async function copy(): Promise<void> {
     await navigator.clipboard.writeText(current.text)
     if (selection.value === current) finish()
   } catch (cause) {
-    if (selection.value === current) error.value = cause instanceof Error ? cause.message : 'Could not copy text. Try again.'
+    if (selection.value === current) error.value = cause instanceof Error ? cause.message : t('Could not copy text. Try again.')
   } finally { copying.value = false }
 }
 function capture(): void {

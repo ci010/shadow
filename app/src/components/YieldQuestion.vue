@@ -1,22 +1,22 @@
 <template>
-  <section v-if="enabled && (request || error)" class="yield-question" :class="{ 'yield-question-custom': customMode }" aria-label="Pending question">
+  <section v-if="enabled && (request || error)" class="yield-question" :class="{ 'yield-question-custom': customMode }" :aria-label="t('Pending question')">
     <form v-if="request" @submit.prevent="submit" @keydown="handleKeydown">
       <header class="yield-heading">
-        <span>{{ inputQuestion ? 'Input' : 'Decision' }} · {{ request.recipient.kind === 'user' ? 'Needs your reply' : request.recipient.kind === 'parent' ? 'Waiting for parent' : 'Waiting for caller' }}</span>
+        <span>{{ inputQuestion ? t('Input') : t('Decision') }} · {{ request.recipient.kind === 'user' ? t('Needs your reply') : request.recipient.kind === 'parent' ? t('Waiting for parent') : t('Waiting for caller') }}</span>
         <span class="i-lucide-signpost" aria-hidden="true" />
       </header>
       <div class="yield-body">
         <DecisionBrief v-if="decisionRequest?.brief" :brief="decisionRequest.brief" @inspect="emit('inspect', $event)" />
-        <section v-if="decisionRequest?.workProposal" class="work-proposal selectable-text" aria-label="Exact proposed work change">
-          <h3>Proposed work · v{{ decisionRequest.workProposal.baseRevision }}</h3>
-          <p>Change type: {{ decisionRequest.workProposal.change }} · New execution: {{ decisionRequest.workProposal.paused ? 'paused' : 'not paused' }}</p>
+        <section v-if="decisionRequest?.workProposal" class="work-proposal selectable-text" :aria-label="t('Exact proposed work change')">
+          <h3>{{ t('Proposed work · v') }}{{ decisionRequest.workProposal.baseRevision }}</h3>
+          <p>{{ t('Change type:') }} {{ decisionRequest.workProposal.change }} {{ t('· New execution:') }} {{ decisionRequest.workProposal.paused ? t('paused') : t('not paused') }}</p>
           <p>{{ decisionRequest.workProposal.definition.objective }}</p>
-          <p><strong>Acceptance:</strong> {{ decisionRequest.workProposal.definition.acceptance.join('; ') }}</p>
-          <p><strong>Boundaries:</strong> {{ decisionRequest.workProposal.definition.boundaries.join('; ') || 'Not recorded; no new permission' }}</p>
+          <p><strong>{{ t('Acceptance:') }}</strong> {{ decisionRequest.workProposal.definition.acceptance.join('; ') }}</p>
+          <p><strong>{{ t('Boundaries:') }}</strong> {{ decisionRequest.workProposal.definition.boundaries.join('; ') || t('Not recorded; no new permission') }}</p>
           <p>{{ decisionRequest.workProposal.reason }}</p>
-          <p class="yield-status">One approval applies this exact change. The executor must adopt the new version. A custom answer or timeout does not approve it.</p>
+          <p class="yield-status">{{ t('One approval applies this exact change. The executor must adopt the new version. A custom answer or timeout does not approve it.') }}</p>
         </section>
-        <p v-if="decisionRequest?.reportingSessionId" class="yield-status">Reporting responsibility: {{ decisionRequest.reportingSessionId }}. Answer authority is unchanged.</p>
+        <p v-if="decisionRequest?.reportingSessionId" class="yield-status">{{ t('Reporting responsibility:') }} {{ decisionRequest.reportingSessionId }}{{ t('. Answer authority is unchanged.') }}</p>
         <fieldset :disabled="!answerable || busy" :aria-describedby="`${id}-status${request.deadline ? ` ${id}-deadline` : ''}`">
           <legend class="selectable-text">{{ request.question }}</legend>
           <div v-if="decisionRequest" class="yield-options">
@@ -25,47 +25,48 @@
                 :checked="!customMode && selected === option" @change="selected = option; customMode = false">
               <span class="yield-index" aria-hidden="true">{{ optionLetter(index) }}</span>
               <span class="yield-option-text">{{ option }}</span>
-              <span v-if="option === decisionRequest.defaultOption" class="yield-default">Default</span>
+              <span v-if="option === decisionRequest.defaultOption" class="yield-default">{{ t('Default') }}</span>
               <span class="yield-selected i-lucide-check" :class="{ visible: !customMode && selected === option }" aria-hidden="true" />
             </label>
             <button type="button" class="yield-option yield-custom-toggle" :class="{ selected: customMode }"
               :aria-expanded="useComposer ? undefined : customMode" :aria-controls="useComposer ? composerId : `${id}-custom`" :aria-keyshortcuts="optionLetter(decisionRequest.options.length)" @click="openCustomResponse">
               <span class="yield-index" aria-hidden="true">{{ optionLetter(decisionRequest.options.length) }}</span>
-              <span class="yield-option-text">{{ useComposer ? 'Write your own answer in the message box below' : customMode ? 'Your answer' : 'Or type your own answer...' }}</span>
+              <span class="yield-option-text">{{ useComposer ? t('Write your own answer in the message box below') : customMode ? t('Your answer') : t('Or type your own answer...') }}</span>
               <span class="yield-selected i-lucide-check" :class="{ visible: customMode }" aria-hidden="true" />
             </button>
           </div>
-          <p v-if="useComposer && answerable" class="yield-composer-note">Type your answer in the message box below and send it to reply to this question. You can attach images and files.</p>
+          <p v-if="useComposer && answerable" class="yield-composer-note">{{ t('Type your answer in the message box below and send it to reply to this question. You can attach images and files.') }}</p>
           <div v-if="!useComposer && (customMode || inputQuestion)" :id="`${id}-custom`" class="yield-custom" :class="{ 'input-response': inputQuestion }">
-            <label :for="`${id}-response`" class="yield-sr-only">Your response</label>
+            <label :for="`${id}-response`" class="yield-sr-only">{{ t('Your response') }}</label>
             <textarea :id="`${id}-response`" ref="customInput" v-model="customText" rows="3" required
-              placeholder="Type your answer..." :maxlength="MAX_YIELD_CUSTOM_TEXT_LENGTH" />
+              :placeholder="t('Type your answer...')" :maxlength="MAX_YIELD_CUSTOM_TEXT_LENGTH" />
           </div>
         </fieldset>
         <p :id="`${id}-status`" class="yield-status" :class="{ 'yield-sr-only': answerable }">{{ request.recipient.kind === 'parent'
-          ? 'Waiting for the parent session. Only that session can answer.' : request.recipient.kind === 'caller' ? 'Waiting for the authenticated A2A caller.'
-          : canAnswer ? inputQuestion ? 'Provide the requested information. This reply does not grant new permissions.' : 'Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.' : 'Waiting for an authorized user. You have read-only access.' }}</p>
+          ? t('Waiting for the parent session. Only that session can answer.') : request.recipient.kind === 'caller' ? t('Waiting for the authenticated A2A caller.')
+          : canAnswer ? inputQuestion ? t('Provide the requested information. This reply does not grant new permissions.') : t('Choose an option, then Continue, or write your own answer. Letter keys select options while this question is focused.') : t('Waiting for an authorized user. You have read-only access.') }}</p>
         <p v-if="request.deadline || decisionRequest?.timeoutPaused || inputQuestion" :id="`${id}-deadline`" class="yield-status">{{ yieldDeadlineText(request, now) }}</p>
-        <p v-if="decisionRequest?.supersedes" class="yield-status">Revised in response to your feedback: {{ decisionRequest.revisionReason }}. This is a new unanswered version.</p>
+        <p v-if="decisionRequest?.supersedes" class="yield-status">{{ t('Revised in response to your feedback:') }} {{ decisionRequest.revisionReason }}{{ t('. This is a new unanswered version.') }}</p>
         <DecisionDiscussion v-if="decisionRequest?.origin && !decisionRequest.ownerOnly && answerable" :exact-proposal="!!decisionRequest.workProposal"
           :key="request.id" :reference="{ sessionId: request.sessionId, physicalId: decisionRequest.origin.physicalId, requestId: request.id }"
           :api-base="apiBase" :can-request="answerable && !busy" @updated="refresh" />
       </div>
       <div class="yield-actions">
-        <button v-if="error" class="btn yield-reload" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? 'Reloading…' : 'Reload question' }}</button>
-        <button v-if="answerable" class="btn yield-cancel" type="button" :disabled="busy" :title="decisionRequest?.ownerOnly ? 'Cancel only this confirmation without choosing an option' : 'Cancel this question and stop the current task without choosing an option'" @click="cancelQuestion">{{ cancelling ? 'Cancelling…' : decisionRequest?.ownerOnly ? 'Cancel confirmation' : 'Cancel task' }}</button>
+        <button v-if="error" class="btn yield-reload" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? t('Reloading…') : t('Reload question') }}</button>
+        <button v-if="answerable" class="btn yield-cancel" type="button" :disabled="busy" :title="decisionRequest?.ownerOnly ? t('Cancel only this confirmation without choosing an option') : t('Cancel this question and stop the current task without choosing an option')" @click="cancelQuestion">{{ cancelling ? t('Cancelling…') : decisionRequest?.ownerOnly ? t('Cancel confirmation') : t('Cancel task') }}</button>
         <button v-if="answerable && !(useComposer && (inputQuestion || customMode))" class="btn yield-continue" type="submit" :disabled="busy || (customMode && !customText.trim())">
-          <span>{{ submitting ? 'Submitting…' : customMode ? 'Send response' : 'Continue' }}</span>
+          <span>{{ submitting ? t('Submitting…') : customMode ? t('Send response') : t('Continue') }}</span>
           <span v-if="!customMode" class="i-lucide-corner-down-left yield-enter" aria-hidden="true" />
         </button>
       </div>
     </form>
     <p v-if="error" class="yield-error" role="alert">{{ error }}</p>
-    <button v-if="error && !request" class="btn btn-sm" type="button" :disabled="loading" @click="refresh">{{ loading ? 'Retrying…' : 'Retry' }}</button>
+    <button v-if="error && !request" class="btn btn-sm" type="button" :disabled="loading" @click="refresh">{{ loading ? t('Retrying…') : t('Retry') }}</button>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText, isInputRequest, type AskRequest } from '../yield-requests.ts'
 import DecisionDiscussion from './DecisionDiscussion.vue'

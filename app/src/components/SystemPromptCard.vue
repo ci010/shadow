@@ -11,9 +11,9 @@
     >
       <div class="text-xs text-ink/50 font-600 uppercase tracking-widest flex items-center gap-2">
         <span v-if="collapsible" class="card-chevron" v-html="collapsed ? '&#9654;' : '&#9660;'" />
-        {{ title }}
+        {{ title || t('System Prompt') }}
         <span v-if="prompt && showTokenEstimate" class="font-400 normal-case tracking-normal text-ink/35">
-          (~{{ Math.round(prompt.length / 4) }} tokens)
+          (~{{ Math.round(prompt.length / 4) }} {{ t('tokens)') }}
         </span>
       </div>
       <button
@@ -24,7 +24,7 @@
         @click.stop="copy"
       >
         <span class="w-3 h-3" :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />
-        {{ copied ? 'Copied!' : 'Copy' }}
+        {{ copied ? t('Copied!') : t('Copy') }}
       </button>
     </div>
     <p v-if="copyError && !embedded" class="copy-error" role="alert">{{ copyError }}</p>
@@ -41,6 +41,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import DOMPurify from 'dompurify'
 import { useMobileResources } from '../mobile-resources.ts'
@@ -70,7 +71,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   emptyMessage: '',
   showTokenEstimate: false,
-  title: 'System Prompt',
+  title: '',
   collapsible: false,
 })
 

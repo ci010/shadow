@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { SidebarSession } from './folders-sidebar.ts'
 import type { ChannelSetupStatus, ChannelState } from '../../src/channels/setup-contract.ts'
 import { channelStateLabel } from './channel-settings.ts'
@@ -18,7 +19,7 @@ export interface BotConversationGroup {
   connection: ReturnType<typeof botConnectionIndicator>
 }
 
-const platformNames: Record<string, string> = { qq: 'QQ', discord: 'Discord', feishu: 'Feishu' }
+const platformNames: Record<string, string> = { qq: 'QQ', discord: 'Discord', get feishu() { return t('Feishu') } }
 export function botPlatformLabel(platform: string) { return platformNames[platform] ?? platform }
 const connectionIcons: Record<ChannelState, string> = {
   connected: 'i-lucide-circle-check', connecting: 'i-lucide-loader-circle',
@@ -30,7 +31,7 @@ const connectionIcons: Record<ChannelState, string> = {
 export function botConnectionIndicator(connection?: SidebarBot['connection']) {
   return {
     state: connection?.state ?? 'unknown',
-    label: connection ? channelStateLabel(connection) : 'Connection status unavailable',
+    label: connection ? channelStateLabel(connection) : t('Connection status unavailable'),
     icon: connection ? connectionIcons[connection.state] : 'i-lucide-circle-help',
   }
 }
@@ -67,7 +68,7 @@ export function restoreCollapsedBots(storage: Pick<Storage, 'getItem'>, apiBase:
   const raw = storage.getItem(botSidebarStorageKey(apiBase, projectId))
   if (raw === null) return new Set()
   const value: unknown = JSON.parse(raw)
-  if (!Array.isArray(value) || value.some(id => typeof id !== 'string' || !id)) throw new TypeError('Invalid bot sidebar preferences')
+  if (!Array.isArray(value) || value.some(id => typeof id !== 'string' || !id)) throw new TypeError(t('Invalid bot sidebar preferences'))
   return new Set(value)
 }
 

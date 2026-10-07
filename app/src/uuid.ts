@@ -1,8 +1,9 @@
+import { t } from './i18n.ts'
 export function createUuid(): string {
   const crypto = globalThis.crypto
   if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID()
   if (typeof crypto?.getRandomValues !== 'function') {
-    throw new Error('Secure random number generation is unavailable. Use a browser with Web Crypto support.')
+    throw new Error(t('Secure random number generation is unavailable. Use a browser with Web Crypto support.'))
   }
 
   const bytes = new Uint8Array(16)

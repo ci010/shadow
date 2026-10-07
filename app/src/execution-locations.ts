@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { FolderRecord, FoldersClient } from './folders-client.ts'
 import { capabilityAvailability, type NodeInventoryEntry } from './node-inventory.ts'
 import { createFolderChatDraft, createRemoteChatDraft, type RemoteNodeTarget } from './remote-conversations.ts'
@@ -22,7 +23,7 @@ export function projectFolderTargets(projectId: string, folders: readonly Folder
     return {
       folder, available,
       detail: `${node?.displayName ?? folder.workdir.nodeId} · ${folder.path}`,
-      ...(!available ? { unavailableReason: node?.connection === 'revoked' ? 'Revoked' : 'Unavailable' } : {}),
+      ...(!available ? { unavailableReason: node?.connection === 'revoked' ? t('Revoked') : t('Unavailable') } : {}),
     }
   })
 }
@@ -31,7 +32,7 @@ export function createExecutionLocationDraft(
   apiBase: string, projectId: string, client: Pick<FoldersClient, 'createSession'>, location?: ExecutionLocation,
 ) {
   if (location?.kind === 'folder' && location.folder.projectId !== projectId) {
-    throw new Error('This folder does not belong to the current project. Refresh the locations and retry.')
+    throw new Error(t('This folder does not belong to the current project. Refresh the locations and retry.'))
   }
   return location?.kind === 'node'
     ? createRemoteChatDraft(apiBase, location.node)

@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { sessionNavigationParent, type SidebarSession } from './folders-sidebar.ts'
 import type { SessionStage } from './session-activity.ts'
 
@@ -73,8 +74,9 @@ export function subagentActivityLabel(activity?: SubagentActivity): string {
   if (!activity) return ''
   return (['running', 'waiting', 'pending'] as const).flatMap(kind => {
     const count = activity[kind]
-    const state = kind === 'running' ? 'working' : kind === 'waiting' ? 'waiting for a response' : 'pending'
-    return count ? [`${count} subagent${count === 1 ? '' : 's'} ${state}`] : []
+    const message = kind === 'running' ? '{count} subagents working'
+      : kind === 'waiting' ? '{count} subagents waiting for a response' : '{count} subagents pending'
+    return count ? [t(message, { count }, count)] : []
   }).join(', ')
 }
 

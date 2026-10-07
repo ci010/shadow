@@ -4,22 +4,22 @@
       <header class="memory-record-meta">
         <strong>{{ record.event.who }}</strong>
         <span v-if="record.event.when">{{ memoryEventTime(record.event.when) }}</span>
-        <span class="memory-record-line">Line {{ record.start }}</span>
+        <span class="memory-record-line">{{ t('Line') }} {{ record.start }}</span>
       </header>
       <p class="memory-record-what">{{ record.event.what }}</p>
       <dl class="memory-record-details">
         <template v-if="record.event.why">
-          <dt>Why</dt><dd>{{ record.event.why }}</dd>
+          <dt>{{ t('Why') }}</dt><dd>{{ record.event.why }}</dd>
         </template>
         <template v-if="record.event.challenge">
-          <dt>Challenge</dt><dd>{{ record.event.challenge }}</dd>
+          <dt>{{ t('Challenge') }}</dt><dd>{{ record.event.challenge }}</dd>
         </template>
         <template v-if="record.event.refs?.length">
-          <dt>References</dt>
+          <dt>{{ t('References') }}</dt>
           <dd><ul class="memory-record-refs"><li v-for="(reference, index) in record.event.refs" :key="index"><code>{{ reference }}</code></li></ul></dd>
         </template>
         <template v-if="record.event.origin">
-          <dt>Session</dt><dd class="memory-record-origin">{{ record.event.origin }}</dd>
+          <dt>{{ t('Session') }}</dt><dd class="memory-record-origin">{{ record.event.origin }}</dd>
         </template>
         <template v-for="field in record.extra" :key="field.name">
           <dt>{{ field.name }}</dt><dd>{{ field.value }}</dd>
@@ -27,13 +27,14 @@
       </dl>
     </template>
     <template v-else>
-      <p class="memory-record-warning" role="status">Line {{ record.start }} · {{ record.message }}</p>
+      <p class="memory-record-warning" role="status">{{ t('Line') }} {{ record.start }} · {{ record.message }}</p>
       <pre class="memory-record-raw">{{ record.raw }}</pre>
     </template>
   </article>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { memoryEventTime, type MemoryEventRecord } from '../../memory-events.ts'
 
 defineProps<{ record: MemoryEventRecord }>()

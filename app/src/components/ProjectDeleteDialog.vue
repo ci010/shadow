@@ -3,17 +3,17 @@
     <dialog ref="dialog" class="project-delete-dialog" role="alertdialog" aria-modal="true" tabindex="-1"
       :aria-labelledby="titleId" :aria-describedby="descriptionId" :aria-busy="busy || undefined"
       @cancel.prevent="close" @keydown.stop @keydown.esc.prevent="close">
-      <h2 :id="titleId">Delete project?</h2>
+      <h2 :id="titleId">{{ t('Delete project?') }}</h2>
       <p class="delete-target"><strong>{{ project.name }}</strong></p>
-      <p :id="descriptionId">This permanently deletes the project's Home, conversations, memory, skills, bots, automations and settings. Registered working folders and their files are kept. Stop active work before deleting. This cannot be undone.</p>
+      <p :id="descriptionId">{{ t('This permanently deletes the project\'s Home, conversations, memory, skills, bots, automations and settings. Registered working folders and their files are kept. Stop active work before deleting. This cannot be undone.') }}</p>
       <form @submit.prevent="submit">
-        <label>Type <strong>{{ project.name }}</strong> to confirm
+        <label>{{ t('To confirm, enter the following name:') }} <strong>{{ project.name }}</strong>
           <input v-model="confirmation" autocomplete="off" :disabled="busy" />
         </label>
         <p v-if="error" class="delete-error" role="alert">{{ error }}</p>
         <div class="delete-actions">
-          <button ref="cancelButton" type="button" class="delete-button" :disabled="busy" autofocus @click="close">Cancel</button>
-          <button type="submit" class="delete-button delete-confirm" :disabled="busy || confirmation !== project.name">{{ busy ? 'Deleting...' : 'Delete project' }}</button>
+          <button ref="cancelButton" type="button" class="delete-button" :disabled="busy" autofocus @click="close">{{ t('Cancel') }}</button>
+          <button type="submit" class="delete-button delete-confirm" :disabled="busy || confirmation !== project.name">{{ busy ? t('Deleting...') : t('Delete project') }}</button>
         </div>
       </form>
     </dialog>
@@ -21,6 +21,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { nextTick, onDeactivated, onMounted, onUnmounted, ref, useId } from 'vue'
 import { createProjectsClient, type ProjectRecord } from '../projects.ts'
 
@@ -44,7 +45,7 @@ async function submit() {
     if (!lifetime.signal.aborted) emit('deleted', project.id)
   } catch (cause) {
     if (!lifetime.signal.aborted) error.value = cause instanceof Error ? cause.message
-      : 'Deletion was not confirmed. Refresh the catalog before retrying.'
+      : t('Deletion was not confirmed. Refresh the catalog before retrying.')
   } finally {
     busy.value = false
     if (!lifetime.signal.aborted && error.value) { await nextTick(); cancelButton.value?.focus() }

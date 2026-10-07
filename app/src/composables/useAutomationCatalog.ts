@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { computed, getCurrentInstance, inject, onActivated, onDeactivated, onMounted, onScopeDispose, ref, shallowRef, watch, type InjectionKey } from 'vue'
 import { createAutomationCatalog } from '../automation-catalog.ts'
 import { useLiveClientPool } from './useLiveClient.ts'
@@ -6,7 +7,7 @@ const catalogKey: InjectionKey<ReturnType<typeof createAutomationCatalog>> = Sym
 
 export function useAutomationCatalog(base: () => string, active: () => boolean) {
   const instance = getCurrentInstance()
-  if (!instance) throw new Error('Automations require a Vue application context.')
+  if (!instance) throw new Error(t('Automations require a Vue application context.'))
   let catalog = inject(catalogKey, undefined)
   if (!catalog) {
     catalog = createAutomationCatalog(useLiveClientPool())

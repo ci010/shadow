@@ -2,24 +2,25 @@
   <Teleport to="body">
     <dialog ref="dialog" class="repair-dialog" role="alertdialog" aria-modal="true" :aria-labelledby="titleId"
       :aria-describedby="descriptionId" :aria-busy="busy" @cancel.prevent="close" @keydown.stop @keydown.esc.prevent="close">
-      <h2 :id="titleId">Repair dead links?</h2>
-      <p>Project: <strong>{{ projectId }}</strong></p><code>{{ preview.sourceId }}</code>
-      <p :id="descriptionId">Replace {{ preview.findingIds.length }} confirmed missing link occurrences in this Wiki file with their label text. No pages are deleted and historical references are not changed.</p>
-      <p class="muted">The source revision and missing targets are checked again before applying. Newly restored targets or changed files require a fresh scan and preview.</p>
+      <h2 :id="titleId">{{ t('Repair dead links?') }}</h2>
+      <p>{{ t('Project:') }} <strong>{{ projectId }}</strong></p><code>{{ preview.sourceId }}</code>
+      <p :id="descriptionId">{{ t('Replace') }} {{ preview.findingIds.length }} {{ t('confirmed missing link occurrences in this Wiki file with their label text. No pages are deleted and historical references are not changed.') }}</p>
+      <p class="muted">{{ t('The source revision and missing targets are checked again before applying. Newly restored targets or changed files require a fresh scan and preview.') }}</p>
       <div class="comparison">
-        <section><h3>Before</h3><pre>{{ preview.before }}</pre></section>
-        <section><h3>After</h3><pre>{{ preview.after }}</pre></section>
+        <section><h3>{{ t('Before') }}</h3><pre>{{ preview.before }}</pre></section>
+        <section><h3>{{ t('After') }}</h3><pre>{{ preview.after }}</pre></section>
       </div>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <form @submit.prevent="submit">
-        <button ref="cancelButton" type="button" :disabled="busy" autofocus @click="close">Cancel</button>
-        <button type="submit" :disabled="busy">{{ busy ? 'Applying...' : 'Confirm repair' }}</button>
+        <button ref="cancelButton" type="button" :disabled="busy" autofocus @click="close">{{ t('Cancel') }}</button>
+        <button type="submit" :disabled="busy">{{ busy ? t('Applying...') : t('Confirm repair') }}</button>
       </form>
     </dialog>
   </Teleport>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onMounted, onUnmounted, ref, useId } from 'vue'
 import { createKnowledgeMaintenanceClient, type KnowledgeRepairPreview } from '../knowledge-maintenance.ts'
 const props = defineProps<{ apiBase: string; projectId: string; preview: KnowledgeRepairPreview }>()
@@ -43,7 +44,7 @@ async function submit() {
     await client.apply(preview, lifetime.signal)
     if (!lifetime.signal.aborted) emit('applied', preview.sourceId)
   } catch (cause) {
-    if (!lifetime.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Repair was not confirmed. Close and refresh before retrying.'
+    if (!lifetime.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Repair was not confirmed. Close and refresh before retrying.')
   } finally { busy.value = false }
 }
 onMounted(() => {

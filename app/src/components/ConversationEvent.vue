@@ -1,7 +1,7 @@
 <template>
   <article v-if="source && !isCurrentSource && presentation.completion" class="system-event" :class="eventClasses" :data-event-id="meta.attrs['event-id']">
     <button type="button" class="event-inspect-header event-header" :aria-pressed="!!selected"
-      :aria-label="`Inspect execution: ${source.label || source.sessionId}`" @click="$emit('inspect', source.sessionId)">
+      :aria-label="t('Inspect execution: {sessionId}', { sessionId: source.label || source.sessionId })" @click="$emit('inspect', source.sessionId)">
       <span class="event-symbol event-icon i-lucide-git-branch" aria-hidden="true" />
       <span class="event-copy">
         <strong>{{ presentation.title }}</strong>
@@ -11,7 +11,7 @@
       <span class="event-icon i-lucide-chevron-right" aria-hidden="true" />
     </button>
     <details class="event-details">
-      <summary class="event-disclosure" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />Event details</summary>
+      <summary class="event-disclosure" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Event details') }}</summary>
       <div class="event-body">
         <div class="event-content"><slot /></div>
         <dl class="event-fields"><template v-for="(value, key) in meta.attrs" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
@@ -33,16 +33,17 @@
         <ToolPayload v-if="rawContent && expanded" class="event-payload" :source="rawContent" />
         <slot v-else-if="!rawContent" />
       </div>
-      <button v-if="source && !isCurrentSource" type="button" class="event-inspect" @click="$emit('inspect', source.sessionId)">View {{ source.mode === 'session' ? 'conversation' : 'execution' }} <span class="i-lucide-arrow-up-right event-icon" aria-hidden="true" /></button>
+      <button v-if="source && !isCurrentSource" type="button" class="event-inspect" @click="$emit('inspect', source.sessionId)">{{ t('View') }} {{ source.mode === 'session' ? t('conversation') : t('execution') }} <span class="i-lucide-arrow-up-right event-icon" aria-hidden="true" /></button>
     </div>
     <details class="event-metadata">
-      <summary class="event-disclosure" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />Event details</summary>
+      <summary class="event-disclosure" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Event details') }}</summary>
       <dl class="event-fields"><template v-for="(value, key) in meta.attrs" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
     </details>
   </details>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, ref } from 'vue'
 import { eventPresentation, type ChatEventMeta } from '../chat-events.ts'
 import type { SidebarSession } from '../folders-sidebar.ts'

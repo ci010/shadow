@@ -120,7 +120,7 @@ test('Settings shell and channel forms compile and preserve accessible navigatio
     assert.deepEqual(compiler.compileTemplate({ source: descriptor.template!.content, filename, id: filename,
       compilerOptions: { bindingMetadata: script.bindings } }).errors, [])
     if (filename === 'SettingsView.vue') {
-      assert.match(source, /aria-label="Settings sections"/)
+      assert.match(source, /:aria-label="t\('Settings sections'\)"/)
       assert.match(source, /ProvidersView v-show=/)
       assert.doesNotMatch(source, /<ChannelsView/)
     }

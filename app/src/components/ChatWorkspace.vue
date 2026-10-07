@@ -8,16 +8,16 @@
         :visible="visible && ['chat', 'project-settings', 'agents'].includes(String(route.name)) && (!childId || wide || route.name !== 'chat')" :keyboard-active="keyboardActive && visible && (!childId || wide || route.name !== 'chat') && activePane === 'primary'"
         @open-child="openChild" @close-child="closeChild" @primary-change="primaryChanged" @deleted="sessionDeleted" @navigate="$emit('navigate', $event)" @prepared="$emit('prepared', $event)" />
     </div>
-    <div v-if="split" class="conversation-resizer" role="separator" tabindex="0" aria-label="Resize child conversation"
+    <div v-if="split" class="conversation-resizer" role="separator" tabindex="0" :aria-label="t('Resize child conversation')"
       aria-orientation="vertical" aria-controls="child-conversation-pane" :aria-valuemin="bounds.min" :aria-valuemax="bounds.max" :aria-valuenow="childWidth"
       @pointerdown="startResize" @pointermove="resize" @pointerup="stopResize" @pointercancel="stopResize" @lostpointercapture="stopResize" @keydown="resizeKey" />
-    <aside v-if="childId" v-show="route.name === 'chat'" id="child-conversation-pane" class="child-conversation" aria-label="Child conversation"
+    <aside v-if="childId" v-show="route.name === 'chat'" id="child-conversation-pane" class="child-conversation" :aria-label="t('Child conversation')"
       @pointerdown.capture="activePane = 'child'" @focusin="activePane = 'child'">
       <ChatTab :key="childId" :api-base="apiBase" :project-id="projectId" :project-name="projectName" embedded :session-id="childId" :visible="visible && route.name === 'chat'" :keyboard-active="keyboardActive && visible && (!wide || activePane === 'child')" @child-navigation="navigateChild">
         <template #pane-actions>
-          <button class="close-child" :aria-label="wide ? 'Close child conversation' : 'Back to main conversation'" :title="wide ? 'Close child conversation' : 'Back to main conversation'" @click="closeChild">
+          <button class="close-child" :aria-label="wide ? t('Close child conversation') : t('Back to main conversation')" :title="wide ? t('Close child conversation') : t('Back to main conversation')" @click="closeChild">
             <span class="w-4 h-4" :class="wide ? 'i-lucide-panel-right-close' : 'i-lucide-arrow-left'" aria-hidden="true" />
-            <span class="close-child-label">Back to main conversation</span>
+            <span class="close-child-label">{{ t('Back to main conversation') }}</span>
           </button>
         </template>
       </ChatTab>
@@ -26,6 +26,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChatTab from './ChatTab.vue'

@@ -2,13 +2,14 @@
   <details class="compaction-summary" @toggle.self="onToggle">
     <summary class="compaction-summary-header" @click="emit('interact')">
       <span class="summary-chevron i-lucide-chevron-right" aria-hidden="true" />
-      <span class="compaction-summary-title">Previous Conversation Summary</span>
+      <span class="compaction-summary-title">{{ t('Previous Conversation Summary') }}</span>
     </summary>
     <div v-if="expanded" class="compaction-summary-body prose" v-html="renderContent(content)" />
   </details>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { ref } from 'vue'
 
 defineProps<{ content: string; renderContent: (content: string) => string }>()

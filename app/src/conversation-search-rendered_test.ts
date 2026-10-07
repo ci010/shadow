@@ -103,7 +103,7 @@ test('Ctrl+F searches real conversations across all segments, split panes and li
           else if (path.endsWith('/probe-requests')) json({ requests: [] })
           else if (path.endsWith('/background-tasks')) json({ total: 0, tasks: [] })
           else if (path.endsWith('/api/slash-commands')) json({ commands: [] })
-          else if (path.includes('/api/') || path.includes('/debug/') || path.includes('/v1/')) json({})
+          else if (/^\/(?:projects\/[^/]+\/)?(?:api|debug|v1)\//.test(path)) json({})
           else next()
         })
       },

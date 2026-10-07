@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { SessionTraceResponse, SessionTraceSpan } from '../../src/otel/session-trace.ts'
 import { messageEnvelope, parseSessionMessage, sessionMessageTitle, type SessionMessageSource } from './message-author.ts'
 import { eventPresentation, parseChatEvent } from './chat-events.ts'
@@ -36,10 +37,10 @@ export function detailText(value: unknown): string {
 }
 
 export function formatTraceDuration(ms?: number): string {
-  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return 'Unavailable'
-  if (ms < 1000) return `${Math.round(ms)} ms`
-  if (ms < 60000) return `${(ms / 1000).toFixed(2)} s`
-  return `${Math.floor(ms / 60000)}m ${Math.floor(ms % 60000 / 1000)}s`
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return t('Unavailable')
+  if (ms < 1000) return t('{value1} ms', { value1: Math.round(ms) })
+  if (ms < 60000) return t('{value1} s', { value1: (ms / 1000).toFixed(2) })
+  return t('{value1}m {value2}s', { value1: Math.floor(ms / 60000), value2: Math.floor(ms % 60000 / 1000) })
 }
 
 export function traceKey(span: Pick<SessionTraceSpan, 'traceId' | 'spanId'>): string {
@@ -92,7 +93,7 @@ export function parseTracePage(value: unknown, sessionId: string, physicalSessio
     || !Array.isArray(value.entries) || typeof value.hasMore !== 'boolean'
     || (value.nextBeforeId !== undefined && (!Number.isSafeInteger(value.nextBeforeId) || Number(value.nextBeforeId) <= 0))
     || (value.hasMore && value.nextBeforeId === undefined)) {
-    throw new Error('Invalid session trace response.')
+    throw new Error(t('Invalid session trace response.'))
   }
   const entries = value.entries.map((entry): SessionTraceSpan => {
     if (!record(entry) || typeof entry.traceId !== 'string' || !entry.traceId
@@ -104,7 +105,7 @@ export function parseTracePage(value: unknown, sessionId: string, physicalSessio
       || (entry.parentSpanId !== undefined && typeof entry.parentSpanId !== 'string')
       || (entry.statusCode !== undefined && typeof entry.statusCode !== 'number')
       || (entry.statusMessage !== undefined && typeof entry.statusMessage !== 'string')) {
-      throw new Error('Invalid session trace span.')
+      throw new Error(t('Invalid session trace span.'))
     }
     return {
       id: entry.id === null ? null : Number(entry.id),
@@ -116,7 +117,7 @@ export function parseTracePage(value: unknown, sessionId: string, physicalSessio
       events: entry.events.map(event => {
         if (!record(event) || typeof event.name !== 'string' || typeof event.time !== 'number'
           || !Number.isFinite(event.time) || !stringMap(event.attributes)) {
-          throw new Error('Invalid session trace event.')
+          throw new Error(t('Invalid session trace event.'))
         }
         return { name: event.name, time: event.time, attributes: event.attributes }
       }),
@@ -131,14 +132,14 @@ export function parseTracePage(value: unknown, sessionId: string, physicalSessio
 export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[]; modelResponses: DiagnosisEvent[]; physicalId?: string } {
   if (!record(value) || !Array.isArray(value.messages)
     || (value.currentPhysicalId !== undefined && typeof value.currentPhysicalId !== 'string')) {
-    throw new Error('Invalid session history response.')
+    throw new Error(t('Invalid session history response.'))
   }
   const events: DiagnosisEvent[] = []
   const modelResponses: DiagnosisEvent[] = []
   const calls = new Map<string, DiagnosisEvent>()
   let turn = 0
   for (const [index, message] of value.messages.entries()) {
-    if (!record(message) || typeof message.role !== 'string') throw new Error('Invalid session history message.')
+    if (!record(message) || typeof message.role !== 'string') throw new Error(t('Invalid session history message.'))
     const parts = Array.isArray(message.content) ? message.content : undefined
     const partText = (part: unknown) => record(part) && part.type === 'image_url'
       ? '[image]' : record(part) && part.type === 'text' ? detailText(part.text) : detailText(part)
@@ -160,7 +161,7 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
         call.images = images
         if (callId) calls.delete(callId)
       } else {
-        events.push({ id: `message-${index}`, kind: 'TOOL', turn, title: String(message.name ?? 'Tool result'), content, result: content, timestamp: time, callId, images })
+        events.push({ id: `message-${index}`, kind: 'TOOL', turn, title: String(message.name ?? t('Tool result')), content, result: content, timestamp: time, callId, images })
       }
       continue
     }
@@ -172,8 +173,8 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
     const response: DiagnosisEvent = {
       id: `message-${index}`, kind, turn,
       title: sessionMessage ? sessionMessageTitle(sessionMessage.sessionSource)
-        : kind === 'CONTEXT' ? (message.name === '__compaction_summary__' ? 'Compaction context'
-          : event ? eventPresentation(event.eventMeta).title : 'Session event') : kind.toLowerCase(),
+        : kind === 'CONTEXT' ? (message.name === '__compaction_summary__' ? t('Compaction context')
+          : event ? eventPresentation(event.eventMeta).title : t('Session event')) : kind.toLowerCase(),
       content: envelope ? (parts ? [
         detailText(parts[0].text).replace(/^<(?:sender|event)\s[^>]*\/>\s*/, ''),
         ...parts.slice(1).map(partText),
@@ -190,10 +191,10 @@ export function parseDiagnosisHistory(value: unknown): { events: DiagnosisEvent[
     if (content || message.role !== 'assistant' || message.reasoning_content || message.reasoning_text) {
       events.push(response)
     }
-    if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) throw new Error('Invalid tool calls in history.')
+    if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) throw new Error(t('Invalid tool calls in history.'))
     for (const [callIndex, call] of (message.tool_calls ?? []).entries()) {
       if (!record(call) || typeof call.id !== 'string' || !record(call.function)
-        || typeof call.function.name !== 'string') throw new Error('Invalid tool call in history.')
+        || typeof call.function.name !== 'string') throw new Error(t('Invalid tool call in history.'))
       const args = detailText(call.function.arguments)
       const event: DiagnosisEvent = {
         id: `message-${index}-call-${callIndex}`, kind: 'TOOL', turn,
@@ -250,10 +251,10 @@ export function recordedModelResponse(span: SessionTraceSpan): ModelResponseDeta
   const response = span.events.find(event => event.name === 'model.response')
   if (!response) return undefined
   const raw = response.attributes.message
-  if (!raw) throw new Error('Recorded model response is missing its message.')
+  if (!raw) throw new Error(t('Recorded model response is missing its message.'))
   let message: unknown
-  try { message = JSON.parse(raw) } catch { throw new Error('Recorded model response contains invalid message JSON.') }
-  if (!record(message) || message.role !== 'assistant') throw new Error('Recorded model response is not an assistant message.')
+  try { message = JSON.parse(raw) } catch { throw new Error(t('Recorded model response contains invalid message JSON.')) }
+  if (!record(message) || message.role !== 'assistant') throw new Error(t('Recorded model response is not an assistant message.'))
   const { modelResponses } = parseDiagnosisHistory({ messages: [message] })
   return { event: { ...modelResponses[0], id: `response-${traceKey(span)}` }, source: 'recorded' }
 }
@@ -318,8 +319,8 @@ export function stackTimelineItems<T extends TraceWindow>(items: readonly T[]): 
 export async function fetchDiagnosisJson(url: URL, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(url, { signal })
   if (response.status === 404 && url.pathname === '/v1/query/session-spans') {
-    throw new Error('Session traces are unavailable on this backend. Restart Shadow after updating the backend.')
+    throw new Error(t('Session traces are unavailable on this backend. Restart Shadow after updating the backend.'))
   }
-  if (!response.ok) throw new Error(`Diagnosis request failed (HTTP ${response.status}).`)
+  if (!response.ok) throw new Error(t('Diagnosis request failed (HTTP {status}).', { status: response.status }))
   return response.json()
 }

@@ -4,8 +4,8 @@
     class="chat-workspace"
     :class="{ 'mobile-sessions-open': mobileSidebarOpen, 'is-draft': !activeSessionId, 'is-embedded': embedded, 'is-managed': managed, 'mobile-chat': mobileLayout }"
   >
-    <button v-if="!embedded && !managed" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">Folders</button>
-    <button v-if="!embedded && !managed && mobileSidebarOpen" class="mobile-sidebar-backdrop" aria-label="Close folders" @click="mobileSidebarOpen = false" />
+    <button v-if="!embedded && !managed" class="mobile-sessions-toggle btn btn-sm" :aria-expanded="mobileSidebarOpen" aria-controls="sessions-sidebar" @click="mobileSidebarOpen = !mobileSidebarOpen">{{ t('Folders') }}</button>
+    <button v-if="!embedded && !managed && mobileSidebarOpen" class="mobile-sidebar-backdrop" :aria-label="t('Close folders')" @click="mobileSidebarOpen = false" />
     <FoldersSidebar
       v-if="!embedded && !managed"
       :api-base="apiBase"
@@ -42,12 +42,12 @@
     <template #actions><slot name="pane-actions" /></template>
     <template #mobile-actions="{ close }">
       <template v-if="activeSessionId">
-        <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">Search conversation</button>
-        <button @click="close(); showMobileSessionDetails()">Session details</button>
-        <button v-if="installation.uiScopes.includes('chat:write')" @click="close(); renameMobileSession()">Rename session</button>
-        <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">Back to owning execution</button>
+        <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">{{ t('Search conversation') }}</button>
+        <button @click="close(); showMobileSessionDetails()">{{ t('Session details') }}</button>
+        <button v-if="installation.uiScopes.includes('chat:write')" @click="close(); renameMobileSession()">{{ t('Rename session') }}</button>
+        <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">{{ t('Back to owning execution') }}</button>
         <details v-if="historyMarkers.length && conversationDocumentVisible && activePanel === 'conversation'" class="mobile-history">
-          <summary>Message history</summary>
+          <summary>{{ t('Message history') }}</summary>
           <MessageHistoryRail list :entries="historyMarkers" :container="messagesContainer" :active="visible && route.name === 'chat'" @navigate="browseHistory(); close()" />
         </details>
       </template>
@@ -58,22 +58,22 @@
         <div v-if="!draft.folder" class="draft-mark" aria-hidden="true">
           <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M24 5 40 14v20L24 43 8 34V14L24 5Z" /><path d="m24 14 9 5v10l-9 5-9-5V19l9-5Z" /></svg>
         </div>
-        <h1>What would you like to work on?</h1>
+        <h1>{{ t('What would you like to work on?') }}</h1>
         <p v-if="projectName" class="draft-scratch">{{ projectName }}</p>
-        <div v-if="draft.folder" class="draft-folder" :aria-label="`Working folder: ${draft.folder.name}`">
+        <div v-if="draft.folder" class="draft-folder" :aria-label="t('Working folder: {name}', { name: draft.folder.name })">
           <svg class="draft-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 6h6l3 3h9v11H3V6Z" /><path d="M3 6V4h6l3 3h9v2" /></svg>
           <div class="draft-folder-copy">
-            <span class="draft-folder-label">{{ draft.folder.kind === 'remote' ? `Remote folder on ${draftRemote?.nodeName}` : 'New conversation in folder' }}</span>
+            <span class="draft-folder-label">{{ draft.folder.kind === 'remote' ? t('Remote folder on {nodeName}', { nodeName: draftRemote?.nodeName }) : t('New conversation in folder') }}</span>
             <strong>{{ draft.folder.name }}</strong>
             <span class="draft-folder-path" :title="draft.folder.path">{{ draft.folder.path }}</span>
           </div>
         </div>
         <p v-else-if="draftRemote" class="draft-scratch">{{ draftRemote.nodeName }} &middot; {{ draftRemote.displayPath || draftRemote.displayName }}</p>
-        <p v-else class="draft-scratch">From scratch &middot; No folder selected</p>
+        <p v-else class="draft-scratch">{{ t('From scratch · No folder selected') }}</p>
       </div>
       <template v-else>
         <div v-show="!mobileLayout || previousPhysicalId || viewingPhysicalId || automationConversation" class="conversation-heading-row">
-          <button v-if="embedded && executionParent" class="btn btn-sm" aria-label="Back to owning execution" @click="inspectExecution(executionParent.sessionId)">
+          <button v-if="embedded && executionParent" class="btn btn-sm" :aria-label="t('Back to owning execution')" @click="inspectExecution(executionParent.sessionId)">
             <span class="i-lucide-arrow-left w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <SessionHeading v-show="!mobileLayout" ref="sessionHeading" :key="activeSessionId" :api-base="apiBase" :session-id="activeSessionId"
@@ -83,8 +83,8 @@
           <SegmentNavigation v-if="previousPhysicalId || viewingPhysicalId || automationConversation" :has-previous="!!previousPhysicalId || !!automationConversation?.hasPrevious.value"
             :historical="!!viewingPhysicalId || !!automationConversation?.historical.value" :busy="loadingHistory || !!automationConversation?.loading.value" @previous="viewPreviousSegment"
             @next="viewNextSegment" @current="goBackToCurrentSegment" />
-          <button class="conversation-find" type="button" aria-label="Search conversation" aria-keyshortcuts="Control+F Meta+F"
-            title="Search conversation (Ctrl+F / Cmd+F)" @click="conversationSearch?.show()">
+          <button class="conversation-find" type="button" :aria-label="t('Search conversation')" aria-keyshortcuts="Control+F Meta+F"
+            :title="t('Search conversation (Ctrl+F / Cmd+F)')" @click="conversationSearch?.show()">
             <span class="i-lucide-search w-4 h-4" aria-hidden="true" />
           </button>
         </div>
@@ -96,19 +96,19 @@
           @update:open="searchVisibilityChanged" @query-change="clearSearchHighlights" />
 
         <!-- Messages -->
-        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" aria-label="Conversation history" :aria-busy="loadingHistory">
+        <div v-show="activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <div class="chat-message-list">
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
             :active="visible && conversationDocumentVisible && activePanel === 'conversation' && route.name === 'chat'" />
-          <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? 'No execution trace yet.' : 'No messages yet. Send one below.' }}</div>
+          <div v-else-if="!loadingHistory && messages.length === 0 && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : t('No messages yet. Send one below.') }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="readonlyContextError" class="composer-error" role="alert">{{ readonlyContextError }}</p>
           <details v-if="unlinkedExecutions.length" class="unlinked-executions history-disclosure">
-            <summary><span class="history-chevron i-lucide-chevron-right" aria-hidden="true" /><span>Other execution traces</span><span class="history-count">{{ unlinkedExecutions.length }}</span></summary>
+            <summary><span class="history-chevron i-lucide-chevron-right" aria-hidden="true" /><span>{{ t('Other execution traces') }}</span><span class="history-count">{{ unlinkedExecutions.length }}</span></summary>
             <div class="history-executions">
-              <p>These executions have no matching tool call in this loaded history.</p>
+              <p>{{ t('These executions have no matching tool call in this loaded history.') }}</p>
               <ul>
                 <li v-for="execution in unlinkedExecutions" :key="execution.sessionId">
                   <button type="button" class="history-execution" @click="inspectExecution(execution.sessionId)">
@@ -120,7 +120,7 @@
             </div>
           </details>
           <div v-if="yieldDecisions.unlinked.length" class="unlinked-decisions">
-            <p class="decision-history-note">Unlinked decision history · {{ yieldDecisions.unlinked.length }}. The original ask could not be located in this view.</p>
+            <p class="decision-history-note">{{ t('Unlinked decision history ·') }} {{ yieldDecisions.unlinked.length }}{{ t('. The original ask could not be located in this view.') }}</p>
             <YieldDecision v-for="[index, decision] in yieldDecisions.unlinked"
               :key="decision.requestId" :decision="decision" :api-base="apiBase"
               :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)"
@@ -170,15 +170,15 @@
                 msg.sessionSource ? 'chat-user chat-session' : msg.role === 'user' ? 'chat-user' : 'chat-assistant',
               ]"
               role="article"
-              :aria-label="msg.sessionSource ? `${sessionMessageTitle(msg.sessionSource)} from ${msg.sessionSource.id || msg.sessionSource.name || 'unknown session'}` : msg.role === 'user' ? (msg.senderName ? `Message from ${msg.senderName}` : 'User message') : 'Assistant message'"
+              :aria-label="msg.sessionSource ? t('{value1} from {value2}', { value1: sessionMessageTitle(msg.sessionSource), value2: msg.sessionSource.id || msg.sessionSource.name || t('unknown session') }) : msg.role === 'user' ? (msg.senderName ? t('Message from {senderName}', { senderName: msg.senderName }) : t('User message')) : t('Assistant message')"
             >
               <component :is="msg.sessionSource.id ? 'button' : 'div'" v-if="msg.sessionSource" class="chat-session-source"
                 :type="msg.sessionSource.id ? 'button' : undefined"
-                :aria-label="msg.sessionSource.id ? `Open conversation ${msg.sessionSource.id}` : undefined"
+                :aria-label="msg.sessionSource.id ? t('Open conversation {id}', { id: msg.sessionSource.id }) : undefined"
                 @click="msg.sessionSource.id && inspectExecution(msg.sessionSource.id)">
                 <span class="i-lucide-messages-square" aria-hidden="true" />
                 <strong>{{ sessionMessageTitle(msg.sessionSource) }}</strong>
-                <span>{{ msg.sessionSource.id || msg.sessionSource.name || 'Unknown session' }}</span>
+                <span>{{ msg.sessionSource.id || msg.sessionSource.name || t('Unknown session') }}</span>
                 <span v-if="msg.sessionSource.id" class="i-lucide-arrow-up-right" aria-hidden="true" />
               </component>
               <div v-else-if="msg.role === 'user' && msg.senderName" class="chat-sender">{{ msg.senderName }}</div>
@@ -186,7 +186,7 @@
               <div v-if="msg.reasoningContent || msg.reasoningText" class="thinking-block">
                 <div class="thinking-header" @click="toggleThinking(idx)">
                   <span class="thinking-icon i-lucide-brain w-4 h-4" aria-hidden="true" />
-                  <span class="thinking-label">Thinking</span>
+                  <span class="thinking-label">{{ t('Thinking') }}</span>
                   <span class="thinking-toggle w-3 h-3" :class="expandedThinking.has(idx) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'" aria-hidden="true" />
                 </div>
                 <div v-if="expandedThinking.has(idx)" class="thinking-content prose" v-html="renderMarkdown(msg.reasoningContent || msg.reasoningText || '')" />
@@ -199,14 +199,14 @@
                 v-if="isDirectChat && isErrorMessage(msg) && idx === messages.length - 1 && !requestBusy && !currentRecovery"
                 class="retry-row"
               >
-                <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Retry</button>
+                <button class="btn btn-sm retry-btn" @click="retryLastRequest"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Retry') }}</button>
               </div>
               <MessageAttachments :paths="msg.attachmentBody.paths"               :api-base="apiBase" :session-id="activeSessionId" :workdir="currentWorkdir" @preview="openImagePreview" @open="workbench?.openLinkedFile($event)" />
               <div class="chat-footer">
               <div v-if="msg.usage" class="usage-info">
-                <span class="usage-badge">{{ msg.usage.promptTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.prompt.toLocaleString() }})</span> prompt</span>
-                <span class="usage-badge">{{ msg.usage.completionTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.completion.toLocaleString() }})</span> completion</span>
-                <span class="usage-badge total">{{ msg.usage.totalTokens.toLocaleString() }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ usageDelta(idx)!.total.toLocaleString() }})</span> total</span>
+                <span class="usage-badge">{{ formatNumber(msg.usage.promptTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.prompt) }})</span> {{ t('prompt') }}</span>
+                <span class="usage-badge">{{ formatNumber(msg.usage.completionTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.completion) }})</span> {{ t('completion') }}</span>
+                <span class="usage-badge total">{{ formatNumber(msg.usage.totalTokens) }} <span v-if="usageDelta(idx)" class="usage-delta">(+{{ formatNumber(usageDelta(idx)!.total) }})</span> {{ t('total') }}</span>
               </div>
               <MessageTimestamp :timestamp="msg.timestamp" />
               </div>
@@ -220,19 +220,19 @@
           </div>
           </template>
           <p v-if="decisionRecordError" class="composer-error" role="alert">{{ decisionRecordError }}
-            <button type="button" @click="refreshDecisionRecords">Retry decision history</button>
+            <button type="button" @click="refreshDecisionRecords">{{ t('Retry decision history') }}</button>
           </p>
           <IoRequestCard v-for="run in ioAfter.get(-1)" :key="run.id" :run="run" :base="apiBase" />
           <details v-if="ioEarlier.length" class="unlinked-executions">
-            <summary>Earlier captures · {{ ioEarlier.length }}</summary>
+            <summary>{{ t('Earlier captures ·') }} {{ ioEarlier.length }}</summary>
             <IoRequestCard v-for="run in ioEarlier" :key="run.id" :run="run" :base="apiBase" />
           </details>
-          <p v-if="ioError" class="composer-error" role="alert">Capture requests: {{ ioError }}</p>
+          <p v-if="ioError" class="composer-error" role="alert">{{ t('Capture requests:') }} {{ ioError }}</p>
           <!-- Streaming response -->
           <ResponseDisclosure v-if="streaming && !viewingPhysicalId && (streamContent || streamMedia.length)" :context="streamResponseContext" :timestamp="streamTimestamp"
             :open="expandedResponses.has(streamResponseContext?.responseId ?? '')"
             @update:open="setResponseExpanded(streamResponseContext, $event)" @interact="clearSelection">
-          <div class="chat-bubble chat-assistant" :data-search-message-idx="displayMessages.length" role="article" aria-label="Assistant message">
+          <div class="chat-bubble chat-assistant" :data-search-message-idx="displayMessages.length" role="article" :aria-label="t('Assistant message')">
             <div class="chat-content selectable-text">
               <span>{{ streamContent }}</span>
             </div>
@@ -248,7 +248,7 @@
     </div>
     <template #diagnosis>
       <p v-if="diagnosisNavigation.error.value" class="composer-error" role="alert">{{ diagnosisNavigation.error.value }}</p>
-      <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" aria-label="Session diagnosis" :id-prefix="embedded || managed ? paneId : undefined"
+      <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" :aria-label="t('Session diagnosis')" :id-prefix="embedded || managed ? paneId : undefined"
         :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
         :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
         :active="visible && activePanel === 'diagnosis' && route.name === 'chat'" :can-read-trace="installation.uiScopes.includes('audit:read')"
@@ -265,12 +265,12 @@
             :subagents="activeSubagents" :stages="displayedSessionStages" @inspect="inspectExecution" />
           <div v-if="isExecution && !viewingPhysicalId" class="chat-working execution-summary" role="status" aria-live="polite">
             <SessionActivity :stage="sessionStage" />
-            <span class="chat-working-detail">{{ isCall ? 'Call · inherited context · blocking' : 'Task · fresh context · async' }} · Read-only trace</span>
+            <span class="chat-working-detail">{{ isCall ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }} {{ t('· Read-only trace') }}</span>
           </div>
           <div v-else-if="sessionWorking && !viewingPhysicalId" class="chat-working" :class="sessionStage" role="status" aria-live="polite"
-            :title="sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : undefined">
+            :title="sessionStage === 'tool' ? (streamingToolCallData?.name || t('Running a tool call')) : undefined">
             <SessionActivity :stage="sessionStage" />
-            <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || 'Running a tool call') : 'The agent is working on your request' }}</span>
+            <span v-if="!isWaitingStage(sessionStage)" class="chat-working-detail">{{ sessionStage === 'tool' ? (streamingToolCallData?.name || t('Running a tool call')) : t('The agent is working on your request') }}</span>
             <WorkingWave v-if="!isWaitingStage(sessionStage)" />
           </div>
         </div>
@@ -296,28 +296,28 @@
         <div v-if="(!activeSessionId || isDirectChat) && !viewingPhysicalId" class="chat-composer">
           <div v-if="currentRecovery && !requestBusy" class="resume-bar" role="status">
             <div>
-              <strong>{{ currentRecovery.reason === 'stopped' ? 'Request stopped' : currentRecovery.reason === 'failed' ? 'Request failed' : 'Request interrupted' }}</strong>
-              <p>Continue without adding a message. Remote shell calls only check the Child's saved execution record; a missing result stays unknown.</p>
+              <strong>{{ currentRecovery.reason === 'stopped' ? t('Request stopped') : currentRecovery.reason === 'failed' ? t('Request failed') : t('Request interrupted') }}</strong>
+              <p>{{ t('Continue without adding a message. Remote shell calls only check the Child\'s saved execution record; a missing result stays unknown.') }}</p>
               <label v-if="currentRecovery.pendingToolCalls" class="resume-confirm">
                 <input type="checkbox" :checked="acknowledgedRecoveryId === currentRecovery.id"
                   @change="acknowledgeRecovery($event, currentRecovery.id)" />
-                I understand other unfinished tools may run again and repeat side effects.
+                {{ t('I understand other unfinished tools may run again and repeat side effects.') }}
               </label>
             </div>
-            <button class="resume-button" aria-label="Resume interrupted request"
+            <button class="resume-button" :aria-label="t('Resume interrupted request')"
               :disabled="!installation.uiScopes.includes('chat:write') || savingSettings || pickingContext || !!currentRecovery.pendingToolCalls && acknowledgedRecoveryId !== currentRecovery.id"
               @click="resumeCurrentRequest()">
-              <span class="i-lucide-play w-4 h-4" aria-hidden="true" /> Continue
+              <span class="i-lucide-play w-4 h-4" aria-hidden="true" /> {{ t('Continue') }}
             </button>
           </div>
           <div v-if="canResend" class="resend-bar">
-            <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> Resend last message</button>
+            <button class="resend-btn" @click="resendLastMessage()"><span class="i-lucide-rotate-ccw w-3.5 h-3.5" aria-hidden="true" /> {{ t('Resend last message') }}</button>
           </div>
           <div class="composer-box" :class="{ 'attachment-drop-target': attachmentDropTarget, 'composer-dual-actions': requestBusy && showComposerSend }"
             @dragover="handleAttachmentDragOver" @dragleave="handleAttachmentDragLeave" @drop="handleAttachmentDrop">
           <p v-if="answeringQuestion" :id="domId('reply-context')" class="composer-reply-context">
             <span class="i-lucide-message-circle-reply w-4 h-4" aria-hidden="true" />
-            <span><strong>Your answer</strong> · {{ activeAsk?.question }}</span>
+            <span><strong>{{ t('Your answer') }}</strong> · {{ activeAsk?.question }}</span>
           </p>
           <SlashCommandMenu ref="slashMenu" :api-base="apiBase" :session-id="activeSessionId || ''"
             :text="inputText" :input="chatInput" :focused="composerFocused"
@@ -325,22 +325,22 @@
             :active="paneActive && keyboardActive && composerVisible && !viewingPhysicalId && !answeringQuestion && !submissionBusy && !composerComposing && installation.uiScopes.includes('chat:write') && route.name === 'chat'"
             @complete="completeSlashCommand" />
           <input ref="attachmentInput" class="composer-file-input" type="file" multiple @change="handleAttachmentInput">
-          <div v-if="pendingAttachments.length" class="composer-context composer-attachments" aria-label="Attached files">
+          <div v-if="pendingAttachments.length" class="composer-context composer-attachments" :aria-label="t('Attached files')">
             <span v-for="attachment in pendingAttachments" :key="attachment.key" class="context-chip attachment-chip" :class="{ 'attachment-reference': attachment.sourceKey }" :title="attachment.source?.path ?? attachment.file.name">
-              <button v-if="attachment.previewUrl" type="button" class="attachment-preview" aria-haspopup="dialog" :aria-label="`View image: ${attachment.file.name}`"
+              <button v-if="attachment.previewUrl" type="button" class="attachment-preview" aria-haspopup="dialog" :aria-label="t('View image: {name}', { name: attachment.file.name })"
                 @click="openImagePreview({ src: attachment.previewUrl, name: attachment.file.name, trigger: $event.currentTarget as HTMLButtonElement })">
                 <img :src="attachment.previewUrl" class="attachment-thumb" :alt="attachment.file.name">
               </button>
               <span v-else class="context-icon i-lucide-paperclip" aria-hidden="true" />
-              <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">Image reference</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
-              <button :disabled="submissionBusy" :aria-label="`Remove ${attachment.file.name}`" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              <span class="attachment-caption"><span>{{ attachment.file.name }}</span><span v-if="attachment.sourceKey" class="attachment-reference-label">{{ t('Image reference') }}</span><span v-if="attachment.source" class="attachment-source-path">{{ attachment.source.path }}</span></span>
+              <button :disabled="submissionBusy" :aria-label="t('Remove {name}', { name: attachment.file.name })" @click="removePendingAttachment(attachment.key)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
             </span>
           </div>
-          <div v-if="contextItems.length" class="composer-context" aria-label="Attached context">
+          <div v-if="contextItems.length" class="composer-context" :aria-label="t('Attached context')">
             <span v-for="(item, index) in contextItems" :key="`${item.kind}:${item.path}`" class="context-chip" :title="item.path">
               <span class="context-icon" :class="item.kind === 'folder' ? 'i-lucide-folder' : 'i-lucide-file'" aria-hidden="true" />
               <span>{{ chatContextName(item.path) }}</span>
-              <button :disabled="submissionBusy" :aria-label="`Remove ${chatContextName(item.path)}`" @click="contextItems.splice(index, 1)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
+              <button :disabled="submissionBusy" :aria-label="t('Remove {value1}', { value1: chatContextName(item.path) })" @click="contextItems.splice(index, 1)"><span class="i-lucide-x w-3.5 h-3.5" aria-hidden="true" /></button>
             </span>
           </div>
           <div class="composer-input">
@@ -348,8 +348,8 @@
               ref="chatInput"
               :id="domId('message-input')"
               v-model="inputText"
-              :placeholder="answeringQuestion ? mobileLayout ? 'Type your answer...' : 'Type your answer here; images and files are welcome...' : mobileLayout ? 'Message...' : remoteConversation ? 'Ask anything about this remote workspace...' : 'Ask anything, or add files and folders for context...'"
-              :aria-label="answeringQuestion ? 'Your answer to the pending question' : 'Message'"
+              :placeholder="answeringQuestion ? mobileLayout ? t('Type your answer...') : t('Type your answer here; images and files are welcome...') : mobileLayout ? t('Message...') : remoteConversation ? t('Ask anything about this remote workspace...') : t('Ask anything, or add files and folders for context...')"
+              :aria-label="answeringQuestion ? t('Your answer to the pending question') : t('Message')"
               :aria-describedby="answeringQuestion ? domId('reply-context') : undefined"
               role="combobox"
               aria-autocomplete="list"
@@ -373,27 +373,27 @@
           </div>
           <div class="composer-toolbar">
             <div class="composer-controls">
-              <ComposerPopover ref="composerOptions" :label="mobileLayout ? 'Message options' : 'Add attachments or context'" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
+              <ComposerPopover ref="composerOptions" :label="mobileLayout ? t('Message options') : t('Add attachments or context')" :sheet="mobileLayout" :title="composerPopoverTitle" :disabled="mobileLayout ? pickingContext || submissionBusy : !canOpenComposerPopover || pickingContext || submissionBusy" :width="220">
                 <template #trigger><span class="i-lucide-plus w-5 h-5" aria-hidden="true" /></template>
                 <template #default="{ close }">
                   <button class="context-action" :disabled="!canOpenComposerPopover" @click="close(); canPickContext ? pickContext('file') : openAttachmentPicker()">
                     <span class="context-icon i-lucide-file-plus" aria-hidden="true" />
-                    Add file
+                    {{ t('Add file') }}
                   </button>
                   <button class="context-action" :disabled="!canPickContext" @click="close(); pickContext('folder')">
                     <span class="context-icon i-lucide-folder-plus" aria-hidden="true" />
-                    Add folder
+                    {{ t('Add folder') }}
                   </button>
                   <button v-if="canPickContext" class="context-action" @click="close(); openAttachmentPicker()">
                     <span class="context-icon i-lucide-image-plus" aria-hidden="true" />
-                    Upload image / file
+                    {{ t('Upload image / file') }}
                   </button>
                   <div v-if="mobileLayout" class="mobile-message-settings">
                     <ModelSelector :settings="reasoningSettings" :settings-disabled="requestBusy || pickingContext" :busy="savingSettings" @change-settings="changeReasoningSettings" />
                     <ExecutionLocationSelector v-if="!activeSessionId && installation.mode === 'main'" ref="executionLocationSelector"
                       :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :selected="draftRemote" :folder="draft.folder"
                       :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
-                    <button v-if="requestBusy && !answeringQuestion" class="context-action" :disabled="!canSend" @click="close(); sendMessage()">Send guidance to running agent</button>
+                    <button v-if="requestBusy && !answeringQuestion" class="context-action" :disabled="!canSend" @click="close(); sendMessage()">{{ t('Send guidance to running agent') }}</button>
                   </div>
                 </template>
               </ComposerPopover>
@@ -403,14 +403,14 @@
                 :disabled="preparingSend || pickingContext || savingSettings" @select="selectExecutionLocation" />
             </div>
             <div class="composer-submit">
-            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending...' : queueModifier ? 'Ctrl+Enter to add to queue' : answeringQuestion ? 'Enter to answer · Shift+Enter for a new line' : imageEditsBusy.size ? 'Preparing marked image...' : attachmentDropTarget ? 'Drop files to attach' : savingSettings ? 'Saving conversation settings...' : pickingContext ? 'Choosing context...' : requestBusy ? 'Enter for guidance · Ctrl+Enter to queue' : 'Enter to send · Ctrl+Enter to queue' }}</span>
+            <span class="composer-hint" role="status">{{ currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : preparingSend ? t('Starting conversation...') : submittingMessage ? t('Sending...') : queueModifier ? t('Ctrl+Enter to add to queue') : answeringQuestion ? t('Enter to answer · Shift+Enter for a new line') : imageEditsBusy.size ? t('Preparing marked image...') : attachmentDropTarget ? t('Drop files to attach') : savingSettings ? t('Saving conversation settings...') : pickingContext ? t('Choosing context...') : requestBusy ? t('Enter for guidance · Ctrl+Enter to queue') : t('Enter to send · Ctrl+Enter to queue') }}</span>
             <button
               v-if="requestBusy"
               class="composer-send composer-stop"
               :disabled="currentRequest?.state.stopping || !installation.uiScopes.includes('chat:write')"
               :aria-busy="currentRequest?.state.stopping || undefined"
-              aria-label="Stop current request"
-              :title="currentRequest?.state.stopping ? 'Stopping current request; waiting for Main...' : 'Stop current request; queued messages are kept'"
+              :aria-label="t('Stop current request')"
+              :title="currentRequest?.state.stopping ? t('Stopping current request; waiting for Main...') : t('Stop current request; queued messages are kept')"
               @click="stopCurrentRequest()"
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
@@ -420,8 +420,8 @@
               class="composer-send"
               :class="{ 'composer-queue': queueModifier }"
               :disabled="!canSend"
-              :aria-label="queueModifier ? 'Add to queue' : answeringQuestion ? 'Send answer' : 'Send message'"
-              :title="submissionBusy ? 'Sending...' : queueModifier ? 'Add to queue (Ctrl+Enter)' : answeringQuestion ? 'Send answer (Enter)' : 'Send message (Enter); Ctrl+Enter to add to queue; Shift+Enter for a new line'"
+              :aria-label="queueModifier ? t('Add to queue') : answeringQuestion ? t('Send answer') : t('Send message')"
+              :title="submissionBusy ? t('Sending...') : queueModifier ? t('Add to queue (Ctrl+Enter)') : answeringQuestion ? t('Send answer (Enter)') : t('Send message (Enter); Ctrl+Enter to add to queue; Shift+Enter for a new line')"
               @click="sendMessage(undefined, { queue: queueModifier || $event.ctrlKey })"
             >
               <span :class="queueModifier ? 'i-lucide-list-plus' : answeringQuestion ? 'i-lucide-message-circle-reply' : 'i-lucide-arrow-up'" class="w-5 h-5" aria-hidden="true" />
@@ -430,13 +430,13 @@
           </div>
           </div>
           <p v-if="mobileLayout && (preparingSend || submittingMessage || imageEditsBusy.size || savingSettings || pickingContext)"
-            class="mobile-composer-note" role="status">{{ preparingSend ? 'Starting conversation...' : submittingMessage ? 'Sending...' : imageEditsBusy.size ? 'Preparing image...' : savingSettings ? 'Saving settings...' : 'Choosing context...' }}</p>
+            class="mobile-composer-note" role="status">{{ preparingSend ? t('Starting conversation...') : submittingMessage ? t('Sending...') : imageEditsBusy.size ? t('Preparing image...') : savingSettings ? t('Saving settings...') : t('Choosing context...') }}</p>
           <p v-if="composerError" class="composer-error" role="alert">{{ composerError }}</p>
           <p v-if="currentRequest?.state.error" class="composer-error" role="alert">{{ currentRequest.state.error }}</p>
           <p v-if="stageError && requestBusy" class="composer-error" role="status">{{ stageError }}</p>
           <p v-if="settingsError" class="composer-error" role="alert">{{ settingsError }}</p>
           <p v-if="composerDraft.error.value" class="composer-error" role="alert">{{ composerDraft.error.value }}</p>
-          <p v-if="remoteConversation" class="remote-execution-note" role="status">Files and commands run on the selected device. Local file attachments are not transferred to that device.</p>
+          <p v-if="remoteConversation" class="remote-execution-note" role="status">{{ t('Files and commands run on the selected device. Local file attachments are not transferred to that device.') }}</p>
         </div>
       </div>
     </template>
@@ -450,6 +450,7 @@
 </template>
 
 <script setup lang="ts">
+import { t, formatNumber } from '../i18n.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DOMPurify from 'dompurify'
@@ -677,12 +678,12 @@ const canAttachFiles = computed(() => (!activeSessionId.value || !!currentWorkdi
 const canPickContext = computed(() => (!activeSessionId.value || !!currentWorkdir.value) && !remoteConversation.value && installation.value.mode === 'main' && !!window.shadowDesktop?.chatContext)
 const canOpenComposerPopover = computed(() => canAttachFiles.value || canPickContext.value)
 const composerPopoverTitle = computed(() =>
-  remoteConversation.value ? 'Local attachments are not transferred to remote workspaces'
+  remoteConversation.value ? t('Local attachments are not transferred to remote workspaces')
     : canAttachFiles.value && canPickContext.value
-    ? 'Add files or folders'
+    ? t('Add files or folders')
     : canAttachFiles.value
-    ? 'Add files, or use the local Main desktop app to attach folders'
-    : 'Folder context requires the local Main desktop app')
+    ? t('Add files, or use the local Main desktop app to attach folders')
+    : t('Folder context requires the local Main desktop app'))
 const canSend = computed(() => !modelSelection?.loading.value && !modelSelection?.error.value && !isExecution.value && (!props.embedded || !!activeSession.value) && canSendChatMessage(
   inputText.value,
   contextItems.value.length,
@@ -799,7 +800,7 @@ async function resumeCurrentRequest(): Promise<void> {
   composerError.value = ''
   if (!eventStream) connectEventStream(sessionId.replace('web:', ''))
   try {
-    if (!eventStream) throw new Error('Live updates are unavailable. Retry before continuing the request.')
+    if (!eventStream) throw new Error(t('Live updates are unavailable. Retry before continuing the request.'))
     await eventStream.ready()
     await resumeChatRequest(props.apiBase, sessionId, recovery.id, control, undefined, acknowledgedRecoveryId.value === recovery.id)
     if (control.state.requestId && finishedRequests.has(control.state.requestId)) control.finish()
@@ -811,7 +812,7 @@ async function resumeCurrentRequest(): Promise<void> {
   } catch (error) {
     if (control.state.phase === 'preparing') control.finish()
     if (generation === sessionSelectionGeneration) {
-      composerError.value = error instanceof Error ? error.message : 'Could not continue this conversation. Refresh and retry.'
+      composerError.value = error instanceof Error ? error.message : t('Could not continue this conversation. Refresh and retry.')
     }
   } finally {
     if (generation === sessionSelectionGeneration) void refreshSessionActivity()
@@ -831,7 +832,7 @@ const executionParent = computed(() => allSessions.value.find(session =>
 const activeSessionName = computed(() => {
   const session = activeSession.value
   if (session?.label && session.label !== session.sessionId && session.label !== session.sessionId.replace('web:', '')) return session.label
-  return messages.value.find(isUserMessage)?.content.trim().split('\n')[0] || 'Conversation'
+  return messages.value.find(isUserMessage)?.content.trim().split('\n')[0] || t('Conversation')
 })
 const detailsRevision = ref(0)
 const settingsOverride = ref<ConversationSettings>()
@@ -850,7 +851,7 @@ function restoreDraftSettings(): void {
     settingsOverride.value = pendingDraftSettings.value = settings
     modelOverride.value = settings?.model ?? ''
   } catch (cause) {
-    settingsError.value = `Could not restore draft settings: ${cause instanceof Error ? cause.message : String(cause)}`
+    settingsError.value = t('Could not restore draft settings: {value1}', { value1: cause instanceof Error ? cause.message : String(cause) })
   }
 }
 onMounted(restoreDraftSettings)
@@ -874,7 +875,7 @@ async function changeConversationSettings(patch: ConversationSettings): Promise<
       settingsOverride.value = pendingDraftSettings.value = settings
       modelOverride.value = settings.model ?? ''
     } catch (cause) {
-      settingsError.value = `Could not save draft settings: ${cause instanceof Error ? cause.message : String(cause)}`
+      settingsError.value = t('Could not save draft settings: {value1}', { value1: cause instanceof Error ? cause.message : String(cause) })
     }
     return
   }
@@ -891,7 +892,7 @@ async function changeConversationSettings(patch: ConversationSettings): Promise<
       ...session, config: { ...session.config, model: settings.model ?? undefined, thinking: settings.thinking ?? undefined, reasoningEffort: settings.reasoningEffort ?? undefined },
     } : session)
   } catch (cause) {
-    if (!controller.signal.aborted) settingsError.value = cause instanceof Error ? cause.message : 'Could not save conversation settings. Please try again.'
+    if (!controller.signal.aborted) settingsError.value = cause instanceof Error ? cause.message : t('Could not save conversation settings. Please try again.')
   } finally {
     if (settingsRequest === controller) { settingsRequest = undefined; savingSettings.value = false }
   }
@@ -994,7 +995,7 @@ function connectEventStream(chatId: string): void {
     event(envelope) {
       if (eventStream !== subscription || activeSessionId.value !== `web:${chatId}` || viewingPhysicalId.value) return
       const payload = envelope.payload
-      if (!isStreamPayload(payload)) throw new Error('Invalid live conversation payload')
+      if (!isStreamPayload(payload)) throw new Error(t('Invalid live conversation payload'))
       if (envelope.requestId && payload.event !== 'session_message' && finishedRequests.has(envelope.requestId)) return
       if (payload.event === 'command_result' && payload.receipt) {
         const requestId = envelope.requestId ?? payload.receipt.id
@@ -1210,7 +1211,7 @@ async function refreshDecisionRecords() {
   try {
     const response = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/decisions`,
       physicalId ? { physicalId } : undefined), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) })
-    if (!response.ok) throw new Error('Could not refresh decision history.')
+    if (!response.ok) throw new Error(t('Could not refresh decision history.'))
     const data = await response.json()
     const records = parseDecisionRecords(data.records)
     if (!controller.signal.aborted && activeSessionId.value === sessionId && viewingPhysicalId.value === physicalId) {
@@ -1219,7 +1220,7 @@ async function refreshDecisionRecords() {
     }
   } catch (cause) {
     if (!controller.signal.aborted && activeSessionId.value === sessionId && viewingPhysicalId.value === physicalId) {
-      decisionRecordError.value = cause instanceof Error ? cause.message : 'Could not refresh decision history.'
+      decisionRecordError.value = cause instanceof Error ? cause.message : t('Could not refresh decision history.')
     }
   }
 }
@@ -1510,7 +1511,7 @@ watch(() => [props.apiBase, props.projectId, paneActive.value] as const, ([base,
     if (!sessions) return
     if (!props.managed) homeCache.setSessions(base, sessions)
     const selected = sessions.find(session => session.sessionId === activeSessionId.value)
-    if (activeSession.value && !selected) composerError.value = 'This conversation or execution is no longer available. Close it and refresh the conversation list.'
+    if (activeSession.value && !selected) composerError.value = t('This conversation or execution is no longer available. Close it and refresh the conversation list.')
     if (selected) selectedMode.value = selected.mode
     allSessions.value = sessions.map(session => ({
       ...session,
@@ -1574,7 +1575,7 @@ function createNewWebChat(folder?: FolderRecord, syncRoute = true, openRemotePic
 function selectExecutionLocation(target: ExecutionLocation | undefined): void {
   if (preparingSend.value || activeSessionId.value) return
   if ((target?.kind === 'node' || target?.kind === 'folder' && target.folder.kind === 'remote') && (contextItems.value.length || pendingAttachments.value.length)) {
-    composerError.value = 'Remove local attachments before selecting a remote workspace. Files are not transferred between devices.'
+    composerError.value = t('Remove local attachments before selecting a remote workspace. Files are not transferred between devices.')
     return
   }
   try {
@@ -1583,7 +1584,7 @@ function selectExecutionLocation(target: ExecutionLocation | undefined): void {
     draftFolder.value = next.folder
     composerError.value = ''
   } catch (cause) {
-    composerError.value = cause instanceof Error ? cause.message : 'Could not select this execution location. Refresh and retry.'
+    composerError.value = cause instanceof Error ? cause.message : t('Could not select this execution location. Refresh and retry.')
   }
 }
 
@@ -1604,14 +1605,14 @@ function handleImageBusy(update: ImageContextBusy): void {
 function handleImageContext(update: ImageContextUpdate): void {
   if (update.contextKey !== fileContextKey.value || disposed) return
   if (update.file && (!canQuoteSelection.value || !canAttachFiles.value)) {
-    composerError.value = 'This conversation cannot receive an image right now. Retry after the current message finishes.'
+    composerError.value = t('This conversation cannot receive an image right now. Retry after the current message finishes.')
     return
   }
   try {
-    if (update.file && !update.source) throw new Error('The image source is unavailable. Reopen the image before attaching it.')
+    if (update.file && !update.source) throw new Error(t('The image source is unavailable. Reopen the image before attaching it.'))
     pendingAttachments.value = updateImageAttachment(pendingAttachments.value, update.sourceKey, update.file, { source: update.source })
   } catch (cause) {
-    composerError.value = cause instanceof Error ? cause.message : 'Could not attach the marked image. Try again.'
+    composerError.value = cause instanceof Error ? cause.message : t('Could not attach the marked image. Try again.')
   }
 }
 
@@ -1639,8 +1640,8 @@ function handleAttachmentDrop(event: DragEvent): void {
   attachmentDropTarget.value = false
   if (!canQuoteSelection.value || !canAttachFiles.value) {
     composerError.value = remoteConversation.value
-      ? 'Local attachments are not transferred to remote workspaces.'
-      : 'This conversation cannot receive file attachments right now.'
+      ? t('Local attachments are not transferred to remote workspaces.')
+      : t('This conversation cannot receive file attachments right now.')
     return
   }
   try {
@@ -1649,12 +1650,12 @@ function handleAttachmentDrop(event: DragEvent): void {
       pendingAttachments.value = updateImageAttachment(pendingAttachments.value, reference.sourceKey, reference.file, { source: reference.source })
     } else {
       const files = droppedChatFiles(event.dataTransfer)
-      if (!files.length) throw new Error('No files were found in this drop. Drop files or use Add file.')
+      if (!files.length) throw new Error(t('No files were found in this drop. Drop files or use Add file.'))
       pendingAttachments.value = appendChatAttachments(pendingAttachments.value, files)
     }
     composerError.value = ''
   } catch (cause) {
-    composerError.value = cause instanceof Error ? cause.message : 'Could not attach the files. Drop them again.'
+    composerError.value = cause instanceof Error ? cause.message : t('Could not attach the files. Drop them again.')
   }
 }
 
@@ -1668,7 +1669,7 @@ function removePendingAttachment(key: string): void {
 function openAttachmentPicker(): void {
   composerError.value = ''
   if (!canAttachFiles.value || !attachmentInput.value) {
-    composerError.value = 'File attachments are unavailable.'
+    composerError.value = t('File attachments are unavailable.')
     return
   }
   attachmentInput.value.value = ''
@@ -1695,7 +1696,7 @@ function handleComposerPaste(event: ClipboardEvent): void {
   if (!canAttachFiles.value) {
     if (clipboardImageFiles(event.clipboardData).length) {
       if (!event.clipboardData?.getData('text/plain')) event.preventDefault()
-      composerError.value = 'Local image attachments are not transferred to the selected remote workspace.'
+      composerError.value = t('Local image attachments are not transferred to the selected remote workspace.')
     }
     return
   }
@@ -1708,14 +1709,14 @@ function handleComposerPaste(event: ClipboardEvent): void {
     composerError.value = ''
   } catch (cause) {
     event.preventDefault()
-    composerError.value = cause instanceof Error ? cause.message : 'Could not paste the image. Paste again or use Add file.'
+    composerError.value = cause instanceof Error ? cause.message : t('Could not paste the image. Paste again or use Add file.')
   }
 }
 
 async function pickContext(kind: ChatContextItem['kind']): Promise<void> {
   const picker = window.shadowDesktop?.chatContext
   if (!canPickContext.value || !picker) {
-    composerError.value = 'File and folder context requires the local Main desktop app.'
+    composerError.value = t('File and folder context requires the local Main desktop app.')
     return
   }
   if (pickingContext.value) return
@@ -1727,7 +1728,7 @@ async function pickContext(kind: ChatContextItem['kind']): Promise<void> {
     if (generation !== sessionSelectionGeneration) return
     contextItems.value = addChatContext(contextItems.value, kind, paths)
   } catch (error) {
-    if (generation === sessionSelectionGeneration) composerError.value = error instanceof Error ? error.message : 'Could not select context. Try again.'
+    if (generation === sessionSelectionGeneration) composerError.value = error instanceof Error ? error.message : t('Could not select context. Try again.')
   } finally {
     if (generation === sessionSelectionGeneration) {
       pickingContext.value = false
@@ -1815,7 +1816,7 @@ async function openProjectWork(key: string) {
     await router.push({ name: 'chat', params: { projectId: id, sessionId: coordinator }, query: { work: key } })
   } catch (cause) {
     if (source !== route.fullPath || !paneActive.value) return
-    composerError.value = cause instanceof Error ? cause.message : 'Could not open Project work. Retry from the Project entry.'
+    composerError.value = cause instanceof Error ? cause.message : t('Could not open Project work. Retry from the Project entry.')
   }
 }
 defineExpose({ restoreSession, focusConversation, requestSession, activeSessionId, allSessions, appendDraft, quoteSelection, handleImageContext, handleImageBusy })
@@ -1843,7 +1844,7 @@ async function loadDirectChat(background = false): Promise<void> {
   if (!background) loadingHistory.value = true
   try {
     const res = await fetch(buildUrl('/api/chat/session', { chatId }), { signal: controller.signal })
-    if (!res.ok) throw new Error('Could not load conversation. Refresh to retry.')
+    if (!res.ok) throw new Error(t('Could not load conversation. Refresh to retry.'))
     const data = await res.json()
     if (controller.signal.aborted) return
     const container = messagesContainer.value
@@ -1870,7 +1871,7 @@ async function loadDirectChat(background = false): Promise<void> {
     viewingPhysicalId.value = null
     physicalIdStack.value = []
   } catch (error) {
-    if (!controller.signal.aborted) composerError.value = error instanceof Error ? error.message : 'Could not load conversation. Refresh to retry.'
+    if (!controller.signal.aborted) composerError.value = error instanceof Error ? error.message : t('Could not load conversation. Refresh to retry.')
   } finally {
     if (historyRequest === controller) {
       historyRequest = undefined
@@ -1902,7 +1903,7 @@ async function loadReadonlySession(background = false): Promise<void> {
       background ? Promise.resolve(null) : fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/context`), { signal: controller.signal }),
     ])
 
-    if (!histRes.ok) throw new Error('Could not update this conversation. Reopen it to retry.')
+    if (!histRes.ok) throw new Error(t('Could not update this conversation. Reopen it to retry.'))
     const histData = await histRes.json()
     if (controller.signal.aborted) return
     const container = messagesContainer.value
@@ -1918,7 +1919,7 @@ async function loadReadonlySession(background = false): Promise<void> {
     }
     composerError.value = ''
 
-    if (ctxRes && !ctxRes.ok) readonlyContextError.value = 'Could not load execution context. Reopen it to retry.'
+    if (ctxRes && !ctxRes.ok) readonlyContextError.value = t('Could not load execution context. Reopen it to retry.')
     if (ctxRes?.ok) {
       const ctxData = await ctxRes.json()
       if (controller.signal.aborted) return
@@ -1927,7 +1928,7 @@ async function loadReadonlySession(background = false): Promise<void> {
       tools.value = ctxData.tools ?? []
     }
   } catch (cause) {
-    if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : 'Could not update this conversation. Reopen it to retry.'
+    if (!controller.signal.aborted) composerError.value = cause instanceof Error ? cause.message : t('Could not update this conversation. Reopen it to retry.')
   } finally {
     if (historyRequest === controller) {
       historyRequest = undefined
@@ -1960,7 +1961,7 @@ async function loadHistoricalSegment(physId: string, direction: 'previous' | 'ne
   loadingHistory.value = true
   try {
     const res = await fetch(buildUrl(`/api/sessions/${encodeURIComponent(physId)}`), { signal: controller.signal })
-    if (!res.ok) throw new Error('Could not load this historical segment. Refresh to retry.')
+    if (!res.ok) throw new Error(t('Could not load this historical segment. Refresh to retry.'))
     const data = await res.json()
     if (controller.signal.aborted) return
     const rawMessages: RawMessage[] = data.messages ?? []
@@ -2039,7 +2040,7 @@ async function loadSearchEntries(signal: AbortSignal): Promise<ConversationSearc
   const history = await loadConversationSearchHistory(props.apiBase, activeSessionId.value, signal)
   signal.throwIfAborted()
   const segments = history.map(segment => {
-    if (!segment.data.messages.every(isSearchHistoryMessage)) throw new Error('Invalid messages in conversation search history. Reopen the conversation and retry.')
+    if (!segment.data.messages.every(isSearchHistoryMessage)) throw new Error(t('Invalid messages in conversation search history. Reopen the conversation and retry.'))
     return {
       id: segment.id, previousId: segment.previousId,
       messages: mergeCommandResults(collapseHistory(segment.data.messages), segment.data.commandResults),
@@ -2073,7 +2074,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   signal.throwIfAborted()
   browseHistory()
   const segment = searchSegments.find(item => item.id === match.entry.segmentId)
-  if (!segment) throw new Error('This search result is no longer available. Retry search.')
+  if (!segment) throw new Error(t('This search result is no longer available. Retry search.'))
   if (viewingPhysicalId.value !== segment.id) {
     historyRequest?.abort()
     historyRequest = undefined
@@ -2095,7 +2096,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   await nextTick()
   signal.throwIfAborted()
   const wrapper = messagesContainer.value?.querySelector<HTMLElement>(`[data-search-message-idx="${match.entry.messageIndex}"]`)
-  if (!wrapper) throw new Error('This message changed while searching. Retry search.')
+  if (!wrapper) throw new Error(t('This message changed while searching. Retry search.'))
   const response = segment.messages[match.entry.messageIndex]?.responseContext
   if (response && isBackgroundResponse(response)) setResponseExpanded(response, true)
   for (let parent = wrapper.parentElement; parent && parent !== messagesContainer.value; parent = parent.parentElement) {
@@ -2110,7 +2111,7 @@ async function revealSearchMatch(match: ConversationSearchMatch, query: string, 
   const expected = match.entry.blocks[match.blockIndex]
   const block = blocks[match.blockIndex]?.text === expected ? blocks[match.blockIndex] : blocks.find(item => item.text === expected)
   const range = block && searchRange(block, match.start, match.end)
-  if (!range || !range.getClientRects().length) throw new Error('The matching message text is not visible. Expand the message or retry search.')
+  if (!range || !range.getClientRects().length) throw new Error(t('The matching message text is not visible. Expand the message or retry search.'))
   clearSearchHighlights()
   paintSearchHighlights(query, range)
   searchTarget = { match, query }
@@ -2178,8 +2179,8 @@ async function sendQuestionAnswer(question: AskRequest, text: string, attachment
   const generation = sessionSelectionGeneration
   const controller = new AbortController()
   const submittedText = inputText.value
-  if (text.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) { composerError.value = `Keep your answer within ${MAX_YIELD_CUSTOM_TEXT_LENGTH} characters, then send it again.`; return }
-  if (attachments.length > MAX_ANSWER_ATTACHMENTS) { composerError.value = `Attach up to ${MAX_ANSWER_ATTACHMENTS} files, then send your answer again.`; return }
+  if (text.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) { composerError.value = t('Keep your answer within {MAX_YIELD_CUSTOM_TEXT_LENGTH} characters, then send it again.', { MAX_YIELD_CUSTOM_TEXT_LENGTH: MAX_YIELD_CUSTOM_TEXT_LENGTH }); return }
+  if (attachments.length > MAX_ANSWER_ATTACHMENTS) { composerError.value = t('Attach up to {MAX_ANSWER_ATTACHMENTS} files, then send your answer again.', { MAX_ANSWER_ATTACHMENTS: MAX_ANSWER_ATTACHMENTS }); return }
   submittingMessage.value = true
   sendRequest = controller
   composerError.value = ''
@@ -2187,8 +2188,8 @@ async function sendQuestionAnswer(question: AskRequest, text: string, attachment
     const uploaded = await uploadChatAttachments(props.apiBase, sessionId.replace('web:', ''), attachments, controller.signal)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     const content = composeImageReferenceMessage(text, uploaded) || 'See attached files.'
-    if (content.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) throw new Error(`Your answer and image references exceed ${MAX_YIELD_CUSTOM_TEXT_LENGTH} characters. Shorten the answer and retry.`)
-    if (!yieldQuestion.value) throw new Error('The question is unavailable. Reload it before sending your answer.')
+    if (content.length > MAX_YIELD_CUSTOM_TEXT_LENGTH) throw new Error(t('Your answer and image references exceed {MAX_YIELD_CUSTOM_TEXT_LENGTH} characters. Shorten the answer and retry.', { MAX_YIELD_CUSTOM_TEXT_LENGTH: MAX_YIELD_CUSTOM_TEXT_LENGTH }))
+    if (!yieldQuestion.value) throw new Error(t('The question is unavailable. Reload it before sending your answer.'))
     if (!await yieldQuestion.value.submitCustom(question.id, content, uploaded.map(item => item.path))) return
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     composerDraft.clearSent(composerDraftKey(props.apiBase, props.projectId ?? '', sessionId), submittedText)
@@ -2199,7 +2200,7 @@ async function sendQuestionAnswer(question: AskRequest, text: string, attachment
     void refreshSessionActivity()
   } catch (error) {
     if (!controller.signal.aborted && generation === sessionSelectionGeneration) {
-      composerError.value = error instanceof Error ? error.message : 'Could not send your answer. Check the connection and retry.'
+      composerError.value = error instanceof Error ? error.message : t('Could not send your answer. Check the connection and retry.')
     }
   } finally {
     if (sendRequest === controller) { sendRequest = undefined; submittingMessage.value = false }
@@ -2250,7 +2251,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
   const event = payload.event ?? 'response'
   if (event === 'session_message') {
     const parsed = parseLiveSessionMessage(payload.message)
-    if (!parsed) throw new Error('Invalid live event message')
+    if (!parsed) throw new Error(t('Invalid live event message'))
     const eventId = 'eventMeta' in parsed ? parsed.eventMeta.attrs['event-id'] : undefined
     if (eventId && messages.value.some(message => message.eventMeta?.attrs['event-id'] === eventId)) return false
     flushStreamResponse(state)
@@ -2342,15 +2343,15 @@ async function sendMessage(overrideContent?: string, opts?: {
   retryMedia?: string[]
 }): Promise<void> {
   if (modelSelection?.loading.value || modelSelection?.error.value) {
-    composerError.value = 'Project models are unavailable. Retry models or update this project’s model settings.'
+    composerError.value = t('Project models are unavailable. Retry models or update this project’s model settings.')
     return
   }
   if (isExecution.value) {
-    composerError.value = 'Tasks and calls are read-only. Send a message in the owning conversation instead.'
+    composerError.value = t('Tasks and calls are read-only. Send a message in the owning conversation instead.')
     return
   }
   if (props.embedded && !activeSession.value && !opts?.parentSessionId) {
-    composerError.value = 'This child conversation is unavailable. Close it and refresh the conversation list.'
+    composerError.value = t('This child conversation is unavailable. Close it and refresh the conversation list.')
     return
   }
   const retry = opts?.retry === true
@@ -2361,7 +2362,7 @@ async function sendMessage(overrideContent?: string, opts?: {
   const model = explicitModel.value
   const savedDraftKey = pendingDraftSettings.value ? draftSettingsKey.value : undefined
   if (remoteConversation.value && (attachments.length || contextItems.value.length)) {
-    composerError.value = 'Remove local attachments before sending to a remote workspace.'
+    composerError.value = t('Remove local attachments before sending to a remote workspace.')
     return
   }
   if ((!content && !retry && attachments.length === 0) || submissionBusy.value || currentRequest.value?.state.stopping
@@ -2424,7 +2425,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     const messageContent = composeImageReferenceMessage(content, uploadedAttachments)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     connectEventStream(chatId)
-    if (!eventStream) throw new Error('Live updates are unavailable. Retry before sending.')
+    if (!eventStream) throw new Error(t('Live updates are unavailable. Retry before sending.'))
     await eventStream.ready(controller.signal)
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) return
     const payload: Record<string, unknown> = {
@@ -2463,14 +2464,14 @@ async function sendMessage(overrideContent?: string, opts?: {
 
     if (!res.ok) {
       rejected = true
-      throw new Error(`Could not send message (${res.status} ${res.statusText}). Retry when Main is available.`)
+      throw new Error(t('Could not send message ({status} {statusText}). Retry when Main is available.', { status: res.status, statusText: res.statusText }))
     }
     const admission: unknown = await res.json()
     if (!isRecord(admission) || admission.chatId !== chatId || typeof admission.requestId !== 'string' || !admission.requestId) {
-      throw new Error('Main did not confirm the request identity. Refresh activity before retrying; the request may be running.')
+      throw new Error(t('Main did not confirm the request identity. Refresh activity before retrying; the request may be running.'))
     }
     if (admission.commandReceipt !== undefined && !isCommandReceipt(admission.commandReceipt)) {
-      throw new Error('Main returned an invalid command result. Refresh the conversation before retrying.')
+      throw new Error(t('Main returned an invalid command result. Refresh the conversation before retrying.'))
     }
     accepted = true
     if (!retry && overrideContent === undefined) {
@@ -2496,7 +2497,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     if (finishedRequests.has(admission.requestId)) control.finish()
     if (savedDraftKey) {
       try { window.localStorage.removeItem(savedDraftKey) }
-      catch (cause) { settingsError.value = `Conversation saved, but draft settings could not be cleared: ${cause instanceof Error ? cause.message : String(cause)}` }
+      catch (cause) { settingsError.value = t('Conversation saved, but draft settings could not be cleared: {value1}', { value1: cause instanceof Error ? cause.message : String(cause) }) }
     }
     if (controller.signal.aborted || generation !== sessionSelectionGeneration) {
       controller.abort()
@@ -2511,9 +2512,9 @@ async function sendMessage(overrideContent?: string, opts?: {
       if (index >= 0) messages.value.splice(index, 1)
     }
     if (isCommand || followUp || !activeSessionId.value || !messageAdded || rejected) {
-      composerError.value = err instanceof Error ? err.message : 'Could not start the conversation. Retry.'
+      composerError.value = err instanceof Error ? err.message : t('Could not start the conversation. Retry.')
     } else {
-      messages.value.push({ role: 'assistant', content: `Error: ${err}`, isError: true, timestamp: new Date().toISOString() })
+      messages.value.push({ role: 'assistant', content: t('Error: {err}', { err: err }), isError: true, timestamp: new Date().toISOString() })
     }
   } finally {
     if (!submitted || rejected) control.finish()
@@ -2780,7 +2781,7 @@ async function loadEmbeddedSession(id: string): Promise<void> {
   else {
     resetConversation()
     activeSessionId.value = id
-    composerError.value = 'This child conversation is unavailable. Close it and refresh the conversation list.'
+    composerError.value = t('This child conversation is unavailable. Close it and refresh the conversation list.')
   }
 }
 watch(() => props.sessionId, id => {

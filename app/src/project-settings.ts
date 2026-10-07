@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { projectJson } from './projects.ts'
 import { isReasoningEffort } from '../../src/agent/llm-config.ts'
@@ -17,7 +18,7 @@ export function parseProjectConfig(value: unknown): ProjectConfig {
     || (value.agent.reasoningEffort !== undefined && !isReasoningEffort(value.agent.reasoningEffort))
     || (value.learning !== undefined && (!isRecord(value.learning)
       || (value.learning.enabled !== undefined && typeof value.learning.enabled !== 'boolean')))) {
-    throw new Error('Main returned invalid project settings. Refresh to retry.')
+    throw new Error(t('Main returned invalid project settings. Refresh to retry.'))
   }
   return value as ProjectConfig
 }
@@ -33,7 +34,7 @@ export function mergeProjectSettings(config: ProjectConfig, section: 'agent' | '
   const next = structuredClone(config)
   const allowed = section === 'agent' ? ['model', 'temperature', 'thinking', 'reasoningEffort']
     : ['enabled', 'reflectIntervalMs', 'encapsulateIntervalMs', 'soulIntervalMs']
-  if (Object.keys(patch).some(key => !allowed.includes(key))) throw new Error('This setting is not project-owned.')
+  if (Object.keys(patch).some(key => !allowed.includes(key))) throw new Error(t('This setting is not project-owned.'))
   const target: Record<string, unknown> = { ...next[section] }
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) delete target[key]
@@ -56,7 +57,7 @@ export function createProjectSettingsClient(base: string, request: typeof fetch 
     async models(signal?: AbortSignal): Promise<string[]> {
       const result = await projectJson(base, '/debug/models', { signal }, request)
       if (!isRecord(result) || !Array.isArray(result.models) || !result.models.every(model => typeof model === 'string')) {
-        throw new Error('Main returned invalid models. Check App provider connections and retry.')
+        throw new Error(t('Main returned invalid models. Check App provider connections and retry.'))
       }
       return result.models
     },

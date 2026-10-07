@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { parseMediaFromContent } from '../../src/utils/media-parse.ts'
 import { conversationFilePath } from './conversation-file-link.ts'
 import type { OpenFile } from './file-workbench.ts'
@@ -22,12 +23,12 @@ export function attachmentFile(path: string, workdir?: SessionDetails['workdir']
 }
 
 export function attachmentName(path: string): string {
-  if (/^data:image\//i.test(path)) return 'Image'
+  if (/^data:image\//i.test(path)) return t('Image')
   let name = path
   if (/^https?:\/\//i.test(path)) {
     try { name = decodeURIComponent(new URL(path).pathname) } catch { /* Keep the original name for malformed URLs. */ }
   }
-  return name.split(/[\\/]/).pop() || 'Attachment'
+  return name.split(/[\\/]/).pop() || t('Attachment')
 }
 
 export function attachmentExtension(path: string): string {

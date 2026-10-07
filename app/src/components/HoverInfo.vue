@@ -5,7 +5,7 @@
   </span>
   <Teleport to="body">
     <div v-if="opened" :id="id" ref="popup" class="hover-info-popup" :class="{ interactive }"
-      :role="interactive ? 'dialog' : 'tooltip'" :aria-label="interactive ? (label || text || 'More information') : undefined"
+      :role="interactive ? 'dialog' : 'tooltip'" :aria-label="interactive ? (label || text || t('More information')) : undefined"
       :style="position" :tabindex="interactive ? -1 : undefined"
       @pointerenter="cancelClose" @pointerleave="scheduleClose" @focusin="cancelClose" @focusout="focusOut" @keydown="popupKey">
       <slot name="content" :close="close"><p class="hover-info-text">{{ text }}</p></slot>
@@ -18,6 +18,7 @@ let dismissCurrent: (() => void) | undefined
 </script>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, useId, watch } from 'vue'
 import { hoverInfoPosition } from '../hover-info.ts'
 

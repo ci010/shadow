@@ -1,72 +1,72 @@
 <template>
   <div ref="root" class="file-workbench" :class="{ 'explorer-docked': expanded && wide, 'mobile-workbench': mobileLayout }" :style="{ '--explorer-width': `${explorerWidth}px` }">
     <Teleport v-if="mobileHeader.visible.value && mobileHeader.chrome?.headerTarget.value" :to="mobileHeader.chrome.headerTarget.value">
-      <button ref="mobileTitleButton" class="mobile-document-title" type="button" aria-label="Switch view" aria-haspopup="dialog" :aria-expanded="viewsOpen" @click="viewsOpen = true">
+      <button ref="mobileTitleButton" class="mobile-document-title" type="button" :aria-label="t('Switch view')" aria-haspopup="dialog" :aria-expanded="viewsOpen" @click="viewsOpen = true">
         <span>{{ selectedTitle }}</span><span class="i-lucide-chevron-down" aria-hidden="true" />
       </button>
-      <button ref="mobileActionsButton" class="mobile-document-more" type="button" aria-label="Conversation and document actions" aria-haspopup="dialog" :aria-expanded="actionsOpen" @click="actionsOpen = true">
+      <button ref="mobileActionsButton" class="mobile-document-more" type="button" :aria-label="t('Conversation and document actions')" aria-haspopup="dialog" :aria-expanded="actionsOpen" @click="actionsOpen = true">
         <span class="i-lucide-ellipsis w-5 h-5" aria-hidden="true" />
       </button>
     </Teleport>
-    <MobileSheet v-if="mobileLayout" :open="viewsOpen" label="Open views" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
-      <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || conversationTitle || 'Conversation' }}</span></button></div>
-      <div v-if="tabs.diagnosis" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="chooseMobileView(DIAGNOSIS_TAB_KEY)"><span class="i-lucide-activity" aria-hidden="true" /><span>Diagnosis</span></button></div>
+    <MobileSheet v-if="mobileLayout" :open="viewsOpen" :label="t('Open views')" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
+      <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || conversationTitle || t('Conversation') }}</span></button></div>
+      <div v-if="tabs.diagnosis" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="chooseMobileView(DIAGNOSIS_TAB_KEY)"><span class="i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span></button></div>
       <div v-if="knowledgeEnabled" class="mobile-view-row">
-        <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>Knowledge</span></button>
-        <button v-if="tabs.knowledge" class="mobile-view-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+        <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>{{ t('Knowledge') }}</span></button>
+        <button v-if="tabs.knowledge" class="mobile-view-close" :aria-label="t('Close Knowledge')" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="entryId in tabs.knowledgeEntries ?? []" :key="entryId" class="mobile-view-row">
         <button :aria-current="tabs.selected === knowledgeEntryTabKey(entryId) ? 'page' : undefined" @click="chooseMobileView(knowledgeEntryTabKey(entryId))"><span class="i-lucide-book-open" aria-hidden="true" /><span>{{ knowledgeLabel(entryId) }}</span></button>
-        <button class="mobile-view-close" :aria-label="`Close ${knowledgeLabel(entryId)}`" @click="closeFile(knowledgeEntryTabKey(entryId), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+        <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: knowledgeLabel(entryId) })" @click="closeFile(knowledgeEntryTabKey(entryId), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="tab in tabs.projectTabs ?? []" :key="tab" class="mobile-view-row">
-        <button :aria-current="tabs.selected === projectTabKey(tab) ? 'page' : undefined" @click="chooseMobileView(projectTabKey(tab))"><span :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span>{{ tab === 'settings' ? 'Project settings' : 'Agents' }}</span></button>
-        <button class="mobile-view-close" :aria-label="`Close ${tab === 'settings' ? 'Project settings' : 'Agents'}`" @click="closeFile(projectTabKey(tab), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+        <button :aria-current="tabs.selected === projectTabKey(tab) ? 'page' : undefined" @click="chooseMobileView(projectTabKey(tab))"><span :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span>{{ tab === 'settings' ? t('Project settings') : t('Agents') }}</span></button>
+        <button class="mobile-view-close" :aria-label="t('Close {value1}', { value1: tab === 'settings' ? t('Project settings') : t('Agents') })" @click="closeFile(projectTabKey(tab), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
       <div v-for="file in tabs.files" :key="fileTabKey(file)" class="mobile-view-row">
-        <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span></button>
-        <button class="mobile-view-close" :aria-label="`Close ${file.path}`" @click="closeFile(fileTabKey(file), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
+        <button :aria-current="tabs.selected === fileTabKey(file) ? 'page' : undefined" @click="chooseMobileView(fileTabKey(file))"><span :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span>{{ file.path }}{{ file.view === 'diff' ? t(' (changes)') : '' }}</span></button>
+        <button class="mobile-view-close" :aria-label="t('Close {path}', { path: file.path })" @click="closeFile(fileTabKey(file), false)"><span class="i-lucide-x" aria-hidden="true" /></button>
       </div>
     </MobileSheet>
-    <MobileSheet v-if="mobileLayout" :open="actionsOpen" label="Conversation and document actions" :return-focus="mobileActionsButton" @update:open="actionsOpen = $event">
+    <MobileSheet v-if="mobileLayout" :open="actionsOpen" :label="t('Conversation and document actions')" :return-focus="mobileActionsButton" @update:open="actionsOpen = $event">
       <div class="mobile-workbench-actions">
         <slot name="actions" />
-        <button v-if="explorerAvailable && !knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />Browse files</button>
-        <button v-if="!isPermanentDocumentTab(tabs.selected)" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />Close current document</button>
-        <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">Close all documents</button>
+        <button v-if="explorerAvailable && !knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />{{ t('Browse files') }}</button>
+        <button v-if="!isPermanentDocumentTab(tabs.selected)" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />{{ t('Close current document') }}</button>
+        <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">{{ t('Close all documents') }}</button>
         <slot name="mobile-actions" :close="closeMobileActions" />
       </div>
     </MobileSheet>
-    <button v-if="expanded && !wide" class="explorer-backdrop" aria-label="Dismiss files" @click="collapseExplorer" />
-    <aside v-if="explorerAvailable || (tabs.knowledge && knowledgeEnabled)" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? 'Knowledge explorer' : 'File explorer'" @keydown.esc.stop.prevent="collapseExplorer">
+    <button v-if="expanded && !wide" class="explorer-backdrop" :aria-label="t('Dismiss files')" @click="collapseExplorer" />
+    <aside v-if="explorerAvailable || (tabs.knowledge && knowledgeEnabled)" v-show="expanded" :id="`${id}-explorer`" class="workbench-explorer" :class="{ drawer: !wide }" :aria-label="knowledgeSelected ? t('Knowledge explorer') : t('File explorer')" @keydown.esc.stop.prevent="collapseExplorer">
       <FileTree v-if="explorerAvailable" v-show="!knowledgeSelected" :api-base="apiBase" :session-id="sessionId" :folder-id="folderId" tree-only :active="active && expanded && !knowledgeSelected"
         :remote="remote" :selected-path="selectedFilePath" :reveal-version="revealVersion"
         :git-status="gitStatus" :git-loading="gitLoading" :git-error="gitError" :git-offline="gitOffline" @refresh-git="refreshGit" @open="openFile">
         <template #actions>
-          <HoverInfo text="Collapse files" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="workbench-button" aria-label="Collapse files" @click="collapseExplorer"><span class="i-lucide-panel-left-close" aria-hidden="true" /></button></HoverInfo>
+          <HoverInfo text="Collapse files" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="workbench-button" :aria-label="t('Collapse files')" @click="collapseExplorer"><span class="i-lucide-panel-left-close" aria-hidden="true" /></button></HoverInfo>
         </template>
       </FileTree>
       <div v-if="tabs.knowledge && knowledgeEnabled" :id="`${id}-knowledge-sidebar`" v-show="knowledgeSelected" class="knowledge-explorer" />
       <SidebarResizer v-if="expanded && wide && active" class="files-resizer" :model-value="explorerWidth" :bounds="resizeBounds"
-        :label="knowledgeSelected ? 'Resize Knowledge navigation' : 'Resize files'" :controls="`${id}-explorer`" @update:model-value="preferredWidth = $event" />
+        :label="knowledgeSelected ? t('Resize Knowledge navigation') : t('Resize files')" :controls="`${id}-explorer`" @update:model-value="preferredWidth = $event" />
     </aside>
     <div class="workbench-editor">
       <div v-show="!mobileLayout" class="document-toolbar">
-        <HoverInfo v-if="explorerAvailable || knowledgeSelected" :text="knowledgeSelected ? 'Toggle Knowledge navigation (Ctrl+Shift+E)' : 'Toggle files (Ctrl+Shift+E)'" v-slot="{ triggerProps }">
-        <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" :aria-label="knowledgeSelected ? 'Toggle Knowledge navigation' : 'Toggle files'" aria-keyshortcuts="Control+Shift+E" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
+        <HoverInfo v-if="explorerAvailable || knowledgeSelected" :text="knowledgeSelected ? t('Toggle Knowledge navigation (Ctrl+Shift+E)') : t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }">
+        <button v-bind="triggerProps" ref="explorerButton" class="workbench-button explorer-toggle" :aria-label="knowledgeSelected ? t('Toggle Knowledge navigation') : t('Toggle files')" aria-keyshortcuts="Control+Shift+E" :aria-controls="`${id}-explorer`" :aria-expanded="expanded" @click="toggleExplorer">
           <span class="i-lucide-panel-left" aria-hidden="true" />
         </button>
         </HoverInfo>
-        <div class="document-tablist" role="tablist" aria-label="Open documents" @wheel="scrollTabs">
+        <div class="document-tablist" role="tablist" :aria-label="t('Open documents')" @wheel="scrollTabs">
           <div class="document-tab conversation-tab fixed-tab" :class="{ selected: tabs.selected === '' }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, '')">
             <button :id="tabId('')" role="tab" :aria-selected="tabs.selected === ''" :tabindex="tabs.selected === '' ? 0 : -1" :aria-controls="panelId('')" @click="selectTab('')" @keydown="tabKey($event, '')">
-              <span class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || 'Conversation' }}</span>
+              <span class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || t('Conversation') }}</span>
             </button>
           </div>
           <div v-if="tabs.diagnosis" class="document-tab diagnosis-tab fixed-tab" :class="{ selected: tabs.selected === DIAGNOSIS_TAB_KEY }" @mousedown="preventMiddleScroll">
             <button :id="tabId(DIAGNOSIS_TAB_KEY)" role="tab" :aria-selected="tabs.selected === DIAGNOSIS_TAB_KEY" :tabindex="tabs.selected === DIAGNOSIS_TAB_KEY ? 0 : -1"
-              :aria-controls="panelId(DIAGNOSIS_TAB_KEY)" title="Session diagnosis" @click="selectTab(DIAGNOSIS_TAB_KEY)" @keydown="tabKey($event, DIAGNOSIS_TAB_KEY)">
-              <span class="document-icon i-lucide-activity" aria-hidden="true" /><span>Diagnosis</span>
+              :aria-controls="panelId(DIAGNOSIS_TAB_KEY)" :title="t('Session diagnosis')" @click="selectTab(DIAGNOSIS_TAB_KEY)" @keydown="tabKey($event, DIAGNOSIS_TAB_KEY)">
+              <span class="document-icon i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span>
             </button>
           </div>
           <div ref="documentTabs" class="document-tabs">
@@ -75,9 +75,9 @@
             <button :id="tabId(KNOWLEDGE_TAB_KEY)" role="tab" :aria-selected="tabs.selected === KNOWLEDGE_TAB_KEY"
               :tabindex="tabs.selected === KNOWLEDGE_TAB_KEY ? 0 : -1" :aria-controls="panelId(KNOWLEDGE_TAB_KEY)"
               @click="selectTab(KNOWLEDGE_TAB_KEY)" @keydown="tabKey($event, KNOWLEDGE_TAB_KEY)">
-              <span class="document-icon i-lucide-book-open" aria-hidden="true" /><span>Knowledge</span>
+              <span class="document-icon i-lucide-book-open" aria-hidden="true" /><span>{{ t('Knowledge') }}</span>
             </button>
-            <button class="document-close" aria-label="Close Knowledge" @click="closeFile(KNOWLEDGE_TAB_KEY)"><span class="i-lucide-x" aria-hidden="true" /></button>
+            <button class="document-close" :aria-label="t('Close Knowledge')" @click="closeFile(KNOWLEDGE_TAB_KEY)"><span class="i-lucide-x" aria-hidden="true" /></button>
           </div>
           <div v-for="entryId in tabs.knowledgeEntries ?? []" :key="knowledgeEntryTabKey(entryId)" class="document-tab" :class="{ selected: tabs.selected === knowledgeEntryTabKey(entryId) }"
             @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, knowledgeEntryTabKey(entryId))" @contextmenu.prevent.stop="openTabMenu($event, knowledgeEntryTabKey(entryId))">
@@ -86,33 +86,33 @@
               :title="entryId" @click="selectTab(knowledgeEntryTabKey(entryId))" @keydown="tabKey($event, knowledgeEntryTabKey(entryId))">
               <span class="document-icon i-lucide-book-open" aria-hidden="true" /><span class="document-name">{{ knowledgeLabel(entryId) }}</span>
             </button>
-            <button class="document-close" :aria-label="`Close ${knowledgeLabel(entryId)}`" @click="closeFile(knowledgeEntryTabKey(entryId))"><span class="i-lucide-x" aria-hidden="true" /></button>
+            <button class="document-close" :aria-label="t('Close {value1}', { value1: knowledgeLabel(entryId) })" @click="closeFile(knowledgeEntryTabKey(entryId))"><span class="i-lucide-x" aria-hidden="true" /></button>
           </div>
           <div v-for="tab in tabs.projectTabs ?? []" :key="tab" class="document-tab" :class="{ selected: tabs.selected === projectTabKey(tab) }"
             @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, projectTabKey(tab))" @contextmenu.prevent.stop="openTabMenu($event, projectTabKey(tab))">
             <button :id="tabId(projectTabKey(tab))" role="tab" :aria-selected="tabs.selected === projectTabKey(tab)"
               :tabindex="tabs.selected === projectTabKey(tab) ? 0 : -1" :aria-controls="panelId(projectTabKey(tab))"
               @click="selectTab(projectTabKey(tab))" @keydown="tabKey($event, projectTabKey(tab))">
-              <span class="document-icon" :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span class="document-name">{{ tab === 'settings' ? 'Project settings' : 'Agents' }}</span>
+              <span class="document-icon" :class="tab === 'settings' ? 'i-lucide-settings-2' : 'i-lucide-bot'" aria-hidden="true" /><span class="document-name">{{ tab === 'settings' ? t('Project settings') : t('Agents') }}</span>
             </button>
-            <button class="document-close" :aria-label="`Close ${tab === 'settings' ? 'Project settings' : 'Agents'}`" @click="closeFile(projectTabKey(tab))"><span class="i-lucide-x" aria-hidden="true" /></button>
+            <button class="document-close" :aria-label="t('Close {value1}', { value1: tab === 'settings' ? t('Project settings') : t('Agents') })" @click="closeFile(projectTabKey(tab))"><span class="i-lucide-x" aria-hidden="true" /></button>
           </div>
           <div v-for="file in tabs.files" :key="fileTabKey(file)" class="document-tab" :class="{ selected: tabs.selected === fileTabKey(file) }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, fileTabKey(file))" @contextmenu.prevent.stop="openTabMenu($event, fileTabKey(file))">
-            <HoverInfo :text="`${file.path}${file.view === 'diff' ? '\nChanges from HEAD' : ''}`" v-slot="{ triggerProps }">
-            <button v-bind="triggerProps" :id="tabId(fileTabKey(file))" role="tab" :aria-selected="tabs.selected === fileTabKey(file)" :tabindex="tabs.selected === fileTabKey(file) ? 0 : -1" :aria-controls="panelId(fileTabKey(file))" :aria-label="`${file.path}${file.view === 'diff' ? ' changes' : ''}`" @click="selectTab(fileTabKey(file))" @keydown="tabKey($event, fileTabKey(file))">
-              <span class="document-icon" :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span class="document-name">{{ file.entry.name }}{{ file.view === 'diff' ? ' (changes)' : '' }}</span>
+            <HoverInfo :text="`${file.path}${file.view === 'diff' ? t('\nChanges from HEAD') : ''}`" v-slot="{ triggerProps }">
+            <button v-bind="triggerProps" :id="tabId(fileTabKey(file))" role="tab" :aria-selected="tabs.selected === fileTabKey(file)" :tabindex="tabs.selected === fileTabKey(file) ? 0 : -1" :aria-controls="panelId(fileTabKey(file))" :aria-label="`${file.path}${file.view === 'diff' ? t(' changes') : ''}`" @click="selectTab(fileTabKey(file))" @keydown="tabKey($event, fileTabKey(file))">
+              <span class="document-icon" :class="file.view === 'diff' ? 'i-lucide-file-diff' : fileIcon(file.entry.name)" aria-hidden="true" /><span class="document-name">{{ file.entry.name }}{{ file.view === 'diff' ? t(' (changes)') : '' }}</span>
             </button>
             </HoverInfo>
-            <HoverInfo :text="`Close ${file.entry.name}${file.view === 'diff' ? ' changes' : ''}`" v-slot="{ triggerProps }">
-            <button v-bind="triggerProps" class="document-close" :aria-label="`Close ${file.path}${file.view === 'diff' ? ' changes' : ''}`" @click="closeFile(fileTabKey(file))"><span class="i-lucide-x" aria-hidden="true" /></button>
+            <HoverInfo :text="t('Close {name}{value2}', { name: file.entry.name, value2: file.view === 'diff' ? t(' changes') : '' })" v-slot="{ triggerProps }">
+            <button v-bind="triggerProps" class="document-close" :aria-label="t('Close {path}{value2}', { path: file.path, value2: file.view === 'diff' ? t(' changes') : '' })" @click="closeFile(fileTabKey(file))"><span class="i-lucide-x" aria-hidden="true" /></button>
             </HoverInfo>
           </div>
           <Teleport to="body">
             <div v-if="tabMenu" class="document-menu-backdrop" @pointerdown.self="dismissTabMenu(true)" @contextmenu.prevent.self="dismissTabMenu(true)">
-              <div ref="menuElement" class="document-menu" role="menu" aria-label="Document tab actions" :style="menuPosition" @keydown="menuKey">
-                <button type="button" role="menuitem" @click="runTabAction('close')">Close</button>
-                <button type="button" role="menuitem" :disabled="tabs.files.length + (tabs.knowledgeEntries?.length ?? 0) + (tabs.projectTabs?.length ?? 0) + Number(!!tabs.knowledge) < 2" @click="runTabAction('others')">Close others</button>
-                <button type="button" role="menuitem" @click="runTabAction('all')"><span>Close all</span><span class="document-menu-shortcut">Ctrl+Shift+W</span></button>
+              <div ref="menuElement" class="document-menu" role="menu" :aria-label="t('Document tab actions')" :style="menuPosition" @keydown="menuKey">
+                <button type="button" role="menuitem" @click="runTabAction('close')">{{ t('Close') }}</button>
+                <button type="button" role="menuitem" :disabled="tabs.files.length + (tabs.knowledgeEntries?.length ?? 0) + (tabs.projectTabs?.length ?? 0) + Number(!!tabs.knowledge) < 2" @click="runTabAction('others')">{{ t('Close others') }}</button>
+                <button type="button" role="menuitem" @click="runTabAction('all')"><span>{{ t('Close all') }}</span><span class="document-menu-shortcut">Ctrl+Shift+W</span></button>
               </div>
             </div>
           </Teleport>
@@ -165,6 +165,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import FileTree from './FileTree.vue'
@@ -222,11 +223,11 @@ function updateKnowledgeLabels(entries: KnowledgeEntry[]) {
 }
 const selectedFilePath = computed(() => tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.path)
 const revealVersion = ref(0)
-const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? 'Diagnosis' : tabs.value.selected === KNOWLEDGE_TAB_KEY ? 'Knowledge'
-  : tabs.value.selected === projectTabKey('settings') ? 'Project settings' : tabs.value.selected === projectTabKey('agents') ? 'Agents'
+const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? t('Diagnosis') : tabs.value.selected === KNOWLEDGE_TAB_KEY ? t('Knowledge')
+  : tabs.value.selected === projectTabKey('settings') ? t('Project settings') : tabs.value.selected === projectTabKey('agents') ? t('Agents')
   : knowledgeEntryId(tabs.value.selected) ? knowledgeLabel(knowledgeEntryId(tabs.value.selected)!)
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
-    ?? props.primaryLabel ?? props.conversationTitle ?? 'Conversation')
+    ?? props.primaryLabel ?? props.conversationTitle ?? t('Conversation'))
 function closeMobileActions() { actionsOpen.value = false }
 function chooseMobileView(key: string) { selectTab(key); viewsOpen.value = false }
 function chooseMobileKnowledge() {

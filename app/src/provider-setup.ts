@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { createUuid } from './uuid.ts'
 
@@ -42,7 +43,7 @@ export function providerDisplayName(provider: string): string {
 
 export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
   if (!isRecord(value) || !Array.isArray(value.providers)) {
-    throw new Error('The backend returned an invalid provider list. Restart Main and retry.')
+    throw new Error(t('The backend returned an invalid provider list. Restart Main and retry.'))
   }
   const names = new Set<string>()
   let selected = false
@@ -53,7 +54,7 @@ export function parseConfiguredProviders(value: unknown): ConfiguredProvider[] {
       || !['api-key', 'copilot', 'none'].includes(String(item.authMode))
       || (item.model !== undefined && typeof item.model !== 'string')
       || (item.baseUrl !== undefined && typeof item.baseUrl !== 'string')) {
-      throw new Error('The backend returned an invalid provider list. Restart Main and retry.')
+      throw new Error(t('The backend returned an invalid provider list. Restart Main and retry.'))
     }
     names.add(item.provider)
     selected ||= item.selected
@@ -90,7 +91,7 @@ export function parseProviderSetup(value: unknown): ProviderSetupStatus {
     || !['api-key', 'copilot', 'none'].includes(String(value.authMode))
     || (value.baseUrl !== undefined && typeof value.baseUrl !== 'string')
     || (value.reason !== undefined && typeof value.reason !== 'string')) {
-    throw new Error('The backend returned an invalid provider status. Restart Main and retry.')
+    throw new Error(t('The backend returned an invalid provider status. Restart Main and retry.'))
   }
   return {
     provider: value.provider,
@@ -106,7 +107,7 @@ export function parseProviderSetup(value: unknown): ProviderSetupStatus {
 export function parseDeviceLogin(value: unknown): DeviceLogin {
   if (!isRecord(value) || typeof value.loginId !== 'string' || !/^[\w-]{1,100}$/.test(value.loginId)
     || !['pending', 'succeeded', 'denied', 'expired', 'cancelled', 'error'].includes(String(value.state))) {
-    throw new Error('The backend returned an invalid login status. Please retry.')
+    throw new Error(t('The backend returned an invalid login status. Please retry.'))
   }
   if (value.state === 'pending' && (
     typeof value.userCode !== 'string' || !/^[A-Za-z0-9-]{4,32}$/.test(value.userCode)
@@ -114,7 +115,7 @@ export function parseDeviceLogin(value: unknown): DeviceLogin {
     || typeof value.expiresAt !== 'number' || !Number.isFinite(value.expiresAt)
     || typeof value.intervalMs !== 'number' || !Number.isFinite(value.intervalMs) || value.intervalMs < 1000
   )) {
-    throw new Error('The backend returned an invalid GitHub device code. Please retry.')
+    throw new Error(t('The backend returned an invalid GitHub device code. Please retry.'))
   }
   return {
     loginId: value.loginId,
@@ -131,10 +132,10 @@ export function parseDeviceLogin(value: unknown): DeviceLogin {
 export class ProviderRequestError extends Error {
   constructor(readonly status: number) {
     super(status === 401 || status === 403
-      ? 'Credentials were not accepted. Reconfigure this provider or sign in again.'
+      ? t('Credentials were not accepted. Reconfigure this provider or sign in again.')
       : status === 400
-        ? 'Check the provider, model, base URL and API key, then retry.'
-        : 'Cannot reach the provider setup service. Check Main and your network, then retry.')
+        ? t('Check the provider, model, base URL and API key, then retry.')
+        : t('Cannot reach the provider setup service. Check Main and your network, then retry.'))
   }
 }
 
@@ -171,12 +172,12 @@ export function createProviderSetupClient(apiBase: string, request: typeof fetch
       const login = parseDeviceLogin(await json('/api/auth/login', {
         method: 'POST', body: JSON.stringify({ model, attemptId }), signal,
       }))
-      if (attemptId && login.loginId !== attemptId) throw new Error('The login attempt changed. Please retry.')
+      if (attemptId && login.loginId !== attemptId) throw new Error(t('The login attempt changed. Please retry.'))
       return login
     },
     async poll(loginId: string, signal?: AbortSignal) {
       const login = parseDeviceLogin(await json(`/api/auth/login/${encodeURIComponent(loginId)}`, { signal }))
-      if (login.loginId !== loginId) throw new Error('The login attempt changed. Please retry.')
+      if (login.loginId !== loginId) throw new Error(t('The login attempt changed. Please retry.'))
       return login
     },
     async cancel(loginId: string) {
@@ -221,7 +222,7 @@ export function createDeviceLoginController(
       if (current !== generation) return
       await cancel()
       if (view.state !== 'error') {
-        update({ state: 'error', error: 'Login status could not be refreshed. Check your connection and retry.' })
+        update({ state: 'error', error: t('Login status could not be refreshed. Check your connection and retry.') })
       }
     }
   }
@@ -248,7 +249,7 @@ export function createDeviceLoginController(
     } catch {
       if (current === generation) {
         await cancel()
-        if (view.state !== 'error') update({ state: 'error', error: 'Could not start GitHub login. Check your connection and retry.' })
+        if (view.state !== 'error') update({ state: 'error', error: t('Could not start GitHub login. Check your connection and retry.') })
       }
     } finally {
       if (startController === requestController) startController = undefined
@@ -271,7 +272,7 @@ export function createDeviceLoginController(
         activeId = undefined
         update({ state: 'cancelled' })
       } catch {
-        update({ state: 'error', error: 'Could not confirm cancellation. The device code will expire; check your connection before retrying.' })
+        update({ state: 'error', error: t('Could not confirm cancellation. The device code will expire; check your connection before retrying.') })
       } finally {
         cancellation = undefined
       }

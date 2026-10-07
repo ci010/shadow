@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { shallowReactive, shallowReadonly } from 'vue'
 import { hostBase, projectBase } from './api-url.ts'
 import { isRecord, parseSessionGraph } from './folders-sidebar.ts'
@@ -33,7 +34,7 @@ export function createSnapshot<T>(load: (signal: AbortSignal) => Promise<T>, del
       state.revision++
     } catch (cause) {
       if (!closed && !current.signal.aborted && controller === current) {
-        state.error = cause instanceof Error ? cause.message : 'Live state is unavailable. Retry.'
+        state.error = cause instanceof Error ? cause.message : t('Live state is unavailable. Retry.')
       }
     } finally {
       if (controller === current) {
@@ -142,7 +143,7 @@ export function createProjectLiveState(
   }
   return {
     acquireCatalog(base: string) {
-      if (disposed) throw new Error('Project live state has been disposed.')
+      if (disposed) throw new Error(t('Project live state has been disposed.'))
       const key = hostBase(base)
       let entry = catalogs.get(key)
       if (!entry) { entry = createCatalog(key); catalogs.set(key, entry) }
@@ -161,7 +162,7 @@ export function createProjectLiveState(
       }
     },
     acquireProject(base: string, projectId: string, observer?: Partial<LiveObserver>, includeWork = false) {
-      if (disposed) throw new Error('Project live state has been disposed.')
+      if (disposed) throw new Error(t('Project live state has been disposed.'))
       const host = hostBase(base)
       const key = JSON.stringify([host, projectId])
       let entry = projects.get(key)

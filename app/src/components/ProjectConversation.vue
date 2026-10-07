@@ -2,9 +2,9 @@
   <div class="project-conversation">
     <div v-if="error" class="project-model-error" role="alert">
       {{ error }}
-      <button class="btn btn-sm" :disabled="loading" @click="load">Retry models</button>
-      <RouterLink :to="{ name: 'project-settings', params: { projectId, section: 'models' } }">Project models</RouterLink>
-      <RouterLink :to="{ name: 'settings', params: { section: 'providers' } }">App providers</RouterLink>
+      <button class="btn btn-sm" :disabled="loading" @click="load">{{ t('Retry models') }}</button>
+      <RouterLink :to="{ name: 'project-settings', params: { projectId, section: 'models' } }">{{ t('Project models') }}</RouterLink>
+      <RouterLink :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('App providers') }}</RouterLink>
     </div>
     <ProjectDashboard v-if="sessionId === ORCHESTRATOR_SESSION_ID" ref="dashboard" :api-base="apiBase" :project-id="projectId"
       :project-name="projectName" :visible="visible" :knowledge-request="knowledgeRequest" :child-session-id="childSessionId"
@@ -27,6 +27,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import ChatWorkspace from './ChatWorkspace.vue'
 import ProjectDashboard from './ProjectDashboard.vue'
@@ -55,7 +56,7 @@ let request: AbortController | undefined
 provideModelSelection({
   current, defaultReasoning, options, error, loading, disabled: computed(() => loading.value),
   async select(model) {
-    if (!model.trim()) { error.value = 'Choose a model for this conversation.'; return }
+    if (!model.trim()) { error.value = t('Choose a model for this conversation.'); return }
     current.value = model
     error.value = ''
   },
@@ -74,7 +75,7 @@ async function load() {
     defaultReasoning.value = configReasoning(config)
     options.value = models
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load project models. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load project models. Retry.')
   } finally { if (request === controller) loading.value = false }
 }
 onMounted(load)

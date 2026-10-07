@@ -1,17 +1,18 @@
 <template>
-  <div class="file-viewer-preview" :aria-label="`Preview ${name}`" :aria-busy="loading">
-    <p v-if="fileViewerFormat(extension) === 'gis'" class="viewer-network-notice" role="status">Map previews use external map tiles and stylesheet resources. Map providers can see the requested map area.</p>
-    <NodeOfflineState v-if="offline" :checking="loading" description="This preview will be available when the owning node reconnects." @retry="load" />
+  <div class="file-viewer-preview" :aria-label="t('Preview {name}', { name: name })" :aria-busy="loading">
+    <p v-if="fileViewerFormat(extension) === 'gis'" class="viewer-network-notice" role="status">{{ t('Map previews use external map tiles and stylesheet resources. Map providers can see the requested map area.') }}</p>
+    <NodeOfflineState v-if="offline" :checking="loading" :description="t('This preview will be available when the owning node reconnects.')" @retry="load" />
     <div v-else-if="error" class="viewer-notice" role="alert">
-      <p>{{ error }} Use Download to save the original file.</p>
-      <button class="viewer-retry" type="button" @click="load">Retry preview</button>
+      <p>{{ error }} {{ t('Use Download to save the original file.') }}</p>
+      <button class="viewer-retry" type="button" @click="load">{{ t('Retry preview') }}</button>
     </div>
-    <p v-else-if="loading" class="viewer-loading" role="status">Loading file preview...</p>
+    <p v-else-if="loading" class="viewer-loading" role="status">{{ t('Loading file preview...') }}</p>
     <div v-show="!error && !offline" ref="container" class="viewer-container selectable-text" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { FileViewer } from '@open-file-viewer/core'
 import { useSessionFiles } from '../../composables/useSessionFiles.ts'
@@ -52,12 +53,12 @@ function mount(controller: AbortController): void {
     onError: (cause, failed) => {
       if (controller.signal.aborted || (failed && failed.source !== file)) return
       loading.value = false
-      error.value = `Could not render this file: ${cause.message}`
+      error.value = t('Could not render this file: {message}', { message: cause.message })
     },
     onUnsupported: unsupported => {
       if (controller.signal.aborted || unsupported.source !== file) return
       loading.value = false
-      error.value = 'This file format cannot be previewed by the installed viewer.'
+      error.value = t('This file format cannot be previewed by the installed viewer.')
     },
   })
 }
@@ -85,7 +86,7 @@ async function load(): Promise<void> {
     source = undefined
     loading.value = false
     offline.value = isNodeOfflineError(cause)
-    error.value = offline.value ? '' : cause instanceof Error ? cause.message : 'Could not load this file. Retry the preview.'
+    error.value = offline.value ? '' : cause instanceof Error ? cause.message : t('Could not load this file. Retry the preview.')
   }
 }
 onMounted(() => void load())
@@ -100,7 +101,7 @@ watch(isDark, () => {
   request = new AbortController()
   try { mount(request) } catch (cause) {
     loading.value = false
-    error.value = cause instanceof Error ? cause.message : 'Could not update the preview theme. Retry the preview.'
+    error.value = cause instanceof Error ? cause.message : t('Could not update the preview theme. Retry the preview.')
   }
 })
 onUnmounted(destroy)

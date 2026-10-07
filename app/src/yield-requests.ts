@@ -1,3 +1,4 @@
+import { t, formatDateTime } from './i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { parseYieldRequest, parseYieldCustomText, MAX_YIELD_CUSTOM_TEXT_LENGTH, type YieldRequest } from '../../src/sessions/yield-contract.ts'
@@ -9,7 +10,7 @@ export function isInputRequest(request: AskRequest): request is InputRequest { r
 
 export function parseYieldResponse(value: unknown, sessionId: string): AskRequest | null {
   if (!value || typeof value !== 'object' || !('request' in value)) {
-    throw new Error('The server returned an invalid question. Retry to load it again.')
+    throw new Error(t('The server returned an invalid question. Retry to load it again.'))
   }
   if (value.request === null) return null
   return value.request && typeof value.request === 'object' && 'kind' in value.request && value.request.kind === 'input'
@@ -18,13 +19,13 @@ export function parseYieldResponse(value: unknown, sessionId: string): AskReques
 
 export function yieldDeadlineText(request: AskRequest, now: number): string {
   if (isInputRequest(request)) return request.deadline
-    ? `Input expires at ${new Date(request.deadline).toLocaleTimeString()}; no answer is chosen automatically.`
-    : 'Waiting for input. No answer is chosen automatically.'
-  if (request.timeoutPaused) return 'Automatic default paused because you requested an explanation or revision. An explicit answer is required.'
-  if (!request.deadline) return 'No time limit. Waiting for a response.'
+    ? t('Input expires at {value1}; no answer is chosen automatically.', { value1: formatDateTime(new Date(request.deadline), { hour: 'numeric', minute: '2-digit', second: '2-digit' }) })
+    : t('Waiting for input. No answer is chosen automatically.')
+  if (request.timeoutPaused) return t('Automatic default paused because you requested an explanation or revision. An explicit answer is required.')
+  if (!request.deadline) return t('No time limit. Waiting for a response.')
   const deadline = Date.parse(request.deadline)
-  if (deadline <= now) return 'Time limit reached. Waiting for the server to confirm the default choice.'
-  return `At ${new Date(deadline).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}, the server will choose the default if no response arrives.`
+  if (deadline <= now) return t('Time limit reached. Waiting for the server to confirm the default choice.')
+  return t('At {value1}, the server will choose the default if no response arrives.', { value1: formatDateTime(new Date(deadline), { hour: '2-digit', minute: '2-digit', second: '2-digit' }) })
 }
 
 async function readResponse(response: Response): Promise<unknown> {
@@ -33,13 +34,13 @@ async function readResponse(response: Response): Promise<unknown> {
   const detail = value && typeof value === 'object' && 'message' in value && typeof value.message === 'string'
     ? value.message : ''
   const recovery: Record<number, string> = {
-    400: 'The request was not accepted. Reload the question before trying again.',
-    403: 'You do not have permission to change this question. Ask an authorized user or the parent session.',
-    404: 'This question is unavailable or this server does not support yield questions. Refresh or update the server.',
-    409: 'This question changed or was already resolved. Reload it before trying again.',
-    503: 'The question service is unavailable. Retry when the server is ready.',
+    400: t('The request was not accepted. Reload the question before trying again.'),
+    403: t('You do not have permission to change this question. Ask an authorized user or the parent session.'),
+    404: t('This question is unavailable or this server does not support yield questions. Refresh or update the server.'),
+    409: t('This question changed or was already resolved. Reload it before trying again.'),
+    503: t('The question service is unavailable. Retry when the server is ready.'),
   }
-  throw new Error([detail, recovery[response.status] ?? 'Could not update the question. Check the connection and retry.'].filter(Boolean).join(' '))
+  throw new Error([detail, recovery[response.status] ?? t('Could not update the question. Check the connection and retry.')].filter(Boolean).join(' '))
 }
 
 export interface YieldSource {
@@ -108,7 +109,7 @@ export function useYieldRequest(source: () => YieldSource) {
       if (!answerError) error.value = ''
     } catch (cause) {
       if (current === generation && !controller.signal.aborted) {
-        error.value = cause instanceof Error ? cause.message : 'Could not load the question. Check the connection and retry.'
+        error.value = cause instanceof Error ? cause.message : t('Could not load the question. Check the connection and retry.')
       }
     } finally {
       if (read === controller) { read = undefined; loading.value = false }
@@ -129,7 +130,7 @@ export function useYieldRequest(source: () => YieldSource) {
           return false
         }
       } else if (input || !question.options.includes(option)) {
-        error.value = 'Choose an offered option or write your own response.'
+        error.value = t('Choose an offered option or write your own response.')
         return false
       }
     }
@@ -153,7 +154,7 @@ export function useYieldRequest(source: () => YieldSource) {
       if (current !== generation || controller.signal.aborted) return false
       if (isCancellation) {
         if (!value || typeof value !== 'object' || !('cancelled' in value) || value.cancelled !== true) {
-          throw new Error('The server did not confirm cancellation. Reload the question before trying again.')
+          throw new Error(t('The server did not confirm cancellation. Reload the question before trying again.'))
         }
       } else if (!value || typeof value !== 'object' || !('answer' in value) || !value.answer || typeof value.answer !== 'object'
         || !('requestId' in value.answer) || value.answer.requestId !== question.id
@@ -163,7 +164,7 @@ export function useYieldRequest(source: () => YieldSource) {
         || !('answeredBy' in value.answer) || value.answer.answeredBy !== 'user'
         || !('answeredAt' in value.answer) || typeof value.answer.answeredAt !== 'string'
         || !Number.isFinite(Date.parse(value.answer.answeredAt))) {
-        throw new Error('The server did not confirm your answer. Reload the question before trying again.')
+        throw new Error(t('The server did not confirm your answer. Reload the question before trying again.'))
       }
       answeredId = question.id
       request.value = null
@@ -177,8 +178,8 @@ export function useYieldRequest(source: () => YieldSource) {
       if (current === generation && !controller.signal.aborted) {
         answerError = true
         error.value = cause instanceof Error ? cause.message : isCancellation
-          ? 'Could not cancel the task. Check the connection and retry.'
-          : 'Could not submit your answer. Check the connection and retry.'
+          ? t('Could not cancel the task. Check the connection and retry.')
+          : t('Could not submit your answer. Check the connection and retry.')
       }
       return false
     } finally {
@@ -215,11 +216,11 @@ export function useYieldRequest(source: () => YieldSource) {
     submit: () => mutate(false), cancelQuestion: () => mutate(true),
     submitCustom: (requestId: string, text: string, media: string[] = []) => {
       if (!answerable.value || busy.value || request.value?.id !== requestId) {
-        error.value = 'This question changed or is unavailable. Reload it before sending your answer.'
+        error.value = t('This question changed or is unavailable. Reload it before sending your answer.')
         return Promise.resolve(false)
       }
       if (media.length && !answerMediaSchema.safeParse(media).success) {
-        error.value = `Attach up to ${MAX_ANSWER_ATTACHMENTS} files, then retry your answer.`
+        error.value = t('Attach up to {MAX_ANSWER_ATTACHMENTS} files, then retry your answer.', { MAX_ANSWER_ATTACHMENTS: MAX_ANSWER_ATTACHMENTS })
         return Promise.resolve(false)
       }
       customMode.value = true

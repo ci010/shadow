@@ -1,22 +1,22 @@
 <template>
   <article class="execution-card" :data-execution-id="execution.sessionId" :data-execution-mode="execution.mode">
     <button class="execution-inspect trace-header" :disabled="!execution.sessionId" :aria-pressed="execution.sessionId ? !!selected : undefined"
-      :aria-label="`Inspect ${execution.mode}: ${execution.label}`" @click="inspect">
+      :aria-label="t('Inspect {mode}: {label}', { mode: execution.mode, label: execution.label })" @click="inspect">
       <span class="execution-icon i-lucide-git-branch" aria-hidden="true" />
-      <span class="execution-copy"><strong>{{ execution.label }}</strong><span>{{ execution.mode === 'call' ? 'Call · inherited context · blocking' : 'Task · fresh context · async' }}<template v-if="execution.agentType"> · {{ execution.agentType }}</template></span></span>
-      <span v-if="execution.blocked" class="execution-blocked">Blocked</span>
+      <span class="execution-copy"><strong>{{ execution.label }}</strong><span>{{ execution.mode === 'call' ? t('Call · inherited context · blocking') : t('Task · fresh context · async') }}<template v-if="execution.agentType"> · {{ execution.agentType }}</template></span></span>
+      <span v-if="execution.blocked" class="execution-blocked">{{ t('Blocked') }}</span>
       <SessionActivity v-else :stage="execution.stage" />
       <span v-if="execution.sessionId" class="i-lucide-chevron-right execution-icon" aria-hidden="true" />
     </button>
     <div class="execution-trace">
       <div v-if="execution.output || execution.partialWork" class="execution-output trace-guide"><slot /><p v-if="execution.partialWork" class="execution-partial">{{ execution.partialWork }}</p></div>
       <details v-disclosure-motion class="execution-details" @toggle.self="detailsOpen = ($event.currentTarget as HTMLDetailsElement).open">
-        <summary class="trace-header" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />Tool details</summary>
+        <summary class="trace-header" @click="$emit('interact')"><span class="trace-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Tool details') }}</summary>
         <div v-if="detailsOpen" class="trace-guide">
-          <span class="execution-detail-label">Arguments</span>
+          <span class="execution-detail-label">{{ t('Arguments') }}</span>
           <ToolPayload boxed class="execution-arguments" :source="execution.arguments" />
           <template v-if="execution.receipt !== undefined">
-            <span class="execution-detail-label">Result</span>
+            <span class="execution-detail-label">{{ t('Result') }}</span>
             <ToolPayload boxed class="execution-result" :source="execution.receipt || '(Empty result)'" />
           </template>
         </div>
@@ -26,6 +26,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { ref } from 'vue'
 import type { InlineExecution } from '../execution-messages.ts'
 import { vDisclosureMotion } from '../disclosure-motion.ts'

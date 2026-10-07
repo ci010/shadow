@@ -1,79 +1,78 @@
 <template>
-  <section class="micro-apps" aria-label="Project apps">
+  <section class="micro-apps" :aria-label="t('Project apps')">
     <header class="apps-heading">
-      <div><h2>Apps</h2><p>Reusable tools for this Project. Your conversations can end; your apps stay.</p></div>
-      <button type="button" :disabled="busy" @click="refresh">Refresh</button>
-      <button v-if="canWrite" type="button" @click="$emit('compose', 'Build a reusable app for me:\n')">Create with agent</button>
+      <div><h2>{{ t('Apps') }}</h2><p>{{ t('Reusable tools for this Project. Your conversations can end; your apps stay.') }}</p></div>
+      <button type="button" :disabled="busy" @click="refresh">{{ t('Refresh') }}</button>
+      <button v-if="canWrite" type="button" @click="$emit('compose', 'Build a reusable app for me:\n')">{{ t('Create with agent') }}</button>
     </header>
-    <p v-if="error" class="apps-error" role="alert">{{ error }} <button :disabled="busy" @click="refresh">Retry</button></p>
-    <p v-if="loading && !apps.length" class="apps-empty" role="status">Loading apps…</p>
+    <p v-if="error" class="apps-error" role="alert">{{ error }} <button :disabled="busy" @click="refresh">{{ t('Retry') }}</button></p>
+    <p v-if="loading && !apps.length" class="apps-empty" role="status">{{ t('Loading apps…') }}</p>
     <div v-else-if="!apps.length && !error" class="apps-empty">
-      <h3>A home for the tools you keep using</h3>
-      <p>Ask a conversation to build an app. Review its code and permissions here, then open it whenever you need it.</p>
-      <p>Publishing does not run code or grant model access.</p>
+      <h3>{{ t('A home for the tools you keep using') }}</h3>
+      <p>{{ t('Ask a conversation to build an app. Review its code and permissions here, then open it whenever you need it.') }}</p>
+      <p>{{ t('Publishing does not run code or grant model access.') }}</p>
     </div>
     <div v-else class="apps-layout" :class="{ 'has-selection': !!selected }">
-      <nav class="apps-list" aria-label="Saved apps">
+      <nav class="apps-list" :aria-label="t('Saved apps')">
         <button v-for="app in apps" :key="app.id" :aria-current="selected?.id === app.id ? 'page' : undefined" @click="select(app.id)">
           <span class="app-identity"><img v-if="app.manifest.icon" :src="microAppIconUrl(apiBase, app)" alt="" @error="iconError" /><strong>{{ app.manifest.name }}</strong></span>
           <span :class="{ 'needs-review': !app.approval }">{{ microAppStatus[app.status] }}</span>
-          <span v-if="app.manifest.llm" class="app-usage">{{ app.calls }} / {{ app.manifest.llm.maxCalls }} model calls</span>
+          <span v-if="app.manifest.llm" class="app-usage">{{ app.calls }} / {{ app.manifest.llm.maxCalls }} {{ t('model calls') }}</span>
         </button>
       </nav>
       <main v-if="selected" class="app-detail">
         <header class="app-heading">
           <div class="app-heading-identity"><img v-if="selected.manifest.icon" :src="microAppIconUrl(apiBase, selected)" alt="" @error="iconError" /><div><h3>{{ selected.manifest.name }}</h3><p>{{ microAppStatus[selected.status] }}</p></div></div>
-          <button :disabled="busy" @click="reviewing = !reviewing">{{ reviewing ? 'Hide details' : 'Review details' }}</button>
-          <button v-if="selected.approval && canWrite" class="app-primary" :disabled="busy || selected.cleanupPending" @click="open">{{ desktopApps ? 'Open window' : 'Open app' }}</button>
-          <button v-if="(selected.status === 'running' || selected.cleanupPending) && canWrite" :disabled="busy" @click="act('stop')">{{ selected.cleanupPending && selected.status === 'failed' ? 'Retry cleanup' : 'Stop' }}</button>
+          <button :disabled="busy" @click="reviewing = !reviewing">{{ reviewing ? t('Hide details') : t('Review details') }}</button>
+          <button v-if="selected.approval && canWrite" class="app-primary" :disabled="busy || selected.cleanupPending" @click="open">{{ desktopApps ? t('Open window') : t('Open app') }}</button>
+          <button v-if="(selected.status === 'running' || selected.cleanupPending) && canWrite" :disabled="busy" @click="act('stop')">{{ selected.cleanupPending && selected.status === 'failed' ? t('Retry cleanup') : t('Stop') }}</button>
         </header>
         <div v-if="selected.lastRun?.error" class="apps-error" role="status">{{ selected.lastRun.error }}</div>
         <div v-if="reviewing || !selected.approval" class="app-review">
           <p>{{ selected.manifest.description }}</p>
           <dl>
-            <dt>Local process</dt><dd>{{ selected.manifest.backend ? `${selected.manifest.backend.runtime}: ${selected.manifest.backend.entry}` : 'None — browser-only app' }}</dd>
-            <dt>Model access</dt><dd>{{ selected.manifest.llm ? `${selected.manifest.llm.maxCalls} attempts per approval; up to ${selected.manifest.llm.maxOutputTokens} output tokens each` : 'None' }}</dd>
-            <dt>Used allowance</dt><dd>{{ selected.calls }} calls. Stopping or restarting does not reset usage.</dd>
-            <dt>Approved model</dt><dd>{{ selected.approval?.model ?? 'Project default at approval, if requested' }}</dd>
-            <dt>Version</dt><dd><code>{{ selected.revision }}</code></dd>
+            <dt>{{ t('Local process') }}</dt><dd>{{ selected.manifest.backend ? `${selected.manifest.backend.runtime}: ${selected.manifest.backend.entry}` : t('None — browser-only app') }}</dd>
+            <dt>{{ t('Model access') }}</dt><dd>{{ selected.manifest.llm ? t('{maxCalls} attempts per approval; up to {maxOutputTokens} output tokens each', { maxCalls: selected.manifest.llm.maxCalls, maxOutputTokens: selected.manifest.llm.maxOutputTokens }) : t('None') }}</dd>
+            <dt>{{ t('Used allowance') }}</dt><dd>{{ selected.calls }} {{ t('calls. Stopping or restarting does not reset usage.') }}</dd>
+            <dt>{{ t('Approved model') }}</dt><dd>{{ selected.approval?.model ?? t('Project default at approval, if requested') }}</dd>
+            <dt>{{ t('Version') }}</dt><dd><code>{{ selected.revision }}</code></dd>
           </dl>
-          <p class="app-boundary">App pages are isolated from Shadow. A local backend has normal host file and process access — it is not an OS sandbox. Review the code and external effects before approving.</p>
+          <p class="app-boundary">{{ t('App pages are isolated from Shadow. A local backend has normal host file and process access — it is not an OS sandbox. Review the code and external effects before approving.') }}</p>
           <details class="app-source">
-            <summary>Review source · {{ selected.files.length }} files</summary>
-            <details v-for="file in selected.files" :key="file.path"><summary>{{ file.path }} · {{ file.bytes }} bytes</summary>
-              <pre v-if="file.text !== undefined"><code>{{ file.text }}</code></pre><p v-else>Binary asset; inspect the source file before approval.</p>
+            <summary>{{ t('Review source ·') }} {{ selected.files.length }} {{ t('files') }}</summary>
+            <details v-for="file in selected.files" :key="file.path"><summary>{{ file.path }} · {{ file.bytes }} {{ t('bytes') }}</summary>
+              <pre v-if="file.text !== undefined"><code>{{ file.text }}</code></pre><p v-else>{{ t('Binary asset; inspect the source file before approval.') }}</p>
             </details>
           </details>
           <form v-if="canWrite && !selected.cleanupPending && selected.status !== 'running' && selected.status !== 'starting'" class="app-approval" @submit.prevent="approve">
-            <label v-if="selected.manifest.llm">Model (optional override)<input v-model="model" placeholder="Use Project default" :disabled="busy" /></label>
-            <label class="app-confirm"><input v-model="confirmed" type="checkbox" :disabled="busy" />I reviewed this version and authorize its local code and requested model allowance.</label>
-            <p v-if="selected.acceptanceAvailable">After approval, we will ask whether its author should run tests. No reply within 60 seconds continues testing, using agent calls and the approved app allowance. You can choose “Not now”. New versions still need review.</p>
-            <button class="app-primary" :disabled="busy || !confirmed">{{ selected.approval ? 'Renew authorization and reset allowance' : 'Approve this version' }}</button>
+            <label v-if="selected.manifest.llm">{{ t('Model (optional override)') }}<input v-model="model" :placeholder="t('Use Project default')" :disabled="busy" /></label>
+            <label class="app-confirm"><input v-model="confirmed" type="checkbox" :disabled="busy" />{{ t('I reviewed this version and authorize its local code and requested model allowance.') }}</label>
+            <p v-if="selected.acceptanceAvailable">{{ t('After approval, we will ask whether its author should run tests. No reply within 60 seconds continues testing, using agent calls and the approved app allowance. You can choose “Not now”. New versions still need review.') }}</p>
+            <button class="app-primary" :disabled="busy || !confirmed">{{ selected.approval ? t('Renew authorization and reset allowance') : t('Approve this version') }}</button>
           </form>
-          <button v-if="selected.approval && canWrite" :disabled="busy" @click="act('revoke')">Revoke access and stop</button>
-          <p v-if="!canWrite">Project owner access is required to approve or run apps.</p>
+          <button v-if="selected.approval && canWrite" :disabled="busy" @click="act('revoke')">{{ t('Revoke access and stop') }}</button>
+          <p v-if="!canWrite">{{ t('Project owner access is required to approve or run apps.') }}</p>
           <button v-if="canWrite && selected.approval && selected.acceptanceAvailable && !selected.acceptance"
             :disabled="busy || selected.cleanupPending || selected.status === 'running' || selected.status === 'starting'" @click="requestTesting">
-            Ask author to test this version
+            {{ t('Ask author to test this version') }}
           </button>
         </div>
-        <section v-if="selected.acceptance" ref="testingPanel" class="app-acceptance" aria-label="Version-bound runtime testing">
-          <h3 role="status">Runtime testing · {{ microAppTestingStatus[selected.acceptance.status] }}</h3>
-          <p>For this exact version. Host observations record activity, not functional correctness. Results below are the author's assessment; fixture tests do not prove real devices or translation quality.</p>
-          <p v-if="selected.acceptance.decision">Continue selected by {{ selected.acceptance.decision === 'timeout' ? 'the 60-second default' : 'the owner' }}.</p>
+        <section v-if="selected.acceptance" ref="testingPanel" class="app-acceptance" :aria-label="t('Version-bound runtime testing')">
+          <h3 role="status">{{ t('Runtime testing ·') }} {{ microAppTestingStatus[selected.acceptance.status] }}</h3>
+          <p>{{ t('For this exact version. Host observations record activity, not functional correctness. Results below are the author\'s assessment; fixture tests do not prove real devices or translation quality.') }}</p>
+          <p v-if="selected.acceptance.decision">{{ t('Continue selected by') }} {{ selected.acceptance.decision === 'timeout' ? t('the 60-second default') : t('the owner') }}.</p>
           <p v-if="selected.acceptance.error" class="apps-error" role="alert">{{ selected.acceptance.error }}</p>
           <p v-if="selected.acceptance.authorTurn">
-            Author started {{ selected.acceptance.authorTurn.startedAt }}<span v-if="selected.acceptance.authorTurn.finishedAt"> · Finished {{ selected.acceptance.authorTurn.finishedAt }} ({{ selected.acceptance.authorTurn.outcome }})</span>.
-            A finished turn is not a passing report.
+            {{ t('Author started') }} {{ selected.acceptance.authorTurn.startedAt }}<span v-if="selected.acceptance.authorTurn.finishedAt"> {{ t('· Finished') }} {{ selected.acceptance.authorTurn.finishedAt }} ({{ selected.acceptance.authorTurn.outcome }})</span>{{ t('. A finished turn is not a passing report.') }}
           </p>
           <details v-if="selected.acceptance.work?.length">
-            <summary>Published Work acceptance criteria</summary>
+            <summary>{{ t('Published Work acceptance criteria') }}</summary>
             <div v-for="work in selected.acceptance.work" :key="work.key">
-              <p><code>{{ work.key }}</code> · revision {{ work.revision }} at publication</p>
+              <p><code>{{ work.key }}</code> {{ t('· revision') }} {{ work.revision }} {{ t('at publication') }}</p>
               <ol><li v-for="(criterion, index) in work.acceptance" :key="index">{{ criterion }}</li></ol>
             </div>
           </details>
-          <p v-else>No Work acceptance criteria were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.</p>
+          <p v-else>{{ t('No Work acceptance criteria were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.') }}</p>
           <YieldQuestion v-if="selected.acceptance.status === 'asking' && selected.acceptance.decisionSessionId && selected.acceptance.decisionRequestId"
             :key="selected.acceptance.id" :api-base="apiBase" :session-id="selected.acceptance.decisionSessionId"
             :active="active" stage="waiting" :can-answer="canWrite" :expected-request-id="selected.acceptance.decisionRequestId"
@@ -83,7 +82,7 @@
               <h4>{{ check.title }} · {{ check.result }} · {{ check.basis }}</h4>
               <p>{{ check.summary }}</p>
               <details v-if="check.observations.length || check.evidence.length">
-                <summary>Evidence · {{ check.observations.length }} host observations, {{ check.evidence.length }} tool excerpts</summary>
+                <summary>{{ t('Evidence ·') }} {{ check.observations.length }} {{ t('host observations,') }} {{ check.evidence.length }} {{ t('tool excerpts') }}</summary>
                 <p v-for="observation in check.observations" :key="observation"><code>{{ observation }}</code></p>
                 <blockquote v-for="source in check.evidence" :key="`${source.physicalId}:${source.id}:${source.quote}`">
                   <p>{{ source.quote }}</p><cite>{{ source.sessionId }} · {{ source.physicalId }} · {{ source.id }}</cite>
@@ -91,35 +90,36 @@
               </details>
             </article>
           </template>
-          <p v-else>No acceptance report yet. Publication or a running process is not a passing result.</p>
+          <p v-else>{{ t('No acceptance report yet. Publication or a running process is not a passing result.') }}</p>
           <details v-if="selected.acceptance.observations.length">
-            <summary>Host observations · {{ selected.acceptance.observations.length }}</summary>
+            <summary>{{ t('Host observations ·') }} {{ selected.acceptance.observations.length }}</summary>
             <p v-for="observation in selected.acceptance.observations" :key="observation.id">
-              {{ observation.kind }} × {{ observation.count }}<span v-if="observation.stateVersion !== undefined"> · state v{{ observation.stateVersion }}</span>
-              · {{ observation.lastAt }}<br /><code>{{ observation.id }}</code> · run <code>{{ observation.runId }}</code>
+              {{ observation.kind }} × {{ observation.count }}<span v-if="observation.stateVersion !== undefined"> {{ t('· state v') }}{{ observation.stateVersion }}</span>
+              · {{ observation.lastAt }}<br /><code>{{ observation.id }}</code> {{ t('· run') }} <code>{{ observation.runId }}</code>
             </p>
           </details>
-          <p v-if="selected.acceptance.observationsTruncated" role="status">Observation limit reached. Missing observations are not proof that a check passed.</p>
+          <p v-if="selected.acceptance.observationsTruncated" role="status">{{ t('Observation limit reached. Missing observations are not proof that a check passed.') }}</p>
           <button v-if="canWrite && selected.approval && ['paused', 'blocked', 'incomplete', 'failed', 'interrupted', 'reported'].includes(selected.acceptance.status)"
             :disabled="busy || selected.cleanupPending || selected.status === 'running' || selected.status === 'starting'" @click="requestTesting">
-            Ask to run tests again
+            {{ t('Ask to run tests again') }}
           </button>
         </section>
         <div v-if="frameUrl" class="app-frame">
-          <div class="app-frame-tools"><span>Isolated app page</span><button @click="frameUrl = ''">Close page</button></div>
+          <div class="app-frame-tools"><span>{{ t('Isolated app page') }}</span><button @click="frameUrl = ''">{{ t('Close page') }}</button></div>
           <iframe :src="frameUrl" :title="selected.manifest.name" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads" referrerpolicy="no-referrer" />
         </div>
         <p v-else-if="selected.approval && desktopApps" class="apps-empty" role="status">
-          {{ openedNatively ? 'Opened in its own window. You can return to your work here.' : 'This app opens in its own desktop window, not inside the workbench.' }}
-          Closing that window stops the app. Its saved data and authorization remain.
+          {{ openedNatively ? t('Opened in its own window. You can return to your work here.') : t('This app opens in its own desktop window, not inside the workbench.') }}
+          {{ t('Closing that window stops the app. Its saved data and authorization remain.') }}
         </p>
-        <p v-else-if="selected.approval" class="apps-empty">Open the app to use it. Closing its page does not stop its backend; use Stop when finished.</p>
+        <p v-else-if="selected.approval" class="apps-empty">{{ t('Open the app to use it. Closing its page does not stop its backend; use Stop when finished.') }}</p>
       </main>
-      <p v-else class="apps-empty">Select an app to review or open it.</p>
+      <p v-else class="apps-empty">{{ t('Select an app to review or open it.') }}</p>
     </div>
   </section>
 </template>
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { microAppIconUrl, microAppRequest, microAppReview, microAppStatus, microAppTestingStatus, microAppView, nativeAppIdentity, validAppLaunch, type MicroAppReview, type MicroAppView } from '../microapps.ts'
@@ -142,7 +142,7 @@ const reportChecks = computed(() => {
     ...(report?.requirements ?? []).map(check => ({
       ...check, key: `${check.workKey}:${check.workRevision}:${check.criterion}`,
       title: acceptance?.work?.find(work => work.key === check.workKey && work.revision === check.workRevision)?.acceptance[check.criterion]
-        ?? `${check.workKey} v${check.workRevision} criterion ${check.criterion + 1}`,
+        ?? t('{workKey} v{workRevision} criterion {value3}', { workKey: check.workKey, workRevision: check.workRevision, value3: check.criterion + 1 }),
     })),
   ]
 })
@@ -166,7 +166,7 @@ async function refresh() {
     apps.value = value.apps
     const id = typeof route.query.microApp === 'string' ? route.query.microApp : selected.value?.id
     if (id) await loadSelection(id, request.signal)
-  } catch (cause) { if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load apps' }
+  } catch (cause) { if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load apps') }
   finally { if (controller === request) loading.value = false }
 }
 async function select(id: string) { await router.replace({ query: { ...route.query, microApp: id } }) }
@@ -180,7 +180,7 @@ async function mutation(operation: (id: string) => Promise<void>) {
     await refresh()
     await desktopApps?.refresh()
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : 'App operation failed'
+    const message = cause instanceof Error ? cause.message : t('App operation failed')
     await refresh()
     error.value = error.value ? `${message} ${error.value}` : message
   }
@@ -219,7 +219,7 @@ function open() {
     reviewing.value = false
   })
 }
-function iconError() { error.value = 'App icon could not be loaded. Refresh the app review to check its current version.' }
+function iconError() { error.value = t('App icon could not be loaded. Refresh the app review to check its current version.') }
 watch(() => props.apiBase, () => { controller?.abort(); apps.value = []; selected.value = undefined; frameUrl.value = ''; openedNatively.value = false })
 watch(() => [props.apiBase, props.active, route.query.microApp], () => {
   if (props.active) void refresh()
@@ -238,7 +238,7 @@ const statusPoll = setInterval(() => {
     selected.value = { ...selected.value, ...updated }
     apps.value = apps.value.map(app => app.id === id ? updated : app)
   }).catch(cause => {
-    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not refresh testing status'
+    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not refresh testing status')
   }).finally(() => { if (controller === request) loading.value = false })
 }, 2000)
 onUnmounted(() => { controller?.abort(); clearInterval(statusPoll) })

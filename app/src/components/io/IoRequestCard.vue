@@ -1,43 +1,43 @@
 <template>
-  <article class="io-request" :data-io-run="run.id" :aria-label="`Capture request: ${run.definition.title}`">
+  <article class="io-request" :data-io-run="run.id" :aria-label="t('Capture request: {title}', { title: run.definition.title })">
     <header class="request-heading">
       <span class="request-icon" :class="icon" aria-hidden="true" />
       <h3>{{ run.definition.title }}</h3>
       <span class="request-state" :class="{ recording: phase === 'recording' }" role="status">{{ status }}</span>
     </header>
     <p v-if="!terminal" class="request-purpose">{{ run.definition.purpose }}</p>
-    <p v-if="!terminal" class="request-scope">{{ sourceNames }} · Up to {{ durationLabel }}</p>
+    <p v-if="!terminal" class="request-scope">{{ sourceNames }} {{ t('· Up to') }} {{ durationLabel }}</p>
     <p v-if="failure" class="request-error" role="alert">{{ failureSummary }}</p>
     <p v-if="live?.execution.notice" class="request-note" role="status">{{ live.execution.notice }}</p>
     <p v-if="!terminal && unsupportedCapture" class="request-note" role="status">{{ unsupportedCapture }}</p>
 
     <div v-if="!terminal && microphones.length && !unsupportedCapture" class="input-devices">
       <label v-for="source in microphones" :key="source.id" class="input-device">
-        <span>{{ microphones.length > 1 ? `Microphone · ${source.id}` : 'Microphone' }}</span>
-        <select :value="selectedDevice(source.id)" :aria-label="`Audio input · ${source.id}`"
+        <span>{{ microphones.length > 1 ? t('Microphone · {id}', { id: source.id }) : t('Microphone') }}</span>
+        <select :value="selectedDevice(source.id)" :aria-label="t('Audio input · {id}', { id: source.id })"
           :disabled="switching[source.id] || !['ready', 'awaiting_consent', 'recording'].includes(phase) || (phase === 'recording' && !live?.execution.captures?.audioInputs?.has(source.id))"
           @change="selectDevice(source.id, $event)">
-          <option value="">System default</option>
+          <option value="">{{ t('System default') }}</option>
           <option v-for="device in devices" :key="device.deviceId" :value="device.deviceId">{{ device.label }}</option>
-          <option v-if="selectedDevice(source.id) && !devices.some(device => device.deviceId === selectedDevice(source.id))" :value="selectedDevice(source.id)">Selected microphone</option>
+          <option v-if="selectedDevice(source.id) && !devices.some(device => device.deviceId === selectedDevice(source.id))" :value="selectedDevice(source.id)">{{ t('Selected microphone') }}</option>
         </select>
-        <span v-if="switching[source.id]" role="status">Switching microphone…</span>
+        <span v-if="switching[source.id]" role="status">{{ t('Switching microphone…') }}</span>
       </label>
       <p v-if="deviceError || enumerationError" class="request-error" role="alert">{{ deviceError || enumerationError }}</p>
-      <p v-else-if="phase === 'recording' && !live?.execution.captures?.audioInputs?.size" class="request-note">This browser cannot switch inputs during recording.</p>
-      <p v-else-if="!devices.length && phase !== 'recording'" class="request-note">Device names may appear after you allow microphone access.</p>
+      <p v-else-if="phase === 'recording' && !live?.execution.captures?.audioInputs?.size" class="request-note">{{ t('This browser cannot switch inputs during recording.') }}</p>
+      <p v-else-if="!devices.length && phase !== 'recording'" class="request-note">{{ t('Device names may appear after you allow microphone access.') }}</p>
     </div>
 
     <div v-if="phase === 'recording' || phase === 'starting'" class="capture-preview">
       <div v-for="source in microphones" :key="source.id" class="audio-level">
-        <label :for="`${controlId}-${source.id}`">Input level</label>
+        <label :for="`${controlId}-${source.id}`">{{ t('Input level') }}</label>
         <meter :id="`${controlId}-${source.id}`" min="0" max="1" :value="live?.execution.captures?.levels?.get(source.id) || 0" />
       </div>
-      <IoMedia v-for="source in videos" :key="source.id" :stream="live?.execution.captures?.streams.get(source.id)" :label="`${source.kind} preview`" />
+      <IoMedia v-for="source in videos" :key="source.id" :stream="live?.execution.captures?.streams.get(source.id)" :label="t('{kind} preview', { kind: source.kind })" />
       <span class="capture-time">{{ elapsedLabel }} / {{ durationLabel }}</span>
     </div>
 
-    <p v-if="phase === 'processing'" class="request-note" role="status">Input collection has stopped. The agent's service is processing your input.</p>
+    <p v-if="phase === 'processing'" class="request-note" role="status">{{ t('Input collection has stopped. The agent\'s service is processing your input.') }}</p>
     <p v-if="run.message && !failure && !terminal" class="backend-message">{{ run.message }}</p>
     <div v-if="nodes.length && !terminal" class="backend-controls">
       <IoNodes :nodes="nodes" :streams="live?.execution.captures?.streams" :disabled="phase !== 'recording'" @event="live?.execution.event($event)" />
@@ -45,54 +45,55 @@
     <form v-for="source in forms" v-show="phase === 'recording'" :key="source.id" class="input-form" @submit.prevent="live?.execution.event({ type: 'ui', sourceId: source.id, id: source.id, value: formValues[source.id] ?? '' })">
       <label :for="`${controlId}-${source.id}`">{{ source.id }}</label>
       <textarea :id="`${controlId}-${source.id}`" v-model="formValues[source.id]" maxlength="4000" rows="2" />
-      <button type="submit" class="request-button">Send input</button>
+      <button type="submit" class="request-button">{{ t('Send input') }}</button>
     </form>
 
     <div v-if="!terminal" class="request-actions">
       <template v-if="phase === 'ready' || phase === 'awaiting_consent'">
-        <button v-if="connectionError && !unsupportedCapture" type="button" class="request-button primary" :disabled="busy || otherActive" @click="bridge?.actions.value?.prepare(run, base)">Retry connection</button>
+        <button v-if="connectionError && !unsupportedCapture" type="button" class="request-button primary" :disabled="busy || otherActive" @click="bridge?.actions.value?.prepare(run, base)">{{ t('Retry connection') }}</button>
         <button v-else type="button" class="request-button primary" :disabled="!!unsupportedCapture || busy || phase !== 'ready' || otherActive" @click="bridge?.actions.value?.start(run.id, base, { ...inputs })">
-          <span v-if="busy" class="i-lucide-loader-circle loading-icon" aria-hidden="true" />{{ unsupportedCapture ? 'Unavailable on mobile' : busy ? 'Preparing…' : startLabel }}
+          <span v-if="busy" class="i-lucide-loader-circle loading-icon" aria-hidden="true" />{{ unsupportedCapture ? t('Unavailable on mobile') : busy ? t('Preparing…') : startLabel }}
         </button>
-        <button type="button" class="request-button quiet" :disabled="busy" @click="bridge?.actions.value?.cancel(run, base, true)">Not now</button>
+        <button type="button" class="request-button quiet" :disabled="busy" @click="bridge?.actions.value?.cancel(run, base, true)">{{ t('Not now') }}</button>
       </template>
-      <button v-if="phase === 'recording'" type="button" class="request-button primary" @click="bridge?.actions.value?.finish(run.id, base)">{{ recordingMedia ? 'Finish recording' : 'Finish input' }}</button>
-      <button v-if="['starting', 'recording', 'draining', 'processing'].includes(phase)" type="button" class="request-button quiet" @click="bridge?.actions.value?.cancel(run, base)">Cancel</button>
-      <span v-if="phase === 'starting'" role="status">Waiting for your device…</span>
-      <span v-if="phase === 'draining'" role="status">Finishing…</span>
+      <button v-if="phase === 'recording'" type="button" class="request-button primary" @click="bridge?.actions.value?.finish(run.id, base)">{{ recordingMedia ? t('Finish recording') : t('Finish input') }}</button>
+      <button v-if="['starting', 'recording', 'draining', 'processing'].includes(phase)" type="button" class="request-button quiet" @click="bridge?.actions.value?.cancel(run, base)">{{ t('Cancel') }}</button>
+      <span v-if="phase === 'starting'" role="status">{{ t('Waiting for your device…') }}</span>
+      <span v-if="phase === 'draining'" role="status">{{ t('Finishing…') }}</span>
     </div>
-    <p v-if="otherActive && !terminal" class="request-note">Finish the current capture before starting this one.</p>
-    <p v-if="failure" class="request-note">Ask the agent to open a corrected request. This capture will not restart automatically.</p>
+    <p v-if="otherActive && !terminal" class="request-note">{{ t('Finish the current capture before starting this one.') }}</p>
+    <p v-if="failure" class="request-note">{{ t('Ask the agent to open a corrected request. This capture will not restart automatically.') }}</p>
 
-    <IoMedia v-if="live?.execution.preview" :mime="live.execution.preview.mime" :url="live.execution.preview.url" :text="live.execution.preview.text" label="Capture result" />
+    <IoMedia v-if="live?.execution.preview" :mime="live.execution.preview.mime" :url="live.execution.preview.url" :text="live.execution.preview.text" :label="t('Capture result')" />
     <div v-for="artifact in run.artifacts" :key="artifact.id" class="capture-artifact">
       <span class="i-lucide-file-audio" aria-hidden="true" />
-      <div><strong>{{ artifact.name }}</strong><small>{{ formatBytes(artifact.size) }}{{ artifact.complete ? '' : ' · Partial recording' }}</small></div>
-      <button v-if="playableMime(artifact.mime) && artifact.size <= IO_MAX_BUFFER_BYTES && artifactPreview?.id !== artifact.id" type="button" class="request-button quiet" :disabled="loadingArtifact" @click="previewArtifact(artifact)">Open</button>
-      <a :href="resources.resolve(artifactUrl(artifact))" :download="artifact.name" class="request-button quiet" referrerpolicy="no-referrer">Download</a>
+      <div><strong>{{ artifact.name }}</strong><small>{{ formatBytes(artifact.size) }}{{ artifact.complete ? '' : t(' · Partial recording') }}</small></div>
+      <button v-if="playableMime(artifact.mime) && artifact.size <= IO_MAX_BUFFER_BYTES && artifactPreview?.id !== artifact.id" type="button" class="request-button quiet" :disabled="loadingArtifact" @click="previewArtifact(artifact)">{{ t('Open') }}</button>
+      <a :href="resources.resolve(artifactUrl(artifact))" :download="artifact.name" class="request-button quiet" referrerpolicy="no-referrer">{{ t('Download') }}</a>
     </div>
     <IoMedia v-if="artifactPreview" :mime="artifactPreview.mime" :url="artifactPreview.url" :text="artifactPreview.text" :label="artifactPreview.name" />
     <p v-if="artifactError" class="request-error" role="alert">{{ artifactError }}</p>
 
     <details class="capture-details">
-      <summary>Details</summary>
+      <summary>{{ t('Details') }}</summary>
       <p v-if="terminal">{{ run.definition.purpose }}</p>
-      <p v-if="terminal && run.message">Last service update: {{ run.message }}</p>
+      <p v-if="terminal && run.message">{{ t('Last service update:') }} {{ run.message }}</p>
       <p v-if="failure" class="request-error">{{ failure }}</p>
       <dl>
-        <dt>Input</dt><dd>{{ sourceNames }}</dd>
-        <dt>Limit</dt><dd>{{ durationLabel }} · {{ formatBytes(run.definition.limits.maxBytes) }}</dd>
-        <dt>Service</dt><dd>{{ run.definition.endpoint }} · {{ run.backendStatus || 'Not connected' }}</dd>
-        <dt>Revision</dt><dd>{{ run.revision }}</dd>
+        <dt>{{ t('Input') }}</dt><dd>{{ sourceNames }}</dd>
+        <dt>{{ t('Limit') }}</dt><dd>{{ durationLabel }} · {{ formatBytes(run.definition.limits.maxBytes) }}</dd>
+        <dt>{{ t('Service') }}</dt><dd>{{ run.definition.endpoint }} · {{ run.backendStatus || t('Not connected') }}</dd>
+        <dt>{{ t('Revision') }}</dt><dd>{{ run.revision }}</dd>
       </dl>
-      <p>Start requests device permission. Input goes to this task's local service, whose code controls processing, storage and onward transfers. Cancel stops capture and disconnects, but does not stop that service or recall data already sent.</p>
-      <p>Devices stop when the time limit is reached. Recordings and files use bounded chunks; inline playback is limited to 8 MiB.</p>
-      <details v-if="terminal && nodes.length"><summary>Service output</summary><IoNodes :nodes="nodes" disabled /></details>
+      <p>{{ t('Start requests device permission. Input goes to this task\'s local service, whose code controls processing, storage and onward transfers. Cancel stops capture and disconnects, but does not stop that service or recall data already sent.') }}</p>
+      <p>{{ t('Devices stop when the time limit is reached. Recordings and files use bounded chunks; inline playback is limited to 8 MiB.') }}</p>
+      <details v-if="terminal && nodes.length"><summary>{{ t('Service output') }}</summary><IoNodes :nodes="nodes" disabled /></details>
     </details>
   </article>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, inject, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { IO_MAX_BUFFER_BYTES, IO_TERMINAL, type IoArtifact, type IoRun } from '../../../../src/io/contracts.ts'
 import { ioBridgeKey, ioRunKey } from '../../io/bridge.ts'
@@ -121,9 +122,9 @@ const busy = computed(() => bridge?.busy.value === ioRunKey(props.base, run.valu
 const otherActive = computed(() => !!bridge?.execution.value && bridge.execution.value.phase !== 'closed' && !live.value)
 const connectionError = computed(() => bridge?.errors.value.get(ioRunKey(props.base, run.value.id)) ?? '')
 const failure = computed(() => live.value?.execution.error || run.value.error || connectionError.value)
-const failureSummary = computed(() => /NotAllowedError/.test(failure.value) ? 'Microphone or camera access was not allowed. Check device permissions before trying again.'
-  : /NotReadableError/.test(failure.value) ? 'The device could not be opened. It may be busy or disconnected.'
-  : /undeclared source/.test(failure.value) ? 'The capture service sent an invalid control. The agent needs to correct its request.'
+const failureSummary = computed(() => /NotAllowedError/.test(failure.value) ? t('Microphone or camera access was not allowed. Check device permissions before trying again.')
+  : /NotReadableError/.test(failure.value) ? t('The device could not be opened. It may be busy or disconnected.')
+  : /undeclared source/.test(failure.value) ? t('The capture service sent an invalid control. The agent needs to correct its request.')
   : failure.value.split('\n')[0]?.slice(0, 240))
 const microphones = computed(() => run.value.definition.sources.filter(source => source.kind === 'microphone'))
 const videos = computed(() => run.value.definition.sources.filter(source => source.kind === 'camera' || source.kind === 'screen'))
@@ -132,9 +133,9 @@ const recordingMedia = computed(() => microphones.value.length > 0 || videos.val
 const nodes = computed(() => live.value?.execution.nodes ?? run.value.ui ?? run.value.definition.ui)
 const sourceNames = computed(() => run.value.definition.sources.map(sourceCaptureLabel).join(', '))
 const icon = computed(() => microphones.value.length ? 'i-lucide-mic' : videos.value.length ? 'i-lucide-video' : 'i-lucide-paperclip')
-const startLabel = computed(() => microphones.value.length ? 'Record audio' : videos.value.some(source => source.kind === 'screen') ? 'Share screen' : videos.value.length ? 'Start camera' : run.value.definition.sources.some(source => source.kind === 'file') ? 'Choose file' : 'Provide input')
-const status = computed(() => terminal.value ? run.value.status === 'completed' ? 'Complete' : run.value.status === 'denied' ? 'Not shared' : run.value.status === 'cancelled' ? 'Cancelled' : 'Could not finish'
-  : busy.value ? 'Connecting' : phase.value === 'ready' ? 'Your turn' : phase.value === 'recording' ? recordingMedia.value ? 'Recording' : 'Collecting input' : phase.value === 'processing' ? 'Processing' : phase.value === 'starting' ? 'Starting' : phase.value === 'draining' ? 'Finishing' : 'Waiting')
+const startLabel = computed(() => microphones.value.length ? t('Record audio') : videos.value.some(source => source.kind === 'screen') ? t('Share screen') : videos.value.length ? t('Start camera') : run.value.definition.sources.some(source => source.kind === 'file') ? t('Choose file') : t('Provide input'))
+const status = computed(() => terminal.value ? run.value.status === 'completed' ? t('Complete') : run.value.status === 'denied' ? t('Not shared') : run.value.status === 'cancelled' ? t('Cancelled') : t('Could not finish')
+  : busy.value ? t('Connecting') : phase.value === 'ready' ? t('Your turn') : phase.value === 'recording' ? recordingMedia.value ? t('Recording') : t('Collecting input') : phase.value === 'processing' ? t('Processing') : phase.value === 'starting' ? t('Starting') : phase.value === 'draining' ? t('Finishing') : t('Waiting'))
 const time = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`
 const durationLabel = computed(() => time(run.value.definition.limits.durationMs))
 const elapsedLabel = computed(() => time(Math.max(0, (live.value?.now ?? Date.now()) - Date.parse(run.value.startedAt ?? new Date().toISOString()))))
@@ -154,7 +155,7 @@ async function refreshDevices() {
   try {
     const available = await listAudioInputs()
     if (!disposed && request === listing) { devices.value = available; enumerationError.value = '' }
-  } catch (cause) { if (!disposed && request === listing) enumerationError.value = `Could not list microphones: ${cause instanceof Error ? cause.message : String(cause)}` }
+  } catch (cause) { if (!disposed && request === listing) enumerationError.value = t('Could not list microphones: {value1}', { value1: cause instanceof Error ? cause.message : String(cause) }) }
 }
 async function selectDevice(id: string, event: Event) {
   const previous = selectedDevice(id)
@@ -165,7 +166,7 @@ async function selectDevice(id: string, event: Event) {
   try { await live.value.execution.switchAudioInput(id, deviceId) }
   catch (cause) {
     inputs.value[id] = previous
-    deviceError.value = `${cause instanceof Error ? cause.message : String(cause)}${phase.value === 'recording' ? ' The previous input is still selected.' : ''}`
+    deviceError.value = `${cause instanceof Error ? cause.message : String(cause)}${phase.value === 'recording' ? t(' The previous input is still selected.') : ''}`
   } finally { switching.value[id] = false; if (!disposed) void refreshDevices() }
 }
 watch(phase, value => { if (value === 'recording') void refreshDevices() })
@@ -184,7 +185,7 @@ async function previewArtifact(artifact: IoArtifact) {
   loadingArtifact.value = true; artifactError.value = ''
   try {
     const response = await fetch(artifactUrl(artifact), { signal: AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]) })
-    if (!response.ok || !response.body) throw new Error('Could not open the recording. Try downloading it.')
+    if (!response.ok || !response.body) throw new Error(t('Could not open the recording. Try downloading it.'))
     const reader = response.body.getReader()
     const chunks: BlobPart[] = []
     let bytes = 0
@@ -193,7 +194,7 @@ async function previewArtifact(artifact: IoArtifact) {
         const part = await reader.read()
         if (part.done) break
         bytes += part.value.byteLength
-        if (bytes > IO_MAX_BUFFER_BYTES) { await reader.cancel(); throw new Error('This file is too large for inline playback. Download it instead.') }
+        if (bytes > IO_MAX_BUFFER_BYTES) { await reader.cancel(); throw new Error(t('This file is too large for inline playback. Download it instead.')) }
         chunks.push(part.value as BlobPart)
       }
     } finally { reader.releaseLock() }
@@ -201,7 +202,7 @@ async function previewArtifact(artifact: IoArtifact) {
     const blob = new Blob(chunks, { type: artifact.mime })
     artifactPreview.value = { id: artifact.id, name: artifact.name, mime: artifact.mime,
       ...(playableMime(artifact.mime) === 'text' ? { text: (await blob.text()).slice(-16_000) } : { url: URL.createObjectURL(blob) }) }
-  } catch (cause) { if (!request.signal.aborted) artifactError.value = cause instanceof Error ? cause.message : 'Could not open the result.' }
+  } catch (cause) { if (!request.signal.aborted) artifactError.value = cause instanceof Error ? cause.message : t('Could not open the result.') }
   finally { if (artifactRequest === request) loadingArtifact.value = false }
 }
 watch(() => [run.value.status, run.value.artifacts[0]?.id], () => {

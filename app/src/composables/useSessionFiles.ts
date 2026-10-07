@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 // Shared helpers for browsing session workdirs or registered Main-local folders.
 import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/execution/filesystem/text-encoding.ts'
 import { apiUrl } from '../api-url.ts'
@@ -101,7 +102,7 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
       return await fetch(url, { signal: signal ? AbortSignal.any([signal, deadline]) : deadline })
     } catch (error) {
       if (deadline.aborted && !signal?.aborted) {
-        throw new Error('File request timed out. Check the device connection and retry.')
+        throw new Error(t('File request timed out. Check the device connection and retry.'))
       }
       throw error
     }
@@ -116,14 +117,14 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     if (!res.ok) throw await fileRequestError(res)
     const data: unknown = await res.json()
     if (!isRecord(data) || typeof data.path !== 'string' || !Array.isArray(data.entries) || !data.entries.every(isFileEntry)) {
-      throw new Error('Invalid file listing received. Refresh to retry.')
+      throw new Error(t('Invalid file listing received. Refresh to retry.'))
     }
     let workdir: DirListing['workdir']
     if (data.workdir !== undefined) {
       if (!isRecord(data.workdir) || (data.workdir.kind !== 'local' && data.workdir.kind !== 'remote')
         || (data.workdir.displayPath !== null && typeof data.workdir.displayPath !== 'string')
         || (data.workdir.scope !== undefined && (data.workdir.scope !== 'home' || data.workdir.kind !== 'local'))) {
-        throw new Error('Invalid workspace information received. Refresh to retry.')
+        throw new Error(t('Invalid workspace information received. Refresh to retry.'))
       }
       workdir = { kind: data.workdir.kind, displayPath: data.workdir.displayPath,
         ...(data.workdir.scope === 'home' ? { scope: 'home' as const } : {}) }
@@ -138,7 +139,7 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     if (!isRecord(data) || !Array.isArray(data.paths) || data.paths.length > 200
       || data.paths.some(path => typeof path !== 'string' || !path || path.startsWith('/')
         || /^[a-z]:/i.test(path) || path.includes('\\') || path.split('/').includes('..'))
-      || typeof data.truncated !== 'boolean') throw new Error('Invalid file search result. Retry.')
+      || typeof data.truncated !== 'boolean') throw new Error(t('Invalid file search result. Retry.'))
     return { paths: data.paths as string[], truncated: data.truncated }
   }
 
@@ -176,7 +177,7 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
       return await response.blob()
     } catch (error) {
       if (deadline.aborted && !signal?.aborted) {
-        throw new Error('File request timed out. Check the device connection and retry.')
+        throw new Error(t('File request timed out. Check the device connection and retry.'))
       }
       throw error
     }
@@ -211,10 +212,10 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
       || (data.encoding !== undefined && (!isTextEncoding(data.encoding) || data.encoding === 'auto'))
       || (data.encodingWarning !== undefined && typeof data.encodingWarning !== 'string')
       || (data.content !== undefined && typeof data.content !== 'string') || (data.truncated !== undefined && typeof data.truncated !== 'boolean')) {
-      throw new Error('Invalid file preview received. Reopen the file to retry.')
+      throw new Error(t('Invalid file preview received. Reopen the file to retry.'))
     }
     if (encoding !== 'auto' && data.encoding !== encoding) {
-      throw new Error('Main did not apply the selected text encoding. Restart Main and reopen the file.')
+      throw new Error(t('Main did not apply the selected text encoding. Restart Main and reopen the file.'))
     }
     return { binary: data.binary, size: data.size, content: data.content, truncated: data.truncated,
       ...(data.encoding !== undefined ? { encoding: data.encoding } : {}),
@@ -237,18 +238,18 @@ export function useSessionFiles(apiBase: string, folderId?: string) {
     const code = isRecord(data) ? data.error : undefined
     const offline = nodeOfflineError(response.status, data)
     if (offline) return offline
-    if (response.status === 401 || response.status === 403) return new Error('Access to these files was denied.')
-    if (response.status === 404) return new Error('This file or folder is no longer available. Refresh the file tree.')
-    if (code === 'invalid_text_encoding') return new Error('This text encoding is unsupported. Choose another encoding.')
-    if (code === 'remote_encoding_unavailable') return new Error('Encoding changes are not supported by this remote workdir. No local file was used.')
-    if (code === 'remote_workdir_requires_executor') return new Error('This remote workdir does not support this file operation yet. No local folder was used.')
+    if (response.status === 401 || response.status === 403) return new Error(t('Access to these files was denied.'))
+    if (response.status === 404) return new Error(t('This file or folder is no longer available. Refresh the file tree.'))
+    if (code === 'invalid_text_encoding') return new Error(t('This text encoding is unsupported. Choose another encoding.'))
+    if (code === 'remote_encoding_unavailable') return new Error(t('Encoding changes are not supported by this remote workdir. No local file was used.'))
+    if (code === 'remote_workdir_requires_executor') return new Error(t('This remote workdir does not support this file operation yet. No local folder was used.'))
     const unavailable = workdirUnavailableMessage(data)
     if (unavailable) return new Error(unavailable)
-    if (code === 'remote_filesystem_failed' && isRecord(data) && data.code === 'path-denied') return new Error('Access to this file or folder was denied by the owning node.')
+    if (code === 'remote_filesystem_failed' && isRecord(data) && data.code === 'path-denied') return new Error(t('Access to this file or folder was denied by the owning node.'))
     if (isRecord(data) && typeof data.message === 'string') return new Error(data.message)
-    if (code === 'workdir_unavailable' || code === 'remote_filesystem_failed') return new Error('The session workdir is unavailable. Check the owning node and retry.')
-    if (code === 'folder_unavailable') return new Error('The folder is unavailable or has changed. Restore it or open the folder again.')
-    return new Error(`Could not load files (${response.status}). Retry when Main is available.`)
+    if (code === 'workdir_unavailable' || code === 'remote_filesystem_failed') return new Error(t('The session workdir is unavailable. Check the owning node and retry.'))
+    if (code === 'folder_unavailable') return new Error(t('The folder is unavailable or has changed. Restore it or open the folder again.'))
+    return new Error(t('Could not load files ({status}). Retry when Main is available.', { status: response.status }))
   }
 
   return { listDir, searchPaths, rawUrl, staticUrl, preview, readBlob }

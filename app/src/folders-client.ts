@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { CloneOperation, FolderRecord } from '../../src/folders/contracts.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { apiUrl } from './api-url.ts'
@@ -6,7 +7,7 @@ import { createUuid } from './uuid.ts'
 
 export type { CloneOperation, FolderRecord }
 
-const invalidResponse = () => new Error('Main returned an invalid folder response. Refresh and retry.')
+const invalidResponse = () => new Error(t('Main returned an invalid folder response. Refresh and retry.'))
 
 function safeFolderMessage(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value.trim() || value.length > 500
@@ -55,7 +56,7 @@ export function parseCloneOperation(value: unknown, id: string): CloneOperation 
     id, state: value.state as CloneOperation['state'], destination: value.destination, folder,
     // Prefer Main's safe recovery guidance, never raw Git output or repository URLs.
     ...(value.state === 'failed' ? {
-      error: safeFolderMessage(value.error) ?? 'Clone failed. Check repository access, Git authentication, and available disk space. Choose a new directory before retrying.',
+      error: safeFolderMessage(value.error) ?? t('Clone failed. Check repository access, Git authentication, and available disk space. Choose a new directory before retrying.'),
     } : {}),
   }
 }
@@ -77,19 +78,19 @@ export function createFoldersClient(apiBase: string, request: typeof fetch = fet
       })
     } catch (error) {
       if (init?.signal?.aborted) throw error
-      throw new Error('Cannot reach Main. Check the connection and retry.')
+      throw new Error(t('Cannot reach Main. Check the connection and retry.'))
     }
     if (!response.ok) {
       let data: unknown
       try { data = await response.json() } catch { data = undefined }
       const message = isRecord(data) && typeof data.error === 'string' ? safeFolderMessage(data.message) : undefined
       throw new Error(message ?? (response.status === 401 || response.status === 403
-        ? 'Main did not authorize this request. Reconnect and retry.'
+        ? t('Main did not authorize this request. Reconnect and retry.')
         : response.status === 400 || response.status === 409
-          ? 'Check the folder path and repository details. The destination must not already exist.'
+          ? t('Check the folder path and repository details. The destination must not already exist.')
           : response.status === 404
-            ? 'The folder or clone could not be found. Refresh and retry.'
-            : 'Main could not complete this request. Check Main and retry.'))
+            ? t('The folder or clone could not be found. Refresh and retry.')
+            : t('Main could not complete this request. Check Main and retry.')))
     }
     let data: unknown
     try { data = await response.json() } catch { throw invalidResponse() }
@@ -193,7 +194,7 @@ export function createCloneController(
     } catch {
       if (current === generation) update({
         state: 'unknown', operation: view.operation,
-        error: 'Clone status could not be refreshed. The clone may still be running. Retry status or cancel.',
+        error: t('Clone status could not be refreshed. The clone may still be running. Retry status or cancel.'),
       })
     } finally {
       if (request === controller) request = undefined
@@ -215,7 +216,7 @@ export function createCloneController(
       // A lost POST response does not prove Git never started. Cancel this ID first.
       await cancel()
       if (view.state === 'cancelled') update({
-        ...view, error: error instanceof Error ? error.message : 'Could not start cloning. Check the connection and retry.',
+        ...view, error: error instanceof Error ? error.message : t('Could not start cloning. Check the connection and retry.'),
       })
     } finally {
       if (request === controller) request = undefined
@@ -235,12 +236,12 @@ export function createCloneController(
         if (operation.state === 'running') {
           unschedule?.()
           unschedule = undefined
-          update({ state: 'unknown', operation, error: 'Cancellation is not confirmed. Retry cancellation or check status.' })
+          update({ state: 'unknown', operation, error: t('Cancellation is not confirmed. Retry cancellation or check status.') })
         }
       } catch {
         update({
           state: 'unknown', operation: view.operation,
-          error: 'Could not confirm cancellation. The clone may still be running. Reconnect, then retry cancellation or check status.',
+          error: t('Could not confirm cancellation. The clone may still be running. Reconnect, then retry cancellation or check status.'),
         })
       } finally {
         cancellation = undefined

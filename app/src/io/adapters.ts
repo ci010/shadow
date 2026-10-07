@@ -1,11 +1,13 @@
+import { t } from '../i18n.ts'
+import { enumLabel } from '../display-labels.ts'
 import { IO_MAX_BUFFER_BYTES, IO_MAX_CHUNK_BYTES, type IoCapability, type IoPacket, type IoSource } from '../../../src/io/contracts.ts'
 import { encodeBytes, ResourceScope } from './transport.ts'
 import { MOBILE_CAPTURE_UNAVAILABLE, mobileCaptureIssue, mobileCaptureRestricted } from './mobile-policy.ts'
 
 export function sourceCaptureLabel(source: IoSource): string {
-  if (source.kind === 'camera' && source.audio) return 'camera + microphone'
-  if (source.kind === 'screen' && source.audio) return 'screen + system/screen audio (OS-dependent)'
-  return source.kind
+  if (source.kind === 'camera' && source.audio) return t('camera + microphone')
+  if (source.kind === 'screen' && source.audio) return t('screen + system/screen audio (OS-dependent)')
+  return enumLabel(source.kind)
 }
 
 export function browserIoCapabilities(): IoCapability[] {
@@ -16,7 +18,7 @@ export function browserIoCapabilities(): IoCapability[] {
     ...(['microphone', 'camera', 'screen', 'file', 'form'] as const).map(id => ({
       id, kind: 'source' as const, requiresGesture: id !== 'form',
       available: id === 'file' || id === 'form' || (!mobile && secure && !!(id === 'screen' ? devices?.getDisplayMedia : devices?.getUserMedia)),
-      reason: id === 'file' || id === 'form' ? undefined : mobile ? MOBILE_CAPTURE_UNAVAILABLE : secure ? undefined : 'A secure local browser context is required.',
+      reason: id === 'file' || id === 'form' ? undefined : mobile ? t(MOBILE_CAPTURE_UNAVAILABLE) : secure ? undefined : t('A secure local browser context is required.'),
     })),
   ]
 }
@@ -36,7 +38,7 @@ export interface CaptureSet {
 export interface CaptureOptions { audioInputDevices?: Readonly<Record<string, string>> }
 
 export async function listAudioInputs(): Promise<Array<{ deviceId: string; label: string }>> {
-  if (mobileCaptureRestricted()) throw new Error(MOBILE_CAPTURE_UNAVAILABLE)
+  if (mobileCaptureRestricted()) throw new Error(t(MOBILE_CAPTURE_UNAVAILABLE))
   const devices = await navigator.mediaDevices.enumerateDevices()
   return devices.filter(device => device.kind === 'audioinput' && device.deviceId !== '')
     .map(device => ({ deviceId: device.deviceId, label: device.label }))
@@ -64,7 +66,7 @@ function pickFile(source: IoSource, scope: ResourceScope): Promise<File> {
     input.hidden = true
     document.body.append(input)
     let settled = false
-    const cancel = () => { if (!settled) { settled = true; reject(new DOMException('File selection cancelled.', 'AbortError')) } }
+    const cancel = () => { if (!settled) { settled = true; reject(new DOMException(t('File selection cancelled.'), 'AbortError')) } }
     input.onchange = () => {
       if (settled) return
       const file = input.files?.[0]
@@ -83,8 +85,8 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
   const issue = mobileCaptureIssue(sources)
   if (issue) throw new Error(issue)
   for (const [id, deviceId] of Object.entries(options.audioInputDevices ?? {})) {
-    if (typeof deviceId !== 'string') throw new TypeError('Audio input device IDs must be strings.')
-    if (!sources.some(source => source.id === id && source.kind === 'microphone')) throw new Error(`Audio device selection is only supported for standalone microphones (${id}).`)
+    if (typeof deviceId !== 'string') throw new TypeError(t('Audio input device IDs must be strings.'))
+    if (!sources.some(source => source.id === id && source.kind === 'microphone')) throw new Error(t('Audio device selection is only supported for standalone microphones ({id}).', { id: id }))
   }
   const scope = new ResourceScope()
   const streams = new Map<string, MediaStream>()
@@ -99,14 +101,14 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
   let queued = 0
   let stopping = false
   let captureFail: ((error: Error) => void) | undefined
-  const cancelled = () => new DOMException('Microphone switch was cancelled or superseded.', 'AbortError')
+  const cancelled = () => new DOMException(t('Microphone switch was cancelled or superseded.'), 'AbortError')
   const stopStream = (stream: MediaStream) => { for (const track of stream.getTracks()) if (track.readyState !== 'ended') track.stop() }
   const audioTrack = (stream: MediaStream) => stream.getAudioTracks()[0]
   const selectedId = (stream: MediaStream, requested = '') => audioTrack(stream)?.getSettings().deviceId || requested || 'default'
   const bindAudioEnded = (route: AudioRoute, sourceId: string) => {
     const stream = route.physical!
     const ended = () => {
-      if (!scope.closed && !stopping && route.physical === stream) captureFail?.(new Error(`microphone ${sourceId} capture ended or permission was revoked.`))
+      if (!scope.closed && !stopping && route.physical === stream) captureFail?.(new Error(t('microphone {sourceId} capture ended or permission was revoked.', { sourceId: sourceId })))
     }
     for (const track of stream.getTracks()) track.addEventListener('ended', ended)
     route.detach = () => { for (const track of stream.getTracks()) track.removeEventListener('ended', ended) }
@@ -139,17 +141,17 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
     return request.then(stream => {
       const route = audioRoutes.get(source.id)
       if (route) {
-        if (scope.closed || stopping) { stopStream(stream); throw new Error('Capture was cancelled.') }
+        if (scope.closed || stopping) { stopStream(stream); throw new Error(t('Capture was cancelled.')) }
         ownedAudio.add(stream)
         const track = audioTrack(stream)
-        if (!track || track.readyState === 'ended') throw new Error('Microphone did not provide a live audio track.')
+        if (!track || track.readyState === 'ended') throw new Error(t('Microphone did not provide a live audio track.'))
         route.physical = stream
         audioInputs.set(source.id, selectedId(stream, options.audioInputDevices?.[source.id]))
         streams.set(source.id, stream)
         return
       }
       scope.add(() => { for (const track of stream.getTracks()) track.stop() })
-      if (!scope.closed && source.audio && stream.getAudioTracks().length === 0) throw new Error(`${source.kind} audio was requested but no audio track was shared. Start a new request without audio or choose a supported source.`)
+      if (!scope.closed && source.audio && stream.getAudioTracks().length === 0) throw new Error(t('{kind} audio was requested but no audio track was shared. Start a new request without audio or choose a supported source.', { kind: source.kind }))
       if (!scope.closed) streams.set(source.id, stream)
     })
   }
@@ -161,15 +163,15 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
     }
   } catch (error) { scope.close(); throw error }
   const ready = Promise.all(requests).then(() => {
-    if (scope.closed) throw new Error('Capture was cancelled.')
+    if (scope.closed) throw new Error(t('Capture was cancelled.'))
   }).catch(error => { scope.close(); throw error })
   void ready.catch(() => {})
   return {
     ready, streams, levels, audioInputs,
     async switchAudioInput(sourceId, deviceId) {
-      if (typeof deviceId !== 'string') throw new TypeError('Audio input device IDs must be strings.')
+      if (typeof deviceId !== 'string') throw new TypeError(t('Audio input device IDs must be strings.'))
       const route = audioRoutes.get(sourceId)
-      if (!route) throw new Error('Live device switching requires a standalone microphone and Web Audio support. Camera and screen audio cannot be switched.')
+      if (!route) throw new Error(t('Live device switching requires a standalone microphone and Web Audio support. Camera and screen audio cannot be switched.'))
       if (scope.closed || stopping) throw cancelled()
       const generation = ++route.generation
       await ready
@@ -186,7 +188,7 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
       try {
         if (scope.closed || stopping || generation !== route.generation) throw cancelled()
         const track = audioTrack(replacement)
-        if (!track || track.readyState === 'ended') throw new Error('Selected microphone did not provide a live audio track.')
+        if (!track || track.readyState === 'ended') throw new Error(t('Selected microphone did not provide a live audio track.'))
         actualId = selectedId(replacement, deviceId)
         if (route.bus) {
           input = route.context.createMediaStreamSource(replacement)
@@ -218,16 +220,16 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
     },
     async start(emit, fail) {
       await ready
-      if (scope.closed || stopping) throw new Error('Capture was cancelled.')
+      if (scope.closed || stopping) throw new Error(t('Capture was cancelled.'))
       captureFail = fail
       const enqueue = (source: IoSource, blob: Blob, value?: unknown) => {
         if (scope.closed || !blob.size) return
-        if (queued + blob.size > IO_MAX_BUFFER_BYTES / 2) { fail(new Error('Capture cannot keep up: its 4 MiB share of the input buffer is full.')); return }
+        if (queued + blob.size > IO_MAX_BUFFER_BYTES / 2) { fail(new Error(t('Capture cannot keep up: its 4 MiB share of the input buffer is full.'))); return }
         queued += blob.size
         pending = pending.then(async () => {
           if (scope.closed) return
           // Encoded images are atomic; recording/file streams may be split but never reordered.
-          if (blob.type.startsWith('image/') && blob.size > IO_MAX_CHUNK_BYTES) throw new Error('Image exceeds 1 MiB. Reduce the capture dimensions.')
+          if (blob.type.startsWith('image/') && blob.size > IO_MAX_CHUNK_BYTES) throw new Error(t('Image exceeds 1 MiB. Reduce the capture dimensions.'))
           for (let offset = 0; offset < blob.size && !scope.closed; offset += IO_MAX_CHUNK_BYTES) {
             const bytes = new Uint8Array(await blob.slice(offset, offset + IO_MAX_CHUNK_BYTES).arrayBuffer())
             await emit({ type: 'data', sourceId: source.id, mime: blob.type || 'application/octet-stream', base64: encodeBytes(bytes), timestamp: Date.now(), value }, bytes.byteLength)
@@ -250,7 +252,7 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
               enqueue(source, file.slice(offset, offset + IO_MAX_CHUNK_BYTES, file.type), { name: file.name, size: file.size, offset })
               await pending
             }
-            if (offset < file.size) throw new Error('File input stopped before the complete file was read. The artifact is partial.')
+            if (offset < file.size) throw new Error(t('File input stopped before the complete file was read. The artifact is partial.'))
           })()
           void fileDone.catch(error => fail(error instanceof Error ? error : new Error(String(error))))
           finalizers.push(() => fileDone)
@@ -279,13 +281,13 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
         }
         for (const track of stream.getTracks()) {
           if (audioRoutes.has(source.id)) continue
-          const ended = () => { if (!stopping) fail(new Error(`${source.kind} capture ended or permission was revoked.`)) }
+          const ended = () => { if (!stopping) fail(new Error(t('{kind} capture ended or permission was revoked.', { kind: source.kind }))) }
           track.addEventListener('ended', ended)
           scope.add(() => track.removeEventListener('ended', ended))
         }
         if (source.kind === 'microphone' && source.mode === 'pcm') {
           const context = audioContexts.get(source.id)
-          if (!context) throw new Error('PCM capture requires Web Audio support.')
+          if (!context) throw new Error(t('PCM capture requires Web Audio support.'))
           const bus = audioRoutes.get(source.id)!.bus!
           // A bounded ScriptProcessor is used for compatibility with packaged/offline contexts.
           const processor = context.createScriptProcessor(4096, 1, 1)
@@ -317,10 +319,10 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
           }, source.intervalMs ?? 1000)
           scope.add(() => { clearInterval(timer); video.pause(); video.srcObject = null })
         } else {
-          if (typeof MediaRecorder !== 'function') throw new Error('Recording is unavailable in this browser.')
+          if (typeof MediaRecorder !== 'function') throw new Error(t('Recording is unavailable in this browser.'))
           const mimes = source.kind === 'microphone' ? ['audio/webm;codecs=opus', 'audio/mp4'] : ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
           const mimeType = mimes.find(mime => MediaRecorder.isTypeSupported(mime))
-          if (!mimeType) throw new Error('No supported recording format is available.')
+          if (!mimeType) throw new Error(t('No supported recording format is available.'))
           const route = audioRoutes.get(source.id)
           let recordingStream = stream
           if (route) {
@@ -331,7 +333,7 @@ export function acquireIoSources(sources: IoSource[], options: CaptureOptions = 
           }
           const recorder = new MediaRecorder(recordingStream, { mimeType, videoBitsPerSecond: 1_000_000, audioBitsPerSecond: 64_000 })
           recorder.ondataavailable = event => enqueue(source, event.data, { container: true, settings: recordingStream.getTracks().map(track => track.getSettings()) })
-          recorder.onerror = () => fail(new Error(`${source.kind} recording failed.`))
+          recorder.onerror = () => fail(new Error(t('{kind} recording failed.', { kind: source.kind })))
           const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
           finalizers.push(async () => { if (recorder.state !== 'inactive') recorder.stop(); await stopped })
           scope.add(() => { if (recorder.state !== 'inactive') recorder.stop() })

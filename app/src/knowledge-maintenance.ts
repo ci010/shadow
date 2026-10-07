@@ -1,9 +1,10 @@
+import { t } from './i18n.ts'
 import type { KnowledgeMaintenanceFinding, KnowledgeMaintenanceReport, KnowledgeMaintenanceStatus, KnowledgeRepairPreview } from '../../src/knowledge/maintenance-contracts.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { createKnowledgeTransport } from './knowledge.ts'
 
 export type { KnowledgeMaintenanceFinding, KnowledgeMaintenanceReport, KnowledgeMaintenanceStatus, KnowledgeRepairPreview }
-const invalid = () => new Error('Main returned invalid maintenance data. Refresh and retry.')
+const invalid = () => new Error(t('Main returned invalid maintenance data. Refresh and retry.'))
 const text = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 
 export function parseMaintenanceReport(value: unknown): KnowledgeMaintenanceReport {

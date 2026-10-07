@@ -1,19 +1,20 @@
 <template>
   <component :is="embedded ? 'section' : 'details'" v-show="!embedded || expanded" class="decision-owner" :class="{ 'is-embedded': embedded }" @toggle="toggle">
-    <summary v-if="!embedded">Decision reporting responsibility</summary>
-    <p>Choose who checks premises and explains this session's decisions to you. This does not change answer authority, parenthood or Initiative assignments.</p>
+    <summary v-if="!embedded">{{ t('Decision reporting responsibility') }}</summary>
+    <p>{{ t('Choose who checks premises and explains this session\'s decisions to you. This does not change answer authority, parenthood or Initiative assignments.') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="candidates.length">
-      <label>Reporting session <select v-model="selected" :disabled="busy">
+      <label>{{ t('Reporting session') }} <select v-model="selected" :disabled="busy">
         <option v-for="item in candidates" :key="item.sessionId" :value="item.sessionId">{{ item.label }}</option>
       </select></label>
-      <button type="button" :disabled="busy || selected === saved" @click="save">Save responsibility</button>
-      <p v-if="saved">Assigned to: {{ saved }}</p>
+      <button type="button" :disabled="busy || selected === saved" @click="save">{{ t('Save responsibility') }}</button>
+      <p v-if="saved">{{ t('Assigned to:') }} {{ saved }}</p>
     </template>
-    <button v-else type="button" :disabled="busy" @click="load">{{ busy ? 'Loading...' : 'Load reporting sessions' }}</button>
+    <button v-else type="button" :disabled="busy" @click="load">{{ busy ? t('Loading...') : t('Load reporting sessions') }}</button>
   </component>
 </template>
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
 const props = defineProps<{ sessionId: string; apiBase: string; embedded?: boolean; expanded?: boolean }>()
@@ -36,15 +37,15 @@ async function request(method: 'GET' | 'POST') {
       signal: AbortSignal.any([current.signal, AbortSignal.timeout(10000)]),
     })
     const data = await response.json()
-    if (!response.ok) throw new Error(data.message || 'Could not load or save decision responsibility.')
+    if (!response.ok) throw new Error(data.message || t('Could not load or save decision responsibility.'))
     if (typeof data.reportingSessionId !== 'string' || !Array.isArray(data.candidates)
       || data.candidates.some((item: unknown) => !item || typeof item !== 'object' || !('sessionId' in item) || typeof item.sessionId !== 'string'
-        || !('label' in item) || typeof item.label !== 'string')) throw new Error('Invalid reporting responsibility response.')
+        || !('label' in item) || typeof item.label !== 'string')) throw new Error(t('Invalid reporting responsibility response.'))
     if (current.signal.aborted) return
     candidates.value = data.candidates
     saved.value = data.reportingSessionId
     selected.value = draftSelection && candidates.value.some(item => item.sessionId === draftSelection) ? draftSelection : saved.value
-  } catch (cause) { if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Decision responsibility request failed.' }
+  } catch (cause) { if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Decision responsibility request failed.') }
   finally { if (controller === current) busy.value = false }
 }
 const load = () => request('GET')

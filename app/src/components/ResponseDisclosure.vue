@@ -3,9 +3,9 @@
     :data-response-id="context?.responseId" :data-msg-idx="messageIndex" @toggle.self="onToggle">
     <summary class="trace-header" @click="emit('interact')">
       <span class="response-chevron i-lucide-chevron-right" aria-hidden="true" />
-      <strong>Background response</strong>
+      <strong>{{ t('Background response') }}</strong>
       <span class="response-source" :title="source">{{ source }}</span>
-      <span v-if="status" class="response-status" :class="{ failed: status === 'failed' }">{{ status === 'failed' ? 'Trigger failed' : 'Trigger cancelled' }}</span>
+      <span v-if="status" class="response-status" :class="{ failed: status === 'failed' }">{{ status === 'failed' ? t('Trigger failed') : t('Trigger cancelled') }}</span>
       <MessageTimestamp :timestamp="timestamp" />
     </summary>
     <div class="response-body trace-guide"><slot /></div>
@@ -14,6 +14,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import { isBackgroundResponse, type ResponseContext } from '../../../src/sessions/response-context.ts'
 import MessageTimestamp from './MessageTimestamp.vue'

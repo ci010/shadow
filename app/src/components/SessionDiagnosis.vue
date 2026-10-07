@@ -1,7 +1,7 @@
 <template>
-  <section class="session-diagnosis" aria-label="Session diagnosis">
+  <section class="session-diagnosis" :aria-label="t('Session diagnosis')">
     <div class="diagnosis-navigation">
-      <div class="diagnosis-views" role="tablist" aria-label="Diagnosis view">
+      <div class="diagnosis-views" role="tablist" :aria-label="t('Diagnosis view')">
         <button v-for="view in views" :id="domId(`diagnosis-${view.id}-tab`)" :key="view.id" role="tab"
           :aria-selected="section === view.id" :aria-controls="domId(`diagnosis-${view.id}`)"
           :tabindex="section === view.id ? 0 : -1" :class="{ selected: section === view.id }"
@@ -11,42 +11,42 @@
       </div>
       <span class="diagnosis-status" :class="{ working: working && !physicalId && !error }">
         <i v-if="working && !physicalId && !error" aria-hidden="true" />
-        {{ error ? 'Update unavailable' : physicalId ? 'Historical segment' : working ? 'Recording' : 'Auto-refresh' }}
+        {{ error ? t('Update unavailable') : physicalId ? t('Historical segment') : working ? t('Recording') : t('Auto-refresh') }}
       </span>
     </div>
 
     <div v-show="section === 'trace'" :id="domId('diagnosis-trace')" class="diagnosis-scroll" role="tabpanel" :aria-labelledby="domId('diagnosis-trace-tab')" tabindex="0">
-      <div v-if="!canReadTrace" class="diagnosis-empty">Session traces require audit:read access. System prompt and tools are available in the tabs above.</div>
+      <div v-if="!canReadTrace" class="diagnosis-empty">{{ t('Session traces require audit:read access. System prompt and tools are available in the tabs above.') }}</div>
       <template v-else>
         <div class="trace-heading">
-          <div><h2>Session trace</h2><p>{{ physicalId ? 'History and execution for this physical segment.' : 'History and execution for the current segment.' }}</p></div>
-          <button class="diagnosis-button" :disabled="exporting" @click="exportDiagnosis">{{ exporting ? 'Exporting...' : 'Export for agent' }}</button>
-          <button class="diagnosis-button" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing...' : 'Refresh' }}</button>
+          <div><h2>{{ t('Session trace') }}</h2><p>{{ physicalId ? t('History and execution for this physical segment.') : t('History and execution for the current segment.') }}</p></div>
+          <button class="diagnosis-button" :disabled="exporting" @click="exportDiagnosis">{{ exporting ? t('Exporting...') : t('Export for agent') }}</button>
+          <button class="diagnosis-button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing...') : t('Refresh') }}</button>
         </div>
-        <p class="timeline-note">Agent exports contain bounded, best-effort-redacted evidence for this segment. Review before sharing.</p>
+        <p class="timeline-note">{{ t('Agent exports contain bounded, best-effort-redacted evidence for this segment. Review before sharing.') }}</p>
         <p v-if="exportStatus" class="timeline-note" role="status">{{ exportStatus }}</p>
         <div v-if="exportError" class="diagnosis-error" role="alert">{{ exportError }}</div>
-        <div v-if="error" class="diagnosis-error" role="alert">{{ error }}<span v-if="events.length || spans.length"> Showing the last successful snapshot.</span></div>
+        <div v-if="error" class="diagnosis-error" role="alert">{{ error }}<span v-if="events.length || spans.length"> {{ t('Showing the last successful snapshot.') }}</span></div>
         <div class="trace-metrics">
-          <div title="Union of loaded execution spans, excluding gaps between turns. Not the age of the conversation."><strong>{{ formatTraceDuration(duration) }}</strong><span>Duration <small v-if="hasMore">(loaded spans)</small></span></div>
-          <div><strong>{{ turns }}</strong><span>User turns</span></div>
-          <div><strong>{{ modelSpans.length }}</strong><span>Model calls <small v-if="hasMore">(loaded)</small></span></div>
-          <div :title="hasUnlinkedToolSpans ? 'Legacy spans have no call ID, so this is a lower bound rather than a guessed pairing.' : 'Recorded tool calls'"><strong><template v-if="hasUnlinkedToolSpans">&ge; </template>{{ toolCallCount }}</strong><span>Tool calls<small v-if="hasUnlinkedToolSpans"> (legacy IDs missing)</small></span></div>
+          <div :title="t('Union of loaded execution spans, excluding gaps between turns. Not the age of the conversation.')"><strong>{{ formatTraceDuration(duration) }}</strong><span>{{ t('Duration') }} <small v-if="hasMore">{{ t('(loaded spans)') }}</small></span></div>
+          <div><strong>{{ turns }}</strong><span>{{ t('User turns') }}</span></div>
+          <div><strong>{{ modelSpans.length }}</strong><span>{{ t('Model calls') }} <small v-if="hasMore">{{ t('(loaded)') }}</small></span></div>
+          <div :title="hasUnlinkedToolSpans ? t('Legacy spans have no call ID, so this is a lower bound rather than a guessed pairing.') : t('Recorded tool calls')"><strong><template v-if="hasUnlinkedToolSpans">&ge; </template>{{ toolCallCount }}</strong><span>{{ t('Tool calls') }}<small v-if="hasUnlinkedToolSpans"> {{ t('(legacy IDs missing)') }}</small></span></div>
         </div>
         <div class="trace-search">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m12 12 5 5"/></svg>
-          <input v-model="query" type="search" aria-label="Search session trace" placeholder="Search messages, tools, arguments and spans..." />
-          <span v-if="query">{{ filteredEvents.length }} events</span>
+          <input v-model="query" type="search" :aria-label="t('Search session trace')" :placeholder="t('Search messages, tools, arguments and spans...')" />
+          <span v-if="query">{{ filteredEvents.length }} {{ t('events') }}</span>
         </div>
 
-        <div class="trace-timeline" aria-label="Execution timeline">
+        <div class="trace-timeline" :aria-label="t('Execution timeline')">
           <div class="timeline-controls">
-            <span>Execution overview <small>{{ zoomWindow ? 'Custom window' : 'Latest 5 min' }}</small></span>
-            <button class="diagnosis-button" aria-label="Zoom into trace" :disabled="timelineRange.end - timelineRange.start <= 1" @click="zoomTimeline(.5)">+</button>
-            <button class="diagnosis-button" aria-label="Zoom out of trace" :disabled="!canPanTimeline" @click="zoomTimeline(2)">&minus;</button>
-            <button class="diagnosis-button" :disabled="!zoomWindow" @click="zoomWindow = undefined">Latest 5 min</button>
+            <span>{{ t('Execution overview') }} <small>{{ zoomWindow ? t('Custom window') : t('Latest 5 min') }}</small></span>
+            <button class="diagnosis-button" :aria-label="t('Zoom into trace')" :disabled="timelineRange.end - timelineRange.start <= 1" @click="zoomTimeline(.5)">+</button>
+            <button class="diagnosis-button" :aria-label="t('Zoom out of trace')" :disabled="!canPanTimeline" @click="zoomTimeline(2)">&minus;</button>
+            <button class="diagnosis-button" :disabled="!zoomWindow" @click="zoomWindow = undefined">{{ t('Latest 5 min') }}</button>
           </div>
-          <div class="timeline-scale"><span>Elapsed</span><div><span>{{ formatTraceDuration(timelineRange.start - fullTimelineRange.start) }}</span><span>{{ formatTraceDuration(timelineRange.end - fullTimelineRange.start) }}</span></div></div>
+          <div class="timeline-scale"><span>{{ t('Elapsed') }}</span><div><span>{{ formatTraceDuration(timelineRange.start - fullTimelineRange.start) }}</span><span>{{ formatTraceDuration(timelineRange.end - fullTimelineRange.start) }}</span></div></div>
           <div v-for="lane in visibleLanes" :key="lane.name" class="timeline-lane">
             <span>{{ lane.name }}</span>
             <div class="lane-track" :style="{ height: `${lane.height}px` }">
@@ -61,105 +61,107 @@
                 <template #content>
                   <strong class="timeline-hover-title">{{ item.title }}</strong>
                   <dl class="timeline-hover-meta">
-                    <dt>Started</dt><dd>{{ formatTime(item.start) }}</dd>
+                    <dt>{{ t('Started') }}</dt><dd>{{ formatTime(item.start) }}</dd>
                     <template v-if="item.span">
-                      <dt>Duration</dt><dd>{{ formatTraceDuration(spanDuration(item.span, now)) }}{{ item.live ? ' elapsed' : '' }}</dd>
-                      <dt>Status</dt><dd>{{ item.live ? 'Running' : item.failed ? 'Error' : 'Completed' }} {{ item.span.statusMessage }}</dd>
-                      <dt>Trace</dt><dd>{{ item.span.traceId }}</dd><dt>Span</dt><dd>{{ item.span.spanId }}</dd>
+                      <dt>{{ t('Duration') }}</dt><dd>{{ formatTraceDuration(spanDuration(item.span, now)) }}{{ item.live ? t(' elapsed') : '' }}</dd>
+                      <dt>{{ t('Status') }}</dt><dd>{{ item.live ? t('Running') : item.failed ? t('Error') : t('Completed') }} {{ item.span.statusMessage }}</dd>
+                      <dt>{{ t('Trace') }}</dt><dd>{{ item.span.traceId }}</dd><dt>{{ t('Span') }}</dt><dd>{{ item.span.spanId }}</dd>
                       <template v-for="(value, key) in item.span.attributes" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template>
                     </template>
-                    <template v-else-if="item.event"><dt>Kind</dt><dd>{{ item.event.kind }}</dd><dt>Turn</dt><dd>{{ item.event.turn }}</dd></template>
+                    <template v-else-if="item.event"><dt>{{ t('Kind') }}</dt><dd>{{ enumLabel(item.event.kind) }}</dd><dt>{{ t('Turn') }}</dt><dd>{{ item.event.turn }}</dd></template>
                   </dl>
                 </template>
               </HoverInfo>
             </div>
           </div>
           <div v-if="canPanTimeline" class="timeline-pan">
-            <button class="diagnosis-button" aria-label="Previous time window" :disabled="panPosition <= 0" @click="moveTimeline(-1)">&larr;</button>
-            <label>Move window<input type="range" min="0" max="100" step="0.1" aria-label="Pan trace timeline"
-              :aria-valuetext="`${formatTime(timelineRange.start)} to ${formatTime(timelineRange.end)}`" :value="panPosition" @input="panTimeline" /></label>
-            <button class="diagnosis-button" aria-label="Next time window" :disabled="panPosition >= 100" @click="moveTimeline(1)">&rarr;</button>
+            <button class="diagnosis-button" :aria-label="t('Previous time window')" :disabled="panPosition <= 0" @click="moveTimeline(-1)">&larr;</button>
+            <label>{{ t('Move window') }}<input type="range" min="0" max="100" step="0.1" :aria-label="t('Pan trace timeline')"
+              :aria-valuetext="t('{start} to {end}', { start: formatTime(timelineRange.start), end: formatTime(timelineRange.end) })" :value="panPosition" @input="panTimeline" /></label>
+            <button class="diagnosis-button" :aria-label="t('Next time window')" :disabled="panPosition >= 100" @click="moveTimeline(1)">&rarr;</button>
           </div>
-          <p v-if="hasTimelineItems && !visibleLanes.some(lane => lane.items.length)" class="timeline-note" role="status">No recorded activity in this window. Move the window to inspect another time.</p>
-          <p class="timeline-note">{{ spans.length ? 'Actual recorded timings; hover for duration, select for details. Gaps include time between requests.' : 'No execution timing is recorded for this segment. Message timestamps are not model or tool durations.' }}</p>
+          <p v-if="hasTimelineItems && !visibleLanes.some(lane => lane.items.length)" class="timeline-note" role="status">{{ t('No recorded activity in this window. Move the window to inspect another time.') }}</p>
+          <p class="timeline-note">{{ spans.length ? t('Actual recorded timings; hover for duration, select for details. Gaps include time between requests.') : t('No execution timing is recorded for this segment. Message timestamps are not model or tool durations.') }}</p>
         </div>
 
-        <div v-if="selectedSpan || selectedEvent" :id="domId('trace-inspector')" class="span-inspector" role="region" aria-label="Selected trace item details">
+        <div v-if="selectedSpan || selectedEvent" :id="domId('trace-inspector')" class="span-inspector" role="region" :aria-label="t('Selected trace item details')">
           <div class="inspector-heading">
-            <span class="event-kind" :class="selectedEvent?.kind || (selectedSpan?.name === 'agent.tool' ? 'TOOL' : 'ASSISTANT')">{{ selectedEvent?.kind || (selectedSpan?.name === 'agent.tool' ? 'TOOL' : 'SPAN') }}</span>
+            <span class="event-kind" :class="selectedEvent?.kind || (selectedSpan?.name === 'agent.tool' ? 'TOOL' : 'ASSISTANT')">{{ enumLabel(selectedEvent?.kind || (selectedSpan?.name === 'agent.tool' ? 'TOOL' : t('SPAN'))) }}</span>
             <strong>{{ selectedEvent?.title || selectedSpan?.attributes['tool.name'] || selectedSpan?.name }}</strong>
-            <span v-if="selectedSpan">{{ formatTraceDuration(spanDuration(selectedSpan, now)) }}{{ selectedSpan.live ? ' elapsed' : '' }}</span>
-            <button class="diagnosis-button" aria-label="Close trace item details" @click="selectedId = ''">&times;</button>
+            <span v-if="selectedSpan">{{ formatTraceDuration(spanDuration(selectedSpan, now)) }}{{ selectedSpan.live ? t(' elapsed') : '' }}</span>
+            <button class="diagnosis-button" :aria-label="t('Close trace item details')" @click="selectedId = ''">&times;</button>
           </div>
-          <dl v-if="selectedSpan" class="span-identity"><dt>Trace</dt><dd>{{ selectedSpan.traceId }}</dd><dt>Span</dt><dd>{{ selectedSpan.spanId }}</dd><dt>Started</dt><dd>{{ formatTime(selectedSpan.startTime) }}</dd><dt>Status</dt><dd>{{ selectedSpan.live ? 'Running' : selectedSpan.statusCode === 2 ? 'Error' : 'Completed' }} {{ selectedSpan.statusMessage }}</dd></dl>
-          <dl v-else-if="selectedEvent" class="span-identity"><dt>Started</dt><dd>{{ formatTime(selectedEvent.timestamp) }}</dd><dt>Turn</dt><dd>{{ selectedEvent.turn }}</dd></dl>
+          <dl v-if="selectedSpan" class="span-identity"><dt>{{ t('Trace') }}</dt><dd>{{ selectedSpan.traceId }}</dd><dt>{{ t('Span') }}</dt><dd>{{ selectedSpan.spanId }}</dd><dt>{{ t('Started') }}</dt><dd>{{ formatTime(selectedSpan.startTime) }}</dd><dt>{{ t('Status') }}</dt><dd>{{ selectedSpan.live ? t('Running') : selectedSpan.statusCode === 2 ? t('Error') : t('Completed') }} {{ selectedSpan.statusMessage }}</dd></dl>
+          <dl v-else-if="selectedEvent" class="span-identity"><dt>{{ t('Started') }}</dt><dd>{{ formatTime(selectedEvent.timestamp) }}</dd><dt>{{ t('Turn') }}</dt><dd>{{ selectedEvent.turn }}</dd></dl>
           <TraceEventDetails v-if="selectedEvent" :event="selectedEvent" />
           <template v-else-if="selectedModelResponse.detail">
-            <h4>Model response</h4>
-            <p v-if="selectedModelResponse.detail.source === 'history'" class="missing-detail">Historical response matched by recorded input message count and completion interval.</p>
+            <h4>{{ t('Model response') }}</h4>
+            <p v-if="selectedModelResponse.detail.source === 'history'" class="missing-detail">{{ t('Historical response matched by recorded input message count and completion interval.') }}</p>
             <TraceEventDetails :event="selectedModelResponse.detail.event" />
           </template>
           <p v-else-if="selectedModelResponse.error" class="diagnosis-error" role="alert">{{ selectedModelResponse.error }}</p>
-          <p v-else-if="selectedSpan?.name === 'agent.tool'" class="missing-detail">No unique matching tool call in this segment's history. Arguments and results are unavailable.</p>
-          <p v-else-if="selectedSpan?.name === 'agent.chat'" class="missing-detail">{{ selectedSpan.live ? 'Waiting for this model call to return its message.' : selectedSpan.statusCode === 2 ? 'This model call failed before returning a message.' : 'No response was captured for this historical call, and its history cannot be uniquely matched.' }}</p>
+          <p v-else-if="selectedSpan?.name === 'agent.tool'" class="missing-detail">{{ t('No unique matching tool call in this segment\'s history. Arguments and results are unavailable.') }}</p>
+          <p v-else-if="selectedSpan?.name === 'agent.chat'" class="missing-detail">{{ selectedSpan.live ? t('Waiting for this model call to return its message.') : selectedSpan.statusCode === 2 ? t('This model call failed before returning a message.') : t('No response was captured for this historical call, and its history cannot be uniquely matched.') }}</p>
           <template v-if="selectedSpan">
-            <details open><summary>Attributes</summary><pre>{{ detailText(selectedSpan.attributes) }}</pre></details>
-            <details v-if="selectedSpan.events.length" :open="!selectedModelResponse.detail"><summary>Events &amp; exceptions ({{ selectedSpan.events.length }})</summary><pre>{{ detailText(selectedSpan.events) }}</pre></details>
+            <details open><summary>{{ t('Attributes') }}</summary><pre>{{ detailText(selectedSpan.attributes) }}</pre></details>
+            <details v-if="selectedSpan.events.length" :open="!selectedModelResponse.detail"><summary>{{ t('Events & exceptions (') }}{{ selectedSpan.events.length }})</summary><pre>{{ detailText(selectedSpan.events) }}</pre></details>
           </template>
         </div>
 
-        <div class="events-heading"><h3>Recorded events</h3><div class="event-fold-controls"><button class="diagnosis-button" @click="toggleAllTurns">{{ allTurnsCollapsed ? 'Expand turns' : 'Collapse turns' }}</button><button class="diagnosis-button" @click="toggleAllCalls">{{ allCallsExpanded ? 'Collapse calls' : 'Expand calls' }}</button></div><span>{{ events.length }} events</span></div>
-        <div class="event-filters" aria-label="Filter recorded events">
-          <button v-for="kind in kinds" :key="kind" :class="{ selected: filter === kind }" :aria-pressed="filter === kind" @click="filter = kind">{{ kind === 'ALL' ? 'All events' : kind.toLowerCase() }}</button>
+        <div class="events-heading"><h3>{{ t('Recorded events') }}</h3><div class="event-fold-controls"><button class="diagnosis-button" @click="toggleAllTurns">{{ allTurnsCollapsed ? t('Expand turns') : t('Collapse turns') }}</button><button class="diagnosis-button" @click="toggleAllCalls">{{ allCallsExpanded ? t('Collapse calls') : t('Expand calls') }}</button></div><span>{{ events.length }} {{ t('events') }}</span></div>
+        <div class="event-filters" :aria-label="t('Filter recorded events')">
+          <button v-for="kind in kinds" :key="kind" :class="{ selected: filter === kind }" :aria-pressed="filter === kind" @click="filter = kind">{{ kind === 'ALL' ? t('All events') : enumLabel(kind).toLowerCase() }}</button>
         </div>
-        <div v-if="loading && !events.length && !spans.length" class="diagnosis-empty" role="status">Loading this session's trace...</div>
-        <div v-else-if="!filteredEvents.length" class="diagnosis-empty">{{ query || filter !== 'ALL' ? 'No events match this filter.' : 'No messages recorded in this segment yet.' }}</div>
+        <div v-if="loading && !events.length && !spans.length" class="diagnosis-empty" role="status">{{ t('Loading this session\'s trace...') }}</div>
+        <div v-else-if="!filteredEvents.length" class="diagnosis-empty">{{ query || filter !== 'ALL' ? t('No events match this filter.') : t('No messages recorded in this segment yet.') }}</div>
         <div v-for="group in eventGroups" :key="group.turn" class="trace-turn">
-          <button class="turn-heading" :aria-expanded="!collapsedTurns.has(group.turn) || !!query || filter !== 'ALL'" @click="toggleTurn(group.turn)"><span>{{ collapsedTurns.has(group.turn) && !query && filter === 'ALL' ? '&#9656;' : '&#9662;' }} {{ group.turn ? `Turn ${group.turn}` : 'Session context' }}</span><span>{{ group.events.length }} events</span></button>
+          <button class="turn-heading" :aria-expanded="!collapsedTurns.has(group.turn) || !!query || filter !== 'ALL'" @click="toggleTurn(group.turn)"><span>{{ collapsedTurns.has(group.turn) && !query && filter === 'ALL' ? '&#9656;' : '&#9662;' }} {{ group.turn ? t('Turn {turn}', { turn: group.turn }) : t('Session context') }}</span><span>{{ group.events.length }} {{ t('events') }}</span></button>
           <div v-show="!collapsedTurns.has(group.turn) || query || filter !== 'ALL'">
           <div v-for="event in group.events" :key="event.id" class="trace-event" :class="{ expanded: expanded.has(event.id), highlighted: selectedEvent?.id === event.id }">
             <button class="trace-event-header" :aria-expanded="expanded.has(event.id)" @click="toggleEvent(event.id)">
               <span class="event-chevron" aria-hidden="true">{{ expanded.has(event.id) ? '&#9662;' : '&#9656;' }}</span>
-              <span class="event-kind" :class="event.kind">{{ event.kind }}</span>
+              <span class="event-kind" :class="event.kind">{{ enumLabel(event.kind) }}</span>
               <strong v-if="event.kind === 'TOOL' || event.kind === 'CONTEXT' || event.kind === 'SESSION'" class="event-name">{{ event.title }}</strong>
-              <span v-if="event.sessionSource" class="event-origin" :title="event.sessionSource.id">{{ event.sessionSource.id || event.sessionSource.name || 'Unknown session' }}</span>
+              <span v-if="event.sessionSource" class="event-origin" :title="event.sessionSource.id">{{ event.sessionSource.id || event.sessionSource.name || t('Unknown session') }}</span>
               <span class="event-preview">{{ preview(event) }}</span>
               <span v-if="event.kind === 'TOOL' && toolSpan(event.id)" class="event-duration">{{ formatTraceDuration(spanDuration(toolSpan(event.id)!, now)) }}</span>
               <time class="event-time" :title="formatTime(event.timestamp)">{{ shortTime(event.timestamp) }}</time>
             </button>
             <div v-if="expanded.has(event.id) && (!collapsedTurns.has(group.turn) || query || filter !== 'ALL')" class="trace-event-detail">
-              <div v-if="event.callId" class="event-call-id">Call ID: {{ event.callId }}<button v-if="toolSpan(event.id)" class="diagnosis-button" @click="selectSpan(toolSpan(event.id)!)">Inspect timing</button></div>
+              <div v-if="event.callId" class="event-call-id">{{ t('Call ID:') }} {{ event.callId }}<button v-if="toolSpan(event.id)" class="diagnosis-button" @click="selectSpan(toolSpan(event.id)!)">{{ t('Inspect timing') }}</button></div>
               <TraceEventDetails :event="event" />
             </div>
             </div>
           </div>
         </div>
         <details class="all-spans">
-          <summary>All execution spans <span>{{ filteredSpans.length }}{{ query ? ' matching' : '' }}</span></summary>
-          <p class="timeline-note">Includes model, tool, context and nested execution spans where recorded. Selecting a span shows its attributes and errors.</p>
+          <summary>{{ t('All execution spans') }} <span>{{ filteredSpans.length }}{{ query ? t(' matching') : '' }}</span></summary>
+          <p class="timeline-note">{{ t('Includes model, tool, context and nested execution spans where recorded. Selecting a span shows its attributes and errors.') }}</p>
           <button v-for="span in filteredSpans" :key="traceKey(span)" class="span-row" :class="{ failed: span.statusCode === 2 }" @click="selectSpan(span)">
             <span class="span-dot" :class="{ running: span.live }" /><strong>{{ span.name }}</strong><span>{{ span.attributes['tool.name'] || span.attributes.model || '' }}</span><span>{{ formatTraceDuration(spanDuration(span, now)) }}</span>
           </button>
-          <div v-if="!filteredSpans.length" class="diagnosis-empty">No recorded spans match.</div>
+          <div v-if="!filteredSpans.length" class="diagnosis-empty">{{ t('No recorded spans match.') }}</div>
         </details>
-        <button v-if="hasMore" class="diagnosis-button load-earlier" :disabled="loading" @click="loadEarlier">Load earlier execution spans</button>
-        <p class="trace-footnote">History comes from this segment's persisted messages. Tool results are paired by call ID. Missing timing or historical context is never estimated.</p>
+        <button v-if="hasMore" class="diagnosis-button load-earlier" :disabled="loading" @click="loadEarlier">{{ t('Load earlier execution spans') }}</button>
+        <p class="trace-footnote">{{ t('History comes from this segment\'s persisted messages. Tool results are paired by call ID. Missing timing or historical context is never estimated.') }}</p>
       </template>
     </div>
 
     <div v-show="section === 'prompt'" :id="domId('diagnosis-prompt')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-prompt-tab')" tabindex="0">
-      <p class="context-note">Current session system prompt, not a captured prompt for each historical model call.</p>
+      <p class="context-note">{{ t('Current session system prompt, not a captured prompt for each historical model call.') }}</p>
       <SystemPromptCard :prompt="systemPrompt" empty-message="No system prompt loaded for this session." />
-      <SystemPromptCard v-if="compactionSummary" title="Compaction Summary" :prompt="compactionSummary" :show-token-estimate="true" />
+      <SystemPromptCard v-if="compactionSummary" :title="t('Compaction Summary')" :prompt="compactionSummary" :show-token-estimate="true" />
     </div>
     <div v-show="section === 'tools'" :id="domId('diagnosis-tools')" class="diagnosis-scroll context-view" role="tabpanel" :aria-labelledby="domId('diagnosis-tools-tab')" tabindex="0">
-      <p class="context-note">Currently available tool definitions. Actual calls, arguments and results are in Trace.</p>
+      <p class="context-note">{{ t('Currently available tool definitions. Actual calls, arguments and results are in Trace.') }}</p>
       <ToolsCard :tools="tools" />
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from '../i18n.ts'
+import { enumLabel } from '../display-labels.ts'
 import { apiUrl } from '../api-url.ts'
 import { fetchDiagnosisExport } from '../diagnosis-export.ts'
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
@@ -187,7 +189,7 @@ const props = defineProps<{
   idPrefix?: string
 }>()
 const domId = (id: string) => props.idPrefix ? `${props.idPrefix}-${id}` : id
-const views = [{ id: 'trace', label: 'Trace' }, { id: 'prompt', label: 'System prompt' }, { id: 'tools', label: 'Tools' }] as const
+const views = [{ id: 'trace', get label() { return t('Trace') } }, { id: 'prompt', get label() { return t('System prompt') } }, { id: 'tools', get label() { return t('Tools') } }] as const
 const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
 const query = ref('')
 const kinds = ['ALL', 'USER', 'SESSION', 'ASSISTANT', 'TOOL', 'CONTEXT', 'SYSTEM']
@@ -346,13 +348,13 @@ function moveTimeline(direction: number): void {
   zoomWindow.value = fitTraceWindow({ start: start + offset, end: end + offset }, fullTimelineRange.value)
 }
 function formatTime(value?: number): string {
-  return value === undefined ? 'Time unavailable' : new Date(value).toLocaleString([], { hour12: false })
+  return value === undefined ? t('Time unavailable') : formatDateTime(new Date(value), { hour12: false })
 }
 function shortTime(value?: number): string {
-  return value === undefined ? 'No timestamp' : new Date(value).toLocaleTimeString([], { hour12: false })
+  return value === undefined ? t('No timestamp') : formatDateTime(new Date(value), { hour12: false })
 }
 function preview(event: DiagnosisEvent): string {
-  return (event.content || event.reasoning || 'Empty message').replace(/\s+/g, ' ').slice(0, 180)
+  return (event.content || event.reasoning || t('Empty message')).replace(/\s+/g, ' ').slice(0, 180)
 }
 function toggleEvent(id: string): void {
   if (expanded.has(id)) expanded.delete(id)
@@ -398,8 +400,8 @@ async function exportDiagnosis(): Promise<void> {
       setTimeout(() => URL.revokeObjectURL(href), 1000)
     }
     exportStatus.value = result.partial
-      ? 'Exported a partial snapshot. Follow its pagination and truncation metadata for more evidence; review before sharing.'
-      : 'Exported the recorded segment snapshot. Historical prompts may be unavailable; review before sharing.'
+      ? t('Exported a partial snapshot. Follow its pagination and truncation metadata for more evidence; review before sharing.')
+      : t('Exported the recorded segment snapshot. Historical prompts may be unavailable; review before sharing.')
   } catch (cause) {
     if (!controller.signal.aborted) exportError.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -422,7 +424,7 @@ async function refresh(): Promise<void> {
     const history = parseDiagnosisHistory(await fetchDiagnosisJson(url(`/api/sessions/${encodeURIComponent(props.physicalId || props.sessionId)}`, { shallow: 'true' }), signal))
     signal.throwIfAborted()
     const physical = props.physicalId || history.physicalId
-    if (!physical) throw new Error('The current physical segment is unavailable; trace data was not fetched.')
+    if (!physical) throw new Error(t('The current physical segment is unavailable; trace data was not fetched.'))
     if (currentPhysicalId !== physical) {
       spans.value = []
       loaded = false
@@ -441,7 +443,7 @@ async function refresh(): Promise<void> {
     while (loaded && page.hasMore && !page.entries.some(span => known.has(traceKey(span)))) {
       const previous = page.nextBeforeId
       page = await tracePage(signal, previous)
-      if (page.hasMore && (page.nextBeforeId === undefined || page.nextBeforeId >= previous!)) throw new Error('Trace pagination did not advance.')
+      if (page.hasMore && (page.nextBeforeId === undefined || page.nextBeforeId >= previous!)) throw new Error(t('Trace pagination did not advance.'))
       incoming.push(...page.entries)
     }
     signal.throwIfAborted()
@@ -468,7 +470,7 @@ async function loadEarlier(): Promise<void> {
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)])
     const page = await tracePage(signal, beforeId)
     signal.throwIfAborted()
-    if (page.hasMore && page.nextBeforeId! >= beforeId) throw new Error('Trace pagination did not advance.')
+    if (page.hasMore && page.nextBeforeId! >= beforeId) throw new Error(t('Trace pagination did not advance.'))
     spans.value = mergeTraceSpans(spans.value, page.entries)
     hasMore.value = page.hasMore
     beforeId = page.nextBeforeId

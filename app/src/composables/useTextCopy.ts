@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { onUnmounted, ref, toValue, watch, type MaybeRefOrGetter } from 'vue'
 
 export function useTextCopy(text: MaybeRefOrGetter<string>) {
@@ -25,7 +26,7 @@ export function useTextCopy(text: MaybeRefOrGetter<string>) {
       copied.value = true
       timer = setTimeout(() => { copied.value = false }, 2000)
     } catch {
-      if (generation === current) error.value = 'Could not copy. Select the value and copy it manually.'
+      if (generation === current) error.value = t('Could not copy. Select the value and copy it manually.')
     } finally {
       if (generation === current) busy.value = false
     }

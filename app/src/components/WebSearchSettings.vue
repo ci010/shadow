@@ -1,54 +1,53 @@
 <template>
   <form class="web-search-settings" @submit.prevent="save" @input="notice = ''" @change="notice = ''">
-    <h2>Web search</h2>
-    <p class="settings-help">Search service and API keys are shared by all Projects. Saved changes apply to subsequent searches; running requests are unchanged.</p>
-    <p v-if="loading" role="status">Loading web search settings...</p>
+    <h2>{{ t('Web search') }}</h2>
+    <p class="settings-help">{{ t('Search service and API keys are shared by all Projects. Saved changes apply to subsequent searches; running requests are unchanged.') }}</p>
+    <p v-if="loading" role="status">{{ t('Loading web search settings...') }}</p>
     <p v-if="error" class="settings-error" role="alert">
       {{ error }}
-      <button type="button" class="btn" :disabled="loading || saving" @click="load">Reload settings</button>
+      <button type="button" class="btn" :disabled="loading || saving" @click="load">{{ t('Reload settings') }}</button>
     </p>
     <fieldset :disabled="loading || saving || !state">
-      <label class="settings-field" :for="`${id}-provider`">Search service
+      <label class="settings-field" :for="`${id}-provider`">{{ t('Search service') }}
         <select :id="`${id}-provider`" v-model="provider" :aria-describedby="`${id}-selection-help`">
-          <option value="auto">Automatic</option>
+          <option value="auto">{{ t('Automatic') }}</option>
           <option v-for="item in searchProviders" :key="item.id" :value="item.id">{{ item.label }}</option>
         </select>
       </label>
       <p :id="`${id}-selection-help`" class="settings-help">
-        Automatic uses the first configured key: Firecrawl, Brave, Exa, then Tavily.
-        Without keys, it uses keyless Firecrawl. Failed searches never switch services automatically.
+        {{ t('Automatic uses the first configured key: Firecrawl, Brave, Exa, then Tavily. Without keys, it uses keyless Firecrawl. Failed searches never switch services automatically.') }}
       </p>
-      <h3>API keys</h3>
-      <p class="settings-help">Saved keys are never shown. Leave a field blank to keep its key, or select Remove key.
-        Environment variables override saved keys when Main restarts.</p>
+      <h3>{{ t('API keys') }}</h3>
+      <p class="settings-help">{{ t('Saved keys are never shown. Leave a field blank to keep its key, or select Remove key. Environment variables override saved keys when Main restarts.') }}</p>
       <div v-for="item in searchProviders" :key="item.id" class="key-row">
         <div class="key-heading">
-          <label :for="`${id}-${item.id}`">{{ item.label }} API key</label>
-          <span :id="`${id}-${item.id}-status`" class="key-status">{{ state?.keys[item.id] ? 'Configured' : 'Not configured' }}</span>
+          <label :for="`${id}-${item.id}`">{{ item.label }} {{ t('API key') }}</label>
+          <span :id="`${id}-${item.id}-status`" class="key-status">{{ state?.keys[item.id] ? t('Configured') : t('Not configured') }}</span>
         </div>
         <input :id="`${id}-${item.id}`" v-model="keys[item.id].value" type="password" autocomplete="new-password"
           :disabled="keys[item.id].remove" :maxlength="4096" :spellcheck="false" autocapitalize="none"
           :aria-describedby="`${id}-${item.id}-status`"
-          :placeholder="state?.keys[item.id] ? 'Enter a replacement key' : 'Enter an API key'" />
+          :placeholder="state?.keys[item.id] ? t('Enter a replacement key') : t('Enter an API key')" />
         <label v-if="state?.keys[item.id]" class="remove-key">
-          <input v-model="keys[item.id].remove" type="checkbox" /> Remove {{ item.label }} key on save
+          <input v-model="keys[item.id].remove" type="checkbox" /> {{ t('Remove') }} {{ item.label }} {{ t('key on save') }}
         </label>
-        <p v-if="item.id === 'firecrawl'" class="key-help">Optional: keyless access is subject to Firecrawl availability and limits.</p>
+        <p v-if="item.id === 'firecrawl'" class="key-help">{{ t('Optional: keyless access is subject to Firecrawl availability and limits.') }}</p>
       </div>
       <div class="settings-actions">
-        <button class="btn save-settings" type="submit" :disabled="!dirty">{{ saving ? 'Saving...' : 'Save web search settings' }}</button>
+        <button class="btn save-settings" type="submit" :disabled="!dirty">{{ saving ? t('Saving...') : t('Save web search settings') }}</button>
       </div>
     </fieldset>
     <p v-if="state" class="settings-help" role="status">
-      Saved service: {{ searchProviderLabel(state.effectiveProvider) }}{{ state.provider === 'auto' ? ' (automatic)' : '' }}.
-      <template v-if="!state.ready">Add its API key or choose another service to enable searches.</template>
-      <template v-else-if="state.effectiveProvider === 'firecrawl' && !state.keys.firecrawl">Using keyless access.</template>
+      {{ t('Saved service:') }} {{ searchProviderLabel(state.effectiveProvider) }}{{ state.provider === 'auto' ? t(' (automatic)') : '' }}.
+      <template v-if="!state.ready">{{ t('Add its API key or choose another service to enable searches.') }}</template>
+      <template v-else-if="state.effectiveProvider === 'firecrawl' && !state.keys.firecrawl">{{ t('Using keyless access.') }}</template>
     </p>
     <p v-if="notice" class="settings-help" role="status">{{ notice }}</p>
   </form>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import {
   createWebSearchSettingsClient, emptySearchKeys, searchProviderLabel, searchProviders, webSearchPatch,
@@ -85,7 +84,7 @@ async function load() {
     const value = await createWebSearchSettingsClient(props.apiBase).load(controller.signal)
     if (!controller.signal.aborted) accept(value)
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load web search settings.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load web search settings.')
   } finally { if (request === controller) loading.value = false }
 }
 async function save() {
@@ -97,9 +96,9 @@ async function save() {
     const value = await createWebSearchSettingsClient(props.apiBase).save(patch.value, controller.signal)
     if (controller.signal.aborted) return
     accept(value)
-    notice.value = 'Web search settings saved for all Projects.'
+    notice.value = t('Web search settings saved for all Projects.')
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not save web search settings. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not save web search settings. Retry.')
   } finally { if (request === controller) saving.value = false }
 }
 watch(() => props.apiBase, load, { immediate: true })

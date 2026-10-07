@@ -1,5 +1,5 @@
 <template>
-  <button ref="trigger" class="browser-access-trigger" type="button" aria-label="Connect browser" title="Connect browser"
+  <button ref="trigger" class="browser-access-trigger" type="button" :aria-label="t('Connect browser')" :title="t('Connect browser')"
     aria-haspopup="dialog" :aria-expanded="open" @click="show">
     <span class="browser-access-icon i-lucide-monitor-smartphone" aria-hidden="true" />
   </button>
@@ -7,34 +7,35 @@
     <dialog v-if="open" ref="dialog" class="browser-access-dialog" :aria-labelledby="titleId" :aria-describedby="descriptionId"
       @cancel.prevent="close" @keydown.stop>
       <div class="dialog-heading">
-        <h2 :id="titleId">Connect a browser</h2>
-        <button class="btn ghost close-button" type="button" aria-label="Close browser pairing" @click="close">
+        <h2 :id="titleId">{{ t('Connect a browser') }}</h2>
+        <button class="btn ghost close-button" type="button" :aria-label="t('Close browser pairing')" @click="close">
           <span class="i-lucide-x w-4 h-4" aria-hidden="true" />
         </button>
       </div>
-      <p :id="descriptionId">Open Shadow in a browser on this computer and enter this one-use code.</p>
-      <p v-if="busy" role="status">Generating pairing code...</p>
+      <p :id="descriptionId">{{ t('Open Shadow in a browser on this computer and enter this one-use code.') }}</p>
+      <p v-if="busy" role="status">{{ t('Generating pairing code...') }}</p>
       <template v-else-if="offer">
-        <label :for="codeId">Pairing code</label>
+        <label :for="codeId">{{ t('Pairing code') }}</label>
         <output v-if="!expired" :id="codeId" class="pairing-code">{{ offer.code }}</output>
-        <p v-else class="pairing-expired" role="status">This code has expired. Generate a new code to continue.</p>
-        <p v-if="!expired" class="pairing-expiry">Expires in {{ remaining }}. Each code can be used once.</p>
-        <p class="pairing-label">Browser address</p>
+        <p v-else class="pairing-expired" role="status">{{ t('This code has expired. Generate a new code to continue.') }}</p>
+        <p v-if="!expired" class="pairing-expiry">{{ t('Expires in') }} {{ remaining }}{{ t('. Each code can be used once.') }}</p>
+        <p class="pairing-label">{{ t('Browser address') }}</p>
         <a class="browser-address selectable-text" :href="offer.url" @click.prevent="openBrowser">{{ offer.url }}</a>
       </template>
       <p v-if="error" class="pairing-error" role="alert">{{ error }}</p>
-      <p v-if="copied" class="pairing-copied" role="status">Pairing code copied.</p>
+      <p v-if="copied" class="pairing-copied" role="status">{{ t('Pairing code copied.') }}</p>
       <div class="pairing-actions">
-        <button class="btn" type="button" :disabled="busy" @click="generate">{{ offer ? 'Generate new code' : 'Retry' }}</button>
-        <button v-if="offer" class="btn" type="button" :disabled="expired || busy" @click="openBrowser">Open Web</button>
-        <button v-if="offer" class="btn primary" type="button" :disabled="expired || busy" @click="copy">Copy code</button>
+        <button class="btn" type="button" :disabled="busy" @click="generate">{{ offer ? t('Generate new code') : t('Retry') }}</button>
+        <button v-if="offer" class="btn" type="button" :disabled="expired || busy" @click="openBrowser">{{ t('Open Web') }}</button>
+        <button v-if="offer" class="btn primary" type="button" :disabled="expired || busy" @click="copy">{{ t('Copy code') }}</button>
       </div>
-      <p class="pairing-note">Keep this code private. Closing this panel does not revoke it; it expires after five minutes.</p>
+      <p class="pairing-note">{{ t('Keep this code private. Closing this panel does not revoke it; it expires after five minutes.') }}</p>
     </dialog>
   </Teleport>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, useId } from 'vue'
 import type { DesktopWebPairing, DesktopWebPairingApi } from '../../../desktop/src/web-pairing-contract.ts'
 
@@ -78,7 +79,7 @@ async function generate() {
     now.value = Date.now()
     offer.value = result
   } catch {
-    if (current === generation && open.value) error.value = 'Could not generate a pairing code. Check that Main is running, then retry.'
+    if (current === generation && open.value) error.value = t('Could not generate a pairing code. Check that Main is running, then retry.')
   } finally {
     if (current === generation) busy.value = false
   }
@@ -97,7 +98,7 @@ async function copy() {
     await navigator.clipboard.writeText(value.code)
     if (current === generation && open.value) copied.value = true
   } catch {
-    if (current === generation && open.value) error.value = 'Could not copy the code. Select and copy the code above, or retry.'
+    if (current === generation && open.value) error.value = t('Could not copy the code. Select and copy the code above, or retry.')
   }
 }
 async function openBrowser() {
@@ -106,10 +107,10 @@ async function openBrowser() {
   const current = generation
   error.value = ''
   try {
-    if (!window.shadowDesktop?.openExternal) throw new Error('Desktop browser opener unavailable')
+    if (!window.shadowDesktop?.openExternal) throw new Error(t('Desktop browser opener unavailable'))
     await window.shadowDesktop.openExternal(value.url)
   } catch {
-    if (current === generation && open.value) error.value = 'Could not open your browser. Open the address above manually.'
+    if (current === generation && open.value) error.value = t('Could not open your browser. Open the address above manually.')
   }
 }
 function clear() {

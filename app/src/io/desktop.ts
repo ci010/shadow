@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import type { IoDefinition } from '../../../src/io/contracts.ts'
 import { MAX_MEDIA_CAPTURE_DURATION_MS, type DesktopMediaCaptureApi, type MediaCaptureCapability } from '../../../desktop/src/media-capture-contract.ts'
 import type {} from '../desktop-bootstrap.ts'
@@ -22,13 +23,13 @@ export function desktopCapabilities(definition: IoDefinition): MediaCaptureCapab
 }
 
 export function desktopSourceIssue(definition: IoDefinition): string | undefined {
-  if (definition.sources.some(source => source.kind === 'screen' && source.audio)) return 'Desktop screen audio is unavailable. Create a new request with screen audio disabled and a separate microphone source if needed.'
-  if (definition.limits.durationMs > MAX_MEDIA_CAPTURE_DURATION_MS) return `Desktop capture is limited to ${MAX_MEDIA_CAPTURE_DURATION_MS / 1000} seconds. Create a request within this limit.`
+  if (definition.sources.some(source => source.kind === 'screen' && source.audio)) return t('Desktop screen audio is unavailable. Create a new request with screen audio disabled and a separate microphone source if needed.')
+  if (definition.limits.durationMs > MAX_MEDIA_CAPTURE_DURATION_MS) return t('Desktop capture is limited to {value1} seconds. Create a request within this limit.', { value1: MAX_MEDIA_CAPTURE_DURATION_MS / 1000 })
   return undefined
 }
 
 export function desktopIoIssue(definition: IoDefinition): string | undefined {
   if (typeof window === 'undefined' || !window.shadowDesktop || !desktopCapabilities(definition).length) return undefined
-  if (!window.shadowDesktop.mediaCapture) return 'This desktop build lacks trusted media grants. Update the desktop app before capturing devices.'
+  if (!window.shadowDesktop.mediaCapture) return t('This desktop build lacks trusted media grants. Update the desktop app before capturing devices.')
   return desktopSourceIssue(definition)
 }

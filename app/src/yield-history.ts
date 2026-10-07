@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { parseYieldQuestion, parseYieldAnswer, parseYieldContinuation, parseYieldDecisionRecord, type YieldAnswer, type YieldRequest, type YieldDecisionRecord, type YieldReference, type YieldContinuation } from '../../src/sessions/yield-contract.ts'
 import { pairToolResults, resolveToolCall, type ToolActivityMessage } from './tool-activity.ts'
 
@@ -29,18 +30,18 @@ export interface InlineYieldDecisions {
 
 export function decisionStatusLabel(status: YieldDecision['status']): string {
   return {
-    'waiting-user': 'Needs your reply',
-    'waiting-parent': 'Waiting for parent',
-    user: 'Answered by user',
-    parent: 'Answered by parent',
-    timeout: 'Default selected by timeout',
-    failed: 'Decision did not complete',
-    unknown: 'No confirmed answer',
-    cancelled: 'Decision cancelled',
-    superseded: 'Replaced by a revised question',
-    investigation: 'Returned for investigation · not approved',
-    deferred: 'Deferred · not approved',
-    invalidated: 'Premise changed · revalidation required',
+    'waiting-user': t('Needs your reply'),
+    'waiting-parent': t('Waiting for parent'),
+    user: t('Answered by user'),
+    parent: t('Answered by parent'),
+    timeout: t('Default selected by timeout'),
+    failed: t('Decision did not complete'),
+    unknown: t('No confirmed answer'),
+    cancelled: t('Decision cancelled'),
+    superseded: t('Replaced by a revised question'),
+    investigation: t('Returned for investigation · not approved'),
+    deferred: t('Deferred · not approved'),
+    invalidated: t('Premise changed · revalidation required'),
   }[status]
 }
 
@@ -57,7 +58,7 @@ function readContinuation(text: string | undefined): YieldContinuation | undefin
 }
 
 export function parseDecisionRecords(value: unknown): YieldDecisionRecord[] {
-  if (!Array.isArray(value)) throw new TypeError('Invalid decision history received.')
+  if (!Array.isArray(value)) throw new TypeError(t('Invalid decision history received.'))
   return value.map(parseYieldDecisionRecord)
 }
 
@@ -121,7 +122,7 @@ export function inlineYieldDecisions(
       }
     } else if (call.name === 'reply' && typeof call.args.request_id === 'string'
       && typeof call.args.text === 'string' && readAnswer(messages[pairs.get(index) ?? -1]?.content)) {
-      decision = { action: 'answer', question: 'Response to child decision', options: [],
+      decision = { action: 'answer', question: t('Response to child decision'), options: [],
         requestId: call.args.request_id, status: 'unknown' }
     } else continue
     const resultIndex = pairs.get(index)

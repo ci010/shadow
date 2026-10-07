@@ -3,23 +3,23 @@
     <div
       class="rounded-md border border-default bg-surface p-4 lg:sticky lg:top-10 lg:h-[calc(100vh-5rem)]">
       <div class="flex items-center justify-between">
-        <h2 class="text-lg font-600">Log Stream</h2>
+        <h2 class="text-lg font-600">{{ t('Log Stream') }}</h2>
         <div class="flex items-center gap-2 text-xs text-ink/60">
-          <span class="tag" :class="{ active: connected && !error && !windowFull }">{{ error ? 'Needs retry' : windowFull ? 'Paused' : connected ? 'Live' : 'Connecting...' }}</span>
+          <span class="tag" :class="{ active: connected && !error && !windowFull }">{{ error ? t('Needs retry') : windowFull ? t('Paused') : connected ? t('Live') : t('Connecting...') }}</span>
         </div>
       </div>
-      <p class="mt-2 text-sm text-ink/60">Live tail of logs. Newest entries appear at the top.</p>
+      <p class="mt-2 text-sm text-ink/60">{{ t('Live tail of logs. Newest entries appear at the top.') }}</p>
       <div v-if="error" role="alert" class="mt-3 text-sm">
-        {{ error }} <button class="btn ghost" @click="retryLogs">Retry logs</button>
+        {{ error }} <button class="btn ghost" @click="retryLogs">{{ t('Retry logs') }}</button>
       </div>
       <div v-if="windowFull" role="status" class="mt-3 text-sm">
-        Live buffer full. Older pages and selection are preserved.
-        <button class="btn ghost" @click="refreshLogs">Load latest logs</button>
+        {{ t('Live buffer full. Older pages and selection are preserved.') }}
+        <button class="btn ghost" @click="refreshLogs">{{ t('Load latest logs') }}</button>
       </div>
 
       <div class="mt-4">
-        <div v-if="loading" role="status" class="text-sm text-ink/60">Loading logs…</div>
-        <div v-if="logEntries.length === 0 && !loading && !error" class="text-ink/40">No logs yet.</div>
+        <div v-if="loading" role="status" class="text-sm text-ink/60">{{ t('Loading logs…') }}</div>
+        <div v-if="logEntries.length === 0 && !loading && !error" class="text-ink/40">{{ t('No logs yet.') }}</div>
         <LogList v-else :entries="logEntries" :selected-id="selectedLog?.id" :height="560" @select="selectLog"
           @load-more="loadMoreLogs" />
       </div>
@@ -27,17 +27,17 @@
 
     <div class="rounded-md border border-default bg-surface p-4">
       <div class="flex items-center justify-between">
-        <h2 class="text-lg font-600">Log Details</h2>
-        <button class="btn ghost" @click="selectedLog = null">Clear</button>
+        <h2 class="text-lg font-600">{{ t('Log Details') }}</h2>
+        <button class="btn ghost" @click="selectedLog = null">{{ t('Clear') }}</button>
       </div>
-      <p class="mt-2 text-sm text-ink/60">Click a log entry to inspect full payload.</p>
+      <p class="mt-2 text-sm text-ink/60">{{ t('Click a log entry to inspect full payload.') }}</p>
 
-      <div v-if="!selectedLog" class="mt-4 text-sm text-ink/50">Select a log entry to inspect details.</div>
+      <div v-if="!selectedLog" class="mt-4 text-sm text-ink/50">{{ t('Select a log entry to inspect details.') }}</div>
       <div v-else class="detail-card mono mt-4 selectable-text">
         <!-- Severity badge + timestamp row -->
         <div class="flex items-center gap-2">
           <span class="severity-badge" :class="severityClass">{{ severityLabel }}</span>
-          <span class="text-xs text-ink/50">{{ selectedLog.time ?? 'unknown' }}</span>
+          <span class="text-xs text-ink/50">{{ selectedLog.time ?? t('unknown') }}</span>
           <span v-if="selectedLog.module" class="text-xs text-ink/40">{{ selectedLog.module }}</span>
         </div>
 
@@ -48,20 +48,20 @@
 
         <!-- Trace context -->
         <div v-if="selectedParsed?.trace_id || selectedParsed?.span_id" class="detail-section">
-          <div class="detail-section-title">Trace Context</div>
+          <div class="detail-section-title">{{ t('Trace Context') }}</div>
           <div v-if="selectedParsed?.trace_id" class="detail-row">
-            <span>Trace ID</span>
+            <span>{{ t('Trace ID') }}</span>
             <code class="text-xs">{{ selectedParsed.trace_id }}</code>
           </div>
           <div v-if="selectedParsed?.span_id" class="detail-row">
-            <span>Span ID</span>
+            <span>{{ t('Span ID') }}</span>
             <code class="text-xs">{{ selectedParsed.span_id }}</code>
           </div>
         </div>
 
         <!-- Attributes -->
         <div v-if="selectedAttributes && Object.keys(selectedAttributes).length" class="detail-section">
-          <div class="detail-section-title">Attributes</div>
+          <div class="detail-section-title">{{ t('Attributes') }}</div>
           <div v-for="(val, key) in selectedAttributes" :key="key" class="detail-row">
             <span>{{ key }}</span>
             <strong class="text-xs break-all">{{ val }}</strong>
@@ -70,7 +70,7 @@
 
         <!-- Resource / Scope -->
         <div v-if="selectedResource" class="detail-section">
-          <div class="detail-section-title">Resource</div>
+          <div class="detail-section-title">{{ t('Resource') }}</div>
           <div v-for="(val, key) in selectedResource" :key="key" class="detail-row">
             <span>{{ key }}</span>
             <strong class="text-xs break-all">{{ val }}</strong>
@@ -79,11 +79,11 @@
 
         <div v-if="isTraceLog" class="trace-stack">
           <div class="trace-section">
-            <div class="trace-title">LLM Request</div>
+            <div class="trace-title">{{ t('LLM Request') }}</div>
             <div v-if="traceRequestMessages.length" class="trace-messages">
               <div v-for="(msg, i) in traceRequestMessages" :key="i" class="trace-msg">
                 <span class="trace-msg-role">{{ messageRoleLabel(msg) }}</span>
-                <span v-if="messageRoleLabel(msg) !== msg.role" class="trace-msg-protocol">Model role: {{ msg.role }}</span>
+                <span v-if="messageRoleLabel(msg) !== msg.role" class="trace-msg-protocol">{{ t('Model role:') }} {{ msg.role }}</span>
                 <pre class="trace-msg-content">{{ typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) }}</pre>
                 <div v-if="msg.tool_calls?.length" class="trace-msg-tools">
                   <div v-for="tc in msg.tool_calls" :key="tc.id" class="trace-msg-tool">
@@ -93,14 +93,14 @@
                 </div>
               </div>
             </div>
-            <div v-else class="text-sm text-ink/50">No request messages captured.</div>
+            <div v-else class="text-sm text-ink/50">{{ t('No request messages captured.') }}</div>
           </div>
           <div class="trace-section">
-            <div class="trace-title">LLM Response</div>
+            <div class="trace-title">{{ t('LLM Response') }}</div>
             <div v-if="traceResponseMessages.length" class="trace-messages">
               <div v-for="(msg, i) in traceResponseMessages" :key="i" class="trace-msg">
                 <span class="trace-msg-role">{{ messageRoleLabel(msg) }}</span>
-                <span v-if="messageRoleLabel(msg) !== msg.role" class="trace-msg-protocol">Model role: {{ msg.role }}</span>
+                <span v-if="messageRoleLabel(msg) !== msg.role" class="trace-msg-protocol">{{ t('Model role:') }} {{ msg.role }}</span>
                 <pre class="trace-msg-content">{{ typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content) }}</pre>
                 <div v-if="msg.tool_calls?.length" class="trace-msg-tools">
                   <div v-for="tc in msg.tool_calls" :key="tc.id" class="trace-msg-tool">
@@ -110,7 +110,7 @@
                 </div>
               </div>
             </div>
-            <div v-else class="text-sm text-ink/50">No response content captured.</div>
+            <div v-else class="text-sm text-ink/50">{{ t('No response content captured.') }}</div>
           </div>
         </div>
       </div>
@@ -119,6 +119,7 @@
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from '../i18n.ts'
 import { messageRoleLabel } from '../message-author.ts'
 import { apiUrl } from '../api-url.ts'
 import { computed, ref, watch } from 'vue'
@@ -236,7 +237,7 @@ function record(value: unknown): value is Record<string, unknown> {
 function validatedLog(value: unknown): LogEntry {
   if (!record(value) || !Number.isSafeInteger(value.id) || Number(value.id) <= 0
     || typeof value.time !== 'number' || !Number.isFinite(value.time) || !('body' in value)) {
-    throw new Error('Invalid log record received.')
+    throw new Error(t('Invalid log record received.'))
   }
   for (const key of ['attributes', 'resource', 'scope']) {
     const raw = value[key]
@@ -244,7 +245,7 @@ function validatedLog(value: unknown): LogEntry {
     if (parsed == null) continue
     if (key === 'attributes'
       ? !Array.isArray(parsed) || !parsed.every(item => record(item) && typeof item.key === 'string')
-      : !record(parsed)) throw new Error(`Invalid log ${key}.`)
+      : !record(parsed)) throw new Error(t('Invalid log {key}.', { key: key }))
   }
   return apiEntryToLogEntry(value)
 }
@@ -274,10 +275,10 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
     url.searchParams.set('limit', String(PAGE_SIZE))
     if (beforeId !== undefined) url.searchParams.set('beforeId', String(beforeId))
     const response = await fetch(url, { signal })
-    if (!response.ok) throw new Error(`Log query failed (${response.status}).`)
+    if (!response.ok) throw new Error(t('Log query failed ({status}).', { status: response.status }))
     const data: unknown = await response.json()
     if (!record(data) || !Array.isArray(data.entries) || typeof data.total !== 'number' || !Number.isFinite(data.total)) {
-      throw new Error('Invalid log query response.')
+      throw new Error(t('Invalid log query response.'))
     }
     return { entries: data.entries.map(validatedLog), total: data.total }
   }
@@ -300,7 +301,7 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
     },
     onError: () => {
       loading.value = false
-      error.value = 'Could not load saved logs. Check Main and retry.'
+      error.value = t('Could not load saved logs. Check Main and retry.')
     },
   })
   refreshLogs = () => {
@@ -330,7 +331,7 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
     } catch {
       if (!scope.signal.aborted && !current.signal.aborted) {
         retryPage = true
-        error.value = 'Could not load older logs. Retry to keep browsing.'
+        error.value = t('Could not load older logs. Retry to keep browsing.')
       }
     } finally {
       if (page === current) {
@@ -359,7 +360,7 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
           windowFull.value = true
         }
       } catch {
-        error.value = 'Could not read a live log. Retry logs to reload saved state.'
+        error.value = t('Could not read a live log. Retry logs to reload saved state.')
       }
     },
     reset: () => refreshLogs(),
@@ -566,7 +567,7 @@ function safeParseJson(line: string): Record<string, unknown> | null {
 
 function formatTime(value: unknown): string | undefined {
   if (typeof value === 'number') {
-    return new Date(value).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    return formatDateTime(new Date(value), { hourCycle: 'h23', ...{ hour: '2-digit', minute: '2-digit', second: '2-digit' } })
   }
   if (typeof value === 'string') return value
   return undefined
@@ -589,7 +590,7 @@ function buildTraceSummary(parsed: Record<string, unknown>): string {
     : typeof parsed.requestedModel === 'string'
       ? parsed.requestedModel
       : 'unknown-model'
-  const duration = typeof parsed.durationMs === 'number' ? `${parsed.durationMs}ms` : ''
+  const duration = typeof parsed.durationMs === 'number' ? t('{durationMs}ms', { durationMs: parsed.durationMs }) : ''
   return `${provider} ${model} ${duration}`.trim()
 }
 

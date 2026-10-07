@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { watch } from 'vue'
 import { projectBase } from './api-url.ts'
 import { isOneShot } from './subagent-executions.ts'
@@ -111,7 +112,7 @@ export function startSessionSoundMonitor(options: {
         if (!signal.aborted && ownGeneration === generation) {
           tracker.reset()
           finished.clear()
-          report(`project:${projectId}`, `Some session sounds are unavailable. ${cause instanceof Error ? cause.message : 'Could not read session activity.'}`)
+          report(`project:${projectId}`, t('Some session sounds are unavailable. {value1}', { value1: cause instanceof Error ? cause.message : t('Could not read session activity.') }))
         }
       } finally {
         if (controller === current) {
@@ -148,7 +149,7 @@ export function startSessionSoundMonitor(options: {
   }
   const catalog = options.state.acquireCatalog(options.base)
   const stopCatalog = watch(() => [catalog.state.revision, catalog.state.error], () => {
-    if (catalog.state.error) { report('catalog', `Session sounds are unavailable. ${catalog.state.error}`); return }
+    if (catalog.state.error) { report('catalog', t('Session sounds are unavailable. {error}', { error: catalog.state.error })); return }
     if (!catalog.state.value) return
     const ids = new Set(catalog.state.value.map(project => project.id))
     for (const [id, project] of projects) if (!ids.has(id)) { project.close(); projects.delete(id) }

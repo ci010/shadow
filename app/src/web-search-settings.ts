@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { apiUrl, hostBase } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
 import type { WebSearchPatch, WebSearchProvider, WebSearchSelection, WebSearchStatus } from '../../src/config/web-search.ts'
@@ -16,19 +17,19 @@ export const isSearchSelection = (value: unknown): value is WebSearchSelection =
 export function parseWebSearchStatus(value: unknown): WebSearchStatus {
   if (!isRecord(value) || !isSearchSelection(value.provider) || !isProvider(value.effectiveProvider)
     || typeof value.ready !== 'boolean' || !isRecord(value.keys)) {
-    throw new Error('Main returned invalid web search settings. Reload settings and retry.')
+    throw new Error(t('Main returned invalid web search settings. Reload settings and retry.'))
   }
   const keys = value.keys
   if (Object.keys(keys).length !== searchProviders.length || searchProviders.some(provider => typeof keys[provider.id] !== 'boolean')
     || Object.keys(value).some(key => !['provider', 'effectiveProvider', 'ready', 'keys'].includes(key))) {
-    throw new Error('Main returned invalid web search settings. Reload settings and retry.')
+    throw new Error(t('Main returned invalid web search settings. Reload settings and retry.'))
   }
   const configured = { firecrawl: keys.firecrawl as boolean, brave: keys.brave as boolean, exa: keys.exa as boolean, tavily: keys.tavily as boolean }
   const effective = value.provider === 'auto'
     ? searchProviders.find(provider => configured[provider.id])?.id ?? 'firecrawl'
     : value.provider
   if (value.effectiveProvider !== effective || value.ready !== (effective === 'firecrawl' || configured[effective])) {
-    throw new Error('Main returned inconsistent web search settings. Reload settings and retry.')
+    throw new Error(t('Main returned inconsistent web search settings. Reload settings and retry.'))
   }
   return { provider: value.provider, effectiveProvider: effective, ready: value.ready, keys: configured }
 }
@@ -61,16 +62,16 @@ export function createWebSearchSettingsClient(base: string, request: typeof fetc
       })
     } catch (error) {
       if (init.signal?.aborted) throw error
-      throw new Error('Could not reach Main. Check the connection and reload settings before retrying.')
+      throw new Error(t('Could not reach Main. Check the connection and reload settings before retrying.'))
     }
     if (!response.ok) {
-      throw new Error(response.status === 401 || response.status === 403 ? 'Web search settings require a Main administrator.'
-        : response.status === 400 ? 'Check the search service and API keys, then retry.'
-        : 'Could not save or load web search settings. Reload settings before retrying.')
+      throw new Error(response.status === 401 || response.status === 403 ? t('Web search settings require a Main administrator.')
+        : response.status === 400 ? t('Check the search service and API keys, then retry.')
+        : t('Could not save or load web search settings. Reload settings before retrying.'))
     }
     let value: unknown
     try { value = await response.json() }
-    catch { throw new Error('Main returned invalid web search settings. Reload settings and retry.') }
+    catch { throw new Error(t('Main returned invalid web search settings. Reload settings and retry.')) }
     return parseWebSearchStatus(value)
   }
   return {

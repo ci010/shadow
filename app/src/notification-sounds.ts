@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { computed, inject, readonly, ref, type InjectionKey } from 'vue'
 
 export type NotificationSound = 'yield' | 'idle'
@@ -6,11 +7,11 @@ export const SOUND_PREFERENCES_KEY = 'shadow:notification-sounds:v1'
 const defaults: SoundPreferences = { enabled: true, yield: true, idle: true, volume: 0.35 }
 
 export function parseSoundPreferences(value: unknown): SoundPreferences {
-  if (!value || typeof value !== 'object') throw new Error('Invalid notification sound preferences.')
+  if (!value || typeof value !== 'object') throw new Error(t('Invalid notification sound preferences.'))
   const prefs = value as Record<string, unknown>
   if (typeof prefs.enabled !== 'boolean' || typeof prefs.yield !== 'boolean' || typeof prefs.idle !== 'boolean'
     || typeof prefs.volume !== 'number' || !Number.isFinite(prefs.volume) || prefs.volume < 0 || prefs.volume > 1) {
-    throw new Error('Invalid notification sound preferences.')
+    throw new Error(t('Invalid notification sound preferences.'))
   }
   return { enabled: prefs.enabled, yield: prefs.yield, idle: prefs.idle, volume: prefs.volume }
 }
@@ -52,7 +53,7 @@ export function createNotificationSounds(options: {
       stop()
     } catch {
       preferences.value = { ...defaults, enabled: false }
-      storageError.value = 'Could not read saved sound preferences. Adjust the settings to save them again.'
+      storageError.value = t('Could not read saved sound preferences. Adjust the settings to save them again.')
     }
   }
   load()
@@ -65,7 +66,7 @@ export function createNotificationSounds(options: {
       options.storage.setItem(SOUND_PREFERENCES_KEY, JSON.stringify(next))
       storageError.value = ''
     } catch {
-      storageError.value = 'Sound settings changed for this window, but could not be saved on this device.'
+      storageError.value = t('Sound settings changed for this window, but could not be saved on this device.')
     }
   }
   async function unlock(): Promise<boolean> {
@@ -78,10 +79,10 @@ export function createNotificationSounds(options: {
       if (context.state !== 'running') await context.resume()
       if (disposed) return false
       ready.value = context.state === 'running'
-      audioError.value = ready.value ? '' : 'Sound is blocked by the browser. Use Preview to enable audio.'
+      audioError.value = ready.value ? '' : t('Sound is blocked by the browser. Use Preview to enable audio.')
       return ready.value
     } catch {
-      audioError.value = 'Could not enable notification sounds. Check browser audio permissions and try Preview again.'
+      audioError.value = t('Could not enable notification sounds. Check browser audio permissions and try Preview again.')
       ready.value = false
       return false
     }
@@ -112,7 +113,7 @@ export function createNotificationSounds(options: {
       lastPlayed = now()
     } catch {
       stop()
-      audioError.value = 'Could not play the notification sound. Try Preview again.'
+      audioError.value = t('Could not play the notification sound. Try Preview again.')
     }
   }
   function notify(kind: NotificationSound) {

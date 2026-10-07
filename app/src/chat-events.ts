@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { messageEnvelope, parseSessionMessage } from './message-author.ts'
 
 export interface ChatEventMeta {
@@ -30,10 +31,12 @@ export function eventPresentation(meta: ChatEventMeta) {
   const completion = /^subagent-(?:complete|failed|cancelled)$/.test(meta.type)
   const status = meta.type === 'subagent-failed' ? 'failed'
     : meta.type === 'subagent-cancelled' ? 'cancelled' : 'completed'
-  const label = meta.attrs.mode === 'task' ? 'Task' : meta.attrs.mode === 'call' ? 'Call' : 'Agent'
+  const label = meta.attrs.mode === 'task' ? t('Task') : meta.attrs.mode === 'call' ? t('Call') : t('Agent')
   return {
     completion,
     failed: completion && status === 'failed',
-    title: completion ? `${label} ${status}` : meta.attrs.title || meta.type.replace(/[-_]/g, ' '),
+    title: completion
+      ? t(status === 'failed' ? '{label} failed' : status === 'cancelled' ? '{label} cancelled' : '{label} completed', { label })
+      : meta.attrs.title || meta.type.replace(/[-_]/g, ' '),
   }
 }

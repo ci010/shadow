@@ -1,37 +1,37 @@
 <template>
-  <article class="yield-decision" :class="decision.status" aria-label="Decision">
+  <article class="yield-decision" :class="decision.status" :aria-label="t('Decision')">
     <header>
       <span class="i-lucide-signpost" aria-hidden="true" />
-      <strong>Decision</strong>
+      <strong>{{ t('Decision') }}</strong>
       <span class="decision-status">{{ decisionStatusLabel(decision.status) }}</span>
     </header>
     <p class="decision-question selectable-text">{{ decision.question }}</p>
-    <p v-if="decision.reportingSessionId" class="decision-note">Reporting responsibility: {{ decision.reportingSessionId }} · not answer authority</p>
+    <p v-if="decision.reportingSessionId" class="decision-note">{{ t('Reporting responsibility:') }} {{ decision.reportingSessionId }} {{ t('· not answer authority') }}</p>
     <DecisionBrief v-if="decision.brief" :brief="decision.brief" @inspect="emit('inspect', $event)" />
-    <p v-else class="decision-note">This older record has no structured brief. Do not infer missing evidence or user constraints.</p>
-    <p v-if="decision.invalidated" class="decision-warning" role="alert">Basis changed: {{ decision.invalidated.reason }}. Any saved answer is historical, not approval for a changed scope.</p>
+    <p v-else class="decision-note">{{ t('This older record has no structured brief. Do not infer missing evidence or user constraints.') }}</p>
+    <p v-if="decision.invalidated" class="decision-warning" role="alert">{{ t('Basis changed:') }} {{ decision.invalidated.reason }}{{ t('. Any saved answer is historical, not approval for a changed scope.') }}</p>
     <ol v-if="decision.options.length" class="decision-options selectable-text">
       <li v-for="option in decision.options" :key="option" :class="{ chosen: decision.answer?.option === option && !decision.answer.custom }">
         {{ option }}
-        <span v-if="decision.answer?.option === option && !decision.answer.custom" class="decision-option-note">Selected</span>
-        <span v-else-if="option === decision.defaultOption" class="decision-option-note">Timeout default</span>
+        <span v-if="decision.answer?.option === option && !decision.answer.custom" class="decision-option-note">{{ t('Selected') }}</span>
+        <span v-else-if="option === decision.defaultOption" class="decision-option-note">{{ t('Timeout default') }}</span>
       </li>
     </ol>
     <div v-if="decision.answer" class="decision-answer selectable-text">
-      <strong>{{ decision.answer.custom ? 'Custom response' : 'Recorded response' }}</strong>
+      <strong>{{ decision.answer.custom ? t('Custom response') : t('Recorded response') }}</strong>
       <p>{{ decision.answer.option }}</p>
       <MessageAttachments v-if="decision.answer.media?.length && apiBase !== undefined && (sessionId || decision.reference?.sessionId)"
         :paths="decision.answer.media" :api-base="apiBase" :session-id="sessionId || decision.reference?.sessionId || ''" :workdir="workdir"
         @preview="emit('preview', $event)" @open="emit('open', $event)" />
       <MessageTimestamp :timestamp="decision.answer.answeredAt" />
     </div>
-    <p v-if="decision.status === 'waiting-user'" class="decision-note">Reply using the decision controls below the conversation.</p>
-    <p v-else-if="decision.status === 'waiting-parent'" class="decision-note">Only the parent session can answer this request.</p>
-    <p v-else-if="decision.status === 'unknown'" class="decision-note">This trace does not confirm an answer or an active wait.</p>
+    <p v-if="decision.status === 'waiting-user'" class="decision-note">{{ t('Reply using the decision controls below the conversation.') }}</p>
+    <p v-else-if="decision.status === 'waiting-parent'" class="decision-note">{{ t('Only the parent session can answer this request.') }}</p>
+    <p v-else-if="decision.status === 'unknown'" class="decision-note">{{ t('This trace does not confirm an answer or an active wait.') }}</p>
     <p v-else-if="decision.status === 'failed'" class="decision-note">{{ decision.result }}</p>
-    <p v-else-if="decision.status === 'cancelled'" class="decision-note">{{ decision.result }} A new request is needed to make a decision.</p>
-    <p v-else-if="decision.status === 'superseded'" class="decision-note">This version was replaced without selecting an answer. {{ decision.result }}</p>
-    <p v-else-if="!decision.answer && ['investigation', 'deferred', 'invalidated'].includes(decision.status)" class="decision-note">{{ decision.result }} No option was selected. Only investigation or already-authorized unaffected work may continue.</p>
+    <p v-else-if="decision.status === 'cancelled'" class="decision-note">{{ decision.result }} {{ t('A new request is needed to make a decision.') }}</p>
+    <p v-else-if="decision.status === 'superseded'" class="decision-note">{{ t('This version was replaced without selecting an answer.') }} {{ decision.result }}</p>
+    <p v-else-if="!decision.answer && ['investigation', 'deferred', 'invalidated'].includes(decision.status)" class="decision-note">{{ decision.result }} {{ t('No option was selected. Only investigation or already-authorized unaffected work may continue.') }}</p>
     <template v-if="apiBase !== undefined">
       <DecisionGraph v-if="decision.reference" :reference="decision.reference" :api-base="apiBase" @inspect="emit('inspect', $event)" @click="emit('interact')" />
       <DecisionDiscussion v-if="decision.reference" :reference="decision.reference" :api-base="apiBase" :can-invalidate="canManage && !decision.invalidated" @updated="emit('updated')" @click="emit('interact')" />
@@ -40,9 +40,9 @@
         @inspect="emit('inspect', $event)" @click="emit('interact')" />
     </template>
     <details v-if="decision.requestId || decision.arguments || decision.result !== undefined" class="decision-details" @click="emit('interact')">
-      <summary>Decision record</summary>
-      <p v-if="decision.requestId">Request: {{ decision.requestId }}</p>
-      <p v-if="decision.origin">Segment: {{ decision.origin.physicalId }}</p>
+      <summary>{{ t('Decision record') }}</summary>
+      <p v-if="decision.requestId">{{ t('Request:') }} {{ decision.requestId }}</p>
+      <p v-if="decision.origin">{{ t('Segment:') }} {{ decision.origin.physicalId }}</p>
       <ToolPayload v-if="decision.arguments" :source="decision.arguments" />
       <ToolPayload v-if="decision.result !== undefined" :source="decision.result || '(Empty result)'" />
     </details>
@@ -51,6 +51,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { decisionStatusLabel, type YieldDecision } from '../yield-history.ts'
 import MessageTimestamp from './MessageTimestamp.vue'
 import ToolPayload from './ToolPayload.vue'

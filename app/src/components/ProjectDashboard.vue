@@ -14,7 +14,7 @@
         <template #actions>
           <button ref="coordinatorTrigger" type="button" class="coordinator-toggle" :aria-expanded="coordinatorOpen"
             :aria-controls="panelId" @click="coordinatorOpen ? closeCoordinator() : openCoordinator()">
-            <span class="i-lucide-messages-square" aria-hidden="true" />Coordinator
+            <span class="i-lucide-messages-square" aria-hidden="true" />{{ t('Coordinator') }}
           </button>
         </template>
         <template #default="{ active }">
@@ -23,13 +23,13 @@
         </template>
       </FileWorkbench>
     </main>
-    <aside v-show="coordinatorOpen" :id="panelId" class="project-coordinator-panel" aria-label="Coordinator conversation"
+    <aside v-show="coordinatorOpen" :id="panelId" class="project-coordinator-panel" :aria-label="t('Coordinator conversation')"
       @pointerdown.capture="activePane = 'coordinator'" @focusin="activePane = 'coordinator'">
       <SidebarResizer v-if="visible && wide && coordinatorOpen" edge="left" :model-value="panelWidth" :bounds="resizeBounds"
-        label="Resize coordinator panel" :controls="panelId" @update:model-value="preferredPanelWidth = $event" />
+        :label="t('Resize coordinator panel')" :controls="panelId" @update:model-value="preferredPanelWidth = $event" />
       <header class="coordinator-heading">
-        <h2>Coordinator</h2>
-        <button type="button" class="coordinator-close" aria-label="Close coordinator panel" @click="closeCoordinator">
+        <h2>{{ t('Coordinator') }}</h2>
+        <button type="button" class="coordinator-close" :aria-label="t('Close coordinator panel')" @click="closeCoordinator">
           <span class="i-lucide-panel-right-close" aria-hidden="true" />
         </button>
       </header>
@@ -39,6 +39,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import FileWorkbench from './files/FileWorkbench.vue'

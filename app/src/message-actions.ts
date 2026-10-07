@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { SidebarSession } from './folders-sidebar.ts'
 import { pairToolResults, resolveToolCall, type ToolActivityMessage } from './tool-activity.ts'
 
@@ -32,7 +33,7 @@ export function inlineMessageActions(
     const recorded = !!sessionId && text?.startsWith(`Message sent to ${sessionId} (silent).`)
     entries.set(index, {
       sessionId,
-      recipient: (sessionId && labels.get(sessionId)) || target || 'Unknown recipient',
+      recipient: (sessionId && labels.get(sessionId)) || target || t('Unknown recipient'),
       content: typeof call.args.content === 'string' ? call.args.content : '',
       status: text === undefined ? 'pending'
         : /^(?:Error:|ERROR\b|Failed\b)/i.test(text.trimStart()) ? 'failed'

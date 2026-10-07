@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { projectChatLocation } from './projects.ts'
 
@@ -48,7 +49,7 @@ export class AutomationRequestError extends Error {
   }
 }
 
-const invalid = () => new AutomationRequestError('Main returned invalid automation data. Retry to refresh.', 'invalid')
+const invalid = () => new AutomationRequestError(t('Main returned invalid automation data. Retry to refresh.'), 'invalid')
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 const identifier = (value: unknown): value is string => typeof value === 'string' && !!value.trim()
   && value !== '.' && value !== '..' && !/[\u0000-\u001f\u007f]/.test(value)
@@ -56,7 +57,7 @@ const optionalText = (value: unknown) => value === undefined || typeof value ===
 const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 
 export function learningOutcomeLabel(outcome: LearningOutcome): string {
-  return { applied: 'Applied', no_change: 'No change', partial: 'Partial', blocked: 'Blocked', draft_only: 'Draft only' }[outcome.status]
+  return { applied: t('Applied'), no_change: t('No change'), partial: t('Partial'), blocked: t('Blocked'), draft_only: t('Draft only') }[outcome.status]
 }
 
 function learningOutcome(value: unknown): LearningOutcome | undefined {
@@ -85,9 +86,9 @@ async function read<T>(
     deadline.throwIfAborted()
     const response = await request(url, { signal: deadline, cache: 'no-store', redirect: 'error' })
     deadline.throwIfAborted()
-    if (response.status === 401 || response.status === 403) throw new AutomationRequestError('Access to automations was denied.', 'denied')
-    if (response.status === 404) throw new AutomationRequestError('Automations are unavailable. Update and restart Main, then retry.')
-    if (!response.ok) throw new AutomationRequestError('Automations could not be loaded. Check Main and retry.')
+    if (response.status === 401 || response.status === 403) throw new AutomationRequestError(t('Access to automations was denied.'), 'denied')
+    if (response.status === 404) throw new AutomationRequestError(t('Automations are unavailable. Update and restart Main, then retry.'))
+    if (!response.ok) throw new AutomationRequestError(t('Automations could not be loaded. Check Main and retry.'))
     const value: unknown = await response.json()
     deadline.throwIfAborted()
     return parse(value)
@@ -96,8 +97,8 @@ async function read<T>(
     if (error instanceof AutomationRequestError) throw error
     if (error instanceof SyntaxError) throw invalid()
     throw new AutomationRequestError(deadline.aborted
-      ? 'Loading automations timed out. Check Main and retry.'
-      : 'Automations could not be loaded. Check Main and retry.')
+      ? t('Loading automations timed out. Check Main and retry.')
+      : t('Automations could not be loaded. Check Main and retry.'))
   }
 }
 

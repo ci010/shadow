@@ -1,6 +1,7 @@
+import { t } from './i18n.ts'
 export class NodeOfflineError extends Error {
   constructor(readonly nodeId: string, readonly capabilityId: string) {
-    super('Node offline')
+    super(t('Node offline'))
     this.name = 'NodeOfflineError'
   }
 }
@@ -26,10 +27,10 @@ export function workdirUnavailableMessage(value: unknown): string | undefined {
   const data = value as Record<string, unknown>
   if (data.error !== 'workdir_unavailable' && data.error !== 'remote_workdir_unavailable') return
   switch (data.reason) {
-    case 'capability-revoked': return 'Access to this workdir was revoked. Select an available folder capability.'
-    case 'capability-missing': return 'This folder capability is no longer available on the owning node.'
-    case 'capability-offline': return 'The folder capability is unavailable on the owning node. Restore the folder and check again.'
-    case 'incompatible': return 'This workdir capability is incompatible. Update the owning node or select another folder.'
-    case 'node-missing': return 'The owning node is no longer registered. Select an available node and folder.'
+    case 'capability-revoked': return t('Access to this workdir was revoked. Select an available folder capability.')
+    case 'capability-missing': return t('This folder capability is no longer available on the owning node.')
+    case 'capability-offline': return t('The folder capability is unavailable on the owning node. Restore the folder and check again.')
+    case 'incompatible': return t('This workdir capability is incompatible. Update the owning node or select another folder.')
+    case 'node-missing': return t('The owning node is no longer registered. Select an available node and folder.')
   }
 }

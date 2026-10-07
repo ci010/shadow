@@ -3,15 +3,16 @@
     <ToolSearchResults v-if="search" :result="search" />
     <pre v-else class="payload-source" :class="{ 'payload-code': filePath || searchResult }"><FileHighlightText v-if="fileLanguage(path) !== 'text'" ref="highlight" :source="source" :path="path" :active="true" :line-numbers="lineNumbers" @error="error = $event" /><template v-else>{{ source }}</template></pre>
     <figure v-for="(image, index) in images" :key="index" class="payload-image">
-      <img :src="image" :alt="`Tool output image ${index + 1}`" loading="lazy" @error="imageError = true" />
-      <figcaption>Tool output image {{ index + 1 }}</figcaption>
+      <img :src="image" :alt="t('Tool output image {value1}', { value1: index + 1 })" loading="lazy" @error="imageError = true" />
+      <figcaption>{{ t('Tool output image') }} {{ index + 1 }}</figcaption>
     </figure>
-    <p v-if="imageError" class="payload-error" role="status">An image could not be displayed.</p>
-    <p v-if="error" class="payload-error" role="status">{{ error }} <button type="button" class="btn btn-sm" @click="highlight?.retry()">Retry</button></p>
+    <p v-if="imageError" class="payload-error" role="status">{{ t('An image could not be displayed.') }}</p>
+    <p v-if="error" class="payload-error" role="status">{{ error }} <button type="button" class="btn btn-sm" @click="highlight?.retry()">{{ t('Retry') }}</button></p>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, ref, watch } from 'vue'
 import { toolPayloadPath } from '../tool-activity.ts'
 import { fileLanguage } from '../file-highlighting.ts'

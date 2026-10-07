@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { readonly, ref, watch, type InjectionKey } from 'vue'
 
 export interface WebAuthStatus {
@@ -11,13 +12,13 @@ export interface WebAuthStatus {
 export type WebAuthView = 'checking' | 'pairing' | 'authenticated' | 'error'
 
 function parseStatus(value: unknown): WebAuthStatus {
-  if (!value || typeof value !== 'object') throw new Error('Shadow returned an invalid browser session. Retry when the server is ready.')
+  if (!value || typeof value !== 'object') throw new Error(t('Shadow returned an invalid browser session. Retry when the server is ready.'))
   const status = value as Partial<WebAuthStatus>
   if (status.version !== 1 || typeof status.required !== 'boolean' || typeof status.authenticated !== 'boolean'
     || (status.pinAvailable !== undefined && typeof status.pinAvailable !== 'boolean')
     || (!status.required && !status.authenticated)
     || (status.expiresAt !== undefined && (typeof status.expiresAt !== 'string' || !Number.isFinite(Date.parse(status.expiresAt))))) {
-    throw new Error('Shadow returned an invalid browser session. Retry when the server is ready.')
+    throw new Error(t('Shadow returned an invalid browser session. Retry when the server is ready.'))
   }
   return status as WebAuthStatus
 }
@@ -92,23 +93,23 @@ export function createBrowserSession(apiBase: string, options: {
           if (ownGeneration === generation && !disposed) accept({ version: 1, required: true, authenticated: false })
           return
         }
-        if (action === 'pair' && response.status === 401) throw new Error(usePin ? 'That PIN is incorrect. Check it and try again.' : 'That pairing code is invalid or expired. Generate a new code in the trusted Shadow CLI.')
-        if (action === 'pair' && response.status === 429) throw new Error('Too many pairing attempts. Wait a moment before trying again.')
-        if (action === 'pair' && response.status === 400) throw new Error(usePin ? 'The PIN could not be accepted. Check it and try again.' : 'The pairing code could not be accepted. Check the code and try again.')
-        throw new Error(`Shadow could not ${action === 'logout' ? 'sign out' : 'verify this browser'} (HTTP ${response.status}). Retry when the server is ready.`)
+        if (action === 'pair' && response.status === 401) throw new Error(usePin ? t('That PIN is incorrect. Check it and try again.') : t('That pairing code is invalid or expired. Generate a new code in the trusted Shadow CLI.'))
+        if (action === 'pair' && response.status === 429) throw new Error(t('Too many pairing attempts. Wait a moment before trying again.'))
+        if (action === 'pair' && response.status === 400) throw new Error(usePin ? t('The PIN could not be accepted. Check it and try again.') : t('The pairing code could not be accepted. Check the code and try again.'))
+        throw new Error(t('Shadow could not {value1} (HTTP {status}). Retry when the server is ready.', { value1: action === 'logout' ? t('sign out') : t('verify this browser'), status: response.status }))
       }
       const next = parseStatus(await response.json())
       if (ownGeneration !== generation || disposed) return
-      if (action === 'pair' && !next.authenticated) throw new Error('Pairing did not authorize this browser. Generate a new code and try again.')
-      if (action === 'logout' && next.required && next.authenticated) throw new Error('Shadow did not revoke this browser session. Retry signing out.')
+      if (action === 'pair' && !next.authenticated) throw new Error(t('Pairing did not authorize this browser. Generate a new code and try again.'))
+      if (action === 'logout' && next.required && next.authenticated) throw new Error(t('Shadow did not revoke this browser session. Retry signing out.'))
       accept(next)
     } catch (cause) {
       if (ownGeneration !== generation || disposed) return
       clearExpiration()
       error.value = controller.signal.aborted
-        ? 'Shadow did not respond in time. Check that the server is running and retry.'
+        ? t('Shadow did not respond in time. Check that the server is running and retry.')
         : cause instanceof Error && !(cause instanceof TypeError) && !(cause instanceof SyntaxError)
-          ? cause.message : 'Could not verify this browser with Shadow. Check that the server is running and retry.'
+          ? cause.message : t('Could not verify this browser with Shadow. Check that the server is running and retry.')
       view.value = action === 'pair' ? 'pairing' : 'error'
     } finally {
       clearTimer(timeout)

@@ -1,25 +1,26 @@
 <template>
-  <article class="pending-device" :aria-label="`Verify ${device.displayName}`">
+  <article class="pending-device" :aria-label="t('Verify {displayName}', { displayName: device.displayName })">
     <h3>{{ device.displayName }}</h3>
-    <p>Requested {{ new Date(device.requestedAt).toLocaleString() }} · Node <code>{{ device.nodeId }}</code></p>
-    <p>Compare this entire fingerprint with the one shown on the Child machine. A matching name or PIN is not enough.</p>
-    <dl><dt>Device identity fingerprint</dt><dd class="fingerprint">{{ device.deviceIdentityFingerprint }}</dd></dl>
+    <p>{{ t('Requested') }} {{ formatDateTime(new Date(device.requestedAt)) }} {{ t('· Node') }} <code>{{ device.nodeId }}</code></p>
+    <p>{{ t('Compare this entire fingerprint with the one shown on the Child machine. A matching name or PIN is not enough.') }}</p>
+    <dl><dt>{{ t('Device identity fingerprint') }}</dt><dd class="fingerprint">{{ device.deviceIdentityFingerprint }}</dd></dl>
     <label class="consent">
       <input v-model="verified" type="checkbox" :disabled="disabled" />
-      <span>I checked the fingerprint on the Child and it matches exactly.</span>
+      <span>{{ t('I checked the fingerprint on the Child and it matches exactly.') }}</span>
     </label>
     <label class="consent">
       <input v-model="consented" type="checkbox" :disabled="disabled" />
-      <span>I trust this device and authorize Main to run tasks and access workdirs through the capabilities configured on this Child. Commands run with the Child’s OS-account permissions; a workdir is not a sandbox.</span>
+      <span>{{ t('I trust this device and authorize Main to run tasks and access workdirs through the capabilities configured on this Child. Commands run with the Child’s OS-account permissions; a workdir is not a sandbox.') }}</span>
     </label>
-    <p v-if="!device.credentialId" class="device-error">This request has no credential identity. Pair again from an updated Child.</p>
+    <p v-if="!device.credentialId" class="device-error">{{ t('This request has no credential identity. Pair again from an updated Child.') }}</p>
     <button type="button" class="device-button primary" :disabled="disabled || !verified || !consented || !device.credentialId" @click="approve">
-      {{ busy ? 'Approving…' : 'Approve device' }}
+      {{ busy ? t('Approving…') : t('Approve device') }}
     </button>
   </article>
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from '../i18n.ts'
 import { ref } from 'vue'
 import { deviceApprovalBody, type PendingDevice } from './device-administration.ts'
 

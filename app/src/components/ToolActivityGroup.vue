@@ -5,9 +5,9 @@
       <span v-if="batch.files" class="activity-icon i-lucide-file-diff" aria-hidden="true" />
       <span class="activity-title">{{ summaryTitle }}</span>
       <LineChangeCounts v-if="batch.changes" :changes="batch.changes" :partial="batch.incomplete" />
-      <span v-else-if="batch.files" class="activity-status">Line counts unavailable</span>
-      <span v-if="batch.entries.some(entry => entry.failed)" class="activity-failed">Failed</span>
-      <span v-if="running" class="activity-status">Running</span>
+      <span v-else-if="batch.files" class="activity-status">{{ t('Line counts unavailable') }}</span>
+      <span v-if="batch.entries.some(entry => entry.failed)" class="activity-failed">{{ t('Failed') }}</span>
+      <span v-if="running" class="activity-status">{{ t('Running') }}</span>
     </summary>
     <div class="activity-list trace-guide">
       <details v-for="entry in batch.entries" :key="entry.index" v-disclosure-motion class="tool-entry" @toggle.self="setExpanded(entry.index, $event)">
@@ -18,26 +18,26 @@
           </span>
           <span class="tool-name">{{ entry.title }}</span>
           <LineChangeCounts v-if="entry.changes" :changes="entry.changes" />
-          <span v-else-if="entry.failed" class="activity-failed">Failed</span>
-          <span v-else-if="entry.file" class="activity-status">Counts unavailable</span>
+          <span v-else-if="entry.failed" class="activity-failed">{{ t('Failed') }}</span>
+          <span v-else-if="entry.file" class="activity-status">{{ t('Counts unavailable') }}</span>
           <span v-if="entry.summary && !entry.file" class="tool-args-summary">{{ entry.summary }}</span>
         </summary>
         <div v-if="groupOpen && expanded.has(entry.index)" class="tool-entry-content">
           <ToolFileDiffPreview v-if="entry.file && entry.toolCallId && apiBase !== undefined && sessionId"
             :api-base="apiBase" :session-id="sessionId" :tool-call-id="entry.toolCallId" :path="entry.path" />
-          <p v-else-if="entry.file" class="activity-status">No historical file diff is available for this tool call.</p>
+          <p v-else-if="entry.file" class="activity-status">{{ t('No historical file diff is available for this tool call.') }}</p>
           <component :is="entry.file ? 'details' : 'div'" v-disclosure-motion class="tool-entry-details">
-            <summary v-if="entry.file" class="tool-details-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />Details</summary>
+            <summary v-if="entry.file" class="tool-details-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Details') }}</summary>
             <div v-if="entry.arguments" class="tool-arguments">
-              <span class="activity-detail-label">Arguments</span>
+              <span class="activity-detail-label">{{ t('Arguments') }}</span>
               <ToolPayload boxed class="tool-call-detail" :source="entry.arguments" />
             </div>
             <details v-if="entry.result !== undefined" v-disclosure-motion class="tool-result" :open="!closedResults.has(entry.index)" @toggle.self="setResultExpanded(entry.index, $event)">
-              <summary class="tool-result-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />Result</summary>
-              <ToolPayload v-if="!closedResults.has(entry.index)" boxed class="tool-result-content" :source="entry.result || '(Empty result)'" :images="entry.images" :file-path="entry.readPath" :line-numbers="entry.lineNumbers" :search-result="entry.grep" />
+              <summary class="tool-result-header"><span class="activity-chevron i-lucide-chevron-right" aria-hidden="true" />{{ t('Result') }}</summary>
+              <ToolPayload v-if="!closedResults.has(entry.index)" boxed class="tool-result-content" :source="entry.result || t('(Empty result)')" :images="entry.images" :file-path="entry.readPath" :line-numbers="entry.lineNumbers" :search-result="entry.grep" />
             </details>
-            <p v-if="entry.usage" class="activity-usage">{{ entry.usage.promptTokens.toLocaleString() }} prompt · {{ entry.usage.completionTokens.toLocaleString() }} completion · {{ entry.usage.totalTokens.toLocaleString() }} total tokens</p>
-            <p v-if="entry.result === undefined" class="activity-status">{{ running ? 'Waiting for result…' : 'No result recorded' }}</p>
+            <p v-if="entry.usage" class="activity-usage">{{ t('{prompt} prompt · {completion} completion · {total} total tokens', { prompt: formatNumber(entry.usage.promptTokens), completion: formatNumber(entry.usage.completionTokens), total: formatNumber(entry.usage.totalTokens) }) }}</p>
+            <p v-if="entry.result === undefined" class="activity-status">{{ running ? t('Waiting for result…') : t('No result recorded') }}</p>
           </component>
         </div>
       </details>
@@ -46,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import { t, formatNumber } from '../i18n.ts'
 import { computed, reactive, ref } from 'vue'
 import type { ToolActivity, ToolActivityBatch } from '../tool-activity.ts'
 import { matchedFileIcon } from '../file-icons.ts'
@@ -57,9 +58,9 @@ const props = defineProps<{ batch: ToolActivityBatch; running?: boolean; apiBase
 const emit = defineEmits<{ interact: [] }>()
 const summaryTitle = computed(() => {
   const { entries, files } = props.batch
-  const title = files ? `${files} ${files === 1 ? 'file' : 'files'} edited` : entries[0].title
+  const title = files ? t('{count} files edited', { count: files }, files) : entries[0].title
   const others = files ? entries.filter(entry => !entry.file).length : entries.length - 1
-  return others ? `${title} and ${others} other tool ${others === 1 ? 'call' : 'calls'}` : title
+  return others ? t('{title} and {count} other tool calls', { title, count: others }, others) : title
 })
 const groupOpen = ref(false)
 const expanded = reactive(new Set<number>())

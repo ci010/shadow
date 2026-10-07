@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { HighlighterCore } from 'shiki/core'
 
 const languages = {
@@ -83,7 +84,7 @@ export function preserveHighlightSource(source: string, tokens: readonly {
   const result: FileHighlightToken[] = []
   for (const token of tokens) {
     if (token.offset < offset || source.slice(token.offset, token.offset + token.content.length) !== token.content) {
-      throw new Error('Syntax tokens do not match the source text.')
+      throw new Error(t('Syntax tokens do not match the source text.'))
     }
     if (token.offset > offset) result.push({ text: source.slice(offset, token.offset) })
     if (token.content) result.push({

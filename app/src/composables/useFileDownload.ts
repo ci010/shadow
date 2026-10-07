@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { onScopeDispose, reactive } from 'vue'
 import { mobileResourcePath } from '../mobile-resources.ts'
 
@@ -37,9 +38,9 @@ export function useFileDownload() {
       const response = await fetch(url.href, { signal: controller.signal, credentials: 'same-origin', referrerPolicy: 'no-referrer' })
       if (!response.ok) {
         const reason = response.status === 401 || response.status === 403
-          ? 'Access was denied. Reconnect and try again.'
-          : response.status === 404 ? 'The file is missing or outside the folders accessible to this conversation.' : 'Please try again.'
-        throw new Error(`Download failed (${response.status}). ${reason}`)
+          ? t('Access was denied. Reconnect and try again.')
+          : response.status === 404 ? t('The file is missing or outside the folders accessible to this conversation.') : t('Please try again.')
+        throw new Error(t('Download failed ({status}). {reason}', { status: response.status, reason: reason }))
       }
       const blob = await response.blob()
       if (controller.signal.aborted) return
@@ -51,7 +52,7 @@ export function useFileDownload() {
       document.body.append(link)
       try { link.click() } finally { link.remove() }
     } catch (cause) {
-      if (!controller.signal.aborted) errors.set(value, cause instanceof Error ? cause.message : 'Download failed. Please try again.')
+      if (!controller.signal.aborted) errors.set(value, cause instanceof Error ? cause.message : t('Download failed. Please try again.'))
     } finally {
       if (requests.get(value) === controller) {
         requests.delete(value)

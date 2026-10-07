@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { NodeInventoryCapability, NodeInventoryEntry, NodeInventoryResponse } from '../../src/cluster/node-inventory.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { apiUrl, hostBase } from './api-url.ts'
@@ -5,10 +6,10 @@ import { apiUrl, hostBase } from './api-url.ts'
 export type { NodeInventoryEntry }
 
 export const CAPABILITY_LABELS: Record<NodeInventoryCapability['kind'], string> = {
-  workdir: 'Workdir',
-  shell: 'Shell',
-  browser: 'Browser',
-  'windows-ui': 'Desktop control',
+  get workdir() { return t('Workdir') },
+  get shell() { return t('Shell') },
+  get browser() { return t('Browser') },
+  get 'windows-ui'() { return t('Desktop control') },
   gpu: 'GPU',
 }
 
@@ -27,7 +28,7 @@ function isCapabilityKind(value: unknown): value is NodeInventoryCapability['kin
 }
 
 export function parseNodeInventory(value: unknown): NodeInventoryResponse {
-  const invalid = () => new Error('The backend returned invalid device data. Update Shadow and retry.')
+  const invalid = () => new Error(t('The backend returned invalid device data. Update Shadow and retry.'))
   if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.nodes)) throw invalid()
   const nodeIds = new Set<string>()
   const nodes: NodeInventoryEntry[] = value.nodes.map((node: unknown) => {
@@ -69,25 +70,25 @@ export async function fetchNodeInventory(
   signal: AbortSignal,
   request: typeof fetch = fetch,
 ): Promise<NodeInventoryResponse> {
-  if (mode === 'client') throw new Error('Device administration is not available to mobile clients.')
+  if (mode === 'client') throw new Error(t('Device administration is not available to mobile clients.'))
   const response = await request(apiUrl(hostBase(apiBase), mode === 'child' ? '/local/v1/nodes' : '/nodes/v1'), {
     signal, cache: 'no-store',
   })
   if (response.status === 401 || response.status === 403) {
-    throw new Error('Device access was denied. Open Nodes through the authorized desktop app or reconnect.')
+    throw new Error(t('Device access was denied. Open Nodes through the authorized desktop app or reconnect.'))
   }
   if (response.status === 404 || response.status === 501) {
-    throw new Error('This backend does not provide device inventory. Restart Shadow after updating the backend.')
+    throw new Error(t('This backend does not provide device inventory. Restart Shadow after updating the backend.'))
   }
-  if (!response.ok) throw new Error(`Could not load devices (${response.status}). Check the backend and retry.`)
+  if (!response.ok) throw new Error(t('Could not load devices ({status}). Check the backend and retry.', { status: response.status }))
   if (response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
-    throw new Error('This backend did not return device inventory. Restart Shadow after updating the backend.')
+    throw new Error(t('This backend did not return device inventory. Restart Shadow after updating the backend.'))
   }
   let data: unknown
   try {
     data = await response.json()
   } catch (cause) {
-    if (cause instanceof SyntaxError) throw new Error('The backend returned invalid device data. Update Shadow and retry.')
+    if (cause instanceof SyntaxError) throw new Error(t('The backend returned invalid device data. Update Shadow and retry.'))
     throw cause
   }
   return parseNodeInventory(data)

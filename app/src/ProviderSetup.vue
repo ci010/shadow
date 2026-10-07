@@ -2,64 +2,65 @@
   <section class="provider-setup" aria-labelledby="provider-setup-title">
     <h2 id="provider-setup-title" ref="title" class="setup-title" tabindex="-1">
       <span v-if="mode === 'add'" class="i-lucide-plus" aria-hidden="true" />
-      {{ mode === 'edit' ? `${providerDisplayName(status?.provider ?? '')} settings` : mode === 'add' ? 'Add provider' : 'Connect a model provider' }}
+      {{ mode === 'edit' ? t('{value1} settings', { value1: providerDisplayName(status?.provider ?? '') }) : mode === 'add' ? t('Add provider') : t('Connect a model provider') }}
     </h2>
     <p class="lead">{{ lead }}</p>
     <p v-if="error || message" class="notice error" role="alert">{{ error || message }}</p>
-    <p v-if="status?.reason && !status.ready && mode !== 'add'" class="notice">{{ providerDisplayName(status.provider) }} is not ready. {{ readinessMessage }}</p>
-    <div v-if="mode !== 'edit' && !excludedProviders.includes('copilot')" class="method-tabs" aria-label="Authentication method">
+    <p v-if="status?.reason && !status.ready && mode !== 'add'" class="notice">{{ providerDisplayName(status.provider) }} {{ t('is not ready.') }} {{ readinessMessage }}</p>
+    <div v-if="mode !== 'edit' && !excludedProviders.includes('copilot')" class="method-tabs" :aria-label="t('Authentication method')">
       <button :aria-pressed="method === 'copilot'" :disabled="busy || saving" @click="method = 'copilot'">GitHub Copilot</button>
-      <button :aria-pressed="method === 'key'" :disabled="busy || saving" @click="method = 'key'">API key / local provider</button>
+      <button :aria-pressed="method === 'key'" :disabled="busy || saving" @click="method = 'key'">{{ t('API key / local provider') }}</button>
     </div>
 
     <div v-if="method === 'copilot'" class="method-panel">
-      <h2>Use your GitHub Copilot account</h2>
-      <p>Authorize Shadow on GitHub using a device code. Your account must have access to Copilot.</p>
+      <h2>{{ t('Use your GitHub Copilot account') }}</h2>
+      <p>{{ t('Authorize Shadow on GitHub using a device code. Your account must have access to Copilot.') }}</p>
       <div v-if="login.state === 'pending' && login.login" class="device-panel" role="status" aria-live="polite">
-        <span>Enter this code on GitHub</span>
-        <div class="device-code"><code>{{ login.login.userCode }}</code><button @click="copyCode">{{ copied ? 'Copied' : 'Copy code' }}</button></div>
-        <button class="primary" @click="openGitHub">Open github.com/login/device</button>
+        <span>{{ t('Enter this code on GitHub') }}</span>
+        <div class="device-code"><code>{{ login.login.userCode }}</code><button @click="copyCode">{{ copied ? t('Copied') : t('Copy code') }}</button></div>
+        <button class="primary" @click="openGitHub">{{ t('Open github.com/login/device') }}</button>
         <span>{{ login.login.verificationUri }}</span>
-        <span>Waiting for your authorization. Code expires at {{ expiryTime }}.</span>
+        <span>{{ t('Waiting for your authorization. Code expires at') }} {{ expiryTime }}.</span>
       </div>
       <p v-else-if="login.state !== 'idle'" role="status" aria-live="polite" class="notice" :class="{ error: failedLogin }">{{ loginMessage }}</p>
       <div class="actions">
         <button v-if="busy" :disabled="login.state === 'cancelling'" @click="cancelLogin">
-          {{ login.state === 'cancelling' ? 'Cancelling...' : 'Cancel login' }}
+          {{ login.state === 'cancelling' ? t('Cancelling...') : t('Cancel login') }}
         </button>
         <button v-else class="primary" :disabled="saving" @click="startLogin">
-          {{ login.state === 'idle' ? 'Sign in with GitHub Copilot' : 'Retry GitHub Copilot login' }}
+          {{ login.state === 'idle' ? t('Sign in with GitHub Copilot') : t('Retry GitHub Copilot login') }}
         </button>
       </div>
     </div>
 
     <form v-else class="method-panel" @submit.prevent="saveProvider">
-      <label>Provider
+      <label>{{ t('Provider') }}
         <select v-model="provider" :disabled="saving || mode === 'edit'" @change="changeProvider">
           <option v-for="preset in availablePresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
-          <option value="custom">Local / OpenAI-compatible</option>
+          <option value="custom">{{ t('Local / OpenAI-compatible') }}</option>
           <option v-if="!knownProviders.includes(provider)" :value="provider">{{ provider }}</option>
         </select>
       </label>
-      <label v-if="provider === 'custom'">Provider name
+      <label v-if="provider === 'custom'">{{ t('Provider name') }}
         <input v-model="customProvider" required pattern="[a-z][a-z0-9_-]*" maxlength="64" placeholder="local" :disabled="saving || mode === 'edit'">
       </label>
-      <label>Connection model <input v-model="model" required placeholder="Model ID from your provider" :disabled="saving"></label>
-      <label>API base URL <input v-model="baseUrl" type="url" :required="provider === 'custom'" placeholder="Provider default, or http://127.0.0.1:11434/v1" :disabled="saving"></label>
-      <label>API key <input v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
-        :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? 'Leave blank to keep the saved key' : provider === 'custom' ? 'Optional for local endpoints' : 'Enter your provider API key'"></label>
-      <p class="help">Keys are saved by Main in this installation's configuration, never in browser storage. Keyless local endpoints do not require a key.</p>
-      <div class="actions"><button class="primary" :disabled="saving">{{ saving ? 'Saving...' : 'Save provider connection' }}</button></div>
+      <label>{{ t('Connection model') }} <input v-model="model" required :placeholder="t('Model ID from your provider')" :disabled="saving"></label>
+      <label>{{ t('API base URL') }} <input v-model="baseUrl" type="url" :required="provider === 'custom'" :placeholder="t('Provider default, or http://127.0.0.1:11434/v1')" :disabled="saving"></label>
+      <label>{{ t('API key') }} <input v-model="apiKey" type="password" autocomplete="off" spellcheck="false" :disabled="saving"
+        :required="provider !== 'custom' && !hasSavedKey" :placeholder="hasSavedKey ? t('Leave blank to keep the saved key') : provider === 'custom' ? t('Optional for local endpoints') : t('Enter your provider API key')"></label>
+      <p class="help">{{ t('Keys are saved by Main in this installation\'s configuration, never in browser storage. Keyless local endpoints do not require a key.') }}</p>
+      <div class="actions"><button class="primary" :disabled="saving">{{ saving ? t('Saving...') : t('Save provider connection') }}</button></div>
     </form>
     <div class="footer-actions">
-      <button :disabled="busy || saving" @click="$emit('retry')">Recheck configuration</button>
-      <button v-if="mode === 'edit'" :disabled="busy || saving" @click="$emit('cancel')">Done editing</button>
-      <button v-else-if="canClose || status?.ready" :disabled="saving" @click="close">Back to workspace</button>
+      <button :disabled="busy || saving" @click="$emit('retry')">{{ t('Recheck configuration') }}</button>
+      <button v-if="mode === 'edit'" :disabled="busy || saving" @click="$emit('cancel')">{{ t('Done editing') }}</button>
+      <button v-else-if="canClose || status?.ready" :disabled="saving" @click="close">{{ t('Back to workspace') }}</button>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from './i18n.ts'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
   COPILOT_VERIFICATION_URL, createDeviceLoginController, createProviderSetupClient,
@@ -76,10 +77,10 @@ const title = ref<HTMLElement | null>(null)
 defineExpose({ focusTitle: () => title.value?.focus() })
 const knownProviders = [...providerPresets.map(item => item.id), 'custom']
 const lead = computed(() => props.mode === 'edit'
-  ? 'Update this shared connection. Default models are configured separately in each project.'
+  ? t('Update this shared connection. Default models are configured separately in each project.')
   : props.excludedProviders.includes('copilot')
-    ? 'Configure an API key or add a named local model endpoint.'
-    : 'Sign in with GitHub Copilot, or configure an API key or local model endpoint.')
+    ? t('Configure an API key or add a named local model endpoint.')
+    : t('Sign in with GitHub Copilot, or configure an API key or local model endpoint.'))
 const availablePresets = computed(() => providerPresets.filter(item => props.mode !== 'add' || !props.excludedProviders.includes(item.id)))
 const method = ref(props.status?.authMode === 'copilot' && props.mode !== 'add' ? 'copilot' : 'key')
 const initialProvider = props.mode === 'add' ? availablePresets.value[0]?.id ?? 'custom'
@@ -107,19 +108,19 @@ const busy = computed(() => ['pending', 'starting', 'cancelling'].includes(login
 const failedLogin = computed(() => ['denied', 'expired', 'error'].includes(login.value.state))
 const hasSavedKey = computed(() => props.status?.provider === (provider.value === 'custom' ? customProvider.value : provider.value) && props.status.hasApiKey)
 const readinessMessages: Record<string, string> = {
-  missing_credentials: 'Add credentials or choose another provider.',
-  invalid_credentials: 'Credentials were rejected. Update them or sign in again.',
-  network_error: 'Check the connection, then recheck configuration.',
+  get missing_credentials() { return t('Add credentials or choose another provider.') },
+  get invalid_credentials() { return t('Credentials were rejected. Update them or sign in again.') },
+  get network_error() { return t('Check the connection, then recheck configuration.') },
 }
-const readinessMessage = computed(() => readinessMessages[props.status?.reason ?? ''] ?? 'Complete the configuration below.')
-const expiryTime = computed(() => new Date(login.value.login?.expiresAt ?? 0).toLocaleTimeString())
+const readinessMessage = computed(() => readinessMessages[props.status?.reason ?? ''] ?? t('Complete the configuration below.'))
+const expiryTime = computed(() => formatDateTime(new Date(login.value.login?.expiresAt ?? 0), { hour: 'numeric', minute: '2-digit', second: '2-digit' }))
 const loginMessage = computed(() => login.value.error ?? ({
-  idle: '', starting: 'Requesting a GitHub device code...', pending: 'Waiting for authorization...',
-  cancelling: 'Cancelling login...', cancelled: 'Login cancelled. You can try again.',
+  idle: '', starting: t('Requesting a GitHub device code...'), pending: t('Waiting for authorization...'),
+  cancelling: t('Cancelling login...'), cancelled: t('Login cancelled. You can try again.'),
   denied: 'Authorization was declined. Start a new login when ready.',
-  expired: 'The device code expired. Start a new login to get another code.',
-  succeeded: 'Copilot is connected. Opening your workspace...',
-  error: 'GitHub login failed. Check your network and Copilot access, then retry.',
+  expired: t('The device code expired. Start a new login to get another code.'),
+  succeeded: t('Copilot is connected. Opening your workspace...'),
+  error: t('GitHub login failed. Check your network and Copilot access, then retry.'),
 }[login.value.state]))
 
 function changeProvider() {
@@ -131,7 +132,7 @@ function changeProvider() {
 async function saveProvider() {
   const name = provider.value === 'custom' ? customProvider.value.trim() : provider.value
   if (props.mode === 'add' && props.excludedProviders.includes(name)) {
-    message.value = 'This provider is already configured. Use its card above to update it, or choose a different name.'
+    message.value = t('This provider is already configured. Use its card above to update it, or choose a different name.')
     return
   }
   saving.value = true
@@ -146,10 +147,10 @@ async function saveProvider() {
     apiKey.value = ''
     if (result.ready) emit('configured')
     else {
-      message.value = `Configuration was not saved. ${readinessMessages[result.reason ?? ''] ?? 'Check credentials and connectivity, then retry.'}`
+      message.value = t('Configuration was not saved. {value1}', { value1: readinessMessages[result.reason ?? ''] ?? t('Check credentials and connectivity, then retry.') })
     }
   } catch (error) {
-    message.value = error instanceof Error ? error.message : 'Could not save the provider. Please retry.'
+    message.value = error instanceof Error ? error.message : t('Could not save the provider. Please retry.')
   } finally {
     saving.value = false
     apiKey.value = ''
@@ -162,17 +163,17 @@ async function copyCode() {
   try {
     await navigator.clipboard.writeText(login.value.login?.userCode ?? '')
     copied.value = true
-  } catch { message.value = 'Clipboard is unavailable. Select and copy the displayed device code manually.' }
+  } catch { message.value = t('Clipboard is unavailable. Select and copy the displayed device code manually.') }
 }
 async function openGitHub() {
   try {
     if (window.shadowDesktop) {
-      if (!window.shadowDesktop.openCopilotLogin) throw new Error('Restart Desktop to enable secure login links.')
+      if (!window.shadowDesktop.openCopilotLogin) throw new Error(t('Restart Desktop to enable secure login links.'))
       await window.shadowDesktop.openCopilotLogin()
     } else {
       window.open(COPILOT_VERIFICATION_URL, '_blank', 'noopener,noreferrer')
     }
-  } catch { message.value = 'Could not open the browser. Open https://github.com/login/device manually.' }
+  } catch { message.value = t('Could not open the browser. Open https://github.com/login/device manually.') }
 }
 const leave = () => { void controller.cancel() }
 watch(() => props.active, active => { if (!active) leave() })

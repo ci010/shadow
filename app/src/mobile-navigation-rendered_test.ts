@@ -27,7 +27,8 @@ test('real App mobile navigation, conversation headers, drafts, sheets and touch
   const names = new Map([['web:chat-one', 'First investigation'], ['web:chat-two', 'Second investigation']])
   const history = [{ role: 'user', content: 'Investigate the mobile layout.' }, { role: 'assistant', content: 'Synthetic reply: ready to continue. ' + 'Long replies should use the available phone width without reserving desktop navigation gutters. '.repeat(8) }]
   const server = await createServer({
-    configFile: false, root: resolve(root, 'app'), logLevel: 'error',
+    configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
+    optimizeDeps: { include: ['vue', 'vue-router', 'vue-i18n'], entries: [] },
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
       name: 'synthetic-mobile-navigation',
       resolveId: id => id === '/mobile-fixture.ts' ? '\0mobile-fixture' : undefined,

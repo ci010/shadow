@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { shallowReactive, readonly } from 'vue'
 import { apiUrl } from './api-url.ts'
 import { fetchAutomations, type AutomationSummary } from './automations.ts'
@@ -31,7 +32,7 @@ export function createAutomationCatalog(
       },
       apply: jobs => { state.jobs = jobs; state.error = ''; state.loaded = true; state.loading = false },
       onError: cause => {
-        state.error = cause instanceof Error ? cause.message : 'Automations are unavailable. Retry.'
+        state.error = cause instanceof Error ? cause.message : t('Automations are unavailable. Retry.')
         state.loading = false
       },
     })
@@ -61,7 +62,7 @@ export function createAutomationCatalog(
 
   return {
     acquire(base: string) {
-      if (disposed) throw new Error('Automation catalog has been disposed.')
+      if (disposed) throw new Error(t('Automation catalog has been disposed.'))
       const key = apiUrl(base, '/').toString()
       let entry = entries.get(key)
       if (!entry) { entry = createEntry(key); entries.set(key, entry) }

@@ -1,12 +1,13 @@
+import { t } from './i18n.ts'
 import type { LearningPipelineStatus, LearningStatus } from '../../src/agent/learning/service.ts'
 import { projectJson } from './projects.ts'
 import { isRecord } from './folders-sidebar.ts'
 
 export type { LearningPipelineStatus, LearningStatus }
 export const learningPipelines = [
-  { id: 'reflector', label: 'Self-reflection' },
-  { id: 'encapsulator', label: 'Skill encapsulation' },
-  { id: 'soulReflector', label: 'Identity reflection' },
+  { id: 'reflector', get label() { return t('Self-reflection') } },
+  { id: 'encapsulator', get label() { return t('Skill encapsulation') } },
+  { id: 'soulReflector', get label() { return t('Identity reflection') } },
 ] as const
 
 function parsePipeline(value: unknown): LearningPipelineStatus {
@@ -14,14 +15,14 @@ function parsePipeline(value: unknown): LearningPipelineStatus {
     || value.intervalMs < 1 || value.intervalMs > 2_147_483_647
     || typeof value.pending !== 'boolean' || typeof value.dispatching !== 'boolean'
     || (value.lastError !== undefined && typeof value.lastError !== 'string')) {
-    throw new Error('Main returned invalid learning pipeline status. Refresh to retry.')
+    throw new Error(t('Main returned invalid learning pipeline status. Refresh to retry.'))
   }
   const timestamps: Partial<Pick<LearningPipelineStatus, 'lastStartedAt' | 'lastCheckedAt' | 'lastDispatchedAt'>> = {}
   for (const key of ['lastStartedAt', 'lastCheckedAt', 'lastDispatchedAt'] as const) {
     const timestamp = value[key]
     if (timestamp === undefined) continue
     if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))) {
-      throw new Error('Main returned an invalid learning timestamp. Refresh to retry.')
+      throw new Error(t('Main returned an invalid learning timestamp. Refresh to retry.'))
     }
     timestamps[key] = timestamp
   }
@@ -34,7 +35,7 @@ function parsePipeline(value: unknown): LearningPipelineStatus {
 export function parseLearningStatus(value: unknown, projectId: string): LearningStatus {
   if (!isRecord(value) || value.projectId !== projectId || typeof value.enabled !== 'boolean'
     || typeof value.stopped !== 'boolean' || !isRecord(value.pipelines)) {
-    throw new Error('Main returned invalid learning ownership or status. Refresh before retrying.')
+    throw new Error(t('Main returned invalid learning ownership or status. Refresh before retrying.'))
   }
   return {
     projectId, enabled: value.enabled, stopped: value.stopped,
@@ -47,11 +48,11 @@ export function parseLearningStatus(value: unknown, projectId: string): Learning
 }
 
 export function learningPipelineState(status: LearningStatus, pipeline: LearningPipelineStatus): string {
-  if (pipeline.dispatching) return status.enabled && !status.stopped ? 'Checking' : 'Stopping check'
-  if (status.stopped) return 'Stopped'
-  if (!status.enabled) return 'Paused'
-  if (pipeline.lastError) return pipeline.pending ? 'Retry pending' : 'Last check failed'
-  return pipeline.pending ? 'Waiting for next check' : 'Waiting for activity'
+  if (pipeline.dispatching) return status.enabled && !status.stopped ? t('Checking') : t('Stopping check')
+  if (status.stopped) return t('Stopped')
+  if (!status.enabled) return t('Paused')
+  if (pipeline.lastError) return pipeline.pending ? t('Retry pending') : t('Last check failed')
+  return pipeline.pending ? t('Waiting for next check') : t('Waiting for activity')
 }
 
 export async function fetchLearningStatus(base: string, projectId: string, signal: AbortSignal, request: typeof fetch = fetch): Promise<LearningStatus> {

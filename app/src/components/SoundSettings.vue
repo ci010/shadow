@@ -1,37 +1,38 @@
 <template>
   <section v-if="sounds" class="sound-settings" aria-labelledby="sound-settings-title">
-    <h2 id="sound-settings-title">Notification sounds</h2>
-    <p class="sound-help">Short cues for conversations across Projects, even when you are on another page. Saved on this device only.</p>
-    <label class="sound-toggle"><input type="checkbox" :checked="preferences.enabled" @change="setEnabled">Enable notification sounds</label>
+    <h2 id="sound-settings-title">{{ t('Notification sounds') }}</h2>
+    <p class="sound-help">{{ t('Short cues for conversations across Projects, even when you are on another page. Saved on this device only.') }}</p>
+    <label class="sound-toggle"><input type="checkbox" :checked="preferences.enabled" @change="setEnabled">{{ t('Enable notification sounds') }}</label>
     <fieldset :disabled="!preferences.enabled">
       <div v-for="item in events" :key="item.kind" class="sound-event">
         <label class="sound-toggle">
           <input type="checkbox" :checked="preferences[item.kind]" @change="sounds.setPreferences({ [item.kind]: !preferences[item.kind] })">
           <span>{{ item.label }}<small>{{ item.description }}</small></span>
         </label>
-        <button type="button" class="btn" :aria-label="`Preview ${item.label.toLowerCase()} sound`" @click="sounds.preview(item.kind)">
-          <span class="i-lucide-volume-2" aria-hidden="true" />Preview
+        <button type="button" class="btn" :aria-label="t('Preview {value1} sound', { value1: item.label.toLowerCase() })" @click="sounds.preview(item.kind)">
+          <span class="i-lucide-volume-2" aria-hidden="true" />{{ t('Preview') }}
         </button>
       </div>
-      <label class="sound-volume" :for="volumeId">Volume <output :for="volumeId">{{ Math.round(preferences.volume * 100) }}%</output>
+      <label class="sound-volume" :for="volumeId">{{ t('Volume') }} <output :for="volumeId">{{ Math.round(preferences.volume * 100) }}%</output>
         <input :id="volumeId" type="range" min="0" max="100" step="5" :value="preferences.volume * 100" @input="setVolume">
       </label>
     </fieldset>
     <p v-if="sounds.error.value" class="sound-error" role="alert">{{ sounds.error.value }}</p>
-    <p v-else-if="preferences.enabled && !sounds.ready.value" class="sound-help" role="status">Use Preview to enable audio in this window. Browser and device mute settings still apply.</p>
-    <p class="sound-help">No sounds on initial load or reconnect. Temporary tasks and calls are excluded, and simultaneous notifications are grouped. The app must remain open; closed or suspended browsers cannot play sounds.</p>
+    <p v-else-if="preferences.enabled && !sounds.ready.value" class="sound-help" role="status">{{ t('Use Preview to enable audio in this window. Browser and device mute settings still apply.') }}</p>
+    <p class="sound-help">{{ t('No sounds on initial load or reconnect. Temporary tasks and calls are excluded, and simultaneous notifications are grouped. The app must remain open; closed or suspended browsers cannot play sounds.') }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, useId } from 'vue'
 import { useNotificationSounds, type NotificationSound } from '../notification-sounds.ts'
 const sounds = useNotificationSounds()
 const volumeId = `sound-volume-${useId()}`
 const preferences = computed(() => sounds?.preferences.value ?? { enabled: false, yield: false, idle: false, volume: 0 })
 const events: { kind: NotificationSound; label: string; description: string }[] = [
-  { kind: 'yield', label: 'Needs your answer', description: 'A conversation asks you a question.' },
-  { kind: 'idle', label: 'Session idle', description: 'A working conversation returns to idle.' },
+  { kind: 'yield', get label() { return t('Needs your answer') }, get description() { return t('A conversation asks you a question.') } },
+  { kind: 'idle', get label() { return t('Session idle') }, get description() { return t('A working conversation returns to idle.') } },
 ]
 function setEnabled() {
   sounds?.setPreferences({ enabled: !preferences.value.enabled })

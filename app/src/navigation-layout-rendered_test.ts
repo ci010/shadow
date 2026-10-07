@@ -49,6 +49,7 @@ test('Knowledge and conversation controls preserve layout, navigation and global
         return `import 'uno.css'; import '/src/styles.css';
           import '/composer-style.css';
           import { createApp, computed, h, ref, reactive, toRefs, nextTick } from 'vue';
+          import { i18n, t } from '/src/i18n.ts';
           import Knowledge from '/src/components/KnowledgeView.vue';
           import KnowledgeGraph from '/src/components/KnowledgeGraph.vue';
           import Rail from '/src/components/MessageHistoryRail.vue';
@@ -60,7 +61,7 @@ test('Knowledge and conversation controls preserve layout, navigation and global
           const state = reactive({ requestBusy:false, currentRequest:{state:{stopping:false}},
             installation:{uiScopes:['chat:write']}, canSend:true, submissionBusy:false, sent:0, stopped:0 });
           Object.assign(window, { __composerFixture:state });
-          const ComposerActions = { render, setup:() => ({ ...toRefs(state),
+          const ComposerActions = { render, setup:() => ({ ...toRefs(state), t,
             sendMessage:() => state.sent++, stopCurrentRequest:() => state.stopped++ }) };
           const catalogEntries = ['memory', 'wiki', 'skill'].map(kind => ({
             id:kind, path:kind + '.md', title:kind, kind, source:'project', deletable:true, revision:'r1',
@@ -111,7 +112,7 @@ test('Knowledge and conversation controls preserve layout, navigation and global
                     h(Rail, { entries:entries.value, container:container.value, list:list.value, onNavigate:browseHistory }),
                   ]),
             ]);
-          } }).mount('#app');`
+          } }).use(i18n).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use((request, response, next) => {

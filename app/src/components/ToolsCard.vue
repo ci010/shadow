@@ -8,7 +8,7 @@
     >
       <div class="text-xs text-ink/50 font-600 uppercase tracking-widest flex items-center gap-2">
         <span v-if="collapsible" class="card-chevron" v-html="collapsed ? '&#9654;' : '&#9660;'" />
-        Tools ({{ tools.length }})
+        {{ t('Tools (') }}{{ tools.length }})
       </div>
       <button
         v-if="tools.length"
@@ -18,13 +18,13 @@
         @click.stop="copy"
       >
         <span class="w-3 h-3" :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />
-        {{ copied ? 'Copied!' : 'Copy JSON' }}
+        {{ copied ? t('Copied!') : t('Copy JSON') }}
       </button>
     </div>
     <p v-if="copyError && !embedded" class="copy-error" role="alert">{{ copyError }}</p>
     <template v-if="!collapsible || !collapsed">
       <div v-if="!tools.length" class="tools-empty flex-1 flex items-center justify-center text-ink/40 text-sm px-4 py-3">
-        {{ emptyMessage || 'No tools available.' }}
+        {{ emptyMessage || t('No tools available.') }}
       </div>
       <div v-else :class="embedded ? 'tools-content' : 'flex-1 overflow-y-auto px-4 py-3 min-h-0'">
         <div class="tools-list">
@@ -54,6 +54,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { useTextCopy } from '../composables/useTextCopy.ts'
 
 export interface ToolDef {
@@ -72,7 +73,7 @@ const props = withDefaults(defineProps<{
   collapsible?: boolean
   embedded?: boolean
 }>(), {
-  emptyMessage: 'No tools available.',
+  emptyMessage: '',
   maxHeight: '',
   collapsible: false,
 })

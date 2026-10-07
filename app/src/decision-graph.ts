@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { parseDecisionRecords } from './yield-history.ts'
 import { parseYieldReference, type YieldDecisionRecord, type YieldReference } from '../../src/sessions/yield-contract.ts'
@@ -31,17 +32,17 @@ export function decisionReader(apiBase: string, signal: AbortSignal, fetcher: ty
         const url = apiUrl(apiBase, `/api/sessions/${encodeURIComponent(reference.sessionId)}/decisions`,
           { physicalId: reference.physicalId })
         const response = await fetcher(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) })
-        if (!response.ok) throw new Error(response.status === 404 ? 'Source record is unavailable.' : 'Could not load decision history.')
+        if (!response.ok) throw new Error(response.status === 404 ? t('Source record is unavailable.') : t('Could not load decision history.'))
         const records = parseDecisionRecords((await response.json()).records)
         if (records.some(record => record.request.sessionId !== reference.sessionId || record.request.origin?.physicalId !== reference.physicalId)) {
-          throw new Error('Decision history does not match the requested session segment.')
+          throw new Error(t('Decision history does not match the requested session segment.'))
         }
         return records
       })()
       segments.set(key, loading)
     }
     const record = (await loading).find(record => record.request.id === reference.requestId)
-    if (!record) throw new Error('The source record does not match this reference.')
+    if (!record) throw new Error(t('The source record does not match this reference.'))
     return record
   }
 }
@@ -60,7 +61,7 @@ export async function loadDecisionGraph(reference: YieldReference, read: ReturnT
       try { node.record = await read(node.reference); signal.throwIfAborted() }
       catch (error) {
         signal.throwIfAborted()
-        node.error = error instanceof Error ? error.message : 'Decision history could not be read.'
+        node.error = error instanceof Error ? error.message : t('Decision history could not be read.')
       }
     }))
     for (const node of batch) {

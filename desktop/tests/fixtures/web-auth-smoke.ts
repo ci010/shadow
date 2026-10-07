@@ -39,6 +39,12 @@ async function main() {
   try {
     await window.loadURL(origin + route)
     await wait(`!!document.querySelector('#pairing-code')`)
+    await execute(`(() => {
+      const language = document.querySelector('.language-selector select');
+      language.value = 'en';
+      language.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`)
+    await wait(`document.documentElement.lang === 'en'`)
     assert.equal(await execute(`document.querySelectorAll('.app-shell, #protected-route').length`), 0)
     assert.equal(await execute('location.pathname + location.search + location.hash'), route)
     await checkBrowserChrome()

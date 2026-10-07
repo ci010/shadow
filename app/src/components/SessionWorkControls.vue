@@ -1,12 +1,12 @@
 <template>
-  <section v-show="backgroundStatus.total || backgroundStatus.error || subagents?.length || expanded" ref="root" class="session-work-controls" aria-label="Session controls" @keydown.esc="closePanel">
+  <section v-show="backgroundStatus.total || backgroundStatus.error || subagents?.length || expanded" ref="root" class="session-work-controls" :aria-label="t('Session controls')" @keydown.esc="closePanel">
     <div class="session-work-triggers">
       <button v-if="backgroundStatus.total || backgroundStatus.error || expanded === 'background'" :id="`${id}-background`" ref="backgroundTrigger"
         type="button" data-session-work="background" :aria-expanded="expanded === 'background'" :aria-controls="`${id}-panel`"
         aria-haspopup="dialog" @click="toggle('background')">
         <span class="i-lucide-terminal work-icon" aria-hidden="true" />
-        <span>Background tasks</span>
-        <span v-if="backgroundStatus.error" class="session-work-attention" aria-label="Status unavailable">!</span>
+        <span>{{ t('Background tasks') }}</span>
+        <span v-if="backgroundStatus.error" class="session-work-attention" :aria-label="t('Status unavailable')">!</span>
         <span v-else>{{ backgroundStatus.total }}</span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
       </button>
@@ -14,7 +14,7 @@
         type="button" data-session-work="subagents" :aria-expanded="expanded === 'subagents'" :aria-controls="`${id}-panel`"
         aria-haspopup="dialog" :title="subagentActivityLabel(subagentStatus)" @click="toggle('subagents')">
         <span class="i-lucide-git-branch work-icon" aria-hidden="true" />
-        <span>Subagents</span><span>{{ subagents?.length ?? 0 }}</span>
+        <span>{{ t('Subagents') }}</span><span>{{ subagents?.length ?? 0 }}</span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 9 3-3 3 3" /></svg>
       </button>
     </div>
@@ -24,12 +24,12 @@
         <div v-show="expanded === 'background'">
           <BackgroundTasks :api-base="apiBase" :session-id="sessionId" :active="active !== false" embedded @status="backgroundStatus = $event" />
         </div>
-        <div v-show="expanded === 'subagents'" class="subagent-list" aria-label="Active subagents">
-          <p v-if="!subagents?.length">No subagents active.</p>
+        <div v-show="expanded === 'subagents'" class="subagent-list" :aria-label="t('Active subagents')">
+          <p v-if="!subagents?.length">{{ t('No subagents active.') }}</p>
           <button v-for="agent in subagents" :key="agent.sessionId" type="button" class="subagent-inspect"
-            :data-subagent-id="agent.sessionId" :aria-label="`Inspect subagent: ${agent.label}`" @click="inspect(agent.sessionId)">
+            :data-subagent-id="agent.sessionId" :aria-label="t('Inspect subagent: {label}', { label: agent.label })" @click="inspect(agent.sessionId)">
             <span class="i-lucide-git-branch work-icon" aria-hidden="true" />
-            <span class="subagent-copy"><strong>{{ agent.label }}</strong><span>{{ agent.mode === 'call' ? 'Blocking call' : 'Background task' }}<template v-if="agent.agentType"> · {{ agent.agentType }}</template></span></span>
+            <span class="subagent-copy"><strong>{{ agent.label }}</strong><span>{{ agent.mode === 'call' ? t('Blocking call') : t('Background task') }}<template v-if="agent.agentType"> · {{ agent.agentType }}</template></span></span>
             <SessionActivity :stage="executionDisplayStage(agent, stages?.[agent.sessionId])" />
           </button>
         </div>
@@ -39,6 +39,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, ref, useId, watch } from 'vue'
 import BackgroundTasks from './BackgroundTasks.vue'
 import SessionActivity from './SessionActivity.vue'

@@ -1,54 +1,54 @@
 <template>
   <section ref="rootElement" class="project-workbench" :class="{ compact: !wide, 'has-panel': !!panel }"
-    :style="{ '--coordination-panel-width': `${panelWidth}px` }" aria-label="Project workbench">
+    :style="{ '--coordination-panel-width': `${panelWidth}px` }" :aria-label="t('Project workbench')">
     <header class="workbench-heading">
-      <div><h1>{{ projectName }}</h1><p>Work, assignments and decisions</p></div>
-      <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? 'Back to work' : 'Apps' }}</button>
+      <div><h1>{{ projectName }}</h1><p>{{ t('Work, assignments and decisions') }}</p></div>
+      <button type="button" :aria-pressed="appsVisible" @click="toggleApps">{{ appsVisible ? t('Back to work') : t('Apps') }}</button>
       <button type="button" :aria-expanded="!appsVisible && panel === 'github'" @click="appsVisible = false; panel = panel === 'github' ? '' : 'github'">GitHub</button>
     </header>
     <ProjectMicroApps v-if="appsVisible" :api-base="apiBase" :active="visible" :can-write="canWrite" @compose="discussApp" />
     <div v-show="!appsVisible" class="workbench-body">
       <main v-show="wide || !panel" class="workbench-main">
         <div class="workbench-toolbar">
-          <div class="work-view-switch" role="group" aria-label="Work view">
-            <button type="button" :aria-pressed="view === 'board'" @click="view = 'board'">Board</button>
-            <button type="button" :aria-pressed="view === 'graph'" @click="view = 'graph'">Graph</button>
+          <div class="work-view-switch" role="group" :aria-label="t('Work view')">
+            <button type="button" :aria-pressed="view === 'board'" @click="view = 'board'">{{ t('Board') }}</button>
+            <button type="button" :aria-pressed="view === 'graph'" @click="view = 'graph'">{{ t('Graph') }}</button>
           </div>
-          <span class="work-count">{{ filtered.length }} of {{ data?.items.length ?? 0 }} items</span>
-          <button type="button" :disabled="loading" @click="refresh">{{ loading ? 'Refreshing…' : 'Refresh' }}</button>
-          <button v-if="canWrite" type="button" class="new-work" @click="newWork">New work</button>
+          <span class="work-count">{{ filtered.length }} {{ t('of') }} {{ data?.items.length ?? 0 }} {{ t('items') }}</span>
+          <button type="button" :disabled="loading" @click="refresh">{{ loading ? t('Refreshing…') : t('Refresh') }}</button>
+          <button v-if="canWrite" type="button" class="new-work" @click="newWork">{{ t('New work') }}</button>
         </div>
-        <form class="work-filters" aria-label="Filter work" @submit.prevent>
-          <label class="work-search">Search<input v-model="filter.query" type="search" placeholder="Find work…" /></label>
-          <label>Initiative<select v-model="filter.root"><option value="">All work</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></select></label>
-          <label>Assigned to<select v-model="filter.assignee"><option value="">Any session</option><option value="unassigned">Unassigned</option>
+        <form class="work-filters" :aria-label="t('Filter work')" @submit.prevent>
+          <label class="work-search">{{ t('Search') }}<input v-model="filter.query" type="search" :placeholder="t('Find work…')" /></label>
+          <label>{{ t('Initiative') }}<select v-model="filter.root"><option value="">{{ t('All work') }}</option><option v-for="item in initiatives" :key="item.key" :value="item.key">{{ item.title }}</option></select></label>
+          <label>{{ t('Assigned to') }}<select v-model="filter.assignee"><option value="">{{ t('Any session') }}</option><option value="unassigned">{{ t('Unassigned') }}</option>
             <option v-for="session in assignedSessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
           </select></label>
-          <label class="completed-filter"><input v-model="filter.terminal" type="checkbox" />Include completed</label>
+          <label class="completed-filter"><input v-model="filter.terminal" type="checkbox" />{{ t('Include completed') }}</label>
         </form>
-        <p v-if="error" class="workbench-error" role="alert">{{ error }} Showing the last loaded state, if available. <button @click="refresh">Retry</button></p>
-        <div v-if="!data && loading" class="workbench-empty" role="status">Loading Project work…</div>
+        <p v-if="error" class="workbench-error" role="alert">{{ error }} {{ t('Showing the last loaded state, if available.') }} <button @click="refresh">{{ t('Retry') }}</button></p>
+        <div v-if="!data && loading" class="workbench-empty" role="status">{{ t('Loading Project work…') }}</div>
         <template v-if="data">
           <details v-if="data.requests.length || reviews.length || unknownEffects.length" class="work-attention" open>
-            <summary>Needs your attention</summary>
+            <summary>{{ t('Needs your attention') }}</summary>
             <button v-for="request in data.requests" :key="request.id" type="button" @click="openSession(request.sessionId)">
-              <span>{{ request.kind === 'decision' ? 'Decision' : 'Question' }} · {{ sessionTitle(request.sessionId) }}</span>
-              <strong>{{ request.question }}</strong><span>Open request →</span>
+              <span>{{ request.kind === 'decision' ? t('Decision') : t('Question') }} · {{ sessionTitle(request.sessionId) }}</span>
+              <strong>{{ request.question }}</strong><span>{{ t('Open request →') }}</span>
             </button>
             <button v-for="item in reviews" :key="item.key" type="button" @click="selectWork(item.key)">
-              <span>{{ item.proposals ? 'Proposed change' : 'Clarification' }}</span><strong>{{ item.title }}</strong><span>Review →</span>
+              <span>{{ item.proposals ? t('Proposed change') : t('Clarification') }}</span><strong>{{ item.title }}</strong><span>{{ t('Review →') }}</span>
             </button>
             <button v-for="effect in unknownEffects" :key="effect.id" type="button" @click="effect.workKeys[0] ? selectWork(effect.workKeys[0]) : openSession(effect.sessionId)">
-              <span>Outcome unknown</span><strong>{{ effect.tool }} · {{ sessionTitle(effect.sessionId) }}</strong><span>Reconcile →</span>
+              <span>{{ t('Outcome unknown') }}</span><strong>{{ effect.tool }} · {{ sessionTitle(effect.sessionId) }}</strong><span>{{ t('Reconcile →') }}</span>
             </button>
           </details>
           <div v-if="!data.items.length" class="workbench-empty">
             <span class="i-lucide-workflow empty-work-icon" aria-hidden="true" />
-            <h2>No work items yet</h2><p>Conversations can stay conversations. Ask the coordinator to organize work when there is an outcome to track.</p>
-            <button @click="canWrite ? newWork() : emit('coordinator')">{{ canWrite ? 'Talk to coordinator' : 'View coordinator conversation' }}</button>
+            <h2>{{ t('No work items yet') }}</h2><p>{{ t('Conversations can stay conversations. Ask the coordinator to organize work when there is an outcome to track.') }}</p>
+            <button @click="canWrite ? newWork() : emit('coordinator')">{{ canWrite ? t('Talk to coordinator') : t('View coordinator conversation') }}</button>
           </div>
-          <div v-else-if="!filtered.length" class="workbench-empty"><h2>No matching work</h2><p>Try another Initiative, session or search.</p><button @click="clearFilters">Clear filters</button></div>
-          <div v-else-if="view === 'board'" class="work-board" tabindex="0" aria-label="Work board">
+          <div v-else-if="!filtered.length" class="workbench-empty"><h2>{{ t('No matching work') }}</h2><p>{{ t('Try another Initiative, session or search.') }}</p><button @click="clearFilters">{{ t('Clear filters') }}</button></div>
+          <div v-else-if="view === 'board'" class="work-board" tabindex="0" :aria-label="t('Work board')">
             <section v-for="group in groups" :key="group.key" class="initiative-group" :aria-label="group.title">
               <h2><span v-if="group.initiative" class="i-lucide-layers" aria-hidden="true" />{{ group.title }}<span>{{ group.items.length }}</span></h2>
               <div class="work-columns" :style="{ '--work-columns': columns.length }">
@@ -57,7 +57,7 @@
                   <WorkItemCard v-for="item in group.items.filter(item => item.status === column.status)" :key="item.key"
                     :item="item" :selected="selected === item.key" :session-title="sessionTitle(item.assignee)"
                     :session-exists="sessionExists(item.assignee)" @select="selectWork" @session="openSession" />
-                  <p v-if="!group.items.some(item => item.status === column.status)" class="column-empty">No items</p>
+                  <p v-if="!group.items.some(item => item.status === column.status)" class="column-empty">{{ t('No items') }}</p>
                 </section>
               </div>
             </section>
@@ -65,14 +65,14 @@
           <WorkGraph v-else :items="filtered" :selected="selected" :sessions="data.sessions" @select="selectWork" @session="openSession" />
         </template>
       </main>
-      <aside v-show="panel" :id="panelId" class="coordination-panel" :aria-label="panel === 'github' ? 'GitHub integration' : 'Work details'">
+      <aside v-show="panel" :id="panelId" class="coordination-panel" :aria-label="panel === 'github' ? t('GitHub integration') : t('Work details')">
         <SidebarResizer v-if="visible && wide && panel" edge="left" :model-value="panelWidth" :bounds="resizeBounds"
-          label="Resize coordination panel" :controls="panelId" @update:model-value="preferredPanelWidth = $event" />
+          :label="t('Resize coordination panel')" :controls="panelId" @update:model-value="preferredPanelWidth = $event" />
         <header class="coordination-panel-heading">
-          <h2 ref="panelHeading" tabindex="-1">{{ panel === 'github' ? 'GitHub' : 'Work details' }}</h2>
-          <button v-if="selected && panel !== 'work'" @click="panel = 'work'">Task</button>
-          <button v-if="panel === 'work' && canWrite" @click="discussSelected">Discuss</button>
-          <button type="button" aria-label="Close coordination panel" @click="closePanel"><span class="i-lucide-x" aria-hidden="true" /></button>
+          <h2 ref="panelHeading" tabindex="-1">{{ panel === 'github' ? 'GitHub' : t('Work details') }}</h2>
+          <button v-if="selected && panel !== 'work'" @click="panel = 'work'">{{ t('Task') }}</button>
+          <button v-if="panel === 'work' && canWrite" @click="discussSelected">{{ t('Discuss') }}</button>
+          <button type="button" :aria-label="t('Close coordination panel')" @click="closePanel"><span class="i-lucide-x" aria-hidden="true" /></button>
         </header>
         <div v-show="panel === 'github'" class="project-work-detail">
           <ProjectGitHub :api-base="apiBase" :project-id="projectId" :active="visible && panel === 'github'"
@@ -82,15 +82,15 @@
         <div v-show="panel === 'work'" class="project-work-detail">
           <template v-if="selected">
             <p v-if="selectedItem" class="work-key">{{ selectedItem.title }}</p>
-            <button v-if="selectedItem?.assignee && sessionExists(selectedItem.assignee)" class="open-executor" @click="openSession(selectedItem.assignee)">Open {{ sessionTitle(selectedItem.assignee) }} →</button>
-            <p v-if="selectedItem?.dependencies.length" class="detail-links">Depends on:
+            <button v-if="selectedItem?.assignee && sessionExists(selectedItem.assignee)" class="open-executor" @click="openSession(selectedItem.assignee)">{{ t('Open') }} {{ sessionTitle(selectedItem.assignee) }} →</button>
+            <p v-if="selectedItem?.dependencies.length" class="detail-links">{{ t('Depends on:') }}
               <button v-for="key in selectedItem.dependencies" :key="key" @click="selectWork(key)">{{ data?.items.find(item => item.key === key)?.title ?? key }}</button>
             </p>
             <WorkAlignment :key="selected" :api-base="apiBase" :session-id="coordinatorId" project :work-key="selected"
               embedded :expanded="visible && panel === 'work'" :can-write="canWrite" :revision="lease?.work.state.revision"
               :sessions="data?.sessions.filter(session => session.assignable)" @updated="refresh" @editing="editing = $event" />
             <details v-if="canWrite && selectedItem?.assignee && sessionExists(selectedItem.assignee)" class="reporting-settings">
-              <summary>Advanced reporting settings</summary>
+              <summary>{{ t('Advanced reporting settings') }}</summary>
               <DecisionOwner :api-base="apiBase" :session-id="selectedItem.assignee" />
             </details>
           </template>
@@ -100,6 +100,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, useId, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectLiveState } from '../composables/useProjectLiveState.ts'
@@ -158,11 +159,11 @@ const assignedSessions = computed(() => {
   if (!overview) return []
   const keys = new Set(overview.items.flatMap(item => item.assignee ? [item.assignee] : []))
   return [...keys].map(sessionId => ({ sessionId,
-    title: overview.sessions.find(session => session.sessionId === sessionId)?.title ?? `${sessionId} (unavailable)` }))
+    title: overview.sessions.find(session => session.sessionId === sessionId)?.title ?? t('{sessionId} (unavailable)', { sessionId: sessionId }) }))
 })
 const rootElement = ref<HTMLElement>(), panelHeading = ref<HTMLElement>()
 let observer: ResizeObserver | undefined
-const sessionTitle = (id: string | null) => data.value?.sessions.find(session => session.sessionId === id)?.title ?? id ?? 'Unassigned'
+const sessionTitle = (id: string | null) => data.value?.sessions.find(session => session.sessionId === id)?.title ?? id ?? t('Unassigned')
 const sessionExists = (id: string | null) => !!id && !!data.value?.sessions.some(session => session.sessionId === id)
 function refresh() { void lease.value?.work.refresh() }
 function clearFilters() { Object.assign(filter, { query: '', root: '', assignee: '', terminal: true }) }
@@ -204,7 +205,7 @@ watch(() => route.query.work, key => {
 }, { immediate: true })
 const removeGuard = router.beforeEach((to, from) => {
   if (!props.visible || !editing.value || to.fullPath === from.fullPath || to.query.work === selected.value) return true
-  return window.confirm('Leave this item with an unsaved work revision? Switching work items discards the revision.')
+  return window.confirm(t('Leave this item with an unsaved work revision? Switching work items discards the revision.'))
 })
 onMounted(() => {
   observer = new ResizeObserver(() => {

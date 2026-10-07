@@ -1,58 +1,60 @@
 <template>
-  <section v-if="enabled && (request || error || notice)" class="publication-request" aria-label="Agent publication approval">
+  <section v-if="enabled && (request || error || notice)" class="publication-request" :aria-label="t('Agent publication approval')">
     <template v-if="request">
-      <label v-if="requests.length > 1" class="publication-picker">Review ({{ requests.length }})
+      <label v-if="requests.length > 1" class="publication-picker">{{ t('Review (') }}{{ requests.length }})
         <select v-model="selectedId" :disabled="busy">
-          <option v-for="item in requests" :key="item.id" :value="item.id">{{ item.change?.title || 'Agent configuration' }} · {{ item.id }}</option>
+          <option v-for="item in requests" :key="item.id" :value="item.id">{{ item.change?.title || t('Agent configuration') }} · {{ item.id }}</option>
         </select>
       </label>
-      <h3>{{ request.change?.title || 'Publish agent configuration?' }}</h3>
-      <p>Publish these changes together for the affected conversations. Nothing is published until you approve.</p>
-      <p class="publication-summary">{{ request.files.length }} changed files · {{ request.impact ? `${request.impact.affectedBindings.length} affected conversations` : 'Review conversation changes below' }}</p>
-      <p>{{ request.impact ? (request.impact.permissionsChanged ? 'Permissions change — review access below.' : 'No permission changes.') : 'Permission impact is not summarized — review bindings below.' }}</p>
-      <p v-if="request.status === 'waiting'" role="status">Approved; waiting for active conversations to finish. No further approval is needed.</p>
-      <p v-if="request.status === 'error'" class="publication-error" role="alert">Publication failed. {{ request.error?.message }} Cancel this review and request a new one after correcting the problem.</p>
+      <h3>{{ request.change?.title || t('Publish agent configuration?') }}</h3>
+      <p>{{ t('Publish these changes together for the affected conversations. Nothing is published until you approve.') }}</p>
+      <p class="publication-summary">{{ request.files.length }} {{ t('changed files ·') }} {{ request.impact ? t('{length} affected conversations', { length: request.impact.affectedBindings.length }) : t('Review conversation changes below') }}</p>
+      <p>{{ request.impact ? (request.impact.permissionsChanged ? t('Permissions change — review access below.') : t('No permission changes.')) : t('Permission impact is not summarized — review bindings below.') }}</p>
+      <p v-if="request.status === 'waiting'" role="status">{{ t('Approved; waiting for active conversations to finish. No further approval is needed.') }}</p>
+      <p v-if="request.status === 'error'" class="publication-error" role="alert">{{ t('Publication failed.') }} {{ request.error?.message }} {{ t('Cancel this review and request a new one after correcting the problem.') }}</p>
       <div class="publication-review">
         <details v-if="request.impact?.affectedBindings.length">
-          <summary>Affected conversations ({{ request.impact.affectedBindings.length }})</summary>
+          <summary>{{ t('Affected conversations (') }}{{ request.impact.affectedBindings.length }})</summary>
           <ul><li v-for="binding in request.impact.affectedBindings" :key="binding">{{ binding }}</li></ul>
         </details>
         <details>
-          <summary>Checks for this revision ({{ checks.length }})</summary>
-          <p v-if="!checks.length">No checks are recorded for this exact revision.</p>
-          <ul v-else><li v-for="check in checks" :key="check.id">{{ checkLabel(check.kind) }} — {{ check.status }}</li></ul>
-          <p>Preview only assembles prompts. Tool tests and model scenarios use synthetic tools; a controlled probe contacts a service. These checks do not establish full business acceptance.</p>
+          <summary>{{ t('Checks for this revision (') }}{{ checks.length }})</summary>
+          <p v-if="!checks.length">{{ t('No checks are recorded for this exact revision.') }}</p>
+          <ul v-else><li v-for="check in checks" :key="check.id">{{ checkLabel(check.kind) }} — {{ enumLabel(check.status) }}</li></ul>
+          <p>{{ t('Preview only assembles prompts. Tool tests and model scenarios use synthetic tools; a controlled probe contacts a service. These checks do not establish full business acceptance.') }}</p>
         </details>
         <details>
-          <summary>Review conversations and permissions</summary>
-          <h4>Proposed bindings</h4>
+          <summary>{{ t('Review conversations and permissions') }}</summary>
+          <h4>{{ t('Proposed bindings') }}</h4>
           <pre>{{ JSON.stringify(request.bindings, null, 2) }}</pre>
-          <h4>Current bindings</h4>
+          <h4>{{ t('Current bindings') }}</h4>
           <pre>{{ JSON.stringify(request.previousBindings, null, 2) }}</pre>
         </details>
         <details v-for="file in request.files" :key="file.path">
-          <summary>{{ file.before === null ? 'Add' : file.after === null ? 'Remove' : 'Change' }} {{ file.path }}</summary>
-          <template v-if="file.after !== null"><h4>Proposed</h4><pre>{{ file.after }}</pre></template>
-          <template v-if="file.before !== null"><h4>Current</h4><pre>{{ file.before }}</pre></template>
+          <summary>{{ file.before === null ? t('Add') : file.after === null ? t('Remove') : t('Change') }} {{ file.path }}</summary>
+          <template v-if="file.after !== null"><h4>{{ t('Proposed') }}</h4><pre>{{ file.after }}</pre></template>
+          <template v-if="file.before !== null"><h4>{{ t('Current') }}</h4><pre>{{ file.before }}</pre></template>
         </details>
         <details>
-          <summary>Exact revisions</summary>
-          <p>{{ request.change ? 'Candidate' : 'Draft' }}: <code>{{ request.revision }}</code></p>
-          <p>Published base: <code>{{ request.baseRevision }}</code></p>
+          <summary>{{ t('Exact revisions') }}</summary>
+          <p>{{ request.change ? t('Candidate') : t('Draft') }}: <code>{{ request.revision }}</code></p>
+          <p>{{ t('Published base:') }} <code>{{ request.baseRevision }}</code></p>
         </details>
       </div>
       <div class="publication-actions">
-        <button type="button" :disabled="busy || needsReload" @click="cancel">{{ operation === 'cancelling' ? 'Cancelling…' : 'Cancel publication' }}</button>
-        <button type="button" class="publication-confirm" :disabled="busy || needsReload || !!request.status" @click="confirm">{{ operation === 'publishing' ? 'Publishing…' : request.status === 'waiting' ? 'Approval recorded' : 'Approve publication' }}</button>
+        <button type="button" :disabled="busy || needsReload" @click="cancel">{{ operation === 'cancelling' ? t('Cancelling…') : t('Cancel publication') }}</button>
+        <button type="button" class="publication-confirm" :disabled="busy || needsReload || !!request.status" @click="confirm">{{ operation === 'publishing' ? t('Publishing…') : request.status === 'waiting' ? t('Approval recorded') : t('Approve publication') }}</button>
       </div>
     </template>
     <p v-if="notice" class="publication-notice" role="status">{{ notice }}</p>
     <p v-if="error" class="publication-error" role="alert">{{ error }}</p>
-    <button v-if="error" type="button" :disabled="busy || loading" @click="reload">{{ loading ? 'Reloading…' : 'Reload review' }}</button>
+    <button v-if="error" type="button" :disabled="busy || loading" @click="reload">{{ loading ? t('Reloading…') : t('Reload review') }}</button>
   </section>
 </template>
 
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { usePublicationRequest } from '../publication-requests.ts'
 
@@ -65,12 +67,12 @@ const { request, requests, selectedId, error, notice, loading, operation, busy, 
   usePublicationRequest(() => ({ ...props, active: active.value }))
 const checks = computed(() => request.value?.checks?.filter(check => check.revision === request.value?.revision) ?? [])
 function checkLabel(kind: string) {
-  if (kind === 'preview') return 'Prompt preview (not a behavior evaluation)'
-  if (kind === 'validate') return 'Configuration validation'
-  if (kind === 'test') return 'Synthetic tool test (not a live integration test)'
-  if (kind === 'scenario') return 'Simulated agent scenario (not full acceptance)'
-  if (kind === 'synthetic' || kind === 'check') return 'Synthetic configuration check'
-  if (kind === 'probe') return 'Controlled connection probe (not full acceptance)'
+  if (kind === 'preview') return t('Prompt preview (not a behavior evaluation)')
+  if (kind === 'validate') return t('Configuration validation')
+  if (kind === 'test') return t('Synthetic tool test (not a live integration test)')
+  if (kind === 'scenario') return t('Simulated agent scenario (not full acceptance)')
+  if (kind === 'synthetic' || kind === 'check') return t('Synthetic configuration check')
+  if (kind === 'probe') return t('Controlled connection probe (not full acceptance)')
   return kind
 }
 function visibility() { documentVisible.value = document.visibilityState !== 'hidden' }

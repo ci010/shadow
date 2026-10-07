@@ -1,47 +1,47 @@
 <template>
   <div class="project-settings-view">
     <header class="settings-heading">
-      <h1>{{ project?.name ?? 'Project' }} settings</h1>
-      <p>Settings apply only to this project. Provider connections and Nodes are shared across the app.</p>
+      <h1>{{ project?.name ?? t('Project') }} {{ t('settings') }}</h1>
+      <p>{{ t('Settings apply only to this project. Provider connections and Nodes are shared across the app.') }}</p>
     </header>
     <div class="settings-layout">
-      <nav class="settings-navigation" aria-label="Project settings">
+      <nav class="settings-navigation" :aria-label="t('Project settings')">
         <RouterLink v-for="item in sections" :key="item.id" :to="{ name: 'project-settings', params: { projectId, section: item.id } }" :aria-current="section === item.id ? 'page' : undefined" :class="{ selected: section === item.id }">{{ item.label }}</RouterLink>
       </nav>
       <div class="settings-content">
-        <p v-if="loading" role="status">Loading project settings...</p>
-        <div v-if="error" class="settings-error" role="alert"><p>{{ error }}</p><button class="btn" :disabled="loading || saving" @click="load">Retry settings</button></div>
+        <p v-if="loading" role="status">{{ t('Loading project settings...') }}</p>
+        <div v-if="error" class="settings-error" role="alert"><p>{{ error }}</p><button class="btn" :disabled="loading || saving" @click="load">{{ t('Retry settings') }}</button></div>
         <p v-if="notice" class="settings-notice" role="status">{{ notice }}</p>
         <form v-show="section === 'general'" @submit.prevent="rename">
-          <h2>General</h2>
-          <label class="settings-field">Project name<input v-model="name" required maxlength="100" :disabled="saving || !project" /></label>
-          <label class="settings-field">Home<input :value="config?.agent.workspace ?? ''" readonly aria-describedby="home-description" /></label>
-          <p id="home-description" class="settings-help">This project's memory, skills, learning and scratch chats live here. Renaming does not move its Home.</p>
-          <button class="btn primary" :disabled="saving || !project || !name.trim()">{{ saving ? 'Saving...' : 'Save name' }}</button>
+          <h2>{{ t('General') }}</h2>
+          <label class="settings-field">{{ t('Project name') }}<input v-model="name" required maxlength="100" :disabled="saving || !project" /></label>
+          <label class="settings-field">{{ t('Home') }}<input :value="config?.agent.workspace ?? ''" readonly aria-describedby="home-description" /></label>
+          <p id="home-description" class="settings-help">{{ t('This project\'s memory, skills, learning and scratch chats live here. Renaming does not move its Home.') }}</p>
+          <button class="btn primary" :disabled="saving || !project || !name.trim()">{{ saving ? t('Saving...') : t('Save name') }}</button>
         </form>
         <section v-if="section === 'general' && project" class="project-danger">
-          <h2>Delete project</h2>
-          <p class="settings-help">{{ project.id === 'default' ? 'The Default project is required and cannot be deleted.' : 'Permanently delete this project and its Home data. Working folders and their files are kept.' }}</p>
-          <button v-if="available && project.id !== 'default'" type="button" class="btn delete-project" :disabled="saving" @click="deleting = true">Delete project</button>
+          <h2>{{ t('Delete project') }}</h2>
+          <p class="settings-help">{{ project.id === 'default' ? t('The Default project is required and cannot be deleted.') : t('Permanently delete this project and its Home data. Working folders and their files are kept.') }}</p>
+          <button v-if="available && project.id !== 'default'" type="button" class="btn delete-project" :disabled="saving" @click="deleting = true">{{ t('Delete project') }}</button>
         </section>
         <section v-if="config && modelsOpened" v-show="section === 'models'">
           <ModelDefaultsForm :api-base="apiBase" scope="project" :project-id="projectId" />
-          <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'providers' } }">Manage shared provider connections</RouterLink>
-          <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'models' } }">App model defaults</RouterLink>
+          <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('Manage shared provider connections') }}</RouterLink>
+          <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'models' } }">{{ t('App model defaults') }}</RouterLink>
         </section>
         <ChannelsView v-if="botsOpened" v-show="section === 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="section === 'bots' && route.name === 'project-settings' && route.params.projectId === projectId"
           :review-bot-id="typeof route.query.discordBot === 'string' ? route.query.discordBot : undefined"
           :requested-review-id="typeof route.query.discordReview === 'string' ? route.query.discordReview : undefined" />
         <form v-show="section === 'learning'" @submit.prevent="saveLearning">
-          <h2>Learning</h2>
-          <p class="settings-help">Reflection, skill encapsulation and identity learning use only this project's sessions and Home.</p>
-          <label v-if="typeof config?.learning?.enabled === 'boolean'" class="settings-checkbox"><input v-model="learningEnabled" type="checkbox" :disabled="saving || !config" />Enable automatic learning</label>
-          <label v-for="item in learningFields" :key="item.key" class="settings-field">{{ item.label }} interval (minutes)<input v-model.number="learningIntervals[item.key]" type="number" min="1" max="35791" step="1" required :disabled="saving || !config" /></label>
-          <button class="btn primary" :disabled="saving || !config">{{ saving ? 'Saving...' : 'Save learning settings' }}</button>
+          <h2>{{ t('Learning') }}</h2>
+          <p class="settings-help">{{ t('Reflection, skill encapsulation and identity learning use only this project\'s sessions and Home.') }}</p>
+          <label v-if="typeof config?.learning?.enabled === 'boolean'" class="settings-checkbox"><input v-model="learningEnabled" type="checkbox" :disabled="saving || !config" />{{ t('Enable automatic learning') }}</label>
+          <label v-for="item in learningFields" :key="item.key" class="settings-field">{{ item.label }} {{ t('interval (minutes)') }}<input v-model.number="learningIntervals[item.key]" type="number" min="1" max="35791" step="1" required :disabled="saving || !config" /></label>
+          <button class="btn primary" :disabled="saving || !config">{{ saving ? t('Saving...') : t('Save learning settings') }}</button>
           <LearningRuntimeStatus :api-base="apiBase" :project-id="projectId" :revision="learningRevision"
             :active="available && section === 'learning' && route.name === 'project-settings' && route.params.projectId === projectId" />
-          <RouterLink class="settings-related" :to="{ name: 'chat', params: { projectId } }">View Self-reflection conversations</RouterLink>
-          <RouterLink class="settings-related" :to="{ name: 'agents', params: { projectId } }">Project agents and instructions</RouterLink>
+          <RouterLink class="settings-related" :to="{ name: 'chat', params: { projectId } }">{{ t('View Self-reflection conversations') }}</RouterLink>
+          <RouterLink class="settings-related" :to="{ name: 'agents', params: { projectId } }">{{ t('Project agents and instructions') }}</RouterLink>
         </form>
       </div>
       <ProjectDeleteDialog v-if="deleting && project" :api-base="hostApiBase" :project="project" @close="deleting = false" @deleted="projectDeleted" />
@@ -50,6 +50,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import ChannelsView from './ChannelsView.vue'
@@ -65,7 +66,7 @@ defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
 const installation = useInstallationContext()
 const available = computed(() => installation.value.mode !== 'child' && installation.value.uiScopes.includes('main:admin'))
-const sections = [{ id: 'general', label: 'General' }, { id: 'models', label: 'Models' }, { id: 'bots', label: 'Bots' }, { id: 'learning', label: 'Learning' }]
+const sections = [{ id: 'general', get label() { return t('General') } }, { id: 'models', get label() { return t('Models') } }, { id: 'bots', get label() { return t('Bots') } }, { id: 'learning', get label() { return t('Learning') } }]
 const section = computed(() => typeof route.params.section === 'string' ? route.params.section : 'general')
 const botsOpened = ref(false)
 const modelsOpened = ref(false)
@@ -82,9 +83,9 @@ const notice = ref('')
 const learningEnabled = ref(true)
 const learningRevision = ref(0)
 const learningFields = [
-  { key: 'reflectIntervalMs', label: 'Self-reflection' },
-  { key: 'encapsulateIntervalMs', label: 'Skill encapsulation' },
-  { key: 'soulIntervalMs', label: 'Identity reflection' },
+  { key: 'reflectIntervalMs', get label() { return t('Self-reflection') } },
+  { key: 'encapsulateIntervalMs', get label() { return t('Skill encapsulation') } },
+  { key: 'soulIntervalMs', get label() { return t('Identity reflection') } },
 ] as const
 const learningIntervals = ref<Record<string, number>>({})
 let request: AbortController | undefined
@@ -100,7 +101,7 @@ function accept(value: ProjectConfig, section?: 'agent' | 'learning') {
   }
 }
 async function load() {
-  if (!available.value) { error.value = 'Project settings require a Main administrator.'; return }
+  if (!available.value) { error.value = t('Project settings require a Main administrator.'); return }
   request?.abort()
   const controller = new AbortController()
   request = controller
@@ -113,11 +114,11 @@ async function load() {
     ])
     if (controller.signal.aborted) return
     project.value = catalog.find(item => item.id === props.projectId)
-    if (!project.value) throw new Error('This project is unavailable. Return to conversations and refresh the catalog.')
+    if (!project.value) throw new Error(t('This project is unavailable. Return to conversations and refresh the catalog.'))
     name.value = project.value.name
     accept(next)
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load project settings. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load project settings. Retry.')
   } finally { if (request === controller) loading.value = false }
 }
 async function mutate(action: (signal: AbortSignal) => Promise<void>) {
@@ -127,7 +128,7 @@ async function mutate(action: (signal: AbortSignal) => Promise<void>) {
   saving.value = true
   error.value = notice.value = ''
   try { await action(controller.signal) }
-  catch (cause) { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not save settings. Retry.' }
+  catch (cause) { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not save settings. Retry.') }
   finally { if (mutation === controller) saving.value = false }
 }
 async function rename() {
@@ -135,7 +136,7 @@ async function rename() {
     const result = await createProjectsClient(props.hostApiBase).save(name.value, props.projectId, signal)
     if (signal.aborted) return
     project.value = result
-    notice.value = 'Project name saved.'
+    notice.value = t('Project name saved.')
     window.dispatchEvent(new CustomEvent('shadow:projects-changed'))
   })
 }
@@ -148,7 +149,7 @@ async function saveLearning() {
     const patch: Record<string, unknown> = {}
     for (const item of learningFields) {
       const minutes = learningIntervals.value[item.key]
-      if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes * 60_000 > 2_147_483_647) throw new Error('Learning intervals must be whole minutes from 1 to 35791.')
+      if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes * 60_000 > 2_147_483_647) throw new Error(t('Learning intervals must be whole minutes from 1 to 35791.'))
       patch[item.key] = minutes * 60_000
     }
     if (typeof config.value?.learning?.enabled === 'boolean') patch.enabled = learningEnabled.value
@@ -156,7 +157,7 @@ async function saveLearning() {
     if (signal.aborted) return
     accept(result, 'learning')
     learningRevision.value++
-    notice.value = 'Learning settings saved for this project.'
+    notice.value = t('Learning settings saved for this project.')
     window.dispatchEvent(new CustomEvent('shadow:config-changed', { detail: { projectId: props.projectId } }))
   })
 }

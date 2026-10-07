@@ -3,22 +3,22 @@
 		<section class="recovery-panel" aria-labelledby="recovery-title" :aria-busy="busy">
 			<img class="brand-mark" :src="shadowLogo" alt="" aria-hidden="true" draggable="false">
 			<div>
-				<h1 id="recovery-title">{{ runtimeName }} is not ready</h1>
-				<p class="message">{{ reason }} Your setup is still saved.</p>
+				<h1 id="recovery-title">{{ runtimeName }} {{ t('is not ready') }}</h1>
+				<p class="message">{{ reason }} {{ t('Your setup is still saved.') }}</p>
 				<p v-if="duration" class="message">{{ duration }}</p>
 			</div>
 			<p v-if="actionFailed" class="notice" role="alert">{{ actionFailed }}</p>
-			<p v-if="busy" class="status" role="status">{{ activeAction === 'retry' ? 'Starting the runtime again…' : activeAction === 'log' ? 'Locating the startup log…' : 'Resetting setup…' }}</p>
+			<p v-if="busy" class="status" role="status">{{ activeAction === 'retry' ? t('Starting the runtime again…') : activeAction === 'log' ? t('Locating the startup log…') : t('Resetting setup…') }}</p>
 			<div v-if="revealLog" class="diagnostics">
-				<p class="message">Startup logs contain timing and failure categories, not chat content or credentials.</p>
-				<button class="secondary-button" :disabled="busy" @click="invoke('log')">Show startup log</button>
+				<p class="message">{{ t('Startup logs contain timing and failure categories, not chat content or credentials.') }}</p>
+				<button class="secondary-button" :disabled="busy" @click="invoke('log')">{{ t('Show startup log') }}</button>
 			</div>
 			<div class="actions">
 				<button v-if="canReset" class="secondary-button" :disabled="busy" @click="resetSetup">
-					Reset setup
+					{{ t('Reset setup') }}
 				</button>
 				<button class="primary-button" :disabled="busy" @click="retry">
-					{{ busy && activeAction === 'retry' ? 'Trying again…' : 'Retry' }}
+					{{ busy && activeAction === 'retry' ? t('Trying again…') : t('Retry') }}
 				</button>
 			</div>
 		</section>
@@ -26,6 +26,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from './i18n.ts'
 import { computed, ref } from 'vue'
 import shadowLogo from './assets/shadow-logo.png'
 import { parseRuntimeFailure, runtimeRecoveryDuration, runtimeRecoveryMessage, type RuntimeFailure } from './runtime-recovery.ts'
@@ -42,7 +43,7 @@ const props = defineProps<{
 
 const runtimeName = computed(() => {
 	const role = parseRuntimeFailure(props.failure)?.role ?? props.role
-	return role === 'child' ? 'Child' : role === 'main' ? 'Main' : 'Runtime'
+	return role === 'child' ? t('Child') : role === 'main' ? t('Main') : t('Runtime')
 })
 const reason = computed(() => runtimeRecoveryMessage(props.failure, props.code))
 const duration = computed(() => runtimeRecoveryDuration(props.failure))
@@ -61,8 +62,8 @@ async function invoke(action: 'retry' | 'reset' | 'log'): Promise<void> {
 		else await props.reset?.()
 	} catch {
 		actionFailed.value = action === 'log'
-			? 'The startup log could not be shown. It may not have been saved. You can still retry startup.'
-			: action === 'reset' ? 'Setup could not be reset. Try again.' : 'Startup could not be retried. Try again.'
+			? t('The startup log could not be shown. It may not have been saved. You can still retry startup.')
+			: action === 'reset' ? t('Setup could not be reset. Try again.') : t('Startup could not be retried. Try again.')
 	} finally {
 		busy.value = false
 	}

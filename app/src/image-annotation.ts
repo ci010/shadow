@@ -1,15 +1,25 @@
+import { t } from './i18n.ts'
 export const MAX_ANNOTATION_BYTES = 20 * 1024 * 1024
 export const MAX_ANNOTATION_PIXELS = 20_000_000
 export const MAX_ANNOTATION_DIMENSION = 8192
 
+export class AnnotationLoadError extends Error {
+  override name = 'AnnotationLoadError'
+}
+
+export function annotationLoadErrorMessage(error: unknown): string {
+  return error instanceof AnnotationLoadError
+    ? error.message : t('This image could not be decoded safely. Retry or open the raw image.')
+}
+
 export function annotationSizeError(bytes: number, width?: number, height?: number): string | null {
-  if (bytes > MAX_ANNOTATION_BYTES) return 'This image exceeds the 20 MiB annotation limit. Open the raw image instead.'
+  if (bytes > MAX_ANNOTATION_BYTES) return t('This image exceeds the 20 MiB annotation limit. Open the raw image instead.')
   if (width === undefined || height === undefined) return null
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return 'This image has no readable dimensions. Open the raw image instead.'
+    return t('This image has no readable dimensions. Open the raw image instead.')
   }
   if (width > MAX_ANNOTATION_DIMENSION || height > MAX_ANNOTATION_DIMENSION || width * height > MAX_ANNOTATION_PIXELS) {
-    return 'This image exceeds the 20 megapixel or 8192 px per-side annotation limit. Open the raw image instead.'
+    return t('This image exceeds the 20 megapixel or 8192 px per-side annotation limit. Open the raw image instead.')
   }
   return null
 }

@@ -14,15 +14,15 @@
 			</div>
 
 			<div v-if="loadError" class="notice error-notice" role="alert">
-				<strong>Setup could not be loaded.</strong>
-				<span>Check the desktop connection, then try again.</span>
-				<button class="secondary-button" :disabled="busy" @click="emit('retry-load')">Retry</button>
+				<strong>{{ t('Setup could not be loaded.') }}</strong>
+				<span>{{ t('Check the desktop connection, then try again.') }}</span>
+				<button class="secondary-button" :disabled="busy" @click="emit('retry-load')">{{ t('Retry') }}</button>
 			</div>
 
 			<template v-else-if="state">
 				<div v-if="showRoleChoice" class="setup-content">
-					<p class="lead">Choose how this computer will participate.</p>
-					<div class="role-list" role="radiogroup" aria-label="Computer role">
+					<p class="lead">{{ t('Choose how this computer will participate.') }}</p>
+					<div class="role-list" role="radiogroup" :aria-label="t('Computer role')">
 						<button
 							class="role-option"
 							:class="{ selected: selectedRole === 'main' }"
@@ -34,7 +34,7 @@
 							<span class="role-icon" aria-hidden="true">
 								<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/><path d="M8 6.5h.01M8 17.5h.01"/></svg>
 							</span>
-							<span><strong>Main</strong><small>Runs the workspace and coordinates connected computers.</small></span>
+							<span><strong>{{ t('Main') }}</strong><small>{{ t('Runs the workspace and coordinates connected computers.') }}</small></span>
 						</button>
 						<button
 							class="role-option"
@@ -47,53 +47,53 @@
 							<span class="role-icon" aria-hidden="true">
 								<svg viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2"/><path d="M9 18h6"/></svg>
 							</span>
-							<span><strong>Child</strong><small>Runs remote tasks for an existing Main. You review execution access before pairing.</small></span>
+							<span><strong>{{ t('Child') }}</strong><small>{{ t('Runs remote tasks for an existing Main. You review execution access before pairing.') }}</small></span>
 						</button>
 					</div>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy || !selectedRole" @click="chooseRole">
-							{{ busy ? 'Saving…' : selectedRole === 'child' ? 'Continue as Child' : 'Continue as Main' }}
+							{{ busy ? t('Saving…') : selectedRole === 'child' ? t('Continue as Child') : t('Continue as Main') }}
 						</button>
 					</div>
 				</div>
 
 				<div v-else-if="state.mode === 'child'" class="setup-content">
-					<p class="lead">On Main, open Nodes and copy a pairing invitation. Paste it here, then approve this device on Main.</p>
+					<p class="lead">{{ t('On Main, open Nodes and copy a pairing invitation. Paste it here, then approve this device on Main.') }}</p>
 					<div v-if="childFingerprint" class="notice" role="status">
-						<strong>This device's fingerprint</strong><code class="pairing-fingerprint">{{ childFingerprint }}</code>
-						<span>If Main already shows this pending device, compare this fingerprint, approve it there, then retry here. Retrying keeps the same identity even if the first response was lost.</span>
+						<strong>{{ t('This device\'s fingerprint') }}</strong><code class="pairing-fingerprint">{{ childFingerprint }}</code>
+						<span>{{ t('If Main already shows this pending device, compare this fingerprint, approve it there, then retry here. Retrying keeps the same identity even if the first response was lost.') }}</span>
 					</div>
 					<form class="child-form" @submit.prevent="pairChild">
 						<template v-if="!manualPairing">
-							<label class="field-label" for="child-invitation">Pairing invitation</label>
-							<textarea id="child-invitation" v-model="invitationText" class="directory-input invitation-input" rows="3" placeholder="Paste the invitation copied from Main" required :disabled="busy" autocomplete="off" spellcheck="false" aria-describedby="child-invitation-help" :aria-invalid="!!invitationPreview.error"></textarea>
-							<p id="child-invitation-help" class="field-help" :role="invitationPreview.error ? 'alert' : undefined">{{ invitationPreview.error || (invitationPreview.endpoint ? `Main: ${invitationPreview.endpoint}` : 'One paste includes Main’s address and pairing details. Keep the invitation private.') }}</p>
+							<label class="field-label" for="child-invitation">{{ t('Pairing invitation') }}</label>
+							<textarea id="child-invitation" v-model="invitationText" class="directory-input invitation-input" rows="3" :placeholder="t('Paste the invitation copied from Main')" required :disabled="busy" autocomplete="off" spellcheck="false" aria-describedby="child-invitation-help" :aria-invalid="!!invitationPreview.error"></textarea>
+							<p id="child-invitation-help" class="field-help" :role="invitationPreview.error ? 'alert' : undefined">{{ invitationPreview.error || (invitationPreview.endpoint ? t('Main: {endpoint}', { endpoint: invitationPreview.endpoint }) : t('One paste includes Main’s address and pairing details. Keep the invitation private.')) }}</p>
 						</template>
 						<template v-else>
-							<label class="field-label" for="child-endpoint">Main device endpoint</label>
+							<label class="field-label" for="child-endpoint">{{ t('Main device endpoint') }}</label>
 							<input id="child-endpoint" v-model="child.endpoint" class="directory-input" type="url" placeholder="http://192.168.1.10:3124" required :disabled="busy" autocomplete="off">
 							<div class="child-fields">
-								<div><label class="field-label" for="child-offer">Offer ID</label><input id="child-offer" v-model="child.offerId" class="directory-input" required :disabled="busy" autocomplete="off"></div>
-								<div><label class="field-label" for="child-pin">Six-digit PIN</label><input id="child-pin" v-model="child.pin" class="directory-input" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required :disabled="busy" autocomplete="off"></div>
+								<div><label class="field-label" for="child-offer">{{ t('Offer ID') }}</label><input id="child-offer" v-model="child.offerId" class="directory-input" required :disabled="busy" autocomplete="off"></div>
+								<div><label class="field-label" for="child-pin">{{ t('Six-digit PIN') }}</label><input id="child-pin" v-model="child.pin" class="directory-input" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required :disabled="busy" autocomplete="off"></div>
 							</div>
 						</template>
-						<button type="button" class="secondary-button" :disabled="busy" @click="togglePairingMode">{{ manualPairing ? 'Paste invitation instead' : 'Enter details manually' }}</button>
-						<label class="consent-row"><input v-model="child.allowInsecureLocalTransport" type="checkbox" :disabled="busy"><span>Use HTTP on a trusted LAN/VPN for testing only. Traffic and the PIN are not encrypted. Never use this on the public internet; device authentication remains required.</span></label>
-						<label class="field-label" for="child-name">Device name</label>
+						<button type="button" class="secondary-button" :disabled="busy" @click="togglePairingMode">{{ manualPairing ? t('Paste invitation instead') : t('Enter details manually') }}</button>
+						<label class="consent-row"><input v-model="child.allowInsecureLocalTransport" type="checkbox" :disabled="busy"><span>{{ t('Use HTTP on a trusted LAN/VPN for testing only. Traffic and the PIN are not encrypted. Never use this on the public internet; device authentication remains required.') }}</span></label>
+						<label class="field-label" for="child-name">{{ t('Device name') }}</label>
 						<input id="child-name" v-model="child.displayName" class="directory-input" required maxlength="128" :disabled="busy">
-						<label class="field-label" for="child-home">Child home — protected identity and managed session data</label>
-						<div class="directory-field"><input id="child-home" v-model="child.dataDir" class="directory-input" required :disabled="busy || childSaved"><button type="button" class="secondary-button" :disabled="busy || childSaved" @click="pickChildFolder('dataDir')">Browse…</button></div>
-						<label class="field-label" for="child-workdir">Shared work folder — files, Git and commands</label>
-						<div class="directory-field"><input id="child-workdir" v-model="child.workdir" class="directory-input" required :disabled="busy"><button type="button" class="secondary-button" :disabled="busy" @click="pickChildFolder('workdir')">Browse…</button></div>
-						<p class="field-help">Use separate folders, not a drive root. Child home stays fixed after the first attempt so retries retain this device's identity. You can correct the endpoint and work folder until pairing succeeds. No existing data is moved or deleted.</p>
-						<label class="consent-row"><input v-model="executionConsent" type="checkbox" :disabled="busy" required><span>I allow the approved Main to read/write the work folder, create managed workdirs under Child home, and execute commands as my OS account. <strong>Shell access is not a sandbox and can access other host files.</strong> Pair only with a Main you trust with this access.</span></label>
-						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || !executionConsent">{{ busy ? 'Submitting pairing request…' : 'Pair and open local status' }}</button></div>
+						<label class="field-label" for="child-home">{{ t('Child home — protected identity and managed session data') }}</label>
+						<div class="directory-field"><input id="child-home" v-model="child.dataDir" class="directory-input" required :disabled="busy || childSaved"><button type="button" class="secondary-button" :disabled="busy || childSaved" @click="pickChildFolder('dataDir')">{{ t('Browse…') }}</button></div>
+						<label class="field-label" for="child-workdir">{{ t('Shared work folder — files, Git and commands') }}</label>
+						<div class="directory-field"><input id="child-workdir" v-model="child.workdir" class="directory-input" required :disabled="busy"><button type="button" class="secondary-button" :disabled="busy" @click="pickChildFolder('workdir')">{{ t('Browse…') }}</button></div>
+						<p class="field-help">{{ t('Use separate folders, not a drive root. Child home stays fixed after the first attempt so retries retain this device\'s identity. You can correct the endpoint and work folder until pairing succeeds. No existing data is moved or deleted.') }}</p>
+						<label class="consent-row"><input v-model="executionConsent" type="checkbox" :disabled="busy" required><span>{{ t('I allow the approved Main to read/write the work folder, create managed workdirs under Child home, and execute commands as my OS account.') }} <strong>{{ t('Shell access is not a sandbox and can access other host files.') }}</strong> {{ t('Pair only with a Main you trust with this access.') }}</span></label>
+						<div class="actions"><button class="primary-button" type="submit" :disabled="busy || !executionConsent">{{ busy ? t('Submitting pairing request…') : t('Pair and open local status') }}</button></div>
 					</form>
 				</div>
 
 				<div v-else-if="state.step === 'choose-data-directory'" class="setup-content">
-					<p class="lead">Choose where Main should keep its configuration and workspace data.</p>
-					<label class="field-label" for="main-directory">Main directory</label>
+					<p class="lead">{{ t('Choose where Main should keep its configuration and workspace data.') }}</p>
+					<label class="field-label" for="main-directory">{{ t('Main directory') }}</label>
 					<div class="directory-field">
 						<input
 							id="main-directory"
@@ -102,75 +102,75 @@
 							type="text"
 							:disabled="busy"
 							:readonly="!api.selectMainDirectoryPath"
-							placeholder="Enter a full directory path"
+							:placeholder="t('Enter a full directory path')"
 							aria-describedby="main-directory-help"
 							autocomplete="off"
 							spellcheck="false"
 							@keydown.enter="commitDirectory"
 						>
-						<button class="secondary-button" :disabled="busy" @click="pickDirectory">Browse…</button>
+						<button class="secondary-button" :disabled="busy" @click="pickDirectory">{{ t('Browse…') }}</button>
 					</div>
-					<p id="main-directory-help" class="field-help">Accept this location, edit the full path, or browse for another folder. Shadow creates the folder when you save. Existing data is not moved or deleted.</p>
+					<p id="main-directory-help" class="field-help">{{ t('Accept this location, edit the full path, or browse for another folder. Shadow creates the folder when you save. Existing data is not moved or deleted.') }}</p>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy || (!directoryPath.trim() && !directorySelection)" @click="commitDirectory">
-							{{ busy ? 'Saving…' : 'Use this directory' }}
+							{{ busy ? t('Saving…') : t('Use this directory') }}
 						</button>
 					</div>
 				</div>
 
 				<div v-else-if="state.step === 'initialize-main'" class="setup-content">
-					<p class="lead">Create the initial Main configuration in the selected directory.</p>
-					<div class="summary-row"><span>Configuration</span><strong>Ready to initialize</strong></div>
+					<p class="lead">{{ t('Create the initial Main configuration in the selected directory.') }}</p>
+					<div class="summary-row"><span>{{ t('Configuration') }}</span><strong>{{ t('Ready to initialize') }}</strong></div>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy" @click="initializeMain">
-							{{ busy ? 'Initializing…' : 'Initialize Main' }}
+							{{ busy ? t('Initializing…') : t('Initialize Main') }}
 						</button>
 					</div>
 				</div>
 
 				<div v-else-if="state.step === 'configure-provider'" class="setup-content">
-					<p class="lead">After Main launches, choose and connect a model provider in the app before your first chat.</p>
+					<p class="lead">{{ t('After Main launches, choose and connect a model provider in the app before your first chat.') }}</p>
 					<ul class="provider-options">
-						<li><strong>GitHub Copilot</strong> — sign in with your GitHub account using a device code.</li>
-						<li><strong>API key or local provider</strong> — use another supported provider or your own local endpoint.</li>
+						<li><strong>GitHub Copilot</strong> {{ t('— sign in with your GitHub account using a device code.') }}</li>
+						<li><strong>{{ t('API key or local provider') }}</strong> {{ t('— use another supported provider or your own local endpoint.') }}</li>
 					</ul>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy" @click="configureProvider">
-							{{ busy ? 'Saving…' : 'Continue' }}
+							{{ busy ? t('Saving…') : t('Continue') }}
 						</button>
 					</div>
 				</div>
 
 				<div v-else-if="state.step === 'choose-local-capabilities'" class="setup-content">
-					<p class="lead">Choose whether this computer may execute approved local tools.</p>
+					<p class="lead">{{ t('Choose whether this computer may execute approved local tools.') }}</p>
 					<label class="toggle-row">
-						<span><strong>Local executor</strong><small>Run approved commands and tools on this computer.</small></span>
+						<span><strong>{{ t('Local executor') }}</strong><small>{{ t('Run approved commands and tools on this computer.') }}</small></span>
 						<input v-model="localExecutor" type="checkbox" role="switch" :disabled="busy">
 					</label>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy" @click="saveCapabilities">
-							{{ busy ? 'Saving…' : 'Continue' }}
+							{{ busy ? t('Saving…') : t('Continue') }}
 						</button>
 					</div>
 				</div>
 
 				<div v-else-if="state.step === 'launch-main'" class="setup-content">
-					<p class="lead">Launch Main, then connect your model provider in the app.</p>
+					<p class="lead">{{ t('Launch Main, then connect your model provider in the app.') }}</p>
 					<div class="launch-summary">
-						<div><span>Role</span><strong>Main</strong></div>
-						<div><span>Provider setup</span><strong>After launch</strong></div>
-						<div><span>Local executor</span><strong>{{ localExecutor ? 'Enabled' : 'Disabled' }}</strong></div>
+						<div><span>{{ t('Role') }}</span><strong>{{ t('Main') }}</strong></div>
+						<div><span>{{ t('Provider setup') }}</span><strong>{{ t('After launch') }}</strong></div>
+						<div><span>{{ t('Local executor') }}</span><strong>{{ localExecutor ? t('Enabled') : t('Disabled') }}</strong></div>
 					</div>
 					<div class="actions">
 						<button class="primary-button" :disabled="busy" @click="launchMain">
-							{{ busy ? 'Launching…' : 'Launch Main' }}
+							{{ busy ? t('Launching…') : t('Launch Main') }}
 						</button>
 					</div>
 				</div>
 
 				<div v-if="actionError" class="notice error-notice action-error" role="alert">
 					<strong>{{ actionError }}</strong>
-					<span>Your setup progress is saved. Retry this step when ready.</span>
+					<span>{{ t('Your setup progress is saved. Retry this step when ready.') }}</span>
 				</div>
 			</template>
 		</section>
@@ -178,6 +178,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from './i18n.ts'
 import { computed, onMounted, ref } from 'vue'
 import shadowLogo from './assets/shadow-logo.png'
 import { decodeChildInvitation } from './device-pairing-invitation.ts'
@@ -226,7 +227,7 @@ const invitationText = ref('')
 const invitationPreview = computed(() => {
 	if (!invitationText.value.trim()) return { endpoint: '', error: '' }
 	try { return { endpoint: decodeChildInvitation(invitationText.value).endpoint, error: '' } }
-	catch (error) { return { endpoint: '', error: error instanceof Error ? error.message : 'Invalid Child invitation.' } }
+	catch (error) { return { endpoint: '', error: error instanceof Error ? error.message : t('Invalid Child invitation.') } }
 })
 const child = ref({ endpoint: '', offerId: '', pin: '', displayName: '', dataDir: '', workdir: '', allowInsecureLocalTransport: false })
 
@@ -241,25 +242,25 @@ function togglePairingMode() {
 const mainSteps = ['choose-data-directory', 'initialize-main', 'configure-provider', 'choose-local-capabilities', 'launch-main'] as const
 const showRoleChoice = computed(() => state.value?.mode === null)
 const currentStepIndex = computed(() => state.value?.mode === 'main' ? mainSteps.indexOf(state.value.step as typeof mainSteps[number]) : -1)
-const progressLabel = computed(() => `Step ${Math.max(1, currentStepIndex.value + 1)} of ${mainSteps.length}`)
+const progressLabel = computed(() => t('Step {value1} of {length}', { value1: Math.max(1, currentStepIndex.value + 1), length: mainSteps.length }))
 const progressPercent = computed(() => Math.max(0, ((currentStepIndex.value + 1) / mainSteps.length) * 100))
 const heading = computed(() => {
-	if (props.loadError) return 'Connect to desktop'
-	if (state.value?.mode === null) return 'Set up this computer'
-	if (state.value?.mode === 'child') return 'Child setup'
+	if (props.loadError) return t('Connect to desktop')
+	if (state.value?.mode === null) return t('Set up this computer')
+	if (state.value?.mode === 'child') return t('Child setup')
 	const titles: Partial<Record<string, string>> = {
-		'choose-data-directory': 'Choose Main directory',
-		'initialize-main': 'Initialize Main',
-		'configure-provider': 'Connect a provider after launch',
-		'choose-local-capabilities': 'Local capabilities',
-		'launch-main': 'Ready to launch',
+		'choose-data-directory': t('Choose Main directory'),
+		'initialize-main': t('Initialize Main'),
+		'configure-provider': t('Connect a provider after launch'),
+		'choose-local-capabilities': t('Local capabilities'),
+		'launch-main': t('Ready to launch'),
 	}
-	return titles[state.value?.step ?? ''] ?? 'Set up Main'
+	return titles[state.value?.step ?? ''] ?? t('Set up Main')
 })
 
 async function run(
 	operation: () => Promise<WizardState>,
-	failureMessage = 'This step could not be completed.',
+	failureMessage = t('This step could not be completed.'),
 ): Promise<void> {
 	busy.value = true
 	actionError.value = ''
@@ -288,14 +289,14 @@ async function loadChild(): Promise<void> {
 			workdir: info.workdir, displayName: child.value.displayName || info.displayName, allowInsecureLocalTransport: info.allowInsecureLocalTransport }
 		childSaved.value = info.saved
 		childFingerprint.value = info.fingerprint ?? ''
-	} catch { actionError.value = 'Child settings could not be loaded. Restart Shadow and retry; existing identity data is retained.' }
+	} catch { actionError.value = t('Child settings could not be loaded. Restart Shadow and retry; existing identity data is retained.') }
 }
 
 async function pickChildFolder(field: 'dataDir' | 'workdir'): Promise<void> {
 	try {
 		const path = await props.api.folders?.selectDirectory()
 		if (path) child.value[field] = path
-	} catch { actionError.value = 'The directory picker failed. Enter a full absolute path or retry Browse.' }
+	} catch { actionError.value = t('The directory picker failed. Enter a full absolute path or retry Browse.') }
 }
 
 async function pairChild(): Promise<void> {
@@ -303,15 +304,15 @@ async function pairChild(): Promise<void> {
 	busy.value = true
 	actionError.value = ''
 	try {
-		if (!props.api.bootstrap.pairChild) throw new Error('Child pairing requires a current desktop build.')
+		if (!props.api.bootstrap.pairChild) throw new Error(t('Child pairing requires a current desktop build.'))
 		const invitation = manualPairing.value ? child.value : decodeChildInvitation(invitationText.value)
 		const result = await props.api.bootstrap.pairChild({ ...child.value,
 			endpoint: invitation.endpoint, offerId: invitation.offerId, pin: invitation.pin, executionConsent: true })
-		if (!result.ok) throw new Error('Child setup could not be saved. Retry this step.')
+		if (!result.ok) throw new Error(t('Child setup could not be saved. Retry this step.'))
 		state.value = result.state
 		emit('complete')
 	} catch (error) {
-		actionError.value = error instanceof Error ? error.message : 'Pairing failed. Check Main and retry.'
+		actionError.value = error instanceof Error ? error.message : t('Pairing failed. Check Main and retry.')
 		await loadChild()
 	} finally {
 		child.value.pin = ''
@@ -331,7 +332,7 @@ async function loadDirectory(): Promise<void> {
 		const selection = await loadMainDirectorySelection(props.api, directorySelection.value)
 		if (selection) useDirectorySelection(selection)
 	} catch {
-		actionError.value = 'The saved or default directory could not be loaded. Enter a full path, or browse for a writable folder.'
+		actionError.value = t('The saved or default directory could not be loaded. Enter a full path, or browse for a writable folder.')
 	} finally {
 		busy.value = false
 	}
@@ -346,7 +347,7 @@ async function pickDirectory(): Promise<void> {
 		const selection = await props.api.selectDirectory()
 		if (selection) useDirectorySelection(selection)
 	} catch {
-		actionError.value = 'The directory picker could not be opened. Enter a full path above, or try Browse again.'
+		actionError.value = t('The directory picker could not be opened. Enter a full path above, or try Browse again.')
 	} finally {
 		busy.value = false
 	}
@@ -356,18 +357,18 @@ async function commitDirectory(): Promise<void> {
 	if (busy.value || (!directoryPath.value.trim() && !directorySelection.value)) return
 	await run(async () => {
 		const result = await commitMainDirectoryChoice(props.api, directoryPath.value, directorySelection.value)
-		if (!result.ok) throw new Error('command failed')
+		if (!result.ok) throw new Error(t('command failed'))
 		directorySelection.value = null
 		return result.state
-	}, 'Main directory could not be saved. Enter a full absolute path to a writable folder, check its permissions and available disk space, then retry.')
+	}, t('Main directory could not be saved. Enter a full absolute path to a writable folder, check its permissions and available disk space, then retry.'))
 }
 
 async function initializeMain(): Promise<void> {
 	await run(async () => {
 		const result = await props.api.bootstrap.initializeMain()
-		if (!result.ok) throw new Error('command failed')
+		if (!result.ok) throw new Error(t('command failed'))
 		return result.state
-	}, 'Main could not be initialized. Check that the selected folder is writable and has free space. If it already contains a configuration, keep it intact and check its compatibility before retrying.')
+	}, t('Main could not be initialized. Check that the selected folder is writable and has free space. If it already contains a configuration, keep it intact and check its compatibility before retrying.'))
 }
 
 async function configureProvider(): Promise<void> {
@@ -389,9 +390,9 @@ async function saveCapabilities(): Promise<void> {
 async function launchMain(): Promise<void> {
 	await run(async () => {
 		const result = await props.api.bootstrap.launchMain({ localExecutor: localExecutor.value, port: MAIN_LAUNCH_PORT })
-		if (!result.ok) throw new Error('command failed')
+		if (!result.ok) throw new Error(t('command failed'))
 		return result.state
-	}, 'Main could not launch. Check that port 43123 is available, then retry.')
+	}, t('Main could not launch. Check that port 43123 is available, then retry.'))
 	if (state.value?.step === 'complete') emit('complete')
 }
 </script>

@@ -1,13 +1,13 @@
 <template>
   <Teleport to="body">
     <div v-if="open" class="slash-menu" :style="position" @pointerdown.prevent>
-      <div v-if="loading" class="slash-status" role="status">Loading commands...</div>
+      <div v-if="loading" class="slash-status" role="status">{{ t('Loading commands...') }}</div>
       <div v-else-if="error" class="slash-status" role="alert">
         <span>{{ error }}</span>
-        <button type="button" @click="refresh">Retry</button>
+        <button type="button" @click="refresh">{{ t('Retry') }}</button>
       </div>
-      <div v-else-if="!matches.length" class="slash-status" role="status">No matching commands.</div>
-      <div :id="listId" class="slash-options" role="listbox" aria-label="Slash commands" :aria-busy="loading">
+      <div v-else-if="!matches.length" class="slash-status" role="status">{{ t('No matching commands.') }}</div>
+      <div :id="listId" class="slash-options" role="listbox" :aria-label="t('Slash commands')" :aria-busy="loading">
         <button v-for="(command, index) in matches" :id="optionId(index)" :key="command.name"
           type="button" role="option" tabindex="-1" :aria-selected="index === selected"
           class="slash-option" @pointermove="selected = index" @click="choose(command)">
@@ -16,15 +16,16 @@
         </button>
       </div>
       <div v-if="matches.length" class="slash-keys" aria-hidden="true">
-        <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
-        <span><kbd>Tab</kbd><kbd>Enter</kbd> Complete</span>
-        <span><kbd>Esc</kbd> Close</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> {{ t('Navigate') }}</span>
+        <span><kbd>Tab</kbd><kbd>Enter</kbd> {{ t('Complete') }}</span>
+        <span><kbd>Esc</kbd> {{ t('Close') }}</span>
       </div>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { filterSlashCommands, slashCommandQuery, useSlashCommandCatalog, type SlashCommand } from '../slash-commands.ts'
 

@@ -2,25 +2,25 @@
   <Teleport to="body">
     <div class="ownership-backdrop" @click.self="close" @keydown="keydown">
       <section ref="dialog" class="ownership-dialog" role="dialog" aria-modal="true" :aria-labelledby="titleId" :aria-describedby="descriptionId" tabindex="-1">
-        <h2 :id="titleId">{{ action === 'move' ? 'Move folder to another project' : 'Remove folder from project' }}</h2>
+        <h2 :id="titleId">{{ action === 'move' ? t('Move folder to another project') : t('Remove folder from project') }}</h2>
         <p class="ownership-folder"><strong>{{ folder.name }}</strong><span>{{ folder.path }}</span></p>
-        <p :id="descriptionId">Files on disk will not be moved or deleted. Existing conversations and learned memory stay in {{ project.name }}. Those conversations will no longer be able to use this folder.</p>
+        <p :id="descriptionId">{{ t('Files on disk will not be moved or deleted. Existing conversations and learned memory stay in') }} {{ project.name }}{{ t('. Those conversations will no longer be able to use this folder.') }}</p>
         <form @submit.prevent="submit">
           <label v-if="action === 'move'" class="ownership-field">
-            Destination project
+            {{ t('Destination project') }}
             <select v-model="targetId" :disabled="busy" required>
-              <option value="" disabled>Choose a project</option>
+              <option value="" disabled>{{ t('Choose a project') }}</option>
               <option v-for="target in targets" :key="target.id" :value="target.id">{{ target.name }}{{ duplicateName(target.name) ? ` (${target.id.slice(0, 8)})` : '' }}</option>
             </select>
           </label>
-          <p v-if="action === 'move' && !targets.length" class="ownership-note">Create another project before moving this folder.</p>
-          <p class="ownership-note">Stop active work in this project before continuing. Unconfirmed remote jobs or overlapping folders may also prevent this change.</p>
+          <p v-if="action === 'move' && !targets.length" class="ownership-note">{{ t('Create another project before moving this folder.') }}</p>
+          <p class="ownership-note">{{ t('Stop active work in this project before continuing. Unconfirmed remote jobs or overlapping folders may also prevent this change.') }}</p>
           <p v-if="error" class="ownership-error" role="alert">{{ error }}</p>
           <footer>
-            <button v-if="error" type="button" class="btn" :disabled="busy" @click="$emit('refresh')">Refresh folders</button>
-            <button ref="cancelButton" type="button" class="btn" :disabled="busy" @click="close">Cancel</button>
+            <button v-if="error" type="button" class="btn" :disabled="busy" @click="$emit('refresh')">{{ t('Refresh folders') }}</button>
+            <button ref="cancelButton" type="button" class="btn" :disabled="busy" @click="close">{{ t('Cancel') }}</button>
             <button type="submit" class="btn ownership-confirm" :disabled="busy || (action === 'move' && !targetId)">
-              {{ busy ? 'Updating...' : action === 'move' ? 'Move folder' : 'Remove folder' }}
+              {{ busy ? t('Updating...') : action === 'move' ? t('Move folder') : t('Remove folder') }}
             </button>
           </footer>
         </form>
@@ -30,6 +30,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
 import { createFoldersClient, type FolderRecord } from '../folders-client.ts'
 import type { ProjectRecord } from '../projects.ts'
@@ -63,7 +64,7 @@ async function submit() {
       : await client.remove(props.folder.id, lifetime.signal)
     if (!lifetime.signal.aborted) emit('changed', result || undefined)
   } catch (cause) {
-    if (!lifetime.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not update folder ownership. Refresh and retry.'
+    if (!lifetime.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not update folder ownership. Refresh and retry.')
   } finally { busy.value = false }
 }
 function keydown(event: KeyboardEvent) {

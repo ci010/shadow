@@ -70,6 +70,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
         if (id !== '\0/conversation-fixture.ts') return
         return `import 'uno.css'; import '/src/styles.css'; import '/conversation-style.css';
           import { createApp, computed, reactive, toRefs } from 'vue';
+          import { i18n, t, formatNumber } from '/src/i18n.ts';
           import DOMPurify from 'dompurify'; import { marked } from 'marked';
           import MessageAction from '/src/components/MessageAction.vue';
           import ExecutionMessage from '/src/components/ExecutionMessage.vue';
@@ -202,7 +203,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
                 router:{replace(){}}, emit:(event, id) => state.navigation.push({event,id}),
                 sessions:() => sessions, reset(){}, refresh(){}, mounted:() => true, newDraft(){},
               });
-              return { ...toRefs(state), messageActions, yieldDecisions,
+              return { ...toRefs(state), t, formatNumber, messageActions, yieldDecisions,
                 expandedResponses, isBackgroundResponse,
                 setResponseExpanded(context, open) { if (!context) return; if (open) expandedResponses.add(context.responseId); else expandedResponses.delete(context.responseId) },
                 displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
@@ -221,7 +222,7 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 'ev
                 viewNextSegment(){ state.viewingPhysicalId = null },
                 renderMarkdown:text => DOMPurify.sanitize(marked.parse(text)), isErrorMessage:() => false };
             },
-          }).mount('#app');`
+          }).use(i18n).mount('#app');`
       },
       configureServer(server) {
         server.middlewares.use((request, response, next) => {

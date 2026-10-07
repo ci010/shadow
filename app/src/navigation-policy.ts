@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type {
   InstallationMode,
   UiScope,
@@ -27,14 +28,14 @@ interface NavigationPolicyItem extends NavigationItem {
 const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
   {
     name: 'chat',
-    label: 'Chat',
+    get label() { return t('Chat') },
     group: 'primary',
     scopes: ['chat:read'],
     modes: ['main', 'child', 'client'],
   },
   {
     name: 'nodes',
-    label: 'Nodes',
+    get label() { return t('Nodes') },
     group: 'primary',
     scopes: ['nodes:admin'],
     modes: ['main', 'child'],
@@ -42,21 +43,21 @@ const NAVIGATION_POLICY: readonly NavigationPolicyItem[] = [
   },
   {
     name: 'settings',
-    label: 'Settings',
+    get label() { return t('Settings') },
     group: 'primary',
     scopes: ['main:admin'],
     modes: ['main', 'client'],
   },
   {
     name: 'spans',
-    label: 'Spans',
+    get label() { return t('Spans') },
     group: 'diagnostics',
     scopes: ['audit:read'],
     modes: ['main', 'child', 'client'],
   },
   {
     name: 'logs',
-    label: 'Logs',
+    get label() { return t('Logs') },
     group: 'diagnostics',
     scopes: ['audit:read'],
     modes: ['main', 'child', 'client'],

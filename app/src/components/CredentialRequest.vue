@@ -1,28 +1,29 @@
 <template>
-  <section v-if="enabled && (request || error)" class="credential-request" aria-label="Private credential entry">
+  <section v-if="enabled && (request || error)" class="credential-request" :aria-label="t('Private credential entry')">
     <form v-if="request" @submit.prevent="submit">
       <fieldset :disabled="busy || !secure">
-        <legend>Add credential privately</legend>
+        <legend>{{ t('Add credential privately') }}</legend>
         <p class="credential-purpose">{{ request.purpose }}</p>
-        <p class="credential-reference">Reference: <code>{{ request.secretRef }}</code></p>
-        <p :id="`${id}-privacy`" class="credential-note">Only the reference and save/cancel status go to the assistant. The value is stored in this Project's credential file on Main; Shadow does not encrypt that file.</p>
-        <p class="credential-note">{{ request.replacesExisting ? 'This reference already has a value. ' : '' }}Saving replaces any value stored under this reference.</p>
-        <label :for="id">Credential value</label>
+        <p class="credential-reference">{{ t('Reference:') }} <code>{{ request.secretRef }}</code></p>
+        <p :id="`${id}-privacy`" class="credential-note">{{ t('Only the reference and save/cancel status go to the assistant. The value is stored in this Project\'s credential file on Main; Shadow does not encrypt that file.') }}</p>
+        <p class="credential-note">{{ request.replacesExisting ? t('This reference already has a value. ') : '' }}{{ t('Saving replaces any value stored under this reference.') }}</p>
+        <label :for="id">{{ t('Credential value') }}</label>
         <input :id="id" v-model="secret" type="password" autocomplete="off" autocapitalize="off" :spellcheck="false"
           maxlength="16384" required :aria-describedby="`${id}-privacy`">
       </fieldset>
-      <p v-if="!secure" class="credential-error" role="alert">Use HTTPS or a local loopback connection to Main to enter credentials privately.</p>
+      <p v-if="!secure" class="credential-error" role="alert">{{ t('Use HTTPS or a local loopback connection to Main to enter credentials privately.') }}</p>
       <div class="credential-actions">
-        <button type="button" :disabled="busy || !secure" @click="cancel">{{ operation === 'cancelling' ? 'Cancelling…' : 'Cancel' }}</button>
-        <button type="submit" class="credential-save" :disabled="busy || !secure || !valid">{{ operation === 'saving' ? 'Saving…' : 'Save privately' }}</button>
+        <button type="button" :disabled="busy || !secure" @click="cancel">{{ operation === 'cancelling' ? t('Cancelling…') : t('Cancel') }}</button>
+        <button type="submit" class="credential-save" :disabled="busy || !secure || !valid">{{ operation === 'saving' ? t('Saving…') : t('Save privately') }}</button>
       </div>
     </form>
     <p v-if="error" class="credential-error" role="alert">{{ error }}</p>
-    <button v-if="error" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? 'Reloading…' : 'Reload request' }}</button>
+    <button v-if="error" type="button" :disabled="loading || busy" @click="refresh">{{ loading ? t('Reloading…') : t('Reload request') }}</button>
   </section>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref, useId } from 'vue'
 import { useCredentialRequest } from '../credential-requests.ts'
 

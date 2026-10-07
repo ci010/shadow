@@ -3,46 +3,46 @@
     <div v-if="mode" class="folder-dialog-backdrop" @click.self="close" @keydown="dialogKeydown">
       <section ref="dialog" class="folder-dialog" role="dialog" aria-modal="true" aria-labelledby="folder-dialog-title" tabindex="-1">
         <header>
-          <h2 id="folder-dialog-title">{{ mode === 'open' ? 'Open folder' : 'Clone repository' }}</h2>
-          <button class="folder-icon-button" aria-label="Close folder dialog" :disabled="busy || cloneView.state === 'cancelling'" @click="close">×</button>
+          <h2 id="folder-dialog-title">{{ mode === 'open' ? t('Open folder') : t('Clone repository') }}</h2>
+          <button class="folder-icon-button" :aria-label="t('Close folder dialog')" :disabled="busy || cloneView.state === 'cancelling'" @click="close">×</button>
         </header>
-        <p class="dialog-intro">{{ mode === 'open' ? 'Add an existing folder to this project. Your files stay where they are.' : 'Clone a repository into a new folder on this computer.' }}</p>
+        <p class="dialog-intro">{{ mode === 'open' ? t('Add an existing folder to this project. Your files stay where they are.') : t('Clone a repository into a new folder on this computer.') }}</p>
         <form @submit.prevent="submit">
           <label v-if="mode === 'clone'" class="dialog-field">
-            <span>Repository URL</span>
+            <span>{{ t('Repository URL') }}</span>
             <input ref="urlInput" v-model="url" type="text" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repo.git" :disabled="cloneActive" required />
-            <small>HTTPS or SSH. Use Git authentication rather than a token in the URL.</small>
+            <small>{{ t('HTTPS or SSH. Use Git authentication rather than a token in the URL.') }}</small>
           </label>
           <label class="dialog-field">
-            <span>{{ mode === 'open' ? 'Folder path' : 'Parent folder' }}</span>
+            <span>{{ mode === 'open' ? t('Folder path') : t('Parent folder') }}</span>
             <span class="path-input-row">
-              <input ref="pathInput" v-model="path" type="text" autocomplete="off" spellcheck="false" placeholder="Absolute folder path" :disabled="busy || cloneActive" required />
-              <button v-if="hasPicker" type="button" class="btn" :disabled="busy || cloneActive" @click="chooseDirectory(false)">{{ busy ? 'Choosing…' : 'Browse…' }}</button>
+              <input ref="pathInput" v-model="path" type="text" autocomplete="off" spellcheck="false" :placeholder="t('Absolute folder path')" :disabled="busy || cloneActive" required />
+              <button v-if="hasPicker" type="button" class="btn" :disabled="busy || cloneActive" @click="chooseDirectory(false)">{{ busy ? t('Choosing…') : t('Browse…') }}</button>
             </span>
-            <small>{{ hasPicker ? 'Choose an existing folder on this computer.' : 'Enter an absolute path on the computer running Main.' }}</small>
+            <small>{{ hasPicker ? t('Choose an existing folder on this computer.') : t('Enter an absolute path on the computer running Main.') }}</small>
           </label>
           <label v-if="mode === 'clone'" class="dialog-field">
-            <span>New folder name</span>
+            <span>{{ t('New folder name') }}</span>
             <input v-model="directoryName" type="text" autocomplete="off" spellcheck="false" :disabled="cloneActive" @input="directoryEdited = true" required />
           </label>
-          <p v-if="mode === 'clone' && path && directoryName" class="destination-preview"><span>Destination</span><span>{{ destination }}</span></p>
+          <p v-if="mode === 'clone' && path && directoryName" class="destination-preview"><span>{{ t('Destination') }}</span><span>{{ destination }}</span></p>
           <div v-if="mode === 'clone' && cloneView.state !== 'idle'" class="clone-status" aria-live="polite">
             <strong>{{ cloneStatus }}</strong>
-            <p v-if="cloneView.state === 'running' || cloneView.state === 'starting'">You can cancel while the repository is being downloaded.</p>
-            <p v-if="cloneView.state === 'succeeded'">The repository folder is ready in the sidebar. Use its + button to start a conversation.</p>
-            <p v-if="cloneView.state === 'failed' || cloneView.state === 'cancelled' || cloneView.state === 'unknown'">Any partial checkout is kept on disk; it is not deleted automatically.</p>
+            <p v-if="cloneView.state === 'running' || cloneView.state === 'starting'">{{ t('You can cancel while the repository is being downloaded.') }}</p>
+            <p v-if="cloneView.state === 'succeeded'">{{ t('The repository folder is ready in the sidebar. Use its + button to start a conversation.') }}</p>
+            <p v-if="cloneView.state === 'failed' || cloneView.state === 'cancelled' || cloneView.state === 'unknown'">{{ t('Any partial checkout is kept on disk; it is not deleted automatically.') }}</p>
             <p v-if="cloneView.operation?.destination" class="checkout-path">{{ cloneView.operation.destination }}</p>
           </div>
           <p v-if="error || (mode === 'clone' && cloneView.error)" class="folder-error" role="alert">{{ error || cloneView.error }}</p>
           <footer>
             <template v-if="mode === 'clone' && cloneActive">
-              <button v-if="cloneView.state === 'unknown'" class="btn" type="button" @click="controller.refresh()">Retry status</button>
-              <button class="btn" type="button" :disabled="cloneView.state === 'cancelling'" @click="controller.cancel()">{{ cloneView.state === 'cancelling' ? 'Cancelling…' : 'Cancel clone' }}</button>
+              <button v-if="cloneView.state === 'unknown'" class="btn" type="button" @click="controller.refresh()">{{ t('Retry status') }}</button>
+              <button class="btn" type="button" :disabled="cloneView.state === 'cancelling'" @click="controller.cancel()">{{ cloneView.state === 'cancelling' ? t('Cancelling…') : t('Cancel clone') }}</button>
             </template>
             <template v-else>
-              <button class="btn" type="button" :disabled="busy" @click="close">{{ cloneView.state === 'succeeded' && mode === 'clone' ? 'Done' : 'Cancel' }}</button>
-              <button v-if="mode === 'clone' && cloneView.state === 'succeeded'" class="btn" type="button" @click="resetClone">Clone another repository</button>
-              <button v-if="mode === 'open' || cloneView.state !== 'succeeded'" class="btn primary" type="submit" :disabled="busy">{{ busy ? 'Opening…' : mode === 'open' ? 'Open folder' : cloneView.state === 'idle' ? 'Clone repository' : 'Retry clone' }}</button>
+              <button class="btn" type="button" :disabled="busy" @click="close">{{ cloneView.state === 'succeeded' && mode === 'clone' ? t('Done') : t('Cancel') }}</button>
+              <button v-if="mode === 'clone' && cloneView.state === 'succeeded'" class="btn" type="button" @click="resetClone">{{ t('Clone another repository') }}</button>
+              <button v-if="mode === 'open' || cloneView.state !== 'succeeded'" class="btn primary" type="submit" :disabled="busy">{{ busy ? t('Opening…') : mode === 'open' ? t('Open folder') : cloneView.state === 'idle' ? t('Clone repository') : t('Retry clone') }}</button>
             </template>
           </footer>
         </form>
@@ -52,6 +52,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { createCloneController, type CloneView, type FolderRecord, type FoldersClient } from '../folders-client.ts'
 import { isAbsoluteFolderPath, suggestCloneDirectory } from '../folders-sidebar.ts'
@@ -76,8 +77,8 @@ const hasPicker = computed(() => !!window.shadowDesktop?.folders?.selectDirector
 const cloneActive = computed(() => props.mode === 'clone' && ['starting', 'running', 'cancelling', 'unknown'].includes(cloneView.value.state))
 const destination = computed(() => `${path.value.replace(/[\\/]+$/, '')}${path.value.includes('\\') ? '\\' : '/'}${directoryName.value}`)
 const cloneStatus = computed(() => ({
-  idle: '', starting: 'Starting clone…', running: 'Cloning repository…', cancelling: 'Cancelling clone…',
-  succeeded: 'Repository cloned', failed: 'Clone failed', cancelled: 'Clone cancelled', unknown: 'Clone status unavailable',
+  idle: '', starting: t('Starting clone…'), running: t('Cloning repository…'), cancelling: t('Cancelling clone…'),
+  succeeded: t('Repository cloned'), failed: t('Clone failed'), cancelled: t('Clone cancelled'), unknown: t('Clone status unavailable'),
 })[cloneView.value.state])
 let request: AbortController | undefined
 let pickerGeneration = 0
@@ -124,14 +125,14 @@ async function chooseDirectory(openImmediately: boolean) {
       if (openImmediately) emit('close')
       return
     }
-    if (typeof selected !== 'string' || !isAbsoluteFolderPath(selected)) throw new Error('invalid selection')
+    if (typeof selected !== 'string' || !isAbsoluteFolderPath(selected)) throw new Error(t('invalid selection'))
     path.value = selected
     if (openImmediately) {
       busy.value = false
       await submit()
     }
   } catch {
-    if (current === pickerGeneration) error.value = 'The folder picker could not open. Try Browse again, or enter an existing absolute folder path.'
+    if (current === pickerGeneration) error.value = t('The folder picker could not open. Try Browse again, or enter an existing absolute folder path.')
   } finally {
     if (current === pickerGeneration) busy.value = false
   }
@@ -141,13 +142,13 @@ async function submit() {
   if (busy.value || cloneActive.value) return
   error.value = ''
   if (!isAbsoluteFolderPath(path.value)) {
-    error.value = 'Enter an absolute path to an existing folder.'
+    error.value = t('Enter an absolute path to an existing folder.')
     return
   }
   if (props.mode === 'clone') {
     if (!url.value.trim() || !directoryName.value.trim() || /[<>:"/\\|?*\u0000-\u001f]/.test(directoryName.value)
       || ['.', '..'].includes(directoryName.value.trim()) || /[. ]$/.test(directoryName.value)) {
-      error.value = 'Enter a repository URL and a new folder name without path separators or reserved characters.'
+      error.value = t('Enter a repository URL and a new folder name without path separators or reserved characters.')
       return
     }
     await controller.start({ url: url.value.trim(), parentPath: path.value.trim(), directoryName: directoryName.value.trim() })
@@ -162,7 +163,7 @@ async function submit() {
     emit('registered', folder)
     emit('close')
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not open this folder. Check its path and retry.'
+    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not open this folder. Check its path and retry.')
   } finally {
     if (request === current) { request = undefined; busy.value = false }
   }

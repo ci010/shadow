@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
 import { parseRuntimeFailure, type RuntimeFailure } from './runtime-recovery.ts'
 import type { DesktopWebPairingApi } from '../../desktop/src/web-pairing-contract.ts'
@@ -128,7 +129,7 @@ export async function commitMainDirectoryChoice(
 	const selection = api.selectMainDirectoryPath
 		? await api.selectMainDirectoryPath(path)
 		: current
-	if (!selection) throw new Error('Choose a Main directory first')
+	if (!selection) throw new Error(t('Choose a Main directory first'))
 	return await api.bootstrap.commitMainDirectory(selection.selectionId)
 }
 

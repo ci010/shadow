@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { fileChangesPageSchema, type RecordedFileChange } from '../../src/sessions/file-change-contract.ts'
 import { apiUrl } from './api-url.ts'
 import { createLiveRefresh } from './live-refresh.ts'
@@ -28,14 +29,14 @@ export function createSessionFileChanges(apiBase: string, sessionId: string, sta
         url.searchParams.set('offset', String(offset))
         url.searchParams.set('limit', '30')
         const response = await (options.request ?? fetch)(url, { signal, cache: 'no-store' })
-        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Access to these file changes was denied.'
-          : response.status === 404 ? 'This session is no longer available.' : `Could not load recorded writes (${response.status}). Retry.`)
+        if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? t('Access to these file changes was denied.')
+          : response.status === 404 ? t('This session is no longer available.') : t('Could not load recorded writes ({status}). Retry.', { status: response.status }))
         const parsed = fileChangesPageSchema.safeParse(await response.json())
-        if (!parsed.success) throw new Error('Invalid recorded writes response. Retry.')
+        if (!parsed.success) throw new Error(t('Invalid recorded writes response. Retry.'))
         const page = parsed.data
         if (page.offset !== offset || page.changes.length !== Math.min(30, Math.max(0, page.total - offset))
           || page.changes.some(change => change.sessionId !== sessionId) || new Set(page.changes.map(change => change.id)).size !== page.changes.length) {
-          throw new Error('Invalid recorded writes response. Retry.')
+          throw new Error(t('Invalid recorded writes response. Retry.'))
         }
         changes.push(...page.changes)
         offset += page.changes.length
@@ -44,7 +45,7 @@ export function createSessionFileChanges(apiBase: string, sessionId: string, sta
       return { changes: [...new Map(changes.map(change => [change.id, change])).values()], total, nextOffset: offset }
     },
     apply(value) { Object.assign(state, value, { loaded: true, loading: false, error: '' }) },
-    onError(error) { state.loading = false; state.error = error instanceof Error ? error.message : 'Could not load recorded writes. Retry.' },
+    onError(error) { state.loading = false; state.error = error instanceof Error ? error.message : t('Could not load recorded writes. Retry.') },
   })
   return {
     refresh() { refresh = true; state.loading = true; queue.refresh() },

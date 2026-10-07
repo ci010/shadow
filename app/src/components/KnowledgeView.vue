@@ -1,85 +1,85 @@
 <template>
   <div ref="scroll" class="knowledge-scroll">
-  <section class="knowledge" :class="{ 'sidebar-layout': !!sidebarTarget }" aria-label="Project knowledge">
+  <section class="knowledge" :class="{ 'sidebar-layout': !!sidebarTarget }" :aria-label="t('Project knowledge')">
     <header class="heading">
-      <div v-if="!selectedId"><h1>Knowledge</h1><p>Memory, wiki and skills for this project. References are explicit links, not inferred relationships.</p></div>
-      <div v-else class="page-location"><button type="button" @click="emit('home')">Knowledge</button><span aria-hidden="true">/</span><span>{{ title(selectedId) }}</span></div>
+      <div v-if="!selectedId"><h1>{{ t('Knowledge') }}</h1><p>{{ t('Memory, wiki and skills for this project. References are explicit links, not inferred relationships.') }}</p></div>
+      <div v-else class="page-location"><button type="button" @click="emit('home')">{{ t('Knowledge') }}</button><span aria-hidden="true">/</span><span>{{ title(selectedId) }}</span></div>
       <div class="heading-actions">
-        <button type="button" aria-label="Back" title="Back (Alt+Left)" @click="router.back()">Back</button>
-        <button type="button" aria-label="Forward" title="Forward (Alt+Right)" @click="router.forward()">Forward</button>
-        <button v-if="!selectedId" type="button" :aria-pressed="showGraph" @click="showGraph = !showGraph">Relationship graph</button>
-        <button type="button" :disabled="loading || !!deletion" @click="refresh">Refresh</button>
+        <button type="button" :aria-label="t('Back')" :title="t('Back (Alt+Left)')" @click="router.back()">{{ t('Back') }}</button>
+        <button type="button" :aria-label="t('Forward')" :title="t('Forward (Alt+Right)')" @click="router.forward()">{{ t('Forward') }}</button>
+        <button v-if="!selectedId" type="button" :aria-pressed="showGraph" @click="showGraph = !showGraph">{{ t('Relationship graph') }}</button>
+        <button type="button" :disabled="loading || !!deletion" @click="refresh">{{ t('Refresh') }}</button>
       </div>
     </header>
-    <p v-if="!canManage" role="alert">Knowledge management requires Main administrator access.</p>
+    <p v-if="!canManage" role="alert">{{ t('Knowledge management requires Main administrator access.') }}</p>
     <template v-else>
       <KnowledgeMaintenance v-show="!selectedId" :api-base="apiBase" :project-id="projectId" :revision="maintenanceRevision" :active="active"
         @select="select" @changed="refresh" />
-      <p v-if="loading" role="status">Loading knowledge...</p>
+      <p v-if="loading" role="status">{{ t('Loading knowledge...') }}</p>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <p v-if="notice" role="status">{{ notice }}</p>
       <div class="workspace">
         <Teleport :to="sidebarTarget || 'body'" :disabled="!sidebarTarget">
-          <aside class="knowledge-navigation" aria-label="Knowledge entries">
+          <aside class="knowledge-navigation" :aria-label="t('Knowledge entries')">
             <div class="navigation-controls">
-              <div class="filters" aria-label="Knowledge categories">
+              <div class="filters" :aria-label="t('Knowledge categories')">
                 <button v-for="tab in tabs" :key="tab.kind" type="button" :aria-pressed="kind === tab.kind" @click="kind = tab.kind">
                   {{ tab.label }} <span>{{ count(tab.kind) }}</span>
                 </button>
               </div>
-              <input v-model="query" type="search" aria-label="Search knowledge" placeholder="Search knowledge" />
-              <p class="muted">{{ filtered.length }} / {{ catalog.entries.length }} entries</p>
+              <input v-model="query" type="search" :aria-label="t('Search knowledge')" :placeholder="t('Search knowledge')" />
+              <p class="muted">{{ filtered.length }} / {{ catalog.entries.length }} {{ t('entries') }}</p>
             </div>
             <div class="entries">
-              <p v-if="!loading && !filtered.length" class="muted">{{ catalog.entries.length ? 'No matching entries.' : 'No knowledge entries yet.' }}</p>
+              <p v-if="!loading && !filtered.length" class="muted">{{ catalog.entries.length ? t('No matching entries.') : t('No knowledge entries yet.') }}</p>
               <button v-for="item in filtered" :key="item.id" type="button" class="entry" :aria-pressed="selectedId === item.id" @click="select(item.id)">
-                <strong>{{ item.title }}</strong><span>{{ item.kind }} · {{ item.source === 'builtin' ? 'Built-in / read-only' : 'Project' }}</span><small>{{ item.path }}</small>
+                <strong>{{ item.title }}</strong><span>{{ enumLabel(item.kind) }} · {{ item.source === 'builtin' ? t('Built-in / read-only') : t('Project') }}</span><small>{{ item.path }}</small>
               </button>
             </div>
           </aside>
         </Teleport>
         <main class="content">
           <template v-if="showGraph && !selectedId">
-            <label class="focus-filter"><input v-model="focusGraph" type="checkbox" :disabled="!selectedId" /> Focus on selected entry and its direct references</label>
+            <label class="focus-filter"><input v-model="focusGraph" type="checkbox" :disabled="!selectedId" /> {{ t('Focus on selected entry and its direct references') }}</label>
             <KnowledgeGraph :catalog="catalog" :visible-ids="graphIds" :selected-id="selectedId" @select="select" />
-            <p class="muted graph-hint">Filtered graphs also include direct neighbors from other categories. Dashed nodes are outside the catalog, not necessarily missing files. Use Link health to verify them.</p>
+            <p class="muted graph-hint">{{ t('Filtered graphs also include direct neighbors from other categories. Dashed nodes are outside the catalog, not necessarily missing files. Use Link health to verify them.') }}</p>
           </template>
-          <section v-if="selectedId" class="detail" :aria-busy="detailLoading" aria-label="Knowledge entry details">
-            <p v-if="detailLoading" role="status">Loading entry...</p>
-            <p v-if="detailError" role="alert" class="error">{{ detailError }} <button type="button" @click="loadDetail">Retry</button></p>
+          <section v-if="selectedId" class="detail" :aria-busy="detailLoading" :aria-label="t('Knowledge entry details')">
+            <p v-if="detailLoading" role="status">{{ t('Loading entry...') }}</p>
+            <p v-if="detailError" role="alert" class="error">{{ detailError }} <button type="button" @click="loadDetail">{{ t('Retry') }}</button></p>
             <template v-if="detail">
               <div class="detail-heading">
                 <div><h2>{{ detail.entry.title }}</h2><code>{{ detail.entry.path }}</code></div>
-                <button v-if="detail.entry.deletable" type="button" class="danger" :disabled="loading || !!error || detailLoading" @click="deletion = detail.entry">Delete</button>
-                <span v-else class="muted">Built-in / read-only</span>
+                <button v-if="detail.entry.deletable" type="button" class="danger" :disabled="loading || !!error || detailLoading" @click="deletion = detail.entry">{{ t('Delete') }}</button>
+                <span v-else class="muted">{{ t('Built-in / read-only') }}</span>
               </div>
               <p v-if="detail.entry.description">{{ detail.entry.description }}</p>
               <div class="preview-controls">
-                <button type="button" :aria-pressed="raw" @click="raw = !raw">{{ raw ? 'Show preview' : 'Show source' }}</button>
-                <span class="muted">Follow links in the preview or use References below.</span>
+                <button type="button" :aria-pressed="raw" @click="raw = !raw">{{ raw ? t('Show preview') : t('Show source') }}</button>
+                <span class="muted">{{ t('Follow links in the preview or use References below.') }}</span>
               </div>
               <p v-if="linkError" role="alert" class="error">{{ linkError }}</p>
               <pre v-if="raw || detail.entry.path.endsWith('.jsonl')" class="source">{{ detail.content }}</pre>
               <div v-else ref="previewElement" class="prose max-w-none knowledge-preview" @click="followPreviewLink" v-html="preview" />
             </template>
             <template v-else-if="!detailLoading && !detailError">
-              <h2>Unresolved reference</h2><code>{{ selectedId }}</code>
-              <p>This target is not in the current knowledge catalog. It may have been deleted or may not be a browsable knowledge entry.</p>
+              <h2>{{ t('Unresolved reference') }}</h2><code>{{ selectedId }}</code>
+              <p>{{ t('This target is not in the current knowledge catalog. It may have been deleted or may not be a browsable knowledge entry.') }}</p>
             </template>
             <div class="relations">
-              <section><h3>Referenced by ({{ relations.incoming.length }})</h3>
-                <p v-if="!relations.incoming.length" class="muted">No incoming references.</p>
+              <section><h3>{{ t('Referenced by (') }}{{ relations.incoming.length }})</h3>
+                <p v-if="!relations.incoming.length" class="muted">{{ t('No incoming references.') }}</p>
                 <button v-for="(link, index) in relations.incoming" :key="index" type="button" @click="select(link.source)">{{ title(link.source) }} <small>{{ link.label }}</small></button>
               </section>
-              <section><h3>References ({{ relations.outgoing.length }})</h3>
-                <p v-if="!relations.outgoing.length" class="muted">No outgoing references.</p>
+              <section><h3>{{ t('References (') }}{{ relations.outgoing.length }})</h3>
+                <p v-if="!relations.outgoing.length" class="muted">{{ t('No outgoing references.') }}</p>
                 <button v-for="(link, index) in relations.outgoing" :key="index" type="button" :class="{ error: !entriesById.has(link.target) }" @click="select(link.target)">
-                  {{ title(link.target) }} <small>{{ entriesById.has(link.target) ? link.label : `Unresolved · ${link.label}` }}</small>
+                  {{ title(link.target) }} <small>{{ entriesById.has(link.target) ? link.label : t('Unresolved · {label}', { label: link.label }) }}</small>
                 </button>
               </section>
             </div>
           </section>
-          <p v-else class="empty">Select an entry to read its content and references.</p>
+          <p v-else class="empty">{{ t('Select an entry to read its content and references.') }}</p>
         </main>
       </div>
       <KnowledgeDeleteDialog v-if="deletion" :api-base="apiBase" :project-id="projectId" :target="deletion"
@@ -90,6 +90,8 @@
 </template>
 
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t } from '../i18n.ts'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
@@ -139,7 +141,7 @@ function restoreScroll(id: string) {
       try { name = decodeURIComponent(fragment) }
       catch (cause) {
         if (!(cause instanceof URIError)) throw cause
-        linkError.value = 'This link has an invalid section address.'
+        linkError.value = t('This link has an invalid section address.')
         return
       }
       const target = [...previewElement.value.querySelectorAll<HTMLElement>('[id]')].find(node => node.id === name)
@@ -148,15 +150,15 @@ function restoreScroll(id: string) {
         target.tabIndex = -1
         target.focus({ preventScroll: true })
       } else if (!fragment) previewElement.value.scrollTop = 0
-      else linkError.value = `Section "#${name}" was not found in this entry.`
+      else linkError.value = t('Section "#{name}" was not found in this entry.', { name: name })
       return
     }
     scroll.value.scrollTop = scrollPositions.get(id) ?? 0
   })
 }
 const tabs = [
-  { kind: 'all', label: 'All' }, { kind: 'memory', label: 'Memory' },
-  { kind: 'wiki', label: 'Wiki' }, { kind: 'skill', label: 'Skills' },
+  { kind: 'all', get label() { return t('All') } }, { kind: 'memory', get label() { return t('Memory') } },
+  { kind: 'wiki', get label() { return t('Wiki') } }, { kind: 'skill', get label() { return t('Skills') } },
 ] as const
 const entriesById = computed(() => new Map(catalog.value.entries.map(item => [item.id, item])))
 const filtered = computed(() => filterKnowledge(catalog.value, kind.value, query.value))
@@ -180,7 +182,7 @@ function followPreviewLink(event: MouseEvent) {
   event.preventDefault()
   linkError.value = ''
   if (knowledgeError !== undefined) {
-    linkError.value = `Cannot open "${knowledgeError}" from this preview. Refresh Knowledge or use Link health to check the reference.`
+    linkError.value = t('Cannot open "{knowledgeError}" from this preview. Refresh Knowledge or use Link health to check the reference.', { knowledgeError: knowledgeError })
     return
   }
   const id = knowledgeId ?? selectedId.value
@@ -204,7 +206,7 @@ async function loadDetail() {
     const result = await createKnowledgeClient(props.apiBase).read(selectedId.value, request.signal)
     if (!request.signal.aborted) { detailCache.set(result.entry.id, result); detail.value = result }
   } catch (cause) {
-    if (!request.signal.aborted) detailError.value = cause instanceof Error ? cause.message : 'Could not load this entry.'
+    if (!request.signal.aborted) detailError.value = cause instanceof Error ? cause.message : t('Could not load this entry.')
   } finally { if (!request.signal.aborted) detailLoading.value = false }
 }
 async function refresh() {
@@ -227,7 +229,7 @@ async function refresh() {
     emit('catalog', result.entries)
     await loadDetail()
   } catch (cause) {
-    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load knowledge.'
+    if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load knowledge.')
   } finally { if (!request.signal.aborted) loading.value = false }
 }
 async function deleted(id: string) {
@@ -239,7 +241,7 @@ async function deleted(id: string) {
     entries: catalog.value.entries.filter(item => item.id !== id),
     links: catalog.value.links.filter(link => link.source !== id),
   }
-  notice.value = 'File deleted. Other entries and their references were kept.'
+  notice.value = t('File deleted. Other entries and their references were kept.')
   maintenanceRevision.value++
   await refresh()
 }

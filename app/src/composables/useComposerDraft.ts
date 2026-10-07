@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { ref, watch, type Ref } from 'vue'
 
 export function composerDraftKey(apiBase: string, projectId: string, sessionId: string): string {
@@ -11,7 +12,7 @@ export function useComposerDraft(key: Readonly<Ref<string>>, storage: () => Pick
   let restoring = false
 
   function failure(cause: unknown) {
-    error.value = `Draft could not be saved or restored on this device. Copy your text before refreshing. ${cause instanceof Error ? cause.message : String(cause)}`
+    error.value = t('Draft could not be saved or restored on this device. Copy your text before refreshing. {value1}', { value1: cause instanceof Error ? cause.message : String(cause) })
   }
   function write(target: string, value: string): boolean {
     try {

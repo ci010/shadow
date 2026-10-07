@@ -3,7 +3,7 @@
     <!-- Breadcrumb / toolbar -->
     <div class="file-desktop-bar">
       <button class="crumb" :class="{ active: currentPath === '' }" @click="navigate('')">
-        <span class="crumb-home">&#127968;</span> workspace
+        <span class="crumb-home">&#127968;</span> {{ t('workspace') }}
       </button>
       <template v-for="crumb in crumbs" :key="crumb.path">
         <span class="crumb-sep">/</span>
@@ -12,14 +12,14 @@
         </button>
       </template>
       <span class="file-desktop-spacer" />
-      <button class="file-desktop-refresh" title="Refresh" @click="reload">&#8635;</button>
+      <button class="file-desktop-refresh" :title="t('Refresh')" @click="reload">&#8635;</button>
     </div>
 
     <!-- Grid -->
     <div class="file-desktop-body">
-      <div v-if="loading" class="file-desktop-note">Loading…</div>
+      <div v-if="loading" class="file-desktop-note">{{ t('Loading…') }}</div>
       <div v-else-if="error" class="file-desktop-note error">{{ error }}</div>
-      <div v-else-if="entries.length === 0" class="file-desktop-note">This folder is empty.</div>
+      <div v-else-if="entries.length === 0" class="file-desktop-note">{{ t('This folder is empty.') }}</div>
       <div v-else class="file-grid">
         <FileTile
           v-for="entry in entries"
@@ -46,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, ref, watch } from 'vue'
 import FileTile from './FileTile.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
@@ -82,7 +83,7 @@ async function reload(): Promise<void> {
     const listing = await files.listDir(props.sessionId, currentPath.value)
     entries.value = listing.entries
   } catch {
-    error.value = 'Failed to load workspace files.'
+    error.value = t('Failed to load workspace files.')
     entries.value = []
   } finally {
     loading.value = false

@@ -1,9 +1,10 @@
+import { t } from './i18n.ts'
 import type { ProjectWorkItem, ProjectWorkOverview } from '../../src/projects/work-overview.ts'
 
 export const workColumns = [
-  { status: 'pending', label: 'Pending' }, { status: 'in_progress', label: 'In progress' },
-  { status: 'blocked', label: 'Blocked' }, { status: 'done', label: 'Done' },
-  { status: 'cancelled', label: 'Cancelled' }, { status: null, label: 'Historical' },
+  { status: 'pending', get label() { return t('Pending') } }, { status: 'in_progress', get label() { return t('In progress') } },
+  { status: 'blocked', get label() { return t('Blocked') } }, { status: 'done', get label() { return t('Done') } },
+  { status: 'cancelled', get label() { return t('Cancelled') } }, { status: null, get label() { return t('Historical') } },
 ] as const
 export function workStatus(item: ProjectWorkItem): string {
   return workColumns.find(column => column.status === item.status)!.label
@@ -15,7 +16,7 @@ export function workRoots(items: ProjectWorkItem[]): Map<string, string> {
     let current = item
     const seen = new Set<string>()
     while (current.parentKey && lookup.has(current.parentKey)) {
-      if (seen.has(current.key)) throw new Error('Work hierarchy contains a cycle. Reload the Project work view.')
+      if (seen.has(current.key)) throw new Error(t('Work hierarchy contains a cycle. Reload the Project work view.'))
       seen.add(current.key)
       current = lookup.get(current.parentKey)!
     }
@@ -43,7 +44,7 @@ export function groupWork(items: ProjectWorkItem[], all: ProjectWorkItem[]) {
     groups.set(key, group)
   }
   return [...groups].map(([key, items]) => ({
-    key, title: key === 'standalone' ? 'Independent work' : all.find(item => item.key === key)!.title, items,
+    key, title: key === 'standalone' ? t('Independent work') : all.find(item => item.key === key)!.title, items,
     initiative: key !== 'standalone',
   }))
 }
@@ -56,7 +57,7 @@ export function workGraph(items: ProjectWorkItem[]) {
   const depths = new Map<string, number>()
   function depth(item: ProjectWorkItem, seen = new Set<string>()): number {
     if (depths.has(item.key)) return depths.get(item.key)!
-    if (seen.has(item.key)) throw new Error('Work hierarchy contains a cycle.')
+    if (seen.has(item.key)) throw new Error(t('Work hierarchy contains a cycle.'))
     seen.add(item.key)
     const parent = item.parentKey ? lookup.get(item.parentKey) : undefined
     const level = parent ? depth(parent, seen) + 1 : 0

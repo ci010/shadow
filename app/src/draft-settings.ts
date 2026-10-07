@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { isRecord } from './folders-sidebar.ts'
 import { isReasoningEffort } from '../../src/agent/llm-config.ts'
 import type { ConversationSettings } from './session-settings.ts'
@@ -11,7 +12,7 @@ function parseSettings(value: unknown): ConversationSettings {
     || (value.model != null && (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 256))
     || (value.thinking != null && (!isRecord(value.thinking) || !['enabled', 'disabled'].includes(String(value.thinking.type))))
     || (value.reasoningEffort != null && !isReasoningEffort(value.reasoningEffort))) {
-    throw new Error('Saved draft model settings are invalid. Choose the model and effort again to replace them.')
+    throw new Error(t('Saved draft model settings are invalid. Choose the model and effort again to replace them.'))
   }
   return {
     ...(typeof value.model === 'string' ? { model: value.model } : {}),

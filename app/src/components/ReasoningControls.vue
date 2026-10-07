@@ -1,17 +1,18 @@
 <template>
-  <div class="effort-options" role="group" aria-label="Reasoning effort">
+  <div class="effort-options" role="group" :aria-label="t('Reasoning effort')">
     <button v-for="option in options" :key="option.value" type="button" class="setting-option effort-option"
       :disabled="disabled || busy" :aria-pressed="selected === option.value"
       @click="emit('change', reasoningSettingsForEffort(option.value))">
-      <span class="setting-option-copy"><span>{{ option.label }}</span><small v-if="option.value === 'default' && inheritedSettings">Follow project · {{ currentEffort(inheritedSettings) }}</small><small v-else-if="option.description">{{ option.description }}</small></span>
+      <span class="setting-option-copy"><span>{{ option.label }}</span><small v-if="option.value === 'default' && inheritedSettings">{{ t('Follow project ·') }} {{ currentEffort(inheritedSettings) }}</small><small v-else-if="option.description">{{ option.description }}</small></span>
       <span v-if="selected === option.value" class="setting-icon i-lucide-check" aria-hidden="true" />
     </button>
-    <p v-if="!options.some(option => option.value === selected)" class="settings-note" role="status">The saved effort is not offered for this model. Select an available level or Default.</p>
-    <p class="settings-note">Applies to this conversation. Available effort levels and no-thinking support depend on the model.</p>
+    <p v-if="!options.some(option => option.value === selected)" class="settings-note" role="status">{{ t('The saved effort is not offered for this model. Select an available level or Default.') }}</p>
+    <p class="settings-note">{{ t('Applies to this conversation. Available effort levels and no-thinking support depend on the model.') }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import { currentEffort, effortOptionsForModel, reasoningSettingsForEffort, type ReasoningSettings } from '../session-settings.ts'
 const props = defineProps<{ settings: ReasoningSettings; inheritedSettings?: ReasoningSettings; model: string; disabled: boolean; busy?: boolean }>()

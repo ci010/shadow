@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { FolderRecord } from '../../src/folders/contracts.ts'
 import { isReasoningEffort, type ReasoningEffort } from '../../src/agent/llm-config.ts'
 import { parseAutomationSessionRef, type AutomationSessionRef } from '../../src/cron/contracts.ts'
@@ -6,10 +7,10 @@ import { isDirectConversation, ORCHESTRATOR_SESSION_ID, parseTopicMetadata, type
 import { channelAddressFromSessionId, type ChannelAddress } from '../../src/bus/events.ts'
 
 export const FOLDER_ACTIONS = [
-  { id: 'open', label: 'Open folder' },
-  { id: 'remote', label: 'Open remote folder' },
-  { id: 'clone', label: 'Clone repository' },
-  { id: 'scratch', label: 'Start from scratch' },
+  { id: 'open', get label() { return t('Open folder') } },
+  { id: 'remote', get label() { return t('Open remote folder') } },
+  { id: 'clone', get label() { return t('Clone repository') } },
+  { id: 'scratch', get label() { return t('Start from scratch') } },
 ] as const
 
 export interface SidebarSession {
@@ -78,7 +79,7 @@ function flattenSessions(sessions: SidebarSession[]): SidebarSession[] {
 }
 
 export function parseSessionGraph(value: unknown, projectId?: string): SidebarSession[] {
-  const invalid = () => new Error('Cannot read conversations from Main. Refresh to retry.')
+  const invalid = () => new Error(t('Cannot read conversations from Main. Refresh to retry.'))
   if (!isRecord(value) || !Array.isArray(value.sessions) || !Array.isArray(value.nodes)) throw invalid()
   const physicalToLogical = new Map<string, string>()
   for (const node of value.nodes) {
@@ -137,7 +138,7 @@ export function parseSessionGraph(value: unknown, projectId?: string): SidebarSe
       topic,
       createdBySessionId: session.createdBySessionId as string | undefined,
       automation,
-      label: typeof session.name === 'string' ? session.name : session.sessionId === ORCHESTRATOR_SESSION_ID ? 'Project coordination'
+      label: typeof session.name === 'string' ? session.name : session.sessionId === ORCHESTRATOR_SESSION_ID ? t('Project coordination')
         : topic?.title || (typeof session.title === 'string' && session.title ? session.title : channelAddress?.conversationId || (direct ? session.sessionId.replace('web:', '') : session.sessionId)),
       description: session.description as string | undefined,
       folderId: session.folderId as string | undefined,

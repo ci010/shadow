@@ -1,12 +1,13 @@
 <template>
-  <span class="line-changes" :aria-label="`${changes.added} lines added, ${changes.removed} lines removed`" :title="partial ? 'Known line changes; some older or unreadable edits have no counts' : 'Line changes across these operations, not a net Git diff'">
+  <span class="line-changes" :aria-label="t('{added} lines added, {removed} lines removed', { added: changes.added, removed: changes.removed })" :title="partial ? t('Known line changes; some older or unreadable edits have no counts') : t('Line changes across these operations, not a net Git diff')">
     <span class="lines-added">+{{ changes.added }}</span>
     <span class="lines-removed">-{{ changes.removed }}</span>
-    <span v-if="partial" class="partial-count" aria-label="Partial counts">*</span>
+    <span v-if="partial" class="partial-count" :aria-label="t('Partial counts')">*</span>
   </span>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import type { LineChanges } from '../tool-activity.ts'
 defineProps<{ changes: LineChanges; partial?: boolean }>()
 </script>

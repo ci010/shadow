@@ -1,10 +1,11 @@
+import { t } from './i18n.ts'
 import type { KnowledgeCatalog, KnowledgeDetail, KnowledgeEntry, KnowledgeKind, KnowledgeLink } from '../../src/knowledge/contracts.ts'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
 
 export type { KnowledgeCatalog, KnowledgeDetail, KnowledgeEntry, KnowledgeKind, KnowledgeLink }
 
-const invalid = () => new Error('Main returned invalid knowledge data. Refresh and retry.')
+const invalid = () => new Error(t('Main returned invalid knowledge data. Refresh and retry.'))
 function entry(value: unknown): KnowledgeEntry {
   if (!isRecord(value) || typeof value.id !== 'string' || !value.id
     || (value.kind !== 'memory' && value.kind !== 'wiki' && value.kind !== 'skill')
@@ -47,20 +48,20 @@ export function createKnowledgeTransport(base: string, request: typeof fetch = f
       })
     } catch (error) {
       if (init.signal?.aborted) throw error
-      throw new Error('Cannot reach Main. Refresh before retrying; a change may already have completed.')
+      throw new Error(t('Cannot reach Main. Refresh before retrying; a change may already have completed.'))
     }
     if (!response.ok) {
       throw new Error(response.status === 409
-        ? 'Knowledge changed since it was loaded. Close this dialog, refresh or scan again, and review it before making changes.'
+        ? t('Knowledge changed since it was loaded. Close this dialog, refresh or scan again, and review it before making changes.')
         : response.status === 401 || response.status === 403
-          ? 'Knowledge management requires Main administrator access.'
+          ? t('Knowledge management requires Main administrator access.')
           : response.status === 404
-            ? 'This entry no longer exists. Refresh the knowledge list.'
+            ? t('This entry no longer exists. Refresh the knowledge list.')
             : response.status === 413
-              ? 'The knowledge collection exceeds the browsing limits. Reduce its size before retrying.'
+              ? t('The knowledge collection exceeds the browsing limits. Reduce its size before retrying.')
               : response.status === 422
-                ? 'Knowledge contains invalid data. Check the project log and fix the reported file before scanning again.'
-              : `Main could not complete the knowledge request (${response.status}). Refresh and retry.`)
+                ? t('Knowledge contains invalid data. Check the project log and fix the reported file before scanning again.')
+              : t('Main could not complete the knowledge request ({status}). Refresh and retry.', { status: response.status }))
     }
     try { return await response.json() } catch { throw invalid() }
   }

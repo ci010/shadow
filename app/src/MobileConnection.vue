@@ -1,38 +1,39 @@
 <template>
-  <section v-if="connected" class="mobile-connection" aria-label="Main connection">
+  <section v-if="connected" class="mobile-connection" :aria-label="t('Main connection')">
     <details>
-      <summary>Main connection{{ session.resourceError.value ? ' · File error' : '' }}</summary>
+      <summary>{{ t('Main connection') }}{{ session.resourceError.value ? t(' · File error') : '' }}</summary>
       <div class="connection-content">
-        <strong>Connected to Main</strong>
+        <strong>{{ t('Connected to Main') }}</strong>
         <p>{{ session.origin.value }}</p>
-        <p>Sessions and tasks run on Main, not this device.</p>
+        <p>{{ t('Sessions and tasks run on Main, not this device.') }}</p>
         <p v-if="session.resourceError.value" role="alert">{{ session.resourceError.value }}</p>
         <div class="connection-actions">
-          <button @click="session.refresh()">Retry connection</button>
-          <button @click="session.disconnect()">Disconnect</button>
+          <button @click="session.refresh()">{{ t('Retry connection') }}</button>
+          <button @click="session.disconnect()">{{ t('Disconnect') }}</button>
         </div>
       </div>
     </details>
   </section>
   <main v-else class="mobile-auth-shell">
     <section class="mobile-auth-panel" aria-labelledby="mobile-auth-title" :aria-busy="session.busy.value">
-      <h1 id="mobile-auth-title">{{ session.view.value === 'pairing' ? 'Connect to Main' : session.view.value === 'error' ? 'Cannot connect to Main' : session.view.value === 'paused' ? 'Connection paused' : 'Connecting to Main' }}</h1>
-      <p>This device is a Shadow client. Sessions and tasks run on your Main computer.</p>
+      <LanguageSelector />
+      <h1 id="mobile-auth-title">{{ session.view.value === 'pairing' ? t('Connect to Main') : session.view.value === 'error' ? t('Cannot connect to Main') : session.view.value === 'paused' ? t('Connection paused') : t('Connecting to Main') }}</h1>
+      <p>{{ t('This device is a Shadow client. Sessions and tasks run on your Main computer.') }}</p>
       <form v-if="session.view.value === 'pairing'" @submit.prevent="pair">
-        <label for="main-address">Main HTTPS address</label>
+        <label for="main-address">{{ t('Main HTTPS address') }}</label>
         <input id="main-address" v-model="endpoint" type="url" placeholder="https://shadow.example.com" autocomplete="url" autocapitalize="off" :spellcheck="false" :disabled="session.busy.value" required>
-        <label for="mobile-pair-code">One-use pairing code</label>
+        <label for="mobile-pair-code">{{ t('One-use pairing code') }}</label>
         <input id="mobile-pair-code" v-model="code" type="password" autocomplete="off" autocapitalize="off" :spellcheck="false" :disabled="session.busy.value" required aria-describedby="mobile-pair-help">
-        <p id="mobile-pair-help" class="hint">Generate a mobile pairing code in the trusted Main CLI. Codes expire after five minutes and work once. Credentials stay in this device’s secure storage.</p>
+        <p id="mobile-pair-help" class="hint">{{ t('Generate a mobile pairing code in the trusted Main CLI. Codes expire after five minutes and work once. Credentials stay in this device’s secure storage.') }}</p>
         <p v-if="session.error.value" class="connection-error" role="alert">{{ session.error.value }}</p>
-        <button class="primary" type="submit" :disabled="session.busy.value || !endpoint.trim() || !code.trim()">{{ session.busy.value ? 'Connecting…' : 'Connect device' }}</button>
+        <button class="primary" type="submit" :disabled="session.busy.value || !endpoint.trim() || !code.trim()">{{ session.busy.value ? t('Connecting…') : t('Connect device') }}</button>
       </form>
       <template v-else>
         <p v-if="session.error.value" class="connection-error" role="alert">{{ session.error.value }}</p>
-        <p v-else role="status">{{ session.view.value === 'paused' ? 'Live updates are paused while the app is in the background.' : 'Checking the secure connection…' }}</p>
+        <p v-else role="status">{{ session.view.value === 'paused' ? t('Live updates are paused while the app is in the background.') : t('Checking the secure connection…') }}</p>
         <div class="connection-actions">
-          <button v-if="!session.busy.value && session.view.value !== 'paused'" class="primary" @click="session.credentials() ? session.refresh() : session.load()">Retry</button>
-          <button :disabled="session.busy.value" @click="session.disconnect()">Disconnect / change Main</button>
+          <button v-if="!session.busy.value && session.view.value !== 'paused'" class="primary" @click="session.credentials() ? session.refresh() : session.load()">{{ t('Retry') }}</button>
+          <button :disabled="session.busy.value" @click="session.disconnect()">{{ t('Disconnect / change Main') }}</button>
         </div>
       </template>
     </section>
@@ -40,8 +41,10 @@
 </template>
 
 <script setup lang="ts">
+import { t } from './i18n.ts'
 import { ref } from 'vue'
 import type { MobileSession } from './mobile-client.ts'
+import LanguageSelector from './components/LanguageSelector.vue'
 const props = defineProps<{ session: MobileSession; connected?: boolean }>()
 const endpoint = ref(props.session.origin.value)
 const code = ref('')
@@ -55,6 +58,7 @@ async function pair() {
 <style scoped>
 .mobile-auth-shell { min-height: 100dvh; display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: var(--c-bg-soft); color: var(--c-text); }
 .mobile-auth-panel { width: min(440px, 100%); padding: 24px; border: 1px solid var(--c-border); background: var(--c-bg-card); }
+.mobile-auth-panel > .language-selector { margin-bottom: 20px; }
 h1 { margin: 0 0 14px; font-size: 24px; line-height: 1.25; font-weight: 600; }
 p { margin: 0 0 18px; font-size: 14px; line-height: 1.6; color: var(--c-text-secondary); overflow-wrap: anywhere; }
 form { display: grid; gap: 10px; }

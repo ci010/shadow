@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { fileChangesPageSchema, parseFilePatch, type RecordedFileChange, type FileChangeHunk } from '../../src/sessions/file-change-contract.ts'
 import { apiUrl } from './api-url.ts'
 import { diffLines, type GitHunk } from './git-files.ts'
@@ -18,17 +19,17 @@ export async function loadToolFileChanges(
     url.searchParams.set('offset', String(changes.length))
     url.searchParams.set('limit', '30')
     const response = await request(url, { signal, cache: 'no-store' })
-    if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Access to this file diff was denied.'
-      : response.status === 404 ? 'This session is no longer available.' : `Could not load the recorded file diff (${response.status}). Retry.`)
+    if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? t('Access to this file diff was denied.')
+      : response.status === 404 ? t('This session is no longer available.') : t('Could not load the recorded file diff ({status}). Retry.', { status: response.status }))
     const parsed = fileChangesPageSchema.safeParse(await response.json())
     signal.throwIfAborted()
-    if (!parsed.success) throw new Error('Invalid recorded file diff response. Retry.')
+    if (!parsed.success) throw new Error(t('Invalid recorded file diff response. Retry.'))
     const page = parsed.data
     if (page.offset !== changes.length || (total !== undefined && page.total !== total)
       || page.changes.length !== Math.min(30, Math.max(0, page.total - page.offset))
       || page.changes.some(change => change.sessionId !== sessionId || change.toolCallId !== toolCallId)
       || new Set([...changes, ...page.changes].map(change => change.id)).size !== changes.length + page.changes.length) {
-      throw new Error('Invalid recorded file diff response. Retry.')
+      throw new Error(t('Invalid recorded file diff response. Retry.'))
     }
     changes.push(...page.changes)
     total = page.total

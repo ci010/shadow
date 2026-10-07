@@ -1,7 +1,8 @@
+import { t } from './i18n.ts'
 /** Resolve an API suffix without discarding the owning project's base path. */
 export function apiUrl(base: string, suffix: string, params?: Record<string, string>): URL {
   if (!suffix.startsWith('/') || suffix.startsWith('//') || suffix.includes('\\')) {
-    throw new Error('API paths must be absolute suffixes, not external URLs.')
+    throw new Error(t('API paths must be absolute suffixes, not external URLs.'))
   }
   const root = new URL(base)
   root.search = ''
@@ -9,14 +10,14 @@ export function apiUrl(base: string, suffix: string, params?: Record<string, str
   root.pathname = `${root.pathname.replace(/\/+$/, '')}/`
   const result = new URL(suffix.slice(1), root)
   if (result.origin !== root.origin || !result.pathname.startsWith(root.pathname)) {
-    throw new Error('API path escaped its resource scope.')
+    throw new Error(t('API path escaped its resource scope.'))
   }
   for (const [key, value] of Object.entries(params ?? {})) result.searchParams.set(key, value)
   return result
 }
 
 export function projectBase(hostBase: string, projectId: string): string {
-  if (!projectId.trim() || projectId === '.' || projectId === '..') throw new Error('Project ID is required.')
+  if (!projectId.trim() || projectId === '.' || projectId === '..') throw new Error(t('Project ID is required.'))
   return apiUrl(hostBase, `/projects/${encodeURIComponent(projectId)}/`).toString()
 }
 

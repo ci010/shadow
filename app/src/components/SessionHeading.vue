@@ -1,6 +1,6 @@
 <template>
   <header class="session-heading">
-    <ComposerPopover ref="detailsPopover" label="Session details" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="520" @opened="loadDetails" @closed="stopRename">
+    <ComposerPopover ref="detailsPopover" :label="t('Session details')" :disabled="!active" :sheet="mobileLayout" :title="`${name} · ${folder}`" :width="520" @opened="loadDetails" @closed="stopRename">
       <template #trigger>
         <span class="heading-name">{{ name }}</span>
         <span class="heading-separator" aria-hidden="true">&middot;</span>
@@ -9,60 +9,60 @@
       </template>
       <template #default>
         <div class="session-details">
-          <section v-if="coordinator || details?.description" class="details-topic" aria-label="Session description">
-            <h3>{{ coordinator ? 'Project coordination' : 'Description' }}</h3>
-            <p v-if="coordinator" class="details-note">Coordinate Project work here. Peer sessions are independent conversations, not tasks or child chats.</p>
+          <section v-if="coordinator || details?.description" class="details-topic" :aria-label="t('Session description')">
+            <h3>{{ coordinator ? t('Project coordination') : t('Description') }}</h3>
+            <p v-if="coordinator" class="details-note">{{ t('Coordinate Project work here. Peer sessions are independent conversations, not tasks or child chats.') }}</p>
             <p v-else class="details-topic-title">{{ details?.description }}</p>
           </section>
-          <p v-if="loading" class="details-note" role="status">Loading session details...</p>
+          <p v-if="loading" class="details-note" role="status">{{ t('Loading session details...') }}</p>
           <p v-if="error" class="details-error" role="alert">{{ error }}</p>
           <dl class="details-identity">
             <template v-if="details?.workdir.kind === 'remote'">
-              <dt>Device</dt><dd>{{ details.workdir.nodeName || details.workdir.nodeId || 'Remote device' }}</dd>
-              <dt>Workspace</dt><dd>{{ details.workdir.displayName || 'Remote workspace' }}<template v-if="details.workdir.available === false"> (unavailable)</template></dd>
+              <dt>{{ t('Device') }}</dt><dd>{{ details.workdir.nodeName || details.workdir.nodeId || t('Remote device') }}</dd>
+              <dt>{{ t('Workspace') }}</dt><dd>{{ details.workdir.displayName || t('Remote workspace') }}<template v-if="details.workdir.available === false"> {{ t('(unavailable)') }}</template></dd>
             </template>
-            <dt>Path</dt>
+            <dt>{{ t('Path') }}</dt>
             <dd>
-              <CopyableId v-if="details?.workdir.displayPath" class="detail-copy" :value="details.workdir.displayPath" label="Path" wrap />
-              <span v-else>{{ details?.workdir.kind === 'remote' ? 'Not advertised by this device' : 'Unavailable' }}</span>
+              <CopyableId v-if="details?.workdir.displayPath" class="detail-copy" :value="details.workdir.displayPath" :label="t('Path')" wrap />
+              <span v-else>{{ details?.workdir.kind === 'remote' ? t('Not advertised by this device') : t('Unavailable') }}</span>
             </dd>
-            <dt>Session name</dt>
+            <dt>{{ t('Session name') }}</dt>
             <dd class="detail-name" :class="{ 'is-editing': editing }">
-              <form v-if="editing" class="session-rename" aria-label="Rename session" :aria-busy="saving"
+              <form v-if="editing" class="session-rename" :aria-label="t('Rename session')" :aria-busy="saving"
                 @submit.prevent="saveName" @keydown.stop="renameKeydown">
                 <input ref="nameInput" v-model="draftName" class="rename-input" :maxlength="SESSION_NAME_MAX_LENGTH" :disabled="saving"
-                  required aria-label="Session name" :aria-invalid="!!renameError" autocomplete="off">
+                  required :aria-label="t('Session name')" :aria-invalid="!!renameError" autocomplete="off">
                 <div class="rename-actions">
-                  <button class="btn btn-sm primary" type="submit" :disabled="saving || !draftName.trim()">{{ saving ? 'Saving...' : 'Save' }}</button>
-                  <button class="btn btn-sm" type="button" :disabled="saving" @click="cancelRename">Cancel</button>
+                  <button class="btn btn-sm primary" type="submit" :disabled="saving || !draftName.trim()">{{ saving ? t('Saving...') : t('Save') }}</button>
+                  <button class="btn btn-sm" type="button" :disabled="saving" @click="cancelRename">{{ t('Cancel') }}</button>
                 </div>
                 <p v-if="renameError" class="details-error" role="alert">{{ renameError }}</p>
               </form>
               <template v-else>
                 <span>{{ name }}</span>
                 <button v-if="canRename" ref="renameButton" type="button" class="rename-button" :disabled="!active"
-                  aria-label="Rename session" title="Rename session" @click="startRename"><span class="i-lucide-pencil w-3.5 h-3.5" aria-hidden="true" /></button>
+                  :aria-label="t('Rename session')" :title="t('Rename session')" @click="startRename"><span class="i-lucide-pencil w-3.5 h-3.5" aria-hidden="true" /></button>
               </template>
             </dd>
-            <dt>Session ID</dt><dd class="detail-id"><CopyableId class="detail-copy" :value="sessionId" label="Session ID" wrap /></dd>
+            <dt>{{ t('Session ID') }}</dt><dd class="detail-id"><CopyableId class="detail-copy" :value="sessionId" :label="t('Session ID')" wrap /></dd>
           </dl>
           <div class="details-usage">
             <dl>
-              <dt>Tokens</dt>
+              <dt>{{ t('Tokens') }}</dt>
               <dd v-if="details?.usage" class="token-counts">
-                <span :title="`${details.usage.promptTokens.toLocaleString()} input tokens`"><span class="i-lucide-arrow-up" aria-hidden="true" />{{ formatTokenCount(details.usage.promptTokens) }} <small>input</small></span>
-                <span :title="`${details.usage.completionTokens.toLocaleString()} output tokens`"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(details.usage.completionTokens) }} <small>output</small></span>
-                <small>{{ details.usageScope === 'session' ? 'This conversation' : details.usageScope === 'segment' ? 'This segment' : 'Last model call' }}</small>
+                <span :title="t('{value1} input tokens', { value1: formatNumber(details.usage.promptTokens) })"><span class="i-lucide-arrow-up" aria-hidden="true" />{{ formatTokenCount(details.usage.promptTokens) }} <small>{{ t('input') }}</small></span>
+                <span :title="t('{value1} output tokens', { value1: formatNumber(details.usage.completionTokens) })"><span class="i-lucide-arrow-down" aria-hidden="true" />{{ formatTokenCount(details.usage.completionTokens) }} <small>{{ t('output') }}</small></span>
+                <small>{{ details.usageScope === 'session' ? t('This conversation') : details.usageScope === 'segment' ? t('This segment') : t('Last model call') }}</small>
               </dd>
-              <dd v-else>Not reported</dd>
+              <dd v-else>{{ t('Not reported') }}</dd>
             </dl>
-            <div class="context-heading"><span>Context</span><span v-if="percent !== null">{{ percent }}%</span></div>
+            <div class="context-heading"><span>{{ t('Context') }}</span><span v-if="percent !== null">{{ percent }}%</span></div>
             <div class="context-counts">
-              <span>{{ details?.context.usedTokens != null ? formatTokenCount(details.context.usedTokens) : 'Not reported' }}</span>
-              <span>{{ details?.context.windowTokens != null ? `${formatTokenCount(details.context.windowTokens)} limit` : 'Limit unavailable' }}</span>
+              <span>{{ details?.context.usedTokens != null ? formatTokenCount(details.context.usedTokens) : t('Not reported') }}</span>
+              <span>{{ details?.context.windowTokens != null ? t('{value1} limit', { value1: formatTokenCount(details.context.windowTokens) }) : t('Limit unavailable') }}</span>
             </div>
-            <progress v-if="percent !== null" :value="Math.min(percent, 100)" max="100" aria-label="Context window usage" :aria-valuetext="`${percent}%`" />
-            <p class="details-note">Last reported context, not a live draft estimate.</p>
+            <progress v-if="percent !== null" :value="Math.min(percent, 100)" max="100" :aria-label="t('Context window usage')" :aria-valuetext="`${percent}%`" />
+            <p class="details-note">{{ t('Last reported context, not a live draft estimate.') }}</p>
           </div>
         </div>
       </template>
@@ -71,6 +71,7 @@
 </template>
 
 <script setup lang="ts">
+import { t, formatNumber } from '../i18n.ts'
 import { apiUrl } from '../api-url.ts'
 import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { parseSessionName, SESSION_NAME_MAX_LENGTH } from '../../../src/sessions/session-name.ts'
@@ -92,7 +93,7 @@ const loading = ref(false)
 const error = ref('')
 const coordinator = computed(() => props.sessionId === ORCHESTRATOR_SESSION_ID || details.value?.sessionKind === 'orchestrator')
 const topic = computed(() => details.value?.topic ?? props.topic)
-const sessionName = computed(() => details.value?.name?.trim() || (coordinator.value ? 'Project coordination' : props.name || topic.value?.title || 'Conversation'))
+const sessionName = computed(() => details.value?.name?.trim() || (coordinator.value ? t('Project coordination') : props.name || topic.value?.title || t('Conversation')))
 const name = computed(() => [props.projectName, sessionName.value].filter(Boolean).join(' / '))
 const editing = ref(false)
 const saving = ref(false)
@@ -131,7 +132,7 @@ async function saveName() {
   renameError.value = ''
   let nextName: string
   try { nextName = parseSessionName(draftName.value) }
-  catch (cause) { renameError.value = cause instanceof Error ? cause.message : 'Enter a valid session name.'; return }
+  catch (cause) { renameError.value = cause instanceof Error ? cause.message : t('Enter a valid session name.'); return }
   const controller = new AbortController()
   renameRequest = controller
   saving.value = true
@@ -142,9 +143,9 @@ async function saveName() {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nextName }),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
     })
-    if (!response.ok) throw new Error(`Could not save the session name (${response.status}). Retry.`)
+    if (!response.ok) throw new Error(t('Could not save the session name ({status}). Retry.', { status: response.status }))
     const result = await response.json()
-    if (!result || result.sessionId !== props.sessionId || result.name !== nextName) throw new Error('Could not confirm the saved name. Retry.')
+    if (!result || result.sessionId !== props.sessionId || result.name !== nextName) throw new Error(t('Could not confirm the saved name. Retry.'))
     if (controller.signal.aborted) return
     if (details.value) details.value = { ...details.value, name: nextName }
     emit('renamed', nextName)
@@ -152,16 +153,16 @@ async function saveName() {
     void restoreRenameFocus()
     void loadDetails()
   } catch (cause) {
-    if (!controller.signal.aborted) renameError.value = cause instanceof Error ? cause.message : 'Could not save the session name. Retry.'
+    if (!controller.signal.aborted) renameError.value = cause instanceof Error ? cause.message : t('Could not save the session name. Retry.')
   } finally {
     if (renameRequest === controller) { renameRequest = undefined; saving.value = false }
   }
 }
-const folder = computed(() => coordinator.value ? 'Project-wide · No folder' : details.value?.workdir.kind === 'remote'
-  ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || 'Remote device'} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : 'Remote folder')}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
+const folder = computed(() => coordinator.value ? t('Project-wide · No folder') : details.value?.workdir.kind === 'remote'
+  ? `${details.value.workdir.nodeName || details.value.workdir.nodeId || t('Remote device')} · ${details.value.workdir.displayName || (details.value.workdir.displayPath ? chatContextName(details.value.workdir.displayPath) : t('Remote folder'))}${details.value.workdir.available === false ? ' (unavailable)' : ''}`
   : details.value?.workdir.displayPath
   ? chatContextName(details.value.workdir.displayPath)
-  : loading.value ? 'Loading folder...' : 'Folder unavailable')
+  : loading.value ? t('Loading folder...') : t('Folder unavailable'))
 const percent = computed(() => details.value ? contextPercent(details.value.context) : null)
 let request: AbortController | undefined
 
@@ -176,12 +177,12 @@ async function loadDetails() {
     const response = await fetch(apiUrl(props.apiBase, `/api/sessions/${encodeURIComponent(props.sessionId)}/details${query}`), {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
     })
-    if (!response.ok) throw new Error(`Session details are unavailable (${response.status}). Reopen the menu to retry.`)
+    if (!response.ok) throw new Error(t('Session details are unavailable ({status}). Reopen the menu to retry.', { status: response.status }))
     const result = parseSessionDetails(await response.json(), props.sessionId)
     if (!controller.signal.aborted) { details.value = result; emit('workdir', result.workdir) }
   } catch (cause) {
     if (!controller.signal.aborted) {
-      error.value = cause instanceof Error ? cause.message : 'Session details are unavailable. Reopen the menu to retry.'
+      error.value = cause instanceof Error ? cause.message : t('Session details are unavailable. Reopen the menu to retry.')
     }
   } finally {
     if (request === controller) { request = undefined; loading.value = false }

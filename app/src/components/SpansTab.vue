@@ -3,25 +3,25 @@
     <div
       class="rounded-md border border-default bg-surface p-4 xl:sticky xl:top-10 xl:h-[calc(100vh-5rem)]">
       <div class="flex items-center justify-between">
-        <h2 class="text-lg font-600">Trace Stream</h2>
+        <h2 class="text-lg font-600">{{ t('Trace Stream') }}</h2>
         <div class="flex items-center gap-2 text-xs text-ink/60">
-          <span class="tag" :class="{ active: connected && !error }">{{ error ? 'Needs retry' : connected ? 'Live' : 'Connecting...' }}</span>
+          <span class="tag" :class="{ active: connected && !error }">{{ error ? t('Needs retry') : connected ? t('Live') : t('Connecting...') }}</span>
         </div>
       </div>
-      <p class="mt-2 text-sm text-ink/60">Spans grouped by trace. Pick a trace to render the full timeline.</p>
+      <p class="mt-2 text-sm text-ink/60">{{ t('Spans grouped by trace. Pick a trace to render the full timeline.') }}</p>
       <div v-if="error" role="alert" class="mt-3 text-sm">
-        {{ error }} <button class="btn ghost" @click="refreshSpans">Retry spans</button>
+        {{ error }} <button class="btn ghost" @click="refreshSpans">{{ t('Retry spans') }}</button>
       </div>
-      <p v-if="windowFull" role="status" class="mt-3 text-sm text-ink/60">Showing the latest {{ LIVE_LIMIT }} spans. The selected trace is retained separately.</p>
+      <p v-if="windowFull" role="status" class="mt-3 text-sm text-ink/60">{{ t('Showing the latest') }} {{ LIVE_LIMIT }} {{ t('spans. The selected trace is retained separately.') }}</p>
 
       <div class="mt-4 grid gap-2">
-        <input v-model="filters.traceId" class="input" placeholder="filter by trace id" />
-        <input v-model="filters.name" class="input" placeholder="filter by span name" />
+        <input v-model="filters.traceId" class="input" :placeholder="t('filter by trace id')" />
+        <input v-model="filters.name" class="input" :placeholder="t('filter by span name')" />
       </div>
 
       <div class="mt-4 trace-list">
-        <div v-if="loading" role="status" class="text-sm text-ink/60">Loading spans…</div>
-        <div v-if="traceSummaries.length === 0 && !loading && !error" class="text-ink/40">No spans yet.</div>
+        <div v-if="loading" role="status" class="text-sm text-ink/60">{{ t('Loading spans…') }}</div>
+        <div v-if="traceSummaries.length === 0 && !loading && !error" class="text-ink/40">{{ t('No spans yet.') }}</div>
         <button
           v-for="trace in traceSummaries"
           :key="trace.traceId"
@@ -31,12 +31,12 @@
           @click="selectTrace(trace.traceId)"
         >
           <div class="trace-main">
-            <div class="trace-title">{{ trace.rootName || 'root' }}</div>
+            <div class="trace-title">{{ trace.rootName || t('root') }}</div>
             <div class="trace-meta">
-              <span>{{ trace.spanCount }} spans</span>
+              <span>{{ trace.spanCount }} {{ t('spans') }}</span>
               <span>•</span>
               <span>{{ formatDuration(trace.durationMs) }}</span>
-              <span v-if="trace.errorCount" class="trace-error">• {{ trace.errorCount }} errors</span>
+              <span v-if="trace.errorCount" class="trace-error">• {{ trace.errorCount }} {{ t('errors') }}</span>
             </div>
           </div>
           <div class="trace-side">
@@ -51,8 +51,8 @@
       <div class="rounded-md border border-default bg-surface p-4">
         <div class="flex items-center justify-between">
           <div>
-            <h2 class="text-lg font-600">Trace Timeline</h2>
-            <p class="mt-2 text-sm text-ink/60">Spans are rendered relative to the trace start time.</p>
+            <h2 class="text-lg font-600">{{ t('Trace Timeline') }}</h2>
+            <p class="mt-2 text-sm text-ink/60">{{ t('Spans are rendered relative to the trace start time.') }}</p>
           </div>
           <div class="flex items-center gap-2 text-xs text-ink/60" v-if="selectedTraceId">
             <span class="tag small">{{ selectedTraceId.slice(0, 16) }}</span>
@@ -60,14 +60,14 @@
         </div>
 
         <div v-if="detailError" role="alert" class="mt-3 text-sm">
-          {{ detailError }} <button class="btn ghost" @click="refreshDetails">Retry trace</button>
+          {{ detailError }} <button class="btn ghost" @click="refreshDetails">{{ t('Retry trace') }}</button>
         </div>
-        <p v-if="detailsLoading" role="status" class="mt-3 text-sm text-ink/60">Loading trace details…</p>
-        <p v-if="traceLimited" role="status" class="mt-3 text-sm text-ink/60">This trace exceeds the {{ LIVE_LIMIT }} span display limit; the timeline is partial.</p>
-        <div v-if="!selectedTraceId" class="mt-4 text-sm text-ink/50">Select a trace to see its timeline.</div>
+        <p v-if="detailsLoading" role="status" class="mt-3 text-sm text-ink/60">{{ t('Loading trace details…') }}</p>
+        <p v-if="traceLimited" role="status" class="mt-3 text-sm text-ink/60">{{ t('This trace exceeds the') }} {{ LIVE_LIMIT }} {{ t('span display limit; the timeline is partial.') }}</p>
+        <div v-if="!selectedTraceId" class="mt-4 text-sm text-ink/50">{{ t('Select a trace to see its timeline.') }}</div>
         <div v-else class="timeline">
           <div class="timeline-header">
-            <span>Span</span>
+            <span>{{ t('Span') }}</span>
             <div class="timeline-ruler">
               <span v-for="tick in timelineTicks" :key="tick.label" class="ruler-tick" :style="{ left: tick.pct + '%' }">
                 {{ tick.label }}
@@ -92,8 +92,8 @@
                 <span v-if="span.depth > 0" class="tree-connector" :style="{ left: `${(span.depth - 1) * 20 + 14}px` }"></span>
                 <span class="depth-dot" :style="{ background: depthColor(span.depth) }"></span>
                 <span class="span-name">{{ span.name }}</span>
-                <span v-if="span.statusCode === 2" class="span-error">error</span>
-                <span v-if="!span.endTime" class="span-live">live</span>
+                <span v-if="span.statusCode === 2" class="span-error">{{ t('error') }}</span>
+                <span v-if="!span.endTime" class="span-live">{{ t('live') }}</span>
               </div>
               <div class="timeline-bar">
                 <div
@@ -112,37 +112,37 @@
       <div class="rounded-md border border-default bg-surface p-4">
         <div class="flex items-center justify-between">
           <div>
-            <h2 class="text-lg font-600">Span Details</h2>
-            <p class="mt-2 text-sm text-ink/60">Inspect attributes, events, and logs for the selected span.</p>
+            <h2 class="text-lg font-600">{{ t('Span Details') }}</h2>
+            <p class="mt-2 text-sm text-ink/60">{{ t('Inspect attributes, events, and logs for the selected span.') }}</p>
           </div>
-          <button class="btn ghost" @click="selectedSpanId = null">Clear</button>
+          <button class="btn ghost" @click="selectedSpanId = null">{{ t('Clear') }}</button>
         </div>
 
-        <div v-if="!selectedSpan" class="mt-4 text-sm text-ink/50">Select a span to inspect details.</div>
+        <div v-if="!selectedSpan" class="mt-4 text-sm text-ink/50">{{ t('Select a span to inspect details.') }}</div>
         <div v-else class="detail-card mono mt-4 selectable-text">
           <div class="detail-row">
-            <span>Name</span>
+            <span>{{ t('Name') }}</span>
             <strong>{{ selectedSpan.name }}</strong>
           </div>
           <div class="detail-row">
-            <span>Span ID</span>
+            <span>{{ t('Span ID') }}</span>
             <strong class="text-xs">{{ selectedSpan.spanId }}</strong>
           </div>
           <div class="detail-row">
-            <span>Parent</span>
-            <strong class="text-xs">{{ selectedSpan.parentSpanId ?? 'root' }}</strong>
+            <span>{{ t('Parent') }}</span>
+            <strong class="text-xs">{{ selectedSpan.parentSpanId ?? t('root') }}</strong>
           </div>
           <div class="detail-row">
-            <span>Duration</span>
+            <span>{{ t('Duration') }}</span>
             <strong>{{ formatDuration(spanDurationMs(selectedSpan)) }}</strong>
           </div>
           <div class="detail-row">
-            <span>Status</span>
-            <strong>{{ selectedSpan.statusCode === 2 ? 'error' : selectedSpan.statusCode === 1 ? 'ok' : 'unset' }}</strong>
+            <span>{{ t('Status') }}</span>
+            <strong>{{ selectedSpan.statusCode === 2 ? t('error') : selectedSpan.statusCode === 1 ? t('ok') : t('unset') }}</strong>
           </div>
 
           <div v-if="Object.keys(selectedSpan.attributes).length" class="detail-section">
-            <div class="detail-section-title">Attributes</div>
+            <div class="detail-section-title">{{ t('Attributes') }}</div>
             <div v-for="(val, key) in selectedSpan.attributes" :key="key" class="detail-row">
               <span>{{ key }}</span>
               <strong class="text-xs break-all">{{ val }}</strong>
@@ -150,12 +150,12 @@
           </div>
 
           <div v-if="selectedSpan.events.length" class="detail-section">
-            <div class="detail-section-title">Events</div>
+            <div class="detail-section-title">{{ t('Events') }}</div>
             <div v-for="evt in selectedSpan.events" :key="evt.id" class="event-card">
               <div class="event-header">
                 <span class="event-name">{{ evt.name }}</span>
                 <span class="event-time">+{{ formatDuration(evt.offsetMs) }}</span>
-                <span v-if="evt.isException" class="event-tag">exception</span>
+                <span v-if="evt.isException" class="event-tag">{{ t('exception') }}</span>
               </div>
               <div v-if="evt.exception" class="event-exception">
                 <div class="exception-line">{{ evt.exception.type }}</div>
@@ -172,7 +172,7 @@
           </div>
 
           <div v-if="spanLogs.length" class="detail-section">
-            <div class="detail-section-title">Logs</div>
+            <div class="detail-section-title">{{ t('Logs') }}</div>
             <div v-for="log in spanLogs" :key="log.id" class="event-card">
               <div class="event-header">
                 <span class="event-name">{{ log.body }}</span>
@@ -187,8 +187,8 @@
             </div>
           </div>
           <div v-else class="detail-section">
-            <div class="detail-section-title">Logs</div>
-            <div class="text-xs text-ink/50">{{ detailsLoading ? 'Loading trace logs…' : detailError ? 'Trace logs unavailable. Retry trace above.' : 'No logs for this span.' }}</div>
+            <div class="detail-section-title">{{ t('Logs') }}</div>
+            <div class="text-xs text-ink/50">{{ detailsLoading ? t('Loading trace logs…') : detailError ? t('Trace logs unavailable. Retry trace above.') : t('No logs for this span.') }}</div>
           </div>
         </div>
       </div>
@@ -197,6 +197,7 @@
 </template>
 
 <script setup lang="ts">
+import { t, formatDateTime } from '../i18n.ts'
 import { apiUrl } from '../api-url.ts'
 import { computed, reactive, ref, watch } from 'vue'
 import { liveProjectId, useLiveClientPool } from '../composables/useLiveClient.ts'
@@ -331,9 +332,9 @@ function validateFields(entry: Record<string, unknown>, fields: string[]) {
     if (parsed == null) continue
     if (key === 'attributes' || key === 'events') {
       if (!Array.isArray(parsed) || !parsed.every(item => record(item)
-        && (key !== 'attributes' || typeof item.key === 'string'))) throw new Error(`Invalid ${key}.`)
+        && (key !== 'attributes' || typeof item.key === 'string'))) throw new Error(t('Invalid {key}.', { key: key }))
       if (key === 'events') for (const event of parsed) validateFields(event, ['attributes'])
-    } else if (!record(parsed)) throw new Error(`Invalid ${key}.`)
+    } else if (!record(parsed)) throw new Error(t('Invalid {key}.', { key: key }))
   }
 }
 
@@ -342,7 +343,7 @@ function validatedSpan(value: unknown): SpanEntry {
     || typeof value.span_id !== 'string' || !value.span_id || typeof value.name !== 'string'
     || typeof value.start_time !== 'number' || !Number.isFinite(value.start_time)
     || (value.end_time != null && (typeof value.end_time !== 'number' || !Number.isFinite(value.end_time)))) {
-    throw new Error('Invalid span record received.')
+    throw new Error(t('Invalid span record received.'))
   }
   validateFields(value, ['attributes', 'events', 'resource', 'scope'])
   return apiSpanToEntry(value)
@@ -357,9 +358,9 @@ async function query(base: string, path: string, params: Record<string, string>,
   const url = apiUrl(base, path)
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value)
   const response = await fetch(url, { signal })
-  if (!response.ok) throw new Error(`Telemetry query failed (${response.status}).`)
+  if (!response.ok) throw new Error(t('Telemetry query failed ({status}).', { status: response.status }))
   const data: unknown = await response.json()
-  if (!record(data) || !Array.isArray(data.entries)) throw new Error('Invalid telemetry query response.')
+  if (!record(data) || !Array.isArray(data.entries)) throw new Error(t('Invalid telemetry query response.'))
   return data.entries as unknown[]
 }
 
@@ -392,7 +393,7 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
     },
     onError: () => {
       loading.value = false
-      error.value = 'Could not load saved spans. Check Main and retry.'
+      error.value = t('Could not load saved spans. Check Main and retry.')
     },
   })
   refreshSpans = () => {
@@ -417,7 +418,7 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
         }
         if (entry.traceId === selectedTraceId.value) receiveTraceSpan(entry)
       } catch {
-        error.value = 'Could not read a live span. Retry spans to reload saved state.'
+        error.value = t('Could not read a live span. Retry spans to reload saved state.')
       }
     },
     reset: () => { refreshSpans(); refreshDetails() },
@@ -459,12 +460,12 @@ watch([() => props.apiBase, selectedTraceId], ([base, traceId], _previous, onCle
         return {
           entries: entries.map(value => {
             const entry = validatedSpan(value)
-            if (entry.traceId !== traceId) throw new Error('Unexpected trace in query response.')
+            if (entry.traceId !== traceId) throw new Error(t('Unexpected trace in query response.'))
             return entry
           }),
           logs: logs.map(value => {
             if (!record(value) || typeof value.span_id !== 'string' || typeof value.time !== 'number'
-              || !Number.isFinite(value.time) || !('body' in value)) throw new Error('Invalid trace log.')
+              || !Number.isFinite(value.time) || !('body' in value)) throw new Error(t('Invalid trace log.'))
             validateFields(value, ['attributes'])
             return apiLogToSpanLog(value)
           }).filter((log): log is SpanLog => log !== null),
@@ -489,7 +490,7 @@ watch([() => props.apiBase, selectedTraceId], ([base, traceId], _previous, onCle
     },
     onError: () => {
       detailsLoading.value = false
-      detailError.value = 'Could not load this trace and its logs. Check Main and retry.'
+      detailError.value = t('Could not load this trace and its logs. Check Main and retry.')
     },
   })
   refreshDetails = () => {
@@ -607,16 +608,16 @@ function barStyle(span: { startTime: number; endTime?: number }): Record<string,
 }
 
 function formatTime(value: number): string {
-  return new Date(value).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return formatDateTime(new Date(value), { hourCycle: 'h23', ...{ hour: '2-digit', minute: '2-digit', second: '2-digit' } })
 }
 
 function formatDuration(ms: number): string {
   if (!isFinite(ms) || ms < 0) return '0ms'
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  if (ms < 60000) return `${(ms / 1000).toFixed(2)}s`
+  if (ms < 1000) return t('{value1}ms', { value1: Math.round(ms) })
+  if (ms < 60000) return t('{value1}s', { value1: (ms / 1000).toFixed(2) })
   const mins = Math.floor(ms / 60000)
   const secs = Math.round((ms % 60000) / 1000)
-  return `${mins}m ${secs}s`
+  return t('{mins}m {secs}s', { mins: mins, secs: secs })
 }
 
 function spanDurationMs(span: SpanEntry): number {
@@ -705,7 +706,7 @@ function extractException(attrs: Record<string, string>): { type: string; messag
   const message = attrs['exception.message'] ?? ''
   const stacktrace = attrs['exception.stacktrace']
   if (!type && !message) return null
-  return { type: type || 'Exception', message: message || 'Unknown error', stacktrace }
+  return { type: type || t('Exception'), message: message || t('Unknown error'), stacktrace }
 }
 
 function parseOtelAttributes(raw: unknown): Record<string, string> {

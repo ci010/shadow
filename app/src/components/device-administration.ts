@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { apiUrl, hostBase } from '../api-url.ts'
 import type { InstallationContextV1 } from '../installation-context.ts'
 
@@ -36,11 +37,11 @@ const record = (value: unknown): value is Record<string, unknown> =>
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
 const identifier = (value: unknown): value is string => text(value) && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
 const timestamp = (value: unknown): value is string => text(value) && Number.isFinite(Date.parse(value))
-const invalid = () => new Error('The backend returned invalid device administration data. Update Shadow and retry.')
+const invalid = () => new Error(t('The backend returned invalid device administration data. Update Shadow and retry.'))
 
 export class DeviceAdministrationAccessError extends Error {
   constructor() {
-    super('Device administration requires the authorized Main desktop app. Open Nodes there and retry. Browser sign-in does not grant device administration access.')
+    super(t('Device administration requires the authorized Main desktop app. Open Nodes there and retry. Browser sign-in does not grant device administration access.'))
     this.name = 'DeviceAdministrationAccessError'
   }
 }
@@ -116,8 +117,8 @@ export function invitationRemaining(invitation: DeviceInvitation, now: number): 
 }
 
 export function deviceApprovalBody(pending: PendingDevice, verified: boolean, consented: boolean) {
-  if (!verified || !consented) throw new Error('Verify the fingerprint and authorize execution before approving.')
-  if (!pending.credentialId) throw new Error('This device request has no credential identity. Pair again from an updated Child.')
+  if (!verified || !consented) throw new Error(t('Verify the fingerprint and authorize execution before approving.'))
+  if (!pending.credentialId) throw new Error(t('This device request has no credential identity. Pair again from an updated Child.'))
   return { version: 1, expectedDeviceIdentityFingerprint: pending.deviceIdentityFingerprint }
 }
 
@@ -149,14 +150,14 @@ export async function deviceAdminRequest(
   }
   const json = response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'application/json'
   if (response.status === 404 && path.includes('/pending/')) {
-    throw new Error('This pairing request is no longer pending. Refresh devices before trying again.')
+    throw new Error(t('This pairing request is no longer pending. Refresh devices before trying again.'))
   }
   if (path.endsWith('/revoke')) {
-    if (response.status === 404) throw new Error('This device or the removal endpoint is unavailable. Refresh devices and check that Main is up to date.')
-    if (response.status === 503) throw new Error('Device removal could not be saved or completed. It may already be disconnected. Retry removal before restarting Main.')
+    if (response.status === 404) throw new Error(t('This device or the removal endpoint is unavailable. Refresh devices and check that Main is up to date.'))
+    if (response.status === 503) throw new Error(t('Device removal could not be saved or completed. It may already be disconnected. Retry removal before restarting Main.'))
   }
   if (response.status === 404 || response.status === 501 || (response.ok && !json)) {
-    throw new Error('Device administration is unavailable. Restart Main after updating Shadow, then retry.')
+    throw new Error(t('Device administration is unavailable. Restart Main after updating Shadow, then retry.'))
   }
   if (response.status === 503 && path === '/nodes/v1/network' && method === 'PUT' && json) {
     const failure: unknown = await response.json()
@@ -165,7 +166,7 @@ export async function deviceAdminRequest(
       if (network.state === 'error') return network
     }
   }
-  if (!response.ok) throw new Error(`Device request failed (${response.status}). Refresh and retry; check Main if the problem continues.`)
+  if (!response.ok) throw new Error(t('Device request failed ({status}). Refresh and retry; check Main if the problem continues.', { status: response.status }))
   try { return await response.json() } catch (cause) {
     if (cause instanceof SyntaxError) throw invalid()
     throw cause

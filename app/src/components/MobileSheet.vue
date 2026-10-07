@@ -7,7 +7,7 @@
       <section ref="panel" class="mobile-sheet" role="dialog" aria-modal="true" :aria-label="label" tabindex="-1" @keydown="keydown">
         <header class="mobile-sheet-heading">
           <h2>{{ label }}</h2>
-          <button type="button" :aria-label="`Close ${label}`" @click="close"><span class="i-lucide-x" aria-hidden="true" /></button>
+          <button type="button" :aria-label="t('Close {label}', { label: label })" @click="close"><span class="i-lucide-x" aria-hidden="true" /></button>
         </header>
         <div class="mobile-sheet-content"><slot :close="close" /></div>
       </section>
@@ -17,6 +17,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 

@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { isRecord, type SidebarSession } from './folders-sidebar.ts'
 import { executionDisplayStage, isExecutionStatus } from './subagent-executions.ts'
 import { pairToolResults, parseToolCall, type ToolActivityMessage } from './tool-activity.ts'
@@ -52,7 +53,7 @@ export function inlineExecutionMessages(
     const failed = raw !== undefined && (!result || result.status === 'failed' || blocked)
     entries.set(index, {
       mode,
-      label: typeof call.args.description === 'string' ? call.args.description : session?.label ?? (mode === 'task' ? 'Delegated task' : 'Context call'),
+      label: typeof call.args.description === 'string' ? call.args.description : session?.label ?? (mode === 'task' ? t('Delegated task') : t('Context call')),
       agentType: session?.agentType ?? (typeof call.args.agent_type === 'string' ? call.args.agent_type : undefined),
       sessionId: session?.sessionId ?? (typeof result?.sessionId === 'string' && result.sessionId ? result.sessionId : undefined),
       stage: blocked || failed ? 'failed' : session ? executionDisplayStage(session, stages[session.sessionId]) : status ?? (live ? 'running' : undefined),

@@ -7,18 +7,19 @@
       <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
       <span v-else class="activity-dot" />
     </span>
-    <span v-if="(stage || !delegatedLabel) && (!compact || activity.kind === 'waiting' && !iconOnly)" class="activity-label">{{ compact ? 'Needs reply' : activity.label }}</span>
+    <span v-if="(stage || !delegatedLabel) && (!compact || activity.kind === 'waiting' && !iconOnly)" class="activity-label">{{ compact ? t('Needs reply') : activity.label }}</span>
     <span v-if="delegatedLabel" class="subagent-activity" :class="subagents?.running ? 'subagent-running' : subagents?.waiting ? 'subagent-waiting' : 'subagent-pending'" :title="delegatedLabel">
       <span class="subagent-symbol" aria-hidden="true">
         <span v-if="subagents?.running" class="activity-wave subagent-wave"><i /><i /><i /></span>
         <span v-else class="i-lucide-git-branch subagent-icon" />
       </span>
-      <span v-if="!iconOnly" class="activity-label">{{ compact ? `${subagentCount} agent${subagentCount === 1 ? '' : 's'}` : delegatedLabel }}</span>
+      <span v-if="!iconOnly" class="activity-label">{{ compact ? t('{count} agents', { count: subagentCount }, subagentCount) : delegatedLabel }}</span>
     </span>
   </span>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed } from 'vue'
 import { isWaitingStage, sessionActivity } from '../session-activity.ts'
 import { subagentActivityLabel, type SubagentActivity } from '../subagent-executions.ts'

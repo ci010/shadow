@@ -1,13 +1,13 @@
 <template>
-  <section class="automation-detail" aria-label="Conversation workspace">
+  <section class="automation-detail" :aria-label="t('Conversation workspace')">
     <div v-if="enabled && !selectedSessionId" class="automation-empty" :aria-busy="loading">
-      <h1>{{ automation?.name || 'Automation' }}</h1>
-      <p v-if="loading" role="status">Loading conversation…</p>
+      <h1>{{ automation?.name || t('Automation') }}</h1>
+      <p v-if="loading" role="status">{{ t('Loading conversation…') }}</p>
       <template v-else-if="error || history.error">
         <p role="alert">{{ error || history.error }}</p>
-        <button class="btn btn-sm" @click="refresh">Retry</button>
+        <button class="btn btn-sm" @click="refresh">{{ t('Retry') }}</button>
       </template>
-      <p v-else>No saved runs yet. The conversation will appear after the first run.</p>
+      <p v-else>{{ t('No saved runs yet. The conversation will appear after the first run.') }}</p>
       <AutomationConversationInfo v-if="automation && !error && !history.error" :conversation="conversation" />
     </div>
     <slot />
@@ -15,6 +15,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, provide, reactive, watch } from 'vue'
 import { automationConversationKey, type AutomationConversation } from '../composables/useAutomationConversation.ts'
 import { createAutomationConversation, automationRunPosition } from '../automation-conversation.ts'
@@ -27,12 +28,12 @@ const emit = defineEmits<{ open: [sessionId: string, replace: boolean] }>()
 const catalog = useAutomationCatalog(() => props.apiBase, () => props.active && props.enabled && !!props.automationId)
 const automation = computed(() => catalog.jobs.value.find(item => item.id === props.automationId) ?? null)
 const error = computed(() => catalog.error.value || (catalog.loaded.value && !automation.value
-  ? 'This automation is no longer available. Saved conversations can still be viewed.' : ''))
+  ? t('This automation is no longer available. Saved conversations can still be viewed.') : ''))
 const history = reactive(emptyAutomationRunHistory())
 const position = computed(() => automationRunPosition(history, props.selectedSessionId))
 const loading = computed(() => history.loading || catalog.loading.value)
 const historyError = computed(() => history.error || (position.value.missing
-  ? 'This conversation is no longer in the automation history. Return to the current conversation or refresh.' : ''))
+  ? t('This conversation is no longer in the automation history. Return to the current conversation or refresh.') : ''))
 const historyCache = new Map<string, ReturnType<typeof emptyAutomationRunHistory>>()
 let identity = ''
 let runHistory: ReturnType<typeof createAutomationRunHistory> | undefined

@@ -2,35 +2,36 @@
   <DesktopFrame>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="auth-title" :aria-busy="session.busy.value">
-        <h1 id="auth-title">{{ session.view.value === 'pairing' ? 'Connect this browser' : session.view.value === 'error' ? 'Cannot connect to Shadow' : 'Connecting to Shadow' }}</h1>
+        <h1 id="auth-title">{{ session.view.value === 'pairing' ? t('Connect this browser') : session.view.value === 'error' ? t('Cannot connect to Shadow') : t('Connecting to Shadow') }}</h1>
         <template v-if="session.view.value === 'pairing'">
-          <p v-if="usePin">Enter the shared PIN to access Shadow as an administrator on this computer.</p>
-          <p v-else>Generate a short-lived, one-use pairing code in the trusted Shadow CLI, then enter it here.</p>
+          <p v-if="usePin">{{ t('Enter the shared PIN to access Shadow as an administrator on this computer.') }}</p>
+          <p v-else>{{ t('Generate a short-lived, one-use pairing code in the trusted Shadow CLI, then enter it here.') }}</p>
           <form @submit.prevent="pair">
-            <label for="pairing-code">{{ usePin ? 'Administrator PIN' : 'Pairing code' }}</label>
+            <label for="pairing-code">{{ usePin ? t('Administrator PIN') : t('Pairing code') }}</label>
             <input id="pairing-code" v-model="code" :type="usePin ? 'password' : 'text'" autocomplete="off" autocapitalize="off" :spellcheck="false" required :disabled="session.busy.value" aria-describedby="pairing-help" autofocus>
-            <p id="pairing-help" class="hint">This browser stays signed in for up to 12 hours. {{ usePin ? 'You can use the same PIN again after expiry or a backend restart.' : 'Your current page will open after pairing.' }}</p>
+            <p id="pairing-help" class="hint">{{ t('This browser stays signed in for up to 12 hours.') }} {{ usePin ? t('You can use the same PIN again after expiry or a backend restart.') : t('Your current page will open after pairing.') }}</p>
             <p v-if="session.error.value" class="auth-error" role="alert">{{ session.error.value }}</p>
-            <button class="primary" type="submit" :disabled="session.busy.value || !code.trim()">{{ session.busy.value ? 'Connecting…' : 'Connect browser' }}</button>
+            <button class="primary" type="submit" :disabled="session.busy.value || !code.trim()">{{ session.busy.value ? t('Connecting…') : t('Connect browser') }}</button>
           </form>
           <div class="auth-alternatives">
-            <button type="button" :disabled="session.busy.value" @click="session.refresh()">Check session</button>
+            <button type="button" :disabled="session.busy.value" @click="session.refresh()">{{ t('Check session') }}</button>
             <button v-if="session.status.value?.pinAvailable" type="button" :disabled="session.busy.value" @click="code = ''; pairingCode = !pairingCode">
-              {{ usePin ? 'Use a one-use pairing code instead' : 'Use administrator PIN instead' }}
+              {{ usePin ? t('Use a one-use pairing code instead') : t('Use administrator PIN instead') }}
             </button>
           </div>
         </template>
         <template v-else-if="session.view.value === 'error'">
           <p class="auth-error" role="alert">{{ session.error.value }}</p>
-          <button class="primary" :disabled="session.busy.value" @click="session.retry()">{{ session.busy.value ? 'Trying again…' : 'Retry' }}</button>
+          <button class="primary" :disabled="session.busy.value" @click="session.retry()">{{ session.busy.value ? t('Trying again…') : t('Retry') }}</button>
         </template>
-        <p v-else role="status">Checking this browser’s session…</p>
+        <p v-else role="status">{{ t('Checking this browser’s session…') }}</p>
       </section>
     </main>
   </DesktopFrame>
 </template>
 
 <script setup lang="ts">
+import { t } from './i18n.ts'
 import { computed, ref } from 'vue'
 import DesktopFrame from './DesktopFrame.vue'
 import type { BrowserSession } from './web-auth.ts'

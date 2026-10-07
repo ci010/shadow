@@ -1,10 +1,10 @@
 <template>
-  <section class="work-graph" aria-label="Work relationships">
-    <p class="graph-legend"><span class="child-line" /> Parent → child <span class="dependency-line" /> Prerequisite → dependent
-      <span v-if="layout.outside">{{ layout.outside }} links leave this filtered view.</span>
+  <section class="work-graph" :aria-label="t('Work relationships')">
+    <p class="graph-legend"><span class="child-line" /> {{ t('Parent → child') }} <span class="dependency-line" /> {{ t('Prerequisite → dependent') }}
+      <span v-if="layout.outside">{{ layout.outside }} {{ t('links leave this filtered view.') }}</span>
     </p>
-    <p v-if="items.length > 200" role="status">Too many items for a readable graph. Filter to an Initiative or session, or use the board.</p>
-    <div v-else class="graph-scroll" tabindex="0" aria-label="Scrollable work graph">
+    <p v-if="items.length > 200" role="status">{{ t('Too many items for a readable graph. Filter to an Initiative or session, or use the board.') }}</p>
+    <div v-else class="graph-scroll" tabindex="0" :aria-label="t('Scrollable work graph')">
       <div class="graph-canvas" :style="{ width: `${layout.width}px`, height: `${layout.height}px` }">
         <svg :width="layout.width" :height="layout.height" aria-hidden="true">
           <defs><marker :id="markerId" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="context-stroke" /></marker></defs>
@@ -21,6 +21,7 @@
   </section>
 </template>
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, useId } from 'vue'
 import type { ProjectWorkItem } from '../../../src/projects/work-overview.ts'
 import { workGraph } from '../project-work.ts'

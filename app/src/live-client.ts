@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import {
   isRealtimeEnvelope, isRealtimeTopic, realtimeTopicKey,
   type RealtimeEnvelope, type RealtimeTopic,
@@ -80,7 +81,7 @@ export function createLiveClient(base: string, options: {
     recovering = true
     stopSource()
     clearTimeout(timer)
-    update({ phase: 'reconnecting', error: 'Live updates disconnected. Reconnecting to Main; saved history remains available.' })
+    update({ phase: 'reconnecting', error: t('Live updates disconnected. Reconnecting to Main; saved history remains available.') })
     timer = setTimeout(connect, Math.min(10_000, 500 * 2 ** Math.min(attempt++, 5)))
   }
   function initialize(subscriber: Subscriber, reason: LiveResetReason) {
@@ -88,12 +89,12 @@ export function createLiveClient(base: string, options: {
     subscriber.observer.reset(reason)
   }
   function projectUnavailable() {
-    return new Error('This project is unavailable. Retry project startup before submitting a message.')
+    return new Error(t('This project is unavailable. Retry project startup before submitting a message.'))
   }
   function deliver(envelope: RealtimeEnvelope) {
     if (envelope.type === 'unavailable') {
       const keys = envelope.topics.map(realtimeTopicKey)
-      if (keys.some(key => !connectedTopics.has(key))) throw new Error('Unexpected unavailable live topic')
+      if (keys.some(key => !connectedTopics.has(key))) throw new Error(t('Unexpected unavailable live topic'))
       unavailableTopics = new Set(keys)
       for (const waiter of [...waiters]) {
         if (unavailableTopics.has(realtimeTopicKey(waiter.owner.topic))) waiter.reject(projectUnavailable())
@@ -105,7 +106,7 @@ export function createLiveClient(base: string, options: {
         const separator = cursor.lastIndexOf(':')
         const nextSeparator = envelope.cursor.lastIndexOf(':')
         if (cursor.slice(0, separator) !== envelope.cursor.slice(0, nextSeparator)) {
-          throw new Error('Main changed its live event generation without a reset. Retry live updates.')
+          throw new Error(t('Main changed its live event generation without a reset. Retry live updates.'))
         }
         if (Number(envelope.cursor.slice(nextSeparator + 1)) <= Number(cursor.slice(separator + 1))) return
       }
@@ -152,7 +153,7 @@ export function createLiveClient(base: string, options: {
       source = current
       connectedTopics = nextTopics
       unavailableTopics.clear()
-      update({ phase: attempt ? 'reconnecting' : 'connecting', ...(attempt ? { error: 'Live updates are reconnecting to Main.' } : {}) })
+      update({ phase: attempt ? 'reconnecting' : 'connecting', ...(attempt ? { error: t('Live updates are reconnecting to Main.') } : {}) })
       heartbeat()
       current.addEventListener('realtime', event => {
         if (source !== current || disposed) return
@@ -163,12 +164,12 @@ export function createLiveClient(base: string, options: {
           heartbeat()
           deliver(envelope)
         } catch {
-          fail(new Error('Could not validate or apply live updates. Retry live updates to reload saved state.'))
+          fail(new Error(t('Could not validate or apply live updates. Retry live updates to reload saved state.')))
         }
       })
       current.addEventListener('error', () => { if (source === current) reconnect() })
     } catch {
-      fail(new Error('Could not open live updates. Check the Main address and retry.'))
+      fail(new Error(t('Could not open live updates. Check the Main address and retry.')))
     }
   }
   function changed() {
@@ -184,8 +185,8 @@ export function createLiveClient(base: string, options: {
     } else timer = setTimeout(connect, 0)
   }
   function subscribe(topic: RealtimeTopic, observer: LiveObserver): LiveSubscription {
-    if (disposed) throw new Error('Live updates have been disposed.')
-    if (!isRealtimeTopic(topic)) throw new Error('Invalid live subscription.')
+    if (disposed) throw new Error(t('Live updates have been disposed.'))
+    if (!isRealtimeTopic(topic)) throw new Error(t('Invalid live subscription.'))
     const subscriber: Subscriber = { topic, observer, closed: false, initialized: false }
     subscribers.add(subscriber)
     changed()
@@ -193,12 +194,12 @@ export function createLiveClient(base: string, options: {
       queueMicrotask(() => {
         if (subscriber.closed) return
         try { initialize(subscriber, 'subscription') }
-        catch { fail(new Error('Could not reload live state. Retry live updates.')) }
+        catch { fail(new Error(t('Could not reload live state. Retry live updates.'))) }
       })
     }
     return {
       ready(signal) {
-        if (subscriber.closed) return Promise.reject(new DOMException('Live subscription closed', 'AbortError'))
+        if (subscriber.closed) return Promise.reject(new DOMException(t('Live subscription closed'), 'AbortError'))
         if (signal?.aborted) return Promise.reject(signal.reason)
         if (ready && unavailableTopics.has(realtimeTopicKey(topic))) return Promise.reject(projectUnavailable())
         if (ready && connectedTopics.has(realtimeTopicKey(topic))) return Promise.resolve()
@@ -212,7 +213,7 @@ export function createLiveClient(base: string, options: {
             if (error !== undefined) reject(error)
             else resolve()
           }
-          const abort = () => finish(signal?.aborted ? signal.reason : new Error('Live updates are not ready. Check Main and retry; no message was submitted.'))
+          const abort = () => finish(signal?.aborted ? signal.reason : new Error(t('Live updates are not ready. Check Main and retry; no message was submitted.')))
           const waiter: Waiter = { owner: subscriber, resolve: () => finish(), reject: finish }
           waiters.add(waiter)
           combined.addEventListener('abort', abort, { once: true })
@@ -223,7 +224,7 @@ export function createLiveClient(base: string, options: {
         if (subscriber.closed) return
         subscriber.closed = true
         subscribers.delete(subscriber)
-        for (const waiter of [...waiters]) if (waiter.owner === subscriber) waiter.reject(new DOMException('Live subscription closed', 'AbortError'))
+        for (const waiter of [...waiters]) if (waiter.owner === subscriber) waiter.reject(new DOMException(t('Live subscription closed'), 'AbortError'))
         changed()
       },
     }
@@ -244,7 +245,7 @@ export function createLiveClient(base: string, options: {
       disposed = true
       clearTimeout(timer)
       stopSource()
-      for (const waiter of [...waiters]) waiter.reject(new DOMException('Live updates closed', 'AbortError'))
+      for (const waiter of [...waiters]) waiter.reject(new DOMException(t('Live updates closed'), 'AbortError'))
       subscribers.clear()
       update({ phase: 'idle' })
     },

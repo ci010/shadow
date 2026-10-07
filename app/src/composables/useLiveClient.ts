@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { getCurrentInstance, inject, type InjectionKey } from 'vue'
 import { hostBase } from '../api-url.ts'
 import { createLiveClient, type LiveClient, type LiveStatus } from '../live-client.ts'
@@ -38,7 +39,7 @@ export function createLiveClientPool() {
 const poolKey: InjectionKey<ReturnType<typeof createLiveClientPool>> = Symbol.for('shadow.live-client-pool')
 export function useLiveClientPool() {
   const instance = getCurrentInstance()
-  if (!instance) throw new Error('Live updates require a Vue application context.')
+  if (!instance) throw new Error(t('Live updates require a Vue application context.'))
   const existing = inject(poolKey, undefined)
   if (existing) return existing
   const pool = createLiveClientPool()

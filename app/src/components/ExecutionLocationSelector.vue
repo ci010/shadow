@@ -1,20 +1,20 @@
 <template>
-  <ComposerPopover ref="popover" label="Execution location" :title="label" :disabled="disabled" :width="360" @opened="refresh" @closed="closed">
+  <ComposerPopover ref="popover" :label="t('Execution location')" :title="label" :disabled="disabled" :width="360" @opened="refresh" @closed="closed">
     <template #trigger>
       <span :class="folder ? 'i-lucide-folder' : selected ? 'i-lucide-monitor' : 'i-lucide-laptop'" aria-hidden="true" />
       <span class="location-label">{{ label }}</span>
       <span class="i-lucide-chevron-down" aria-hidden="true" />
     </template>
     <template #default="{ close }">
-      <div class="location-header"><strong>Execution location</strong><button class="location-refresh" :disabled="loading" @click="refresh">Refresh</button></div>
+      <div class="location-header"><strong>{{ t('Execution location') }}</strong><button class="location-refresh" :disabled="loading" @click="refresh">{{ t('Refresh') }}</button></div>
       <button class="location-option" :aria-pressed="!folder && !selected" @click="emit('select', undefined); close()">
-        <span class="i-lucide-laptop" aria-hidden="true" /><span><strong>This computer</strong><small>Managed conversation folder</small></span>
+        <span class="i-lucide-laptop" aria-hidden="true" /><span><strong>{{ t('This computer') }}</strong><small>{{ t('Managed conversation folder') }}</small></span>
         <span v-if="!folder && !selected" class="i-lucide-check" aria-hidden="true" />
       </button>
-      <p v-if="loading" class="location-note" role="status">Loading execution locations...</p>
+      <p v-if="loading" class="location-note" role="status">{{ t('Loading execution locations...') }}</p>
       <p v-if="error" class="location-error" role="alert">{{ error }}</p>
       <template v-if="folderTargets.length">
-        <div class="location-device"><strong>Project folders</strong></div>
+        <div class="location-device"><strong>{{ t('Project folders') }}</strong></div>
         <button v-for="target in folderTargets" :key="target.folder.id"
           class="location-option" :disabled="!target.available || loading || !!error"
           :aria-label="target.folder.name" :aria-pressed="folder?.id === target.folder.id"
@@ -25,23 +25,24 @@
         </button>
       </template>
       <template v-if="targets.length">
-        <div class="location-device"><strong>Remote devices</strong><span>From scratch</span></div>
+        <div class="location-device"><strong>{{ t('Remote devices') }}</strong><span>{{ t('From scratch') }}</span></div>
         <button v-for="target in targets" :key="target.nodeId"
           class="location-option" :disabled="!target.available || loading || !!error"
-          :aria-label="`Start from scratch on ${target.nodeName}`"
+          :aria-label="t('Start from scratch on {nodeName}', { nodeName: target.nodeName })"
           :aria-pressed="!folder && selected?.nodeId === target.nodeId && !selected?.capabilityId"
           @click="emit('select', { kind: 'node', node: target }); close()">
           <span class="i-lucide-monitor" aria-hidden="true" />
-          <span><strong>{{ target.nodeName }}</strong><small>{{ target.unavailableReason || 'New managed conversation folder' }}</small></span>
+          <span><strong>{{ target.nodeName }}</strong><small>{{ target.unavailableReason || t('New managed conversation folder') }}</small></span>
           <span v-if="!folder && selected?.nodeId === target.nodeId && !selected?.capabilityId" class="i-lucide-check" aria-hidden="true" />
         </button>
       </template>
-      <p class="location-note">Conversations and managed folders are created on first send.</p>
+      <p class="location-note">{{ t('Conversations and managed folders are created on first send.') }}</p>
     </template>
   </ComposerPopover>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import ComposerPopover from './ComposerPopover.vue'
 import { fetchNodeInventory, type NodeInventoryEntry } from '../node-inventory.ts'
@@ -52,7 +53,7 @@ import { projectFolderTargets, type ExecutionLocation } from '../execution-locat
 const props = defineProps<{ apiBase: string; projectId: string; folder?: FolderRecord; selected?: RemoteChatTarget; disabled?: boolean }>()
 const emit = defineEmits<{ select: [target: ExecutionLocation | undefined] }>()
 const popover = ref<InstanceType<typeof ComposerPopover>>()
-const label = computed(() => props.folder?.name ?? (props.selected ? `${props.selected.nodeName} · ${props.selected.displayName}` : 'This computer'))
+const label = computed(() => props.folder?.name ?? (props.selected ? `${props.selected.nodeName} · ${props.selected.displayName}` : t('This computer')))
 const nodes = ref<NodeInventoryEntry[]>([])
 const folders = ref<FolderRecord[]>([])
 const folderTargets = computed(() => projectFolderTargets(props.projectId, folders.value, nodes.value))
@@ -95,7 +96,7 @@ async function refresh() {
     if (!controller.signal.aborted) {
       nodes.value = []
       folders.value = []
-      error.value = cause instanceof Error ? cause.message : 'Could not load execution locations. Retry.'
+      error.value = cause instanceof Error ? cause.message : t('Could not load execution locations. Retry.')
       controller.abort()
     }
   } finally {

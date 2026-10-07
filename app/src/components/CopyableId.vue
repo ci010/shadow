@@ -1,15 +1,16 @@
 <template>
   <div class="copyable-id" :class="{ 'copy-wrap': wrap }">
     <span class="copy-value selectable-text">{{ value }}</span>
-    <button type="button" :aria-label="copied ? `${label} copied` : `Copy ${label}`" :title="copied ? `${label} copied` : `Copy ${label}`" :disabled="busy" @click="copy">
+    <button type="button" :aria-label="copied ? t('{label} copied', { label: label }) : t('Copy {label}', { label: label })" :title="copied ? t('{label} copied', { label: label }) : t('Copy {label}', { label: label })" :disabled="busy" @click="copy">
       <span :class="copied ? 'i-lucide-check' : 'i-lucide-copy'" aria-hidden="true" />
     </button>
-    <span v-if="copied" class="copy-feedback" role="status">Copied</span>
+    <span v-if="copied" class="copy-feedback" role="status">{{ t('Copied') }}</span>
     <span v-if="error" class="copy-error" role="alert">{{ error }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { useTextCopy } from '../composables/useTextCopy.ts'
 
 const props = defineProps<{ value: string; label: string; wrap?: boolean }>()

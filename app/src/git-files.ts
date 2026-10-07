@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { FileEntry } from './composables/useSessionFiles.ts'
 import { apiUrl } from './api-url.ts'
 import { nodeOfflineError, workdirUnavailableMessage } from './workdir-request-error.ts'
@@ -9,8 +10,8 @@ const badges: Record<GitChangeKind, string> = {
   modified: 'M', added: 'A', deleted: 'D', renamed: 'R', untracked: 'U', conflicted: '!', typechanged: 'T',
 }
 const labels: Record<GitChangeKind, string> = {
-  modified: 'Modified', added: 'Added', deleted: 'Deleted', renamed: 'Renamed',
-  untracked: 'Untracked', conflicted: 'Conflicted', typechanged: 'Type changed',
+  get modified() { return t('Modified') }, get added() { return t('Added') }, get deleted() { return t('Deleted') }, get renamed() { return t('Renamed') },
+  get untracked() { return t('Untracked') }, get conflicted() { return t('Conflicted') }, get typechanged() { return t('Type changed') },
 }
 export function gitChangeLabel(status: GitChangeKind): string { return labels[status] }
 export function gitChangeBadge(status: GitChangeKind): string { return badges[status] }
@@ -63,10 +64,10 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 export function gitUnavailableLabel(reason: GitStatus['reason']): string {
-  if (reason === 'remote_unsupported') return 'Git changes are not available for this remote workdir. No local folder was used.'
-  if (reason === 'git_unavailable') return 'Git is not installed or is unavailable on the owning device.'
-  if (reason === 'not_repository') return 'This folder is not a Git repository.'
-  return 'Git status is not available for this workdir.'
+  if (reason === 'remote_unsupported') return t('Git changes are not available for this remote workdir. No local folder was used.')
+  if (reason === 'git_unavailable') return t('Git is not installed or is unavailable on the owning device.')
+  if (reason === 'not_repository') return t('This folder is not a Git repository.')
+  return t('Git status is not available for this workdir.')
 }
 
 export function createGitFilesClient(apiBase: string, sessionId: string, folderId?: string) {
@@ -79,11 +80,11 @@ export function createGitFilesClient(apiBase: string, sessionId: string, folderI
     if (!response.ok) {
       const offline = nodeOfflineError(response.status, value)
       if (offline) throw offline
-      if (response.status === 401 || response.status === 403) throw new Error('Access to these Git changes was denied.')
-      if (response.status === 404) throw new Error('This file or workdir is no longer available. Refresh files and changes.')
+      if (response.status === 401 || response.status === 403) throw new Error(t('Access to these Git changes was denied.'))
+      if (response.status === 404) throw new Error(t('This file or workdir is no longer available. Refresh files and changes.'))
       const unavailable = workdirUnavailableMessage(value)
       if (unavailable) throw new Error(unavailable)
-      throw new Error(record(value) && typeof value.message === 'string' ? value.message : `Could not load Git changes (${response.status}). Retry.`)
+      throw new Error(record(value) && typeof value.message === 'string' ? value.message : t('Could not load Git changes ({status}). Retry.', { status: response.status }))
     }
     return value
   }

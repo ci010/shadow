@@ -1,6 +1,6 @@
 <template>
-  <div class="conversation-skeleton" :class="{ paused: !active || hidden }" role="status" aria-label="Loading conversation">
-    <span class="skeleton-label">Loading conversation...</span>
+  <div class="conversation-skeleton" :class="{ paused: !active || hidden }" role="status" :aria-label="t('Loading conversation')">
+    <span class="skeleton-label">{{ t('Loading conversation...') }}</span>
     <div class="skeleton-thread" aria-hidden="true">
       <div class="skeleton-message skeleton-user"><i /><i /></div>
       <div class="skeleton-message skeleton-assistant"><i /><i /><i /></div>
@@ -10,6 +10,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onMounted, onUnmounted, ref } from 'vue'
 withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 const hidden = ref(false)

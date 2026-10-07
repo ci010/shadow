@@ -1,17 +1,17 @@
 <template>
   <div ref="tree" class="file-tree" :class="{ 'has-preview': previewEntry, 'tree-only': treeOnly }">
-    <section class="file-tree-list" :aria-label="folderId ? 'Folder files' : 'Session files'" :aria-busy="loading || sourcePending">
+    <section class="file-tree-list" :aria-label="folderId ? t('Folder files') : t('Session files')" :aria-busy="loading || sourcePending">
       <header class="file-tree-header">
-        <div v-if="treeOnly" class="file-tree-modes" role="tablist" aria-label="Explorer view">
-          <button :id="`${id}-files-tab`" role="tab" :aria-selected="!changesOnly" :aria-controls="`${id}-body`" :tabindex="changesOnly ? -1 : 0" @click="changesOnly = false" @keydown="viewKey">Files</button>
-          <HoverInfo :text="offline ? 'Node offline' : gitError || (gitStatus?.available ? 'All uncommitted changes from HEAD' : gitLoading ? 'Checking Git status...' : gitUnavailableLabel(gitStatus?.reason))" v-slot="{ triggerProps }">
-          <button v-bind="triggerProps" :id="`${id}-changes-tab`" role="tab" :aria-selected="changesOnly" :aria-controls="`${id}-body`" :tabindex="changesOnly ? 0 : -1" :disabled="offline || !gitStatus?.available" @click="changesOnly = true" @keydown="viewKey">Changes</button>
+        <div v-if="treeOnly" class="file-tree-modes" role="tablist" :aria-label="t('Explorer view')">
+          <button :id="`${id}-files-tab`" role="tab" :aria-selected="!changesOnly" :aria-controls="`${id}-body`" :tabindex="changesOnly ? -1 : 0" @click="changesOnly = false" @keydown="viewKey">{{ t('Files') }}</button>
+          <HoverInfo :text="offline ? t('Node offline') : gitError || (gitStatus?.available ? t('All uncommitted changes from HEAD') : gitLoading ? t('Checking Git status...') : gitUnavailableLabel(gitStatus?.reason))" v-slot="{ triggerProps }">
+          <button v-bind="triggerProps" :id="`${id}-changes-tab`" role="tab" :aria-selected="changesOnly" :aria-controls="`${id}-body`" :tabindex="changesOnly ? 0 : -1" :disabled="offline || !gitStatus?.available" @click="changesOnly = true" @keydown="viewKey">{{ t('Changes') }}</button>
           </HoverInfo>
         </div>
-        <span v-else>Current workdir</span>
+        <span v-else>{{ t('Current workdir') }}</span>
         <div class="file-tree-actions">
           <HoverInfo text="Refresh files and changes" v-slot="{ triggerProps }">
-          <button v-bind="triggerProps" class="file-tree-refresh" aria-label="Refresh files" :aria-busy="loading" :disabled="loading || !hasSource" @click="reload(); $emit('refresh-git')">
+          <button v-bind="triggerProps" class="file-tree-refresh" :aria-label="t('Refresh files')" :aria-busy="loading" :disabled="loading || !hasSource" @click="reload(); $emit('refresh-git')">
             <span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" />
           </button>
           </HoverInfo>
@@ -19,8 +19,8 @@
         </div>
       </header>
       <div class="file-tree-search">
-        <input v-model="filterQuery" type="search" aria-label="Search file paths" placeholder="Search file paths" />
-        <p v-if="filterQuery && !changesOnly" class="file-tree-search-hint">Searches file paths with ripgrep; respects ignore rules.</p>
+        <input v-model="filterQuery" type="search" :aria-label="t('Search file paths')" :placeholder="t('Search file paths')" />
+        <p v-if="filterQuery && !changesOnly" class="file-tree-search-hint">{{ t('Searches file paths with ripgrep; respects ignore rules.') }}</p>
       </div>
       <div ref="body" :id="`${id}-body`" class="file-tree-body" :role="treeOnly ? 'tabpanel' : undefined" :aria-labelledby="treeOnly ? `${id}-${changesOnly ? 'changes' : 'files'}-tab` : undefined" @scroll="saveScroll">
         <HoverInfo v-if="loaded" :text="workspaceInfo" v-slot="{ triggerProps }">
@@ -31,21 +31,21 @@
         </HoverInfo>
         <NodeOfflineState v-if="offline" :checking="loading || gitLoading" @retry="reload(); $emit('refresh-git')" />
         <template v-else>
-        <div v-if="gitError" class="file-tree-note error" role="alert">{{ gitError }} <button class="file-tree-retry" @click="$emit('refresh-git')">Retry Git</button></div>
+        <div v-if="gitError" class="file-tree-note error" role="alert">{{ gitError }} <button class="file-tree-retry" @click="$emit('refresh-git')">{{ t('Retry Git') }}</button></div>
         <p v-if="!changesOnly && !gitStatus?.available && gitStatus?.reason && gitStatus.reason !== 'not_repository'" class="file-tree-note" role="status">{{ gitUnavailableLabel(gitStatus.reason) }}</p>
-        <p v-if="!hasSource" class="file-tree-note">Open a folder or select a conversation to browse files.</p>
-        <p v-else-if="changesOnly && gitLoading" class="file-tree-note" role="status">Loading changes...</p>
+        <p v-if="!hasSource" class="file-tree-note">{{ t('Open a folder or select a conversation to browse files.') }}</p>
+        <p v-else-if="changesOnly && gitLoading" class="file-tree-note" role="status">{{ t('Loading changes...') }}</p>
         <p v-else-if="changesOnly && !gitStatus?.available" class="file-tree-note">{{ gitUnavailableLabel(gitStatus?.reason) }}</p>
-        <p v-else-if="!changesOnly && loading && !loaded" class="file-tree-note" role="status">{{ remote ? 'Loading remote files...' : 'Loading files...' }}</p>
+        <p v-else-if="!changesOnly && loading && !loaded" class="file-tree-note" role="status">{{ remote ? t('Loading remote files...') : t('Loading files...') }}</p>
         <div v-if="!changesOnly && error" class="file-tree-note error" role="alert">
-          <p>{{ error }}</p><button class="file-tree-retry" @click="reload()">Retry</button>
+          <p>{{ error }}</p><button class="file-tree-retry" @click="reload()">{{ t('Retry') }}</button>
         </div>
-        <p v-if="hasSource && changesOnly && gitStatus?.available && !gitLoading && displayEntries.length === 0 && !gitError" class="file-tree-note">Working tree clean.</p>
+        <p v-if="hasSource && changesOnly && gitStatus?.available && !gitLoading && displayEntries.length === 0 && !gitError" class="file-tree-note">{{ t('Working tree clean.') }}</p>
         <template v-if="normalizedFilter && !changesOnly && hasSource">
-          <p v-if="searching" class="file-tree-note" role="status">Searching file paths...</p>
+          <p v-if="searching" class="file-tree-note" role="status">{{ t('Searching file paths...') }}</p>
           <p v-if="searchError" class="file-tree-note error" role="alert">{{ searchError }}</p>
-          <p v-if="!searching && !searchError && !searchPaths.length" class="file-tree-note">No matching file paths.</p>
-          <p v-if="searchTruncated" class="file-tree-note">Showing the first 200 matches. Narrow your search to find more.</p>
+          <p v-if="!searching && !searchError && !searchPaths.length" class="file-tree-note">{{ t('No matching file paths.') }}</p>
+          <p v-if="searchTruncated" class="file-tree-note">{{ t('Showing the first 200 matches. Narrow your search to find more.') }}</p>
           <template v-for="path in searchPaths" :key="path">
           <FileTreeNode v-if="isArchive(path)" :api-base="displaySource.apiBase" :session-id="displaySource.sessionId"
             :folder-id="displaySource.folderId" :dir="path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''"
@@ -58,7 +58,7 @@
           </button>
           </template>
         </template>
-        <p v-if="filterQuery && changesOnly && !filteredEntries.length && gitStatus?.available" class="file-tree-note">No matching changes.</p>
+        <p v-if="filterQuery && changesOnly && !filteredEntries.length && gitStatus?.available" class="file-tree-note">{{ t('No matching changes.') }}</p>
         <template v-if="!normalizedFilter || changesOnly">
         <template v-if="hasSource && (changesOnly ? gitStatus?.available : loaded)">
           <FileTreeNode v-for="entry in filteredEntries" :key="`${workspaceKey}:${changesOnly}:${fileEntryKey(entry)}`" :api-base="displaySource.apiBase"
@@ -76,11 +76,12 @@
     <FilePreviewModal v-if="previewEntry" :key="previewPath" inline :api-base="apiBase" :session-id="sessionId"
       :remote="workdir?.kind === 'remote'"
       :folder-id="folderId" :dir="previewDir" :entry="previewEntry" @close="closePreview" />
-    <div v-else-if="previewOnOpen" class="file-preview-empty">Select a file to preview its current contents.</div>
+    <div v-else-if="previewOnOpen" class="file-preview-empty">{{ t('Select a file to preview its current contents.') }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, inject, nextTick, onUnmounted, ref, shallowRef, useId, watch } from 'vue'
 import FileTreeNode from './FileTreeNode.vue'
 import FilePreviewModal from './FilePreviewModal.vue'
@@ -123,11 +124,11 @@ const currentSource = (): FileTreeSource => ({ apiBase: props.apiBase, sessionId
 const displaySource = ref(currentSource())
 const sourcePending = ref(false)
 const workspaceKey = computed(() => fileWorkspaceKey(displaySource.value, workdir.value))
-const workspaceLabel = computed(() => workdir.value?.scope === 'home' ? 'Home'
+const workspaceLabel = computed(() => workdir.value?.scope === 'home' ? t('Home')
   : workdir.value?.displayPath?.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1)
-    || (workdir.value?.kind === 'remote' ? 'Remote workspace' : props.folderId ? 'Folder workspace' : 'Session workspace'))
+    || (workdir.value?.kind === 'remote' ? t('Remote workspace') : props.folderId ? t('Folder workspace') : t('Session workspace')))
 const workspaceInfo = computed(() => [
-  workdir.value?.scope === 'home' ? 'Home' : workdir.value?.kind === 'remote' ? 'Remote workspace' : 'Current workspace',
+  workdir.value?.scope === 'home' ? t('Home') : workdir.value?.kind === 'remote' ? t('Remote workspace') : t('Current workspace'),
   workdir.value?.displayPath,
 ].filter(Boolean).join('\n'))
 const error = ref('')
@@ -176,7 +177,7 @@ async function reload(refreshChildren = true): Promise<void> {
         sourcePending.value = false
       }
       fileOffline.value = isNodeOfflineError(cause)
-      error.value = fileOffline.value ? '' : cause instanceof Error ? cause.message : 'Could not load files. Retry.'
+      error.value = fileOffline.value ? '' : cause instanceof Error ? cause.message : t('Could not load files. Retry.')
     }
   } finally {
     if (request === controller) { request = undefined; loading.value = false }
@@ -270,7 +271,7 @@ watch([normalizedFilter, changesOnly, () => props.active, () => props.apiBase, (
           searchTruncated.value = result.truncated
         }
       } catch (cause) {
-        if (!controller.signal.aborted) searchError.value = cause instanceof Error ? cause.message : 'File search failed. Retry.'
+        if (!controller.signal.aborted) searchError.value = cause instanceof Error ? cause.message : t('File search failed. Retry.')
       } finally { if (!controller.signal.aborted) searching.value = false }
     }, 200)
     onCleanup(() => { clearTimeout(timer); controller.abort() })

@@ -1,11 +1,11 @@
 <template>
-  <section class="graph-panel" aria-label="Knowledge relationship graph">
+  <section class="graph-panel" :aria-label="t('Knowledge relationship graph')">
     <div class="graph-toolbar">
-      <span>{{ graph.nodes.length }} nodes / {{ graph.links.length }} links. Arrows point to referenced entries.</span>
-      <label>Zoom <input v-model.number="zoom" aria-label="Graph zoom" type="range" min="50" max="150" step="10" /></label>
+      <span>{{ graph.nodes.length }} {{ t('nodes /') }} {{ graph.links.length }} {{ t('links. Arrows point to referenced entries.') }}</span>
+      <label>{{ t('Zoom') }} <input v-model.number="zoom" :aria-label="t('Graph zoom')" type="range" min="50" max="150" step="10" /></label>
     </div>
-    <div class="graph-scroll" tabindex="0" aria-label="Scrollable relationship graph">
-      <p v-if="!graph.nodes.length" class="empty">No entries match. Change the filter or search.</p>
+    <div class="graph-scroll" tabindex="0" :aria-label="t('Scrollable relationship graph')">
+      <p v-if="!graph.nodes.length" class="empty">{{ t('No entries match. Change the filter or search.') }}</p>
       <svg v-else :width="graph.width * zoom / 100" :height="graph.height * zoom / 100" :viewBox="`0 0 ${graph.width} ${graph.height}`">
         <defs><marker :id="arrowId" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker></defs>
         <text v-for="(label, index) in ['Memory', 'Wiki', 'Skills', 'Outside catalog']" :key="label" :x="20 + index * 280" y="25" class="column-label">{{ label }}</text>
@@ -15,12 +15,12 @@
         </path>
         <g v-for="node in graph.nodes" :key="node.id" :transform="`translate(${node.x},${node.y})`"
           class="node" :class="[node.kind, { selected: node.id === selectedId }]" role="button" tabindex="0"
-          :aria-label="`${node.title}${node.kind === 'missing' ? ' (unresolved reference)' : ''}`" :aria-pressed="node.id === selectedId"
+          :aria-label="`${node.title}${node.kind === 'missing' ? t(' (unresolved reference)') : ''}`" :aria-pressed="node.id === selectedId"
           @click="$emit('select', node.id)" @keydown.enter.prevent="$emit('select', node.id)" @keydown.space.prevent="$emit('select', node.id)">
           <title>{{ node.id }}</title>
           <rect width="240" height="52" />
           <text x="12" y="22">{{ short(node.title, 29) }}</text>
-          <text x="12" y="40" class="node-kind">{{ node.kind === 'missing' ? 'Unresolved / outside catalog' : node.kind }}</text>
+          <text x="12" y="40" class="node-kind">{{ enumLabel(node.kind === 'missing' ? t('Unresolved / outside catalog') : node.kind) }}</text>
         </g>
       </svg>
     </div>
@@ -28,6 +28,8 @@
 </template>
 
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t } from '../i18n.ts'
 import { computed, ref, useId } from 'vue'
 import { layoutKnowledgeGraph, type KnowledgeCatalog } from '../knowledge.ts'
 const props = defineProps<{ catalog: KnowledgeCatalog; visibleIds: string[]; selectedId: string }>()

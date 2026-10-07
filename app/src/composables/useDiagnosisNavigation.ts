@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { computed, ref, watch } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
@@ -39,7 +40,7 @@ export function useDiagnosisNavigation(options: {
     }
     if (query[panelKey.value] === route.query[panelKey.value] && query[sectionKey.value] === route.query[sectionKey.value]) return
     void router.replace({ query }).then(() => { error.value = '' }, cause => {
-      error.value = `Could not save the diagnosis view in the URL. ${cause instanceof Error ? cause.message : String(cause)}`
+      error.value = t('Could not save the diagnosis view in the URL. {value1}', { value1: cause instanceof Error ? cause.message : String(cause) })
     })
   }
   function selectSection(value: DiagnosisSection) {

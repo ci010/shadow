@@ -3,20 +3,21 @@
     <dialog ref="dialog" class="session-delete-dialog" role="alertdialog" aria-modal="true" tabindex="-1"
       :aria-labelledby="titleId" :aria-describedby="descriptionId" :aria-busy="busy || undefined"
       @cancel.prevent="close" @keydown.stop @keydown.esc.prevent="close">
-      <h2 :id="titleId">Delete conversation?</h2>
+      <h2 :id="titleId">{{ t('Delete conversation?') }}</h2>
       <p class="delete-target"><strong>{{ target.name }}</strong><span>{{ target.sessionId }}</span></p>
-      <p v-if="target.projectName" class="delete-project">Project: {{ target.projectName }}</p>
-      <p :id="descriptionId">This conversation and its delegated tasks and calls will be deleted, including their execution history. Active work will be stopped. Independent topics are kept; shared history may be retained to protect other conversations. This cannot be undone.</p>
+      <p v-if="target.projectName" class="delete-project">{{ t('Project:') }} {{ target.projectName }}</p>
+      <p :id="descriptionId">{{ t('This conversation and its delegated tasks and calls will be deleted, including their execution history. Active work will be stopped. Independent topics are kept; shared history may be retained to protect other conversations. This cannot be undone.') }}</p>
       <p v-if="error" class="delete-error" role="alert">{{ error }}</p>
       <form @submit.prevent="submit">
-        <button ref="cancelButton" type="button" class="delete-button" :disabled="busy" autofocus @click="close">Cancel</button>
-        <button type="submit" class="delete-button delete-confirm" :disabled="busy">{{ busy ? 'Deleting...' : 'Delete conversation' }}</button>
+        <button ref="cancelButton" type="button" class="delete-button" :disabled="busy" autofocus @click="close">{{ t('Cancel') }}</button>
+        <button type="submit" class="delete-button delete-confirm" :disabled="busy">{{ busy ? t('Deleting...') : t('Delete conversation') }}</button>
       </form>
     </dialog>
   </Teleport>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { nextTick, onDeactivated, onMounted, onUnmounted, ref, useId } from 'vue'
 import { deleteConversation, type SessionDeletionTarget } from '../session-deletion.ts'
 
@@ -46,7 +47,7 @@ async function submit() {
     if (!lifetime.signal.aborted) { deleted = true; emit('deleted', ids) }
   } catch (cause) {
     if (!lifetime.signal.aborted) error.value = cause instanceof Error
-      ? cause.message : 'Deletion was not confirmed. Check Main and refresh the conversation list before retrying.'
+      ? cause.message : t('Deletion was not confirmed. Check Main and refresh the conversation list before retrying.')
   } finally {
     busy.value = false
     if (!lifetime.signal.aborted && error.value) {

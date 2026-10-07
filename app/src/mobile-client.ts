@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { ref, type InjectionKey } from 'vue'
 
 export interface MobileCredentials {
@@ -17,11 +18,11 @@ export function mobileBootTarget(mode: string, native: boolean): 'native' | 'una
 export function validateMainOrigin(value: string): string {
   const trimmed = value.trim()
   let url: URL
-  try { url = new URL(trimmed) } catch { throw new Error('Enter a complete HTTPS Main address, such as https://shadow.example.com.') }
+  try { url = new URL(trimmed) } catch { throw new Error(t('Enter a complete HTTPS Main address, such as https://shadow.example.com.')) }
   if (url.protocol !== 'https:' || !url.hostname || url.username || url.password ||
     url.pathname !== '/' || url.search || url.hash || /[\\?#]/.test(trimmed) ||
     !/^https:\/\/[^/]+\/?$/i.test(trimmed)) {
-    throw new Error('Use an HTTPS origin only, without a username, password, path, query, or fragment.')
+    throw new Error(t('Use an HTTPS origin only, without a username, password, path, query, or fragment.'))
   }
   return url.origin
 }
@@ -33,7 +34,7 @@ export function parseMobileCredentials(value: string): MobileCredentials {
   if (!data || data.version !== 1 || typeof data.origin !== 'string' ||
     validateMainOrigin(data.origin) !== data.origin || typeof data.accessToken !== 'string' ||
     !/^[\x21-\x7e]{16,4096}$/.test(data.accessToken) || !validExpiry(data.expiresAt)) {
-    throw new Error('Saved mobile credentials are invalid or expired. Pair this device again.')
+    throw new Error(t('Saved mobile credentials are invalid or expired. Pair this device again.'))
   }
   return { version: 1, origin: data.origin, accessToken: data.accessToken, expiresAt: data.expiresAt }
 }
@@ -71,11 +72,11 @@ export function createMobileFetch(options: {
       return options.fetch(new Request(request, { headers, credentials: 'omit', redirect: 'error' }))
     }
     const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
-    if (!isMobileBusinessPath(url.pathname, method)) throw new Error('This operation is not available to the mobile client.')
-    if (!credentials || options.signal().aborted) throw new Error('Connect to Main before continuing.')
+    if (!isMobileBusinessPath(url.pathname, method)) throw new Error(t('This operation is not available to the mobile client.'))
+    if (!credentials || options.signal().aborted) throw new Error(t('Connect to Main before continuing.'))
     if (Date.parse(credentials.expiresAt) <= Date.now()) {
       options.unauthorized()
-      throw new Error('Your mobile session expired. Pair this device again.')
+      throw new Error(t('Your mobile session expired. Pair this device again.'))
     }
     const target = new URL(url.pathname + url.search, credentials.origin)
     const request = new Request(input instanceof Request ? input : target, init)
@@ -121,7 +122,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
   async function remove() {
     credentials = undefined
     try { await persist(() => store.remove()) }
-    catch { fail('Could not clear credentials from secure storage. Retry disconnect before using this device again.'); return false }
+    catch { fail(t('Could not clear credentials from secure storage. Retry disconnect before using this device again.')); return false }
     return true
   }
   async function loseAuth() {
@@ -129,7 +130,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     const id = generation
     busy.value = true
     view.value = 'pairing'
-    error.value = 'Your session expired or was revoked. Generate a new one-use code on Main and pair again.'
+    error.value = t('Your session expired or was revoked. Generate a new one-use code on Main and pair again.')
     await remove()
     if (id === generation) busy.value = false
   }
@@ -167,14 +168,14 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
       const data = await response.json()
       if (id !== generation) return
       if (data.version !== 1 || data.authenticated !== true || !validExpiry(data.expiresAt)) {
-        fail('Main returned an invalid session response. Check that Main supports this mobile client.'); return
+        fail(t('Main returned an invalid session response. Check that Main supports this mobile client.')); return
       }
       credentials = { ...credentials, expiresAt: data.expiresAt }
       const saved = JSON.stringify(credentials)
       await persist(() => store.set({ value: saved }))
       if (id === generation) connected()
     } catch {
-      if (id === generation) fail('Could not verify the connection or save it securely. Check Main, HTTPS, and device secure storage, then retry.')
+      if (id === generation) fail(t('Could not verify the connection or save it securely. Check Main, HTTPS, and device secure storage, then retry.'))
     } finally { if (id === generation) busy.value = false }
   }
   async function pair(endpoint: string, code: string) {
@@ -184,29 +185,29 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     try {
       origin.value = validateMainOrigin(endpoint)
       if (!/^(?:[a-f\d]+-)*[a-f\d]+$/i.test(code.trim()) || code.trim().replaceAll('-', '').length !== 24) {
-        throw new Error('Enter the 24-character one-use pairing code generated on Main.')
+        throw new Error(t('Enter the 24-character one-use pairing code generated on Main.'))
       }
       const response = await json('/mobile/v1/pair', { method: 'POST', body: JSON.stringify({ code: code.trim() }), signal })
       if (id !== generation) return
       if (!response.ok) throw new Error(response.status === 401 || response.status === 400
-        ? 'This code is invalid, expired, or already used. Generate a new code on Main.'
-        : 'Main could not pair this device. Check the connection and try a new code.')
+        ? t('This code is invalid, expired, or already used. Generate a new code on Main.')
+        : t('Main could not pair this device. Check the connection and try a new code.'))
       let next: MobileCredentials
       try {
         const data = await response.json()
         next = parseMobileCredentials(JSON.stringify({ ...data, origin: origin.value }))
-      } catch { throw new Error('Main returned an invalid pairing response. Check that Main supports this mobile client, then generate a new code.') }
+      } catch { throw new Error(t('Main returned an invalid pairing response. Check that Main supports this mobile client, then generate a new code.')) }
       if (id !== generation) return
       try { await persist(() => store.set({ value: JSON.stringify(next) })) }
       catch {
         void json('/mobile/v1/session', { method: 'DELETE', signal: AbortSignal.timeout(5000) }, next.accessToken).catch(() => {})
-        throw new Error('Could not save credentials in device secure storage. Nothing was saved in browser storage. Retry with a new code.')
+        throw new Error(t('Could not save credentials in device secure storage. Nothing was saved in browser storage. Retry with a new code.'))
       }
       if (id !== generation) return
       credentials = next
       connected()
     } catch (cause) {
-      if (id === generation) error.value = cause instanceof Error && !(cause instanceof TypeError) ? cause.message : 'Could not reach Main securely. Check its HTTPS address and connection, then try a new code.'
+      if (id === generation) error.value = cause instanceof Error && !(cause instanceof TypeError) ? cause.message : t('Could not reach Main securely. Check its HTTPS address and connection, then try a new code.')
     } finally { if (id === generation) busy.value = false }
   }
   async function load() {
@@ -221,7 +222,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
       try { credentials = parseMobileCredentials(saved.value); origin.value = credentials.origin }
       catch { await loseAuth(); return }
       await refresh()
-    } catch { if (id === generation) fail('Device secure storage is unavailable. Unlock the device and retry. Browser storage is never used for credentials.') }
+    } catch { if (id === generation) fail(t('Device secure storage is unavailable. Unlock the device and retry. Browser storage is never used for credentials.')) }
     finally { if (id === generation) busy.value = false }
   }
   async function disconnect() {
@@ -245,7 +246,7 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     busy.value = false
     if (cleared) {
       view.value = 'pairing'
-      error.value = revoked ? '' : 'Disconnected on this device. Main was unreachable, so remote revocation was not confirmed. Revoke the mobile session on Main.'
+      error.value = revoked ? '' : t('Disconnected on this device. Main was unreachable, so remote revocation was not confirmed. Revoke the mobile session on Main.')
     }
   }
   function setActive(value: boolean) {
@@ -261,13 +262,13 @@ export function createMobileSession(store: CredentialStore, request: typeof fetc
     signal: () => lifetime.signal,
     unauthorized: () => { if (credentials) void loseAuth() },
     async resourceTicket(path: string, signal: AbortSignal) {
-      if (!credentials || lifetime.signal.aborted) throw new Error('Connect to Main to open this resource.')
+      if (!credentials || lifetime.signal.aborted) throw new Error(t('Connect to Main to open this resource.'))
       const response = await json('/mobile/v1/resource-ticket', {
         method: 'POST', body: JSON.stringify({ path }),
         signal: AbortSignal.any([signal, lifetime.signal, AbortSignal.timeout(15_000)]),
       }, credentials.accessToken)
-      if (response.status === 401) { await loseAuth(); throw new Error('Pair again to open this resource.') }
-      if (!response.ok) throw new Error('Could not authorize this resource. Retry the connection to reload it.')
+      if (response.status === 401) { await loseAuth(); throw new Error(t('Pair again to open this resource.')) }
+      if (!response.ok) throw new Error(t('Could not authorize this resource. Retry the connection to reload it.'))
       return response.json() as Promise<unknown>
     },
     dispose() { disposed = true; stop(); credentials = undefined },

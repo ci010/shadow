@@ -1,64 +1,65 @@
 <template>
   <details class="decision-graph" @toggle="toggle">
-    <summary>Decision relationship graph</summary>
-    <p>Read-only snapshot. Dashed arrows mean an agent selected a citation, not a verified cause or reporting hierarchy.
-      Solid arrows are recorded revisions. Nodes quote agent-authored questions; their claims are not independently verified.</p>
-    <p v-if="loading" role="status">Loading decision references...</p>
+    <summary>{{ t('Decision relationship graph') }}</summary>
+    <p>{{ t('Read-only snapshot. Dashed arrows mean an agent selected a citation, not a verified cause or reporting hierarchy. Solid arrows are recorded revisions. Nodes quote agent-authored questions; their claims are not independently verified.') }}</p>
+    <p v-if="loading" role="status">{{ t('Loading decision references...') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="graph && layout">
-      <p v-if="graph.limited" class="graph-warning" role="status">Partial graph: at most {{ DECISION_GRAPH_LIMIT }} records and {{ DECISION_GRAPH_DEPTH }} reference steps are loaded. Open a source session to inspect further.</p>
-      <div class="decision-graph-scroll" tabindex="0" aria-label="Scrollable decision relationship graph">
+      <p v-if="graph.limited" class="graph-warning" role="status">{{ t('Partial graph: at most {records} records and {depth} reference steps are loaded. Open a source session to inspect further.', { records: DECISION_GRAPH_LIMIT, depth: DECISION_GRAPH_DEPTH }) }}</p>
+      <div class="decision-graph-scroll" tabindex="0" :aria-label="t('Scrollable decision relationship graph')">
         <svg :width="layout.width" :height="layout.height" :viewBox="`0 0 ${layout.width} ${layout.height}`">
           <defs><marker :id="arrowId" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker></defs>
           <path v-for="(edge, index) in edges" :key="index" :d="edge.path" class="graph-edge" :class="{ citation: edge.kind === 'cites' || edge.kind === 'reconsiders' }" :marker-end="`url(#${arrowId})`">
-            <title>{{ edge.kind }}</title>
+            <title>{{ enumLabel(edge.kind) }}</title>
           </path>
           <g v-for="node in layout.nodes" :key="node.id" :transform="`translate(${node.x},${node.y})`"
             class="graph-node" :class="{ selected: selected === node.id, unavailable: node.error }" role="button" tabindex="0"
-            :aria-pressed="selected === node.id" :aria-label="`Decision ${node.number}: ${node.record?.request.question ?? node.error}`"
+            :aria-pressed="selected === node.id" :aria-label="t('Decision {number}: {error}', { number: node.number, error: node.record?.request.question ?? node.error })"
             @click="selected = node.id" @keydown.enter.prevent="selected = node.id" @keydown.space.prevent="selected = node.id">
             <rect width="240" height="96" />
-            <text x="10" y="20">{{ node.number }} · {{ node.id === graph.root ? 'Selected decision' : 'Referenced decision' }}</text>
+            <text x="10" y="20">{{ node.number }} · {{ node.id === graph.root ? t('Selected decision') : t('Referenced decision') }}</text>
             <text x="10" y="42">{{ short(node.reference.sessionId, 30) }}</text>
             <text x="10" y="62">{{ short(node.record?.request.question ?? node.error ?? '', 32) }}</text>
-            <text x="10" y="82">{{ node.record ? decisionStatusLabel(recordedDecision(node.record).status) : 'Unavailable record' }}</text>
+            <text x="10" y="82">{{ node.record ? decisionStatusLabel(recordedDecision(node.record).status) : t('Unavailable record') }}</text>
           </g>
         </svg>
       </div>
-      <ul class="graph-relations" aria-label="Recorded decision relationships">
+      <ul class="graph-relations" :aria-label="t('Recorded decision relationships')">
         <li v-for="(edge, index) in graph.edges" :key="index">
           <button type="button" @click="selected = edge.from">#{{ numberOf(edge.from) }}</button>
-          {{ edge.kind === 'cites' ? 'cites (agent-selected)' : edge.kind === 'reconsiders' ? 'reconsiders (history, not an inherited premise)' : edge.kind === 'supersedes' ? 'supersedes (recorded revision)' : 'was replaced by (recorded revision)' }}
+          {{ edge.kind === 'cites' ? t('cites (agent-selected)') : edge.kind === 'reconsiders' ? t('reconsiders (history, not an inherited premise)') : edge.kind === 'supersedes' ? t('supersedes (recorded revision)') : t('was replaced by (recorded revision)') }}
           <button type="button" @click="selected = edge.to">#{{ numberOf(edge.to) }}</button>
         </li>
       </ul>
-      <p v-if="!graph.edges.length">No linked decisions were recorded. This does not establish that the question is independent.</p>
-      <section v-if="inspected" class="graph-inspector" aria-label="Selected decision record">
-        <strong>Decision #{{ numberOf(inspected.id) }} · Recorded facts</strong>
-        <p>Owner: {{ inspected.reference.sessionId }}</p>
+      <p v-if="!graph.edges.length">{{ t('No linked decisions were recorded. This does not establish that the question is independent.') }}</p>
+      <section v-if="inspected" class="graph-inspector" :aria-label="t('Selected decision record')">
+        <strong>{{ t('Decision #') }}{{ numberOf(inspected.id) }} {{ t('· Recorded facts') }}</strong>
+        <p>{{ t('Owner:') }} {{ inspected.reference.sessionId }}</p>
         <template v-if="inspected.record">
-          <p>Addressed to: {{ inspected.record.request.recipient.kind }} · {{ inspected.record.request.recipient.sessionId }}</p>
-          <p>{{ decisionStatusLabel(recordedDecision(inspected.record).status) }}. This snapshot does not indicate an active wait.</p>
-          <strong>Agent-authored question (original text)</strong>
+          <p>{{ t('Addressed to:') }} {{ enumLabel(inspected.record.request.recipient.kind) }} · {{ inspected.record.request.recipient.sessionId }}</p>
+          <p>{{ decisionStatusLabel(recordedDecision(inspected.record).status) }}{{ t('. This snapshot does not indicate an active wait.') }}</p>
+          <strong>{{ t('Agent-authored question (original text)') }}</strong>
           <p class="graph-original">{{ inspected.record.request.question }}</p>
-          <p v-if="inspected.record.invalidated" role="alert">Premise changed: {{ inspected.record.invalidated.reason }}. Revalidation is required even if an answer was previously recorded.</p>
+          <p v-if="inspected.record.invalidated" role="alert">{{ t('Premise changed:') }} {{ inspected.record.invalidated.reason }}{{ t('. Revalidation is required even if an answer was previously recorded.') }}</p>
           <DecisionBrief v-if="inspected.record.request.brief" :brief="inspected.record.request.brief" graph @inspect="emit('inspect', $event)" />
           <ol><li v-for="option in inspected.record.request.options" :key="option">{{ option }}</li></ol>
-          <p v-if="inspected.record.answer">Recorded response: {{ inspected.record.answer.option }}</p>
+          <p v-if="inspected.record.answer">{{ t('Recorded response:') }} {{ inspected.record.answer.option }}</p>
           <p v-if="inspected.record.closed">{{ inspected.record.closed.message }}</p>
-          <p v-if="inspected.record.request.revisionReason">Revision requested by user: {{ inspected.record.request.revisionReason }}</p>
+          <p v-if="inspected.record.request.revisionReason">{{ t('Revision requested by user:') }} {{ inspected.record.request.revisionReason }}</p>
           <MessageTimestamp :timestamp="inspected.record.request.createdAt" />
-          <button type="button" @click="emit('inspect', inspected.reference.sessionId)">Open source session</button>
+          <button type="button" @click="emit('inspect', inspected.reference.sessionId)">{{ t('Open source session') }}</button>
         </template>
         <p v-else role="alert">{{ inspected.error }}</p>
-        <p class="graph-identity">Request: {{ inspected.reference.requestId }} · Segment: {{ inspected.reference.physicalId }}</p>
+        <p class="graph-identity">{{ t('Request:') }} {{ inspected.reference.requestId }} {{ t('· Segment:') }} {{ inspected.reference.physicalId }}</p>
       </section>
     </template>
-    <button v-if="!loading" type="button" @click="load">Refresh graph</button>
+    <button v-if="!loading" type="button" @click="load">{{ t('Refresh graph') }}</button>
   </details>
 </template>
 
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t } from '../i18n.ts'
 import { computed, onUnmounted, ref, shallowRef, useId, watch } from 'vue'
 import { DECISION_GRAPH_LIMIT, DECISION_GRAPH_DEPTH, decisionKey, decisionReader, loadDecisionGraph, layoutDecisionGraph, type DecisionGraph } from '../decision-graph.ts'
 import { decisionStatusLabel, recordedDecision } from '../yield-history.ts'
@@ -97,7 +98,7 @@ async function load() {
     const next = await loadDecisionGraph(props.reference, decisionReader(props.apiBase, current.signal), current.signal)
     if (!current.signal.aborted) { graph.value = next; selected.value = next.root }
   } catch (cause) {
-    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load the decision graph.'
+    if (!current.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load the decision graph.')
   } finally { if (controller === current) loading.value = false }
 }
 function toggle(event: Event) {

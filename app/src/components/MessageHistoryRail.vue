@@ -1,10 +1,10 @@
 <template>
-  <nav v-if="entries.length" ref="rail" class="message-history-rail" :class="{ 'history-list': list, 'can-scroll-up': canScrollUp, 'can-scroll-down': canScrollDown }" aria-label="Message history" @scroll.passive="updateRailOverflow" @mouseleave="scheduleHide" @keydown="navigate">
+  <nav v-if="entries.length" ref="rail" class="message-history-rail" :class="{ 'history-list': list, 'can-scroll-up': canScrollUp, 'can-scroll-down': canScrollDown }" :aria-label="t('Message history')" @scroll.passive="updateRailOverflow" @mouseleave="scheduleHide" @keydown="navigate">
     <div v-for="(entry, ordinal) in entries" :key="entry.index" class="history-entry">
     <button
       class="history-marker"
       :class="[entry.kind, entry.status, { current: isCurrent(entry), previewing: preview?.index === entry.index }]"
-      :aria-label="`${entry.members ? 'Expand collaboration' : `Jump to message ${ordinal + 1}`}: ${entry.label} from ${entry.source}${entry.sourceId && entry.sourceId !== entry.source ? ` (${entry.sourceId})` : ''}: ${entry.preview.slice(0, 160)}`"
+      :aria-label="t('{value1}: {label} from {source}{value4}: {value5}', { value1: entry.members ? t('Expand collaboration') : t('Jump to message {number}', { number: ordinal + 1 }), label: entry.label, source: entry.source, value4: entry.sourceId && entry.sourceId !== entry.source ? ` (${entry.sourceId})` : '', value5: entry.preview.slice(0, 160) })"
       :aria-current="isCurrent(entry) ? 'true' : undefined"
       :aria-expanded="entry.members ? (list ? expandedGroup === entry.index : preview?.index === entry.index) : undefined"
       :aria-describedby="!entry.members && preview?.index === entry.index ? tooltipId : undefined"
@@ -22,7 +22,7 @@
   </nav>
   <Teleport to="body">
     <div v-if="preview" :id="tooltipId" class="history-preview" :class="[preview.kind, preview.status]"
-      :role="preview.members ? 'dialog' : 'tooltip'" :aria-label="preview.members ? 'Internal collaboration messages' : undefined"
+      :role="preview.members ? 'dialog' : 'tooltip'" :aria-label="preview.members ? t('Internal collaboration messages') : undefined"
       :style="previewPosition" @mouseenter="keepPreview" @mouseleave="scheduleHide" @focusin="keepPreview" @focusout="scheduleHide"
       @keydown.esc.stop.prevent="hidePreview">
       <div class="history-preview-source"><strong>{{ preview.source }}</strong><span>{{ preview.label }}</span></div>
@@ -39,6 +39,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { nextTick, onActivated, onDeactivated, onUnmounted, ref, useId, watch } from 'vue'
 import { formatMessageTime, type MessageHistoryMarker } from '../message-history.ts'
 

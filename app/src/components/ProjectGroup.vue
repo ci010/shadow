@@ -15,16 +15,16 @@
         @opening="$emit('coordinator-opening')" @open="$emit('select', $event)" />
     </template>
     <template #project-actions>
-      <button v-if="canManageKnowledge" class="project-settings" :aria-label="`${project.name} knowledge`" :title="`${project.name} knowledge`"
+      <button v-if="canManageKnowledge" class="project-settings" :aria-label="t('{name} knowledge', { name: project.name })" :title="t('{name} knowledge', { name: project.name })"
         @click="$emit('knowledge')">
         <span class="i-lucide-book-open w-3.5 h-3.5" aria-hidden="true" />
       </button>
-      <RouterLink v-if="canManageKnowledge" class="project-settings" :aria-label="`${project.name} agents`" :title="`${project.name} agents`"
+      <RouterLink v-if="canManageKnowledge" class="project-settings" :aria-label="t('{name} agents', { name: project.name })" :title="t('{name} agents', { name: project.name })"
         :to="{ name: 'agents', params: { projectId: project.id } }">
         <span class="i-lucide-bot w-3.5 h-3.5" aria-hidden="true" />
       </RouterLink>
-      <button v-if="runtimeState === 'failed'" class="project-settings retry-runtime" :disabled="retrying" :aria-label="`Retry ${project.name} startup`" title="Retry project startup" @click="retryRuntime"><span class="i-lucide-refresh-cw w-3.5 h-3.5" aria-hidden="true" /></button>
-      <RouterLink class="project-settings" :aria-label="`${project.name} settings`" :title="`${project.name} settings`"
+      <button v-if="runtimeState === 'failed'" class="project-settings retry-runtime" :disabled="retrying" :aria-label="t('Retry {name} startup', { name: project.name })" :title="t('Retry project startup')" @click="retryRuntime"><span class="i-lucide-refresh-cw w-3.5 h-3.5" aria-hidden="true" /></button>
+      <RouterLink class="project-settings" :aria-label="t('{name} settings', { name: project.name })" :title="t('{name} settings', { name: project.name })"
         :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }">
         <span class="i-lucide-settings-2 w-3.5 h-3.5" aria-hidden="true" />
       </RouterLink>
@@ -34,6 +34,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, inject, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import FoldersSidebar from './FoldersSidebar.vue'
 import ProjectCoordinator from './ProjectCoordinator.vue'
@@ -104,7 +105,7 @@ function subscribe() {
     if (current.activity.state.value) stages.value = current.activity.state.value.stages
     const detail = [...new Set([current.graph.state.error, current.activity.state.error].filter(Boolean))].join(' ')
     error.value = detail && runtimeState.value === 'failed'
-      ? 'This project could not start. Use Retry project startup beside its name.' : detail
+      ? t('This project could not start. Use Retry project startup beside its name.') : detail
   }, { immediate: true })
   stopWatching = () => { stopGraph(); stopActivity() }
 }
@@ -137,10 +138,10 @@ async function refreshMetadata(snapshot: ProjectLiveLease) {
         const status = await createProjectsClient(props.apiBase).status(props.project.id, current.signal)
         if (!current.signal.aborted) {
           runtimeState.value = status.state
-          if (status.state === 'failed') error.value = 'This project could not start. Use Retry project startup beside its name.'
+          if (status.state === 'failed') error.value = t('This project could not start. Use Retry project startup beside its name.')
         }
       } catch (cause) {
-        if (!current.signal.aborted) error.value += ` ${cause instanceof Error ? cause.message : 'Runtime status is unavailable.'}`
+        if (!current.signal.aborted) error.value += ` ${cause instanceof Error ? cause.message : t('Runtime status is unavailable.')}`
       }
     } else runtimeState.value = 'ready'
   } finally {
@@ -161,7 +162,7 @@ async function retryRuntime() {
     runtimeState.value = status.state
     await refresh()
   } catch (cause) {
-    if (!disposed) error.value = cause instanceof Error ? cause.message : 'Could not retry project startup. Check Main.'
+    if (!disposed) error.value = cause instanceof Error ? cause.message : t('Could not retry project startup. Check Main.')
   } finally { retrying.value = false }
 }
 function deleteSession(id: string) {

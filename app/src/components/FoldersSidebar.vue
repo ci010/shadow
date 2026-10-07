@@ -1,33 +1,33 @@
 <template>
-  <aside :id="grouped ? domId('sessions-sidebar') : 'sessions-sidebar'" ref="sidebar" class="folders-sidebar sessions-sidebar" :class="{ 'is-rail': isRail, 'is-grouped': grouped }" :aria-label="projectName || 'Folders'" :style="{ '--folders-width': `${isRail ? 64 : sidebarWidth}px` }">
+  <aside :id="grouped ? domId('sessions-sidebar') : 'sessions-sidebar'" ref="sidebar" class="folders-sidebar sessions-sidebar" :class="{ 'is-rail': isRail, 'is-grouped': grouped }" :aria-label="projectName || t('Folders')" :style="{ '--folders-width': `${isRail ? 64 : sidebarWidth}px` }">
     <SidebarResizer v-if="!grouped && desktop && resizeActive && !isRail" class="folders-resizer" :model-value="sidebarWidth" :bounds="resizeBounds"
-      label="Resize folders" controls="sessions-sidebar" @update:model-value="preferredWidth = $event" />
+      :label="t('Resize folders')" controls="sessions-sidebar" @update:model-value="preferredWidth = $event" />
     <header class="folders-header">
       <button v-if="grouped" type="button" class="project-toggle"
-        :aria-label="`${groupExpanded ? 'Collapse' : 'Expand'} project ${projectName}`"
+        :aria-label="t('{value1} project {projectName}', { value1: groupExpanded ? t('Collapse') : t('Expand'), projectName: projectName })"
         :aria-expanded="groupExpanded" :aria-controls="domId('folders-navigation')" @click="groupExpanded = !groupExpanded">
         <span class="w-3.5 h-3.5" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : ['i-lucide-chevron-right', { 'org-expanded': groupExpanded }]" aria-hidden="true" />
       </button>
-      <h2 v-if="!isRail"><slot v-if="grouped" name="project-name">{{ projectName }}</slot><template v-else><span class="folders-heading-icon w-4 h-4" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : 'i-lucide-folder'" aria-hidden="true" />Folders</template></h2>
+      <h2 v-if="!isRail"><slot v-if="grouped" name="project-name">{{ projectName }}</slot><template v-else><span class="folders-heading-icon w-4 h-4" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : 'i-lucide-folder'" aria-hidden="true" />{{ t('Folders') }}</template></h2>
       <div class="folders-header-actions">
         <slot name="project-actions" />
-        <HoverInfo v-if="!grouped && desktop" :text="isRail ? 'Expand folders' : 'Collapse folders'"><template #default="{ triggerProps }">
-          <button class="folder-action-button folders-rail-toggle" v-bind="triggerProps" :aria-label="isRail ? 'Expand folders' : 'Collapse folders'" :aria-expanded="!isRail" aria-controls="folders-navigation" @click="railCollapsed = !railCollapsed">
+        <HoverInfo v-if="!grouped && desktop" :text="isRail ? t('Expand folders') : t('Collapse folders')"><template #default="{ triggerProps }">
+          <button class="folder-action-button folders-rail-toggle" v-bind="triggerProps" :aria-label="isRail ? t('Expand folders') : t('Collapse folders')" :aria-expanded="!isRail" aria-controls="folders-navigation" @click="railCollapsed = !railCollapsed">
             <span :class="isRail && loading ? 'i-lucide-loader-circle folder-loading-icon' : isRail ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="w-4 h-4" aria-hidden="true" />
           </button>
         </template></HoverInfo>
         <HoverInfo text="Add folder"><template #default="{ triggerProps }">
-          <button ref="menuButton" class="folder-action-button" v-bind="triggerProps" :aria-label="projectName ? `New work in ${projectName}` : 'Add folder'" aria-haspopup="menu" :aria-expanded="menuOpen" :aria-controls="domId('folder-actions')" @click="toggleMenu" @keydown.down.prevent="openMenu"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
+          <button ref="menuButton" class="folder-action-button" v-bind="triggerProps" :aria-label="projectName ? t('New work in {projectName}', { projectName: projectName }) : t('Add folder')" aria-haspopup="menu" :aria-expanded="menuOpen" :aria-controls="domId('folder-actions')" @click="toggleMenu" @keydown.down.prevent="openMenu"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
         </template></HoverInfo>
       </div>
     </header>
-    <span class="rail-visually-hidden" role="status">{{ loading ? 'Loading folders…' : '' }}</span>
+    <span class="rail-visually-hidden" role="status">{{ loading ? t('Loading folders…') : '' }}</span>
     <div v-show="!grouped || groupExpanded" :id="domId('folders-navigation')" class="folders-scroll" :aria-busy="loading || sessionsLoading">
       <div v-if="error && !isRail" class="sidebar-error" role="alert">
         <p>{{ error }}</p>
-        <button class="text-action" @click="loadFolders">Retry folders</button>
+        <button class="text-action" @click="loadFolders">{{ t('Retry folders') }}</button>
       </div>
-      <HoverInfo v-if="error && isRail" :text="error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Folders unavailable. Retry folders" @click="loadFolders"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
+      <HoverInfo v-if="error && isRail" :text="error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Folders unavailable. Retry folders')" @click="loadFolders"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
       <section v-for="group in groups.folders" :key="group.folder.id" class="folder-group">
         <TreeRow class="folder-folder-row" :selected="!activeSessionId && selectedFolderId === group.folder.id"
           :class="{ working: !!folderWorkingStage(group.sessions) || folderSubagents(group.sessions).running > 0 }" :icon-only="isRail"
@@ -39,18 +39,18 @@
           <template #icon><span v-if="loading" class="i-lucide-loader-circle folder-loading-icon" /><span v-else-if="isRail" class="folder-initial">{{ railInitial(group.folder.name) }}</span><span v-else :class="group.folder.kind === 'remote' ? 'i-lucide-monitor' : expandedFolders.has(group.folder.id) ? 'i-lucide-folder-open' : 'i-lucide-folder'" /></template>
           <template #meta><SessionActivity v-if="folderWorkingStage(group.sessions) || folderHasSubagents(group.sessions)" :stage="folderWorkingStage(group.sessions)" :subagents="folderSubagents(group.sessions)" compact :icon-only="isRail" :title="undefined" /></template>
           <template #actions>
-            <HoverInfo :text="`New conversation in ${group.folder.name}`"><template #default="{ triggerProps }"><button class="folder-action-button folder-add" v-bind="triggerProps" :aria-label="`New conversation in ${group.folder.name}`" @click="startFolderDraft(group.folder)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
-            <button v-if="grouped" class="folder-action-button folder-add folder-actions" :aria-label="`Folder actions for ${group.folder.name}`"
+            <HoverInfo :text="t('New conversation in {name}', { name: group.folder.name })"><template #default="{ triggerProps }"><button class="folder-action-button folder-add" v-bind="triggerProps" :aria-label="t('New conversation in {name}', { name: group.folder.name })" @click="startFolderDraft(group.folder)"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
+            <button v-if="grouped" class="folder-action-button folder-add folder-actions" :aria-label="t('Folder actions for {name}', { name: group.folder.name })"
               aria-haspopup="menu" :aria-expanded="menuOpen && menuFolder?.id === group.folder.id" :aria-controls="domId('folder-actions')"
               @click="openFolderActions(group.folder, $event)" @keydown.down.prevent="openFolderActions(group.folder, $event)"><span class="i-lucide-ellipsis w-4 h-4" aria-hidden="true" /></button>
           </template>
           <template #info="{ close }">
             <div class="folder-info">
               <strong class="folder-info-title">{{ group.folder.name }}</strong>
-              <p v-if="group.folder.kind === 'remote'">Remote device: {{ group.folder.workdir.nodeId }}</p>
+              <p v-if="group.folder.kind === 'remote'">{{ t('Remote device:') }} {{ group.folder.workdir.nodeId }}</p>
               <p class="folder-info-path">{{ group.folder.path }}</p>
-              <p>{{ group.sessions.length }} {{ group.sessions.length === 1 ? 'conversation' : 'conversations' }}</p>
-              <button class="folder-info-new" @click="startFolderDraft(group.folder); close()">New conversation</button>
+              <p>{{ group.sessions.length }} {{ group.sessions.length === 1 ? t('conversation') : t('conversations') }}</p>
+              <button class="folder-info-new" @click="startFolderDraft(group.folder); close()">{{ t('New conversation') }}</button>
               <FolderSessionList v-if="group.sessions.length" class="folder-info-conversations" :sessions="group.sessions" :active-session-id="activeSessionId"
                 :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" :show-info="false" @select="selectConversation($event); close()" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
             </div>
@@ -62,14 +62,14 @@
       </section>
       <section class="legacy-chats" :aria-labelledby="domId('legacy-chats-heading')">
         <div class="chats-heading">
-          <h3 :id="domId('legacy-chats-heading')" :class="{ 'rail-visually-hidden': isRail }">Chats</h3>
+          <h3 :id="domId('legacy-chats-heading')" :class="{ 'rail-visually-hidden': isRail }">{{ t('Chats') }}</h3>
           <HoverInfo text="Start from scratch"><template #default="{ triggerProps }">
-            <button type="button" class="folder-action-button chat-add" v-bind="triggerProps" :aria-label="projectName ? `New chat in ${projectName}` : 'New chat'" @click="startScratchDraft"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
+            <button type="button" class="folder-action-button chat-add" v-bind="triggerProps" :aria-label="projectName ? t('New chat in {projectName}', { projectName: projectName }) : t('New chat')" @click="startScratchDraft"><span class="i-lucide-plus w-4 h-4" aria-hidden="true" /></button>
           </template></HoverInfo>
         </div>
-        <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">Loading conversations…</span></p>
-        <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">Retry conversations</button></div>
-        <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Conversations unavailable. Retry conversations" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
+        <p v-if="sessionsLoading" class="sidebar-note" :class="{ 'rail-note': isRail, 'rail-visually-hidden': sessions.length > 0 }" role="status"><span v-if="isRail" class="i-lucide-loader-circle w-4 h-4" aria-hidden="true" /><span :class="{ 'rail-visually-hidden': isRail }">{{ t('Loading conversations…') }}</span></p>
+        <div v-if="sessionsError && !isRail" class="sidebar-error" role="alert"><p>{{ sessionsError }}</p><button class="text-action" @click="$emit('reload')">{{ t('Retry conversations') }}</button></div>
+        <HoverInfo v-if="sessionsError && isRail" :text="sessionsError"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Conversations unavailable. Retry conversations')" @click="$emit('reload')"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
         <FolderSessionList :sessions="chatGroups.chats" :depth="1" :rail="isRail" :active-session-id="activeSessionId" :collapsed="collapsed" :stages="stages" :executions-by-owner="executionsByOwner" @select="selectConversation" @delete="$emit('delete', $event)" @toggle="$emit('toggle', $event)" />
       </section>
       <section v-for="bot in chatGroups.bots" :key="bot.id" class="bot-conversations" :data-bot-id="bot.id">
@@ -95,8 +95,8 @@
                 <span>{{ bot.connection.label }}</span>
               </div>
               <dl class="bot-info-details">
-                <div><dt>Platform</dt><dd>{{ botPlatformLabel(bot.platform) }}</dd></div>
-                <div><dt>Bot ID</dt><dd><CopyableId :value="bot.id" label="Bot ID" /></dd></div>
+                <div><dt>{{ t('Platform') }}</dt><dd>{{ botPlatformLabel(bot.platform) }}</dd></div>
+                <div><dt>{{ t('Bot ID') }}</dt><dd><CopyableId :value="bot.id" :label="t('Bot ID')" /></dd></div>
               </dl>
             </div>
           </template>
@@ -110,14 +110,14 @@
         :groups="groups.automations" :stages="stages" :selected-id="selectedAutomationId || activeAutomation?.jobId"
         @select="$emit('automation', $event)" />
       <div v-if="cloneStatus.state === 'unknown' || cloneStatus.state === 'failed'" class="sidebar-error" role="alert">
-        <template v-if="!isRail"><p>{{ cloneStatus.error }}</p><button class="text-action" @click="dialogMode = 'clone'">Review clone</button></template>
-        <HoverInfo v-else :text="cloneStatus.error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" aria-label="Review clone error" @click="dialogMode = 'clone'"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
+        <template v-if="!isRail"><p>{{ cloneStatus.error }}</p><button class="text-action" @click="dialogMode = 'clone'">{{ t('Review clone') }}</button></template>
+        <HoverInfo v-else :text="cloneStatus.error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Review clone error')" @click="dialogMode = 'clone'"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
       </div>
     </div>
     <FolderDialog :mode="dialogMode" :client="client" @close="dialogMode = null" @registered="folderRegistered" @status="cloneStatus = $event" />
     <Teleport to="body">
       <div v-if="menuOpen" class="folder-menu-backdrop" @click.self="closeMenu(false)" @keydown.esc.prevent.stop="closeMenu(true)">
-        <div :id="domId('folder-actions')" ref="menu" class="folder-menu" role="menu" :aria-label="menuFolder ? `Folder actions for ${menuFolder.name}` : 'Add folder'" :style="menuPosition" @keydown="menuKeydown">
+        <div :id="domId('folder-actions')" ref="menu" class="folder-menu" role="menu" :aria-label="menuFolder ? t('Folder actions for {name}', { name: menuFolder.name }) : t('Add folder')" :style="menuPosition" @keydown="menuKeydown">
           <button v-for="action in menuActions" :key="action.id" role="menuitem" @click="runAction(action.id)">{{ action.label }}</button>
         </div>
       </div>
@@ -126,6 +126,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import FolderDialog from './FolderDialog.vue'
 import FolderSessionList from './FolderSessionList.vue'
@@ -205,7 +206,7 @@ const dialogMode = ref<'open' | 'clone' | null>(null)
 const menuOpen = ref(false)
 const menuFolder = ref<FolderRecord>()
 const menuActions = computed(() => menuFolder.value
-  ? [{ id: 'move' as const, label: 'Move to project...' }, { id: 'remove' as const, label: 'Remove folder...' }]
+  ? [{ id: 'move' as const, label: t('Move to project...') }, { id: 'remove' as const, label: t('Remove folder...') }]
   : folderActions.value)
 let menuAnchor: HTMLElement | undefined
 const menuButton = ref<HTMLElement>()
@@ -262,7 +263,7 @@ async function loadFolders() {
     const result = await client.list(controller.signal)
     if (!controller.signal.aborted) folders.value = result
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not load folders. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load folders. Retry.')
   } finally {
     if (listRequest === controller) { loading.value = false; listRequest = undefined }
   }

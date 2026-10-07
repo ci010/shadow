@@ -1,56 +1,58 @@
 <template>
-  <section v-if="enabled && (request || error || notice)" class="probe-request" aria-label="Connection test approval">
+  <section v-if="enabled && (request || error || notice)" class="probe-request" :aria-label="t('Connection test approval')">
     <template v-if="request">
-      <label v-if="requests.length > 1" class="probe-picker">Connection test ({{ requests.length }})
+      <label v-if="requests.length > 1" class="probe-picker">{{ t('Connection test (') }}{{ requests.length }})
         <select v-model="selectedId" :disabled="busy">
-          <option v-for="item in requests" :key="item.id" :value="item.id">{{ item.title }} · {{ item.status }} · {{ item.id }}</option>
+          <option v-for="item in requests" :key="item.id" :value="item.id">{{ item.title }} · {{ enumLabel(item.status) }} · {{ item.id }}</option>
         </select>
       </label>
       <h3>{{ request.title }}</h3>
-      <p v-if="request.status === 'pending'">Approve one controlled connection test of <strong>{{ request.toolName }}</strong>, including before publication.</p>
-      <p v-else role="status">Connection test: {{ request.status }}.</p>
-      <p class="probe-summary">{{ request.address.platform }} · {{ request.address.conversationId }} · at most {{ request.maxCalls }} GET calls</p>
-      <p>Only the routes below and the pinned tool arguments are authorized for this run. No native network access, writes, inbox delivery or publication.</p>
+      <p v-if="request.status === 'pending'">{{ t('Approve one controlled connection test of') }} <strong>{{ request.toolName }}</strong>{{ t(', including before publication.') }}</p>
+      <p v-else role="status">{{ t('Connection test:') }} {{ enumLabel(request.status) }}.</p>
+      <p class="probe-summary">{{ request.address.platform }} · {{ request.address.conversationId }} {{ t('· at most') }} {{ request.maxCalls }} {{ t('GET calls') }}</p>
+      <p>{{ t('Only the routes below and the pinned tool arguments are authorized for this run. No native network access, writes, inbox delivery or publication.') }}</p>
       <div class="probe-review">
         <ul class="probe-grants">
           <li v-for="grant in request.grants" :key="grant.id">
             <strong>{{ grant.origin }}</strong>
             <ul><li v-for="route in grant.routes" :key="`${route.method} ${route.path}`"><code>{{ route.method }} {{ route.path }}</code></li></ul>
-            <p v-if="grant.credential">Credential reference: <code>{{ grant.credential.secretRef }}</code> · header <code>{{ grant.credential.header }}</code><template v-if="grant.credential.prefix"> · prefix <code>{{ grant.credential.prefix }}</code></template> (no secret value shown)</p>
-            <p v-else>No credential attached.</p>
+            <p v-if="grant.credential">{{ t('Credential reference:') }} <code>{{ grant.credential.secretRef }}</code> {{ t('· header') }} <code>{{ grant.credential.header }}</code><template v-if="grant.credential.prefix"> {{ t('· prefix') }} <code>{{ grant.credential.prefix }}</code></template> {{ t('(no secret value shown)') }}</p>
+            <p v-else>{{ t('No credential attached.') }}</p>
           </li>
         </ul>
-        <p v-if="!request.grants.length">No HTTP routes are authorized.</p>
-        <p>Approval expires {{ formatTime(request.expiresAt) }}.</p>
+        <p v-if="!request.grants.length">{{ t('No HTTP routes are authorized.') }}</p>
+        <p>{{ t('Approval expires') }} {{ formatTime(request.expiresAt) }}.</p>
         <details>
-          <summary>Exact source, revision and arguments</summary>
-          <p>Change: <code>{{ request.changeId }}</code></p>
-          <p>Revision: <code>{{ request.revision }}</code></p>
-          <p>Source hash: <code>{{ request.sourceHash }}</code></p>
+          <summary>{{ t('Exact source, revision and arguments') }}</summary>
+          <p>{{ t('Change:') }} <code>{{ request.changeId }}</code></p>
+          <p>{{ t('Revision:') }} <code>{{ request.revision }}</code></p>
+          <p>{{ t('Source hash:') }} <code>{{ request.sourceHash }}</code></p>
           <template v-if="request.source">
-            <p>Source file: <code>{{ request.source.path }}</code></p>
+            <p>{{ t('Source file:') }} <code>{{ request.source.path }}</code></p>
             <pre>{{ request.source.code }}</pre>
           </template>
-          <p>Connection: <code>{{ request.address.botInstanceId }}</code></p>
+          <p>{{ t('Connection:') }} <code>{{ request.address.botInstanceId }}</code></p>
           <pre>{{ JSON.stringify(request.arguments, null, 2) }}</pre>
         </details>
       </div>
-      <p v-if="request.runId">Recorded run: <code>{{ request.runId }}</code></p>
-      <p v-if="request.error" class="probe-error" role="alert"><template v-if="request.status === 'completed'">Completed with a warning: </template>{{ request.error }}</p>
-      <p v-if="request.status === 'completed'">Completed means this controlled probe finished, not that real conversation behavior or business acceptance was evaluated.</p>
-      <p v-if="request.status === 'running' || operation === 'running'" role="status">Running the approved test. This may take up to 30 seconds; do not approve again.</p>
+      <p v-if="request.runId">{{ t('Recorded run:') }} <code>{{ request.runId }}</code></p>
+      <p v-if="request.error" class="probe-error" role="alert"><template v-if="request.status === 'completed'">{{ t('Completed with a warning:') }} </template>{{ request.error }}</p>
+      <p v-if="request.status === 'completed'">{{ t('Completed means this controlled probe finished, not that real conversation behavior or business acceptance was evaluated.') }}</p>
+      <p v-if="request.status === 'running' || operation === 'running'" role="status">{{ t('Running the approved test. This may take up to 30 seconds; do not approve again.') }}</p>
       <div v-if="request.status === 'pending'" class="probe-actions">
-        <button type="button" :disabled="busy || needsReload" @click="cancel">{{ operation === 'cancelling' ? 'Cancelling…' : 'Cancel test' }}</button>
-        <button type="button" class="probe-confirm" :disabled="busy || needsReload" @click="approve">{{ operation === 'running' ? 'Testing…' : 'Approve one test' }}</button>
+        <button type="button" :disabled="busy || needsReload" @click="cancel">{{ operation === 'cancelling' ? t('Cancelling…') : t('Cancel test') }}</button>
+        <button type="button" class="probe-confirm" :disabled="busy || needsReload" @click="approve">{{ operation === 'running' ? t('Testing…') : t('Approve one test') }}</button>
       </div>
     </template>
     <p v-if="notice" role="status">{{ notice }}</p>
     <p v-if="error" class="probe-error" role="alert">{{ error }}</p>
-    <button v-if="error" type="button" :disabled="busy || loading" @click="reload">{{ loading ? 'Reloading…' : 'Reload test status' }}</button>
+    <button v-if="error" type="button" :disabled="busy || loading" @click="reload">{{ loading ? t('Reloading…') : t('Reload test status') }}</button>
   </section>
 </template>
 
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t, formatDateTime } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAuthoringProbes } from '../authoring-probes.ts'
 
@@ -61,7 +63,7 @@ const documentVisible = ref(typeof document === 'undefined' || document.visibili
 const active = computed(() => props.active && documentVisible.value)
 const { requests, request, selectedId, error, notice, loading, operation, busy, enabled, needsReload, approve, cancel, reload } =
   useAuthoringProbes(() => ({ ...props, active: active.value }))
-function formatTime(value: string) { return new Date(value).toLocaleString() }
+function formatTime(value: string) { return formatDateTime(new Date(value)) }
 function visibility() { documentVisible.value = document.visibilityState !== 'hidden' }
 onMounted(() => document.addEventListener('visibilitychange', visibility))
 onUnmounted(() => document.removeEventListener('visibilitychange', visibility))

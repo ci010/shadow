@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
 
@@ -43,16 +44,16 @@ export async function loadConversationSearchHistory(base: string, sessionId: str
   let key: string | null = sessionId
   while (key !== null) {
     signal.throwIfAborted()
-    if (visited.has(key)) throw new Error('Conversation history contains a segment cycle. Reopen the conversation and retry.')
+    if (visited.has(key)) throw new Error(t('Conversation history contains a segment cycle. Reopen the conversation and retry.'))
     visited.add(key)
     const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(key)}`, { shallow: 'true' }), {
       signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
     })
-    if (!response.ok) throw new Error(`Could not load conversation history for search (${response.status}). Retry search.`)
+    if (!response.ok) throw new Error(t('Could not load conversation history for search ({status}). Retry search.', { status: response.status }))
     const data: unknown = await response.json()
     if (!isRecord(data) || !Array.isArray(data.messages)
       || !(data.previousPhysicalId === null || typeof data.previousPhysicalId === 'string')) {
-      throw new Error('Invalid conversation search history. Reopen the conversation and retry.')
+      throw new Error(t('Invalid conversation search history. Reopen the conversation and retry.'))
     }
     segments.push({ id: segments.length ? key : null, previousId: data.previousPhysicalId, data: { ...data, messages: data.messages } })
     key = data.previousPhysicalId
@@ -106,7 +107,7 @@ export function setConversationHighlights(owner: string, ranges?: Range[], activ
   if (ranges && active) highlights.set(owner, { ranges, active })
   else highlights.delete(owner)
   if (typeof CSS === 'undefined' || !CSS.highlights || typeof Highlight === 'undefined') {
-    if (ranges) throw new Error('Conversation search highlighting requires a newer browser. Update your browser and retry.')
+    if (ranges) throw new Error(t('Conversation search highlighting requires a newer browser. Update your browser and retry.'))
     return
   }
   if (!highlights.size) {

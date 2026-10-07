@@ -1,7 +1,8 @@
+import { t } from './i18n.ts'
 import { parseDeviceInvitation, type DeviceInvitation } from './components/device-administration.ts'
 
 const prefix = 'shadow-child:v1:'
-const invalid = () => new Error('Invalid Child invitation. Copy the complete invitation from Main > Nodes.')
+const invalid = () => new Error(t('Invalid Child invitation. Copy the complete invitation from Main > Nodes.'))
 
 export interface ChildInvitation extends DeviceInvitation {
   endpoint: string
@@ -30,7 +31,7 @@ export function decodeChildInvitation(text: string, now = Date.now()): ChildInvi
     throw invalid()
   }
   if (Date.parse(invitation.expiresAt) <= now) {
-    throw new Error('This invitation has expired. Create and copy a new invitation on Main.')
+    throw new Error(t('This invitation has expired. Create and copy a new invitation on Main.'))
   }
   return invitation
 }

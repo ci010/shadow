@@ -1,132 +1,134 @@
 <template>
   <component :is="embedded ? 'section' : 'details'" v-show="!embedded || expanded" class="work-alignment" :class="{ 'is-embedded': embedded }" @toggle="toggle">
-    <summary v-if="!embedded">Work <span v-if="needsAttention">— review needed</span></summary>
-    <p class="work-note">A revision changes the agreement, not permissions or external operations.</p>
+    <summary v-if="!embedded">{{ t('Work') }} <span v-if="needsAttention">{{ t('— review needed') }}</span></summary>
+    <p class="work-note">{{ t('A revision changes the agreement, not permissions or external operations.') }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
-    <button type="button" :disabled="busy" @click="load">{{ busy ? 'Loading...' : 'Refresh work state' }}</button>
-    <label v-if="view.records.length > 1">Work item
+    <button type="button" :disabled="busy" @click="load">{{ busy ? t('Loading...') : t('Refresh work state') }}</button>
+    <label v-if="view.records.length > 1">{{ t('Work item') }}
       <select v-model="selected" :disabled="busy || editing">
-        <option v-for="item in view.records" :key="item.key" :value="item.key">{{ item.workflow?.title || item.key }} · v{{ item.revision }}</option>
+        <option v-for="item in view.records" :key="item.key" :value="item.key">{{ item.workflow?.title || item.key }} {{ t('· v') }}{{ item.revision }}</option>
       </select>
     </label>
     <template v-if="current">
       <p><strong>{{ current.definition.objective }}</strong></p>
-      <p>{{ current.origin === 'human' ? 'Human-confirmed agreement' : 'Agent interpretation — not a quoted user requirement' }}</p>
-      <p>Managed by: {{ sessionTitle(current.authority.manager) }} · Assigned to: {{ sessionTitle(current.authority.executor) }}</p>
-      <p v-if="current.workflow">Progress: {{ current.workflow.status }}<template v-if="current.workflow.blockedReason"> — {{ current.workflow.blockedReason }}</template></p>
-      <p v-if="current.workflow?.parentKey">Parent work: {{ current.workflow.parentKey }}</p>
-      <p v-if="current.workflow?.dependencies.length">Dependencies: {{ current.workflow.dependencies.join(', ') }}</p>
+      <p>{{ current.origin === 'human' ? t('Human-confirmed agreement') : t('Agent interpretation — not a quoted user requirement') }}</p>
+      <p>{{ t('Managed by:') }} {{ sessionTitle(current.authority.manager) }} {{ t('· Assigned to:') }} {{ sessionTitle(current.authority.executor) }}</p>
+      <p v-if="current.workflow">{{ t('Progress:') }} {{ enumLabel(current.workflow.status) }}<template v-if="current.workflow.blockedReason"> — {{ current.workflow.blockedReason }}</template></p>
+      <p v-if="current.workflow?.parentKey">{{ t('Parent work:') }} {{ current.workflow.parentKey }}</p>
+      <p v-if="current.workflow?.dependencies.length">{{ t('Dependencies:') }} {{ current.workflow.dependencies.join(', ') }}</p>
       <details v-if="view.records.some(item => item.workflow?.parentKey === current?.key)">
-        <summary>Initiative · child work</summary>
+        <summary>{{ t('Initiative · child work') }}</summary>
         <ul><li v-for="item in view.records.filter(item => item.workflow?.parentKey === current?.key)" :key="item.key">
-          {{ item.workflow?.title }} — {{ item.workflow?.status }} · {{ item.authority.executor || 'unassigned' }}
+          {{ item.workflow?.title }} — {{ enumLabel(item.workflow?.status) }} · {{ item.authority.executor || t('unassigned') }}
         </li></ul>
-        <p>Child completion does not replace this item's acceptance review.</p>
+        <p>{{ t('Child completion does not replace this item\'s acceptance review.') }}</p>
       </details>
-      <p>Acceptance: {{ current.definition.acceptance.join('; ') }}</p>
-      <p>Existing boundaries: {{ current.definition.boundaries.join('; ') || 'Not recorded — do not infer permission' }}</p>
-      <p>Status: {{ current.paused ? 'Paused' : current.adoption?.revision === current.revision ? 'Adopted by executor' : 'Awaiting executor adoption' }} · {{ current.reason }}</p>
-      <p v-if="current.answerReview">Custom answer needs interpretation review: {{ current.answerReview.text }}</p>
-      <section v-for="proposal in current.proposals?.filter(item => item.status === 'pending' && item.baseRevision === current?.revision && item.assignmentRevision === current?.workflow?.assignmentRevision)" :key="proposal.id" aria-label="Pending work proposal">
-        <h3>Proposed change</h3>
-        <p>Change type: {{ proposal.change }} · New execution: {{ proposal.paused ? 'paused' : 'not paused' }}</p>
+      <p>{{ t('Acceptance:') }} {{ current.definition.acceptance.join('; ') }}</p>
+      <p>{{ t('Existing boundaries:') }} {{ current.definition.boundaries.join('; ') || t('Not recorded — do not infer permission') }}</p>
+      <p>{{ t('Status:') }} {{ current.paused ? t('Paused') : current.adoption?.revision === current.revision ? t('Adopted by executor') : t('Awaiting executor adoption') }} · {{ current.reason }}</p>
+      <p v-if="current.answerReview">{{ t('Custom answer needs interpretation review:') }} {{ current.answerReview.text }}</p>
+      <section v-for="proposal in current.proposals?.filter(item => item.status === 'pending' && item.baseRevision === current?.revision && item.assignmentRevision === current?.workflow?.assignmentRevision)" :key="proposal.id" :aria-label="t('Pending work proposal')">
+        <h3>{{ t('Proposed change') }}</h3>
+        <p>{{ t('Change type:') }} {{ proposal.change }} {{ t('· New execution:') }} {{ proposal.paused ? t('paused') : t('not paused') }}</p>
         <p>{{ proposal.definition.objective }}</p>
-        <p>Acceptance: {{ proposal.definition.acceptance.join('; ') }}</p>
-        <p>Boundaries: {{ proposal.definition.boundaries.join('; ') || 'Not recorded — no new permission' }}</p>
+        <p>{{ t('Acceptance:') }} {{ proposal.definition.acceptance.join('; ') }}</p>
+        <p>{{ t('Boundaries:') }} {{ proposal.definition.boundaries.join('; ') || t('Not recorded — no new permission') }}</p>
         <p>{{ proposal.reason }}</p>
-        <button v-if="canWrite" type="button" :disabled="busy" @click="perform('apply_proposal', { proposalId: proposal.id })">Approve this exact change</button>
-        <p>Uses the same proposal as Ask. Approval is recorded once.</p>
+        <button v-if="canWrite" type="button" :disabled="busy" @click="perform('apply_proposal', { proposalId: proposal.id })">{{ t('Approve this exact change') }}</button>
+        <p>{{ t('Uses the same proposal as Ask. Approval is recorded once.') }}</p>
       </section>
       <dl v-if="current.adoption">
-        <dt>Executor understanding</dt><dd>{{ current.adoption.understanding }}</dd>
-        <dt>Stop / retain</dt><dd>{{ current.adoption.stop.join('; ') || 'None' }} / {{ current.adoption.retain.join('; ') || 'None' }}</dd>
-        <dt>Agent-chosen next phase (not user scope)</dt><dd>{{ current.adoption.next.join('; ') }}</dd>
+        <dt>{{ t('Executor understanding') }}</dt><dd>{{ current.adoption.understanding }}</dd>
+        <dt>{{ t('Stop / retain') }}</dt><dd>{{ current.adoption.stop.join('; ') || t('None') }} / {{ current.adoption.retain.join('; ') || t('None') }}</dd>
+        <dt>{{ t('Agent-chosen next phase (not user scope)') }}</dt><dd>{{ current.adoption.next.join('; ') }}</dd>
       </dl>
-      <p v-if="current.transition">Context transition: {{ current.transition.strategy }} — {{ current.transition.status }}.
-        <span v-if="current.transition.successorId">Successor: {{ current.transition.successorId }}. Initiative assignment is unchanged until explicitly released and reassigned.</span>
+      <p v-if="current.transition">{{ t('Context transition:') }} {{ enumLabel(current.transition.strategy) }} — {{ enumLabel(current.transition.status) }}.
+        <span v-if="current.transition.successorId">{{ t('Successor:') }} {{ current.transition.successorId }}{{ t('. Initiative assignment is unchanged until explicitly released and reassigned.') }}</span>
       </p>
       <details v-if="current.history.length">
-        <summary>Revision history and proposals</summary>
+        <summary>{{ t('Revision history and proposals') }}</summary>
         <article v-for="(event, index) in current.history" :key="index">
           <p>{{ event.kind }} · {{ event.actor }} · {{ event.at }}</p>
           <pre>{{ JSON.stringify(event.data, null, 2) }}</pre>
         </article>
       </details>
       <div v-if="canWrite" class="work-actions">
-        <button type="button" :disabled="busy || editing || !current.authority.active" @click="edit()">Revise work</button>
-        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(false, true)">New work item</button>
-        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(true)">Add child work</button>
+        <button type="button" :disabled="busy || editing || !current.authority.active" @click="edit()">{{ t('Revise work') }}</button>
+        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(false, true)">{{ t('New work item') }}</button>
+        <button v-if="!project" type="button" :disabled="busy || editing" @click="edit(true)">{{ t('Add child work') }}</button>
       </div>
       <details v-if="canWrite && current.workflow && current.sequence">
-        <summary>Assignment and progress</summary>
-        <label v-if="!current.workflow.assignee">Assign to session
-          <select v-if="sessions" v-model="assignee"><option value="">Choose a session</option><option v-for="session in sessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option></select>
-          <input v-else v-model="assignee" placeholder="Session ID">
+        <summary>{{ t('Assignment and progress') }}</summary>
+        <label v-if="!current.workflow.assignee">{{ t('Assign to session') }}
+          <select v-if="sessions" v-model="assignee"><option value="">{{ t('Choose a session') }}</option><option v-for="session in sessions" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option></select>
+          <input v-else v-model="assignee" :placeholder="t('Session ID')">
         </label>
-        <button v-if="!current.workflow.assignee" type="button" :disabled="busy || !assignee.trim()" @click="manage('assign', { assignee: assignee.trim() })">Assign work</button>
+        <button v-if="!current.workflow.assignee" type="button" :disabled="busy || !assignee.trim()" @click="manage('assign', { assignee: assignee.trim() })">{{ t('Assign work') }}</button>
         <template v-else>
-          <label>Release reason <input v-model="releaseReason" placeholder="Verified handoff context"></label>
-          <button type="button" :disabled="busy || !releaseReason.trim()" @click="manage('assign', { assignee: null, reason: releaseReason })">Release assignment</button>
-          <p>An executor checkpoint and settled effects are required after execution has started.</p>
+          <label>{{ t('Release reason') }} <input v-model="releaseReason" :placeholder="t('Verified handoff context')"></label>
+          <button type="button" :disabled="busy || !releaseReason.trim()" @click="manage('assign', { assignee: null, reason: releaseReason })">{{ t('Release assignment') }}</button>
+          <p>{{ t('An executor checkpoint and settled effects are required after execution has started.') }}</p>
         </template>
-        <label>Progress <select v-model="progress"><option value="pending">Pending</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="done">Done</option><option value="cancelled">Cancelled</option></select></label>
-        <label v-if="progress === 'blocked'">Blocker <textarea v-model="blocker" required /></label>
-        <label v-if="progress === 'done'">Verified acceptance and result <textarea v-model="result" required /></label>
-        <button type="button" :disabled="busy || progress === 'done' && !result.trim() || progress === 'blocked' && !blocker.trim()" @click="saveProgress">Record progress</button>
+        <label>{{ t('Progress') }} <select v-model="progress"><option value="pending">{{ t('Pending') }}</option><option value="in_progress">{{ t('In progress') }}</option><option value="blocked">{{ t('Blocked') }}</option><option value="done">{{ t('Done') }}</option><option value="cancelled">{{ t('Cancelled') }}</option></select></label>
+        <label v-if="progress === 'blocked'">{{ t('Blocker') }} <textarea v-model="blocker" required /></label>
+        <label v-if="progress === 'done'">{{ t('Verified acceptance and result') }} <textarea v-model="result" required /></label>
+        <button type="button" :disabled="busy || progress === 'done' && !result.trim() || progress === 'blocked' && !blocker.trim()" @click="saveProgress">{{ t('Record progress') }}</button>
       </details>
       <details class="advanced-work">
-        <summary>Advanced recovery</summary>
+        <summary>{{ t('Advanced recovery') }}</summary>
         <details v-if="current.checkpoint">
-          <summary>Executor checkpoint · v{{ current.checkpoint.revision }}</summary>
-          <p v-for="field in inventoryFields" :key="field">{{ field }}: {{ current.checkpoint[field].join('; ') || 'None reported' }}</p>
+          <summary>{{ t('Executor checkpoint · v') }}{{ current.checkpoint.revision }}</summary>
+          <p v-for="field in inventoryFields" :key="field">{{ field }}: {{ current.checkpoint[field].join('; ') || t('None reported') }}</p>
         </details>
         <div v-if="canWrite" class="work-actions">
-          <button type="button" :disabled="busy || !current.authority.executor" @click="perform('request_checkpoint')">Request executor checkpoint</button>
-          <button type="button" :disabled="busy || !canTransition" @click="transition = 'fresh'">Fresh context</button>
-          <button type="button" :disabled="busy || !canTransition" @click="transition = 'successor'">Prepare successor</button>
+          <button type="button" :disabled="busy || !current.authority.executor" @click="perform('request_checkpoint')">{{ t('Request executor checkpoint') }}</button>
+          <button type="button" :disabled="busy || !canTransition" @click="transition = 'fresh'">{{ t('Fresh context') }}</button>
+          <button type="button" :disabled="busy || !canTransition" @click="transition = 'successor'">{{ t('Prepare successor') }}</button>
         </div>
-        <p v-if="!canTransition">A current executor checkpoint with no unresolved effects is required before context replacement.</p>
+        <p v-if="!canTransition">{{ t('A current executor checkpoint with no unresolved effects is required before context replacement.') }}</p>
       </details>
     </template>
     <template v-else-if="!busy">
-      <p>No work is assigned here. Conversation needs no work item; create one when execution or tracking is needed.</p>
-      <button v-if="canWrite && !project" type="button" @click="edit()">Create work item</button>
+      <p>{{ t('No work is assigned here. Conversation needs no work item; create one when execution or tracking is needed.') }}</p>
+      <button v-if="canWrite && !project" type="button" @click="edit()">{{ t('Create work item') }}</button>
     </template>
     <form v-if="editing && canWrite" @submit.prevent="save">
-      <label v-if="creating">Work title <input v-model="title" required maxlength="160"></label>
-      <label>Outcome <textarea v-model="objective" required maxlength="4000" /></label>
-      <label>Acceptance (one per line) <textarea v-model="acceptance" required /></label>
-      <label>Existing boundaries (one per line; not new permission) <textarea v-model="boundaries" /></label>
-      <label v-if="!creating">Change type <select v-model="change"><option value="understanding">Correct interpretation</option><option value="goal">Change goal / acceptance</option><option value="authorization">Review authorization boundary</option><option value="pause">Pause / resume work</option></select></label>
-      <label>Why this revision is needed <textarea v-model="reason" required maxlength="2000" /></label>
-      <label v-if="!creating"><input v-model="paused" type="checkbox"> Pause new execution</label>
-      <button type="submit" :disabled="busy">{{ creating ? 'Create work (executor must adopt)' : 'Apply revision (executor must adopt)' }}</button>
-      <button type="button" :disabled="busy" @click="editing = false">Cancel edit</button>
+      <label v-if="creating">{{ t('Work title') }} <input v-model="title" required maxlength="160"></label>
+      <label>{{ t('Outcome') }} <textarea v-model="objective" required maxlength="4000" /></label>
+      <label>{{ t('Acceptance (one per line)') }} <textarea v-model="acceptance" required /></label>
+      <label>{{ t('Existing boundaries (one per line; not new permission)') }} <textarea v-model="boundaries" /></label>
+      <label v-if="!creating">{{ t('Change type') }} <select v-model="change"><option value="understanding">{{ t('Correct interpretation') }}</option><option value="goal">{{ t('Change goal / acceptance') }}</option><option value="authorization">{{ t('Review authorization boundary') }}</option><option value="pause">{{ t('Pause / resume work') }}</option></select></label>
+      <label>{{ t('Why this revision is needed') }} <textarea v-model="reason" required maxlength="2000" /></label>
+      <label v-if="!creating"><input v-model="paused" type="checkbox"> {{ t('Pause new execution') }}</label>
+      <button type="submit" :disabled="busy">{{ creating ? t('Create work (executor must adopt)') : t('Apply revision (executor must adopt)') }}</button>
+      <button type="button" :disabled="busy" @click="editing = false">{{ t('Cancel edit') }}</button>
     </form>
     <div v-if="transition && canWrite" role="alert">
-      <p>{{ transition === 'fresh' ? 'Replace reasoning context at the next safe boundary, retaining history, files and queued input?' : 'Retire this execution and prepare an idle successor? This does not transfer Initiative assignments.' }}</p>
-      <button type="button" :disabled="busy" @click="perform('transition', { strategy: transition })">Confirm {{ transition }}</button>
-      <button type="button" :disabled="busy" @click="transition = ''">Cancel</button>
+      <p>{{ transition === 'fresh' ? t('Replace reasoning context at the next safe boundary, retaining history, files and queued input?') : t('Retire this execution and prepare an idle successor? This does not transfer Initiative assignments.') }}</p>
+      <button type="button" :disabled="busy" @click="perform('transition', { strategy: transition })">{{ t('Confirm') }} {{ transition }}</button>
+      <button type="button" :disabled="busy" @click="transition = ''">{{ t('Cancel') }}</button>
     </div>
     <article v-for="effect in view.effects" :key="effect.id">
-      <p>Unresolved operation: {{ effect.tool }} — {{ effect.status }} · {{ effect.sessionId }}</p>
-      <button v-if="canWrite && effect.status === 'unknown'" type="button" :disabled="busy" @click="settleId = effect.id">Review external outcome</button>
+      <p>{{ t('Unresolved operation:') }} {{ effect.tool }} — {{ enumLabel(effect.status) }} · {{ effect.sessionId }}</p>
+      <button v-if="canWrite && effect.status === 'unknown'" type="button" :disabled="busy" @click="settleId = effect.id">{{ t('Review external outcome') }}</button>
     </article>
     <div v-if="settleId && canWrite" role="alert">
-      <p>Only confirm after independently checking the external outcome. This records your reconciliation, not cancellation or rollback.</p>
-      <button type="button" :disabled="busy" @click="perform('settle', { effectId: settleId })">I verified the outcome</button>
-      <button type="button" :disabled="busy" @click="settleId = ''">Cancel</button>
+      <p>{{ t('Only confirm after independently checking the external outcome. This records your reconciliation, not cancellation or rollback.') }}</p>
+      <button type="button" :disabled="busy" @click="perform('settle', { effectId: settleId })">{{ t('I verified the outcome') }}</button>
+      <button type="button" :disabled="busy" @click="settleId = ''">{{ t('Cancel') }}</button>
     </div>
   </component>
 </template>
 <script setup lang="ts">
+import { enumLabel } from '../display-labels.ts'
+import { t } from '../i18n.ts'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { apiUrl } from '../api-url.ts'
 import { parseWorkView, type WorkView } from '../work-alignment.ts'
 const props = defineProps<{ sessionId: string; apiBase: string; canWrite: boolean; embedded?: boolean; expanded?: boolean; revision?: number;
   project?: boolean; workKey?: string; sessions?: { sessionId: string; title: string }[] }>()
 const emit = defineEmits<{ attention: [needed: boolean]; updated: []; editing: [value: boolean] }>()
-const sessionTitle = (id: string | null) => id ? props.sessions?.find(session => session.sessionId === id)?.title ?? id : 'Unassigned'
+const sessionTitle = (id: string | null) => id ? props.sessions?.find(session => session.sessionId === id)?.title ?? id : t('Unassigned')
 const view = ref<WorkView>({ records: [], effects: [] })
 const selected = ref('')
 const current = computed(() => view.value.records.find(record => record.key === selected.value))
@@ -162,7 +164,7 @@ async function request(body?: object) {
       ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
     })
     const data: unknown = await response.json()
-    if (!response.ok) throw new Error(data && typeof data === 'object' && 'message' in data && typeof data.message === 'string' ? data.message : 'Could not load or change work alignment.')
+    if (!response.ok) throw new Error(data && typeof data === 'object' && 'message' in data && typeof data.message === 'string' ? data.message : t('Could not load or change work alignment.'))
     const parsed = parseWorkView(data)
     if (pending.signal.aborted) return false
     view.value = parsed
@@ -171,7 +173,7 @@ async function request(body?: object) {
     return true
   } catch (cause) {
     if (!pending.signal.aborted) {
-      const message = cause instanceof Error ? cause.message : 'Work alignment failed.'
+      const message = cause instanceof Error ? cause.message : t('Work alignment failed.')
       if (body) actionError.value = message
       else readError.value = message
     }

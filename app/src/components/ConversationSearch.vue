@@ -1,20 +1,21 @@
 <template>
-  <div v-if="open" class="conversation-search" role="search" aria-label="Search conversation" :aria-busy="loading || navigating" @keydown="searchKey">
+  <div v-if="open" class="conversation-search" role="search" :aria-label="t('Search conversation')" :aria-busy="loading || navigating" @keydown="searchKey">
     <div class="search-controls">
       <span class="i-lucide-search search-icon" aria-hidden="true" />
-      <input ref="input" v-model="query" type="search" aria-label="Search all conversation history" placeholder="Search all messages"
+      <input ref="input" v-model="query" type="search" :aria-label="t('Search all conversation history')" :placeholder="t('Search all messages')"
         autocomplete="off" spellcheck="false" @compositionstart="composing = true" @compositionend="endComposition" />
-      <span class="search-count" role="status" aria-live="polite" aria-atomic="true">{{ loading ? 'Loading history...' : query.trim() ? `${matches.length ? selected + 1 : 0} / ${matches.length}` : '' }}</span>
-      <button type="button" :disabled="!matches.length || loading || navigating" aria-label="Previous match" title="Previous match (Shift+Enter)" @click="move(-1)"><span class="i-lucide-chevron-up" aria-hidden="true" /></button>
-      <button type="button" :disabled="!matches.length || loading || navigating" aria-label="Next match" title="Next match (Enter)" @click="move(1)"><span class="i-lucide-chevron-down" aria-hidden="true" /></button>
-      <button type="button" aria-label="Close conversation search" title="Close search (Esc)" @click="close(true)"><span class="i-lucide-x" aria-hidden="true" /></button>
+      <span class="search-count" role="status" aria-live="polite" aria-atomic="true">{{ loading ? t('Loading history...') : query.trim() ? `${matches.length ? selected + 1 : 0} / ${matches.length}` : '' }}</span>
+      <button type="button" :disabled="!matches.length || loading || navigating" :aria-label="t('Previous match')" :title="t('Previous match (Shift+Enter)')" @click="move(-1)"><span class="i-lucide-chevron-up" aria-hidden="true" /></button>
+      <button type="button" :disabled="!matches.length || loading || navigating" :aria-label="t('Next match')" :title="t('Next match (Enter)')" @click="move(1)"><span class="i-lucide-chevron-down" aria-hidden="true" /></button>
+      <button type="button" :aria-label="t('Close conversation search')" :title="t('Close search (Esc)')" @click="close(true)"><span class="i-lucide-x" aria-hidden="true" /></button>
     </div>
-    <p v-if="error" class="search-error" role="alert">{{ error }} <button type="button" @click="load">Retry</button></p>
-    <p v-else class="search-scope">{{ query.trim() && !loading && !matches.length ? 'No matching messages in this conversation.' : 'All history · message text · Enter / Shift+Enter to navigate' }}</p>
+    <p v-if="error" class="search-error" role="alert">{{ error }} <button type="button" @click="load">{{ t('Retry') }}</button></p>
+    <p v-else class="search-scope">{{ query.trim() && !loading && !matches.length ? t('No matching messages in this conversation.') : t('All history · message text · Enter / Shift+Enter to navigate') }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { conversationMatches, isConversationFindKey, type ConversationSearchEntry, type ConversationSearchMatch } from '../conversation-search.ts'
 
@@ -61,7 +62,7 @@ async function load() {
     entries.value = result
     historyReady.value = true
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not search conversation history. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not search conversation history. Retry.')
   } finally {
     if (request === controller) { loading.value = false; request = undefined }
   }
@@ -112,7 +113,7 @@ async function reveal() {
   try {
     await props.revealMatch(match, query.value, controller.signal)
   } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Could not open this search match. Retry.'
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not open this search match. Retry.')
   } finally {
     if (navigation === controller) { navigating.value = false; navigation = undefined }
   }

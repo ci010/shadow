@@ -179,7 +179,7 @@ test('remote selector and chat surfaces compile with accessible device selection
       assert.match(source, /Remove local attachments before selecting a remote workspace/)
     }
     if (file === 'ExecutionLocationSelector.vue') {
-      assert.match(source, /label="Execution location"/)
+      assert.match(source, /:label="t\('Execution location'\)"/)
       assert.doesNotMatch(source, /remoteOnly|remoteConversationTargets/)
       assert.match(source, /v-for="target in folderTargets"/)
       assert.match(source, /!target.available \|\| loading \|\| !!error/)

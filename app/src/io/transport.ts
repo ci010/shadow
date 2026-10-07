@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { apiUrl } from '../api-url.ts'
 import { IO_MAX_CHUNK_BYTES, ioOutputSchema, type IoOutput } from '../../../src/io/contracts.ts'
 
@@ -5,7 +6,7 @@ export class IoBudget {
   bytes = 0
   constructor(readonly maxBytes: number) {}
   consume(bytes: number) {
-    if (!Number.isSafeInteger(bytes) || bytes < 0 || this.bytes + bytes > this.maxBytes) throw new Error('The confirmed data budget has been reached.')
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || this.bytes + bytes > this.maxBytes) throw new Error(t('The confirmed data budget has been reached.'))
     this.bytes += bytes
   }
 }
@@ -15,12 +16,12 @@ export function decodeOutput(value: unknown): { mime: string; bytes: Uint8Array 
   let bytes: Uint8Array
   if (output.text !== undefined) bytes = new TextEncoder().encode(output.text)
   else {
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(output.base64!)) throw new Error('Invalid base64 output')
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(output.base64!)) throw new Error(t('Invalid base64 output'))
     const decoded = atob(output.base64!)
-    if (btoa(decoded) !== output.base64) throw new Error('Invalid canonical base64 output')
+    if (btoa(decoded) !== output.base64) throw new Error(t('Invalid canonical base64 output'))
     bytes = Uint8Array.from(decoded, char => char.charCodeAt(0))
   }
-  if (bytes.byteLength > IO_MAX_CHUNK_BYTES) throw new Error('Output exceeds the 1 MiB chunk limit.')
+  if (bytes.byteLength > IO_MAX_CHUNK_BYTES) throw new Error(t('Output exceeds the 1 MiB chunk limit.'))
   return { mime: output.mime, bytes }
 }
 
@@ -47,7 +48,7 @@ export async function ioRequest<T>(base: string, path: string, body?: unknown, s
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
     throw new IoRequestError(
-      typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : `I/O request failed (${response.status})`,
+      typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : t('I/O request failed ({status})', { status: response.status }),
       response.status, typeof data?.error === 'string' ? data.error : undefined,
     )
   }

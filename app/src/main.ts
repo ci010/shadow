@@ -19,6 +19,10 @@ import {
 } from './desktop-bootstrap.ts'
 import type { InstallationContextV1 } from './installation-context.ts'
 import { registerBrowserPwa } from './pwa.ts'
+import { i18n, initializeI18n } from './i18n.ts'
+
+const stopLocalization = initializeI18n(window)
+if (import.meta.hot) import.meta.hot.dispose(stopLocalization)
 
 if (import.meta.env.MODE !== 'mobile') void registerBrowserPwa({
 	production: import.meta.env.PROD,
@@ -39,11 +43,13 @@ function desktopRoot(component: Component, props?: Record<string, unknown>) {
 function mountMainApp(installationContext: InstallationContextV1): void {
 	if (installationContext.mode === 'child') {
 		createApp(ChildDesktop, { apiBase: installationContext.apiBase })
+			.use(i18n)
 			.use(createInstallationContextProvider(installationContext))
 			.mount('#app')
 		return
 	}
 	createApp(App)
+		.use(i18n)
 		.use(router)
 		.use(createInstallationContextProvider(installationContext))
 		.mount('#app')
@@ -69,7 +75,7 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 				await startDesktopApp(api)
 			},
 		}))
-		wizard.mount('#app')
+		wizard.use(i18n).mount('#app')
 		return
 	}
 
@@ -95,7 +101,7 @@ function renderDesktopOutcome(api: ShadowDesktopApi, outcome: RendererBootstrapO
 			}
 			: undefined,
 	}))
-	recovery.mount('#app')
+	recovery.use(i18n).mount('#app')
 }
 
 async function startDesktopApp(api: ShadowDesktopApi): Promise<void> {
@@ -113,14 +119,14 @@ if (import.meta.env.MODE === 'mobile') {
 	const session = createBrowserSession(apiBase)
 	const stopMounting = mountBrowserSession(session, {
 		authenticated: () => {
-			const app = createApp(App).use(router)
+			const app = createApp(App).use(i18n).use(router)
 				.use(createInstallationContextProvider(createLocalMainAdminContext(apiBase)))
 				.provide(browserSessionKey, session)
 			app.mount('#app')
 			return () => app.unmount()
 		},
 		unauthenticated: () => {
-			const auth = createApp(BrowserAuth, { session })
+			const auth = createApp(BrowserAuth, { session }).use(i18n)
 			auth.mount('#app')
 			return () => auth.unmount()
 		},

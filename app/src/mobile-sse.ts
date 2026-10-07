@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 /** SSE framing is independent of network chunks (including split CRLF and UTF-8). */
 export function createSseParser(deliver: (type: string, data: string) => void) {
   let line = ''
@@ -22,7 +23,7 @@ export function createSseParser(deliver: (type: string, data: string) => void) {
     for (const character of chunk) {
       if (cr && character === '\n') { cr = false; continue }
       cr = false
-      if (++size > 2 * 1024 * 1024) throw new Error('Live frame exceeds the mobile limit.')
+      if (++size > 2 * 1024 * 1024) throw new Error(t('Live frame exceeds the mobile limit.'))
       if (character === '\r' || character === '\n') { consume(); cr = character === '\r' }
       else line += character
     }
@@ -36,7 +37,7 @@ export function createFetchEventSource(url: string, request: typeof fetch = fetc
   void (async () => {
     try {
       const response = await request(url, { headers: { accept: 'text/event-stream' }, signal: controller.signal, cache: 'no-store' })
-      if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream') || !response.body) throw new Error('Live connection unavailable.')
+      if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream') || !response.body) throw new Error(t('Live connection unavailable.'))
       reader = response.body.getReader()
       const decoder = new TextDecoder()
       const parse = createSseParser((type, data) => {

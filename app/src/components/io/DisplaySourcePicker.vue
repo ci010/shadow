@@ -3,24 +3,24 @@
     <dialog ref="dialog" class="display-picker" aria-labelledby="display-picker-title" aria-describedby="display-picker-description" @cancel.prevent="respond(null)">
       <template v-if="state">
         <header>
-          <h2 id="display-picker-title">Choose a screen or window</h2>
-          <p id="display-picker-description">Only the source you share goes to this capture and its confirmed outputs. System audio is not shared.</p>
+          <h2 id="display-picker-title">{{ t('Choose a screen or window') }}</h2>
+          <p id="display-picker-description">{{ t('Only the source you share goes to this capture and its confirmed outputs. System audio is not shared.') }}</p>
         </header>
         <div class="picker-content" :aria-busy="state.status === 'loading'">
-          <p v-if="state.status === 'loading'" class="picker-message" role="status">Loading screen and window previews…</p>
-          <p v-else-if="state.status === 'error'" class="picker-message" role="alert">Could not load screens and windows. Cancel and try again. If this continues, check screen recording access in your system settings.</p>
-          <p v-else-if="!state.sources.length" class="picker-message" role="status">No screens or windows are available. Open the window you want to share, then cancel and try again.</p>
+          <p v-if="state.status === 'loading'" class="picker-message" role="status">{{ t('Loading screen and window previews…') }}</p>
+          <p v-else-if="state.status === 'error'" class="picker-message" role="alert">{{ t('Could not load screens and windows. Cancel and try again. If this continues, check screen recording access in your system settings.') }}</p>
+          <p v-else-if="!state.sources.length" class="picker-message" role="status">{{ t('No screens or windows are available. Open the window you want to share, then cancel and try again.') }}</p>
           <fieldset v-else :disabled="submitting">
-            <legend class="picker-legend">Select one source to share</legend>
+            <legend class="picker-legend">{{ t('Select one source to share') }}</legend>
             <div class="source-grid">
               <label v-for="source in state.sources" :key="source.id" class="source-option" :class="{ selected: selected === source.id }" :title="source.name">
                 <span class="source-preview">
                   <img v-if="source.thumbnailUrl && !failedImages.has(source.id)" :src="source.thumbnailUrl" alt="" @error="failedImages.add(source.id)">
-                  <span v-else class="preview-unavailable">Preview unavailable</span>
+                  <span v-else class="preview-unavailable">{{ t('Preview unavailable') }}</span>
                 </span>
                 <span class="source-caption">
-                  <input v-model="selected" type="radio" name="display-source" :value="source.id" :aria-label="`${source.kind === 'screen' ? 'Screen' : 'Window'}: ${source.name}`">
-                  <span class="source-text"><span class="source-name">{{ source.name }}</span><span class="source-kind">{{ source.kind === 'screen' ? 'Screen' : 'Window' }}</span></span>
+                  <input v-model="selected" type="radio" name="display-source" :value="source.id" :aria-label="`${source.kind === 'screen' ? t('Screen') : t('Window')}: ${source.name}`">
+                  <span class="source-text"><span class="source-name">{{ source.name }}</span><span class="source-kind">{{ source.kind === 'screen' ? t('Screen') : t('Window') }}</span></span>
                 </span>
               </label>
             </div>
@@ -28,10 +28,10 @@
           <p v-if="error" class="picker-error" role="alert">{{ error }}</p>
         </div>
         <footer>
-          <span class="selection-hint" role="status">{{ selectedName ? `Selected: ${selectedName}` : 'Nothing is shared until you select a source and confirm.' }}</span>
+          <span class="selection-hint" role="status">{{ selectedName ? t('Selected: {selectedName}', { selectedName: selectedName }) : t('Nothing is shared until you select a source and confirm.') }}</span>
           <div class="picker-actions">
-            <button ref="cancelButton" type="button" :disabled="submitting" @click="respond(null)">Cancel</button>
-            <button type="button" class="share-source" :disabled="!selected || state.status !== 'ready' || submitting" @click="respond(selected)">{{ submitting ? 'Confirming…' : 'Share selected' }}</button>
+            <button ref="cancelButton" type="button" :disabled="submitting" @click="respond(null)">{{ t('Cancel') }}</button>
+            <button type="button" class="share-source" :disabled="!selected || state.status !== 'ready' || submitting" @click="respond(selected)">{{ submitting ? t('Confirming…') : t('Share selected') }}</button>
           </div>
         </footer>
       </template>
@@ -40,6 +40,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { DisplayPickerState } from '../../../../desktop/src/media-capture-contract.ts'
 import { desktopMediaBridge } from '../../io/desktop.ts'
@@ -89,7 +90,7 @@ async function respond(sourceId: string | null) {
   catch {
     if (state.value?.requestId === requestId) {
       if (sourceId === null) close()
-      else error.value = 'This source could not be shared. Select another source or cancel and try again.'
+      else error.value = t('This source could not be shared. Select another source or cancel and try again.')
     }
   } finally {
     if (state.value?.requestId === requestId) submitting.value = false

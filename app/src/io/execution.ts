@@ -1,3 +1,4 @@
+import { t } from '../i18n.ts'
 import { IO_FINALIZE_MS, IO_LEASE_MS, IO_TERMINAL, parseIoDefinition, parseIoUi, type IoArtifact, type IoPacket, type IoRelayUpdate, type IoRun, type IoUiNode } from '../../../src/io/contracts.ts'
 import type { DesktopMediaCaptureApi } from '../../../desktop/src/media-capture-contract.ts'
 import { acquireIoSources, type CaptureSet } from './adapters.ts'
@@ -25,7 +26,7 @@ export function validateIoNodes(value: unknown, sources: ReadonlySet<string>): I
   const visit = (list: IoUiNode[]) => {
     for (const node of list) {
       if (node.sourceId && !sources.has(node.sourceId)) {
-        throw new Error(`Backend view node "${node.id}" refers to undeclared source "${node.sourceId}". Omit sourceId for standalone controls or declare the source in a new request.`)
+        throw new Error(t('Backend view node "{id}" refers to undeclared source "{sourceId}". Omit sourceId for standalone controls or declare the source in a new request.', { id: node.id, sourceId: node.sourceId }))
       }
       if (node.children) visit(node.children)
     }
@@ -90,7 +91,7 @@ export class IoExecution {
   private changed() { this.options.change() }
 
   start(audioInputDevices: Record<string, string> = {}): Promise<void> {
-    if (this.phase !== 'ready' || this.run.backendStatus !== 'ready') return Promise.reject(new Error('Connect a ready backend before starting input.'))
+    if (this.phase !== 'ready' || this.run.backendStatus !== 'ready') return Promise.reject(new Error(t('Connect a ready backend before starting input.')))
     const mobileIssue = mobileCaptureIssue(this.run.definition.sources)
     if (mobileIssue) return this.fail(new Error(mobileIssue))
     this.audioInputDevices = { ...audioInputDevices }
@@ -108,7 +109,7 @@ export class IoExecution {
   private scheduleDeadline() {
     clearTimeout(this.duration)
     this.duration = setTimeout(() => {
-      void (this.phase === 'recording' ? this.finish() : this.cancel('cancelled', 'Input duration elapsed before permission or start acknowledgement.'))
+      void (this.phase === 'recording' ? this.finish() : this.cancel('cancelled', t('Input duration elapsed before permission or start acknowledgement.')))
     }, Math.max(0, this.sourceDeadline - performance.now()))
   }
   private armDesktop(bridge: DesktopMediaCaptureApi): Promise<void> {
@@ -119,11 +120,11 @@ export class IoExecution {
     try {
       const pending = bridge.arm({ runId: this.run.id, capabilities: desktopCapabilities(this.run.definition), durationMs: this.run.definition.limits.durationMs })
       void pending.then(() => { if (this.control.signal.aborted) void bridge.revoke({ runId: this.run.id }).catch(() => {}) }).catch(() => {})
-      const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('Desktop permission arming timed out. Open a new request and retry.')), 5000) })
+      const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(t('Desktop permission arming timed out. Open a new request and retry.'))), 5000) })
       return Promise.race([pending, timeout]).finally(() => clearTimeout(timer)).then(grant => {
         if (this.control.signal.aborted) return
-        if (!Number.isFinite(grant.expiresAt) || grant.expiresAt <= Date.now()) throw new Error('Desktop media grant expired.')
-        if (!(this.options.hasUserActivation?.() ?? navigator.userActivation?.isActive)) throw new Error('The Start gesture expired. No devices were opened; open a new request to retry.')
+        if (!Number.isFinite(grant.expiresAt) || grant.expiresAt <= Date.now()) throw new Error(t('Desktop media grant expired.'))
+        if (!(this.options.hasUserActivation?.() ?? navigator.userActivation?.isActive)) throw new Error(t('The Start gesture expired. No devices were opened; open a new request to retry.'))
         this.sourceDeadline = Math.min(this.sourceDeadline, performance.now() + grant.expiresAt - Date.now())
         this.scheduleDeadline()
         return this.acquireAndStart()
@@ -131,7 +132,7 @@ export class IoExecution {
     } catch (error) { clearTimeout(timer); return this.fail(error) }
   }
   private acquireAndStart(): Promise<void> {
-    if (this.control.signal.aborted || performance.now() >= this.sourceDeadline) return this.cancel('cancelled', 'Input deadline elapsed.')
+    if (this.control.signal.aborted || performance.now() >= this.sourceDeadline) return this.cancel('cancelled', t('Input deadline elapsed.'))
     // Browser acquisition begins before the first backend await.
     try { this.captures = (this.options.acquire ?? acquireIoSources)(this.run.definition.sources, { audioInputDevices: this.audioInputDevices }) }
     catch (error) { return this.fail(error) }
@@ -148,7 +149,7 @@ export class IoExecution {
       if (this.phase === 'closed') return
       await this.captures!.ready
       if (this.control.signal.aborted) return
-      if (performance.now() >= this.sourceDeadline) { await this.cancel('cancelled', 'Input deadline elapsed before devices were ready.'); return }
+      if (performance.now() >= this.sourceDeadline) { await this.cancel('cancelled', t('Input deadline elapsed before devices were ready.')); return }
       this.lastHeartbeat = performance.now()
       this.phase = 'recording'
       await this.queue.send({ type: 'start' })
@@ -167,12 +168,12 @@ export class IoExecution {
     return value === undefined ? 0 : new TextEncoder().encode(typeof value === 'string' ? value : JSON.stringify(value)).byteLength
   }
   async switchAudioInput(sourceId: string, deviceId: string): Promise<void> {
-    if (this.phase !== 'recording' || !this.captures?.switchAudioInput) throw new Error('Audio input can only be changed during active capture.')
-    if (!this.sources.has(sourceId)) throw new Error('Unknown input source.')
+    if (this.phase !== 'recording' || !this.captures?.switchAudioInput) throw new Error(t('Audio input can only be changed during active capture.'))
+    if (!this.sources.has(sourceId)) throw new Error(t('Unknown input source.'))
     try { this.assertLease() } catch (error) { await this.fail(error); throw error }
     if (performance.now() >= this.sourceDeadline) {
       await this.finish()
-      throw new Error('The recording time limit has been reached.')
+      throw new Error(t('The recording time limit has been reached.'))
     }
     await this.captures.switchAudioInput(sourceId, deviceId)
     if (!this.control.signal.aborted) this.changed()
@@ -182,7 +183,7 @@ export class IoExecution {
     if (performance.now() >= this.sourceDeadline) { await this.finish(); return }
     try {
       this.assertLease()
-      if (packet.sourceId && !this.sources.has(packet.sourceId)) throw new Error('Unknown input source.')
+      if (packet.sourceId && !this.sources.has(packet.sourceId)) throw new Error(t('Unknown input source.'))
       this.budget.consume(this.valueBytes(packet.value))
       await this.queue.send(packet)
     } catch (error) { await this.fail(error) }
@@ -215,7 +216,7 @@ export class IoExecution {
     return this.finishing
   }
   private assertLease() {
-    if (performance.now() - this.lastHeartbeat >= IO_LEASE_MS) throw new Error('Connection lease expired. Input cannot resume silently; open a new I/O request.')
+    if (performance.now() - this.lastHeartbeat >= IO_LEASE_MS) throw new Error(t('Connection lease expired. Input cannot resume silently; open a new I/O request.'))
   }
   private async pulse() {
     if (this.pulseBusy || this.control.signal.aborted) return
@@ -224,7 +225,7 @@ export class IoExecution {
       this.assertLease()
       await this.request(this.options.base, this.path('/heartbeat'), this.options.grant, AbortSignal.any([this.control.signal, AbortSignal.timeout(5000)]))
       this.lastHeartbeat = performance.now()
-    } catch { if (!this.control.signal.aborted) await this.fail(new Error('Connection lost. Devices stopped. Check the local service and open a new request.')) }
+    } catch { if (!this.control.signal.aborted) await this.fail(new Error(t('Connection lost. Devices stopped. Check the local service and open a new request.'))) }
     finally { this.pulseBusy = false }
   }
   invalidate() { this.lastSnapshot = 0 }
@@ -242,7 +243,7 @@ export class IoExecution {
           this.releaseDevices()
           // Collect effects that arrived between the preceding updates read and backend completion.
           try { await this.pullUpdates() }
-          catch { this.notice = 'The backend finished, but its last transient preview could not be loaded. Registered artifacts remain available.' }
+          catch { this.notice = t('The backend finished, but its last transient preview could not be loaded. Registered artifacts remain available.') }
           finally { this.applySnapshot(snapshot) }
         } else this.applySnapshot(snapshot)
       }
@@ -252,25 +253,25 @@ export class IoExecution {
   }
   private async pullUpdates() {
     const batch = await this.request<{ updates: IoRelayUpdate[]; cursor: number; reset?: boolean }>(this.options.base, this.path(`/updates?after=${this.cursor}`), undefined, AbortSignal.any([this.control.signal, AbortSignal.timeout(5000)]))
-    if (!Array.isArray(batch.updates) || batch.updates.length > 256 || !Number.isSafeInteger(batch.cursor) || batch.cursor < 0) throw new Error('Backend update cursor is invalid.')
+    if (!Array.isArray(batch.updates) || batch.updates.length > 256 || !Number.isSafeInteger(batch.cursor) || batch.cursor < 0) throw new Error(t('Backend update cursor is invalid.'))
     if (batch.reset) {
       const snapshot = await this.request<IoRun>(this.options.base, this.path(''), undefined, this.control.signal)
       this.nodes = validateIoNodes(snapshot.ui ?? snapshot.definition.ui, this.sources)
       this.run.artifacts = snapshot.artifacts
       this.run.message = snapshot.message
       this.clearPreview()
-      this.notice = 'Reconnected to the latest backend view. Some transient previews may have been missed.'
+      this.notice = t('Reconnected to the latest backend view. Some transient previews may have been missed.')
       this.cursor = 0
     }
     for (const update of batch.updates) {
       if (!Number.isSafeInteger(update.sequence) || update.sequence <= this.cursor) continue
       const { method, args } = update.effect
-      if (!Array.isArray(args)) throw new Error('Backend view update is invalid.')
+      if (!Array.isArray(args)) throw new Error(t('Backend view update is invalid.'))
       if (method === 'ui.render') {
         this.nodes = validateIoNodes(args[0], this.sources)
         this.run.ui = this.nodes
       } else if (method === 'status') {
-        if (typeof args[0] !== 'string') throw new Error('Backend status is invalid.')
+        if (typeof args[0] !== 'string') throw new Error(t('Backend status is invalid.'))
         this.run.message = args[0].slice(0, 4000)
       } else if (method === 'preview') {
         const { mime, bytes } = decodeOutput(args[0])
@@ -280,17 +281,17 @@ export class IoExecution {
           : { mime, bytes: bytes.byteLength, ...(playableMime(mime) ? { url: URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime })) } : {}) }
       } else if (method === 'artifact') {
         const artifact = args[0] as IoArtifact
-        if (!artifact || typeof artifact.id !== 'string' || typeof artifact.name !== 'string' || typeof artifact.mime !== 'string' || !Number.isSafeInteger(artifact.size) || artifact.size < 0) throw new Error('Backend artifact metadata is invalid.')
+        if (!artifact || typeof artifact.id !== 'string' || typeof artifact.name !== 'string' || typeof artifact.mime !== 'string' || !Number.isSafeInteger(artifact.size) || artifact.size < 0) throw new Error(t('Backend artifact metadata is invalid.'))
         const index = this.run.artifacts.findIndex(item => item.id === artifact.id)
         if (index < 0) this.run.artifacts.push(artifact)
         else this.run.artifacts[index] = artifact
-      } else throw new Error('Unsupported backend view update.')
+      } else throw new Error(t('Unsupported backend view update.'))
       this.cursor = update.sequence
     }
     this.cursor = batch.cursor
   }
   private applySnapshot(snapshot: IoRun) {
-    if (snapshot.id !== this.run.id || snapshot.revision !== this.run.revision) throw new Error('The I/O session changed. Open its new request before continuing.')
+    if (snapshot.id !== this.run.id || snapshot.revision !== this.run.revision) throw new Error(t('The I/O session changed. Open its new request before continuing.'))
     Object.assign(this.run, snapshot)
     if (snapshot.ui) this.nodes = validateIoNodes(snapshot.ui, this.sources)
     if (IO_TERMINAL.has(snapshot.status)) {
@@ -305,7 +306,7 @@ export class IoExecution {
     const status = error instanceof Error && error.name === 'NotAllowedError' ? 'denied'
       : error instanceof Error && error.name === 'AbortError' ? 'cancelled' : 'failed'
     const detail = error instanceof Error
-      ? `${error.name && error.name !== 'Error' ? `${error.name}: ` : ''}${error.message || 'I/O operation failed.'}`
+      ? `${error.name && error.name !== 'Error' ? `${error.name}: ` : ''}${error.message || t('I/O operation failed.')}`
       : String(error)
     return this.cancel(status, detail)
   }
@@ -324,7 +325,7 @@ export class IoExecution {
         if (result.run.status === 'completed') this.error = ''
       } catch (cause) {
         this.run.status = status
-        this.notice = `Input stopped locally, but the server could not confirm the stop: ${cause instanceof Error ? cause.message : String(cause)}. The server lease will expire; check the connection before retrying.`.slice(0, 2000)
+        this.notice = t('Input stopped locally, but the server could not confirm the stop: {value1}. The server lease will expire; check the connection before retrying.', { value1: cause instanceof Error ? cause.message : String(cause) }).slice(0, 2000)
       }
       this.changed()
     })()

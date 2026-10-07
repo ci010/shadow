@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import type { SourceLines } from './file-selection.ts'
 
 export interface MemoryEvent {
@@ -41,12 +42,12 @@ export function parseMemoryEvents(source: string, truncated = false): MemoryEven
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error
       return [{ ...span, kind: partial ? 'partial' : 'invalid', raw, message: partial
-        ? 'This record is cut off by the preview limit. Use Download to read the full entry.'
-        : 'Invalid JSON on this line. The original text is shown below.' }]
+        ? t('This record is cut off by the preview limit. Use Download to read the full entry.')
+        : t('Invalid JSON on this line. The original text is shown below.') }]
     }
     if (!isEvent(value)) {
       return [{ ...span, kind: 'invalid', raw,
-        message: 'This line does not match the memory event format. The original text is shown below.' }]
+        message: t('This line does not match the memory event format. The original text is shown below.') }]
     }
     return [{ ...span, kind: 'event', event: value, extra: Object.entries(value)
       .filter(([key]) => !fields.has(key))

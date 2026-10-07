@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { projectResourceKey } from './projects.ts'
 import { createUuid } from './uuid.ts'
 import type { FolderRecord } from './folders-client.ts'
@@ -42,8 +43,8 @@ export function createConversationResources() {
     },
     prepared(key: string, sessionId: string): ConversationResource {
       const item = resources.find(item => item.key === key)
-      if (!item) throw new Error('The owning conversation draft is unavailable.')
-      if (item.sessionId && item.sessionId !== sessionId) throw new Error('A draft cannot change session identity.')
+      if (!item) throw new Error(t('The owning conversation draft is unavailable.'))
+      if (item.sessionId && item.sessionId !== sessionId) throw new Error(t('A draft cannot change session identity.'))
       item.sessionId = sessionId
       return item
     },

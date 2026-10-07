@@ -195,7 +195,7 @@ test('switching sessions cannot retarget an in-flight cancellation or stop queue
 
 test('composer exposes an accessible stop action and retains activity when polling fails', async () => {
   const source = await readFile(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
-  assert.match(source, /v-if="requestBusy"[\s\S]*?aria-label="Stop current request"[\s\S]*?@click="stopCurrentRequest\(\)"/)
+  assert.match(source, /v-if="requestBusy"[\s\S]*?:aria-label="t\('Stop current request'\)"[\s\S]*?@click="stopCurrentRequest\(\)"/)
   assert.match(source, /currentRequest\?\.state\.error[\s\S]*?role="alert"/)
   const polling = source.slice(source.indexOf('async function pollSessionStages'), source.indexOf('function startStagePolling'))
   assert.doesNotMatch(polling.slice(polling.indexOf('} catch')), /sessionStages\.value = \{\}/)
@@ -256,11 +256,11 @@ test('Resume rejection is retryable; unknown admission never claims success or s
 
 test('Continue is prominent above the composer, gated by persisted recovery rather than idle or a draft', async () => {
   const source = await readFile(new URL('./components/ChatTab.vue', import.meta.url), 'utf8')
-  assert.match(source, /v-if="currentRecovery && !requestBusy"[\s\S]*?aria-label="Resume interrupted request"[\s\S]*?@click="resumeCurrentRequest\(\)"/)
+  assert.match(source, /v-if="currentRecovery && !requestBusy"[\s\S]*?:aria-label="t\('Resume interrupted request'\)"[\s\S]*?@click="resumeCurrentRequest\(\)"/)
   assert(source.indexOf('class="resume-bar"') < source.indexOf('class="composer-box"'))
   assert.match(source, /currentRecovery = computed\(\(\) => activeSessionId\.value \? sessionRecoveries\.value\[activeSessionId\.value\] : undefined\)/)
   assert.equal((source.match(/await resumeChatRequest\(/g) ?? []).length, 1)
-  assert.match(source, /Continue without adding a message\. Remote shell calls only check the Child's saved execution record/)
+  assert.match(source, /Continue without adding a message\. Remote shell calls only check the Child\\'s saved execution record/)
   assert.match(source, /type="checkbox" :checked="acknowledgedRecoveryId === currentRecovery\.id"/)
   assert.match(source, /acknowledgedRecoveryId !== currentRecovery\.id/)
   assert.match(source, /sessionRecoveries\.value\[sessionId\]\?\.id === priorRecoveryId/)

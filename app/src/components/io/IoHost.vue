@@ -1,15 +1,16 @@
 <template>
   <DisplaySourcePicker />
-  <aside v-if="owned && !inConversation" class="capture-status" aria-label="Active capture in another conversation">
+  <aside v-if="owned && !inConversation" class="capture-status" :aria-label="t('Active capture in another conversation')">
     <span class="capture-dot" :class="{ recording: execution?.phase === 'recording' }" aria-hidden="true" />
     <span role="status">{{ statusText }} · {{ execution!.run.definition.title }}</span>
-    <button type="button" @click="$emit('openConversation', { projectId: execution!.run.projectId, sessionId: execution!.run.sessionId })">Open conversation</button>
-    <button v-if="execution?.phase === 'recording'" type="button" @click="execution.finish()">Stop recording</button>
-    <button v-else type="button" @click="execution?.cancel()">Cancel</button>
+    <button type="button" @click="$emit('openConversation', { projectId: execution!.run.projectId, sessionId: execution!.run.sessionId })">{{ t('Open conversation') }}</button>
+    <button v-if="execution?.phase === 'recording'" type="button" @click="execution.finish()">{{ t('Stop recording') }}</button>
+    <button v-else type="button" @click="execution?.cancel()">{{ t('Cancel') }}</button>
   </aside>
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, onBeforeUnmount, onMounted, triggerRef, watch } from 'vue'
 import { parseIoDefinition, type IoRun } from '../../../../src/io/contracts.ts'
 import { apiUrl } from '../../api-url.ts'
@@ -31,9 +32,9 @@ const execution = bridge.execution
 const owned = computed(() => !!execution.value && execution.value.phase !== 'closed')
 const inConversation = computed(() => [...bridge.views.value.values()].some(view =>
   view.apiBase === bridge.executionBase.value && view.sessionId === execution.value?.run.sessionId))
-const statusText = computed(() => execution.value?.phase === 'recording' ? 'Recording'
-  : execution.value?.phase === 'processing' ? 'Processing input' : execution.value?.phase === 'ready' ? 'Input ready'
-  : execution.value?.phase === 'draining' ? 'Finishing input' : 'Preparing input')
+const statusText = computed(() => execution.value?.phase === 'recording' ? t('Recording')
+  : execution.value?.phase === 'processing' ? t('Processing input') : execution.value?.phase === 'ready' ? t('Input ready')
+  : execution.value?.phase === 'draining' ? t('Finishing input') : t('Preparing input'))
 const livePool = useLiveClientPool()
 const subscriptions = new Map<string, LiveSubscription>()
 const clients = new Map<string, { clientId: string; clientToken: string }>()
@@ -78,8 +79,8 @@ async function client(base: string) {
     const result = await ioRequest<{ clientToken: string }>(base, '/clients', { id: clientId, name: 'Local capture client', capabilities },
       AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
     controller.signal.throwIfAborted()
-    if (disposed || !bases.value.has(base)) throw new DOMException('Capture view closed', 'AbortError')
-    if (!result || typeof result.clientToken !== 'string' || !result.clientToken) throw new Error('Invalid capture client registration')
+    if (disposed || !bases.value.has(base)) throw new DOMException(t('Capture view closed'), 'AbortError')
+    if (!result || typeof result.clientToken !== 'string' || !result.clientToken) throw new Error(t('Invalid capture client registration'))
     const registered = { clientId, clientToken: result.clientToken }
     clients.set(base, registered)
     return registered
@@ -117,7 +118,7 @@ async function poll() {
         setError(base)
       } catch (cause) {
         if (disposed || !bases.value.has(base) || (cause instanceof DOMException && cause.name === 'AbortError')) return
-        setError(base, cause instanceof Error ? cause.message : 'Could not load capture requests.')
+        setError(base, cause instanceof Error ? cause.message : t('Could not load capture requests.'))
       }
     }))
     if (!owned.value && !bridge.busy.value) {
@@ -144,15 +145,15 @@ async function prepare(run: IoRun, base: string) {
     const issue = mobileCaptureIssue(snapshot.definition.sources) ?? desktopIoIssue(snapshot.definition)
     if (issue) throw new Error(issue)
     const response = await fetch(apiUrl(base, `/api/sessions/${encodeURIComponent(snapshot.sessionId)}/details`), { signal: AbortSignal.timeout(10_000) })
-    if (!response.ok) throw new Error('Could not check the conversation workdir. Retry the connection.')
-    if (parseSessionDetails(await response.json(), snapshot.sessionId).workdir.kind === 'remote') throw new Error('Device capture needs a local conversation.')
+    if (!response.ok) throw new Error(t('Could not check the conversation workdir. Retry the connection.'))
+    if (parseSessionDetails(await response.json(), snapshot.sessionId).workdir.kind === 'remote') throw new Error(t('Device capture needs a local conversation.'))
     const credentials = await client(base)
     const result = await ioRequest<{ leaseToken: string; run: IoRun }>(base, `/runs/${encodeURIComponent(run.id)}/prepare`, { ...credentials, revision: snapshot.revision }, AbortSignal.timeout(20_000))
     if (token !== generation || disposed) {
       await ioRequest(base, `/runs/${encodeURIComponent(run.id)}/stop`, { status: 'cancelled' })
       return
     }
-    if (result.run.revision !== snapshot.revision) throw new Error('The requested input changed. Ask for a new request.')
+    if (result.run.revision !== snapshot.revision) throw new Error(t('The requested input changed. Ask for a new request.'))
     bridge.executionBase.value = base
     const current = new IoExecution({
       base, run: result.run, grant: { ...credentials, leaseToken: result.leaseToken },
@@ -161,7 +162,7 @@ async function prepare(run: IoRun, base: string) {
     execution.value = current
     putRun(base, current.run)
     current.connect()
-  } catch (cause) { setError(key, cause instanceof Error ? cause.message : 'Could not prepare input. Retry the connection.') }
+  } catch (cause) { setError(key, cause instanceof Error ? cause.message : t('Could not prepare input. Retry the connection.')) }
   finally { if (token === generation) bridge.busy.value = undefined }
 }
 function current(id: string, base: string) {
@@ -181,7 +182,7 @@ bridge.actions.value = {
       try {
         const result = await ioRequest<{ run: IoRun }>(base, `/runs/${encodeURIComponent(run.id)}/stop`, { status: denied ? 'denied' : 'cancelled' })
         putRun(base, result.run)
-      } catch (cause) { setError(key, cause instanceof Error ? cause.message : 'Could not cancel this request.') }
+      } catch (cause) { setError(key, cause instanceof Error ? cause.message : t('Could not cancel this request.')) }
       finally { bridge.busy.value = undefined }
     }
     void poll()
@@ -198,15 +199,15 @@ async function pulseClients() {
       catch (cause) {
         if (disposed || !bases.value.has(base) || clients.get(base) !== credentials) return
         clients.delete(base)
-        const detail = cause instanceof Error ? cause.message : 'Client disconnected'
-        if (owned.value && bridge.executionBase.value === base) await execution.value!.fail(new Error(`Capture connection lost: ${detail}`))
+        const detail = cause instanceof Error ? cause.message : t('Client disconnected')
+        if (owned.value && bridge.executionBase.value === base) await execution.value!.fail(new Error(t('Capture connection lost: {detail}', { detail: detail })))
         else if (cause instanceof IoRequestError && cause.status === 403 && cause.code === 'client_expired') {
           try {
             await client(base)
             if (!disposed && bases.value.has(base)) setError(base)
           } catch (error) {
             if (disposed || !bases.value.has(base) || (error instanceof DOMException && error.name === 'AbortError')) return
-            setError(base, error instanceof Error ? error.message : 'Could not reconnect the capture client.')
+            setError(base, error instanceof Error ? error.message : t('Could not reconnect the capture client.'))
           }
         }
         else setError(base, detail)
@@ -229,7 +230,7 @@ watch(bases, values => {
   }
   void poll()
 }, { immediate: true })
-const pageHide = () => { void execution.value?.cancel('cancelled', 'The capture page was closed.'); execution.value?.dispose() }
+const pageHide = () => { void execution.value?.cancel('cancelled', t('The capture page was closed.')); execution.value?.dispose() }
 const visibilityChanged = () => {
   if (!document.hidden) void pulseClients().then(() => poll())
 }

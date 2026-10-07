@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { inject, onActivated, onDeactivated, onScopeDispose, reactive, type ObjectDirective } from 'vue'
 import { mobileSessionKey } from './mobile-client.ts'
 
@@ -19,13 +20,13 @@ export function mobileResourcePath(value: string, origin: string): string | null
 }
 export function validateResourceTicket(data: unknown, path: string, origin: string): { url: string; expires: number } {
   const value = data as Record<string, unknown> | null
-  if (!value || value.version !== 1 || typeof value.url !== 'string' || typeof value.expiresAt !== 'string') throw new Error('Main returned an invalid resource ticket.')
+  if (!value || value.version !== 1 || typeof value.url !== 'string' || typeof value.expiresAt !== 'string') throw new Error(t('Main returned an invalid resource ticket.'))
   const url = new URL(value.url)
   const expires = Date.parse(value.expiresAt)
   if (url.origin !== origin || url.protocol !== 'https:' || url.username || url.password || url.hash ||
     !url.searchParams.get('ticket') || mobileResourcePath(url.href, origin) !== path ||
     !Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + 65_000) {
-    throw new Error('Main returned an invalid resource ticket.')
+    throw new Error(t('Main returned an invalid resource ticket.'))
   }
 
   return { url: url.href, expires }
@@ -101,7 +102,7 @@ export function useMobileResources() {
       if (!request.signal.aborted) {
         cache.set(path, '')
         expiries.delete(path)
-        session.resourceError.value = 'A file preview or download could not be authorized. Retry the connection to reload protected resources.'
+        session.resourceError.value = t('A file preview or download could not be authorized. Retry the connection to reload protected resources.')
       }
     } finally { if (request === controller) pending.delete(path) }
   }

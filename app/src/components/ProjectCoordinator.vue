@@ -1,15 +1,16 @@
 <template>
   <span class="project-coordinator">
     <button type="button" class="coordinator-entry" :class="{ selected }" :aria-disabled="loading"
-      :aria-label="`Open Project coordination in ${projectName}`" :aria-current="selected ? 'page' : undefined"
+      :aria-label="t('Open Project coordination in {projectName}', { projectName: projectName })" :aria-current="selected ? 'page' : undefined"
       :aria-busy="loading" @click="open">
       <span :title="projectName">{{ projectName }}</span>
     </button>
-    <span v-if="error" class="coordinator-error" role="alert">{{ error }} <button type="button" class="text-action" @click="open">Retry</button></span>
+    <span v-if="error" class="coordinator-error" role="alert">{{ error }} <button type="button" class="text-action" @click="open">{{ t('Retry') }}</button></span>
   </span>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { ensureProjectOrchestrator } from '../projects.ts'
 
@@ -38,7 +39,7 @@ async function open() {
     if (!controller.signal.aborted && request === controller) emit('open', id)
   } catch (cause) {
     if (!controller.signal.aborted && request === controller) {
-      error.value = cause instanceof Error ? cause.message : 'Could not open Project coordination. Retry.'
+      error.value = cause instanceof Error ? cause.message : t('Could not open Project coordination. Retry.')
     }
   } finally {
     if (request === controller) { request = undefined; loading.value = false }

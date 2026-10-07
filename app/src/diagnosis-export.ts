@@ -1,3 +1,4 @@
+import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -14,9 +15,9 @@ export async function fetchDiagnosisExport(
   if (physicalId) url.searchParams.set('physicalId', physicalId)
   signal.throwIfAborted()
   const response = await request(url, { signal })
-  if (!response.ok) throw new Error(`Diagnosis export failed (HTTP ${response.status}).${response.status === 404 ? ' Restart Shadow after updating the backend, or check the selected session.' : ''}`)
+  if (!response.ok) throw new Error(t('Diagnosis export failed (HTTP {status}).{value2}', { status: response.status, value2: response.status === 404 ? t(' Restart Shadow after updating the backend, or check the selected session.') : '' }))
   if (!response.headers.get('content-type')?.includes('application/json')) {
-    throw new Error('Diagnosis export is unavailable on this backend. Restart Shadow after updating.')
+    throw new Error(t('Diagnosis export is unavailable on this backend. Restart Shadow after updating.'))
   }
   const value: unknown = await response.json()
   signal.throwIfAborted()
@@ -28,7 +29,7 @@ export async function fetchDiagnosisExport(
     || !object(value.trace) || typeof value.trace.hasMore !== 'boolean'
     || !object(value.privacy) || !Array.isArray(value.privacy.truncatedPaths)
     || value.privacy.reviewRequiredBeforeSharing !== true) {
-    throw new Error('Invalid diagnosis export response.')
+    throw new Error(t('Invalid diagnosis export response.'))
   }
   return {
     filename: `diagnosis-${value.session.physicalId.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`,

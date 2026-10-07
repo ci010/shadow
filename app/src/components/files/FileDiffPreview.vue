@@ -1,26 +1,26 @@
 <template>
-  <section class="file-diff" aria-label="File changes">
+  <section class="file-diff" :aria-label="t('File changes')">
     <header class="file-diff-header">
-      <div class="file-diff-heading"><span class="file-diff-path">{{ path }}</span><span>{{ diff?.base === 'empty' ? 'New file' : 'HEAD' }} → Working tree</span></div>
+      <div class="file-diff-heading"><span class="file-diff-path">{{ path }}</span><span>{{ diff?.base === 'empty' ? t('New file') : 'HEAD' }} {{ t('→ Working tree') }}</span></div>
       <div class="file-diff-actions">
-        <button v-if="diff?.status !== 'deleted'" @click="$emit('open-source')">Open file</button>
-        <button :disabled="loading" aria-label="Refresh file diff" @click="loadDiff"><span class="i-lucide-refresh-cw" aria-hidden="true" /></button>
+        <button v-if="diff?.status !== 'deleted'" @click="$emit('open-source')">{{ t('Open file') }}</button>
+        <button :disabled="loading" :aria-label="t('Refresh file diff')" @click="loadDiff"><span class="i-lucide-refresh-cw" aria-hidden="true" /></button>
       </div>
     </header>
     <div ref="scroller" class="file-diff-scroll">
-      <NodeOfflineState v-if="offline" :checking="loading" description="This diff will be available when the owning node reconnects." @retry="loadDiff" />
-      <p v-else-if="loading" class="diff-notice" role="status">Loading changes...</p>
-      <div v-if="!offline && error" class="diff-notice error" role="alert">{{ error }} <span v-if="diff">Showing the last loaded diff.</span> <button @click="loadDiff">Retry</button></div>
+      <NodeOfflineState v-if="offline" :checking="loading" :description="t('This diff will be available when the owning node reconnects.')" @retry="loadDiff" />
+      <p v-else-if="loading" class="diff-notice" role="status">{{ t('Loading changes...') }}</p>
+      <div v-if="!offline && error" class="diff-notice error" role="alert">{{ error }} <span v-if="diff">{{ t('Showing the last loaded diff.') }}</span> <button @click="loadDiff">{{ t('Retry') }}</button></div>
       <template v-if="diff && !loading && !offline">
-        <p v-if="diff.originalPath" class="diff-notice">Renamed from {{ diff.originalPath }}</p>
-        <p v-if="diff.binary || diff.truncated || !diff.hunks.length" class="diff-notice">{{ diff.notice || (diff.binary ? 'Binary files differ. A text diff is not available.' : diff.truncated ? 'This change exceeds the diff preview limit. Use Git locally to inspect the complete change.' : 'No content differences from HEAD. Git metadata or the staging area may still differ.') }}</p>
+        <p v-if="diff.originalPath" class="diff-notice">{{ t('Renamed from') }} {{ diff.originalPath }}</p>
+        <p v-if="diff.binary || diff.truncated || !diff.hunks.length" class="diff-notice">{{ diff.notice || (diff.binary ? t('Binary files differ. A text diff is not available.') : diff.truncated ? t('This change exceeds the diff preview limit. Use Git locally to inspect the complete change.') : t('No content differences from HEAD. Git metadata or the staging area may still differ.')) }}</p>
         <template v-else>
           <p v-if="diff.notice" class="diff-notice">{{ diff.notice }}</p>
-          <div class="diff-columns" aria-hidden="true"><span>HEAD</span><span>Now</span></div>
-          <p v-if="highlightError" class="diff-notice error" role="alert">{{ highlightError }} <button @click="highlight">Retry highlighting</button></p>
+          <div class="diff-columns" aria-hidden="true"><span>HEAD</span><span>{{ t('Now') }}</span></div>
+          <p v-if="highlightError" class="diff-notice error" role="alert">{{ highlightError }} <button @click="highlight">{{ t('Retry highlighting') }}</button></p>
           <p v-if="quoteError" class="diff-notice error" role="alert">{{ quoteError }}</p>
           <div ref="selectionRoot" class="diff-content">
-            <section v-for="(hunk, hunkIndex) in hunks" :key="hunkIndex" class="diff-hunk" :aria-label="`Changes at line ${hunk.newStart}`">
+            <section v-for="(hunk, hunkIndex) in hunks" :key="hunkIndex" class="diff-hunk" :aria-label="t('Changes at line {newStart}', { newStart: hunk.newStart })">
               <div class="diff-hunk-heading">@@ -{{ hunk.oldStart }},{{ hunk.oldLines }} +{{ hunk.newStart }},{{ hunk.newLines }} @@</div>
               <div v-for="(row, index) in hunk.rows" :key="index" class="diff-row" :class="`diff-${row.kind}`"
                 data-diff-row :data-old-line="row.oldLine" :data-new-line="row.newLine">
@@ -38,6 +38,7 @@
 </template>
 
 <script setup lang="ts">
+import { t } from '../../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import SelectionMenu from '../SelectionMenu.vue'
 import NodeOfflineState from './NodeOfflineState.vue'
@@ -93,7 +94,7 @@ async function highlight() {
     pendingTokens = tokens
     applyPending()
   } catch {
-    if (current === generation && props.active) highlightError.value = 'Syntax highlighting is unavailable. The plain-text diff remains available.'
+    if (current === generation && props.active) highlightError.value = t('Syntax highlighting is unavailable. The plain-text diff remains available.')
   }
 }
 async function loadDiff() {
@@ -113,7 +114,7 @@ async function loadDiff() {
   } catch (cause) {
     if (!request.signal.aborted) {
       offline.value = isNodeOfflineError(cause)
-      error.value = offline.value ? '' : cause instanceof Error ? cause.message : 'Could not load the diff. Retry.'
+      error.value = offline.value ? '' : cause instanceof Error ? cause.message : t('Could not load the diff. Retry.')
     }
   } finally {
     if (controller === request) { controller = undefined; loading.value = false }
@@ -122,7 +123,7 @@ async function loadDiff() {
 function quote(text: string, range: Range) {
   if (!selectionRoot.value || !props.canQuote) return
   const context = quoteDiffSelection(selectionRoot.value, range, diff.value?.sourcePath ?? props.path, text)
-  if (!context) { quoteError.value = 'Select file content to quote its source lines.'; return }
+  if (!context) { quoteError.value = t('Select file content to quote its source lines.'); return }
   quoteError.value = ''
   emit('quote', context)
 }

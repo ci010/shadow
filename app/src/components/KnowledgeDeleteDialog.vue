@@ -2,26 +2,27 @@
   <Teleport to="body">
     <dialog ref="dialog" class="knowledge-delete" role="alertdialog" aria-modal="true" :aria-labelledby="titleId"
       :aria-describedby="descriptionId" :aria-busy="busy" @cancel.prevent="close" @keydown.stop @keydown.esc.prevent="close">
-      <h2 :id="titleId">Delete {{ target.title }}?</h2>
-      <p>Project: <strong>{{ projectId }}</strong></p>
+      <h2 :id="titleId">{{ t('Delete') }} {{ target.title }}?</h2>
+      <p>{{ t('Project:') }} <strong>{{ projectId }}</strong></p>
       <code>{{ target.path }}</code>
-      <p :id="descriptionId">This permanently deletes only this file. Other entries and their references remain unchanged; links to this entry will remain unresolved in the catalog. This cannot be undone.</p>
-      <p v-if="target.kind === 'skill'">Only SKILL.md is removed; bundled resources are retained. A built-in skill with the same name becomes available again. Already loaded session instructions are not erased.</p>
-      <p v-if="target.path.endsWith('.jsonl')">The entire log file is deleted, including every record in it.</p>
-      <h3>{{ incoming.length }} incoming references</h3>
+      <p :id="descriptionId">{{ t('This permanently deletes only this file. Other entries and their references remain unchanged; links to this entry will remain unresolved in the catalog. This cannot be undone.') }}</p>
+      <p v-if="target.kind === 'skill'">{{ t('Only SKILL.md is removed; bundled resources are retained. A built-in skill with the same name becomes available again. Already loaded session instructions are not erased.') }}</p>
+      <p v-if="target.path.endsWith('.jsonl')">{{ t('The entire log file is deleted, including every record in it.') }}</p>
+      <h3>{{ incoming.length }} {{ t('incoming references') }}</h3>
       <ul v-if="incoming.length"><li v-for="(link, index) in incoming" :key="index">{{ link.source }} ({{ link.label }})</li></ul>
-      <p v-else>No incoming references in the current knowledge snapshot.</p>
-      <p class="muted">New references may be added by running agents. Deleting memory does not erase chat history or prevent future learning from recreating it.</p>
+      <p v-else>{{ t('No incoming references in the current knowledge snapshot.') }}</p>
+      <p class="muted">{{ t('New references may be added by running agents. Deleting memory does not erase chat history or prevent future learning from recreating it.') }}</p>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <form @submit.prevent="submit">
-        <button ref="cancelButton" type="button" :disabled="busy" autofocus @click="close">Cancel</button>
-        <button type="submit" class="danger" :disabled="busy">{{ busy ? 'Deleting...' : 'Delete file' }}</button>
+        <button ref="cancelButton" type="button" :disabled="busy" autofocus @click="close">{{ t('Cancel') }}</button>
+        <button type="submit" class="danger" :disabled="busy">{{ busy ? t('Deleting...') : t('Delete file') }}</button>
       </form>
     </dialog>
   </Teleport>
 </template>
 
 <script setup lang="ts">
+import { t } from '../i18n.ts'
 import { onMounted, onUnmounted, ref, useId } from 'vue'
 import { createKnowledgeClient, type KnowledgeEntry, type KnowledgeLink } from '../knowledge.ts'
 const props = defineProps<{ apiBase: string; projectId: string; target: KnowledgeEntry; incoming: KnowledgeLink[] }>()
@@ -45,7 +46,7 @@ async function submit() {
     await client.remove(target, lifetime.signal)
     if (!lifetime.signal.aborted) emit('deleted', target.id)
   } catch (cause) {
-    if (!lifetime.signal.aborted) error.value = cause instanceof Error ? cause.message : 'Deletion was not confirmed. Close and refresh before retrying.'
+    if (!lifetime.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Deletion was not confirmed. Close and refresh before retrying.')
   } finally { busy.value = false }
 }
 onMounted(() => {

@@ -5,6 +5,27 @@ to the same Node backend; Electron provides setup and native-window controls, no
 a separate agent implementation. The [architecture reference](architecture.md)
 explains the implementation and its limitations.
 
+## Language
+
+Choose **English**, **Simplified Chinese**, or **System language** using the
+language selector in the window header, mobile navigation, or
+**App settings > Language**. The selector is also available on browser/mobile
+login screens and in desktop setup and recovery, before a backend connection
+is established.
+
+The default follows the browser/device language preferences, using the first
+supported English or Chinese language and falling back to English. Chinese
+variants currently use Simplified Chinese. Changing the selection updates UI
+copy, accessible labels, and date/number formatting without reloading or
+discarding unsent input.
+
+The preference is saved locally for this browser profile and app origin, not
+in a Project or on Main. Other tabs at the same origin synchronize the choice.
+If local storage is unavailable, the app reports that the choice cannot be
+saved but still applies it to the current window. UI language does not alter
+agent responses, prompts, conversation history, filenames, or original
+provider/tool output.
+
 ## Projects, folders, and conversations
 
 The sidebar displays multiple Projects at once; there is no global project
