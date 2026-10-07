@@ -284,7 +284,7 @@ export class PublicationRequests {
           return { requestId: request.id, revision: request.revision, status: 'waiting' }
         }
         entry.approved = false
-        if (wasWaiting) entry.request = { ...request, status: 'error', error: {
+        entry.request = { ...request, status: 'error', error: {
           code: 'publication_failed', message: 'Publication failed. Review the current configuration before explicitly retrying.',
         } }
         this.save(this.entries)

@@ -17,7 +17,7 @@ import type {
 } from '../agent/context/builder.ts'
 import type { EventService } from '../events/service.ts'
 import type { IdentityManager } from '../agent/identity.ts'
-import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { resolveInferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import type { Bus } from '../bus/bus.ts'
 import type { ProjectScope } from '../projects/scope.ts'
 import { channelAddressFromSessionId, deriveSessionId, type InboundMessage } from '../bus/events.ts'
@@ -1273,7 +1273,9 @@ ${JSON.stringify(request)}`,
       }
       try {
         this.deps.conversationPolicies?.authorize(sessionId, input)
-        session.dispatch(deliveryInput, config)
+        session.dispatch(deliveryInput, resolveInferenceSettings(
+          config, this.deps.conversationPolicies?.resolve(sessionId)?.agent, state?.config,
+        ))
       } catch (error) {
         if (resume) {
           state!.recovery = recovery
@@ -2061,7 +2063,8 @@ ${JSON.stringify(request)}`,
       remote ? node.nodeId === workdir.workdir.nodeId : node.role === 'main')
     const capability = node?.capabilities.find(capability =>
       capability.capabilityId === workdir.workdir.capabilityId && capability.kind === 'workdir')
-    const model = state.config?.model ?? this.deps.getLlmRuntimeConfig?.().model
+    const model = state.config?.model ?? this.deps.conversationPolicies?.resolve(sessionId)?.agent.model
+      ?? this.deps.getLlmRuntimeConfig?.().model
     const window = model ? this.deps.getKnownContextWindow?.(model) : null
     return {
       ...(state.projectId ? { projectId: state.projectId } : {}),

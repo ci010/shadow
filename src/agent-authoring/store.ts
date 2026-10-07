@@ -31,6 +31,12 @@ const reservedTools = new Set([
   'sql', 'update_convention', 'io_surface', 'io_capabilities', 'io_run', 'log',
   'plan_write', 'web_search', 'search_tools',
 ])
+export const agentInferenceSchema = z.object({
+  model: z.string().min(1).optional(), temperature: z.number().finite().min(0).max(2).optional(),
+  maxTokens: z.number().int().positive().optional(),
+  thinking: z.object({ type: z.enum(['enabled', 'disabled']) }).strict().optional(),
+  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
+}).strict()
 const agentFrontmatter = z.object({
   name: ResourceName.optional(), description: z.string().optional(),
   allowedTools: z.array(ResourceName), blockedTools: z.array(ResourceName).optional(),
@@ -38,10 +44,7 @@ const agentFrontmatter = z.object({
   defaultMode: z.enum(['session', 'task', 'call']).optional(),
   ephemeral: z.boolean().optional(), skills: z.boolean().optional(),
   soul: z.boolean().optional(), root: z.literal(false).optional(),
-  model: z.string().min(1).optional(), temperature: z.number().finite().min(0).max(2).optional(),
-  maxTokens: z.number().int().positive().optional(),
-  thinking: z.object({ type: z.enum(['enabled', 'disabled']) }).strict().optional(),
-  reasoningEffort: z.enum(REASONING_EFFORTS).optional(),
+  ...agentInferenceSchema.shape,
 }).strict()
 const skillFrontmatter = z.object({
   name: ResourceName.optional(), description: z.string().optional(),

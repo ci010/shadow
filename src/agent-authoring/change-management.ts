@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import { parseDocument } from 'yaml'
+import { parseFrontmatter } from '../utils/frontmatter.ts'
+import { inferenceSettings, resolveInferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
+import type { ModelInfo } from '../providers/provider.ts'
+import { agentInferenceSchema } from './store.ts'
 import type { Tool } from '../tools/tool.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import type { VirtualFsHandler, VirtualFsWriteHandler } from '../vfs/virtual-fs.ts'
@@ -7,13 +12,20 @@ import type { AgentAuthoringService } from './service.ts'
 import type { AgentCredentialStore } from './credentials.ts'
 import type { PublicationRequests } from './publication-requests.ts'
 import type { AuthoringProbeRequests } from './probe-requests.ts'
-import { ConversationBindingSchema, conversationBindingKey } from './contracts.ts'
+import { ConversationBindingSchema, ResourceName, conversationBindingKey } from './contracts.ts'
 import { formatGuide } from './management.ts'
 import { testResourceTool } from './checks.ts'
 import { AuthoringEvidenceError, redactAuthoringEvidence } from './evidence.ts'
 import { runAuthoringScenario } from './scenario-check.ts'
 
-const actions = ['schema', 'create', 'list', 'read', 'edit', 'delegate', 'revoke', 'check', 'request_probe', 'propose', 'rebase', 'runs', 'run', 'close'] as const
+const actions = ['schema', 'inspect', 'create', 'list', 'read', 'configure_inference', 'status', 'edit', 'delegate', 'revoke', 'check', 'request_probe', 'propose', 'rebase', 'runs', 'run', 'close'] as const
+const inferencePatchSchema = z.object({
+  model: agentInferenceSchema.shape.model.nullable(),
+  temperature: agentInferenceSchema.shape.temperature.nullable(),
+  maxTokens: agentInferenceSchema.shape.maxTokens.nullable(),
+  thinking: agentInferenceSchema.shape.thinking.nullable(),
+  reasoningEffort: agentInferenceSchema.shape.reasoningEffort.nullable(),
+}).strict()
 const argsSchema = z.object({
   action: z.enum(actions), changeId: z.string().min(1).optional(),
   expectedRevision: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
@@ -50,6 +62,7 @@ export interface ChangeManagementOptions {
   probes: AuthoringProbeRequests
   canAuthor: (sessionId: string) => boolean
   inventory: () => unknown
+  inference?: () => Promise<{ defaults: LlmRuntimeConfig; models: ModelInfo[] }>
   validateLive: (snapshot: AuthoringChange['snapshot']) => Promise<void>
   evaluateScenario: Parameters<typeof runAuthoringScenario>[0]['evaluate']
 }
@@ -95,8 +108,21 @@ function page(content: string, offset = 0, limit = 8000) {
 }
 
 function runSummary(run: AuthoringRun, revision: string) {
+  const result = z.object({
+    error: z.string().optional(), errors: z.array(z.string()).optional(), valid: z.boolean().optional(),
+    response: z.string().optional(),
+    checks: z.array(z.object({ kind: z.string(), expected: z.string(), passed: z.boolean() })).optional(),
+  }).safeParse(run.result)
+  const details = result.success ? result.data : undefined
   return { id: run.id, changeId: run.changeId, revision: run.revision, kind: run.kind, status: run.status,
-    createdAt: run.createdAt, current: run.revision === revision }
+    createdAt: run.createdAt, current: run.revision === revision,
+    ...(details ? { summary: {
+      valid: details.valid, error: details.error?.slice(0, 1000),
+      errors: details.errors?.slice(0, 10).map(error => error.slice(0, 1000)),
+      response: details.response?.slice(0, 1500), checks: details.checks,
+      truncated: (details.response?.length ?? 0) > 1500 || (details.errors?.length ?? 0) > 10 ||
+        (details.error?.length ?? 0) > 1000 || details.errors?.some(error => error.length > 1000) === true,
+    } } : {}) }
 }
 
 function invalidate(options: ChangeManagementOptions, changeId: string): void {
@@ -105,8 +131,11 @@ function invalidate(options: ChangeManagementOptions, changeId: string): void {
 }
 
 const guide = {
-  workflow: 'create -> edit files -> check -> propose. Pass changeId, not a copied bundle. Published resources and the legacy shared draft are untouched until the owner approves the exact proposal.',
+  workflow: 'inspect -> create -> configure_inference or edit -> check validate -> propose -> status. Pass changeId, not a copied bundle. Published resources and the legacy shared draft are untouched until the owner approves the exact proposal.',
   inputs: {
+    inspect: '{botInstanceId?} (direct owner; published bindings, coverage and provider model/effort capabilities, without creating a Change)',
+    configure_inference: '{agent, settings:{model?,reasoningEffort?,temperature?,maxTokens?,thinking?}} + expectedRevision. Omitted fields are unchanged; null removes an override. Only enabled, bound Agents; changes affect every binding sharing that Agent, not a Bot-wide default.',
+    status: '{} (authoritative current Change revision versus published revision and pending review; missing review is never proof of publication)',
     create: '{title, editors?:[{sessionId,paths}]} (direct owner, base=current published; paths are exact resources or a directory prefix ending /)',
     list: '{} (only your assigned changes)',
     read: '{path?} (omit path for files, bindings and revisions; offset/limit page exact source)',
@@ -134,12 +163,20 @@ const guide = {
   ],
   execution: formatGuide.execution,
   resourceExample: formatGuide.example,
+  inferenceFields: {
+    model: 'Exact id from inspect.models; null inherits the runtime default.',
+    reasoningEffort: 'low | medium | high | xhigh | max; respect model.reasoningEfforts when supplied. Missing capability metadata means unknown, not unsupported. null inherits.',
+    temperature: 'Finite number from 0 to 2; null inherits.',
+    maxTokens: 'Positive integer; null inherits.',
+    thinking: '{type:"enabled"|"disabled"}; null inherits.',
+    precedence: 'Explicit session override > published Agent > runtime defaults. Scenario checks have no session override.',
+  },
 }
 
 export function authoringChangeTool(options: ChangeManagementOptions): Tool {
   return {
     name: 'authoring_change', optIn: true,
-    description: 'Edit, check and propose isolated agent/skill Changes. create once, then use changeId and file edits; versions, hashes and check runs are saved automatically. Read schema for action inputs. Delegated authors can continue in their topic. Real GET tests and publication open owner review cards, never grant themselves permission.',
+    description: 'Inspect published Agent bindings, uncovered conversations and available models/efforts; configure_inference or edit isolated Changes, check, propose and query authoritative status. Read schema for inputs. Never scrape chat history for publication receipts. Publication and real GET tests require owner review.',
     parameters: {
       type: 'object', properties: {
         action: { type: 'string', enum: [...actions] }, changeId: { type: 'string' },
@@ -155,6 +192,37 @@ export function authoringChangeTool(options: ChangeManagementOptions): Tool {
       const input = args.input ?? {}
       const { changes } = options
       if (args.action === 'schema') return JSON.stringify(guide)
+      if (args.action === 'inspect') {
+        assertOwner(context)
+        const { botInstanceId } = z.object({ botInstanceId: z.string().min(1).optional() }).strict().parse(input)
+        const snapshot = options.service.options.store.snapshot()
+        const bindings = snapshot.bundle.bindings.filter(binding => !botInstanceId || binding.botInstanceId === botInstanceId)
+        const inventory = z.object({
+          bots: z.array(z.unknown()).optional(),
+          conversations: z.array(z.object({
+            sessionId: z.string(), address: addressSchema.extend({ projectId: z.string(), legacySessionId: z.boolean().optional() }).nullish(),
+            inferenceOverrides: agentInferenceSchema.optional(),
+          }).passthrough()).default([]),
+        }).passthrough().parse(options.inventory())
+        const capabilities = await options.inference?.()
+        const agents = [...new Set(bindings.map(binding => binding.agent))].sort().map(name => {
+          const settings = agentInferenceSchema.parse(inferenceSettings(parseFrontmatter(snapshot.bundle.files[`agents/${name}/AGENT.md`]).frontmatter))
+          return { name, settings, effective: capabilities ? resolveInferenceSettings(capabilities.defaults, settings) : null,
+            affectedBindings: snapshot.bundle.bindings.filter(binding => binding.agent === name) }
+        })
+        const conversations = inventory.conversations.filter(item => item.address && (!botInstanceId || item.address.botInstanceId === botInstanceId))
+          .map(item => {
+            const binding = bindings.find(binding => binding.enabled && conversationBindingKey(binding) === conversationBindingKey(item.address!))
+            const agent = agents.find(agent => agent.name === binding?.agent)
+            return { ...item, covered: !!binding, agent: binding?.agent ?? null,
+              effective: capabilities ? resolveInferenceSettings(capabilities.defaults, agent?.settings, item.inferenceOverrides) : null }
+          })
+        return JSON.stringify({ publishedRevision: snapshot.revision, bots: inventory.bots, bindings, agents, conversations,
+          uncoveredConversations: conversations.filter(item => !item.covered),
+          models: capabilities?.models ?? null, runtimeDefaults: capabilities?.defaults ?? null,
+          capabilityStatus: capabilities ? 'available' : 'unavailable',
+          scope: 'Only enabled bindings use published Agent settings. No Bot-wide defaults. Unlisted conversations have unknown coverage; shared Agents affect all their bindings.' })
+      }
       if (args.action === 'list') {
         const assigned = changes.list().filter(change => change.ownerSessionId === context.sessionId ||
           change.editors.some(editor => editor.sessionId === context.sessionId))
@@ -170,6 +238,19 @@ export function authoringChangeTool(options: ChangeManagementOptions): Tool {
       }
       if (!args.changeId) throw new Error('This action requires changeId. Create or list your Changes first.')
       const change = assertAccess(options, context, args.changeId)
+      if (args.action === 'status') {
+        z.object({}).strict().parse(input)
+        const store = options.service.options.store
+        const publishedRevision = store.snapshot().revision
+        const request = options.publications.list().find(item => item.change?.id === change.id && item.revision === change.snapshot.revision)
+        const current = change.snapshot.revision === publishedRevision
+        return JSON.stringify({ changeId: change.id, revision: change.snapshot.revision, publishedRevision,
+          status: current ? 'published' : request ? request.status ?? 'awaiting_owner_review'
+            : change.closed ? 'closed_unpublished' : change.base.revision !== publishedRevision ? 'base_changed' : 'not_published',
+          active: current, request: request ? { id: request.id, status: request.status ?? 'awaiting_owner_review', error: request.error } : null,
+          historicalRevision: !current && store.history().some(item => item.revision === change.snapshot.revision),
+          runs: changes.runs(change.id).map(run => runSummary(run, change.snapshot.revision)) })
+      }
       if (args.action === 'read') {
         const { path } = z.object({ path: z.string().optional() }).strict().parse(input)
         if (!path) return JSON.stringify({ ...summary(change), inventory: options.inventory() })
@@ -196,6 +277,30 @@ export function authoringChangeTool(options: ChangeManagementOptions): Tool {
       }
       if (change.closed) throw new Error('This Change is closed. Its files and saved runs remain readable.')
       if (!args.expectedRevision || args.expectedRevision !== change.snapshot.revision) throw new Error('Read the Change and supply its exact expectedRevision. No fallback to a different source.')
+      if (args.action === 'configure_inference') {
+        const parsed = z.object({ agent: ResourceName, settings: inferencePatchSchema }).strict().parse(input)
+        if (!Object.keys(parsed.settings).length) throw new Error('Supply at least one inference setting.')
+        const path = `agents/${parsed.agent}/AGENT.md`
+        assertAccess(options, context, change.id, path)
+        const affectedBindings = change.snapshot.bundle.bindings.filter(binding => binding.agent === parsed.agent)
+        if (!affectedBindings.some(binding => binding.enabled)) throw new Error('Choose an Agent with an enabled binding. This action does not create Bot-wide defaults.')
+        const source = change.snapshot.bundle.files[path]
+        if (source === undefined) throw new Error('Change Agent does not exist.')
+        const match = /^(---\r?\n)([\s\S]*?)(\r?\n---\r?\n)([\s\S]*)$/.exec(source)
+        if (!match) throw new Error('Agent frontmatter is missing.')
+        const document = parseDocument(match[2])
+        if (document.errors.length) throw new Error(document.errors.map(error => error.message).join('\n'))
+        for (const [key, value] of Object.entries(parsed.settings)) {
+          if (value === null) document.delete(key)
+          else document.set(key, value)
+        }
+        const content = `${match[1]}${document.toString().trimEnd()}${match[3]}${match[4]}`
+        if (JSON.stringify(redactAuthoringEvidence(content, options.credentials)) !== JSON.stringify(content)) throw new Error('Do not put stored credential values in authored resources.')
+        const next = changes.edit(change.id, { expectedRevision: args.expectedRevision, files: { [path]: content } })
+        invalidate(options, change.id)
+        return JSON.stringify({ ...summary(next), affectedBindings, settings: inferenceSettings(parseFrontmatter(content).frontmatter),
+          message: 'Saved to this Change only. Run check validate, propose and query status after owner approval. Shared Agent bindings are all affected.' })
+      }
       if (args.action === 'edit') {
         const parsed = z.object({
           files: z.record(z.string().nullable()).optional(),
@@ -311,7 +416,7 @@ export function authoringChangeTool(options: ChangeManagementOptions): Tool {
         })
         return JSON.stringify({ ...runSummary(run, changes.get(change.id).snapshot.revision),
           message: 'Evidence saved. Read action run with this runId for the exact JSON result; do not copy it from chat logs.',
-          ...page(JSON.stringify(run.result), 0, 4000) })
+          ...(parsed.kind === 'scenario' ? {} : page(JSON.stringify(run.result), 0, 4000)) })
       }
       throw new Error('Unsupported authoring action.')
     },

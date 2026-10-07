@@ -10,6 +10,7 @@ import type { ReceiveChannelMessage } from '../sessions/input.ts'
 import { DiscordChannel } from './discord.ts'
 import { FeishuChannel } from './feishu.ts'
 import { QQChannel } from './qq.ts'
+import { QQDeliveryError } from './qq-replies.ts'
 import { WebChannel } from './web.ts'
 import { WeChatChannel } from './wechat.ts'
 import { CHANNEL_IDS, type BotInstanceStatus, type ChannelId, type ChannelSetupStatus, type ChannelState } from './setup-contract.ts'
@@ -755,11 +756,14 @@ export class ChannelManager {
         if (this.options && msg.channel !== 'virtual') {
           try {
             await this.deliver(msg)
-          } catch {
-            console.error('[channel-manager] Source bot delivery unavailable')
+          } catch (error) {
+            const reason = error instanceof QQDeliveryError ? error.message : 'source_bot_unavailable'
+            console.error(error instanceof QQDeliveryError
+              ? `[channel-manager] ${reason}`
+              : '[channel-manager] Source bot delivery unavailable')
             this.bus.emit('channel.delivery.failed', {
               projectId: this.projectId, channelAddress: msg.channelAddress,
-              channel: msg.channel, chatId: msg.chatId, error: 'source_bot_unavailable',
+              channel: msg.channel, chatId: msg.chatId, error: reason,
             })
           }
           continue

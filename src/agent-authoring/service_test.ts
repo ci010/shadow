@@ -204,6 +204,76 @@ async function fixture(Store: typeof JsonlSessionStore | typeof SqliteSessionSto
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: reloaded QQ sticker previews and clearly marked old records stay out of inference`, async () => {
+    const f = await fixture(Store)
+    const gif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+    const face = '<faceType=6,faceId="0",ext="eyJ0ZXh0IjoiIn0=">'
+    try {
+      const imagePath = join(f.root, 'sticker.gif')
+      await writeFile(imagePath, Buffer.from(gif.split(',')[1], 'base64'))
+      await f.stage()
+      await f.publish()
+      await f.app.receiveChannelMessage(message({ content: `${face} Keep the text`, media: [imagePath], silent: true,
+        displayMetadata: { attachments: [{ path: imagePath, sticker: true }] } }))
+      await f.idle()
+      assert.equal(f.requests.length, 0)
+      await f.sessions.retireIdleConversationContexts(target => target === id)
+      await f.store.appendMessages(SessionManager.currentPhysicalId(f.sessions.getSessionState(id)!), [{
+        role: 'user', timestamp: new Date().toISOString(),
+        content: [{ type: 'text', text: `${face} Historical words` }, { type: 'image_url', image_url: { url: gif } }],
+      }])
+      await f.app.receiveChannelMessage(message({ content: 'Now reply' }))
+      await f.idle()
+      const request = f.requests.at(-1)!
+      assert(request.messages.every(message => !Array.isArray(message.content) || message.content.every(part => part.type !== 'image_url')))
+      assert.match(JSON.stringify(request.messages), /Keep the text/)
+      assert.match(JSON.stringify(request.messages), /Historical words/)
+      assert.doesNotMatch(JSON.stringify(request.messages), /data:image/)
+      const history = f.sessions.getActiveSession(id)!.history
+      assert.equal(history.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url') : []).length, 2)
+    } finally { await f.close() }
+  })
+
+  test(`${Store.name}: published inference settings reach ordinary channel turns and inherit after removal`, async () => {
+    const f = await fixture(Store)
+    try {
+      const value = bundle(f.folder.id)
+      const path = 'agents/reader/AGENT.md'
+      value.files[path] = value.files[path].replace('description:', 'model: configured-agent-model\nreasoningEffort: low\ntemperature: 0.4\nmaxTokens: 321\nthinking: {type: enabled}\ndescription:')
+      await f.stage(value)
+      await f.publish()
+      await f.app.receiveChannelMessage(message())
+      await f.idle()
+      let options = f.promptCaptures.list(id)[0].options
+      assert.equal(options.model, 'configured-agent-model')
+      assert.equal(options.reasoningEffort, 'low')
+      assert.equal(options.temperature, 0.4)
+      assert.equal(options.maxTokens, 321)
+      assert.deepEqual(options.thinking, { type: 'enabled' })
+      assert.equal(f.sessions.getSessionState(id)?.config?.model, undefined)
+      await f.sessions.setSessionConfig(id, { model: 'session-model', reasoningEffort: 'high' })
+      await f.app.receiveChannelMessage(message())
+      await f.idle()
+      options = f.promptCaptures.list(id)[0].options
+      assert.equal(options.model, 'session-model')
+      assert.equal(options.reasoningEffort, 'high')
+      await f.sessions.unsetSessionConfig(id, 'model')
+      await f.sessions.unsetSessionConfig(id, 'reasoningEffort')
+      await f.app.receiveChannelMessage(message({ channelAddress: otherAddress, chatId: otherAddress.conversationId }))
+      await f.idle(channelSessionId(otherAddress))
+      assert.equal(f.promptCaptures.list(channelSessionId(otherAddress)).at(-1)!.options.model, 'fixture')
+      await f.stage()
+      await f.publish()
+      await f.app.receiveChannelMessage(message())
+      await f.idle()
+      options = f.promptCaptures.list(id)[0].options
+      assert.equal(options.model, 'fixture')
+      assert.equal(options.reasoningEffort, undefined)
+      assert.equal(options.temperature, 0)
+      assert.equal(options.maxTokens, undefined)
+    } finally { await f.close() }
+  })
+
   test(`${Store.name}: owner authors and publishes group-specific prompts and strict tools end to end`, async () => {
     const f = await fixture(Store)
     try {

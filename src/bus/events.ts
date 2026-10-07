@@ -32,7 +32,7 @@ export interface ChannelMessageMetadata {
   source?: string
   author?: { bot?: boolean; role?: string }
   mentions?: Array<{ id?: string; name?: string; bot?: boolean; role?: string; isSelf?: boolean }>
-  attachments?: Array<{ path: string; contentType?: string; size?: number; width?: number; height?: number }>
+  attachments?: Array<{ path: string; contentType?: string; size?: number; width?: number; height?: number; sticker?: boolean }>
 }
 
 /** Shared inbound metadata and agent execution context. */

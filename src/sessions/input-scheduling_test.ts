@@ -736,6 +736,81 @@ for (const staged of [false, true]) {
 }
 
 for (const storage of ['jsonl', 'sqlite'] as const) {
+  test(`QQ peer handoff produces a proactive final group notification (${storage})`, async t => {
+    const address = { projectId: 'project', botInstanceId: 'qq-bot', platform: 'qq', conversationId: 'group:group' }
+    const f = await fixture({ storage, state: {
+      sessionId: channelSessionId(address), projectId: address.projectId, physicalIdVersion: 2,
+    } })
+    const channel = new QQChannel(f.bus, { appId: 'synthetic', secret: 'synthetic' })
+    const sent: Array<{ path: string; body: unknown }> = []
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input)
+      if (url.hostname === 'bots.qq.com') return Response.json({ access_token: 'synthetic-token', expires_in: 7200 })
+      sent.push({ path: url.pathname, body: JSON.parse(String(init?.body)) })
+      return Response.json({ id: 'proactive-result' })
+    })
+    try {
+      f.session.dispatch({
+        id: 'task-handoff', timestamp: new Date().toISOString(), kind: 'message', policy: 'queue',
+        source: { kind: 'session', sessionId: 'web:worker', coordination: { intent: 'handoff' } },
+        content: 'The task is complete. Notify the QQ group.',
+      }, llm)
+      await waitFor(() => f.calls.length === 1)
+      assert.match(JSON.stringify(f.calls[0].messages), /The task is complete/)
+      f.calls[0].resolve(done('The fix is ready for review.'))
+      await waitFor(() => f.session.quiescent)
+      const final = f.outboundMessages.find(message => message.event === 'response' && message.done)
+      assert.ok(final)
+      assert.deepEqual(final.channelAddress, address)
+      assert.equal(final.replyTo, undefined)
+      for (const message of f.outboundMessages) await channel.onMessage(message)
+      assert.deepEqual(sent, [{
+        path: '/v2/groups/group/messages',
+        body: { msg_type: 2, markdown: { content: 'The fix is ready for review.' } },
+      }])
+      const records = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(f.state)))
+      assert.match(JSON.stringify(records), /The fix is ready for review/)
+    } finally { await channel.stop(); await f.close() }
+  })
+
+  test(`QQ sticker previews survive silent history and quoted reuse without model images (${storage})`, async t => {
+    const f = await fixture({ storage, state: { sessionId: 'qq:group:group' } })
+    const channel = new QQChannel(f.bus, { appId: 'synthetic', secret: 'synthetic', workspace: f.workspace })
+    channel.setReceiver(async message => {
+      f.session.dispatch(channelMessageInput(message), llm)
+      return { status: 'accepted', sessionId: f.state.sessionId, inputId: message.messageId }
+    })
+    const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+    t.mock.method(globalThis, 'fetch', async () => new Response(gif, { headers: { 'content-type': 'image/gif' } }))
+    const base = { group_openid: 'group', author: { member_openid: 'sender' }, timestamp: new Date().toISOString() }
+    const face = '<faceType=6,faceId="0",ext="eyJ0ZXh0IjoiIn0=">'
+    try {
+      await channel['handleDispatch']('GROUP_MESSAGE_CREATE', {
+        ...base, id: 'sticker', content: `${face} Keep my words`,
+        message_scene: { ext: ['msg_idx=sticker-index'] },
+        attachments: [{ filename: 'face.jpg', content_type: 'image/gif', url: 'https://multimedia.nt.qq.com.cn/face' }],
+      })
+      await waitFor(() => f.session.history.length === 1 && f.session.quiescent)
+      assert.equal(f.calls.length, 0)
+      const saved = await Array.fromAsync(f.store.readSessionLog(SessionManager.currentPhysicalId(f.state)))
+      assert.match(JSON.stringify(saved), /image_url/)
+      assert.match(JSON.stringify(saved), /"displayOnly":true/)
+      await channel['handleDispatch']('GROUP_AT_MESSAGE_CREATE', {
+        ...base, id: 'quote', content: 'Explain the real image', message_type: 103,
+        message_scene: { ext: ['ref_msg_idx=sticker-index'] },
+        attachments: [{ filename: 'normal.gif', content_type: 'image/gif', url: 'https://multimedia.nt.qq.com.cn/normal' }],
+      })
+      await waitFor(() => f.calls.length === 1)
+      const images = f.calls[0].messages.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url') : [])
+      assert.equal(images.length, 1, 'only the normal GIF reaches inference, not either copy of the sticker')
+      assert.match(JSON.stringify(f.calls[0].messages), /Keep my words|Explain the real image/)
+      assert.doesNotMatch(JSON.stringify(f.calls[0].messages), /displayOnly/)
+      assert.equal(f.session.history.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url') : []).length, 3)
+      f.calls[0].resolve(done())
+      await waitFor(() => f.session.quiescent)
+    } finally { await channel.stop(); await f.close() }
+  })
+
   test(`QQ documented rich message content persists and reaches the provider (${storage})`, async t => {
     const f = await fixture({ storage, state: { sessionId: 'qq:group:group' } })
     const channel = new QQChannel(f.bus, { appId: 'synthetic', secret: 'synthetic', workspace: f.workspace })

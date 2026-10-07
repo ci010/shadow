@@ -143,7 +143,7 @@ export function ownerChannelConfigurationTool(store: IntegrationStore, memory: M
           id: bot.id, displayName: bot.displayName, platform: bot.platform, enabled: bot.enabled,
           authoringTool: 'authoring_change',
         })),
-        otherPlatformWorkflow: 'QQ/Feishu are supported through authoring_change in Shadow owner chat. Read its schema, create/read a Change to discover inventory.conversations and exact addresses, edit Agent Markdown/skill tools/bindings, check, then propose. The owner approves the exact publication card; Discord revisions and review URLs do not apply. project_config inspect is read-only discovery without creating a Change.',
+        otherPlatformWorkflow: 'QQ/Feishu use authoring_change in Shadow owner chat: schema, inspect for published bindings, uncovered conversations and model/effort capabilities, then create a Change, configure_inference or edit, check validate, propose, and status after owner approval. Model changes affect explicitly selected bound Agents, not Bot-wide defaults. Discord revisions and review URLs do not apply.',
         domains: memory.domains(), resources: memory.ownerResources(), tools: integrationToolNames })
       if (input.action === 'directory') return JSON.stringify(await transport.directory(input.botId, input.guildId, input.after, context.signal))
       if (input.action === 'members') {

@@ -248,8 +248,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       { id: qq.id, displayName: 'QQ support', platform: 'qq', enabled: false, authoringTool: 'authoring_change' },
       { id: feishu.id, displayName: 'Feishu support', platform: 'feishu', enabled: false, authoringTool: 'authoring_change' },
     ])
-    assert.match(output('list').otherPlatformWorkflow, /inventory.conversations/)
-    assert.match(output('list').otherPlatformWorkflow, /owner approves/)
+    assert.match(output('list').otherPlatformWorkflow, /inspect.*uncovered conversations/)
+    assert.match(output('list').otherPlatformWorkflow, /owner approval/)
     assert(!JSON.stringify(f.requests).includes('synthetic-token') && !JSON.stringify(f.requests).includes('fixture-901'))
     assert.match(JSON.stringify(output('schema')), /human review/)
     assert.equal(output('directory').guilds[0].name, 'Our server')

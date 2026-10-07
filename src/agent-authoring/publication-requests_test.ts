@@ -193,14 +193,18 @@ test('edit during retirement or proposal validation rejects stale review', async
   } finally { gate.resolve(); await f.close() }
 })
 
-test('live validation and retirement failures propagate without publishing or consuming approval', async () => {
+test('live validation and retirement failures retain an explicit retryable review error without publishing', async () => {
   const f = await fixture()
   try {
     await f.stage()
     const request = await f.requests.propose()
     f.validate(async () => { throw new Error('Folder revoked') })
     await assert.rejects(f.requests.submit(request.id, decision(request)), /Folder revoked/)
-    assert.deepEqual(f.requests.pending(), request)
+    const { status, error, ...pending } = f.requests.pending()!
+    assert.deepEqual(pending, request)
+    assert.equal(status, 'error')
+    assert.equal(error?.code, 'publication_failed')
+    assert.doesNotMatch(error?.message ?? '', /Folder revoked/)
     f.validate(async () => {})
     f.retirement(async () => { throw new Error('Channel work is active') })
     await assert.rejects(f.requests.submit(request.id, decision(request)), /Channel work is active/)
@@ -258,7 +262,11 @@ test('HTTP requires owner authorization and strict decisions; no automatic retry
     const failed = await f.app.request(`${path}/${request.id}`, { method: 'POST', headers, body: JSON.stringify(decision(request)) })
     assert.equal(failed.status, 500)
     assert.equal((await failed.text()).includes('Private internal detail'), false)
-    assert.deepEqual(f.requests.pending(), request)
+    const { status, error, ...pending } = f.requests.pending()!
+    assert.deepEqual(pending, request)
+    assert.equal(status, 'error')
+    assert.equal(error?.code, 'publication_failed')
+    assert.doesNotMatch(error?.message ?? '', /Private internal detail/)
     assert.equal(f.store.snapshot().revision, request.baseRevision)
     f.validate(async () => {})
     const published = await f.app.request(`${path}/${request.id}`, { method: 'POST', headers, body: JSON.stringify(decision(request)) })

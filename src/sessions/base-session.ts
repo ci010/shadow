@@ -42,6 +42,7 @@ import { ReadTool } from '../tools/read.ts'
 import { pendingToolCalls } from './recovery.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
 import { saveToolImages } from './tool-images.ts'
+import { modelMessages } from '../providers/message-content.ts'
 
 /**
  * Shared base for all session types.
@@ -252,7 +253,9 @@ export abstract class BaseSession {
           ? { ...message, content: withCurrentWork(String(message.content ?? ''), workPrompt) } : message)
           : [{ role: 'system', content: workPrompt }, ...this.messages]
         : this.messages
-      const inferenceMessages = withExecutionBudget(withResponseAudience(workMessages, responseContext), budget.remaining, 'turn')
+      const inferenceMessages = withExecutionBudget(withResponseAudience(
+        modelMessages(workMessages, executionContext.channel === 'qq'), responseContext,
+      ), budget.remaining, 'turn')
       await this.tools.boundary?.beforeInference(signal)
       if (this.tools.boundary) await this.store.saveState(this.id, this.state)
 

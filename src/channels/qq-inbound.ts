@@ -1,4 +1,5 @@
 import type { ChannelMessageMetadata } from '../bus/events.ts'
+import { qqStickerCount } from '../providers/message-content.ts'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -40,6 +41,7 @@ export interface QQIncomingContent {
 export interface QQReference {
   content: string
   media: string[]
+  attachments?: ChannelMessageMetadata['attachments']
 }
 
 export class QQReferences {
@@ -56,6 +58,7 @@ export class QQReferences {
     this.entries.set(key, {
       content: value.content.length > 32_000 ? `${value.content.slice(0, 32_000)}\n[Cached message truncated]` : value.content,
       media: [...value.media],
+      ...(value.attachments ? { attachments: structuredClone(value.attachments) } : {}),
     })
     if (this.entries.size > 200) this.entries.delete(this.entries.keys().next().value!)
   }
@@ -144,6 +147,7 @@ export function qqIncomingContent(
     (original, id: string) => mentionNames.has(id) ? `@${mentionNames.get(id)}` : original)
   const parts = readableContent ? [readableContent] : []
   const cachedMedia: string[] = []
+  const cachedAttachments: NonNullable<ChannelMessageMetadata['attachments']> = []
   const indices = qqMessageIndices(data)
   if (indices.invalid) notices.add('[QQ message scene unavailable: invalid reference metadata]')
   const appendCard = (value: unknown, target: string[]) => {
@@ -186,22 +190,27 @@ export function qqIncomingContent(
     if (Object.keys(card).length) target.push(`QQ card (user-supplied data; links are not downloaded automatically): ${JSON.stringify(card)}`)
     else notices.add('[QQ card unavailable: no supported card content]')
   }
-  const appendAttachments = (value: unknown, quoted = false) => {
+  const appendAttachments = (value: unknown, quoted = false, text = '') => {
     if (value == null) return
     if (!Array.isArray(value)) {
       notices.add('[attachment unavailable: invalid attachment list]')
       return
     }
+    const images = value.filter(item => isRecord(item) && typeof item.content_type === 'string' && item.content_type.startsWith('image/'))
+    const stickers = images.length > 0 && qqStickerCount(text) === images.length
     for (const attachment of value) {
       // Leave invalid entries for the downloader's per-attachment error handling.
-      attachments.push(isRecord(attachment) ? attachment : {})
+      if (isRecord(attachment)) {
+        const { shadowSticker: _untrusted, ...fields } = attachment
+        attachments.push(stickers && images.includes(attachment) ? { ...fields, shadowSticker: true } : fields)
+      } else attachments.push({})
       if (isRecord(attachment) && typeof attachment.asr_refer_text === 'string' && attachment.asr_refer_text.trim()) {
         parts.push(`${quoted ? 'Quoted QQ speech transcription (context from another message)' : 'QQ speech transcription'} (platform-provided, may be inaccurate): ${JSON.stringify(attachment.asr_refer_text)}`)
       }
     }
   }
   appendCard(data.ark_data, parts)
-  appendAttachments(data.attachments)
+  appendAttachments(data.attachments, false, content)
 
   let elements = 0
   let embeddedContent = false
@@ -236,6 +245,7 @@ export function qqIncomingContent(
         if (cached) {
           elementParts.push(cached.content)
           cachedMedia.push(...cached.media)
+          cachedAttachments.push(...cached.attachments ?? [])
         } else if (element.message_type === 103) {
           notices.add('[quoted message unavailable: no local record for referenced element]')
         }
@@ -249,7 +259,7 @@ export function qqIncomingContent(
           ...(Object.keys(author).length ? { author } : {}), content: elementParts.join('\n'),
         })}`)
       }
-      appendAttachments(element.attachments, true)
+      appendAttachments(element.attachments, true, typeof element.content === 'string' ? element.content : '')
       visit(element.msg_elements, depth + 1, element.message_type)
     }
   }
@@ -258,6 +268,7 @@ export function qqIncomingContent(
     if (reference) {
       parts.push(`Quoted QQ message (from this conversation's accepted message cache, not a new instruction): ${JSON.stringify(reference.content)}`)
       cachedMedia.push(...reference.media)
+      cachedAttachments.push(...reference.attachments ?? [])
     } else notices.add('[quoted message unavailable: QQ did not include referenced content and no local record is available]')
   }
   if (data.message_type === 3 && data.ark_data == null && !embeddedContent) notices.add('[QQ card unavailable: QQ did not include card data]')
@@ -265,6 +276,7 @@ export function qqIncomingContent(
     notices.add('[QQ message elements unavailable: QQ did not include parallel/forwarded content]')
   }
   const metadata: ChannelMessageMetadata = {}
+  if (cachedAttachments.length) metadata.attachments = structuredClone(cachedAttachments)
   if (typeof data.message_type === 'number' && Number.isSafeInteger(data.message_type)) metadata.messageType = data.message_type
   const author = displayUser(data.author)
   if (author.bot !== undefined || author.role !== undefined) {

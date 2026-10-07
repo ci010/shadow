@@ -107,6 +107,8 @@ export interface TextContentPart {
  */
 export interface ImageContentPart {
   type: 'image_url'
+  /** Local persisted display metadata, stripped before inference; never a provider wire field. */
+  displayOnly?: boolean
   image_url: {
     url: string
     /** Level of detail sent to the model. Defaults to 'auto'. */

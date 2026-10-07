@@ -82,8 +82,9 @@ not Discord's `channel_config propose`. Owner `channel_config list` includes
 `otherPlatformBots` and the appropriate authoring route so an absent Discord
 assignment is not mistaken for unsupported QQ configuration.
 
-Use `project_config inspect` for read-only discovery, or create/read an isolated
-Change to obtain the Project's Bot and conversation inventory. Match the target
+Use `authoring_change inspect` for read-only discovery without creating a Change:
+published Agent settings, the provider model/effort catalog, and the Project's
+Bot and known conversation inventory, including uncovered conversations. Match the target
 session to its exact Bot/platform/conversation address. Edit the Agent resource,
 selected skill tools and binding, run the Change checks, then propose the exact
 revision. Tools are read/search and published skill tool aliases with explicit
@@ -93,6 +94,23 @@ currently use Discord's Settings Review page. A model cannot approve publication
 Do not expose management tools to the target QQ group or treat a QQ group role
 as Shadow ownership. Unbound QQ conversations retain their existing behavior
 until an owner-approved binding is published.
+
+For inference-only edits, create a Change and use `configure_inference` with an
+explicit Agent name and `settings` (`model`, `reasoningEffort`, `temperature`,
+`maxTokens`, `thinking`). Omitted fields stay unchanged; null removes an override.
+This edits frontmatter without changing instructions, tools or bindings. Every
+binding sharing the Agent is affected; **there are no Bot-wide model defaults**.
+Known unbound conversations are explicitly listed and remain unchanged.
+Run `check validate` before proposing; known unsupported model/effort combinations
+are rejected, while missing effort metadata means unknown support.
+Ordinary channel turns and synthetic scenarios share inference setting assembly:
+explicit session overrides win over published Agent settings, then runtime defaults.
+Agent defaults are not copied into QQ session state, so removing them restores
+inheritance. Query `status` by Change ID after approval to compare the exact
+revision against the published snapshot and pending/waiting/error review state.
+An absent request alone never means publication succeeded.
+Check/status responses include compact assertions and errors; full scenario
+transcripts remain available through the saved `run` ID rather than chat scraping.
 
 **Participants control invocation, not reply visibility.** Anyone who can read
 the Discord channel can read the Bot's replies, even if they cannot invoke it.
@@ -233,6 +251,19 @@ delivery for one configured Bot does not establish platform access for every Bot
 
 ## QQ incoming messages and files
 
+QQ sticker images remain in stored chat history for UI previews, but are excluded
+from model requests, including later turns that reuse silent history and cached
+quotes. The model gets a short omission label and any accompanying text, not the
+sticker's image bytes. Classification uses the observed
+`<faceType=6,faceId="...",ext="...">` marker within each attachment-bearing message
+element, not GIF format, filename or dimensions. Normal pictures/screenshots and
+unmarked GIFs remain visible to the model. When markers cannot be matched
+unambiguously to images in the same element, images are retained rather than
+discarding a possibly meaningful picture. Clearly marked all-sticker historical
+QQ messages are filtered at inference time without rewriting their history;
+ambiguous old quoted/forwarded payloads are not reclassified. This does not block
+an explicitly authorized image-reading tool from opening an attachment.
+
 GROUP and C2C events share the same normalized input path. Shadow handles ordinary
 text, ARK cards (`message_type: 3`), parallel elements (`101`), forwarded records
 (`102`) and quoted content (`103`), including recursively nested combinations.
@@ -326,11 +357,27 @@ the need to recognize `mentions[].is_you` for model triggering.
 Rich-message, quoted-file and binary frame fixtures cover the adapter, provider
 input and both session stores; live quoted-file delivery is still unverified.
 
-## QQ GROUP and C2C passive replies
+## QQ GROUP notifications and passive replies
 
 Ordinary GROUP/C2C replies send the final summary, rather than every tool
 result or intermediate model update. Questions and final errors are separate
 messages. Guild channels and DMs use their existing progressive delivery.
+
+GROUP responses without an originating QQ message ID (for example, an
+asynchronous result handed back from another session) use proactive sending:
+the request omits `msg_id` and its paired `msg_seq`. Enable the QQ client's
+**allow the robot to speak proactively in the group** setting. QQ enforces its
+own proactive permissions and rate limits; enabling the setting does not
+guarantee delivery. Text, Markdown and uploaded media use the same routing.
+C2C sending remains passive-only.
+
+An explicitly supplied passive source never falls back to proactive sending,
+including after expiry, quota exhaustion, platform rejection or an ambiguous
+network result. Shadow does not borrow an unrelated recent group message or
+automatically retry proactive sends. QQ delivery failures retain their sanitized
+kind, outcome and available HTTP/platform codes in backend logs and the
+`channel.delivery.failed` event, rather than being labeled as a disconnected Bot.
+Saved assistant output is not a platform delivery receipt.
 
 For each accepted incoming message ID, Shadow conservatively allows up to
 **5 GROUP** or **4 C2C** passive replies within **5 minutes** of the

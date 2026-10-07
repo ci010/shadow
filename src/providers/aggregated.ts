@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '../tools/tool.ts'
+import { modelMessages } from './message-content.ts'
 import type {
   ChatMessage,
   LLMProvider,
@@ -58,7 +59,7 @@ export class AggregatedProvider implements LLMProvider {
     options: LLMProviderOptions,
   ): Promise<LLMResponse> {
     const { provider, options: cleaned } = this.resolve(options)
-    return provider.chat(messages, tools, cleaned)
+    return provider.chat(modelMessages(messages), tools, cleaned)
   }
 
   async listModels(): Promise<string[]> {
@@ -98,6 +99,12 @@ export class AggregatedProvider implements LLMProvider {
   }
 
   // ── Public helpers ────────────────────────────────────────────────────
+
+  /** Catalog identity using the same primary-provider rule as chat routing. */
+  qualifiedModelId(spec: string): string {
+    const { model, provider } = parseModelSpec(spec)
+    return `${model}@${provider ?? this.primaryProviderName}`
+  }
 
   /** Look up an underlying provider by name. */
   getProvider(name: string): LLMProvider | undefined {

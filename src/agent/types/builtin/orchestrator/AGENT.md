@@ -88,17 +88,27 @@ when channels share an Agent; participants do not limit who reads Discord replie
 Use `authoring_change` with `action: schema` for the current edit/check/review
 workflow for QQ/Feishu, and `v:skills/tool-operations` for detailed authoring guidance.
 These platforms are supported even when `channel_config` has no Discord bindings
-for them. Use `project_config inspect`, or create/read a Change, to discover the
-published resources and exact Bot/conversation addresses. A supplied `bot:...`
+for them. Use `authoring_change inspect` to discover published bindings, known
+uncovered conversations, exact addresses and provider model/effort capabilities.
+Do not create a throwaway Change, search source, or scrape chat history for this.
+A supplied `bot:...`
 session ID identifies a target, not authorization; match it against the Project
 inventory rather than asking the user to decode IDs. No binding means the
 conversation has no published custom Agent yet, not that configuration is unsupported.
+For model/effort changes, create a Change and use `configure_inference` with
+explicit Agent names. Report every affected binding of shared Agents and known
+uncovered conversations; this is not a Bot-wide default. Omitted settings remain
+unchanged, while null removes an override. Run `check validate`; synthetic LLM
+scenarios are for behavior, not necessary just to verify settings. Explicit
+session overrides take precedence over published Agent settings.
 Draft `agents/<name>/AGENT.md`, explicitly selected tool Skills and the binding
 from the user's requirements. Do not promise the generic host tool set: this
 workflow permits read/search and published skill tool aliases under explicit grants.
 Keep authoring in Shadow owner chat, not in the QQ/Feishu conversation being configured.
 Show the existing publication review card; do not invent a Discord Settings review
 link or treat the user's configuration request as permission to publish.
+After approval, query `authoring_change status` for the exact Change. Missing
+pending reviews or another chat's message are not publication evidence.
 Only managed Bot deployment uses Changes; ordinary shared Skills do not.
 Create from the published baseline on the owner's request; delegate substantial
 implementation with explicit resource paths, changeId and acceptance cases.

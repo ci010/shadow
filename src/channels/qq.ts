@@ -349,6 +349,9 @@ export class QQChannel extends AbstractChannel {
     if (isV2) {
       const count = Number(!!msg.content.trim()) + (msg.media?.length ?? 0)
       if (!count) return null
+      // Session handoffs have no QQ source: send a proactive group notification.
+      // An explicit passive source never falls back after rejection or expiry.
+      if (target.kind === 'group' && passiveMsgId === undefined) return deliver()
       return this.passiveReplies.send(msg.chatId, passiveMsgId, count, deliver)
     }
     // Retain legacy guild failure/fallback behavior.
@@ -379,7 +382,7 @@ export class QQChannel extends AbstractChannel {
       const mdBody: Record<string, unknown> = { markdown: { content } }
       if (isV2) {
         mdBody.msg_type = MSG_TYPE_MARKDOWN
-        mdBody.msg_seq = next!()
+        if (next) mdBody.msg_seq = next()
       }
       if (passiveMsgId) mdBody.msg_id = passiveMsgId
 
@@ -396,7 +399,7 @@ export class QQChannel extends AbstractChannel {
     const body: Record<string, unknown> = { content }
     if (isV2) {
       body.msg_type = MSG_TYPE_TEXT
-      body.msg_seq = next!()
+      if (next) body.msg_seq = next()
     }
     if (passiveMsgId) body.msg_id = passiveMsgId
     return this.postMessage(path, headers, body)
@@ -465,9 +468,9 @@ export class QQChannel extends AbstractChannel {
         : `/v2/users/${target.id}/messages`
       const body: Record<string, unknown> = {
         msg_type: MSG_TYPE_MEDIA,
-        msg_seq: next!(),
         media: { file_info: uploaded.file_info },
       }
+      if (next) body.msg_seq = next()
       if (passiveMsgId) body.msg_id = passiveMsgId
       return this.postMessage(sendPath, headers, body)
     }
@@ -863,7 +866,7 @@ export class QQChannel extends AbstractChannel {
       displayMetadata,
       silent: this.triggerMode === 'mention' && !mentionsBot,
     }, media))
-    this.rememberIncoming(chatId, data, content, media)
+    this.rememberIncoming(chatId, data, content, media, displayMetadata)
   }
 
   private async onC2CMessage(data: Record<string, unknown>): Promise<void> {
@@ -884,7 +887,7 @@ export class QQChannel extends AbstractChannel {
       ...(typeof author?.username === 'string' ? { senderName: author.username } : {}),
       displayMetadata,
     }, media))
-    this.rememberIncoming(chatId, data, content, media)
+    this.rememberIncoming(chatId, data, content, media, displayMetadata)
   }
 
   private async onGuildMessage(
@@ -914,7 +917,7 @@ export class QQChannel extends AbstractChannel {
       senderName,
       displayMetadata,
     }, media)
-    this.rememberIncoming(chatId, data, content, media)
+    this.rememberIncoming(chatId, data, content, media, displayMetadata)
   }
 
   // ── Attachments ────────────────────────────────────────────────────────────
@@ -924,14 +927,14 @@ export class QQChannel extends AbstractChannel {
     return this._seenIds.add(JSON.stringify([chatId, messageIndex ? 'index' : 'id', messageIndex ?? msgId]))
   }
 
-  private rememberIncoming(chatId: string, data: Record<string, unknown>, content: string, media?: string[]): void {
+  private rememberIncoming(chatId: string, data: Record<string, unknown>, content: string, media?: string[], metadata?: ChannelMessageMetadata): void {
     if (this.stopping) return
     const { messageIndex, invalid } = qqMessageIndices(data)
     if (invalid) return
     const index = messageIndex ?? (typeof data.id === 'string' ? data.id : undefined)
     if (index) {
       this.assertConnection()
-      this.references.remember(chatId, index, { content, media: media ?? [] })
+      this.references.remember(chatId, index, { content, media: media ?? [], attachments: metadata?.attachments })
     }
   }
 
@@ -955,7 +958,7 @@ export class QQChannel extends AbstractChannel {
     const sessionId = this.logicalSessionId(chatId)
     const results: string[] = [...incoming.cachedMedia]
     const displayMetadata: ChannelMessageMetadata = { ...incoming.displayMetadata }
-    const attachmentMetadata: NonNullable<ChannelMessageMetadata['attachments']> = []
+    const attachmentMetadata: NonNullable<ChannelMessageMetadata['attachments']> = [...displayMetadata.attachments ?? []]
     let downloadedCount = 0
     const notices: string[] = [...incoming.notices]
     for (const att of attachments) {
@@ -1004,6 +1007,7 @@ export class QQChannel extends AbstractChannel {
         results.push(rel)
         downloadedCount++
         const metadata: NonNullable<ChannelMessageMetadata['attachments']>[number] = { path: rel }
+        if (att.shadowSticker === true) metadata.sticker = true
         if (typeof att.content_type === 'string') metadata.contentType = att.content_type
         for (const key of ['size', 'width', 'height'] as const) {
           if (typeof att[key] === 'number' && Number.isSafeInteger(att[key]) && att[key] >= 0) metadata[key] = att[key]

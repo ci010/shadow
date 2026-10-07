@@ -134,7 +134,12 @@ export async function buildUserChatMessage(
   ]
 
   if (msg.media && msg.media.length > 0) {
-    parts.push(...await buildMediaParts(msg.media, workspace, cwd))
+    const media = await buildMediaParts(msg.media, workspace, cwd)
+    const sender = msg.source.kind === 'user' ? msg.source.sender : undefined
+    parts.push(...media.map((part, index) => part.type === 'image_url' && sender?.channel === 'qq'
+      ? { ...part, displayOnly: sender.displayMetadata?.attachments?.some(
+        attachment => attachment.path === msg.media![index] && attachment.sticker === true,
+      ) ?? false } : part))
   }
 
   return {

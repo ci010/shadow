@@ -27,7 +27,7 @@ import { SessionTool } from '../../tools/session.ts'
 import { runtimeDiscoveryProvider, runtimeIdentityProvider, type RuntimeProviderDeps } from '../../agent/context/runtime.ts'
 import { workspaceProvider } from '../../agent/context/workspace.ts'
 import { IdentityManager } from '../../agent/identity.ts'
-import type { LlmRuntimeConfig } from '../../agent/llm-config.ts'
+import { inferenceSettings, validateInferenceCapabilities, type LlmRuntimeConfig } from '../../agent/llm-config.ts'
 import { MemoryStore } from '../../agent/memory.ts'
 import { agentTypesPlugin } from '../../agent/types/routes.ts'
 import { createConfigCommand } from '../../slash-commands/handlers/config.ts'
@@ -859,12 +859,17 @@ export async function createProjectRuntime(
   commandDispatcher.register(createDumpPromptCommand(agent))
   commandDispatcher.register(createStatusCommand(sessions))
   commandDispatcher.register(createSessionsCommand(agent))
+  const inferenceCatalog = async () => ({
+    defaults: { ...llm },
+    models: provider.listModelInfos ? await provider.listModelInfos() : (await provider.listModels()).map(id => ({ id })),
+  })
   const authoringOptions: Omit<AuthoringManagementOptions, 'publicationRequests'> = {
     service: authoring, credentials: agentCredentials, credentialRequests,
     inventory: () => ({
       bots: botStore.list().map(({ id, platform, displayName, enabled, legacySessionId }) => ({ id, platform, displayName, enabled, legacySessionId })),
       conversations: sessions.listSessions().map(session => ({
         sessionId: session.sessionId, address: authoring.address(session.sessionId),
+        inferenceOverrides: inferenceSettings(sessions.getSessionState(session.sessionId)?.config),
       })),
       folders: folderRegistry.list(),
     }),
@@ -875,10 +880,14 @@ export async function createProjectRuntime(
       }
     },
     validateLive: async snapshot => {
+      const catalog = snapshot.bundle.bindings.some(binding => binding.enabled) ? await inferenceCatalog() : undefined
       for (const binding of snapshot.bundle.bindings.filter(binding => binding.enabled)) {
         if (binding.platform === 'discord') throw new Error('Discord assignments are managed in Project Bots > Discord access. Disable legacy bindings before publishing this bundle.')
         const bot = botStore.get(binding.botInstanceId)
         if (bot.platform !== binding.platform) throw new Error('Binding platform does not match its bot instance.')
+        const policy = agentResources.preview({ ...binding, projectId: project.id }, snapshot)
+        if (policy && catalog) validateInferenceCapabilities(policy.agent, catalog.defaults, catalog.models,
+          provider.qualifiedModelId(policy.agent.model ?? catalog.defaults.model))
         for (const id of binding.readFolders) {
           if (!folderRegistry.get(id)) throw new Error(`Read folder ${id} is not registered in this Project.`)
         }
@@ -950,6 +959,7 @@ export async function createProjectRuntime(
     changes: authoringChanges, service: authoring, credentials: agentCredentials,
     publications: publicationRequests, probes: probeRequests, canAuthor,
     inventory: authoringOptions.inventory, validateLive: authoringOptions.validateLive,
+    inference: inferenceCatalog,
     evaluateScenario: (prompt, tools, input, signal, llmOverrides) =>
       sessions.evaluateAuthoringScenario({ prompt, tools, input, signal, llmOverrides }),
   }

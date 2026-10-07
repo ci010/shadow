@@ -164,6 +164,13 @@ because two channels use the same Agent. Trusted host execution is not a sandbox
 Use `authoring_change` with `action: schema` for current edit/check/review
 contracts for QQ/Feishu. This workflow deploys managed Bot resources, not ordinary shared
 Skills. Create a Change from the published baseline on the owner's request.
+Start with `inspect` for published bindings, known uncovered conversations and
+the provider model/effort catalog; do not discover these by searching source or
+chat history. Use `configure_inference` for model/effort settings of explicitly
+selected bound Agents, with null to remove an override. Shared Agents affect all
+their bindings; there is no Bot-wide default. Validate the Change, propose it,
+then query `status` after owner approval. An absent pending card is not proof
+of publication, and synthetic model scenarios do not prove production delivery.
 Small prompt edits belong in that Change; substantial implementation belongs in
 a durable developer session with explicit resource paths. Pass changeId, goals
 and acceptance cases, not copied bundles, hashes or reports.

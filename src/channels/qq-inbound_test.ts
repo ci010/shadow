@@ -2,6 +2,26 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { decodeQQGatewayPayload, qqAttachmentSources, qqInboundDiagnostics, qqIncomingContent, qqMessageIndices, QQReferences } from './qq-inbound.ts'
 
+test('QQ stickers are classified per message element, not by GIF extension or dimensions', () => {
+  const face = '<faceType=6,faceId="0",ext="eyJ0ZXh0IjoiIn0=">'
+  const image = { filename: 'photo.gif', content_type: 'image/gif', width: 128, height: 128, url: 'https://example.com/image' }
+  const result = qqIncomingContent({
+    attachments: [image], msg_elements: [{ content: `${face} Keep the explanation`, attachments: [image] }],
+  }, 'Ordinary GIF')
+  assert.equal(result.attachments[0].shadowSticker, undefined)
+  assert.equal(result.attachments[1].shadowSticker, true)
+  assert.match(result.content, /Keep the explanation/)
+  const mixed = qqIncomingContent({ attachments: [image, image] }, face)
+  assert(mixed.attachments.every(item => item.shadowSticker === undefined), 'ambiguous mixed attachments are not guessed')
+  assert.equal(qqIncomingContent({ attachments: [{ ...image, shadowSticker: true }] }, 'Not a sticker').attachments[0].shadowSticker, undefined)
+  const cache = new QQReferences()
+  cache.remember('group', 'ref', { content: face, media: ['cached.gif'], attachments: [{ path: 'cached.gif', sticker: true }] })
+  const quoted = qqIncomingContent({ message_type: 103, msg_elements: [{ message_type: 103, msg_idx: 'ref' }] }, '',
+    undefined, index => cache.get('group', index))
+  assert.deepEqual(quoted.cachedMedia, ['cached.gif'])
+  assert.deepEqual(quoted.displayMetadata?.attachments, [{ path: 'cached.gif', sticker: true }])
+})
+
 test('QQ gateway decodes text and binary JSON without losing typed-array offsets', () => {
   const value = { op: 0, t: 'GROUP_AT_MESSAGE_CREATE', s: 7, d: { content: 'file', attachments: [] } }
   const text = JSON.stringify(value)

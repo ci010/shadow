@@ -1,5 +1,5 @@
 import type { AuthoringEvaluationResult } from '../sessions/authoring-evaluation.ts'
-import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
+import { inferenceSettings, type LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { SessionTools, Tools } from '../tools/registry.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { contentText } from '../providers/provider.ts'
@@ -129,12 +129,7 @@ export async function runAuthoringScenario(options: AuthoringScenarioOptions): P
     execute: async () => { throw new Error('Synthetic tools must use the scenario registry.') },
   })
   const tools = new FixtureTools(base, service.options.workspace, definitions.map(definition => definition.function.name), [], [])
-  const llmOverrides: AuthoringScenarioLlmOverrides = {}
-  if (policy.agent.model !== undefined) llmOverrides.model = policy.agent.model
-  if (policy.agent.temperature !== undefined) llmOverrides.temperature = policy.agent.temperature
-  if (policy.agent.maxTokens !== undefined) llmOverrides.maxTokens = policy.agent.maxTokens
-  if (policy.agent.thinking !== undefined) llmOverrides.thinking = structuredClone(policy.agent.thinking)
-  if (policy.agent.reasoningEffort !== undefined) llmOverrides.reasoningEffort = policy.agent.reasoningEffort
+  const llmOverrides = inferenceSettings(policy.agent)
   let evaluation: AuthoringEvaluationResult
   try {
     evaluation = await options.evaluate(prompt, tools, scenario.input, signal, llmOverrides)
