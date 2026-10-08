@@ -2621,6 +2621,8 @@
   "This trace exceeds the": "此追踪超出",
   "This version was replaced without selecting an answer.": "此版本已被替换，未选择答案。",
   "This workdir capability is incompatible. Update the owning node or select another folder.": "此工作目录能力不兼容。请更新所属节点或选择其他文件夹。",
+  "Forum": "论坛",
+  "Forum assignments apply inside public posts when thread inheritance is enabled. Each post has separate history; the forum parent is not a chat.": "开启讨论串继承后，论坛分配会应用到其公开帖子。每个帖子有独立历史，论坛父频道本身不是聊天会话。",
   "Thread": "讨论串",
   "Time limit reached. Waiting for the server to confirm the default choice.": "已达到时限。正在等待服务器确认默认选项。",
   "Time unavailable": "时间不可用",

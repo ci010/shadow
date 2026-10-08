@@ -17,7 +17,9 @@ const memberSchema = z.object({ user, roles: z.array(id), nick: z.string().nulla
   communication_disabled_until: z.string().datetime({ offset: true }).nullable().optional() })
 const guildSchema = z.object({ id, name: z.string(), owner_id: id })
 const thread = (type: number) => [10, 11, 12].includes(type)
-const supported = (type: number) => [0, 5, 10, 11].includes(type)
+// Forum parents are assignment containers only. Conversation inspection below still
+// admits messages/history solely in supported text channels and public threads.
+const supported = (type: number) => [0, 5, 10, 11, 15].includes(type)
 const has = (permissions: bigint, bits: bigint) => (permissions & bits) === bits
 
 export async function discordBotIdentity(api: DiscordApi, signal: AbortSignal): Promise<string> {
@@ -86,7 +88,8 @@ export async function discordDirectory(api: DiscordApi, signal: AbortSignal, gui
     const canView = has(bits, Permission.view)
     if (!canView) continue
     const writable = (!bot.communication_disabled_until || Date.parse(bot.communication_disabled_until) <= Date.now()) &&
-      has(bits, thread(channel.type) ? Permission.sendInThreads : Permission.send) &&
+      // For a forum, canSend means replying inside its posts, not creating a post.
+      has(bits, thread(channel.type) || channel.type === 15 ? Permission.sendInThreads : Permission.send) &&
       (!thread(channel.type) || channel.thread_metadata?.archived === false && channel.thread_metadata.locked === false)
     result.channels.push({
       id: channel.id, name: channel.name ?? channel.id, type: channel.type, parentId: channel.parent_id ?? null,

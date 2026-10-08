@@ -92,7 +92,7 @@ test('Discord settings render named resources, exact human reviews, learning dom
                 json({ botInstanceId: path.split('/').at(-1), botUserId: '900', guilds: [{ id: '100', name: 'Community workspace', icon: null }],
                   guildId, guildCursor: null, channels: guildId ? [
                     { id: '201', name: 'customer-help', type: 0, parentId: null, canView: true, canSend: true, canReadHistory: true, supported: true },
-                    { id: '202', name: 'product-questions', type: 0, parentId: null, canView: true, canSend: true, canReadHistory: true, supported: true },
+                    { id: '202', name: 'product-questions', type: 15, parentId: null, canView: true, canSend: true, canReadHistory: true, supported: true },
                   ] : [], roles: guildId ? [{ id: '700', name: 'Support team' }] : [],
                   synchronizedAt: now, completeness: guildId ? 'channels-and-active-threads' : 'guild-page',
                   notice: 'Archived and private threads are not enumerated.' })

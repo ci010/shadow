@@ -2621,6 +2621,8 @@
   "This trace exceeds the": "This trace exceeds the",
   "This version was replaced without selecting an answer.": "This version was replaced without selecting an answer.",
   "This workdir capability is incompatible. Update the owning node or select another folder.": "This workdir capability is incompatible. Update the owning node or select another folder.",
+  "Forum": "Forum",
+  "Forum assignments apply inside public posts when thread inheritance is enabled. Each post has separate history; the forum parent is not a chat.": "Forum assignments apply inside public posts when thread inheritance is enabled. Each post has separate history; the forum parent is not a chat.",
   "Thread": "Thread",
   "Time limit reached. Waiting for the server to confirm the default choice.": "Time limit reached. Waiting for the server to confirm the default choice.",
   "Time unavailable": "Time unavailable",

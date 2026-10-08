@@ -46,6 +46,10 @@ async function main() {
     await execute(`(async()=>{for (const item of document.querySelectorAll('.picker-row input')) {
       item.click(); await new Promise(resolve=>setTimeout(resolve,0));
     } ${field('Everyone who can send', 'input')}.click();})()`)
+    assert.equal(await execute("[...document.querySelectorAll('.picker-row')].some(row => row.textContent.includes('Forum product-questions') && !row.querySelector('input').disabled)"), true,
+      'Forum parents are named, selectable assignment containers')
+    assert.equal(await execute("document.body.innerText.includes('Each post has separate history; the forum parent is not a chat.')"), true)
+    assert.equal(await execute(`${field('New public threads inherit', 'input')}.checked`), true)
     await execute('window.__refreshBot()')
     assert.equal(await execute("document.querySelectorAll('.picker-row input:checked').length"), 2,
       'Status polling preserves channel selections')

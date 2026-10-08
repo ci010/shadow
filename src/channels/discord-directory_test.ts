@@ -77,10 +77,67 @@ test('directory discovers names before any messages, preserves duplicate names a
   assert.equal(result.channels.filter(item => item.name === 'help').length, 5)
   assert.equal(result.channels.find(item => item.id === '301')?.parentId, '201')
   assert.equal(result.channels.find(item => item.id === '302')?.supported, false)
-  assert.equal(result.channels.find(item => item.id === '203')?.supported, false)
+  assert.equal(result.channels.find(item => item.id === '203')?.supported, true, 'Forums are assignable containers')
   assert.equal(result.completeness, 'channels-and-active-threads')
   assert.match(result.notice, /Archived and private/)
   assert(!f.calls.some(path => path.includes('/messages')))
+})
+
+test('forum assignment checks thread reply permission, never treating the parent as a message destination', async t => {
+  const f = fixture()
+  const forum = channel('203', { type: 15 })
+  f.values.set('/channels/203', forum)
+  f.values.set('/guilds/100/roles', [{ id: '100', name: '@everyone', permissions: '0' },
+    { id: '700', name: 'Support', permissions: (P.view | P.readHistory | P.sendInThreads).toString() }])
+  const adapter = new DiscordChannel(new Bus(), { token: 'synthetic-token' })
+  t.after(() => adapter.stop())
+  t.mock.method(adapter, 'directory', async () => discordDirectory(f.api, signal(), '100'))
+  const target = { kind: 'channel' as const, guildId: '100', channelId: '203' }
+  assert.equal((await adapter.inspectTarget(target, signal())).botUserId, '900',
+    'Replying in existing posts does not require permission to create posts')
+  await assert.rejects(inspectDiscordConversation(f.api, '203', '500', signal()), /not supported/,
+    'A forum parent is never a direct conversation')
+  f.values.set('/guilds/100/roles', [{ id: '100', name: '@everyone', permissions: '0' },
+    { id: '700', name: 'Support', permissions: (P.view | P.send | P.readHistory).toString() }])
+  const denied = (await discordDirectory(f.api, signal(), '100')).channels.find(item => item.id === '203')!
+  assert.equal(denied.supported, true)
+  assert.equal(denied.canSend, false, 'Creating posts is not permission to reply in threads')
+  await assert.rejects(adapter.inspectTarget(target, signal()), /permission/)
+})
+
+test('forum posts enforce live parent overwrites, visibility, timeout and archive/lock state', async () => {
+  const f = fixture()
+  const forum = channel('203', { type: 15, name: 'Questions' })
+  const post = channel('303', { type: 11, parent_id: '203', thread_metadata: { archived: false, locked: false } })
+  f.values.set('/channels/203', forum)
+  f.values.set('/channels/303', post)
+  f.values.set('/guilds/100/threads/active', { threads: [post] })
+  const inspect = () => inspectDiscordConversation(f.api, '303', '500', signal())
+  const initial = await inspect()
+  assert.equal(initial.location.parentName, 'Questions')
+  assert.equal(initial.location.parentId, '203')
+  assert.equal(initial.canSend, true)
+  for (const actor of ['500', '900']) {
+    for (const [permission, field] of [[P.sendInThreads, 'canSend'], [P.view, 'canView'], [P.readHistory, 'canReadHistory']] as const) {
+      f.values.set('/channels/203', { ...forum, permission_overwrites: [
+        { id: actor, type: 1, deny: permission.toString(), allow: '0' },
+      ] })
+      assert.equal((await inspect())[field], false, `${actor} must retain ${field}`)
+    }
+    f.values.set('/channels/203', forum)
+    const memberPath = `/guilds/100/members/${actor}`
+    const member = f.values.get(memberPath) as Record<string, unknown>
+    f.values.set(memberPath, { ...member, communication_disabled_until: new Date(Date.now() + 60_000).toISOString() })
+    assert.equal((await inspect()).canSend, false)
+    if (actor === '900') assert.equal((await discordDirectory(f.api, signal(), '100')).channels.find(item => item.id === '203')?.canSend, false)
+    f.values.set(memberPath, member)
+  }
+  for (const metadata of [{ archived: true, locked: false }, { archived: false, locked: true }]) {
+    f.values.set('/channels/303', { ...post, thread_metadata: metadata })
+    assert.equal((await inspect()).canSend, false)
+  }
+  f.values.set('/channels/303', { ...post, type: 12 })
+  await assert.rejects(inspect(), /not supported/, 'Private threads remain disabled')
 })
 
 test('live sender/Bot roles, overwrite precedence, timeouts and thread metadata are enforced', async () => {
@@ -208,6 +265,35 @@ test('actual Discord ingress authorizes before reactions, attachments or silent 
   assert.equal(received[1]!.silent, true)
   assert.equal(received[1]!.channelAdmissionId, 'synthetic-proof')
   assert.equal(requests, 1)
+})
+
+test('forum post events keep ingress in the child thread and preserve mention-only triggering', async t => {
+  const f = fixture()
+  const adapter = new DiscordChannel(new Bus(), { token: 'synthetic-token', triggerMode: 'all', reactionEmoji: '' })
+  t.after(() => adapter.stop())
+  f.values.set('/channels/203', channel('203', { type: 15, name: 'Questions' }))
+  f.values.set('/channels/303', channel('303', { type: 11, name: 'One question', parent_id: '203',
+    thread_metadata: { archived: false, locked: false } }))
+  const received: InboundMessage[] = []
+  adapter.setDiscordIntegration({
+    admit: async input => ({ admissionId: `proof-${input.messageId}`, trigger: 'mention',
+      location: (await inspectDiscordConversation(f.api, input.chatId, input.senderId, signal())).location }),
+    discard() {}, confirm: async () => {}, invalidate() {},
+  })
+  adapter.setReceiver(async message => {
+    received.push(message)
+    return { status: 'accepted', sessionId: `discord:${message.chatId}`, inputId: message.messageId }
+  })
+  // No gateway connection: the READY identity and subsequent events are synthetic.
+  await dispatch(adapter, 'READY', { user: { id: '900', username: 'helper', bot: true }, application: { id: '900' }, session_id: 'synthetic' })
+  await dispatch(adapter, 'THREAD_CREATE', { id: '303', parent_id: '203', type: 11, name: 'One question' })
+  const message = { id: '400', channel_id: '303', guild_id: '100', content: 'Question without mention',
+    author: { id: '500', username: 'Sam', bot: false } }
+  await dispatch(adapter, 'MESSAGE_CREATE', message)
+  await dispatch(adapter, 'MESSAGE_CREATE', { ...message, id: '401', content: '<@900> Help with this post', mentions: [{ id: '900' }] })
+  assert.deepEqual(received.map(message => message.chatId), ['303', '303'], 'Never route posts into their forum parent')
+  assert.deepEqual(received.map(message => message.silent), [true, false])
+  assert(received.every(message => message.channelLocation?.parentId === '203' && message.channelLocation.type === 11))
 })
 
 test('per-request output guards stop subsequent Discord send and edit chunks after revocation', async t => {

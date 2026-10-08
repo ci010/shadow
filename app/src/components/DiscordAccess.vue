@@ -37,7 +37,7 @@
               <div v-if="visibleChannels.length" class="channel-picker" :aria-label="t('Channels to assign')">
                 <label v-for="channel in visibleChannels" :key="channel.id" class="picker-row">
                   <input v-model="selectedChannels" type="checkbox" :value="channel.id" :disabled="!channel.supported || !channel.canSend" />
-                  <span><strong>{{ channel.type === 10 || channel.type === 11 ? t('Thread') : '#' }} {{ channel.name }}</strong><small>{{ channelParent(channel.parentId) }} · {{ channel.id.slice(-6) }}</small></span>
+                  <span><strong>{{ channel.type === 15 ? t('Forum') : channel.type === 10 || channel.type === 11 ? t('Thread') : '#' }} {{ channel.name }}</strong><small>{{ channelParent(channel.parentId) }} · {{ channel.id.slice(-6) }}</small></span>
                   <span class="row-status">{{ !channel.supported ? t('Unsupported type') : !channel.canSend ? t('Cannot send') : existingChannel(channel.id) ? (existingChannel(channel.id)!.enabled ? agentName(existingChannel(channel.id)!.agentId) : t('Disabled')) : t('Not assigned') }}</span>
                 </label>
               </div>
@@ -64,6 +64,7 @@
               <label>{{ t('Respond to') }}<select v-model="trigger"><option value="mention">{{ t('Mentions and replies to the Bot') }}</option><option value="all">{{ t('Every authorized message') }}</option></select></label>
               <label v-if="locationType === 'channel'" class="check-label"><input v-model="inheritThreads" type="checkbox" />{{ t('New public threads inherit this assignment, not its history') }}</label>
             </div>
+            <p v-if="locationType === 'channel' && directory?.channels.some(channel => channel.type === 15 && selectedChannels.includes(channel.id))" class="access-notice">{{ t('Forum assignments apply inside public posts when thread inheritance is enabled. Each post has separate history; the forum parent is not a chat.') }}</p>
             <h5>{{ t('Tools available here') }}</h5>
             <div class="choices"><label v-for="tool in assignedAgent?.tools ?? []" :key="tool" class="check-label"><input v-model="selectedTools" type="checkbox" :value="tool" />{{ toolLabel(tool) }}</label></div>
             <p v-if="selectedTools.includes('channel_config')" class="access-notice">{{ t('This grants configuration management within the manager\'s approved tool and knowledge limits. Every change still requires human approval.') }}</p>
